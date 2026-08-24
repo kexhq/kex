@@ -812,6 +812,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             for (const auto& constructor : constructors->second)
                 ifaces.traitConformances.push_back({constructor, traitName});
     }
+    // Importers need these to expand a field or signature spelled against a
+    // defining module's alias, the same way the KexI path carries them.
+    for (auto& [name, body] : typeAliases)
+        ifaces.typeAliases.try_emplace(name, body);
     return ifaces;
 }
 
@@ -893,6 +897,8 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         base.recordFieldNames.try_emplace(name, std::move(fields));
     for (auto& [name, fields] : extra.recordFields)
         base.recordFields.try_emplace(name, std::move(fields));
+    for (auto& [name, body] : extra.typeAliases)
+        base.typeAliases.try_emplace(name, std::move(body));
     base.typeNames.insert(extra.typeNames.begin(), extra.typeNames.end());
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),

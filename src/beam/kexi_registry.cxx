@@ -739,6 +739,16 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     TypeVarMap vars;
                     interfaces.distinctTypes[te.name] = {
                         te.genericParams, semanticType(te.backingType, vars)};
+                } else if (!te.isDistinct && te.backingType &&
+                           te.constructors.empty() &&
+                           te.genericParams.empty()) {
+                    TypeVarMap vars;
+                    auto body = semanticType(te.backingType, vars);
+                    // Artifacts written before alias bodies were recorded
+                    // store an Unknown placeholder; that is not an alias.
+                    if (body && !std::holds_alternative<semantic::UnknownType>(
+                                    body->kind))
+                        interfaces.typeAliases.try_emplace(te.name, body);
                 }
             }
 

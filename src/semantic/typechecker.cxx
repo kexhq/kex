@@ -352,11 +352,24 @@ auto TypeChecker::check(const ast::Program& program,
 
     m_globals.set("ENV", Type::map(Type::string(), Type::string()));
 
+    // Imported aliases first; a locally declared name of the same spelling
+    // then overwrites it, which is the precedence the rest of the checker uses.
+    if (m_importedInterfaces)
+        m_typeAliases = m_importedInterfaces->typeAliases;
+
     // Alias bodies must see the canonical built-in types. Resolving an open
     // row alias before this point made its `String` field a nominal name while
     // record declarations later used the real String type; both printed the
     // same but failed invariant row-field comparison.
     registerTypeAliases(program);
+
+    // The imported field types seeded above were spelled against the defining
+    // module's aliases and never went through resolveTypeExpr; expand them now
+    // that the alias table is complete, so an imported record compares the same
+    // way a locally declared one does.
+    for (auto& [_, fields] : m_recordFields)
+        for (auto& [__, fieldType] : fields)
+            fieldType = expandTypeAliases(fieldType);
 
     if (m_importedInterfaces)
         for (const auto& trait : m_importedInterfaces->traits)
@@ -1435,6 +1448,19 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         }
     }
     if (!def.target) return;
+    // The target names a type the way source inside the module does, so it has
+    // to resolve in that module's scope. Without this a `make Server` inside
+    // `module CollisionWeb` resolved bare `Server` through the global
+    // unique-suffix fallback and registered its methods against the prelude's
+    // `Web.Server`, which checkMakeDef (which does set the path) then
+    // registered a second time under the right name.
+    const auto previousModulePath = m_currentModulePath;
+    m_currentModulePath = modulePath;
+    struct PathRestore {
+        std::string& target;
+        const std::string& saved;
+        ~PathRestore() { target = saved; }
+    } pathRestore{m_currentModulePath, previousModulePath};
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
     std::unordered_set<std::string> slotNames;
@@ -1796,6 +1822,61 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
         list += missing[i];
     }
     error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
+}
+
+auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
+    -> TypePtr {
+    if (!type || depth > 8) return type;
+    auto recur = [&](const TypePtr& inner) {
+        return expandTypeAliases(inner, depth + 1);
+    };
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        std::vector<TypePtr> args;
+        for (const auto& arg : named->typeArgs) args.push_back(recur(arg));
+        const auto dot = named->name.rfind('.');
+        const auto last = dot == std::string::npos ? named->name
+                                                   : named->name.substr(dot + 1);
+        // Distinct types are nominal: `distinct type Meters = Integer` must
+        // NOT collapse to Integer, so mirror resolveTypeExpr's precedence.
+        if (!m_distinctTypes.count(resolveDistinctName(last)) &&
+            !m_recordFields.count(named->name)) {
+            if (auto alias = m_typeAliases.find(last);
+                alias != m_typeAliases.end() && args.empty())
+                return expandTypeAliases(alias->second, depth + 1);
+        }
+        if (args.empty()) return type;
+        return Type::named(named->name, std::move(args));
+    }
+    if (auto* list = std::get_if<ListType>(&type->kind))
+        return Type::list(recur(list->element));
+    if (auto* optional = std::get_if<OptionalType>(&type->kind))
+        return Type::optional(recur(optional->inner));
+    if (auto* map = std::get_if<MapType>(&type->kind))
+        return Type::map(recur(map->key), recur(map->value));
+    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+        std::vector<TypePtr> elements;
+        for (const auto& element : tuple->elements)
+            elements.push_back(recur(element));
+        return Type::tuple(std::move(elements));
+    }
+    if (auto* fn = std::get_if<FuncType>(&type->kind)) {
+        std::vector<TypePtr> params;
+        for (const auto& param : fn->params) params.push_back(recur(param));
+        return Type::func(std::move(params), recur(fn->result));
+    }
+    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
+        std::vector<TypePtr> members;
+        for (const auto& member : intersection->members)
+            members.push_back(recur(member));
+        return Type::intersection(std::move(members));
+    }
+    if (auto* record = std::get_if<RecordType>(&type->kind)) {
+        std::vector<std::pair<std::string, TypePtr>> fields;
+        for (const auto& [name, fieldType] : record->fields)
+            fields.emplace_back(name, recur(fieldType));
+        return Type::record(std::move(fields));
+    }
+    return type;
 }
 
 auto TypeChecker::normalizeIntersection(TypePtr type) const -> TypePtr {
@@ -3975,7 +4056,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 m_importedInterfaces->modules.count(*importedPath) > 0;
             bool isNamespaceCall = node.receiver &&
                 (isNamespaceReceiver(*node.receiver) || isImportedNamespace);
-            if (isImportedNamespace) {
+            // A LOCAL nested module is qualified the same way: without this
+            // `CollisionWeb.Server.build(7000)` checked as the bare name
+            // `build` and picked the prelude's `Web.Server.build` — the two
+            // are indistinguishable there, both `Integer -> Server`, and the
+            // imported one is listed first. Only when signatures really were
+            // published under that key, so value chains through a static
+            // constructor (`Temperature.Fahrenheit(212)`) stay untouched.
+            const bool isLocalNamespace = importedPath &&
+                m_localModules.contains(*importedPath) &&
+                m_userSignatures.count(*importedPath + "::" + node.method) > 0;
+            if (isImportedNamespace || isLocalNamespace) {
                 callName = *importedPath + "::" + node.method;
             } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
@@ -5949,8 +6040,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     size_t localSigCount = 0;
     if (!importedSigs.empty() || useLocalMethods) {
         if (useLocalMethods) {
+            // A module-scoped `make` is also reachable through a value whose
+            // TYPE names that module: `CollisionWeb.Server` already carries
+            // the qualification a `using` would supply, and requiring one
+            // there would make a method unreachable from anywhere the type
+            // itself is nameable.
+            const auto receiverModule = [&]() -> std::string {
+                if (!isMethodCall || argTypes.empty()) return {};
+                auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind);
+                if (!named) return {};
+                const auto dot = named->name.rfind('.');
+                return dot == std::string::npos ? std::string{}
+                                                : named->name.substr(0, dot);
+            }();
             for (const auto& method : methodIt->second)
-                if (makeModuleVisible(method.makeModule))
+                if (makeModuleVisible(method.makeModule) ||
+                    (!method.makeModule.empty() &&
+                     method.makeModule == receiverModule))
                     merged.push_back(method);
             localSigCount = merged.size();
         }
@@ -6368,6 +6474,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         const Signature* best =
             undominated.empty() ? fullMatches.front() : undominated.front();
+        // A method call dispatches on its RECEIVER, so a candidate whose first
+        // parameter is exactly the receiver's type is the one written for it.
+        // Equally specific candidates otherwise fall back to declaration
+        // order, which picked `factor : SIUnit -> _` for a `Measure` receiver
+        // as soon as the receiver stopped being inferred as Unknown.
+        if (isMethodCall && !argTypes.empty()) {
+            const auto receiver = resolve(argTypes.front());
+            for (const auto* candidate : undominated)
+                if (!candidate->params.empty() &&
+                    typesEqual(resolve(candidate->params.front()), receiver)) {
+                    best = candidate;
+                    break;
+                }
+        }
         const bool concreteArguments = std::all_of(
             argTypes.begin(), argTypes.end(),
             [&](const TypePtr& argument) {

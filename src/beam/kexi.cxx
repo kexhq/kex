@@ -294,7 +294,9 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     for (const auto& c : t[2]->asList()) te.constructors.push_back(c->asBinaryStr());
     if (t.size() >= 5) {
         te.isDistinct = t[3]->asAtom() == "true";
-        if (te.isDistinct) te.backingType = termToType(t[4]);
+        // Written for distinct types AND transparent aliases; older
+        // artifacts store a nil here, which termToType leaves null.
+        te.backingType = termToType(t[4]);
     }
     return te;
 }

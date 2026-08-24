@@ -128,6 +128,10 @@ struct ImportedInterfaces {
     // resolve them unambiguously.
     std::unordered_map<
         std::string, std::unordered_map<std::string, TypePtr>> recordFields;
+    // Bodies of transparent aliases (`type FilePath = String`), keyed by the
+    // bare name the way the local alias table is. Distinct types are NOT here
+    // — those stay nominal and live in `distinctTypes`.
+    std::unordered_map<std::string, TypePtr> typeAliases;
     // Every type NAME the imported sources declare: ADTs, records, and
     // constructor-less aliases such as `type List<X> = [X]`. `adts` only
     // carries types that have constructors, and it is indexed by those

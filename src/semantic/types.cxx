@@ -1,4 +1,5 @@
 #include "types.hxx"
+#include <algorithm>
 #include <unordered_set>
 
 namespace kex::semantic {

@@ -644,7 +644,11 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     te.name = td.name;
     te.genericParams = td.typeParams;
     te.isDistinct = td.isDistinct;
-    if (td.isDistinct && td.variants && !td.variants->empty())
+    // Transparent aliases carry their body too: without it an importing
+    // module saw `FS.FilePath` as an opaque nominal name and a `{String:
+    // String}` literal failed to match a `Map<FS.FilePath, String>` field.
+    if (td.variants && !td.variants->empty() &&
+        (td.isDistinct || kex::isTransparentTypeAlias(td)))
         te.backingType = convertTypeExpr(td.variants->front());
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.

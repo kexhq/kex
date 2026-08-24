@@ -50,7 +50,7 @@ module Kex.AST do
     | MapType(TypeRef, TypeRef)
     | UnionType([TypeRef])
     | IntersectionType([TypeRef])
-    | RecordType([{String, TypeRef}])
+    | RecordType([(String, TypeRef)])
     | NullableType(TypeRef)
     | BlockType(TypeRef)
     | AtomType(String)
