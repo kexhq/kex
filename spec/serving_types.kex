@@ -1,0 +1,20 @@
+# kex: check-only
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  get ::> Reply<Integer>
+  slot get -> Reply<Integer> = Kex.Intrinsic.Process.reply(@count)
+
+  reset :> Void
+  slot reset = Kex.Intrinsic.Process.cast
+end
+
+foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
+foul readQuickly(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 250)
+foul reset(server: Server<Counter>) -> Void = server.reset()
+
+let local(state: Counter) -> Reply<Integer> = state.get()
+let configured(server: Server<Counter>) -> Server<Counter> = server.within(10_000)

@@ -398,6 +398,9 @@ private:
     // Receiver-aware signatures declared inside `make T do` blocks. Their
     // first parameter is the implicit receiver, matching UFCS call checking.
     std::unordered_map<std::string, std::vector<Signature>> m_methodSignatures;
+    // Protocol entry names declared with `slot`, used to recognize the
+    // compiler-owned `within:` call option on a Server<X> receiver.
+    std::unordered_set<std::string> m_slotMethodNames;
     // Checked interface attached to its exact syntax declaration. Unlike the
     // call-resolution table above, this preserves ownership when separate
     // modules or overload declarations reuse the same unqualified name.

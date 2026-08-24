@@ -79,6 +79,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
     m_methodSignatures.clear();
+    m_slotMethodNames.clear();
     m_makeMethodNames.clear();
     m_qualifiedPublished.clear();
     m_overloadPurity.clear();
@@ -1353,6 +1354,33 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     if (!def.target) return;
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
+    std::unordered_set<std::string> slotNames;
+    if (def.isServing)
+        for (const auto& item : def.body)
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                fn && *fn && (*fn)->isSlot)
+                slotNames.insert((*fn)->name);
+    m_slotMethodNames.insert(slotNames.begin(), slotNames.end());
+
+    auto remoteSlotSignature = [&](const Signature& handler,
+                                   bool hasFrom) -> Signature {
+        Signature remote = handler;
+        remote.params.front() = Type::named("Server", {receiver});
+        if (hasFrom) {
+            TypePtr reply = Type::unknown();
+            if (auto* named = std::get_if<NamedType>(&handler.result->kind);
+                named && named->name == "Reply" && named->typeArgs.size() == 1)
+                reply = named->typeArgs.front();
+            remote.result = Type::named(
+                "Result", {reply, Type::named("CallError")});
+            remote.isFoul = true;
+        } else {
+            remote.result = Type::unit();
+            remote.isFoul = true;
+        }
+        return remote;
+    };
 
     for (const auto& item : def.body) {
         auto add = [&](const std::unique_ptr<ast::TypeAnnotation>& ann) {
@@ -1380,7 +1408,19 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                                 return true;
                             });
             sig->makeModule = modulePath;
-            if (!duplicate) existing.push_back(std::move(*sig));
+            if (!duplicate) existing.push_back(*sig);
+            if (def.isServing && slotNames.count(ann->name)) {
+                auto remote = remoteSlotSignature(*sig, ann->implicitFrom);
+                const bool remoteDuplicate = std::any_of(
+                    existing.begin(), existing.end(), [&](const Signature& other) {
+                        if (other.params.size() != remote.params.size()) return false;
+                        for (size_t i = 0; i < other.params.size(); ++i)
+                            if (!typesEqual(other.params[i], remote.params[i]))
+                                return false;
+                        return true;
+                    });
+                if (!remoteDuplicate) existing.push_back(std::move(remote));
+            }
         };
         if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
             add(*ann);
@@ -1400,10 +1440,10 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     // as unknown, while the identical call inside `main` (checked last) worked.
     // Registering the declared shape here makes the method visible to whatever
     // is checked first; the body still refines it later.
-    const auto preRegister = [&](const ast::FunctionDef& def) {
-        if (m_annotatedMethods.count(def.name)) return;
-        if (def.clauses.empty()) return;
-        const auto& clause = def.clauses.front();
+    const auto preRegister = [&](const ast::FunctionDef& method) {
+        if (m_annotatedMethods.count(method.name)) return;
+        if (method.clauses.empty()) return;
+        const auto& clause = method.clauses.front();
         // Only plain named parameters. A pattern in first position is the
         // receiver-matching form (`let head(@[x | _])`) whose arity must not
         // gain an implicit receiver, and a type-selector argument
@@ -1411,8 +1451,8 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         for (const auto& param : clause.params)
             if (param.pattern || !param.name) return;
         Signature signature;
-        signature.name = def.name;
-        signature.isFoul = def.isFoul;
+        signature.name = method.name;
+        signature.isFoul = method.isFoul;
         signature.params.push_back(receiver);
         for (const auto& param : clause.params)
             signature.params.push_back(
@@ -1422,7 +1462,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
             : freshTypeVar();
         signature.makeModule = modulePath;
-        auto& existing = m_methodSignatures[def.name];
+        auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
             std::any_of(existing.begin(), existing.end(),
                         [&](const Signature& other) {
@@ -1433,7 +1473,23 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                                     return false;
                             return true;
                         });
-        if (!duplicate) existing.push_back(std::move(signature));
+        if (!duplicate) existing.push_back(signature);
+        if (def.isServing && method.isSlot) {
+            bool hasFrom = false;
+            if (auto* named = std::get_if<NamedType>(&signature.result->kind))
+                hasFrom = named->name == "Reply" &&
+                          named->typeArgs.size() == 1;
+            auto remote = remoteSlotSignature(signature, hasFrom);
+            const bool remoteDuplicate = std::any_of(
+                existing.begin(), existing.end(), [&](const Signature& other) {
+                    if (other.params.size() != remote.params.size()) return false;
+                    for (size_t i = 0; i < other.params.size(); ++i)
+                        if (!typesEqual(other.params[i], remote.params[i]))
+                            return false;
+                    return true;
+                });
+            if (!remoteDuplicate) existing.push_back(std::move(remote));
+        }
     };
     for (const auto& item : def.body) {
         if (const auto* function =
@@ -3456,9 +3512,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
             }
-            for (const auto& [_, arg] : node.namedArgs) {
+            for (const auto& [_, arg] : node.namedArgs)
                 argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
-            }
             // Second pass: infer lambdas with parameter hints from the signature.
             for (const auto& [argIdx, rawIdx] : contextualLambdas) {
                 auto hints = resolveArgHints(node.name, argTypes, argIdx);
@@ -3821,8 +3876,32 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
             }
-            for (const auto& [_, arg] : node.namedArgs) {
-                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            const bool serverSlotCall = [&] {
+                if (isNamespaceCall || argTypes.empty() ||
+                    !m_slotMethodNames.count(node.method))
+                    return false;
+                auto receiver = resolve(argTypes.front());
+                auto* named = std::get_if<NamedType>(&receiver->kind);
+                return named && named->name == "Server" &&
+                       named->typeArgs.size() == 1;
+            }();
+            for (const auto& [name, arg] : node.namedArgs) {
+                auto type = arg ? inferExpr(*arg) : Type::unknown();
+                if (serverSlotCall && name == "within") {
+                    auto resolved = resolve(type);
+                    const bool infinity = [&] {
+                        auto* atom = std::get_if<PrimitiveType>(&resolved->kind);
+                        return atom && atom->kind == PrimitiveType::Atom &&
+                               atom->atomName == "infinity";
+                    }();
+                    if (!infinity && !containsOpenType(resolved) &&
+                        !typesEqual(resolved, Type::integer()))
+                        error(arg ? arg->location : expr.location,
+                              "`within:` expects Integer milliseconds or :infinity, got " +
+                                  typeToString(resolved));
+                    continue;
+                }
+                argTypes.push_back(std::move(type));
             }
             // Second pass: infer lambdas with parameter hints from the signature.
             for (const auto& [argIdx, rawIdx] : contextualLambdas) {
@@ -4212,6 +4291,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
             std::string sourceName = node.typeName;
+            TypePtr contextualRecordType;
             if (sourceName == "This" || sourceName == "New") {
                 if (!m_inMakeBlock || !m_currentMakeType) {
                     error(expr.location, "`" + sourceName +
@@ -4226,6 +4306,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return Type::unknown();
                 }
                 sourceName = named->name;
+                contextualRecordType = receiver;
             }
             const auto recordName = resolveRecordName(sourceName);
             // Naming a qualified record is a reference to its MODULE: the
@@ -4321,7 +4402,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // found, so the resolved identity is always the right answer here:
             // a literal must have the same type name that annotations
             // mentioning the same record resolve to.
-            return Type::named(recordName);
+            return contextualRecordType ? contextualRecordType
+                                        : Type::named(recordName);
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
             if (node.condition) {

@@ -6,6 +6,14 @@ type Pid
 type Task<A>
 type Reference
 type Process<A>
+type Reply<A>
+
+type CallError = Timeout | NoProcess | CallFailed
+
+record Server<X> do
+  process : Process<X>
+  timeout : Integer = 5000
+end
 
 module Process do
   # Run an executable directly with an argv vector. No shell is involved.
@@ -99,6 +107,24 @@ make Process<X> do
 
   alive? :> Bool
   let alive? = Kex.Intrinsic.Process.alive?(this)
+end
+
+make Server<X> do
+  # Return an immutable view of the same server with a new default call timeout.
+  within :> Integer -> Server<X>
+  let within(timeout) = New { timeout: timeout }
+
+  link :> Void
+  let link = @process.link
+
+  unlink :> Void
+  let unlink = @process.unlink
+
+  monitor :> Reference
+  let monitor = @process.monitor
+
+  alive? :> Bool
+  let alive? = @process.alive?
 end
 
 module Task do

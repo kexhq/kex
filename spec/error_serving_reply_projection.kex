@@ -1,0 +1,10 @@
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  get ::> Reply<Integer>
+  slot get -> Reply<Integer> = Kex.Intrinsic.Process.reply(@count)
+end
+
+foul bad(server: Server<Counter>) -> String = server.get()
