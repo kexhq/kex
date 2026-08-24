@@ -450,16 +450,25 @@ private do
     # $T$ stands in for a backtick. A raw string is delimited by backticks,
     # so a Markdown code fence cannot be written inside one — and Markdown
     # without fences is not much of a README.
-    let libraryUsage = `
-      ## Use it
 
-      In the depending package's $T$package.kex$T$:
+    # What a visitor to the repository page needs first: how to get this
+    # package into THEIR package. Shared by both variants — an application is
+    # still a package somebody can depend on, and a README that only says how
+    # to run it locally leaves the reader to guess the manifest line.
+    let dependency = `
+      ## Add it to your project
+
+      In your own package's $T$package.kex$T$:
 
       $T$$T$$T$kex
       tey("$NAME$", git: "https://github.com/you/$NAME$", tag: "~> 0.1")
       $T$$T$$T$
 
-      Then $T$tey install$T$, and in the source:
+      Then $T$tey install$T$. The tag is the release, and $T$~> 0.1$T$ takes the
+      newest $T$0.1.x$T$ — Tey resolves it against this repository's tags.
+    `
+    let libraryUsage = `
+      ## Use it
 
       $T$$T$$T$kex
       using $MODULE$
@@ -475,8 +484,7 @@ private do
       git tag v0.1.0 && git push origin v0.1.0
       $T$$T$$T$
 
-      The tag is the release: Tey resolves $T$tag: "~> 0.1"$T$ by listing this
-      repository's tags. Keep it in step with $T$version$T$ in $T$package.kex$T$.
+      Keep the tag in step with $T$version$T$ in $T$package.kex$T$.
     `
     let applicationUsage = `
       ## Run it
@@ -486,7 +494,10 @@ private do
       tey run
       $T$$T$$T$
     `
-    let usage = library then libraryUsage else applicationUsage
+    # A library is USED by depending on it, so the manifest line comes first
+    # and the `using` example follows it. An application is run, so its own
+    # instructions lead and the dependency line is the footnote.
+    let usage = library then "${dependency}${libraryUsage}" else "${applicationUsage}${dependency}"
     let body = `
       # $NAME$
 
@@ -500,7 +511,23 @@ private do
       tey test      # run spec/*.spec.kex
       $T$$T$$T$
 
-      $USAGE$`
+      $USAGE$
+      ## Your own commands
+
+      A package can add commands to Tey. Declare them in $T$package.kex$T$:
+
+      $T$$T$$T$kex
+      command("bench", run: "script/bench.kex", description: "Run the benchmarks")
+      command("fmt", run: "kex --format src", description: "Format the sources")
+      $T$$T$$T$
+
+      They run as $T$tey bench$T$ and $T$tey fmt$T$ from anywhere in the package, are
+      listed under **Package commands** in $T$tey help$T$, and show up as tasks in
+      editors that ask Tey what this project can do. A $T$run:$T$ whose first word
+      ends in $T$.kex$T$ is run by Kex; anything else is a shell command line.
+
+      Built-in names ($T$build$T$, $T$test$T$, $T$run$T$, ...) cannot be redeclared, so
+      $T$tey test$T$ means the same thing in every package.`
     # Two passes, and they cannot be one: substitution runs in sorted key
     # order, so `$USAGE$` would be spliced in LAST — after the placeholders
     # it contains had already been looked for — and the usage section would
@@ -514,9 +541,9 @@ private do
   # printed nothing until it had finished, so six files appeared as one line
   # of output after the fact.
   let creating(name: String, library: Bool, directory: String) -> String do
-    let kind = library then "library" else "package"
+    let kind = library then "library" else "application"
     let place = directory == "." then "this directory" else directory
-    return "${Console.BOLD}Creating${Console.RESET} ${kind} ${Console.CYAN}${name}${Console.RESET} in ${place}"
+    return "${Console.BOLD}Creating${Console.RESET} a ${kind} package ${Console.CYAN}${name}${Console.RESET} in ${place}"
   end
 
   # One scaffolded path: the verb, then the path as it looks from inside the

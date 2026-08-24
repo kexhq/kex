@@ -201,7 +201,9 @@ private do
       Ok(result) => Digest.sha256(result.stdout)
       Error(error) => return Error(error)
     end
-    Ok(Tey.Lockfile.Dependency { name: manifestName, git: manifestGit,
-      resolved: resolved, commit: commit, sha256: sha, groups: manifestGroups })
+    # The candidate again with the hash filled in: everything else was already
+    # decided above, and repeating the five unchanged fields is how the two
+    # copies drift when a sixth is added.
+    Ok(Tey.Lockfile.Dependency { ...candidate, sha256: sha })
   end
 end

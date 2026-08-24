@@ -69,8 +69,7 @@ make OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: StringValue,
                               description: description, default: default,
                               required?: required? }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   let integer(long: String, short: Char?, description: String,
@@ -78,15 +77,13 @@ make OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: IntegerValue,
                               description: description, default: default,
                               required?: required? }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   let flag(long: String, short: Char?, description: String) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: FlagValue,
                               description: description, default: Just("false") }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   # Declares a command. `usage` is what the help line shows after the name
@@ -94,15 +91,13 @@ make OptionConfig do
   let command(name: String, description: String, handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: "", handler: handler }
-    OptionConfig { name: @name, description: @description,
-                   options: @options, commands: [...@commands, spec] }
+    New { commands: [...@commands, spec] }
   end
 
   let command(name: String, usage: String, description: String, handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: usage, handler: handler }
-    OptionConfig { name: @name, description: @description,
-                   options: @options, commands: [...@commands, spec] }
+    New { commands: [...@commands, spec] }
   end
 
   # The same, listed under its own help heading rather than with the tool's
@@ -112,8 +107,7 @@ make OptionConfig do
               handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: usage, handler: handler, section: section }
-    OptionConfig { name: @name, description: @description,
-                   options: @options, commands: [...@commands, spec] }
+    New { commands: [...@commands, spec] }
   end
 
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do

@@ -14,7 +14,8 @@ foul parser -> OptionConfig do
   OptionParser.define("tey", "Package and Kex toolchain manager")
     .flag("help", Just('h'), "Show this help")
     .flag("version", Just('V'), "Show Tey and active Kex versions")
-    .flag("lib", None, "Create a library package with `tey init`")
+    .flag("lib", None, "Create a library package, without being asked")
+    .flag("app", None, "Create an application package, without being asked")
     .string("git", None, "Git URL for `tey add`", None, false)
     .string("tag", None, "Git tag or tag requirement", None, false)
     .string("branch", None, "Git branch", None, false)
@@ -34,7 +35,7 @@ foul parser -> OptionConfig do
     # an argument overrides that, for a checkout whose directory name is not
     # the package name.
     .command("init", "[<name>]", "create a Kex package in this directory") do |options|
-      Tey.Commands.init(options.arguments.first.or(""), options.flagEnabled?("lib"))
+      Tey.Commands.init(options.arguments.first.or(""), Tey.Cli.libraryChoice(options))
     end
     .command("add", "<name> --git <url>", "add a Git dependency and update tey.lock") do |options|
       match options.arguments.first do
@@ -251,10 +252,43 @@ private do
   end
 
 
+  # Whether to scaffold a library, when the command line did not say. `--lib`
+  # and `--app` both answer it without asking.
+  #
+  # The two scaffolds differ in what they produce and in what the README then
+  # tells a visitor to do, so guessing "application" silently was a choice
+  # made FOR the author on the one command where they are most likely to have
+  # an opinion.
+  #
+  # End-of-input answers "application": a pipe, a CI job or `tey new x
+  # </dev/null` cannot answer, and a question nobody is there to read must not
+  # hang or fail the command.
+  foul libraryChoice(options: ParsedOptions) -> Bool do
+    return true if options.flagEnabled?("lib")
+    return false if options.flagEnabled?("app")
+    return Tey.Cli.askLibrary
+  end
+
+  foul askLibrary -> Bool do
+    IO.print("Create a ${Console.BOLD}library${Console.RESET}? [y/${Console.CYAN}N${Console.RESET}] ")
+    # `.or("")` rather than a match on the Optional: end-of-input and a bare
+    # Enter both mean "the default", so the two need no telling apart — which
+    # is just as well, because `IO.getLine` answers a line as an UNTAGGED
+    # string on both backends despite being declared `String?`, so `Just(x)`
+    # matches nothing anywhere (kexhq/kex#197).
+    let choice = IO.getLine.or("").trim.lowerCase
+    # The prompt carried no newline, so close its line before the scaffold
+    # prints underneath.
+    IO.printLine("") if choice == ""
+    return true if choice == "y" || choice == "yes"
+    return false if choice == "" || choice == "n" || choice == "no"
+    Tey.Cli.askLibrary
+  end
+
   foul newPackage(options: ParsedOptions) -> Integer do
     match options.arguments.first do
       None => Tey.Cli.incomplete("new", "<name>")
-      Just(name) => Tey.Commands.new(name, options.flagEnabled?("lib"))
+      Just(name) => Tey.Commands.new(name, Tey.Cli.libraryChoice(options))
     end
   end
 
