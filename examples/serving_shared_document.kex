@@ -1,0 +1,30 @@
+record Document do
+  text : String
+  revision : Integer = 0
+end
+
+record Snapshot do
+  text : String
+  revision : Integer
+end
+
+serving Document do
+  slot replace(text: String) -> Reply<Integer> do
+    new.text = text
+    new.revision = new.revision + 1
+    return { new, reply: new.revision }
+  end
+
+  slot read -> Reply<Snapshot> do
+    return { reply: Snapshot { text: @text, revision: @revision } }
+  end
+
+  slot archive -> Reply<Integer> = { stop: :normal, reply: @revision }
+end
+
+main do
+  let document = Process.spawn(Document { text: "First draft" })
+  assert(document.replace("Ready for review") == Ok(1))
+  assert(document.read() == Ok(Snapshot { text: "Ready for review", revision: 1 }))
+  document.archive()
+end

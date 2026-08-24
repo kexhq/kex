@@ -1,0 +1,28 @@
+record RateLimiter do
+  remaining : Integer
+end
+
+serving RateLimiter do
+  slot allowed? -> Reply<Bool> do
+    let allowed = @remaining > 0
+    new.remaining = allowed then @remaining - 1 else @remaining
+    return { new, reply: allowed }
+  end
+
+  slot refill(limit: Integer) -> Void do
+    new.remaining = limit
+    return new
+  end
+
+  slot stop -> Reply<Integer> = { stop: :normal, reply: @remaining }
+end
+
+main do
+  let api = Process.spawn(RateLimiter { remaining: 2 })
+  assert(api.allowed?() == Ok(true))
+  assert(api.allowed?() == Ok(true))
+  assert(api.allowed?() == Ok(false))
+  api.refill(1)
+  assert(api.allowed?() == Ok(true))
+  api.stop()
+end

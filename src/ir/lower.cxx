@@ -846,6 +846,17 @@ struct Lowering {
     // is what simpleTypeName returned for it before.
     static auto makeTargetNameList(const ast::TypeExprPtr& t)
         -> std::vector<std::string> {
+        if (t) {
+            if (const auto* tn = std::get_if<ast::TypeName>(&t->kind);
+                tn && tn->parts.size() > 1) {
+                std::string qualified;
+                for (const auto& part : tn->parts) {
+                    if (!qualified.empty()) qualified += ".";
+                    qualified += part;
+                }
+                return {std::move(qualified)};
+            }
+        }
         auto names = kex::makeTargetNames(t);
         if (names.empty()) names.emplace_back("");
         return names;

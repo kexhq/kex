@@ -18,7 +18,7 @@ serving Counter do
 
   slot reset(to: Integer) -> Void do
     new.count = to
-    new
+    return new
   end
 
   slot shutdown -> Reply<Integer> = { stop: :normal, reply: @count }
