@@ -35,6 +35,8 @@ enum class TokenType {
     Record,
     Rescue,
     Return,
+    Serving,
+    Slot,
     Spawn,
     Then,
     This,
@@ -58,6 +60,7 @@ enum class TokenType {
     Colon,        // :
     Caret,        // ^
     TypeAnnotation, // :>
+    SlotAnnotation, // ::>
     Comma,        // ,
     Dot,          // .
     DotDot,       // ..

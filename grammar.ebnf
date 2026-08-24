@@ -19,6 +19,7 @@ top_level_item
   | type_def
   | record_def
   | make_def
+  | serving_def
   | function_def
   | compiled_block
   | using_block
@@ -45,6 +46,7 @@ module_item
   | type_def
   | record_def
   | make_def
+  | serving_def
   | function_def
   | compiled_block
   | visibility_block
@@ -142,6 +144,12 @@ make_item
   | visibility_block
   ;
 
+(* ===== Serving Blocks ===== *)
+
+serving_def = SERVING make_target DO serving_body END ;
+serving_body = ( slot_def | function_def | type_annotation )* ;
+slot_def = FOUL? SLOT LOWER_IDENT function_clauses ;
+
 (* ===== Functions ===== *)
 
 function_def
@@ -183,12 +191,14 @@ param
   ;
 
 (* Type annotations: *)
-(*   :> means implicit This as first param — used inside make blocks *)
+(*   :> means implicit This as first param — used inside make/serving blocks *)
+(*  ::> means implicit This and From — used by synchronous slots *)
 (*      e.g. modulo :> This -> This  means  This -> This -> This *)
 (*   :  means full explicit signature — used at top level *)
 (*      e.g. element : String -> [String] -> Element *)
 type_annotation
   = LOWER_IDENT TYPE_ANNOTATION type_expr
+  | LOWER_IDENT SLOT_ANNOTATION type_expr
   | LOWER_IDENT COLON type_expr
   | binary_op TYPE_ANNOTATION type_expr           (* operator signatures, e.g. == :> This -> Bool *)
   | binary_op COLON type_expr                     (* e.g. == : This -> This -> Bool *)
@@ -362,7 +372,7 @@ match_clause
   | WHEN expr FAT_ARROW expr   (* bare when = _ when *)
   ;
 
-receive_expr = RECEIVE DO match_clause* after_clause? END ;
+receive_expr = RECEIVE DO [ PIPE LOWER_IDENT PIPE ] match_clause* after_clause? END ;
 
 (* The timeout belongs to the branch it governs. A receive with no
    `after` blocks until a message matches; one with no clauses and only an
@@ -522,6 +532,8 @@ PUBLIC   = "public" ;
 RECEIVE  = "receive" ;
 RECORD   = "record" ;
 RETURN   = "return" ;
+SERVING  = "serving" ;
+SLOT     = "slot" ;
 SPAWN    = "spawn" ;
 THEN     = "then" ;
 THIS     = "this" ;
@@ -571,6 +583,7 @@ SLASH        = "/" ;
 STAR         = "*" ;
 TILDE        = "~" ;
 TYPE_ANNOTATION = ":>" ;
+SLOT_ANNOTATION = "::>" ;
 UNDERSCORE   = "_" ;
 
 (* Identifiers *)

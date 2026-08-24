@@ -1941,10 +1941,15 @@ struct Lowering {
         if (n.name == "self" && args.empty() && !knownFns.count("self"))
             return callE("erlang", "self", 0, {});
         if (n.name == "send" && args.size() == 2 && !knownFns.count("send")) {
+            return wrapLets(binds, callE("erlang", "send", 2,
+                                         two(std::move(args[0]),
+                                             std::move(args[1]))));
+        }
+        if (n.name == "sendFrom" && args.size() == 2 &&
+            !knownFns.count("sendFrom")) {
             auto message = std::make_unique<Expr>();
-            message->node = MakeTuple{three(lit(LitKind::Atom, "kex_msg"),
-                                            std::move(args[1]),
-                                            callE("erlang", "self", 0, {}))};
+            message->node = MakeTuple{two(callE("erlang", "self", 0, {}),
+                                          std::move(args[1]))};
             return wrapLets(binds, callE("erlang", "send", 2,
                                          two(std::move(args[0]),
                                              std::move(message))));
@@ -4468,7 +4473,7 @@ struct Lowering {
 
     auto lowerReceive(const ast::ReceiveExpr& n) -> ExprPtr {
         Receive r;
-        r.senderVar = n.senderBinding ? *n.senderBinding : fresh("Sndr");
+        if (n.senderBinding) r.senderVar = *n.senderBinding;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;

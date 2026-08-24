@@ -2168,6 +2168,18 @@ int main() {
     });
 
     describe("Interpreter — Processes (fiber-based scheduler, phase 1)", []() {
+        it("plain send preserves a raw two-tuple", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  spawn do parent.send((:raw, 7)) end\n"
+                "  receive do\n"
+                "    (:raw, n) => IO.printLine(n)\n"
+                "  end\n"
+                "end\n");
+            assertEqual(out, std::string("7\n"));
+        });
+
         it("spawn/send/receive round trip", []() {
             auto out = runOutput(
                 "foul pingServer do\n"
@@ -2181,7 +2193,7 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  let server = pingServer()\n"
-                "  server.send(:ping)\n"
+                "  server.sendFrom(:ping)\n"
                 "  receive do\n"
                 "    :pong => IO.printLine(\"pong\")\n"
                 "  end\n"
@@ -2550,11 +2562,11 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  let server = pingServer()\n"
-                "  server.send(:ping)\n"
+                "  server.sendFrom(:ping)\n"
                 "  receive do :pong => IO.printLine(\"pong1\") end\n"
-                "  server.send(:ping)\n"
+                "  server.sendFrom(:ping)\n"
                 "  receive do :pong => IO.printLine(\"pong2\") end\n"
-                "  server.send(:ping)\n"
+                "  server.sendFrom(:ping)\n"
                 "  receive do :pong => IO.printLine(\"pong3\") end\n"
                 "end\n"
             );

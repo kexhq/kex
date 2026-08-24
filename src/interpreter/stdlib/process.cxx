@@ -246,6 +246,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::unit();
     });
 
+    defineIntrinsic("Process::sendFrom", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        auto* p = std::get_if<ProcessValue>(&args[0]->data);
+        if (!p) return Value::unit();
+        auto sender = Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
+        p->scheduler->send(p->pid, Value::tuple({std::move(sender), args[1]}));
+        return Value::unit();
+    });
+
     // pid.link()/pid.unlink() — links the CALLING process (whichever
     // process is currently running when this is invoked, not necessarily
     // the receiver's spawner) to the receiver pid. Passive bookkeeping

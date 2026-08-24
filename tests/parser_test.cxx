@@ -620,6 +620,29 @@ int main() {
         });
     });
 
+    describe("Parser — Serving Blocks", []() {
+        it("parses serving with call and cast slots", []() {
+            auto program = parse(
+                "record Counter do count : Integer = 0 end\n"
+                "serving Counter do\n"
+                "  increment ::> Integer -> Reply<Integer>\n"
+                "  slot increment(by: Integer) = { reply: by }\n"
+                "  slot reset = new\n"
+                "end\n");
+            assertEqual(program.items.size(), size_t(2));
+            auto& serving = std::get<std::unique_ptr<ast::MakeDef>>(program.items[1]);
+            assertTrue(serving->isServing);
+            assertEqual(serving->body.size(), size_t(3));
+            auto& ann = std::get<std::unique_ptr<ast::TypeAnnotation>>(serving->body[0]);
+            assertTrue(ann->implicitThis);
+            assertTrue(ann->implicitFrom);
+            auto& call = std::get<std::unique_ptr<ast::FunctionDef>>(serving->body[1]);
+            auto& cast = std::get<std::unique_ptr<ast::FunctionDef>>(serving->body[2]);
+            assertTrue(call->isSlot);
+            assertTrue(cast->isSlot);
+        });
+    });
+
     describe("Parser — Expressions", []() {
         it("parses let binding", []() {
             auto program = parse("main do\n  let x = 5\nend");
@@ -718,6 +741,19 @@ int main() {
             auto& body = fn->clauses[0].body;
             return std::get<ast::ReceiveExpr>(body[0]->kind);
         };
+
+        it("parses sender binding", []() {
+            auto prog = parse(
+                "foul wait do\n"
+                "  receive do |sender|\n"
+                "    :ping => sender\n"
+                "  end\n"
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertTrue(recv.senderBinding.has_value());
+            assertEqual(*recv.senderBinding, std::string("sender"));
+        });
 
         it("parses inline single-expression clause body", []() {
             auto prog = parse(

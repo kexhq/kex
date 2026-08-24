@@ -3469,7 +3469,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
             // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
-            if (node.name == "send" && argTypes.size() == 2) {
+            if ((node.name == "send" || node.name == "sendFrom") &&
+                argTypes.size() == 2) {
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
@@ -3875,7 +3876,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
 
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
             // argTypes[0] = pid type, argTypes[1] = msg type.
-            if (node.method == "send" && argTypes.size() == 2) {
+            if ((node.method == "send" || node.method == "sendFrom") &&
+                argTypes.size() == 2) {
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {

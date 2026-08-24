@@ -144,6 +144,7 @@ auto Parser::syncToTopLevel() -> void {
     case TokenType::Record:
     case TokenType::Trait:
     case TokenType::Make:
+    case TokenType::Serving:
     case TokenType::Main:
     case TokenType::Compiled:
     case TokenType::Using:
@@ -206,6 +207,8 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     return parseTraitDef();
   if (check(TokenType::Make))
     return parseMakeDef();
+  if (check(TokenType::Serving))
+    return parseServingDef();
   if (check(TokenType::Compiled))
     return parseCompiledBlock();
   if (check(TokenType::Using))
@@ -323,6 +326,8 @@ auto Parser::parseModuleDef(bool allowStandalone,
       mod->body.push_back(parseTraitDef());
     } else if (check(TokenType::Make)) {
       mod->body.push_back(parseMakeDef());
+    } else if (check(TokenType::Serving)) {
+      mod->body.push_back(parseServingDef());
     } else if (check(TokenType::Compiled)) {
       mod->body.push_back(parseCompiledBlock());
     } else if (check(TokenType::Using)) {
@@ -685,6 +690,20 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
   return complete(std::move(def));
 }
 
+auto Parser::parseServingDef() -> std::unique_ptr<ast::MakeDef> {
+  auto def = std::make_unique<ast::MakeDef>();
+  def->location = currentLocation();
+  def->isServing = true;
+  expect(TokenType::Serving, "Expected 'serving'");
+  def->target = parseTypeExpr();
+  if (def->target)
+    if (auto *named = std::get_if<ast::TypeName>(&def->target->kind);
+        named && named->parts.size() == 1)
+      rejectSingleLetterTypeName(named->parts[0], "serving target");
+  parseMakeBody(*def);
+  return complete(std::move(def));
+}
+
 // `, implement: Trait1, Trait2` — optional, and shared with `make %name`
 // generation, which has no target type to parse before it.
 auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
@@ -733,7 +752,9 @@ auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
 // The `do ... end` half of a `make`, shared with `make %name` generation.
 auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
   auto *def = &into;
-  expect(TokenType::Do, "Expected 'do' after make target");
+  expect(TokenType::Do, def->isServing
+      ? "Expected 'do' after serving target"
+      : "Expected 'do' after make target");
   skipNewlines();
 
   while (!check(TokenType::End) && !atEnd()) {
@@ -741,6 +762,8 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
       def->body.push_back(parseVisibilityBlock());
     } else if (check(TokenType::Foul)) {
       def->body.push_back(parseFunctionDef(true));
+    } else if (def->isServing && check(TokenType::Slot)) {
+      def->body.push_back(parseFunctionDef());
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef());
     } else if (check(TokenType::LowerIdent) &&
@@ -759,7 +782,9 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
     skipNewlines();
   }
 
-  expect(TokenType::End, "Expected 'end' to close make");
+  expect(TokenType::End, def->isServing
+      ? "Expected 'end' to close serving"
+      : "Expected 'end' to close make");
 }
 
 // ===== Functions =====
@@ -770,9 +795,12 @@ auto Parser::parseFunctionDef(bool isFoul)
   def->location = currentLocation();
   def->isFoul = isFoul;
 
-  if (isFoul)
+  if (isFoul) {
     expect(TokenType::Foul, "Expected 'foul'");
-  else
+    if (match(TokenType::Slot)) def->isSlot = true;
+  } else if (match(TokenType::Slot)) {
+    def->isSlot = true;
+  } else
     expect(TokenType::Let, "Expected 'let'");
 
   // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
@@ -993,7 +1021,10 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   else
     error("Expected name");
 
-  if (match(TokenType::TypeAnnotation)) {
+  if (match(TokenType::SlotAnnotation)) {
+    ann->implicitThis = true;
+    ann->implicitFrom = true;
+  } else if (match(TokenType::TypeAnnotation)) {
     ann->implicitThis = true;
   } else {
     expect(TokenType::Colon, "Expected ':' or ':>'");
@@ -2767,9 +2798,6 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 
   expect(TokenType::Do, "Expected 'do' after receive");
 
-  // Optional `|sender|` binding: when present, every received message is
-  // expected to be a 2-tuple {Payload, Sender} and `sender` is bound to
-  // the sending pid (with Payload matched against the clause patterns).
   std::optional<std::string> senderBinding;
   if (match(TokenType::Pipe)) {
     senderBinding =

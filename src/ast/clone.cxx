@@ -141,6 +141,7 @@ auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef> {
     out->location = function.location;
     out->name = function.name;
     out->isFoul = function.isFoul;
+    out->isSlot = function.isSlot;
     out->isPredicate = function.isPredicate;
     out->computedName = clone(function.computedName);
     out->clauses = cloneVec(function.clauses);
@@ -181,6 +182,7 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
     out->location = make.location;
     out->target = clone(make.target);
     out->isFinal = make.isFinal;
+    out->isServing = make.isServing;
     out->implements = make.implements;
     for (const auto& item : make.body) {
         std::visit(
@@ -194,6 +196,7 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
                     copy->name = node->name;
                     copy->type = clone(node->type);
                     copy->implicitThis = node->implicitThis;
+                    copy->implicitFrom = node->implicitFrom;
                     copy->isFoul = node->isFoul;
                     out->body.push_back(std::move(copy));
                 } else if constexpr (std::is_same_v<Ptr, VisibilityBlock>) {

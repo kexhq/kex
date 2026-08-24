@@ -301,8 +301,8 @@ struct ReceiveExpr {
     std::vector<MatchClause> clauses;
     std::optional<ExprPtr> timeout;
     std::optional<ExprPtr> afterBody;
-    // When present, every message is expected to be a 2-tuple {Payload, Sender}
-    // and this name is bound to the Sender pid for each clause. Patterns in
+    // When present, every message is expected to be the conventional Erlang
+    // sender pair {Sender, Payload} and this name is bound to Sender. Patterns in
     // `clauses` match against the Payload only.
     std::optional<std::string> senderBinding;
 };
@@ -527,6 +527,7 @@ struct TypeAnnotation {
     std::string name;
     TypeExprPtr type;
     bool implicitThis; // :> vs :
+    bool implicitFrom = false; // ::>
     bool isFoul = false;
 };
 
@@ -560,6 +561,7 @@ struct FunctionDef {
     // declaration or any backend.
     ExprPtr computedName;
     bool isFoul = false;
+    bool isSlot = false;
     bool isPredicate = false; // ends with ?
     std::vector<FunctionClause> clauses;
 };
@@ -628,6 +630,7 @@ struct MakeDef {
     SourceLocation location;
     TypeExprPtr target;
     bool isFinal = false;
+    bool isServing = false;
     std::vector<std::string> implements;  // trait names claimed by this block
     // ExprPtr is only ever produced for a GENERATED `make %name do ... end`,
     // where the body may hold a driver loop declaring methods

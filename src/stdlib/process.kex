@@ -53,9 +53,13 @@ record ProcessResult do
 end
 
 make Pid do
-  # Sends +msg+ to the process, wrapped in the standard Kex message format.
+  # Sends +msg+ unchanged as a raw BEAM term.
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
+
+  # Sends the conventional Erlang sender-bearing pair {Process.self, msg}.
+  sendFrom :> X -> Void
+  let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
   # Links the calling process to this one (bidirectional exit propagation).
   link :> Void

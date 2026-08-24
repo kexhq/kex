@@ -2,7 +2,7 @@
 %% intrinsics. Thin wrappers over Erlang BIFs with Kex's message format.
 %% Receiver is the first argument.
 -module(kex_intrinsic_process).
--export(['send'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
+-export(['send'/2, 'sendFrom'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
           self/0, exit/2, register/2, whereis/1, run/2, stream/2]).
 
@@ -227,8 +227,9 @@ collect_port(Port, Chunks) ->
             {Status, iolist_to_binary(lists:reverse(Chunks))}
     end.
 
-%% pid.send(msg) — send a Kex-formatted message.
-'send'(Pid, Msg) -> erlang:send(Pid, {'kex_msg', Msg, erlang:self()}).
+%% Raw BEAM messaging, plus the conventional sender-bearing {Pid, Payload} form.
+'send'(Pid, Msg) -> erlang:send(Pid, Msg).
+'sendFrom'(Pid, Msg) -> erlang:send(Pid, {erlang:self(), Msg}).
 
 %% pid.link() — bidirectional exit propagation.
 'link'(Pid) -> erlang:link(Pid).

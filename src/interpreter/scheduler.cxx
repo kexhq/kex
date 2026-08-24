@@ -370,9 +370,7 @@ auto Scheduler::send(ProcessId target, ValuePtr payload) -> bool {
     if (it == m_processes.end() || it->second->finished) return false;
     auto& proc = *it->second;
 
-    auto sender = Value::process(m_current, this);
-    auto wrapped = Value::tuple({std::move(payload), std::move(sender)});
-    proc.mailbox.push_back(std::move(wrapped));
+    proc.mailbox.push_back(std::move(payload));
 
     if (proc.blockedOnReceive) {
         proc.blockedOnReceive = false;
@@ -409,9 +407,16 @@ auto Scheduler::blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr {
 
     while (true) {
         for (size_t i = 0; i < proc.mailbox.size(); i++) {
-            auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
-            ValuePtr payload = (tup && tup->elements.size() == 2) ? tup->elements[0] : proc.mailbox[i];
-            ValuePtr sender = (tup && tup->elements.size() == 2) ? tup->elements[1] : Value::none();
+            ValuePtr payload = proc.mailbox[i];
+            ValuePtr sender = Value::none();
+            if (expr.senderBinding) {
+                auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
+                if (!tup || tup->elements.size() != 2 ||
+                    !std::holds_alternative<ProcessValue>(tup->elements[0]->data))
+                    continue;
+                sender = tup->elements[0];
+                payload = tup->elements[1];
+            }
 
             for (const auto& clause : expr.clauses) {
                 m_evaluator.pushEnv();
