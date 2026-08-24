@@ -150,6 +150,16 @@ module Docgen.Model do
     line : Integer
   end
 
+  # One row of versions.json. The file accumulates across builds — the
+  # output directory IS the site, so each build upserts its (package, id)
+  # entry into whatever is already published there.
+  record VersionEntry do
+    id : String
+    label : String
+    generatedAt : String
+    package : String
+  end
+
   # The kind label used in indexes and JSON for each entity variant.
   foul kindOf(entity: Entity) -> String do
     match entity do

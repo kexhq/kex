@@ -66,6 +66,8 @@ module Docgen.Cli do
     IO.printLine("  model.json         full documentation model")
     IO.printLine("  search.json        flat search index (name/kind/signature)")
     IO.printLine("  <pkg>/<ver>/*.md   one Markdown page per source file")
+    IO.printLine("  <pkg>/<ver>/*.html the same pages as a styled static site")
+    IO.printLine("  assets/style.css   the site's stylesheet (kex.run design tokens)")
     IO.printLine("  manifest.json, versions.json, llms.txt, llms-full.txt,")
     IO.printLine("  robots.txt, sitemap.xml")
     IO.printLine("")

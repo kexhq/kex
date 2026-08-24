@@ -28,4 +28,6 @@ bundle "kex" do
           description: "Start the REPL on the freshly built compiler")
   command("tey", run: "make build-tey",
           description: "Rebuild Tey and ./tey-run from this checkout")
+  command("docs-all", run: "tools/docgen/build-all.sh",
+          description: "Regenerate the full docs site (all tags + unreleased) into ../kdocs")
 end

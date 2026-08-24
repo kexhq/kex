@@ -1,0 +1,365 @@
+# Model records → static HTML pages, styled after kex.run's docs section
+# (warm honey/cream palette, Fraunces/Plus Jakarta Sans/JetBrains Mono,
+# dark code surface with tok-* syntax classes). The stylesheet lives in
+# Docgen.Css and is written to assets/style.css by the build driver.
+#
+# HTML is a sibling renderer of the Markdown one: both walk the typed
+# PackageModel, so nothing here parses Markdown or JSON.
+
+module Docgen.Html do
+  using Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, kindOf, nameOf]
+
+  # ── Public API ───────────────────────────────────────────────────────────
+
+  foul pageHtml(page: SourcePage, model: PackageModel) -> String do
+    let sections = page.entities.map { |e| entitySection(e) }.join("\n")
+    let body = "<h1>${esc(page.title)}</h1>\n${sections}"
+    return layout(page.title, page.urlPath, body, model)
+  end
+
+  # Landing page for <pkg>/<version>/index.html: every module as a card.
+  foul versionIndexHtml(model: PackageModel) -> String do
+    let label = labelOf(model)
+    let cards = model.pages.map { |p| pageCard(p) }.join("\n")
+    let body = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>\n<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>\n<div class=\"cards\">\n${cards}\n</div>"
+    return layout(label, "", body, model)
+  end
+
+  # Site root index.html: every published package/version as a card. Built
+  # from the accumulated versions.json entries, not just this build's model.
+  foul rootIndexHtml(versions: [VersionEntry]) -> String do
+    let cards = versions.map { |v|
+      "<a class=\"card\" href=\"${v.package}/${v.id}/index.html\"><span class=\"card-title\">${esc(v.label)}</span><span class=\"card-meta\">${esc(v.package)} ${esc(v.id)} · generated ${esc(v.generatedAt.take(10))}</span></a>"
+    }.join("\n")
+    return $`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kex docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="https://kex.run">kex</a>
+    <span class="brand-sub">docs</span>
+    <span class="spacer"></span>
+    <a class="back" href="https://kex.run/docs">kex.run ↗</a>
+  </div>
+</header>
+<div class="wrap">
+  <main class="content prose">
+    <h1>kex documentation</h1>
+    <p class="lede">Reference documentation generated from source by docgen. Machine-readable entry points: <a href="llms.txt">llms.txt</a>, <a href="search.json">search.json</a>, <a href="versions.json">versions.json</a>.</p>
+    <div class="cards">
+${cards}
+    </div>
+  </main>
+</div>
+</body>
+</html>
+`
+  end
+
+  # ── Layout ───────────────────────────────────────────────────────────────
+
+  foul layout(title: String, current: String, bodyContent: String, model: PackageModel) -> String do
+    let label = labelOf(model)
+    let root = rootPrefix(current)
+    return $`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)} — ${esc(label)} ${esc(model.version)} — kex docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="${root}assets/style.css">
+<script src="${root}assets/site.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="https://kex.run">kex</a>
+    <span class="brand-sub">docs</span>
+    <span class="spacer"></span>
+    <span class="pkg-badge" id="version-badge" data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}" data-page="${esc(pageTarget(current))}">${esc(label)} ${esc(model.version)}</span>
+    <a class="back" href="https://kex.run/docs">kex.run ↗</a>
+  </div>
+</header>
+<div class="wrap layout">
+  ${sidebar(model, current)}
+  <main class="content">
+    <nav class="crumbs"><a href="${versionPrefix(current)}index.html">${esc(label)}</a> <span class="sep">/</span> <span>${esc(title)}</span></nav>
+    <article class="prose">
+${bodyContent}
+    </article>
+  </main>
+</div>
+<footer class="foot">
+  <div class="wrap">Generated by kex docgen at ${esc(model.generatedAt)} · <a href="${root}llms.txt">llms.txt</a> · <a href="${root}search.json">search.json</a></div>
+</footer>
+</body>
+</html>
+`
+  end
+
+  foul sidebar(model: PackageModel, current: String) -> String do
+    let vpre = versionPrefix(current)
+    let entries = model.pages.map { |p| sidebarEntry(p, current, vpre) }.join("\n")
+    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
+  end
+
+  foul sidebarEntry(page: SourcePage, current: String, vpre: String) -> String do
+    let href = "${vpre}${page.urlPath}.html"
+    if page.urlPath == current
+      let entityLinks = page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
+      return "<li><a class=\"active\" href=\"${href}\">${esc(page.title)}</a><ul class=\"side-sub\">\n${entityLinks}\n</ul></li>"
+    end
+    return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
+  end
+
+  foul pageCard(p: SourcePage) -> String do
+    return "<a class=\"card\" href=\"${p.urlPath}.html\"><span class=\"card-title\">${esc(p.title)}</span><span class=\"card-meta\">${p.entities.count} entities · ${esc(p.source)}</span></a>"
+  end
+
+  # ── Entity sections ──────────────────────────────────────────────────────
+
+  foul entitySection(e: Entity) -> String do
+    match e do
+      TypeDecl(entry) => typeSection(entry)
+      RecordDecl(entry) => recordSection(entry)
+      TraitDecl(entry) => traitSection(entry)
+      MakeDecl(entry) => makeSection(entry)
+      ModuleDecl(entry) => moduleSection(entry)
+      FuncDecl(entry) => functionSection(entry)
+      ConstDecl(entry) => constantSection(entry)
+    end
+  end
+
+  foul typeSection(e: TypeEntry) -> String do
+    let parents = if e.parents.empty?
+      ""
+    else
+      " : " + e.parents.join(", ")
+    end
+    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${esc(parents)}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
+  end
+
+  foul variantsHtml(variants: [VariantEntry]?) -> String do
+    match variants do
+      Just(vs) => do
+        let items = vs.map { |v| variantItem(v) }.join("\n")
+        return "<h3>Variants</h3>\n<ul class=\"variants\">\n${items}\n</ul>"
+      end
+      None => ""
+    end
+  end
+
+  foul variantItem(v: VariantEntry) -> String do
+    if v.name.empty?
+      return "<li class=\"abstract\"><em>abstract</em></li>"
+    end
+    if v.fields.empty?
+      return "<li><code>${esc(v.name)}</code></li>"
+    end
+    return "<li><code>${esc(v.name)}(${esc(v.fields.join(", "))})</code></li>"
+  end
+
+  foul recordSection(e: RecordEntry) -> String do
+    let rows = e.fields.map { |f| fieldRow(f.name, f.typeName, f.hasDefault) }.join("\n")
+    return "<section class=\"entity\" id=\"record-${slug(e.name)}\">\n<h2><span class=\"kind\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n</section>"
+  end
+
+  foul fieldRow(name: String, typeName: String, hasDefault: Bool) -> String do
+    let opt = if hasDefault then " <span class=\"opt\">optional</span>" else "" end
+    return "<div class=\"field\"><dt><code>${esc(name)}</code></dt><dd><code>${esc(typeName)}</code>${opt}</dd></div>"
+  end
+
+  foul traitSection(e: TraitEntry) -> String do
+    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions)}\n</section>"
+  end
+
+  foul makeSection(e: MakeEntry) -> String do
+    let impls = if e.implements.empty?
+      ""
+    else
+      " implements " + e.implements.join(", ")
+    end
+    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind\">make</span> <code>${esc(e.target)}</code>${esc(impls)}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions)}\n</section>"
+  end
+
+  foul moduleSection(e: ModuleEntry) -> String do
+    let children = e.children.map { |c| entitySection(c) }.join("\n")
+    return "<section class=\"entity\" id=\"module-${slug(e.name)}\">\n<h2><span class=\"kind\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
+  end
+
+  foul functionSection(e: FunctionEntry) -> String do
+    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc)}${returnsHtml(e.doc)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
+  end
+
+  foul constantSection(e: ConstantEntry) -> String do
+    let typePart = if e.typeName.empty?
+      ""
+    else
+      " <code>${esc(e.typeName)}</code>"
+    end
+    return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
+  end
+
+  # ── Functions inside traits, makes, modules ──────────────────────────────
+
+  foul functionsHtml(functions: [FunctionEntry]) -> String do
+    if functions.empty?
+      return ""
+    end
+    let sections = functions.map { |f| functionDetail(f) }.join("\n")
+    return "\n<div class=\"functions\">\n${sections}\n</div>"
+  end
+
+  foul functionDetail(f: FunctionEntry) -> String do
+    return "<div class=\"fn\" id=\"fn-${slug(f.name)}\">\n<h4><code>${esc(f.name)}</code></h4>\n${docHtml(f.doc)}${signaturesHtml(f)}${paramsHtml(f.doc)}${returnsHtml(f.doc)}${examplesHtml(f.doc)}${deprecatedHtml(f.doc)}\n</div>"
+  end
+
+  foul signaturesHtml(f: FunctionEntry) -> String do
+    if f.signatures.empty?
+      return ""
+    end
+    return "<pre class=\"code\"><code>${Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
+  end
+
+  # ── Doc fragments ────────────────────────────────────────────────────────
+
+  foul docHtml(doc: Doc) -> String do
+    if doc.summary.empty?
+      return ""
+    end
+    let paras = doc.summary.split("\n\n").map { |p| "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>" }.join("\n")
+    return paras + "\n"
+  end
+
+  # Minimal inline Markdown for doc prose: `code` spans. Splitting on the
+  # backtick alternates plain/code segments; an unmatched trailing backtick
+  # degrades to literal text rather than swallowing the rest of the page.
+  foul inlineCode(text: String) -> String do
+    let parts = text.split("`")
+    if parts.count == 1
+      return esc(text)
+    end
+    if parts.count % 2 == 0
+      return esc(text)
+    end
+    let rendered = parts.reduce(("", 0), { |acc, part|
+      let (buffer, i) = acc
+      let segment = if i % 2 == 1 then "<code>${esc(part)}</code>" else esc(part) end
+      (buffer + segment, i + 1)
+    })
+    let (html, _) = rendered
+    return html
+  end
+
+  foul paramsHtml(doc: Doc) -> String do
+    if doc.params.empty?
+      return ""
+    end
+    let rows = doc.params.map { |p|
+      let typePart = if p.typeName.empty? then "" else " <code>${esc(p.typeName)}</code>" end
+      "<div class=\"param\"><dt><code>${esc(p.name)}</code>${typePart}</dt><dd>${inlineCode(p.description)}</dd></div>"
+    }.join("\n")
+    return "<h5>Parameters</h5>\n<dl class=\"params\">\n${rows}\n</dl>\n"
+  end
+
+  foul returnsHtml(doc: Doc) -> String do
+    match doc.returns do
+      Just(r) => do
+        if r.typeName.empty? && r.description.empty?
+          return ""
+        end
+        let typePart = if r.typeName.empty? then "" else "<code>${esc(r.typeName)}</code> — " end
+        return "<p class=\"returns\"><strong>Returns:</strong> ${typePart}${inlineCode(r.description)}</p>\n"
+      end
+      None => ""
+    end
+  end
+
+  foul examplesHtml(doc: Doc) -> String do
+    if doc.examples.empty?
+      return ""
+    end
+    let blocks = doc.examples.map { |ex|
+      let caption = if ex.caption.empty? then "" else "<p class=\"caption\"><em>${inlineCode(ex.caption)}</em></p>\n" end
+      "${caption}<pre class=\"code\"><code>${Docgen.Highlight.highlight(ex.code)}</code></pre>"
+    }.join("\n")
+    return "<h5>Examples</h5>\n${blocks}\n"
+  end
+
+  foul deprecatedHtml(doc: Doc) -> String do
+    match doc.deprecated do
+      Just(msg) => "<p class=\"deprecated\"><strong>Deprecated.</strong> ${esc(msg)}</p>\n"
+      None => ""
+    end
+  end
+
+  # ── Shared helpers ───────────────────────────────────────────────────────
+
+  # Escape text for HTML (content and double-quoted attributes).
+  foul esc(s: String) -> String do
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+  end
+
+  foul labelOf(model: PackageModel) -> String do
+    if model.label.empty?
+      return model.package
+    end
+    return model.label
+  end
+
+  # The page the version switcher tries first in the target version.
+  foul pageTarget(current: String) -> String do
+    if current.empty?
+      return "index.html"
+    end
+    return current + ".html"
+  end
+
+  foul anchorOf(e: Entity) -> String do
+    return "${kindOf(e)}-${slug(nameOf(e))}"
+  end
+
+  foul slug(name: String) -> String do
+    return name.lowerCase.replace(" ", "-").replace(".", "-").replace("/", "-")
+  end
+
+  foul typeParamSuffix(typeParams: [String]) -> String do
+    if typeParams.empty?
+      return ""
+    end
+    return "<" + typeParams.join(", ") + ">"
+  end
+
+  # Relative path from a page's urlPath back to the version directory:
+  # "string" → "" (sibling), "kex/ast" → "../".
+  foul versionPrefix(urlPath: String) -> String do
+    if urlPath.empty?
+      return ""
+    end
+    return ups(urlPath.split("/").count - 1)
+  end
+
+  # From the page to the site root: version dir is <pkg>/<version>/.
+  foul rootPrefix(urlPath: String) -> String do
+    return versionPrefix(urlPath) + "../../"
+  end
+
+  foul ups(n: Integer) -> String do
+    if n <= 0
+      return ""
+    end
+    return "../" + ups(n - 1)
+  end
+end

@@ -211,6 +211,13 @@ module Docgen.Extract do
   end
 
   foul noteFunction(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
+    # A module-level `let NAME = value` arrives as a zero-clause-param
+    # function whose clause has NO parameter list — that, not arity, is what
+    # distinguishes it from `foul f() = ...` (empty list, but present).
+    # Document it as the constant it is.
+    if isConstantBinding(info)
+      return noteConstant(accum, info, prefix)
+    end
     let paramNames = clauseParamNames(info.clauses.first)
     match findPending(accum, info.name) do
       None => accum + [PendingFn(PendingFunction {
@@ -223,6 +230,62 @@ module Docgen.Extract do
         line: info.location.line
       })]
       Just(_) => accum.map { |p| addClause(p, info, paramNames) }
+    end
+  end
+
+  foul isConstantBinding(info: Kex.AST.FunctionInfo) -> Bool do
+    match info.clauses.first do
+      Just(clause) => !clause.hasParamList
+      None => false
+    end
+  end
+
+  foul noteConstant(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
+    match findPending(accum, info.name) do
+      None => accum + [Done(ConstDecl(ConstantEntry {
+        name: info.name,
+        qualifiedName: qualify(prefix, info.name),
+        typeName: returnTypeText(info),
+        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        line: info.location.line
+      }))]
+      Just(_) => accum.map { |p| constantFromPending(p, info, prefix) }
+    end
+  end
+
+  # The annotation arrived first and created a PendingFunction; the binding
+  # now replaces it with the constant entry, keeping name/doc/line.
+  foul constantFromPending(p: Pending, info: Kex.AST.FunctionInfo, prefix: String) -> Pending do
+    match p do
+      PendingFn(fn) => do
+        if fn.name != info.name
+          return p
+        end
+        let doc = if fn.doc.summary.empty?
+          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+        else
+          fn.doc
+        end
+        let typeName = match fn.annotations.first do
+          Just(a) => typeText(annotationRef(a))
+          None => returnTypeText(info)
+        end
+        return Done(ConstDecl(ConstantEntry {
+          name: fn.name,
+          qualifiedName: qualify(prefix, fn.name),
+          typeName: typeName,
+          doc: doc,
+          line: fn.line
+        }))
+      end
+      Done(_) => p
+    end
+  end
+
+  foul returnTypeText(info: Kex.AST.FunctionInfo) -> String do
+    match info.clauses.first do
+      Just(clause) => typeTextOpt(clause.returnType)
+      None => ""
     end
   end
 
@@ -383,12 +446,12 @@ module Docgen.Extract do
   end
 
   foul typeText(ref: Kex.AST.TypeRef) -> String do
-    return ref.to(String).or("?")
+    return Kex.AST.typeRefText(ref)
   end
 
   foul typeTextOpt(ref: Kex.AST.TypeRef?) -> String do
     match ref do
-      Just(r) => r.to(String).or("?")
+      Just(r) => Kex.AST.typeRefText(r)
       None => "?"
     end
   end

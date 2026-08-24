@@ -1,0 +1,48 @@
+# Browser-side assets for the docs site. Only the version switcher so far:
+# a tiny script that replaces the static header badge with a <select>
+# populated from versions.json at runtime, so pages built by an older run
+# still offer versions published after them. Without JavaScript the badge
+# stays and the site is fully usable.
+
+module Docgen.Assets do
+  foul siteJs() -> String do
+    return `
+      (function () {
+        var badge = document.getElementById("version-badge");
+        if (!badge) return;
+        var root = badge.getAttribute("data-root");
+        var pkg = badge.getAttribute("data-package");
+        var current = badge.getAttribute("data-version");
+        var page = badge.getAttribute("data-page");
+        fetch(root + "versions.json")
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            var versions = (data.versions || []).filter(function (v) { return v.package === pkg; });
+            if (versions.length < 2) return;
+            var select = document.createElement("select");
+            select.className = "version-select";
+            select.setAttribute("aria-label", "Documentation version");
+            versions.forEach(function (v) {
+              var opt = document.createElement("option");
+              opt.value = v.id;
+              opt.textContent = v.label + " " + v.id;
+              if (v.id === current) opt.selected = true;
+              select.appendChild(opt);
+            });
+            select.addEventListener("change", function () {
+              var base = root + pkg + "/" + select.value + "/";
+              var target = base + page;
+              // The same page may not exist in the target version (renamed
+              // module, or a source that no longer parses): fall back to the
+              // version's index rather than landing on a 404.
+              fetch(target, { method: "HEAD" })
+                .then(function (res) { window.location.href = res.ok ? target : base + "index.html"; })
+                .catch(function () { window.location.href = base + "index.html"; });
+            });
+            badge.replaceWith(select);
+          })
+          .catch(function () {});
+      })();
+    `
+  end
+end

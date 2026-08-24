@@ -50,6 +50,9 @@ module Docgen.Serve do
   end
 
   foul contentTypeFor(path: String) -> String do
+    return "text/html; charset=utf-8" if path.endsWith?(".html")
+    return "text/css; charset=utf-8" if path.endsWith?(".css")
+    return "text/javascript; charset=utf-8" if path.endsWith?(".js")
     return "text/markdown; charset=utf-8" if path.endsWith?(".md")
     return "application/json" if path.endsWith?(".json")
     return "application/xml" if path.endsWith?(".xml")
