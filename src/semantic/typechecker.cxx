@@ -1387,6 +1387,16 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             if (!ann) return;
             auto sig = annotationToSignature(*ann, &targetVars);
             if (!sig) return;
+            const bool replyResult = [&] {
+                auto result = resolve(sig->result);
+                auto* named = std::get_if<NamedType>(&result->kind);
+                return named && named->name == "Reply" &&
+                       named->typeArgs.size() == 1;
+            }();
+            if (def.isServing && slotNames.count(ann->name) &&
+                ann->implicitFrom && !replyResult)
+                error(ann->location,
+                      "`::>` is not valid on a cast slot — casts have no `from`; use `:>`");
             sig->params.insert(sig->params.begin(), receiver);
             m_annotatedMethods.insert(ann->name);
             // Skip a signature already registered with the same parameters —
@@ -1410,7 +1420,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             sig->makeModule = modulePath;
             if (!duplicate) existing.push_back(*sig);
             if (def.isServing && slotNames.count(ann->name)) {
-                auto remote = remoteSlotSignature(*sig, ann->implicitFrom);
+                auto remote = remoteSlotSignature(*sig, replyResult);
                 const bool remoteDuplicate = std::any_of(
                     existing.begin(), existing.end(), [&](const Signature& other) {
                         if (other.params.size() != remote.params.size()) return false;
@@ -2294,9 +2304,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // Resolve inline return type annotation (-> Type on the function def line),
     // present when no separate TypeAnnotation declaration exists.
     TypePtr inlineReturnType;
-    if (!declared && !def.clauses.empty() && def.clauses[0].returnAnnotation) {
+    if (!def.clauses.empty() && def.clauses[0].returnAnnotation) {
         std::unordered_map<std::string, TypePtr> gvars;
         inlineReturnType = resolveTypeExpr(**def.clauses[0].returnAnnotation, gvars);
+        if (declared && !containsOpenType(declared->result) &&
+            !containsOpenType(inlineReturnType) &&
+            !typesEqual(resolve(declared->result), resolve(inlineReturnType)))
+            error((*def.clauses[0].returnAnnotation)->location,
+                  "inline return type for `" + def.name + "` disagrees with its separate annotation: " +
+                  typeToString(resolve(inlineReturnType)) + " versus " +
+                  typeToString(resolve(declared->result)));
     }
 
     auto returnType = declared    ? declared->result
@@ -2349,6 +2366,15 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 named && m_recordFields.count(resolveRecordName(named->name)))
                 defineVar("new", m_currentMakeType);
         }
+        const auto slotResult = resolve(returnType);
+        const auto* slotReply = def.isSlot
+            ? std::get_if<NamedType>(&slotResult->kind) : nullptr;
+        const bool callSlot = slotReply && slotReply->name == "Reply" &&
+                              slotReply->typeArgs.size() == 1;
+        if (callSlot)
+            defineVar("from", Type::named("From", {slotReply->typeArgs.front()}));
+        const bool previousCastSlot = m_inCastSlot;
+        m_inCastSlot = def.isSlot && !callSlot;
         std::unordered_map<std::string, TypePtr> genericVars;
         std::vector<TypePtr> paramTypes;
         for (size_t pi = 0; pi < clause.params.size(); pi++) {
@@ -2394,18 +2420,127 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
         }
         auto bodyType = inferBody(clause.body);
+        m_inCastSlot = previousCastSlot;
         // Verify body matches declared return type (if declared and concrete).
         // Use argMatchesParam (not typesEqual) to apply the same trait-family
         // relaxations that call-site checking uses — e.g. Int and Integer are
         // compatible, so `add : Int -> Int -> Int` with a body returning
         // Integer (inferred from literal arithmetic) isn't a mismatch.
         auto effectiveReturnType = declared ? declared->result : inlineReturnType;
+        const auto servingTransitionMatches = [&]() {
+            if (!def.isSlot || !effectiveReturnType || clause.body.empty())
+                return false;
+            auto expected = resolve(effectiveReturnType);
+            auto* replyType = std::get_if<NamedType>(&expected->kind);
+            if (!replyType || replyType->name != "Reply" ||
+                replyType->typeArgs.size() != 1)
+                return false;
+            const ast::Expr* result = clause.body.back().get();
+            if (auto* returned = std::get_if<ast::ReturnExpr>(&result->kind))
+                result = returned->value.get();
+            auto* map = result ? std::get_if<ast::MapExpr>(&result->kind) : nullptr;
+            if (!map) return false;
+            bool hasReply = false;
+            bool hasState = false;
+            for (const auto& entry : map->entries) {
+                if (!entry.key || !entry.value) continue;
+                auto* key = std::get_if<ast::AtomLiteral>(&entry.key->kind);
+                if (!key || key->name != "reply") continue;
+                hasReply = true;
+                auto actual = resolve(inferExpr(*entry.value));
+                if (!containsOpenType(actual) &&
+                    !containsOpenType(replyType->typeArgs.front()) &&
+                    !argMatchesParam(actual, replyType->typeArgs.front()))
+                    typeMismatch(entry.value->location,
+                                 replyType->typeArgs.front(), actual);
+            }
+            for (const auto& entry : map->entries) {
+                if (!entry.key) continue;
+                auto* key = std::get_if<ast::AtomLiteral>(&entry.key->kind);
+                if (key && (key->name == "new" || key->name == "state"))
+                    hasState = true;
+            }
+            if (hasReply) return true;
+            if (!hasState) return false;
+
+            std::function<bool(const ast::Expr&)> mentionsFrom;
+            mentionsFrom = [&](const ast::Expr& expression) -> bool {
+                return std::visit([&](const auto& node) -> bool {
+                    using E = std::decay_t<decltype(node)>;
+                    auto one = [&](const ast::ExprPtr& value) {
+                        return value && mentionsFrom(*value);
+                    };
+                    if constexpr (std::is_same_v<E, ast::Identifier>)
+                        return node.name == "from";
+                    else if constexpr (std::is_same_v<E, ast::MethodCall>) {
+                        if (one(node.receiver)) return true;
+                        for (const auto& arg : node.args) if (one(arg)) return true;
+                        for (const auto& [_, value] : node.namedArgs) if (one(value)) return true;
+                        return node.block && one(*node.block);
+                    } else if constexpr (std::is_same_v<E, ast::FunctionCall>) {
+                        for (const auto& arg : node.args) if (one(arg)) return true;
+                        for (const auto& [_, value] : node.namedArgs) if (one(value)) return true;
+                        return node.block && one(*node.block);
+                    } else if constexpr (std::is_same_v<E, ast::Lambda> ||
+                                         std::is_same_v<E, ast::BlockExpr>) {
+                        for (const auto& item : node.body) if (one(item)) return true;
+                    } else if constexpr (std::is_same_v<E, ast::ReturnExpr>)
+                        return one(node.value);
+                    else if constexpr (std::is_same_v<E, ast::MapExpr>) {
+                        for (const auto& entry : node.entries)
+                            if (one(entry.key) || one(entry.value)) return true;
+                    } else if constexpr (std::is_same_v<E, ast::LetExpr> ||
+                                         std::is_same_v<E, ast::VarExpr> ||
+                                         std::is_same_v<E, ast::AssignExpr>)
+                        return one(node.value);
+                    else if constexpr (std::is_same_v<E, ast::IfExpr>) {
+                        if (one(node.condition)) return true;
+                        for (const auto& item : node.thenBody) if (one(item)) return true;
+                        for (const auto& [condition, body] : node.elifs) {
+                            if (one(condition)) return true;
+                            for (const auto& item : body) if (one(item)) return true;
+                        }
+                        if (node.elseBody)
+                            for (const auto& item : *node.elseBody) if (one(item)) return true;
+                    }
+                    return false;
+                }, expression.kind);
+            };
+            const bool deferred = std::any_of(
+                clause.body.begin(), clause.body.end(),
+                [&](const ast::ExprPtr& item) { return item && mentionsFrom(*item); });
+            if (!deferred)
+                error(def.location,
+                      "call slot returns without `reply:` but never uses `from` for a deferred reply");
+            return true;
+        }();
+        const auto servingCastTransitionMatches = [&]() {
+            if (!def.isSlot || !effectiveReturnType || clause.body.empty() ||
+                !typesEqual(resolve(effectiveReturnType), Type::unit()))
+                return false;
+            if (m_currentMakeType &&
+                argMatchesParam(resolve(bodyType), resolve(m_currentMakeType)))
+                return true;
+            const ast::Expr* result = clause.body.back().get();
+            if (auto* returned = std::get_if<ast::ReturnExpr>(&result->kind))
+                result = returned->value.get();
+            auto* map = result ? std::get_if<ast::MapExpr>(&result->kind) : nullptr;
+            if (!map) return false;
+            return std::any_of(map->entries.begin(), map->entries.end(),
+                [](const ast::MapEntry& entry) {
+                    if (!entry.key) return false;
+                    auto* key = std::get_if<ast::AtomLiteral>(&entry.key->kind);
+                    return key && (key->name == "new" || key->name == "state" ||
+                                   key->name == "stop");
+                });
+        }();
         if (effectiveReturnType &&
             !std::holds_alternative<TypeVar>(effectiveReturnType->kind) &&
             !std::holds_alternative<UnknownType>(effectiveReturnType->kind) &&
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
-            !argMatchesParam(bodyType, effectiveReturnType)) {
+            !argMatchesParam(bodyType, effectiveReturnType) &&
+            !servingTransitionMatches && !servingCastTransitionMatches) {
             error(def.location,
                   "`" + def.name + "` declared to return " + typeToString(effectiveReturnType) +
                   " but body returns " + typeToString(bodyType));
@@ -3123,6 +3258,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::atom();
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            if (node.name == "from" && m_inCastSlot) {
+                error(expr.location,
+                      "`from` is not available in a cast — no caller is waiting for a reply");
+                return Type::unknown();
+            }
             auto type = lookupVar(node.name);
             if (!type) {
                 if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
@@ -3885,6 +4025,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return named && named->name == "Server" &&
                        named->typeArgs.size() == 1;
             }();
+            if (!isNamespaceCall && node.method == "reply" &&
+                argTypes.size() >= 2) {
+                auto receiver = resolve(argTypes.front());
+                if (auto* named = std::get_if<NamedType>(&receiver->kind);
+                    named && named->name == "From" &&
+                    named->typeArgs.size() == 1) {
+                    auto actual = resolve(argTypes[1]);
+                    auto expected = resolve(named->typeArgs.front());
+                    if (!containsOpenType(actual) && !containsOpenType(expected) &&
+                        !argMatchesParam(actual, expected))
+                        typeMismatch(node.args.front()->location, expected, actual);
+                }
+            }
             for (const auto& [name, arg] : node.namedArgs) {
                 auto type = arg ? inferExpr(*arg) : Type::unknown();
                 if (serverSlotCall && name == "within") {
@@ -6182,6 +6335,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->backendArity,
                     isReceiver,
                     resolvedFoul,
+                    false,
                     resolved->paramNames,
                 };
                 for (std::size_t i = 0; i < matched.params.size(); ++i) {
@@ -6221,6 +6375,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 target.backendArity = static_cast<int>(matched.params.size());
                 target.passesReceiver = true;
                 target.isFoul = matched.isFoul;
+                if (!matched.params.empty()) {
+                    auto receiver = resolve(matched.params.front());
+                    auto* named = std::get_if<NamedType>(&receiver->kind);
+                    target.isServingCast = named && named->name == "Server" &&
+                        m_slotMethodNames.count(name) &&
+                        typesEqual(resolve(matched.result), Type::unit());
+                }
+                if (target.isServingCast)
+                    for (const auto& [label, value] : methodCall->namedArgs)
+                        if (label == "within")
+                            error(value ? value->location : methodCall->receiver->location,
+                                  "`within:` is not valid on an asynchronous cast slot");
                 for (const auto& param : matched.params)
                     target.localDispatchTypes.push_back(
                         typeToString(resolve(param)));

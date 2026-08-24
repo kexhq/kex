@@ -56,6 +56,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     m_evaluator.m_env = proc.savedEnv;
     auto callerCapabilities = std::move(m_evaluator.m_capabilityBindings);
     m_evaluator.m_capabilityBindings = std::move(proc.savedCapabilities);
+    auto callerServingFrom = std::move(m_evaluator.m_servingFrom);
+    m_evaluator.m_servingFrom = std::move(proc.savedServingFrom);
 
     proc.fiber->resume();
 
@@ -65,6 +67,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     proc.savedEnv = m_evaluator.m_env;
     proc.savedCapabilities = std::move(m_evaluator.m_capabilityBindings);
     m_evaluator.m_capabilityBindings = std::move(callerCapabilities);
+    proc.savedServingFrom = std::move(m_evaluator.m_servingFrom);
+    m_evaluator.m_servingFrom = std::move(callerServingFrom);
     m_current = prevCurrent;
 }
 
@@ -245,7 +249,9 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
         }
         procPtr->exitValue = resultMsg;
         procPtr->finished = true;
-        self->send(spawner, resultMsg);
+        self->send(spawner, Value::tuple({Value::atom("task_result"),
+                                         Value::integer(procPtr->id),
+                                         resultMsg}));
     });
 
     m_processes.emplace(id, std::move(proc));
@@ -274,34 +280,84 @@ auto Scheduler::startServer(ValuePtr initialState) -> ProcessId {
                 auto envelope = procPtr->mailbox.front();
                 procPtr->mailbox.pop_front();
                 auto* request = std::get_if<TupleValue>(&envelope->data);
-                if (!request || request->elements.size() != 5) continue;
+                if (!request || request->elements.empty()) continue;
                 auto* tag = std::get_if<AtomValue>(&request->elements[0]->data);
+                const bool isCast = tag && tag->name == "server_cast" &&
+                    request->elements.size() == 3;
+                if (isCast) {
+                    self->m_evaluator.m_servingFrom.reset();
+                    auto* method = std::get_if<StringValue>(&request->elements[1]->data);
+                    auto* arguments = std::get_if<ListValue>(&request->elements[2]->data);
+                    if (!method || !arguments) continue;
+                    std::vector<ValuePtr> callArgs{state};
+                    callArgs.insert(callArgs.end(), arguments->elements.begin(), arguments->elements.end());
+                    auto transition = self->m_evaluator.callFunction(
+                        self->m_evaluator.resolveMethodName(state, method->value, &callArgs),
+                        std::move(callArgs), {}, SourceLocation{});
+                    ValuePtr stop;
+                    if (auto* record = std::get_if<RecordValue>(&transition->data)) {
+                        if (record->typeName != "Reply") state = transition;
+                        if (auto next = record->fields.find("state"); next != record->fields.end()) state = next->second;
+                    } else if (auto* map = std::get_if<MapValue>(&transition->data)) {
+                        for (const auto& [key, value] : map->entries) {
+                            std::string name;
+                            if (auto* string = std::get_if<StringValue>(&key->data)) name = string->value;
+                            else if (auto* atom = std::get_if<AtomValue>(&key->data)) name = atom->name;
+                            if (name == "state" || name == "new") state = value;
+                            if (name == "stop") stop = value;
+                        }
+                    }
+                    if (stop) {
+                        procPtr->exitValue = stop;
+                        procPtr->finished = true;
+                        return;
+                    }
+                    continue;
+                }
+                if (!tag || tag->name != "server_call" || request->elements.size() != 5) continue;
                 auto* ref = std::get_if<IntValue>(&request->elements[1]->data);
                 auto* method = std::get_if<StringValue>(&request->elements[2]->data);
                 auto* arguments = std::get_if<ListValue>(&request->elements[3]->data);
                 auto* caller = std::get_if<ProcessValue>(&request->elements[4]->data);
-                if (!tag || tag->name != "server_call" || !ref || !method ||
-                    !arguments || !caller) continue;
+                if (!ref || !method || !arguments || !caller) continue;
 
                 std::vector<ValuePtr> callArgs{state};
+                self->m_evaluator.m_servingFrom = Value::record("From", {
+                    {"pid", Value::process(caller->pid, self)},
+                    {"ref", Value::integer(ref->value)},
+                });
                 callArgs.insert(callArgs.end(), arguments->elements.begin(), arguments->elements.end());
                 auto transition = self->m_evaluator.callFunction(
                     self->m_evaluator.resolveMethodName(state, method->value, &callArgs),
                     std::move(callArgs), {}, SourceLocation{});
                 ValuePtr reply = transition;
+                bool hasReply = false;
+                ValuePtr stop;
                 if (auto* record = std::get_if<RecordValue>(&transition->data)) {
                     if (auto next = record->fields.find("state"); next != record->fields.end()) state = next->second;
-                    if (auto value = record->fields.find("reply"); value != record->fields.end()) reply = value->second;
+                    if (auto value = record->fields.find("reply"); value != record->fields.end()) {
+                        reply = value->second;
+                        hasReply = true;
+                    }
                 } else if (auto* map = std::get_if<MapValue>(&transition->data)) {
                     for (const auto& [key, value] : map->entries) {
-                        auto* name = std::get_if<StringValue>(&key->data);
-                        if (!name) continue;
-                        if (name->value == "state" || name->value == "new") state = value;
-                        if (name->value == "reply") reply = value;
+                        std::string name;
+                        if (auto* string = std::get_if<StringValue>(&key->data)) name = string->value;
+                        else if (auto* atom = std::get_if<AtomValue>(&key->data)) name = atom->name;
+                        else continue;
+                        if (name == "state" || name == "new") state = value;
+                        if (name == "reply") { reply = value; hasReply = true; }
+                        if (name == "stop") stop = value;
                     }
                 }
-                self->send(caller->pid, Value::tuple({Value::atom("server_reply"),
-                    Value::integer(ref->value), Value::ok(reply)}));
+                if (hasReply)
+                    self->send(caller->pid, Value::tuple({Value::atom("server_reply"),
+                        Value::integer(ref->value), Value::ok(reply)}));
+                if (stop) {
+                    procPtr->exitValue = stop;
+                    procPtr->finished = true;
+                    return;
+                }
             }
         } catch (...) {
             rethrowIfForcedUnwind();
@@ -313,6 +369,13 @@ auto Scheduler::startServer(ValuePtr initialState) -> ProcessId {
     m_processes.emplace(id, std::move(proc));
     m_ready.push_back(id);
     return id;
+}
+
+auto Scheduler::castServer(ProcessId server, std::string method,
+                           std::vector<ValuePtr> args) -> bool {
+    return send(server, Value::tuple({Value::atom("server_cast"),
+                                     Value::string(std::move(method)),
+                                     Value::list(std::move(args))}));
 }
 
 auto Scheduler::callServer(ProcessId server, std::string method,
@@ -374,17 +437,17 @@ auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeou
     while (true) {
         for (size_t i = 0; i < proc.mailbox.size(); i++) {
             auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
-            if (!tup || tup->elements.size() != 2) continue;
-            const ValuePtr& payload = tup->elements[0];
-            const ValuePtr& sender = tup->elements[1];
-            auto* senderProc = std::get_if<ProcessValue>(&sender->data);
-            if (!senderProc || senderProc->pid != taskId) continue;
-            auto* payloadTup = std::get_if<TupleValue>(&payload->data);
+            if (!tup || tup->elements.size() != 3) continue;
+            auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
+            auto* senderId = std::get_if<IntValue>(&tup->elements[1]->data);
+            if (!tag || tag->name != "task_result" || !senderId ||
+                senderId->value != static_cast<int64_t>(taskId)) continue;
+            auto* payloadTup = std::get_if<TupleValue>(&tup->elements[2]->data);
             if (!payloadTup || payloadTup->elements.size() != 2) continue;
-            auto* tag = std::get_if<AtomValue>(&payloadTup->elements[0]->data);
-            if (!tag || (tag->name != "task_done" && tag->name != "task_failed")) continue;
+            auto* resultTag = std::get_if<AtomValue>(&payloadTup->elements[0]->data);
+            if (!resultTag || (resultTag->name != "task_done" && resultTag->name != "task_failed")) continue;
 
-            auto result = payload;
+            auto result = tup->elements[2];
             proc.mailbox.erase(proc.mailbox.begin() + static_cast<long>(i));
             return result;
         }

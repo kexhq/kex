@@ -1,0 +1,10 @@
+# kex: check-only
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  reset ::> Void
+  slot reset -> Void = Kex.Intrinsic.Process.cast
+end

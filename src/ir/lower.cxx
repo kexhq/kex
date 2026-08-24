@@ -235,6 +235,11 @@ struct Lowering {
     // parameter, but its tail-call argument is bumped instead of threaded.
     std::unordered_map<std::string, std::string> loopCounters;
     std::string sourceFile;
+    std::string outputModule;
+    // Exact externally-callable protocol surface for each serving state.
+    // Ordinary helpers share the compiled module but must never become OTP
+    // request handlers merely because erlang:apply/3 can see them.
+    std::unordered_map<std::string, std::vector<std::string>> servingSlotsByType;
     const SourceLocation* currentLoc = nullptr;
     // Names bound with `let` (immutable) — a mutating `!` call on one is a
     // runtime error matching the walker's behaviour.
@@ -2312,6 +2317,35 @@ struct Lowering {
                 return wrapLets(binds, structuredTypeLiteral(recorded->second.type));
             }
         }
+        // Process.spawn(state) must remember the module that owns the serving
+        // slot dispatchers.  The source-level prelude wrapper cannot discover
+        // its caller's compiled module at runtime, so lower this call directly.
+        if (n.method == "spawn" && n.receiver && n.args.size() == 1) {
+            if (auto* owner = std::get_if<ast::UpperIdentifier>(&n.receiver->kind);
+                owner && owner->name == "Process") {
+                std::vector<Binding> binds;
+                auto state = atomize(n.args[0], binds);
+                std::vector<ExprPtr> slotAtoms;
+                if (expressionTypes) {
+                    auto found = expressionTypes->find(n.args[0].get());
+                    if (found != expressionTypes->end() && found->second) {
+                        const auto stateType = semantic::typeToString(found->second);
+                        if (auto slots = servingSlotsByType.find(stateType);
+                            slots != servingSlotsByType.end())
+                            for (const auto& slot : slots->second)
+                                slotAtoms.push_back(lit(LitKind::Atom, slot));
+                    }
+                }
+                auto allowedSlots = std::make_unique<Expr>();
+                allowedSlots->node = MakeList{std::move(slotAtoms), std::nullopt};
+                return wrapLets(
+                    binds,
+                    callE("kex_intrinsic_process", "spawnServing", 3,
+                          three(std::move(state),
+                                lit(LitKind::Atom, outputModule),
+                                std::move(allowedSlots))));
+            }
+        }
         if (resolvedCalls) {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
@@ -2387,31 +2421,33 @@ struct Lowering {
             if (resolvedServerSlot) {
                 std::vector<Binding> binds;
                 auto server = atomize(n.receiver, binds);
-                std::vector<ExprPtr> handlerArgs;
-                const auto stateName = fresh("ServerState");
-                handlerArgs.push_back(var(stateName));
+                std::vector<ExprPtr> protocolArgs;
                 for (const auto& arg : n.args)
-                    handlerArgs.push_back(atomize(arg, binds));
-                if (n.block) handlerArgs.push_back(atomize(*n.block, binds));
+                    protocolArgs.push_back(atomize(arg, binds));
+                if (n.block) protocolArgs.push_back(atomize(*n.block, binds));
+                auto argsList = std::make_unique<Expr>();
+                argsList->node = MakeList{std::move(protocolArgs), std::nullopt};
 
-                Lambda handler;
-                handler.params = {stateName};
-                handler.body = localCallExpr(resolved->second.backendFunction,
-                                             std::move(handlerArgs));
-                auto handlerExpr = std::make_unique<Expr>();
-                handlerExpr->node = std::move(handler);
-                auto handlerName = fresh("ServerHandler");
-                binds.push_back({handlerName, std::move(handlerExpr)});
+                if (resolved->second.isServingCast) {
+                    std::vector<ExprPtr> castArgs;
+                    castArgs.push_back(std::move(server));
+                    castArgs.push_back(lit(LitKind::Atom, n.method));
+                    castArgs.push_back(std::move(argsList));
+                    return wrapLets(
+                        binds, callE("kex_intrinsic_process", "server_cast", 3,
+                                     std::move(castArgs)));
+                }
 
                 ExprPtr timeout = lit(LitKind::Atom, "default");
                 for (const auto& [name, value] : n.namedArgs)
                     if (name == "within") timeout = atomize(value, binds);
                 std::vector<ExprPtr> callArgs;
                 callArgs.push_back(std::move(server));
-                callArgs.push_back(var(handlerName));
+                callArgs.push_back(lit(LitKind::Atom, n.method));
+                callArgs.push_back(std::move(argsList));
                 callArgs.push_back(std::move(timeout));
                 return wrapLets(
-                    binds, callE("kex_intrinsic_process", "server_call", 3,
+                    binds, callE("kex_intrinsic_process", "server_call", 4,
                                  std::move(callArgs)));
             }
             // Semantic analysis has already applied lexical `using` policy
@@ -5561,7 +5597,14 @@ struct Lowering {
                     currentContextVar.clear();
                 }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
+                if (fn->isSlot) subst["from"] = "from";
                 ExprPtr body = lowerBody(clause.body);
+                if (fn->isSlot)
+                    body = makeLet(
+                        "from",
+                        callE("erlang", "get", 1,
+                              one(lit(LitKind::Atom, "kex_serving_from"))),
+                        std::move(body));
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
                     body = makeLet(it->first, std::move(it->second), std::move(body));
                 for (auto it = recordPatterns.rbegin(); it != recordPatterns.rend(); ++it)
@@ -6708,6 +6751,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     Module mod;
     mod.name = "kex_" + fileStem;
+    L.outputModule = mod.name;
 
     // Traits: a `make Type, implement: T do ... end` block inherits every
     // default method (a trait `let m = ...` with a body) of each T it doesn't
@@ -6882,6 +6926,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             signaturesByNameAndArity;
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
+            if (md.isServing && fd->isSlot) {
+                auto& slots = L.servingSlotsByType[typeName];
+                if (std::find(slots.begin(), slots.end(), fd->name) == slots.end())
+                    slots.push_back(fd->name);
+            }
             definedFns.insert(fd->name);
             // A make-block method is a definition like any other, so if it is
             // foul it takes the capability context and every call to it has

@@ -641,6 +641,22 @@ int main() {
             assertTrue(call->isSlot);
             assertTrue(cast->isSlot);
         });
+
+        it("desugars the new transition shorthand", []() {
+            auto program = parse("main do\n  { new, reply: 1 }\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& map = std::get<ast::MapExpr>(main->body[0]->kind);
+            assertEqual(map.entries.size(), size_t(2));
+            auto& key = std::get<ast::AtomLiteral>(map.entries[0].key->kind);
+            auto& value = std::get<ast::Identifier>(map.entries[0].value->kind);
+            assertEqual(key.name, std::string("new"));
+            assertEqual(value.name, std::string("new"));
+
+            auto singleton = parse("main do\n  { new }\nend");
+            auto& singletonMain = std::get<std::unique_ptr<ast::MainBlock>>(singleton.items[0]);
+            auto& singletonMap = std::get<ast::MapExpr>(singletonMain->body[0]->kind);
+            assertEqual(singletonMap.entries.size(), size_t(1));
+        });
     });
 
     describe("Parser — Expressions", []() {

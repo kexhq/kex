@@ -1,0 +1,10 @@
+# kex: check-only
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  get ::> Reply<Integer>
+  slot get -> Reply<String> = Kex.Intrinsic.Process.reply("wrong")
+end

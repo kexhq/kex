@@ -425,6 +425,7 @@ auto ResolvePass::resolveRescue(const ast::RescueBlock& rescue) -> void {
 
 auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
     pushScope();
+    if (def.isSlot) defineLocal("from");
     for (const auto& clause : def.clauses) {
         bindParams(clause.params);
         resolveBody(clause.body);

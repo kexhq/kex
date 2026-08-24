@@ -3487,6 +3487,9 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
   // A leading `...` also means a map — `{ ...other, "k": 1 }` splices one in,
   // and a lambda body has no use for a bare spread.
   if (check(TokenType::DotDotDot) ||
+      (check(TokenType::LowerIdent) && peek().value == "new" &&
+       (peekNext().type == TokenType::Comma ||
+        peekNext().type == TokenType::RBrace)) ||
       ((check(TokenType::String) || check(TokenType::RawString) ||
         check(TokenType::InterpolatedRawString) ||
         check(TokenType::LowerIdent)) &&
@@ -3497,6 +3500,23 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     std::vector<ast::MapEntry> entries;
     do {
       skipNewlines();
+      // Serving transition shorthand: `{ new, reply: value }` means the
+      // same map as `{ new: new, reply: value }`.
+      if (check(TokenType::LowerIdent) && peek().value == "new" &&
+          (peekNext().type == TokenType::Comma ||
+           peekNext().type == TokenType::RBrace)) {
+        auto keyLoc = currentLocation();
+        advance();
+        auto key = std::make_unique<ast::Expr>();
+        key->location = keyLoc;
+        key->kind = ast::AtomLiteral{"new"};
+        auto value = std::make_unique<ast::Expr>();
+        value->location = keyLoc;
+        value->kind = ast::Identifier{"new"};
+        entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
+        skipNewlines();
+        continue;
+      }
       // `{ ...other, "k": 1 }` — splice another map in. No `key: value`
       // follows, so this entry is complete once the source is parsed.
       if (check(TokenType::DotDotDot)) {

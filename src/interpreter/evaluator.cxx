@@ -1172,6 +1172,8 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 for (const auto& [name, value] : capturedImports) m_env->define(name, value);
                 for (const auto& [name, value] : dictionaries)
                     m_env->define(name, value);
+                if (funcDef->isSlot && m_servingFrom)
+                    m_env->define("from", m_servingFrom);
                 bool matched = true;
 
                 // UFCS: if this function is a type-scoped method (name contains "::"),
@@ -1914,9 +1916,38 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (!milliseconds) throw RuntimeError("Server.within expects Integer milliseconds", expr.location);
                     return Value::server(server->pid, server->scheduler, milliseconds->value);
                 }
+                if (node.method == "process")
+                    return Value::process(server->pid, server->scheduler);
+                if (node.method == "timeout")
+                    return Value::integer(server->timeoutMs);
+                if (node.method == "link") {
+                    server->scheduler->link(server->pid);
+                    return Value::unit();
+                }
+                if (node.method == "unlink") {
+                    server->scheduler->unlink(server->pid);
+                    return Value::unit();
+                }
+                // The walker has passive link bookkeeping but no DOWN-signal
+                // model yet. Match Process.monitor's current inert fallback
+                // without accidentally dispatching a serving slot named
+                // `monitor`.
+                if (node.method == "monitor") return Value::unit();
                 if (node.method == "alive?") return Value::boolean(server->scheduler->isAlive(server->pid));
                 std::vector<ValuePtr> slotArgs;
                 for (const auto& arg : node.args) slotArgs.push_back(arg ? eval(*arg) : Value::none());
+                bool isCast = false;
+                if (m_expressionTypes)
+                    if (auto found = m_expressionTypes->find(&expr);
+                        found != m_expressionTypes->end() && found->second) {
+                        const auto type = semantic::typeToString(found->second);
+                        isCast = type == "Void" || type == "Unit";
+                    }
+                if (isCast) {
+                    server->scheduler->castServer(server->pid, node.method,
+                                                  std::move(slotArgs));
+                    return Value::unit();
+                }
                 std::optional<int64_t> timeout = server->timeoutMs;
                 for (const auto& [name, value] : node.namedArgs) if (name == "within") {
                     auto configured = value ? eval(*value) : Value::none();

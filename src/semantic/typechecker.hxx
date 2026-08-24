@@ -429,6 +429,7 @@ private:
     TypePtr m_currentMakeType;
     // Module owning the `make` block being checked, "" at top level.
     std::string m_currentMakeModule;
+    bool m_inCastSlot = false;
 
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;

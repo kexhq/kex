@@ -7,6 +7,7 @@ type Task<A>
 type Reference
 type Process<A>
 type Reply<A>
+type From<A>
 
 type CallError = Timeout | NoProcess | CallFailed
 
@@ -129,6 +130,15 @@ make Server<X> do
 
   alive? :> Bool
   let alive? = @process.alive?
+end
+
+make From<X> do
+  # Completes the pending call identified by this caller/reference pair.
+  reply :> X -> Void
+  foul reply(value) = Kex.Intrinsic.Process.replyFrom(this, value)
+
+  pid :> Pid
+  let pid = Kex.Intrinsic.Process.fromPid(this)
 end
 
 module Task do

@@ -1,0 +1,1 @@
+spec/error_serving_deferred_reply_type.kex:9:16: error: Type mismatch: expected Integer, got String

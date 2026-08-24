@@ -1,0 +1,12 @@
+# kex: check-only
+
+record Queue do
+  depth : Integer = 0
+end
+
+serving Queue do
+  foul slot take -> Reply<Integer> do
+    from.reply("wrong")
+    return { new }
+  end
+end

@@ -60,6 +60,7 @@ struct Process {
     // one process cannot silently change what another process's code means —
     // a process spawned OUTSIDE a `with` must not see it (kexhq/kex#143).
     std::vector<std::pair<std::string, ValuePtr>> savedCapabilities;
+    ValuePtr savedServingFrom;
     // Set by send() only when a message arrives while this process is
     // genuinely blocked in receive with nothing matching — guards against
     // enqueueing the same process into the ready queue more than once.
@@ -159,6 +160,8 @@ public:
     auto callServer(ProcessId server, std::string method,
                     std::vector<ValuePtr> args,
                     std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
+    auto castServer(ProcessId server, std::string method,
+                    std::vector<ValuePtr> args) -> bool;
 
     // A plain cooperative sleep — registers a timeout for the currently-
     // running process and yields until it fires. Used by the supervisor

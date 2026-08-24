@@ -1,0 +1,1 @@
+spec/error_serving_cast_from.kex:8:3: error: `::>` is not valid on a cast slot — casts have no `from`; use `:>`
