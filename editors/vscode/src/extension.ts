@@ -10,6 +10,7 @@ import {
   isExecutableFile, kexInfo, lockedVersion, resolveToolchain, teySelectedVersion,
 } from './toolchain';
 import { registerTaskProvider } from './tasks';
+import { registerTestExplorer } from './test-explorer';
 
 let client: LanguageClient | undefined;
 // The watcher feeding that client its `didChangeWatchedFiles`. Held here
@@ -548,6 +549,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // the provider itself decides there is nothing to offer in a workspace with
   // no package.kex, and a workspace can gain one while the editor is open.
   registerTaskProvider(context);
+
+  // The Testing view: describe/it from every spec file, run per case.
+  // Registered unconditionally for the same reason — the tree is empty until
+  // a workspace turns out to have specs in it (kexhq/kex#199).
+  registerTestExplorer(context);
 
   // Changing which compiler to run is a request to run it.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {

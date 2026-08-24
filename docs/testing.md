@@ -112,6 +112,84 @@ Calls must be parenthesized — `describe("name") do`, not `describe "name" do` 
 
 A summary line (`N passed, M failed`) prints once, at the end of the program, only if at least one `it` ran.
 
+## Machine-readable results: `--test-json`, `--test-list`, `--test-only`
+
+The ✓/✗ prose is for people. A tool — an editor's test tree, a CI reporter —
+needs the same run said in a form it can act on, and needs to be able to ask
+for one case rather than a file, so three flags do that (kexhq/kex#199). They
+work on both backends, and both emit byte-identical records for the same file:
+`make spec-test-json` diffs them against a golden to keep it that way.
+
+`--test-json` replaces the prose with one JSON object per line on stdout:
+
+```console
+$ kex --test-json spec/arithmetic.spec.kex
+{"kexTest":"case","path":["arithmetic","adds"],"name":"adds","status":"passed","durationMs":0.181,"file":"spec/arithmetic.spec.kex","line":2,"column":3}
+{"kexTest":"case","path":["arithmetic","divides"],"name":"divides","status":"failed","durationMs":0.237,"file":"spec/arithmetic.spec.kex","line":6,"column":3,"failure":{"message":"assertion failed: expected 3, got 2","file":"spec/arithmetic.spec.kex","line":7,"column":5}}
+{"kexTest":"summary","passed":1,"failed":1}
+```
+
+A spec prints its own output to the same stream, so a line is a record only if
+it parses as JSON **and** carries `kexTest`; anything else is the program
+talking. `status` is `passed`, `failed`, or `skipped` (an `it` with no block).
+Every location is a `file`/`line`/`column` triple, omitted entirely when
+unknown — a case's location is its `it`, and a failure's is the `assert` that
+raised it, or the `it` again when the failure came from somewhere with no
+`assert` of its own (an `Assert.*` helper, or an ordinary bug in the code under
+test). Fields may be added; a reader should ignore what it does not know.
+
+`--test-list` reports the same `file`/`line` for every `describe` and `it`
+without running a single case body:
+
+```console
+$ kex --test-list spec/arithmetic.spec.kex
+{"kexTest":"item","kind":"describe","path":["arithmetic"],"name":"arithmetic","file":"spec/arithmetic.spec.kex","line":1,"column":1}
+{"kexTest":"item","kind":"it","path":["arithmetic","adds"],"name":"adds","file":"spec/arithmetic.spec.kex","line":2,"column":3}
+```
+
+It is a real execution of the file's top level — the `describe` blocks run,
+because they are what registers the cases — with every `it` body skipped. A
+spec that generates its cases in a loop is therefore listed exactly as it will
+run, which a parser of the source could not promise.
+
+`--test-only <name>` runs one case, and is repeatable. The name is the full
+path, joined with ` > `, or an ancestor `describe`'s path, or a bare label:
+
+```console
+$ kex --test-only "arithmetic > adds" spec/arithmetic.spec.kex
+$ kex --test-only "arithmetic" spec/arithmetic.spec.kex     # the whole group
+$ kex --test-only "adds" spec/arithmetic.spec.kex           # by label alone
+```
+
+### Through Tey
+
+`tey test` passes all three through under shorter names, and takes the spec
+files to run as arguments rather than always globbing `spec/`:
+
+```console
+$ tey test                                   # the whole suite, as prose
+$ tey test spec/greet.spec.kex               # one file
+$ tey test spec/greet.spec.kex --list        # its cases, as JSON, none run
+$ tey test spec/greet.spec.kex --json --only "Greet > greets by name"
+```
+
+`--only` takes ONE name (Tey's parser keeps one value per option); the
+compiler's `--test-only` repeats. `--list` wins over `--json`, since discovery
+is already a JSON mode and it is the one that runs nothing. In either
+machine-readable mode Tey prints nothing of its own — not even `No specs found`
+— so what reaches stdout is records and whatever the spec itself printed.
+
+A tool should prefer `tey test` in a package: the source roots a package's
+specs need (its own `src/`, and every locked dependency's) are Tey's to know,
+and `kex spec/greet.spec.kex` on its own cannot compile them. Outside a package
+there is nothing for Tey to know and the compiler's own flags are one process
+fewer.
+
+The VS Code extension does exactly that (see
+`editors/vscode/src/test-runner.ts` for the choice, and `test-explorer.ts` for
+the tree): discovery draws the tree, `--only` is the per-case ▶, and the JSON
+records are what the results and inline failure markers are read from.
+
 ## Specs for example files: `<name>.spec.kex`
 
 `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need to redeclare its types/records/functions — running it auto-loads `<name>.kex`'s declarations (skipping its own `main` block, so its demo output doesn't run) into the same scope first. Lookup is same-directory by default, plus `examples/<name>.kex` as a fallback when the spec lives in a directory named `spec` (see `specBaseCandidates` in `src/main.cxx`) — which is how `spec/json_parser.spec.kex` tests `examples/json_parser.kex` without copying any of its code.

@@ -62,8 +62,16 @@ kex -c <file.kex>           # compile to BEAM via Core Erlang
 kex -R <file.kex>           # run on BEAM
 kex -C <file.kex>           # run semantic analysis only
 kex -e <file.kex>           # emit Core Erlang (.core) without invoking erlc
+kex --test-json <spec.kex>  # report describe/it as JSON records, with locations
+kex --test-list <spec.kex>  # list the cases as JSON, running none of them
+kex --test-only <name> ...  # run one case, or one describe (repeatable)
 ```
 
 `kex` gates on type checking by default. Use `--no-check` to skip the
 type-checker (useful when iterating on code that type-checks correctly at
 runtime but has incomplete annotations).
+
+The three `--test-*` flags are for tools reading a spec run rather than people:
+one JSON record per case, carrying the file and line of the `it` and of the
+failure. `docs/testing.md` documents the record shape; the VS Code test
+explorer is built on them.

@@ -227,6 +227,12 @@ jobs:
       - name: Stdlib spec suite via BEAM
         run: make spec-stdlib-beam
 
+      # The JSON reporting an editor's test tree reads, on both backends
+      # (kexhq/kex#199). Same reasoning as the suites above: the records are a
+      # contract, and a tool cannot care which backend ran the suite.
+      - name: Test-reporting modes
+        run: make spec-test-json
+
   # musl is a supported platform, and glibc passing says nothing about it:
   # the spec suite pins float formatting, and that is exactly where libm
   # implementations differ. The image build runs `make spec` and

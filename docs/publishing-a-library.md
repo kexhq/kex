@@ -87,6 +87,13 @@ anything has to run the same way. `tey test --interpret` (and `tey run
 --interpret`) tree-walks the source instead — for a backend gap, or a
 debugging session.
 
+`tey test` also takes the specs to run — `tey test spec/greet.spec.kex` while
+you are working on one — and, for a tool rather than a person, `--json`,
+`--list` and `--only <name>`: one JSON record per case with source locations,
+the cases discovered without running any, and a run narrowed to one case. That
+is what the VS Code test explorer drives; `docs/testing.md` has the record
+shape.
+
 ## Name the commands your package needs
 
 The other things a package needs run — the formatter, the migration, the

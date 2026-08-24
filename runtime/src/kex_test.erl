@@ -1,7 +1,8 @@
 -module(kex_test).
--export([describe/2, it/2, before/1, before/2, 'after'/1, 'after'/2,
-          maybe_print_summary/0,
-          assert/1, assert/2, is_truthy/1,
+-export([describe/2, describe/3, it/2, it/3, before/1, before/2,
+          'after'/1, 'after'/2,
+          maybe_print_summary/0, configure/2,
+          assert/1, assert/2, assert_at/2, assert_at/3, is_truthy/1,
           allow_mocks/0, mocks_allowed/0, require_mocks_allowed/1]).
 
 %% Mock.* is test-only (issue #144): a mock lets one part of a program lie
@@ -39,45 +40,218 @@ require_mocks_allowed(Api) ->
 %% m_testDepth/m_testsPassed/m_testsFailed members — it's inherently
 %% sequential, single-process bookkeeping, not real concurrent state.
 
-describe(Name, Fun) ->
+%% How this run reports itself, and which cases it runs (kexhq/kex#199).
+%% Like allow_mocks/0 this is granted by the RUNNER (src/main.cxx builds the
+%% -eval that calls it), never baked into an emitted module: a .beam handed
+%% straight to `erl` reports the ✓/✗ prose a person reads.
+%%
+%% Mode is pretty | json | list; Filters is a list of binaries, each naming a
+%% case by its full ` > `-joined path, by an ancestor describe's path, or by a
+%% bare label. Mirrors Evaluator::setTestReportMode/setTestFilters.
+configure(Mode, Filters) when Mode =:= pretty; Mode =:= json; Mode =:= list ->
+    put(kex_test_mode, Mode),
+    put(kex_test_filters, Filters),
+    'Kex.Unit'.
+
+mode() ->
+    case get(kex_test_mode) of
+        undefined -> pretty;
+        Mode -> Mode
+    end.
+
+name_path() ->
+    case get(kex_test_name_path) of
+        undefined -> [];
+        Path -> Path
+    end.
+
+%% A filter names a case by its full path, an ancestor `describe` by its own
+%% path, or any case by its bare label. Mirrors Evaluator::testCaseSelected,
+%% `IsGroup` included: a describe also runs when a filter names something
+%% INSIDE it — a bare label could belong to a case at any depth, so a describe
+%% cannot rule it out without running.
+selected(Path) -> selected(Path, false).
+
+selected(Path, IsGroup) ->
+    case get(kex_test_filters) of
+        undefined -> true;
+        [] -> true;
+        Filters ->
+            Joined = join_path(Path),
+            Prefix = <<Joined/binary, " > ">>,
+            Leaf = lists:last(Path),
+            lists:any(fun(Filter) ->
+                Filter =:= Joined
+                    orelse has_prefix(Joined, <<Filter/binary, " > ">>)
+                    orelse case IsGroup of
+                        true -> has_prefix(Filter, Prefix)
+                                    orelse binary:match(Filter, <<" > ">>) =:= nomatch;
+                        false -> Filter =:= Leaf
+                    end
+            end, Filters)
+    end.
+
+has_prefix(Binary, Prefix) ->
+    Size = byte_size(Prefix),
+    byte_size(Binary) >= Size andalso binary:part(Binary, 0, Size) =:= Prefix.
+
+join_path([]) -> <<>>;
+join_path([First | Rest]) ->
+    lists:foldl(fun(Part, Acc) -> <<Acc/binary, " > ", Part/binary>> end,
+                First, Rest).
+
+%% The location `assert` last reported, when it is in the same file as the
+%% `it` — a failure inside a stdlib helper would otherwise decorate a line of
+%% the stdlib, which is no use to anyone reading the spec.
+failure_location(Where) ->
+    case {get(kex_test_last_location), Where} of
+        {{File, _, _} = Last, {File, _, _}} -> Last;
+        _ -> Where
+    end.
+
+%% ---- JSON records ------------------------------------------------------
+%% One record per line on stdout, byte-for-byte the shape the tree-walker
+%% emits (src/interpreter/stdlib/test.cxx) — spec/test_json.spec.kex diffs the
+%% two backends, because an editor cannot care which one ran the suite.
+
+emit_case(Path, Status, DurationMs, Failure, Where) ->
+    Head = [<<"{\"kexTest\":\"case\",\"path\":">>, json_path(Path),
+            <<",\"name\":">>, json_string(lists:last(Path)),
+            <<",\"status\":">>, json_string(Status),
+            <<",\"durationMs\":">>, json_number(DurationMs),
+            json_location(Where)],
+    Tail = case Failure of
+        none -> [];
+        {Message, FailWhere} ->
+            [<<",\"failure\":{\"message\":">>,
+             json_string(kex_io:to_string_bin(Message)),
+             json_location(FailWhere), <<"}">>]
+    end,
+    emit_record([Head, Tail]).
+
+emit_item(Kind, Path, Where) ->
+    emit_record([<<"{\"kexTest\":\"item\",\"kind\":">>, json_string(Kind),
+                 <<",\"path\":">>, json_path(Path),
+                 <<",\"name\":">>, json_string(lists:last(Path)),
+                 json_location(Where)]).
+
+emit_record(Parts) ->
+    io:format("~ts}~n", [iolist_to_binary(Parts)]).
+
+json_path(Path) ->
+    Items = lists:join(<<",">>, [json_string(Part) || Part <- Path]),
+    iolist_to_binary([<<"[">>, Items, <<"]">>]).
+
+%% Omitted entirely when the location is unknown, so a consumer can tell "no
+%% location" from "line 0".
+json_location(none) -> <<>>;
+json_location({File, Line, Column}) ->
+    iolist_to_binary([<<",\"file\":">>, json_string(File),
+                      <<",\"line\":">>, integer_to_binary(Line),
+                      <<",\"column\":">>, integer_to_binary(Column)]).
+
+json_number(Value) ->
+    iolist_to_binary(io_lib:format("~.3f", [Value * 1.0])).
+
+json_string(Value) when not is_binary(Value) ->
+    json_string(kex_io:to_string_bin(Value));
+json_string(Binary) ->
+    iolist_to_binary([<<"\"">>, [json_char(C) || <<C>> <= Binary], <<"\"">>]).
+
+%% Bytes, not characters: UTF-8 continuation bytes pass through untouched,
+%% which is what makes the result a valid UTF-8 JSON string.
+json_char($") -> <<"\\\"">>;
+json_char($\\) -> <<"\\\\">>;
+json_char($\n) -> <<"\\n">>;
+json_char($\r) -> <<"\\r">>;
+json_char($\t) -> <<"\\t">>;
+json_char(C) when C < 16#20 ->
+    iolist_to_binary(io_lib:format("\\u~4.16.0b", [C]));
+json_char(C) -> <<C>>.
+
+describe(Name, Fun) -> describe(Name, Fun, none).
+
+describe(Name, Fun, Where) ->
     Depth = get_depth(),
     PreviousScopes = hook_scopes(),
-    io:format("~s~ts~n", [indent(Depth), kex_io:to_string(Name)]),
-    put(kex_test_depth, Depth + 1),
-    put(kex_test_hook_scopes,
-        [#{before => [], 'after' => [], after_all => []} | PreviousScopes]),
-    BodyResult = capture_exception(Fun),
-    [Current | _] = hook_scopes(),
-    AfterResult = run_all_hooks(lists:reverse(maps:get(after_all, Current))),
-    put(kex_test_hook_scopes, PreviousScopes),
-    put(kex_test_depth, Depth),
-    case BodyResult of
-        {raised, Class, Reason, Stack} -> erlang:raise(Class, Reason, Stack);
-        ok ->
-            case AfterResult of
-                ok -> ok;
-                {failed, Msg} -> erlang:error(Msg)
-            end
-    end,
-    'None'.
+    PreviousPath = name_path(),
+    Path = PreviousPath ++ [kex_io:to_string_bin(Name)],
+    %% A `describe` runs whenever anything under it might: it is what
+    %% REGISTERS the cases, so skipping it would skip them too.
+    case selected(Path, true) of
+        false -> 'None';
+        true ->
+            case mode() of
+                pretty -> io:format("~s~ts~n", [indent(Depth), kex_io:to_string(Name)]);
+                list -> emit_item(<<"describe">>, Path, Where);
+                json -> ok
+            end,
+            put(kex_test_name_path, Path),
+            put(kex_test_depth, Depth + 1),
+            put(kex_test_hook_scopes,
+                [#{before => [], 'after' => [], after_all => []} | PreviousScopes]),
+            BodyResult = capture_exception(Fun),
+            [Current | _] = hook_scopes(),
+            AfterResult = run_all_hooks(lists:reverse(maps:get(after_all, Current))),
+            put(kex_test_hook_scopes, PreviousScopes),
+            put(kex_test_depth, Depth),
+            put(kex_test_name_path, PreviousPath),
+            case BodyResult of
+                {raised, Class, Reason, Stack} -> erlang:raise(Class, Reason, Stack);
+                ok ->
+                    case AfterResult of
+                        ok -> ok;
+                        {failed, Msg} -> erlang:error(Msg)
+                    end
+            end,
+            'None'
+    end.
 
-it(Name, Fun) ->
+it(Name, Fun) -> it(Name, Fun, none).
+
+it(Name, Fun, Where) ->
+    Path = name_path() ++ [kex_io:to_string_bin(Name)],
+    case mode() of
+        %% Discovery runs no bodies: the tree an editor draws must be cheap and
+        %% must not have side effects (kexhq/kex#199).
+        list -> emit_item(<<"it">>, Path, Where), 'None';
+        Mode ->
+            case selected(Path) of
+                false -> 'None';
+                true -> run_it(Name, Fun, Where, Path, Mode)
+            end
+    end.
+
+run_it(Name, Fun, Where, Path, Mode) ->
     Depth = get_depth(),
     Indent = indent(Depth),
+    Started = erlang:monotonic_time(microsecond),
     %% Mock state set during this test — by a `before` hook or by the body —
     %% is discarded when the test ends, so a forgotten `Mock.FS.clear()` cannot
     %% leak into the next one. Captured BEFORE the hooks run, so per-test setup
     %% is undone too while anything a `before(:all)` established outside this
     %% block survives (kexhq/kex#143).
     SavedMocks = capture_mocks(),
+    %% Where in the SPEC FILE we got to. Only `assert` reports a location (see
+    %% assert_at/2,3), so a failure inside a stdlib helper leaves this at the
+    %% `it` itself rather than pointing into another file.
+    put(kex_test_last_location, Where),
     Result = run_case(Fun),
     restore_mocks(SavedMocks),
-    case Result of
-        ok ->
+    FailWhere = failure_location(Where),
+    Elapsed = (erlang:monotonic_time(microsecond) - Started) / 1000,
+    case {Result, Mode} of
+        {ok, json} ->
+            inc(kex_test_passed),
+            emit_case(Path, <<"passed">>, Elapsed, none, Where);
+        {ok, _} ->
             inc(kex_test_passed),
             io:format("~s~ts~ts~ts ~ts~n", [Indent, kex_intrinsic_console:'Green'(),
                       [16#2713], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name)]);
-        {failed, Msg} ->
+        {{failed, Msg}, json} ->
+            inc(kex_test_failed),
+            emit_case(Path, <<"failed">>, Elapsed, {Msg, FailWhere}, Where);
+        {{failed, Msg}, _} ->
             inc(kex_test_failed),
             io:format("~s~ts~ts~ts ~ts: ~ts~n", [Indent, kex_intrinsic_console:'Red'(),
                       [16#2717], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name), Msg])
@@ -197,20 +371,31 @@ capture_exception(Fun) ->
 maybe_print_summary() ->
     Passed = counter(kex_test_passed),
     Failed = counter(kex_test_failed),
-    case Passed + Failed of
-        0 -> ok;
-        _ ->
-            io:format("~n~b passed, ~b failed~n", [Passed, Failed]),
-            case Failed of
+    case mode() of
+        %% Discovery ran no cases, so there is nothing to tally.
+        list -> ok;
+        %% In JSON the summary is emitted even for a run with no cases at all:
+        %% it is how a consumer tells "this file has no tests" from "the
+        %% process died before finishing".
+        json ->
+            io:format("{\"kexTest\":\"summary\",\"passed\":~b,\"failed\":~b}~n",
+                      [Passed, Failed]),
+            halt_if_failed(Failed);
+        pretty ->
+            case Passed + Failed of
                 0 -> ok;
                 _ ->
-                    %% Flush before halting: halt/1 does not wait for the
-                    %% group leader, and the tally above is the one line a
-                    %% failing run must not lose.
-                    ok = io:format(""),
-                    erlang:halt(1)
+                    io:format("~n~b passed, ~b failed~n", [Passed, Failed]),
+                    halt_if_failed(Failed)
             end
     end.
+
+halt_if_failed(0) -> ok;
+halt_if_failed(_) ->
+    %% Flush before halting: halt/1 does not wait for the group leader, and the
+    %% tally above is the one line a failing run must not lose.
+    ok = io:format(""),
+    erlang:halt(1).
 
 get_depth() -> counter(kex_test_depth).
 hook_scopes() ->
@@ -237,6 +422,19 @@ indent(Depth) -> lists:duplicate(Depth * 2, $\s).
 %% ordinary Kex list of integers here, so `kex_io:to_string/1` renders it as
 %% `[97, 115, …]` — which is exactly what a bare `assert(false)` used to
 %% report, where the walker says just "assertion failed".
+%% Located forms, emitted by the IR lowerer for every `assert` in Kex source
+%% (kexhq/kex#199). They exist so a failure can name the LINE it happened on:
+%% the walker recovers that from evaluation, and BEAM has nothing equivalent
+%% once the spec is a fun in a .beam. The location is recorded whether or not
+%% the assertion holds — the last one recorded before a failure is the one
+%% that failed.
+assert_at(Cond, Where) ->
+    put(kex_test_last_location, Where),
+    assert(Cond).
+assert_at(Cond, Msg, Where) ->
+    put(kex_test_last_location, Where),
+    assert(Cond, Msg).
+
 assert(Cond) ->
     case is_truthy(Cond) of
         true -> true;

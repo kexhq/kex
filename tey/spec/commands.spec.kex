@@ -19,3 +19,41 @@ describe("Tey.Commands.backendFlags") do
     assert(Tey.Commands.backendFlags(true) == [])
   end
 end
+
+# What `tey test --json` / `--list` / `--only` ask the compiler for.
+#
+# An editor's test tree is built on these (kexhq/kex#199), and it calls `tey`
+# rather than `kex` because only Tey knows the package's source roots. So the
+# flags have to arrive at the compiler exactly as spelled — a filter that goes
+# missing silently runs the whole suite, and a mode that goes missing floods a
+# JSON reader with ✓/✗ prose.
+describe("Tey.Commands.testReportingFlags") do
+  it("asks for nothing when a person is watching") do
+    assert(Tey.Commands.testReportingFlags(false, false, "") == [])
+  end
+
+  it("asks for one JSON record per case under --json") do
+    assert(Tey.Commands.testReportingFlags(true, false, "") == ["--test-json"])
+  end
+
+  it("asks for discovery under --list") do
+    assert(Tey.Commands.testReportingFlags(false, true, "") == ["--test-list"])
+  end
+
+  it("prefers discovery when asked for both") do
+    # Discovery is already a JSON mode, and it is the one that runs nothing —
+    # so asking for both can only mean the one that runs nothing.
+    assert(Tey.Commands.testReportingFlags(true, true, "") == ["--test-list"])
+  end
+
+  it("passes --only through as the compiler's own filter") do
+    assert(Tey.Commands.testReportingFlags(true, false, "outer > inner > case")
+           == ["--test-json", "--test-only", "outer > inner > case"])
+  end
+
+  it("passes no filter for an empty --only") do
+    # An unset `--only` reads as "" here, and "" as a filter matches nothing:
+    # the difference between "run everything" and "run nothing" is this line.
+    assert(Tey.Commands.testReportingFlags(false, false, "") == [])
+  end
+end

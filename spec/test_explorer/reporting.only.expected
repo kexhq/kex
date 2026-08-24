@@ -1,0 +1,3 @@
+{"kexTest":"case","path":["reporting","nested","reports a case nested one level down"],"name":"reports a case nested one level down","status":"passed","durationMs":0,"file":"spec/test_explorer/reporting.spec.kex","line":29,"column":5}
+{"kexTest":"case","path":["reporting","nested","reports a failure raised inside a stdlib helper"],"name":"reports a failure raised inside a stdlib helper","status":"failed","durationMs":0,"file":"spec/test_explorer/reporting.spec.kex","line":33,"column":5,"failure":{"message":"assertion failed: expected 5, got 4","file":"spec/test_explorer/reporting.spec.kex","line":33,"column":5}}
+{"kexTest":"summary","passed":1,"failed":1}

@@ -74,6 +74,12 @@
           "default": [],
           "markdownDescription": "Extra directories the language server searches for `using` modules, on top of the workspace's own `lib`/`src`. Relative paths resolve from the workspace root. A Tey package's dependencies need nothing here — the server reads those from `tey.lock`. Use this for vendored trees, monorepo siblings, and other layouts no lock file describes."
         },
+        "kex.testExplorer.backend": {
+          "type": "string",
+          "enum": ["auto", "walker", "beam"],
+          "default": "auto",
+          "markdownDescription": "Which backend the Testing view runs `*.spec.kex` files on. `auto` follows the runner: the BEAM in a Tey package, because that is what `tey test` does and what the package ships as, and the tree-walking interpreter outside one, because it starts in milliseconds. `walker` and `beam` say so outright. Both backends report identical results — the compiler's own suite pins that — so this changes what the cases run on, never what the test tree is told."
+        },
         "kex.toolchain": {
           "type": "string",
           "default": "",
