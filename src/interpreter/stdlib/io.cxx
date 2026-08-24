@@ -181,39 +181,44 @@ auto Evaluator::registerIOBuiltins() -> void {
         defineIntrinsic("System::die", std::move(fn));
     }
 
-    // IO.getLine() — reads one line from stdin (or mock input). Returns
-    // String, or None at EOF / when mock input is exhausted.
+    // IO.getLine() — reads one line from stdin (or mock input).
+    //
+    // `String?`, as io.kex declares: `Just(line)` or `None` at EOF. The line
+    // used to come back UNWRAPPED, so the type was really `String | None` and
+    // `match ... Just(x)` matched nothing on either backend — only `.or(...)`
+    // worked, because `Optional.or`'s catch-all returns whatever it is given
+    // (kexhq/kex#197).
     defineDual("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto line = m_mockIOInputLines.front();
             m_mockIOInputLines.pop_front();
-            return Value::string(line);
+            return Value::just(Value::string(line));
         }
         std::string line;
         if (!std::getline(std::cin, line)) {
             return Value::none();
         }
-        return Value::string(line);
+        return Value::just(Value::string(line));
     });
 
     // IO.get() — reads a single character from stdin (or mock input).
-    // Returns a one-character String, or None at EOF.
+    // `String?` on the same terms as `getLine` above (kexhq/kex#197).
     defineDual("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto& front = m_mockIOInputLines.front();
             if (front.empty()) {
                 m_mockIOInputLines.pop_front();
-                return Value::string("\n");
+                return Value::just(Value::string("\n"));
             }
             char c = front[0];
             front.erase(0, 1);
-            return Value::string(std::string(1, c));
+            return Value::just(Value::string(std::string(1, c)));
         }
         int c = std::cin.get();
         if (c == EOF) return Value::none();
-        return Value::string(std::string(1, static_cast<char>(c)));
+        return Value::just(Value::string(std::string(1, static_cast<char>(c))));
     });
 
     // ── Mock.IO ──────────────────────────────────────────────────────

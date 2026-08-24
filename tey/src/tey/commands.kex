@@ -260,8 +260,8 @@ foul build -> Integer do
     return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
   end
   let status = Tey.Commands.report(
-    Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
-                                    ...Tey.Commands.sourceRoots, ...units]))
+    Process.stream(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+                                       ...Tey.Commands.sourceRoots, ...units]))
   return status if status != 0
   Tey.Commands.buildTargets(package)
 end

@@ -113,16 +113,45 @@ feed_port(Port) ->
     end.
 
 %% Every chunk the child writes goes straight out, and the loop ends with the
-%% exit status. `put_chars` with a binary keeps the bytes exactly as the child
-%% wrote them, so a partial UTF-8 sequence split across two chunks still ends
-%% up correct on the terminal.
-pump_port(Port) ->
+%% exit status.
+%%
+%% A port hands over BYTES, and a chunk boundary can fall inside a multi-byte
+%% character: the spec runner's `✓` is three bytes, and `io:put_chars/1` on a
+%% truncated sequence raises `badarg` — which surfaced as `tey: badarg` from
+%% the launcher, on Alpine, in the middle of `tey test`. So an incomplete tail
+%% is held back and prepended to the next chunk.
+pump_port(Port) -> pump_port(Port, <<>>).
+
+pump_port(Port, Buffered) ->
     receive
         {Port, {data, Bin}} ->
-            io:put_chars(Bin),
-            pump_port(Port);
+            pump_port(Port, emit(<<Buffered/binary, Bin/binary>>));
         {Port, {exit_status, Status}} ->
+            %% Whatever is left cannot become valid — the child is gone — but
+            %% it is output the child produced, so it goes out as raw bytes
+            %% rather than being dropped.
+            case Buffered of
+                <<>> -> ok;
+                Rest -> file:write(standard_io, Rest)
+            end,
             Status
+    end.
+
+%% Writes every COMPLETE character in `Chunk` and answers the incomplete tail
+%% to carry forward. Invalid bytes (not merely incomplete ones) are written
+%% raw: they came from the child, and a terminal showing them wrongly beats
+%% output that silently disappears.
+emit(Chunk) ->
+    case unicode:characters_to_binary(Chunk, unicode, unicode) of
+        {incomplete, Encoded, Rest} ->
+            io:put_chars(Encoded),
+            Rest;
+        {error, Encoded, _Rest} ->
+            io:put_chars(Encoded),
+            <<>>;
+        Encoded when is_binary(Encoded) ->
+            io:put_chars(Encoded),
+            <<>>
     end.
 
 run_merged(Executable, Arguments) ->
