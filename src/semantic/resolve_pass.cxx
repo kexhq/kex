@@ -23,10 +23,118 @@ static auto editDistance(const std::string& a, const std::string& b) -> int {
 ResolvePass::ResolvePass(const ImportedInterfaces* imports)
     : m_imports(imports) {}
 
+// Parameter labels, gathered from every declaration in the unit — a module's
+// members, a `make` block's methods, a `private do` block's, at any depth.
+// Kept separate from the resolving walk because a call may precede the
+// definition it names.
+using LabelMap =
+    std::unordered_map<std::string, std::unordered_set<std::string>>;
+
+// Every parameter label the clauses of one FunctionDef declare. All clauses,
+// not just the first: `render(text)` and `render(text, width:)` are one name,
+// and reading only clause zero would reject the label the second declares.
+static auto collectLabels(const ast::FunctionDef& def, LabelMap& into) -> void {
+    auto& labels = into[def.name];
+    for (const auto& clause : def.clauses)
+        for (const auto& param : clause.params)
+            if (param.name) labels.insert(*param.name);
+}
+
+template <typename Items>
+static auto collectLabelsIn(const Items& items, LabelMap& into) -> void {
+    for (const auto& item : items) {
+        std::visit([&into](const auto& ptr) {
+            if (!ptr) return;
+            using T = std::decay_t<decltype(*ptr)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                collectLabels(*ptr, into);
+            else if constexpr (std::is_same_v<T, ast::ModuleDef>)
+                collectLabelsIn(ptr->body, into);
+            else if constexpr (std::is_same_v<T, ast::MakeDef>)
+                collectLabelsIn(ptr->body, into);
+            else if constexpr (std::is_same_v<T, ast::VisibilityBlock>)
+                collectLabelsIn(ptr->items, into);
+        }, item);
+    }
+}
+
+auto ResolvePass::declaredLabels(const std::string& name) const
+    -> std::optional<std::unordered_set<std::string>> {
+    std::unordered_set<std::string> labels;
+    bool known = false;
+    if (auto local = m_declaredLabels.find(name);
+        local != m_declaredLabels.end()) {
+        labels = local->second;
+        known = true;
+    }
+    // An imported overload declares labels of its own, and the union is what
+    // the call may use: a unit that defines `to(value, String)` while
+    // `Units.SI` supplies `to(value, String, in:)` must accept `in:`.
+    if (m_imports) {
+        const auto merge = [&](const std::vector<ImportedFunction>& overloads) {
+            for (const auto& overload : overloads) {
+                known = true;
+                labels.insert(overload.paramNames.begin(),
+                              overload.paramNames.end());
+            }
+        };
+        if (auto receiver = m_imports->receiverFunctions.find(name);
+            receiver != m_imports->receiverFunctions.end())
+            merge(receiver->second);
+        for (const auto& [moduleName, module] : m_imports->modules) {
+            (void)moduleName;
+            if (auto exported = module.exports.find(name);
+                exported != module.exports.end())
+                merge(exported->second);
+        }
+    }
+    if (!known) return std::nullopt;
+    return labels;
+}
+
+auto ResolvePass::checkNamedArguments(
+    const std::string& name,
+    const std::vector<std::pair<std::string, ast::ExprPtr>>& namedArgs,
+    SourceLocation loc) -> void {
+    if (namedArgs.empty()) return;
+    // A qualified call is checked under its member name: the label belongs to
+    // the function, and the declaration was collected under the bare name.
+    const auto separator = name.rfind('.');
+    const auto member =
+        separator == std::string::npos ? name : name.substr(separator + 1);
+    auto labels = declaredLabels(member);
+    if (!labels) return;
+    for (const auto& named : namedArgs) {
+        const auto& label = named.first;
+        if (labels->count(label)) continue;
+        std::string message =
+            "Unknown named argument `" + label + ":` for `" + name + "`";
+        // The nearest declared label, on the same edit-distance rule the
+        // undefined-name hint uses. A typo is the common case here.
+        std::string best;
+        int bestDistance = 3;
+        for (const auto& candidate : *labels) {
+            const int distance = editDistance(label, candidate);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+        if (!best.empty()) message += " — did you mean `" + best + ":`?";
+        error(loc, message);
+    }
+}
+
 auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
     m_db = &db;
     m_state = db.fileState(file);
     if (!m_state) return;
+
+    // Labels first, over the whole unit: a call may precede the definition it
+    // names, and companion declarations (a `.spec.kex` base, a manifest's
+    // vocabulary) are already merged into this AST by now.
+    m_declaredLabels.clear();
+    collectLabelsIn(m_state->ast.items, m_declaredLabels);
 
     // Persistent module scope: synthetic top-level let bindings land here so
     // they remain visible to all subsequent top-level items in the same file.
@@ -410,6 +518,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                     recordRef(node.name, expr.location);
                 }
             }
+            checkNamedArguments(node.name, node.namedArgs, expr.location);
             for (const auto& arg : node.args)
                 if (arg) resolveExpr(*arg);
             for (const auto& [_, arg] : node.namedArgs)

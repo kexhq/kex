@@ -22,6 +22,12 @@ record CommandSpec do
   description : String = ""
   usage : String = ""
   handler : CommandHandler
+  # The help heading this command is listed under. "" is the tool's own
+  # `Commands:` block; anything else gets its own heading, in the order the
+  # sections were first declared. Commands a tool discovers at runtime — a
+  # package manifest's own — are not the tool's vocabulary, and a reader who
+  # cannot tell which is which has to guess where to file a bug.
+  section : String = ""
 end
 
 record OptionConfig do
@@ -99,6 +105,17 @@ make OptionConfig do
                    options: @options, commands: [...@commands, spec] }
   end
 
+  # The same, listed under its own help heading rather than with the tool's
+  # built-ins. `section:` is a label at the call site so the fourth string
+  # cannot be mistaken for the description.
+  let command(name: String, usage: String, description: String, section: String,
+              handler: CommandHandler) -> OptionConfig do
+    let spec = CommandSpec { name: name, description: description,
+                             usage: usage, handler: handler, section: section }
+    OptionConfig { name: @name, description: @description,
+                   options: @options, commands: [...@commands, spec] }
+  end
+
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
     OptionParser.parse(@options, args)
   end
@@ -154,12 +171,19 @@ make OptionConfig do
     end
     let optionsText = "${title}\n\nOptions:\n${lines.join("\n")}"
     return optionsText if @commands.empty?
-    let width = @commands.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
-    let commandLines = @commands.map do |command|
-      let label = OptionParser.commandLabel(command)
-      "  ${label}${" ".repeat(width - label.count)}  ${command.description}"
+    let blocks = @commands.map { |command| command.section }.uniq.map do |section|
+      let heading = section == "" then "Commands:" else "${section}:"
+      let listed = @commands.filter { |command| command.section == section }
+      # Each block is its own table: a section of short names should not be
+      # pushed across the page by the longest built-in three headings up.
+      let width = listed.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
+      let commandLines = listed.map do |command|
+        let label = OptionParser.commandLabel(command)
+        "  ${label}${" ".repeat(width - label.count)}  ${command.description}"
+      end
+      "${heading}\n${commandLines.join("\n")}"
     end
-    "${optionsText}\n\nCommands:\n${commandLines.join("\n")}"
+    return "${optionsText}\n\n${blocks.join("\n\n")}"
   end
 end
 

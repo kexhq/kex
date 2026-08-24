@@ -25,7 +25,7 @@ foul parser -> OptionConfig do
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
-    .flag("json", None, "Print `tey kex list` as one JSON document (needs --installed)")
+    .flag("json", None, "Print `tey kex list` or `tey commands` as one JSON document")
     .flag("interpret", None, "Run `tey run`, `tey test` and package commands on the interpreter, not the BEAM")
     .command("new", "<name>", "create a Kex package in a new directory") do |options|
       Tey.Cli.newPackage(options)
@@ -71,8 +71,8 @@ foul parser -> OptionConfig do
     .command("setup merge-driver", "", "configure Git's tey.lock merge driver") do |options|
       Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
     end
-    .command("help", "", "show this help") do |_|
-      Tey.Cli.cli.printHelp
+    .command("help", "[--json]", "show this help") do |options|
+      Tey.Cli.help(options.flagEnabled?("json"))
     end
     .command("kex list", "[--pre] [--installed] [--json]", "show Kex versions, newest first") do |options|
       Tey.Cli.kexList(options)
@@ -108,11 +108,13 @@ end
 # unknown-command message, and into argument stripping, for free.
 #
 # A package command can never shadow a built-in: the manifest reader refuses
-# those names outright (Tey.Manifest.reservedCommands).
+# those names outright (Tey.Manifest.reservedCommands). They are listed under
+# their own help heading regardless — "unknown command" should send a reader to
+# package.kex or to Tey, and the two lists are written by different people.
 foul cli -> OptionConfig do
   return Tey.Cli.packageCommands.reduce(Tey.Cli.parser) do |config, command|
     let summary = command.commandDescription != "" then command.commandDescription else command.commandRun
-    config.command(command.commandName, "[args...]", summary) do |options|
+    config.command(command.commandName, "[args...]", summary, section: "Package commands") do |options|
       Tey.Commands.runCommand(command, options.arguments, options.flagEnabled?("interpret"))
     end
   end
@@ -490,6 +492,24 @@ private do
       end
       Ok(package) => package.commands
     end
+  end
+
+  # `tey help`, and `tey help --json` for a tool rather than a person.
+  #
+  # The JSON is the same list the help text renders — built-ins and this
+  # package's own, each carrying the `section` that separates them — so an
+  # editor offering commands as tasks reads Tey's answer instead of parsing
+  # package.kex with a second manifest reader of its own. Outside a package it
+  # is the built-ins alone: no package.kex is a state, not a failure, and an
+  # editor asks in every workspace it opens.
+  foul help(asJson: Bool) -> Integer do
+    return Tey.Cli.cli.printHelp if !asJson
+    let entries = Tey.Cli.cli.commands.map do |command|
+      { name: command.name, usage: command.usage,
+        description: command.description, section: command.section }
+    end
+    IO.printLine(JSON.stringify({ commands: entries }))
+    0
   end
 
 

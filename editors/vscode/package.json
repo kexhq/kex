@@ -19,10 +19,22 @@
     "vscode": "^1.90.0"
   },
   "categories": ["Programming Languages", "Linters"],
-  "activationEvents": ["onLanguage:kex"],
+  "activationEvents": ["onLanguage:kex", "onTaskType:tey"],
   "main": "./out/extension.js",
   "files": ["out/**", "syntaxes/**", "images/**", "language-configuration.json", "README.md", "LICENSE"],
   "contributes": {
+    "taskDefinitions": [
+      {
+        "type": "tey",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The tey command to run, as `tey <command>` — one declared by this package's package.kex, or a built-in such as `build` or `test`."
+          }
+        }
+      }
+    ],
     "commands": [
       {
         "command": "kex.restartLanguageServer",

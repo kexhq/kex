@@ -9,6 +9,7 @@ import {
   InstalledToolchain, ResolvedToolchain, TEY_FOLLOW, installedToolchains,
   isExecutableFile, kexInfo, lockedVersion, resolveToolchain, teySelectedVersion,
 } from './toolchain';
+import { registerTaskProvider } from './tasks';
 
 let client: LanguageClient | undefined;
 // The watcher feeding that client its `didChangeWatchedFiles`. Held here
@@ -540,6 +541,11 @@ export function activate(context: vscode.ExtensionContext): void {
     'kex.restartLanguageServer', () => scheduleRestart(context, true)));
   context.subscriptions.push(vscode.commands.registerCommand(
     'kex.selectToolchain', () => selectToolchain(context)));
+
+  // A package's own commands, offered as tasks. Registered unconditionally:
+  // the provider itself decides there is nothing to offer in a workspace with
+  // no package.kex, and a workspace can gain one while the editor is open.
+  registerTaskProvider(context);
 
   // Changing which compiler to run is a request to run it.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
