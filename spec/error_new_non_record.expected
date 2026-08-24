@@ -1,0 +1,2 @@
+spec/error_new_non_record.kex:3:25: error: `new` requires a record receiver
+spec/error_new_non_record.kex:4:28: error: `New` requires a record receiver

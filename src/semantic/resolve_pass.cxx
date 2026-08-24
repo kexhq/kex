@@ -326,6 +326,8 @@ auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
 }
 
 auto ResolvePass::resolveMakeFns(const decltype(ast::MakeDef::body)& body) -> void {
+    pushScope();
+    defineLocal("new");
     for (const auto& item : body) {
         std::visit([this](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
@@ -343,6 +345,7 @@ auto ResolvePass::resolveMakeFns(const decltype(ast::MakeDef::body)& body) -> vo
             }
         }, item);
     }
+    popScope();
 }
 
 auto ResolvePass::bindParams(const std::vector<ast::Param>& params) -> void {
@@ -366,6 +369,11 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         if constexpr (std::is_same_v<T, ast::Identifier>) {
             if (node.name != "_") {
                 if (!isKnown(node.name)) {
+                    if (node.name == "new") {
+                        error(expr.location,
+                              "`new` requires a record receiver (or an explicit local binding)");
+                        return;
+                    }
                     auto hint = suggest(node.name);
                     std::string msg = "Undefined name: `" + node.name + "`";
                     if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
@@ -580,8 +588,8 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             resolveBody(node.body);
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& [_, v] : node.fields)
-                if (v) resolveExpr(*v);
+            for (const auto& field : node.fields)
+                if (field.value) resolveExpr(*field.value);
         }
         else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
             // `~Mod.fn` names a member of another namespace, which this pass

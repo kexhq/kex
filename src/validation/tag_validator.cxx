@@ -124,7 +124,7 @@ auto walkExpr(
             walk(node.start);
             walk(node.end);
         } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& [_, value] : node.fields) walk(value);
+            for (const auto& field : node.fields) walk(field.value);
         } else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             for (const auto& value : node.body) walk(value);
         }

@@ -1,0 +1,9 @@
+# kex: check-only
+make Integer do
+  let copy -> Integer = new
+  let changed -> Integer = New { }
+end
+
+main do
+  IO.printLine(1.copy)
+end

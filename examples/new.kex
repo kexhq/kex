@@ -1,0 +1,148 @@
+# Three related spellings, one idea: build a value of the enclosing type while
+# naming only the fields that differ.
+#
+#   New { ... }   constructor. Unlisted fields come from `this`, so anything
+#                 may be omitted. Needs a receiver (make blocks only).
+#   This { ... }  constructor. Unlisted fields come from declared defaults;
+#                 optional fields become None; mandatory fields are required.
+#   new           a REFERENCE to the newly cloned instance — not a constructor.
+#                 Only `new.field = ...` and reading `new` are legal.
+#                 `new { ... }` is an ERROR.
+#
+# `new.x = 0; new.y = 0; return new` is exactly `New { x: 0, y: 0 }`, and each
+# field may be assigned repeatedly, just like any other mutable binding.
+
+record Vector do
+  x : Float
+  y : Float
+end
+
+make Vector do
+  # Both fields change, so nothing is elided here.
+  let +(other: Vector) -> Vector = New { x: @x + other.x, y: @y + other.y }
+  let -(other: Vector) -> Vector = New { x: @x - other.x, y: @y - other.y }
+  let *(scalar: Float) -> Vector = New { x: @x * scalar, y: @y * scalar }
+
+  # Partial: only y changes, x rides along untouched.
+  let reflectX -> Vector = New { y: -@y }
+  let reflectY -> Vector = New { x: -@x }
+end
+
+# ---------------------------------------------------------------------------
+# Partial updates on a wide record — the payoff case.
+# ---------------------------------------------------------------------------
+
+record User do
+  name      : String
+  email     : String
+  age       : Integer
+  active?   : Bool
+  loginCount: Integer
+  bio       : String
+end
+
+make User do
+  # One field of six. Without `new` this is six lines of `name: @name, ...`.
+  let birthday -> User = New { age: @age + 1 }
+
+  let deactivated -> User = New { active?: false }
+
+  let renamed(to: String) -> User = New { name: to }
+
+  # Two of six.
+  let signedIn -> User = New { loginCount: @loginCount + 1, active?: true }
+
+  # `new` with no overrides is just a copy — equal to `this`.
+  let copy -> User = new
+
+  # Partial updates compose: each step names only what it changes.
+  let onboarded(displayName: String) -> User do
+    return this
+      .renamed(displayName)
+      .signedIn
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Statement form — same partiality, built up across statements.
+# ---------------------------------------------------------------------------
+
+record Config do
+  host    : String  = "localhost"
+  port    : Integer = 80
+  tls?    : Bool    = false
+  timeout : Integer = 30
+  retries : Integer = 10
+end
+
+make Config do
+  # Where do unmentioned fields come from?
+  #   This { ... } -> declared defaults (mandatory fields must still be given)
+  #   New  { ... } -> this receiver's current values (anything may be omitted)
+  # `new` is neither: it is a REFERENCE to the clone, so `new { ... }` is an
+  # error. Only `new.field = ...` and reading `new` are legal.
+  let defaultsWithTls -> This = This { tls?: true }   # host: "localhost" (default)
+  let keepHostWithTls -> This = New  { tls?: true }   # host: @host      (receiver)
+
+  # Touches two fields; host, timeout and retries are never mentioned.
+  let secured -> Config do
+    new.port = 443
+    new.tls? = true
+    return new
+  end
+
+  # Control flow: a field is conditionally overridden. Each assignment is an
+  # ordinary statement, so branches need no special handling.
+  let clamped(maxRetries: Integer) -> Config do
+    if @retries > maxRetries
+      new.retries = maxRetries
+    end
+    return new
+  end
+
+  # Mixing forms: start from an expression-form partial, then adjust.
+  let hardened -> Config do
+    new.tls? = true
+    new.timeout = @timeout.min(5)
+    return new
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Nested records — the inner value is replaced wholesale, not written through.
+# ---------------------------------------------------------------------------
+
+record Account do
+  owner   : User
+  config  : Config
+  balance : Float
+end
+
+make Account do
+  # Only `owner` changes; config and balance carry over. The inner User is
+  # itself built with a partial `new` inside `make User`.
+  let ownerRenamed(to: String) -> Account = New { owner: @owner.renamed(to) }
+
+  let credited(amount: Float) -> Account = New { balance: @balance + amount }
+end
+
+main do
+  let v = Vector { x: 3.0, y: 4.0 }
+  IO.printLine(v + Vector { x: 1.0, y: 1.0 })
+  IO.printLine(v.reflectX)
+
+  let u = User {
+    name: "ada", email: "ada@example.com", age: 36,
+    active?: false, loginCount: 0, bio: "mathematician"
+  }
+  IO.printLine(u.birthday.age)        # 37, everything else preserved
+  IO.printLine(u.signedIn.active?)    # true
+  IO.printLine(u.copy == u)           # true
+
+  let c = Config {
+    host: "localhost", port: 80, tls?: false, timeout: 30, retries: 10
+  }
+  IO.printLine(c.secured.port)        # 443
+  IO.printLine(c.secured.host)        # "localhost" — untouched
+  IO.printLine(c.clamped(3).retries)  # 3
+end

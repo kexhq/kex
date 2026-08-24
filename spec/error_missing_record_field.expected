@@ -1,0 +1,1 @@
+spec/error_missing_record_field.kex:9:16: error: missing mandatory field `y` constructing `Point`

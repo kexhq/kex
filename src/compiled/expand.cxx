@@ -244,6 +244,9 @@ struct Substituter {
     auto each(std::vector<std::pair<std::string, ast::ExprPtr>>& list) -> void {
         for (auto& [_, item] : list) substitute(item);
     }
+    auto each(std::vector<ast::RecordEntry>& list) -> void {
+        for (auto& entry : list) substitute(entry.value);
+    }
     auto each(std::vector<ast::MatchClause>& clauses) -> void {
         for (auto& clause : clauses) {
             if (clause.guard) substitute(*clause.guard);
@@ -752,6 +755,11 @@ struct ChainCollapser {
             if (!item || !isStatic(*item)) return false;
         return true;
     }
+    auto allStatic(const std::vector<ast::RecordEntry>& list) const -> bool {
+        for (const auto& entry : list)
+            if (!entry.value || !isStatic(*entry.value)) return false;
+        return true;
+    }
 
     // Is this expression's value determined at compile time, treating any
     // free runtime name as a PLACEHOLDER it may carry but not compute with?
@@ -877,8 +885,8 @@ struct ChainCollapser {
                               std::is_same_v<T, ast::TupleExpr>) {
                     return anyOf(node.elements);
                 } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-                    for (const auto& [_, value] : node.fields)
-                        if (value && callsCompiled(*value)) return true;
+                    for (const auto& field : node.fields)
+                        if (field.value && callsCompiled(*field.value)) return true;
                     return false;
                 } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
                     for (const auto& entry : node.entries)

@@ -1263,9 +1263,31 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
 }
 
 auto Parser::parseAssignment() -> ast::ExprPtr {
-  if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Equals) {
+  // Assignment targets are deliberately narrower than postfix expressions:
+  // a mutable local, optionally followed by record fields. Calls and computed
+  // receivers are never lvalues.
+  bool assignmentAhead = false;
+  int assignmentOffset = 0;
+  auto isFieldName = [](TokenType type) {
+    return type == TokenType::LowerIdent || type == TokenType::End ||
+           type == TokenType::Type || type == TokenType::Match ||
+           type == TokenType::Loop || type == TokenType::Timeout;
+  };
+  if (check(TokenType::LowerIdent)) {
+    assignmentOffset = 1;
+    while (peekAt(assignmentOffset).type == TokenType::Dot &&
+           isFieldName(peekAt(assignmentOffset + 1).type))
+      assignmentOffset += 2;
+    assignmentAhead = peekAt(assignmentOffset).type == TokenType::Equals;
+  }
+  if (assignmentAhead) {
     auto loc = currentLocation();
     auto name = advance().value;
+    std::vector<std::string> path;
+    while (match(TokenType::Dot)) {
+      if (!isFieldName(peek().type)) error("Expected field name");
+      path.push_back(advance().value);
+    }
     advance(); // =
     // The value stops short of a trailing `if`: in
     // `status = code if failed?` the condition decides whether the
@@ -1276,7 +1298,8 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
-    expr->kind = ast::AssignExpr{std::move(name), std::move(value)};
+    expr->kind =
+        ast::AssignExpr{std::move(name), std::move(path), std::move(value)};
     return complete(std::move(expr));
   }
   return parseOr();
@@ -1480,7 +1503,10 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         continue;
       }
 
-      if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent)) {
+      if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
+          !check(TokenType::End) && !check(TokenType::Type) &&
+          !check(TokenType::Match) && !check(TokenType::Loop) &&
+          !check(TokenType::Timeout)) {
         error("Expected method or module name after '.'");
       }
       auto methodTok = advance();
@@ -1947,7 +1973,13 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
 
   // @field / @method(args) — shorthand for this.field / this.method(args),
   // for use inside make/record functions.
-  if (check(TokenType::At) && peekNext().type == TokenType::LowerIdent) {
+  if (check(TokenType::At) &&
+      (peekNext().type == TokenType::LowerIdent ||
+       peekNext().type == TokenType::Timeout ||
+       peekNext().type == TokenType::Type ||
+       peekNext().type == TokenType::Match ||
+       peekNext().type == TokenType::Loop ||
+       peekNext().type == TokenType::End)) {
     advance(); // @
     auto name = advance().value;
 
@@ -2079,14 +2111,19 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
       }
     }
 
-    // Record construction: Type { field: value }
+    // Record construction: Type { field: value } / Type { ...base, field: v }
     if (check(TokenType::LBrace)) {
       advance(); // {
-      std::vector<std::pair<std::string, ast::ExprPtr>> fields;
+      std::vector<ast::RecordEntry> fields;
 
       if (!check(TokenType::RBrace)) {
         do {
           skipNewlines();
+          if (match(TokenType::DotDotDot)) {
+            fields.push_back(ast::RecordEntry{"", parseExpr(), true});
+            skipNewlines();
+            continue;
+          }
           std::string fieldName;
           if (check(TokenType::LowerIdent) || check(TokenType::End) ||
               check(TokenType::Type) || check(TokenType::Match) ||
@@ -2106,7 +2143,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             value->location = currentLocation();
             value->kind = ast::Identifier{fieldName};
           }
-          fields.push_back({fieldName, std::move(value)});
+          fields.push_back(
+              ast::RecordEntry{fieldName, std::move(value), false});
           skipNewlines();
         } while (match(TokenType::Comma));
       }

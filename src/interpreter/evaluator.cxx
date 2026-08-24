@@ -1193,15 +1193,20 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 //    pre-@ make-block functions like `let pub(b) = b.priv`.
                 if (firstParamIsThisPattern) {
                     // @Pat: receiver is pattern-matched as first param; bind this for @field access
-                    if (!args.empty()) m_env->define("this", args[0]);
+                    if (!args.empty()) {
+                        m_env->define("this", args[0]);
+                        m_env->define("new", args[0], /*isMutable=*/true);
+                    }
                 } else if (isMethod && !args.empty()
                            && args.size() == requiredParams + 1) {
                     // Type-scoped method called with exactly required-params + 1 args:
                     // the extra arg is the receiver.
                     m_env->define("this", args[0]);
+                    m_env->define("new", args[0], /*isMutable=*/true);
                 } else if (isMethod && args.size() > clause.params.size()) {
                     // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
+                    m_env->define("new", args[0], /*isMutable=*/true);
                 }
 
                 for (size_t i = 0; i < clause.params.size(); i++) {
@@ -1633,6 +1638,25 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (!m_env->isMutable(node.name)) {
                 throw RuntimeError("Cannot assign to immutable binding: " + node.name, expr.location);
             }
+            if (!node.path.empty()) {
+                if (node.path.size() != 1)
+                    throw RuntimeError(
+                        "Nested record-field assignment is not supported",
+                        expr.location);
+                auto current = m_env->get(node.name);
+                auto* record = current
+                    ? std::get_if<RecordValue>(&current->data) : nullptr;
+                if (!record)
+                    throw RuntimeError("Field assignment requires a record binding",
+                                       expr.location);
+                if (!record->fields.count(node.path.front()))
+                    throw RuntimeError("Record " + record->typeName +
+                                           " has no field: " + node.path.front(),
+                                       expr.location);
+                auto fields = record->fields;
+                fields[node.path.front()] = value;
+                value = Value::record(record->typeName, std::move(fields));
+            }
             m_env->set(node.name, value);
             // The assigned value, matching BEAM lowering (which yields the
             // new SSA binding). Returning None made the REPL print
@@ -2043,7 +2067,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
 
-            // UFCS and free-call syntax share imported overloads.
+            // UFCS and free-call syntax share imported overloads. Named
+            // overloads need to be considered before the receiver's generic
+            // method so labels such as `in:` select the imported clause.
             if (auto imported = findImportedNamedOverload(
                     node.method, namedArgs, receiver))
                 return callFunction(*imported, std::move(args),
@@ -2059,8 +2085,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (const auto* named = std::get_if<semantic::NamedType>(
                             &found->second->kind)) {
                         const auto candidate = named->name + "::" + node.method;
-                        if (m_functionValues.count(candidate) ||
-                            m_env->get(candidate))
+                        const auto runtimeType = dispatchTypeName(receiver);
+                        const auto runtimeDot = runtimeType.rfind('.');
+                        const bool resolvedShortRecordMethod =
+                            runtimeDot != std::string::npos &&
+                            specificMethod == runtimeType.substr(runtimeDot + 1) +
+                                "::" + node.method;
+                        if (!resolvedShortRecordMethod &&
+                            (m_functionValues.count(candidate) ||
+                             m_env->get(candidate)))
                             specificMethod = candidate;
                     }
                 }
@@ -2410,10 +2443,36 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return node.elseExpr ? eval(*node.elseExpr) : Value::none();
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            const auto typeName = resolveRecordTypeName(node.typeName);
+            std::string typeName;
+            ValuePtr receiver;
+            if (node.typeName == "This" || node.typeName == "New") {
+                receiver = m_env->get("this");
+                auto* record = receiver
+                    ? std::get_if<RecordValue>(&receiver->data) : nullptr;
+                if (!record)
+                    throw RuntimeError("`" + node.typeName +
+                                           "` requires a record receiver",
+                                       expr.location);
+                typeName = record->typeName;
+            } else {
+                typeName = resolveRecordTypeName(node.typeName);
+            }
             std::unordered_map<std::string, ValuePtr> fields;
-            for (const auto& [name, val] : node.fields) {
-                fields[name] = val ? eval(*val) : Value::none();
+            if (node.typeName == "New")
+                fields = std::get<RecordValue>(receiver->data).fields;
+            for (const auto& entry : node.fields) {
+                auto value = entry.value ? eval(*entry.value) : Value::none();
+                if (entry.spread) {
+                    auto* spread = std::get_if<RecordValue>(&value->data);
+                    if (!spread || spread->typeName != typeName)
+                        throw RuntimeError("Cannot spread " + value->typeName() +
+                                               " into record " + typeName,
+                                           expr.location);
+                    for (const auto& [name, field] : spread->fields)
+                        fields[name] = field;
+                } else {
+                    fields[entry.name] = value;
+                }
             }
             // A qualified type from an opt-in module may not be loaded yet:
             // the declaration alone is enough to name it, and that came from
@@ -2441,6 +2500,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (fields.count(field.name)) continue;
                     if (field.defaultValue && *field.defaultValue) {
                         fields[field.name] = eval(**field.defaultValue);
+                    } else {
+                        fields[field.name] = Value::none();
                     }
                 }
             }
@@ -3284,6 +3345,14 @@ auto Evaluator::receiverArgumentOffset(const std::string& functionName,
     auto scope = functionName.substr(0, separator);
     auto receiverType = dispatchTypeName(args[0]);
     if (scope == receiverType) return 1;
+    // Module-owned records retain their qualified runtime identity
+    // (`CollisionWeb.Server`), while a make block written as `make Server`
+    // registers `Server::method`. Method resolution applies this same
+    // last-segment fallback; arity matching must count its implicit receiver
+    // too, or the result depends on which same-named import is encountered.
+    if (const auto dot = receiverType.rfind('.'); dot != std::string::npos &&
+        scope == receiverType.substr(dot + 1))
+        return 1;
 
     auto parent = m_variantParent.find(receiverType);
     return parent != m_variantParent.end() && scope == parent->second ? 1 : 0;
@@ -3441,8 +3510,17 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // and otherwise dispatch on the last segment.
     if (const auto dot = receiverType.rfind('.'); dot != std::string::npos) {
         const auto qualified = receiverType + "::" + method;
-        if (!m_env->get(qualified) && !m_functionValues.count(qualified))
-            receiverType = receiverType.substr(dot + 1);
+        const auto shortType = receiverType.substr(dot + 1);
+        const auto shortQualified = shortType + "::" + method;
+        // A module function can have the same qualified name as its record
+        // (`module Server; let new(...)`) while `make Server` registers the
+        // actual receiver method under the short type. Presence of that
+        // namespace function must not suppress receiver-method fallback.
+        const bool shortMethod = m_functionDefs.contains(shortQualified) ||
+            m_runtimeSignatures.contains(shortQualified);
+        if ((!m_env->get(qualified) && !m_functionValues.count(qualified)) ||
+            shortMethod)
+            receiverType = std::move(shortType);
     }
     auto typed = receiverType + "::" + method;
     const bool protocolMethod = std::any_of(
@@ -3491,15 +3569,18 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         auto matchesDefinition = [&](const std::string& candidate) {
             auto defs = m_functionDefs.find(candidate);
             if (defs == m_functionDefs.end()) return false;
+            const auto receiverOffset = receiverArgumentOffset(candidate, *args);
             for (const auto* def : defs->second) {
                 if (!def) continue;
                 for (const auto& clause : def->clauses) {
-                    if (clause.params.size() != args->size()) continue;
+                    if (clause.params.size() + receiverOffset != args->size())
+                        continue;
                     bool allMatch = true;
                     for (size_t i = 0; i < clause.params.size(); ++i) {
                         const auto& param = clause.params[i];
                         if (!param.type || !*param.type) continue;
-                        if (!runtimeTypeMatches((*args)[i], **param.type)) {
+                        if (!runtimeTypeMatches((*args)[i + receiverOffset],
+                                                **param.type)) {
                             allMatch = false;
                             break;
                         }
@@ -3548,11 +3629,11 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             if (matches(candidate)) imported = std::move(candidate);
             break;
         }
-        if (!imported.empty()) return imported;
         if ((typedMatches ||
              (protocolMethod && typedExists && !typedHasSignatures)) &&
             makeMethodInScope(typed))
             return typed;
+        if (!imported.empty()) return imported;
     }
 
     if (m_env->get(typed) && makeMethodInScope(typed)) return typed;

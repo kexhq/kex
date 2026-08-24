@@ -1,0 +1,1 @@
+spec/error_record_spread_type.kex:12:27: error: record spread expects `Point`, but got Other

@@ -3445,20 +3445,50 @@ struct Lowering {
     auto lowerRecordConstruction(const ast::RecordConstruction& n) -> ExprPtr {
         std::vector<Binding> binds;
         std::vector<ExprPtr> args;
-        const auto recordName = canonicalRecordName(n.typeName);
+        const bool fromReceiver = n.typeName == "New";
+        const auto recordName = canonicalRecordName(
+            (n.typeName == "This" || fromReceiver) ? currentMakeType
+                                                    : n.typeName);
+        struct LoweredEntry {
+            const ast::RecordEntry* source;
+            AtomicRef value;
+        };
+        std::vector<LoweredEntry> entries;
+        entries.reserve(n.fields.size());
+        for (const auto& field : n.fields) {
+            auto value = atomize(field.value, binds);
+            entries.push_back({&field, snap(value)});
+        }
         auto it = records.find(recordName);
         if (it == records.end()) {
             // Unknown record — fall back to fields as written.
-            for (const auto& [name, v] : n.fields) args.push_back(atomize(v, binds));
+            for (auto& entry : entries)
+                if (!entry.source->spread) args.push_back(entry.value.get());
         } else {
             const auto& info = it->second;
             for (size_t i = 0; i < info.fields.size(); i++) {
-                const ast::ExprPtr* provided = nullptr;
-                for (const auto& [name, v] : n.fields)
-                    if (name == info.fields[i]) { provided = &v; break; }
-                if (provided) args.push_back(atomize(*provided, binds));
-                else if (info.defaults[i]) args.push_back(atomize(*info.defaults[i], binds));
-                else args.push_back(lit(LitKind::None, "none"));
+                const LoweredEntry* provided = nullptr;
+                for (auto rit = entries.rbegin(); rit != entries.rend(); ++rit)
+                    if (rit->source->spread ||
+                        rit->source->name == info.fields[i]) {
+                        provided = &*rit;
+                        break;
+                    }
+                if (provided && !provided->source->spread) {
+                    args.push_back(provided->value.get());
+                } else if (provided || fromReceiver) {
+                    auto base = provided ? provided->value.get() : var("this");
+                    auto read = callE(
+                        "erlang", "element", 2,
+                        two(litInt(static_cast<int>(i) + 2), std::move(base)));
+                    auto name = fresh("field");
+                    binds.push_back({name, std::move(read)});
+                    args.push_back(var(name));
+                } else if (info.defaults[i]) {
+                    args.push_back(atomize(*info.defaults[i], binds));
+                } else {
+                    args.push_back(lit(LitKind::None, "none"));
+                }
             }
         }
         auto ex = std::make_unique<Expr>();
@@ -4613,7 +4643,7 @@ struct Lowering {
                 return matchBool(std::move(c), std::move(ctrl), std::move(rest));
             }
         if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
-            auto val = lower(ae->value);
+            auto val = lowerAssignmentValue(*ae);
             std::string nv = fresh(ae->name); subst[ae->name] = nv;
             return makeLet(nv, std::move(val), cont());
         }
@@ -4787,7 +4817,7 @@ struct Lowering {
             auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
         }
         if (auto* ae = std::get_if<ast::AssignExpr>(&arm->kind)) {
-            auto val = lower(ae->value);
+            auto val = lowerAssignmentValue(*ae);
             std::string nv = fresh(ae->name); subst[ae->name] = nv;
             return makeLet(nv, std::move(val), armEnd());
         }
@@ -4808,6 +4838,21 @@ struct Lowering {
         auto r = lowerMethodCall(mc);
         m_lowerMutatingAsValue = false;
         return r;
+    }
+
+    auto lowerAssignmentValue(const ast::AssignExpr& assignment) -> ExprPtr {
+        if (assignment.path.empty()) return lower(assignment.value);
+        if (assignment.path.size() != 1)
+            throw LowerError(
+                "IR lower: nested record-field assignment is not supported");
+        std::vector<Binding> binds;
+        auto value = atomize(assignment.value, binds);
+        auto updated = callE(
+            "kex_intrinsic_type", "updateRecord", 3,
+            three(var(currentName(assignment.name)),
+                  lit(LitKind::Atom, assignment.path.front()),
+                  std::move(value)));
+        return wrapLets(binds, std::move(updated));
     }
 
     // Lower a `loop`/`while` to a LetRec threading its mutable state.
@@ -4966,7 +5011,7 @@ struct Lowering {
         }
         // name = value  (reassignment → fresh SSA name, value sees the OLD one)
         if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
-            auto val = lower(ae->value);
+            auto val = lowerAssignmentValue(*ae);
             std::string ssa = fresh(ae->name);
             subst[ae->name] = ssa;
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
@@ -5390,6 +5435,11 @@ struct Lowering {
                 FunClause fc;
                 if (!implicitThisName.empty()) {
                     subst[implicitThisName] = implicitThisName;
+                    // The make-local `new` begins as a reference copy of the
+                    // receiver. It emits no binding or runtime check; only a
+                    // later field assignment creates a fresh record value.
+                    subst["new"] = implicitThisName;
+                    immutableBindings.erase("new");
                     auto pat = std::make_unique<Pattern>();
                     pat->kind = PatKind::Var; pat->name = implicitThisName;
                     fc.params.push_back(std::move(pat));

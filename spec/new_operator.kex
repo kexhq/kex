@@ -1,0 +1,144 @@
+record Profile do
+  name : String
+  age : Integer
+  nick : String?
+end
+
+trait ProfileCopy do
+  clone : () -> Profile
+end
+
+make Profile, implement: ProfileCopy do
+  let birthday -> Profile = New { age: @age + 1 }
+  let clone -> Profile = New { }
+  let complete -> This = This { name: @name, age: @age }
+  let expressionOnce -> Profile = New { age: @age + 2 }
+
+  let statementOnce -> Profile do
+    new.age = @age + 2
+    return new
+  end
+
+  let revised(delta: Integer) -> Profile do
+    new.age = @age + delta
+    new.age = new.age + 1
+    if new.age > 20
+      new.name = "adult"
+    end
+    return new
+  end
+
+  let accumulated -> Profile do
+    [1, 2, 3].each do |amount|
+      new.age = new.age + amount
+    end
+    return new
+  end
+
+  let looped -> Profile do
+    var remaining = 3
+    while remaining > 0
+      new.age = new.age + 1
+      remaining = remaining - 1
+    end
+    return new
+  end
+
+  let shadowed -> Profile do
+    var new = Profile { name: "local", age: 1 }
+    new.age = 2
+    return new
+  end
+end
+
+record Box do
+  profile : Profile
+  label : String
+end
+
+make Box do
+  let birthday -> Box = New { profile: @profile.birthday }
+end
+
+record Defaults do
+  host : String = "localhost"
+  enabled? : Bool = false
+end
+
+make Defaults do
+  let declared -> Defaults = This { }
+  let retained -> Defaults = New { }
+end
+
+# `new` may also be a module function or a receiver method. Qualified calls
+# and `@new(...)` use call syntax, while bare `new` remains the implicit copy.
+module CollisionWeb do
+  record Server do
+    port : Integer
+  end
+
+  module Server do
+    let new(port: Integer) -> Server = Server { port: port }
+  end
+
+  make Server do
+    let new(delta: Integer) -> Server = New { port: @port + delta }
+
+    let throughReceiverMethod(delta: Integer) -> Server do
+      let called = @new(delta)
+      new.port = called.port + 1
+      return new
+    end
+
+    let throughModuleFunction(port: Integer) -> Server do
+      let called = Server.new(port)
+      new.port = called.port
+      return new
+    end
+  end
+end
+
+main do
+  let original = Profile { name: "Ada", age: 18 }
+  let spread = Profile { ...original, age: 40 }
+  let spreadAgain = Profile { name: "first", ...spread, name: "last" }
+  let box = Box { profile: original, label: "primary" }
+  let configured = Defaults { host: "remote", enabled?: true }
+  var mutable = original
+  mutable.age = 50
+  var new = original
+  new.age = 60
+
+  IO.printLine(original.birthday.age)
+  IO.printLine(original.birthday.name)
+  IO.printLine(original.clone == original)
+  IO.printLine(original.complete == original)
+  IO.printLine(original.statementOnce == original.expressionOnce)
+  IO.printLine(original.revised(1).name)
+  IO.printLine(original.revised(1).age)
+  IO.printLine(original.accumulated.age)
+  IO.printLine(original.looped.age)
+  IO.printLine(spread.age)
+  IO.printLine(spreadAgain.name)
+  IO.printLine(original.nick == None)
+  IO.printLine(mutable.age)
+  IO.printLine(box.birthday.profile.age)
+  IO.printLine(box.birthday.label)
+  IO.printLine(configured.declared.host)
+  IO.printLine(configured.retained.host)
+  IO.printLine(original.shadowed.name)
+  IO.printLine(original.shadowed.age)
+  IO.printLine(new.age)
+  let server = CollisionWeb.Server.new(8000)
+  IO.printLine(server.port)
+  IO.printLine(server.throughReceiverMethod(80).port)
+  IO.printLine(server.throughModuleFunction(9000).port)
+  var owned = CollisionWeb.Server.new(7000)
+  let returned = owned.throughReceiverMethod(5)
+  IO.printLine(owned.port)
+  IO.printLine(returned.port)
+  owned.throughReceiverMethod!(5)
+  IO.printLine(owned.port)
+  owned.new!(10)
+  IO.printLine(owned.port)
+end

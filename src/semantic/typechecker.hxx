@@ -32,6 +32,10 @@ public:
     // the same constructor→owner relation `satisfiesTrait` uses.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    // The binding being mutated by an assignment. Assignment expressions
+    // themselves are Void, but tooling still needs the receiver type for
+    // hover and member completion on `binding.field = value`.
+    auto assignmentTargetTypeOf(const ast::Expr* expr) const -> TypePtr;
 
     // Names introduced by a PATTERN, with where they were written. Patterns
     // are not expressions, so nothing about `Boxed(b)`'s `b` appears in
@@ -358,6 +362,9 @@ private:
     // chains (`user.name`, `point.x`) returns the declared field type.
     std::unordered_map<std::string,
                        std::unordered_map<std::string, TypePtr>> m_recordFields;
+    // Fields without a default whose declared type is not Optional.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program,
                               bool namesOnly = false) -> void;
     auto resolveRecordName(const std::string& name) const -> std::string;
@@ -422,6 +429,7 @@ private:
 
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;
+    std::unordered_map<const ast::Expr*, TypePtr> m_assignmentTargetTypes;
 
     // Unification substitution: TypeVar id → the concrete/constrained type it
     // was unified with during body inference. Never cleared between functions

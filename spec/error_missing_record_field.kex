@@ -1,0 +1,10 @@
+# kex: check-only
+record Point do
+  x : Integer
+  y : Integer
+  label : String?
+end
+
+main do
+  IO.printLine(Point { x: 1 })
+end

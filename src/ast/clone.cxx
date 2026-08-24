@@ -258,8 +258,12 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.block = cloneOpt(node.block);
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, RecordConstruction>) {
-                out->kind =
-                    RecordConstruction{node.typeName, cloneNamed(node.fields)};
+                RecordConstruction copy;
+                copy.typeName = node.typeName;
+                for (const auto& field : node.fields)
+                    copy.fields.push_back(
+                        RecordEntry{field.name, clone(field.value), field.spread});
+                out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, BinaryOp>) {
                 out->kind = BinaryOp{clone(node.left), node.op, clone(node.right)};
             } else if constexpr (std::is_same_v<T, UnaryOp>) {
@@ -315,7 +319,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.type = cloneOpt(node.type);
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, AssignExpr>) {
-                out->kind = AssignExpr{node.name, clone(node.value)};
+                out->kind = AssignExpr{node.name, node.path, clone(node.value)};
             } else if constexpr (std::is_same_v<T, ReturnExpr>) {
                 out->kind = ReturnExpr{clone(node.value)};
             } else if constexpr (std::is_same_v<T, SpawnExpr>) {

@@ -1,0 +1,12 @@
+# kex: check-only
+record Point do
+  x : Integer
+  y : Integer
+end
+
+make Point do
+  let badName -> Point = New { z: 1 }
+  let badType -> Point = New { x: "no" }
+end
+
+main do end

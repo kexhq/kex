@@ -674,8 +674,10 @@ public:
                     expressionPtr(node.value),
                 });
             } else if constexpr (std::is_same_v<T, AssignExpr>) {
+                std::string target = node.name;
+                for (const auto& part : node.path) target += "." + part;
                 return expressionVariant("Assign", {
-                    m_builder.string(node.name), expressionPtr(node.value),
+                    m_builder.string(target), expressionPtr(node.value),
                 });
             } else if constexpr (std::is_same_v<T, ReturnExpr>) {
                 return expressionVariant("Return", {expressionPtr(node.value)});
@@ -804,10 +806,10 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, RecordConstruction>) {
                 std::vector<Value> fields;
-                for (const auto& [name, value] : node.fields) {
+                for (const auto& field : node.fields) {
                     fields.push_back(m_builder.record("RecordField", {
-                        {"name", m_builder.string(name)},
-                        {"value", expressionPtr(value)},
+                        {"name", m_builder.string(field.spread ? "..." : field.name)},
+                        {"value", expressionPtr(field.value)},
                     }));
                 }
                 return expressionVariant("RecordLit", {

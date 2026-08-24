@@ -1,0 +1,13 @@
+# kex: check-only
+record Point do
+  x : Integer
+end
+
+record Other do
+  x : Integer
+end
+
+main do
+  let other = Other { x: 1 }
+  IO.printLine(Point { ...other })
+end

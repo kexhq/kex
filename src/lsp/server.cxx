@@ -2070,12 +2070,44 @@ private:
             for (const auto& [expression, _] : analyzer.typeMap()) {
                 if (!expression || expression->location.file != document.path)
                     continue;
+                bool hasAssignmentTarget = false;
+                if (const auto* assignment =
+                        std::get_if<ast::AssignExpr>(&expression->kind)) {
+                    if (const auto target =
+                            analyzer.assignmentTargetTypeOf(expression)) {
+                        hasAssignmentTarget = true;
+                        if (auto qualifier = completionQualifierForType(target);
+                            !qualifier.empty()) {
+                            document.localReceiverTypes[assignment->name] = qualifier;
+                            document.receiverSpans.insert_or_assign(
+                                Document::receiverKey(
+                                    static_cast<unsigned int>(
+                                        expression->location.line),
+                                    static_cast<unsigned int>(
+                                        expression->location.column)),
+                                std::move(qualifier));
+                        }
+                        document.hoverEntries.push_back({
+                            .line = static_cast<unsigned int>(
+                                expression->location.line),
+                            .byteColumn = static_cast<unsigned int>(
+                                expression->location.column),
+                            .byteLength = static_cast<unsigned int>(
+                                assignment->name.size()),
+                            .detail = assignment->name + " : " +
+                                      semantic::typeToString(target),
+                            .completeDetail = true,
+                        });
+                    }
+                }
                 // Every expression that could be completed against, by where
                 // it starts. Answering a member completion from this costs a
                 // hash lookup; re-deriving it by re-analyzing the buffer cost
                 // ~18ms a keystroke in a 900-line file.
-                if (auto spanQualifier =
-                        completionQualifierForType(analyzer.displayTypeOf(expression));
+                if (auto spanQualifier = hasAssignmentTarget
+                        ? std::string{}
+                        : completionQualifierForType(
+                              analyzer.displayTypeOf(expression));
                     !spanQualifier.empty())
                     document.receiverSpans.insert_or_assign(
                         Document::receiverKey(
@@ -2621,6 +2653,11 @@ private:
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
             symbol = m_db.findSymbol(lookupName, document.path);
+        // A source-recognized lexical binding always shadows global/module
+        // symbols, even when inference could not produce a hover entry for
+        // it. Returning no type is preferable to claiming that a lambda
+        // parameter named `name` is the unrelated `Weekday.name` method.
+        if (lexicalReference && !resolvedSymbolAtPosition) symbol = nullptr;
 
         std::string detail;
         std::string documentation;

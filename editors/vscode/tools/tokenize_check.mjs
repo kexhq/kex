@@ -14,10 +14,16 @@ const SAMPLE = `record Box do
 end
 
 make Box do
-  let grown -> Box = Box { size: @size * 2, label: @label }
-  let scaled(by: Integer) -> Box = Box { size: @size * by }
+  let grown -> Box = New { size: @size * 2 }
+  let defaults -> Box = This { size: 1 }
+  let scaled(by: Integer) -> Box do
+    new.size = @size * by
+    return new
+  end
   push :> X -> [X]
 end
+
+let copied = Box { ...source, label: "copy" }
 `;
 
 await oniguruma.loadWASM(wasm);

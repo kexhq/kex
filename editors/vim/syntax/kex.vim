@@ -74,10 +74,16 @@ syn match kexImplement /\<implement\>\%(\s*:\)\@=/
 " ===== Keywords and types =====
 syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return spawn then timeout try trying using var when while with
 syn keyword kexConstant true false None
-syn keyword kexThis this
+" `new` is an ordinary, shadowable binding, but make methods supply it as a
+" language-level receiver copy. Highlight it alongside `this`, not as Keyword.
+syn keyword kexThis this new
+syn keyword kexModifier distinct
 syn keyword kexStorage module record type trait make capability
 syn keyword kexBuiltinType Any Atom Bool Byte Char Float Float32 Float64 Int Integer Int8 Int16 Int32 Int64 List Map Optional Process Result Stream String UInt8 UInt16 UInt32 UInt64 Void
 syn match kexType /\<[A-Z][A-Za-z0-9_]*\>/
+" Contextual make-block constructors; neither spelling is globally reserved.
+" Keep this after kexType so the more specific match wins.
+syn match kexUpdateConstructor /\<\%(New\|This\)\>\ze\s*{/
 
 " `-> T or! E` / `-> T or E` is type syntax, not the .or(…) method.
 syn match kexOr /\%([.A-Za-z0-9_]\)\@<!or!\=\%([A-Za-z0-9_(]\)\@!/
@@ -87,6 +93,8 @@ syn match kexAtom /:[A-Za-z_][A-Za-z0-9_?!]*/
 syn match kexInstanceVar /@[a-z_][A-Za-z0-9_?!]*/
 syn match kexNumber /\%([A-Za-z0-9_]\)\@<!\%(0[xX][0-9a-fA-F_]\+\|0[bB][01_]\+\|0[oO][0-7_]\+\|[0-9][0-9_]*\%(\.[0-9][0-9_]*\)\=\%([eE][+-]\=[0-9]\+\)\=\)\%([A-Za-z0-9_]\)\@!/
 syn match kexOperator /->\|=>\|:>\|\.\.\.\?\|==\|!=\|<=\|>=\|&&\|||\|[+\-*/%=<>!?&|~^]/
+" Keep this after kexOperator so the member wins over the preceding dot.
+syn match kexFieldAssign /\.\zs[a-z_][A-Za-z0-9_?!]*\ze\s*=/
 
 syn sync minlines=200
 
@@ -97,6 +105,7 @@ hi def link kexKeyword Statement
 hi def link kexOr Statement
 hi def link kexConstant Boolean
 hi def link kexThis Special
+hi def link kexModifier StorageClass
 hi def link kexStorage StorageClass
 hi def link kexImplement Label
 hi def link kexFuncDecl Function
@@ -129,7 +138,9 @@ hi def link kexBlockParam Identifier
 hi def link kexBlockParamSep Special
 hi def link kexPipe Special
 hi def link kexBuiltinType Type
+hi def link kexUpdateConstructor Function
 hi def link kexType Type
+hi def link kexFieldAssign Identifier
 
 let b:current_syntax = "kex"
 
