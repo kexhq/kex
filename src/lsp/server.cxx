@@ -2600,7 +2600,7 @@ private:
                         fields.push_back({
                             .label = "stop",
                             .kind = ::lsp::CompletionItemKind::Field,
-                            .detail = "stop : process exit reason",
+                            .detail = "stop : ProcessExitReason",
                             .filterText = "stop",
                             .insertText = "stop: ",
                         });
@@ -2976,6 +2976,52 @@ private:
             (hoverLine.find("::>") != std::string::npos &&
              document.text.rfind("serving ", hoverWordOffset) !=
                  std::string::npos);
+        std::string replyContractDetail;
+        std::string replyContractDocumentation;
+        if (lookupName == "Reply") {
+            size_t open = hoverWordOffset + word.byteLength;
+            while (open < document.text.size() && std::isspace(
+                       static_cast<unsigned char>(document.text[open]))) ++open;
+            if (open < document.text.size() && document.text[open] == '<') {
+                size_t depth = 1;
+                size_t close = open + 1;
+                for (; close < document.text.size() && depth; ++close) {
+                    if (document.text[close] == '<') ++depth;
+                    else if (document.text[close] == '>') --depth;
+                }
+                if (!depth) {
+                    const auto payload = document.text.substr(
+                        open + 1, close - open - 2);
+                    std::string state = "State";
+                    if (const auto serving =
+                            document.text.rfind("serving ", hoverWordOffset);
+                        serving != std::string::npos) {
+                        size_t start = serving + 8;
+                        while (start < hoverWordOffset && std::isspace(
+                                   static_cast<unsigned char>(document.text[start])))
+                            ++start;
+                        size_t end = start;
+                        while (end < hoverWordOffset && (std::isalnum(
+                                   static_cast<unsigned char>(document.text[end])) ||
+                                   document.text[end] == '_' ||
+                                   document.text[end] == '.')) ++end;
+                        if (end > start)
+                            state = document.text.substr(start, end - start);
+                    }
+                    replyContractDetail = "record Reply<" + payload + "> do\n" +
+                        "  reply : " + payload + "\n" +
+                        "  new : " + state + "?\n" +
+                        "  stop : ProcessExitReason?\n" +
+                        "end";
+                    replyContractDocumentation =
+                        "`reply` is required for an immediate call response. "
+                        "It may be omitted only when the slot sends a deferred "
+                        "response with `from.reply(...)`. `new` installs the "
+                        "updated serving state; `stop` terminates the server "
+                        "after the transition.";
+                }
+            }
+        }
         const auto localDefinition =
             (!resolvedSymbolAtPosition && moduleQualifier.empty())
                 ? sourceLocalDefinition(
@@ -3147,6 +3193,10 @@ private:
             symbol = nullptr;
         } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
+            symbol = nullptr;
+        } else if (!replyContractDetail.empty()) {
+            detail = std::move(replyContractDetail);
+            documentation = std::move(replyContractDocumentation);
             symbol = nullptr;
         } else if (slotDeclarationSymbol) {
             detail = slotDeclarationSymbol->detail.empty()

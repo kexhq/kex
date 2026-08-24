@@ -849,6 +849,8 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":13,"character":11}}})");
             messages += frame(
+                R"({"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":39}}})");
+            messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":2},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}]}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":13,"character":10}}})");
@@ -861,7 +863,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":13}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":9,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -883,6 +885,19 @@ int main() {
                            responseForId(result, 5).find("CallError") !=
                                std::string::npos,
                        "remote slot hover omitted its Result/CallError projection: " +
+                           result);
+            assertTrue(responseForId(result, 10).find("record Reply<Integer> do") !=
+                           std::string::npos &&
+                           responseForId(result, 10).find("reply : Integer") !=
+                           std::string::npos &&
+                           responseForId(result, 10).find("new : Counter?") !=
+                               std::string::npos &&
+                           responseForId(result, 10).find(
+                               "stop : ProcessExitReason?") !=
+                               std::string::npos &&
+                           responseForId(result, 10).find("required") !=
+                               std::string::npos,
+                       "Reply hover did not expose its transition contract: " +
                            result);
             assertTrue(responseForId(result, 6).find(R"("filterText":"later")") !=
                            std::string::npos &&

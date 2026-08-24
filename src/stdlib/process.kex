@@ -6,7 +6,25 @@ type Pid
 type Task<A>
 type Reference
 type Process<A>
-type Reply<A>
+
+# A process termination reason. This remains open because the BEAM permits any
+# term as an exit reason; conventional values include `:normal`, `:shutdown`,
+# and structured application errors.
+type ProcessExitReason = Any
+
+# Describes the transition returned by a synchronous serving slot.
+#
+# `reply` answers the caller immediately. A slot may omit it only when it sends
+# a deferred response with `from.reply(...)`. `new` installs the next serving
+# state; omitting it preserves the current state. `stop` terminates the server
+# after applying the transition. Within a `serving X` block, the checker narrows
+# `new` from `Any?` to `X?`.
+record Reply<A> do
+  reply : A
+  new : Any? = None
+  stop : ProcessExitReason? = None
+end
+
 type From<A>
 
 type CallError = Timeout | NoProcess | CallFailed
