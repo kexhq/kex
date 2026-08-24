@@ -195,6 +195,13 @@ private:
     // clause, not a fresh one per occurrence.
     auto resolveTypeExpr(const ast::TypeExpr& typeExpr,
                         std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
+    auto normalizeIntersection(TypePtr type) const -> TypePtr;
+    // Imported record field types arrive from KexI with alias names left as
+    // written (`FS.FilePath`); the local path expands them via m_typeAliases.
+    // Without this the same declaration compared unequal across the module
+    // boundary and record construction reported `{FS.FilePath: String}` vs
+    // `{String: String}`.
+    auto expandTypeAliases(const TypePtr& type, int depth = 0) const -> TypePtr;
 
     // Type inference for expressions
     auto inferExpr(const ast::Expr& expr) -> TypePtr;

@@ -30,6 +30,9 @@ struct TermBuilder {
     auto list(std::vector<Value> values) const -> Value {
         return Term::list(std::move(values));
     }
+    auto tuple(std::vector<Value> values) const -> Value {
+        return Term::tuple(std::move(values));
+    }
     auto string(std::string value) const -> Value {
         return Term::binary(value);
     }

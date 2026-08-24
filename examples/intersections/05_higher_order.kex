@@ -1,0 +1,19 @@
+# Intersection-type example. See docs/intersections-spec.md.
+
+record User do
+  name   : String
+  active : Bool
+end
+
+activeName : { name: String } & { active: Bool } -> String
+let activeName(value) = if value.active then value.name else "inactive" end
+
+# The intersection is nested inside the callback type rather than checked as
+# the direct parameter of renderWith.
+renderWith : ({ name: String } & { active: Bool } -> String) -> User -> String
+let renderWith(render, value) = render(value)
+
+main do
+  let user = User { name: "Ada", active: true }
+  IO.printLine(renderWith(~activeName, user))
+end

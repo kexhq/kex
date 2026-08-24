@@ -89,12 +89,16 @@ type_expr
   | LBRACKET type_expr RBRACKET                   (* list type *)
   | LBRACE type_expr COLON type_expr RBRACE       (* map type *)
   | type_expr PIPE type_expr                      (* union type *)
+  | type_expr AMP type_expr                       (* intersection type *)
+  | LBRACE row_field ( COMMA row_field )* RBRACE (* open record type *)
   | type_expr QUESTION                            (* optional sugar: T? = Just(T) | None *)
   | type_expr "or" "!" type_expr                  (* result sugar: T or! E = Result<T, E> *)
   | type_expr "or" type_expr                      (* either sugar: A or B = Either<A, B> *)
   | BLOCK LESS_THAN type_expr GREATER_THAN        (* block type *)
   | atom_literal                                  (* atom in type position *)
   ;
+
+row_field = LOWER_IDENT COLON type_expr ;
 
 type_arg = type_expr ;
 

@@ -1,0 +1,23 @@
+# Intersection-type example. See docs/intersections-spec.md.
+
+trait Timestamped do
+  timestamp :> DateTime
+end
+
+record ImportJob do
+  id        : String
+  createdAt : DateTime
+end
+
+make ImportJob, implement: Inspectable, Timestamped do
+  let inspectValue(_) = "ImportJob(${@id})"
+  let timestamp = @createdAt
+end
+
+audit : Inspectable & Timestamped -> String
+let audit(value) = "${value.timestamp}: ${value.inspectValue(false)}"
+
+main do
+  let job = ImportJob { id: "customers-2026-08", createdAt: DateTime.now }
+  IO.printLine(audit(job))
+end

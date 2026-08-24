@@ -91,6 +91,7 @@ private:
     auto parseTypeOr() -> ast::TypeExprPtr;
     auto parseTypeUnion() -> ast::TypeExprPtr;
     auto parseTypeFunction() -> ast::TypeExprPtr;
+    auto parseTypeIntersection() -> ast::TypeExprPtr;
     auto parseTypePostfix() -> ast::TypeExprPtr;
     auto parseTypePrimary() -> ast::TypeExprPtr;
     auto parseTypeName() -> ast::TypeName;

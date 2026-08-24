@@ -73,6 +73,21 @@ auto hasErrorWithInterfaces(
     return false;
 }
 
+auto noErrorsWithInterfaces(
+    const std::string& source,
+    const semantic::ImportedInterfaces& interfaces) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    semantic::Analyzer analyzer(&interfaces);
+    analyzer.analyze(program);
+    return std::none_of(
+        analyzer.diagnostics().begin(), analyzer.diagnostics().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.level == semantic::Diagnostic::Level::Error;
+        });
+}
+
 int main() {
     describe("SemanticDB — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
@@ -1612,6 +1627,96 @@ int main() {
         });
     });
 
+    describe("Types — intersections", []() {
+        it("normalizes idempotence, rows, and impossible field meets", []() {
+            auto integer = semantic::Type::integer();
+            auto same = semantic::Type::intersection({integer, integer});
+            assertTrue(semantic::typesEqual(same, integer));
+
+            auto merged = semantic::Type::intersection({
+                semantic::Type::record({{"name", semantic::Type::string()}}),
+                semantic::Type::record({{"age", semantic::Type::integer()}}),
+            });
+            assertEqual(semantic::typeToString(merged),
+                        std::string("{name: String, age: Integer}"));
+
+            auto impossible = semantic::Type::intersection({
+                semantic::Type::record({{"value", semantic::Type::string()}}),
+                semantic::Type::record({{"value", semantic::Type::integer()}}),
+            });
+            assertTrue(std::holds_alternative<semantic::VoidType>(
+                impossible->kind));
+        });
+
+        it("merges row members before checking field access", []() {
+            assertTrue(noErrors(
+                "record Entry do\n"
+                "  name : String\n"
+                "  active : Bool\n"
+                "end\n"
+                "describe : { name: String } & { active: Bool } -> String\n"
+                "let describe(value) = if value.active then value.name else \"off\" end\n"
+                "main do describe(Entry { name: \"job\", active: true }) end\n"));
+        });
+
+        it("reduces incompatible closed record intersections to Never", []() {
+            assertTrue(hasError(
+                "record User do name : String end\n"
+                "record Pet do name : String end\n"
+                "impossible : User & Pet\n"
+                "let impossible = User { name: \"Ada\" }\n",
+                "incompatible nominal record tags `User` and `Pet`"));
+        });
+
+        it("supports intersection and open-row aliases", []() {
+            assertTrue(noErrors(
+                "record Entry do\n"
+                "  name : String\n"
+                "  active : Bool\n"
+                "end\n"
+                "type Named = { name: String }\n"
+                "type ActiveNamed = Named & { active: Bool }\n"
+                "describe : ActiveNamed -> String\n"
+                "let describe(value) = value.name\n"
+                "main do describe(Entry { name: \"job\", active: true }) end\n"));
+        });
+
+        it("forgets producer intersections to either component", []() {
+            assertTrue(noErrors(
+                "record Entry do name : String end\n"
+                "preserve : R & { name: String } -> R & { name: String }\n"
+                "let preserve(value) = value\n"
+                "nameOf : { name: String } -> String\n"
+                "let nameOf(value) = value.name\n"
+                "main do nameOf(preserve(Entry { name: \"job\" })) end\n"));
+        });
+
+        it("applies row assignability inside record fields and lists", []() {
+            assertTrue(noErrors(
+                "record Entry do name : String end\n"
+                "record Envelope do item : { name: String } end\n"
+                "main do\n"
+                "  let entry = Entry { name: \"job\" }\n"
+                "  let envelope = Envelope { item: entry }\n"
+                "  let entries: [{ name: String }] = [entry]\n"
+                "  envelope.item.name + entries.at(0).or(entry).name\n"
+                "end\n"));
+        });
+
+        it("rejects maps and mutation through an open row", []() {
+            assertTrue(hasError(
+                "nameOf : { name: String } -> String\n"
+                "let nameOf(value) = value.name\n"
+                "main do nameOf({ \"name\": \"Ada\" }) end\n",
+                "nameOf"));
+            assertTrue(hasError(
+                "let rename(value: { name: String }) do\n"
+                "  value.name = \"changed\"\n"
+                "end\n",
+                "field assignment requires a record binding"));
+        });
+    });
+
     describe("Types — trait registry", []() {
         using namespace kex::semantic;
         auto traits = TraitRegistry::withBuiltins();
@@ -1921,6 +2026,114 @@ int main() {
                 "  let y = identity(\"hi\")\n"
                 "end\n"
             ));
+        });
+
+        it("accepts unrelated nominal records satisfying one open record", []() {
+            assertTrue(noErrors(
+                "record User do\n"
+                "  name : String\n"
+                "  age : Integer\n"
+                "end\n"
+                "record Service do\n"
+                "  name : String\n"
+                "  port : Integer\n"
+                "end\n"
+                "nameOf : { name: String } -> String\n"
+                "let nameOf(value) = value.name\n"
+                "main do\n"
+                "  nameOf(User { name: \"Ada\", age: 30 })\n"
+                "  nameOf(Service { name: \"search\", port: 9200 })\n"
+                "end\n"));
+        });
+
+        it("rejects records missing or mistyping an open-record field", []() {
+            assertTrue(hasError(
+                "record User do\n"
+                "  name : Integer\n"
+                "end\n"
+                "nameOf : { name: String } -> String\n"
+                "let nameOf(value) = value.name\n"
+                "main do nameOf(User { name: 1 }) end\n",
+                "nameOf"));
+            assertTrue(hasError(
+                "record User do\n"
+                "  age : Integer\n"
+                "end\n"
+                "nameOf : { name: String } -> String\n"
+                "let nameOf(value) = value.name\n"
+                "main do nameOf(User { age: 1 }) end\n",
+                "nameOf"));
+        });
+
+        it("requires every member of a trait intersection", []() {
+            const std::string declarations =
+                "trait Left do left :> String end\n"
+                "trait Right do right :> String end\n"
+                "record Both do value : String end\n"
+                "make Both, implement: Left, Right do\n"
+                "  let left = @value\n"
+                "  let right = @value\n"
+                "end\n"
+                "record Half do value : String end\n"
+                "make Half, implement: Left do let left = @value end\n"
+                "accept : Left & Right -> String\n"
+                "let accept(value) = value.left + value.right\n";
+            assertTrue(noErrors(
+                declarations +
+                "main do accept(Both { value: \"ok\" }) end\n"));
+            assertTrue(hasError(
+                declarations +
+                "main do accept(Half { value: \"no\" }) end\n",
+                "accept"));
+        });
+
+        it("checks open rows against imported generic record fields", []() {
+            semantic::ImportedInterfaces interfaces;
+            interfaces.typeNames.insert("External.Box");
+            interfaces.recordArities["External.Box"] = 1;
+            interfaces.recordFieldNames["External.Box"] = {"value"};
+            interfaces.recordFields["External.Box"] = {
+                {"value", semantic::Type::typeVar(-1)},
+            };
+
+            assertTrue(noErrorsWithInterfaces(
+                "stringValue : { value: String } -> String\n"
+                "let stringValue(box) = box.value\n"
+                "let use(box: External.Box<String>) = stringValue(box)\n",
+                interfaces));
+            assertTrue(hasErrorWithInterfaces(
+                "stringValue : { value: String } -> String\n"
+                "let stringValue(box) = box.value\n"
+                "let use(box: External.Box<Integer>) = stringValue(box)\n",
+                interfaces, "stringValue"));
+        });
+
+        it("preserves R through an imported intersection signature", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface external;
+            external.sourceModule = "External";
+            external.backendModule = "external";
+            semantic::ImportedFunction audit;
+            audit.sourceName = "audit";
+            audit.backendFunction = "audit";
+            audit.backendModule = "external";
+            audit.backendArity = 1;
+            auto row = semantic::Type::record(
+                {{"enabled", semantic::Type::boolean()}});
+            auto shape = semantic::Type::intersection(
+                {semantic::Type::typeVar(-1), row});
+            audit.signature = {"audit", {shape}, shape, true};
+            external.exports["audit"].push_back(std::move(audit));
+            interfaces.modules["External"] = std::move(external);
+
+            assertTrue(noErrorsWithInterfaces(
+                "record Account do\n"
+                "  enabled : Bool\n"
+                "  email : String\n"
+                "end\n"
+                "foul use(account: Account) -> String = "
+                "External.audit(account).email\n",
+                interfaces));
         });
 
         it("forward references with compatible types pass", []() {

@@ -66,6 +66,43 @@ auto runWithModuleRoots(const std::string& source, std::vector<std::string> root
 }
 
 int main() {
+    describe("Interpreter — intersection and row annotations", []() {
+        it("requires every open-row field and its declared runtime type", []() {
+            auto result = run(
+                "record Contact do\n"
+                "  name : String\n"
+                "  age : Integer\n"
+                "end\n"
+                "describe : { name: String, age: Integer } -> String\n"
+                "let describe(contact) = contact.name\n"
+                "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("Ada"));
+        });
+
+        it("does not let a map take an open-row overload", []() {
+            auto result = run(
+                "let describe(value: { name: String }) = \"record\"\n"
+                "let describe(value: { String: String }) = \"map\"\n"
+                "main do describe({ \"name\": \"Ada\" }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("map"));
+        });
+
+        it("requires both sides when dispatching an intersection overload", []() {
+            auto result = run(
+                "record Contact do\n"
+                "  name : String\n"
+                "  age : Integer\n"
+                "end\n"
+                "let describe(value: { name: String } & { age: Integer }) = \"both\"\n"
+                "let describe(value: { name: String }) = \"named\"\n"
+                "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("both"));
+        });
+    });
+
     describe("Interpreter — Modules", []() {
         it("imports selected module exports with using", []() {
             auto result = run(

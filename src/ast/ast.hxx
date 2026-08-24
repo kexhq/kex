@@ -57,6 +57,15 @@ struct UnionType {
     TypeExprPtr right;
 };
 
+struct IntersectionType {
+    TypeExprPtr left;
+    TypeExprPtr right;
+};
+
+struct RecordType {
+    std::vector<std::pair<std::string, TypeExprPtr>> fields;
+};
+
 struct OptionalType {
     TypeExprPtr inner;
 };
@@ -92,6 +101,8 @@ struct TypeExpr {
         ListType,
         MapType,
         UnionType,
+        IntersectionType,
+        RecordType,
         OptionalType,
         BlockType,
         AtomType,

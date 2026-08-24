@@ -1,0 +1,26 @@
+# Intersection-type example. See docs/intersections-spec.md.
+
+record Customer do
+  label : String
+  email : String
+end
+
+record InventoryItem do
+  label : String
+  sku   : String
+end
+
+labelOf : { label: String } -> String
+let labelOf(value) = value.label
+
+main do
+  let customer = Customer { label: "Ada", email: "ada@example.test" }
+  let item = InventoryItem { label: "Mechanical keyboard", sku: "KB-104" }
+
+  IO.printLine(labelOf(customer))
+  IO.printLine(labelOf(item))
+
+  # Passing through an open-record consumer does not erase the concrete value.
+  IO.printLine(customer.email)
+  IO.printLine(item.sku)
+end

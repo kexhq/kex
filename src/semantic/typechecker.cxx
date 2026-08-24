@@ -53,6 +53,14 @@ auto mentionsUnknownType(const TypePtr& type) -> bool {
         for (const auto& element : tuple->elements)
             if (mentionsUnknownType(element)) return true;
     }
+    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
+        for (const auto& member : intersection->members)
+            if (mentionsUnknownType(member)) return true;
+    }
+    if (auto* record = std::get_if<RecordType>(&type->kind)) {
+        for (const auto& [_, fieldType] : record->fields)
+            if (mentionsUnknownType(fieldType)) return true;
+    }
     return false;
 }
 
@@ -60,6 +68,59 @@ auto headShapeOf(const TypePtr& type) -> TypePtr {
     if (!type) return type;
     if (auto* named = std::get_if<NamedType>(&type->kind))
         return Type::named(named->name);
+    return type;
+}
+
+auto substituteInterfaceGenerics(const TypePtr& type,
+                                 const std::vector<TypePtr>& args) -> TypePtr {
+    if (!type) return type;
+    if (auto* var = std::get_if<TypeVar>(&type->kind)) {
+        if (var->id < 0) {
+            auto index = static_cast<size_t>(-var->id - 1);
+            if (index < args.size()) return args[index];
+        }
+        return type;
+    }
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        std::vector<TypePtr> nested;
+        for (const auto& arg : named->typeArgs)
+            nested.push_back(substituteInterfaceGenerics(arg, args));
+        return Type::named(named->name, std::move(nested));
+    }
+    if (auto* list = std::get_if<ListType>(&type->kind))
+        return Type::list(substituteInterfaceGenerics(list->element, args));
+    if (auto* optional = std::get_if<OptionalType>(&type->kind))
+        return Type::optional(
+            substituteInterfaceGenerics(optional->inner, args));
+    if (auto* map = std::get_if<MapType>(&type->kind))
+        return Type::map(substituteInterfaceGenerics(map->key, args),
+                         substituteInterfaceGenerics(map->value, args));
+    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+        std::vector<TypePtr> elements;
+        for (const auto& element : tuple->elements)
+            elements.push_back(substituteInterfaceGenerics(element, args));
+        return Type::tuple(std::move(elements));
+    }
+    if (auto* fn = std::get_if<FuncType>(&type->kind)) {
+        std::vector<TypePtr> params;
+        for (const auto& param : fn->params)
+            params.push_back(substituteInterfaceGenerics(param, args));
+        return Type::func(std::move(params),
+                          substituteInterfaceGenerics(fn->result, args));
+    }
+    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
+        std::vector<TypePtr> members;
+        for (const auto& member : intersection->members)
+            members.push_back(substituteInterfaceGenerics(member, args));
+        return Type::intersection(std::move(members));
+    }
+    if (auto* record = std::get_if<RecordType>(&type->kind)) {
+        std::vector<std::pair<std::string, TypePtr>> fields;
+        for (const auto& [name, fieldType] : record->fields)
+            fields.emplace_back(
+                name, substituteInterfaceGenerics(fieldType, args));
+        return Type::record(std::move(fields));
+    }
     return type;
 }
 
@@ -86,8 +147,12 @@ auto TypeChecker::check(const ast::Program& program,
     m_scopedDeclaredSignatures.clear();
     m_typeAliases.clear();
     m_distinctTypes.clear();
+    m_recordFields.clear();
+    m_requiredRecordFields.clear();
     if (m_importedInterfaces)
         m_distinctTypes = m_importedInterfaces->distinctTypes;
+    if (m_importedInterfaces)
+        m_recordFields = m_importedInterfaces->recordFields;
     m_currentModulePath.clear();
     m_scopeStack.clear();
     m_importScopeStack.clear();
@@ -256,7 +321,6 @@ auto TypeChecker::check(const ast::Program& program,
             function && *function)
             m_functionDeclarations.emplace((*function)->name, function->get());
     registerRecordFields(program, /*namesOnly=*/true);
-    registerTypeAliases(program);
 
     // Register built-in types
     // (done before registerDeclaredSignatures so annotation TypeExprs can resolve these names)
@@ -287,6 +351,25 @@ auto TypeChecker::check(const ast::Program& program,
     // name (TraitRegistry, phase 3), satisfied by Float32 and Float64.
 
     m_globals.set("ENV", Type::map(Type::string(), Type::string()));
+
+    // Imported aliases first; a locally declared name of the same spelling
+    // then overwrites it, which is the precedence the rest of the checker uses.
+    if (m_importedInterfaces)
+        m_typeAliases = m_importedInterfaces->typeAliases;
+
+    // Alias bodies must see the canonical built-in types. Resolving an open
+    // row alias before this point made its `String` field a nominal name while
+    // record declarations later used the real String type; both printed the
+    // same but failed invariant row-field comparison.
+    registerTypeAliases(program);
+
+    // The imported field types seeded above were spelled against the defining
+    // module's aliases and never went through resolveTypeExpr; expand them now
+    // that the alias table is complete, so an imported record compares the same
+    // way a locally declared one does.
+    for (auto& [_, fields] : m_recordFields)
+        for (auto& [__, fieldType] : fields)
+            fieldType = expandTypeAliases(fieldType);
 
     if (m_importedInterfaces)
         for (const auto& trait : m_importedInterfaces->traits)
@@ -881,6 +964,19 @@ auto TypeChecker::distinctBacking(const TypePtr& type) const -> TypePtr {
                     params.push_back(substitute(param));
                 return Type::func(std::move(params), substitute(fn->result));
             }
+            if (const auto* intersection =
+                    std::get_if<IntersectionType>(&part->kind)) {
+                std::vector<TypePtr> members;
+                for (const auto& member : intersection->members)
+                    members.push_back(substitute(member));
+                return Type::intersection(std::move(members));
+            }
+            if (const auto* record = std::get_if<RecordType>(&part->kind)) {
+                std::vector<std::pair<std::string, TypePtr>> fields;
+                for (const auto& [name, fieldType] : record->fields)
+                    fields.emplace_back(name, substitute(fieldType));
+                return Type::record(std::move(fields));
+            }
             return part;
         };
     auto backing = substitute(found->second.backingType);
@@ -1352,6 +1448,19 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         }
     }
     if (!def.target) return;
+    // The target names a type the way source inside the module does, so it has
+    // to resolve in that module's scope. Without this a `make Server` inside
+    // `module CollisionWeb` resolved bare `Server` through the global
+    // unique-suffix fallback and registered its methods against the prelude's
+    // `Web.Server`, which checkMakeDef (which does set the path) then
+    // registered a second time under the right name.
+    const auto previousModulePath = m_currentModulePath;
+    m_currentModulePath = modulePath;
+    struct PathRestore {
+        std::string& target;
+        const std::string& saved;
+        ~PathRestore() { target = saved; }
+    } pathRestore{m_currentModulePath, previousModulePath};
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
     std::unordered_set<std::string> slotNames;
@@ -1715,6 +1824,90 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
     error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
 }
 
+auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
+    -> TypePtr {
+    if (!type || depth > 8) return type;
+    auto recur = [&](const TypePtr& inner) {
+        return expandTypeAliases(inner, depth + 1);
+    };
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        std::vector<TypePtr> args;
+        for (const auto& arg : named->typeArgs) args.push_back(recur(arg));
+        const auto dot = named->name.rfind('.');
+        const auto last = dot == std::string::npos ? named->name
+                                                   : named->name.substr(dot + 1);
+        // Distinct types are nominal: `distinct type Meters = Integer` must
+        // NOT collapse to Integer, so mirror resolveTypeExpr's precedence.
+        if (!m_distinctTypes.count(resolveDistinctName(last)) &&
+            !m_recordFields.count(named->name)) {
+            if (auto alias = m_typeAliases.find(last);
+                alias != m_typeAliases.end() && args.empty())
+                return expandTypeAliases(alias->second, depth + 1);
+        }
+        if (args.empty()) return type;
+        return Type::named(named->name, std::move(args));
+    }
+    if (auto* list = std::get_if<ListType>(&type->kind))
+        return Type::list(recur(list->element));
+    if (auto* optional = std::get_if<OptionalType>(&type->kind))
+        return Type::optional(recur(optional->inner));
+    if (auto* map = std::get_if<MapType>(&type->kind))
+        return Type::map(recur(map->key), recur(map->value));
+    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+        std::vector<TypePtr> elements;
+        for (const auto& element : tuple->elements)
+            elements.push_back(recur(element));
+        return Type::tuple(std::move(elements));
+    }
+    if (auto* fn = std::get_if<FuncType>(&type->kind)) {
+        std::vector<TypePtr> params;
+        for (const auto& param : fn->params) params.push_back(recur(param));
+        return Type::func(std::move(params), recur(fn->result));
+    }
+    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
+        std::vector<TypePtr> members;
+        for (const auto& member : intersection->members)
+            members.push_back(recur(member));
+        return Type::intersection(std::move(members));
+    }
+    if (auto* record = std::get_if<RecordType>(&type->kind)) {
+        std::vector<std::pair<std::string, TypePtr>> fields;
+        for (const auto& [name, fieldType] : record->fields)
+            fields.emplace_back(name, recur(fieldType));
+        return Type::record(std::move(fields));
+    }
+    return type;
+}
+
+auto TypeChecker::normalizeIntersection(TypePtr type) const -> TypePtr {
+    auto* meet = std::get_if<IntersectionType>(&type->kind);
+    if (!meet) return type;
+
+    TypePtr concreteRecord;
+    for (const auto& member : meet->members) {
+        auto* named = std::get_if<NamedType>(&member->kind);
+        if (!named ||
+            !m_recordFields.count(resolveRecordName(named->name)))
+            continue;
+        if (concreteRecord && !typesEqual(concreteRecord, member)) {
+            const auto& left = std::get<NamedType>(concreteRecord->kind).name;
+            const auto& right = named->name;
+            return Type::voidType(
+                "incompatible nominal record tags `" + left + "` and `" +
+                right + "`");
+        }
+        concreteRecord = member;
+    }
+    if (!concreteRecord) return type;
+
+    for (const auto& member : meet->members) {
+        if (typesEqual(member, concreteRecord)) continue;
+        if (!argMatchesParam(concreteRecord, member))
+            return Type::voidType();
+    }
+    return concreteRecord;
+}
+
 auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                                    std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr {
     return std::visit([this, &genericVars](const auto& node) -> TypePtr {
@@ -1836,6 +2029,24 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             members.push_back(node.left ? resolveTypeExpr(*node.left, genericVars) : Type::unknown());
             members.push_back(node.right ? resolveTypeExpr(*node.right, genericVars) : Type::unknown());
             return std::make_shared<Type>(Type{UnionType{std::move(members)}});
+        }
+        else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            std::vector<TypePtr> members;
+            members.push_back(node.left
+                ? resolveTypeExpr(*node.left, genericVars) : Type::unknown());
+            members.push_back(node.right
+                ? resolveTypeExpr(*node.right, genericVars) : Type::unknown());
+            return normalizeIntersection(
+                Type::intersection(std::move(members)));
+        }
+        else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            std::vector<std::pair<std::string, TypePtr>> fields;
+            for (const auto& [name, fieldType] : node.fields)
+                fields.emplace_back(
+                    name, fieldType
+                        ? resolveTypeExpr(*fieldType, genericVars)
+                        : Type::unknown());
+            return Type::record(std::move(fields));
         }
         else if constexpr (std::is_same_v<T, ast::AtomType>) {
             return Type::atom(node.name);
@@ -3845,7 +4056,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 m_importedInterfaces->modules.count(*importedPath) > 0;
             bool isNamespaceCall = node.receiver &&
                 (isNamespaceReceiver(*node.receiver) || isImportedNamespace);
-            if (isImportedNamespace) {
+            // A LOCAL nested module is qualified the same way: without this
+            // `CollisionWeb.Server.build(7000)` checked as the bare name
+            // `build` and picked the prelude's `Web.Server.build` — the two
+            // are indistinguishable there, both `Integer -> Server`, and the
+            // imported one is listed first. Only when signatures really were
+            // published under that key, so value chains through a static
+            // constructor (`Temperature.Fahrenheit(212)`) stay untouched.
+            const bool isLocalNamespace = importedPath &&
+                m_localModules.contains(*importedPath) &&
+                m_userSignatures.count(*importedPath + "::" + node.method) > 0;
+            if (isImportedNamespace || isLocalNamespace) {
                 callName = *importedPath + "::" + node.method;
             } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
@@ -4732,6 +4953,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             return Type::tuple(std::move(elements));
                         } else if constexpr (std::is_same_v<Part, OptionalType>) {
                             return Type::optional(instantiate(part.inner));
+                        } else if constexpr (std::is_same_v<Part, IntersectionType>) {
+                            std::vector<TypePtr> members;
+                            for (const auto& member : part.members)
+                                members.push_back(instantiate(member));
+                            return Type::intersection(std::move(members));
+                        } else if constexpr (std::is_same_v<Part, RecordType>) {
+                            std::vector<std::pair<std::string, TypePtr>> fields;
+                            for (const auto& [name, fieldType] : part.fields)
+                                fields.emplace_back(name, instantiate(fieldType));
+                            return Type::record(std::move(fields));
                         } else if constexpr (std::is_same_v<Part, NamedType>) {
                             std::vector<TypePtr> args;
                             for (const auto& arg : part.typeArgs)
@@ -5231,6 +5462,57 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // Never is the bottom type — a Never-typed expression (never returns) is
     // compatible with any expected type.
     if (std::holds_alternative<VoidType>(argType->kind)) return true;
+    // An intersection in expected position is a conjunction: the same actual
+    // value must satisfy every member.
+    if (auto* intersection =
+            std::get_if<IntersectionType>(&paramType->kind)) {
+        for (const auto& member : intersection->members)
+            if (!argMatchesParam(argType, member)) return false;
+        return true;
+    }
+    // An intersection value may be forgotten to any one of its components.
+    if (auto* intersection = std::get_if<IntersectionType>(&argType->kind)) {
+        for (const auto& member : intersection->members)
+            if (argMatchesParam(member, paramType)) return true;
+        return false;
+    }
+    // A union can flow to an expected type only when every possible member
+    // can. This is the directional dual of the expected-union rule below.
+    if (auto* unionType = std::get_if<UnionType>(&argType->kind)) {
+        for (const auto& member : unionType->members)
+            if (!argMatchesParam(member, paramType)) return false;
+        return true;
+    }
+    // Open structural records are record-only and use width compatibility.
+    // Field types are deliberately invariant in the first slice.
+    if (auto* required = std::get_if<RecordType>(&paramType->kind)) {
+        auto fieldMatches = [&](const auto& available) {
+            for (const auto& [name, expected] : required->fields) {
+                auto found = available.find(name);
+                if (found == available.end() ||
+                    !typesEqual(found->second, expected))
+                    return false;
+            }
+            return true;
+        };
+        if (auto* named = std::get_if<NamedType>(&argType->kind)) {
+            auto record =
+                m_recordFields.find(resolveRecordName(named->name));
+            if (record == m_recordFields.end()) return false;
+            std::unordered_map<std::string, TypePtr> fields;
+            for (const auto& [name, fieldType] : record->second)
+                fields[name] = substituteInterfaceGenerics(
+                    fieldType, named->typeArgs);
+            return fieldMatches(fields);
+        }
+        if (auto* actual = std::get_if<RecordType>(&argType->kind)) {
+            std::unordered_map<std::string, TypePtr> fields;
+            for (const auto& [name, fieldType] : actual->fields)
+                fields[name] = fieldType;
+            return fieldMatches(fields);
+        }
+        return false;
+    }
     if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {
         return satisfiesTrait(argType, constrained->traitName);
     }
@@ -5369,7 +5651,9 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
             return argMatchesParam(argResult, paramResult);
         }
         for (size_t i = 0; i < paramParams.size(); i++)
-            if (!argMatchesParam(argParams[i], paramParams[i])) return false;
+            // Function parameters are contravariant: a callback offered to a
+            // context must accept everything the context may pass.
+            if (!argMatchesParam(paramParams[i], argParams[i])) return false;
         // Void as the expected return means "result discarded" — accept any body type.
         if (isUnitLike(paramResult)) return true;
         return argMatchesParam(argResult, paramResult);
@@ -5481,6 +5765,16 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
                 return std::make_shared<Type>(Type{TupleType{std::move(es)}});
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 return Type::optional(remap(node.inner));
+            } else if constexpr (std::is_same_v<T, IntersectionType>) {
+                std::vector<TypePtr> members;
+                for (const auto& member : node.members)
+                    members.push_back(remap(member));
+                return Type::intersection(std::move(members));
+            } else if constexpr (std::is_same_v<T, RecordType>) {
+                std::vector<std::pair<std::string, TypePtr>> fields;
+                for (const auto& [name, fieldType] : node.fields)
+                    fields.emplace_back(name, remap(fieldType));
+                return Type::record(std::move(fields));
             } else if constexpr (std::is_same_v<T, NamedType>) {
                 std::vector<TypePtr> args;
                 for (const auto& a : node.typeArgs) args.push_back(remap(a));
@@ -5518,6 +5812,46 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             SourceLocation loc, bool isMethodCall,
                             const ast::MethodCall* methodCall,
                             const ast::Expr* callExpr) -> TypePtr {
+    // A field promised by an open record is known more specifically than an
+    // unrelated global/UFCS method with the same name. Concrete record fields
+    // already receive this priority later; structural receivers need it here
+    // because they have no nominal registry entry to trigger that path.
+    if (isMethodCall && argTypes.size() == 1) {
+        auto structuralField = [&](const auto& self, const TypePtr& type)
+            -> TypePtr {
+            auto resolved = resolve(type);
+            if (auto* record = std::get_if<RecordType>(&resolved->kind))
+                for (const auto& [fieldName, fieldType] : record->fields)
+                    if (fieldName == name) return fieldType;
+            if (auto* intersection =
+                    std::get_if<IntersectionType>(&resolved->kind))
+                for (const auto& member : intersection->members)
+                    if (auto found = self(self, member)) return found;
+            return nullptr;
+        };
+        if (auto field = structuralField(structuralField, argTypes.front()))
+            return field;
+    }
+    if (isMethodCall && !argTypes.empty()) {
+        auto receiver = resolve(argTypes.front());
+        if (auto* intersection =
+                std::get_if<IntersectionType>(&receiver->kind)) {
+            for (const auto& member : intersection->members) {
+                std::string traitName;
+                if (auto* named = std::get_if<NamedType>(&member->kind))
+                    traitName = named->name;
+                else if (auto* constrained =
+                             std::get_if<ConstrainedType>(&member->kind))
+                    traitName = constrained->traitName;
+                if (traitName.empty()) continue;
+                if (const TraitDef* trait = m_traits.get(traitName))
+                    for (const auto& required : trait->requiredMethods)
+                        if (required.name == name &&
+                            argTypes.size() == required.params.size() + 1)
+                            return required.result;
+            }
+        }
+    }
     // A local function binding (`let f(x) ...` inside an expression block)
     // is represented as a FuncType variable rather than a top-level
     // FunctionDef signature. Resolve it before consulting global overloads.
@@ -5706,8 +6040,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     size_t localSigCount = 0;
     if (!importedSigs.empty() || useLocalMethods) {
         if (useLocalMethods) {
+            // A module-scoped `make` is also reachable through a value whose
+            // TYPE names that module: `CollisionWeb.Server` already carries
+            // the qualification a `using` would supply, and requiring one
+            // there would make a method unreachable from anywhere the type
+            // itself is nameable.
+            const auto receiverModule = [&]() -> std::string {
+                if (!isMethodCall || argTypes.empty()) return {};
+                auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind);
+                if (!named) return {};
+                const auto dot = named->name.rfind('.');
+                return dot == std::string::npos ? std::string{}
+                                                : named->name.substr(0, dot);
+            }();
             for (const auto& method : methodIt->second)
-                if (makeModuleVisible(method.makeModule))
+                if (makeModuleVisible(method.makeModule) ||
+                    (!method.makeModule.empty() &&
+                     method.makeModule == receiverModule))
                     merged.push_back(method);
             localSigCount = merged.size();
         }
@@ -5738,7 +6087,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         // A field holding a function is APPLIED when arguments
                         // follow it: `route.handler(request)` is a call, and
                         // its type is the handler's result, not the handler.
-                        auto fieldType = fi->second;
+                        auto fieldType = substituteInterfaceGenerics(
+                            fi->second, named->typeArgs);
                         for (size_t applied = 1; applied < argTypes.size();) {
                             auto* fn = std::get_if<FuncType>(&fieldType->kind);
                             if (!fn) break;
@@ -5749,6 +6099,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     }
                 }
             }
+            auto fieldFromStructuralType = [&](const auto& self,
+                                               const TypePtr& candidate)
+                -> TypePtr {
+                if (auto* record = std::get_if<RecordType>(&candidate->kind)) {
+                    for (const auto& [fieldName, fieldType] : record->fields)
+                        if (fieldName == name) return fieldType;
+                }
+                if (auto* intersection =
+                        std::get_if<IntersectionType>(&candidate->kind)) {
+                    for (const auto& member : intersection->members)
+                        if (auto found = self(self, member)) return found;
+                }
+                return nullptr;
+            };
+            if (auto fieldType =
+                    fieldFromStructuralType(fieldFromStructuralType, receiver))
+                return fieldType;
             // Trait-bounded receiver: `item.method()` where `item: SomeTrait`.
             // Look up the method in the trait's required methods to get return type.
             if (auto* ct = std::get_if<ConstrainedType>(&receiver->kind)) {
@@ -5756,6 +6123,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     for (const auto& req : trait->requiredMethods) {
                         if (req.name == name) return req.result;
                     }
+                }
+            }
+            if (auto* intersection =
+                    std::get_if<IntersectionType>(&receiver->kind)) {
+                for (const auto& member : intersection->members) {
+                    auto* namedTrait = std::get_if<NamedType>(&member->kind);
+                    if (!namedTrait) continue;
+                    if (const TraitDef* trait = m_traits.get(namedTrait->name))
+                        for (const auto& req : trait->requiredMethods)
+                            if (req.name == name) return req.result;
                 }
             }
             // If the field name is unambiguously defined on exactly one record
@@ -6097,6 +6474,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         const Signature* best =
             undominated.empty() ? fullMatches.front() : undominated.front();
+        // A method call dispatches on its RECEIVER, so a candidate whose first
+        // parameter is exactly the receiver's type is the one written for it.
+        // Equally specific candidates otherwise fall back to declaration
+        // order, which picked `factor : SIUnit -> _` for a `Measure` receiver
+        // as soon as the receiver stopped being inferred as Unknown.
+        if (isMethodCall && !argTypes.empty()) {
+            const auto receiver = resolve(argTypes.front());
+            for (const auto* candidate : undominated)
+                if (!candidate->params.empty() &&
+                    typesEqual(resolve(candidate->params.front()), receiver)) {
+                    best = candidate;
+                    break;
+                }
+        }
         const bool concreteArguments = std::all_of(
             argTypes.begin(), argTypes.end(),
             [&](const TypePtr& argument) {
@@ -6402,14 +6793,38 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // into (e.g. `let f(s) = s.split(",")` constrains `s` to String).
         // Only apply when the param is concrete — skip generic params that
         // themselves contain TypeVars (e.g. `first : [A] -> A?`).
-        auto typeContainsVar = [](const TypePtr& t) {
-            // Shallow check: top-level TypeVar, or List/Optional/Constrained
-            // wrapping a TypeVar. Deep recursion isn't worth the complexity here.
+        std::function<bool(const TypePtr&)> typeContainsVar =
+            [&](const TypePtr& t) {
             if (std::holds_alternative<TypeVar>(t->kind)) return true;
             if (auto* lt = std::get_if<ListType>(&t->kind))
-                return std::holds_alternative<TypeVar>(lt->element->kind);
+                return typeContainsVar(lt->element);
             if (auto* ot = std::get_if<OptionalType>(&t->kind))
-                return std::holds_alternative<TypeVar>(ot->inner->kind);
+                return typeContainsVar(ot->inner);
+            if (auto* map = std::get_if<MapType>(&t->kind))
+                return typeContainsVar(map->key) ||
+                       typeContainsVar(map->value);
+            if (auto* tuple = std::get_if<TupleType>(&t->kind))
+                return std::any_of(
+                    tuple->elements.begin(), tuple->elements.end(),
+                    typeContainsVar);
+            if (auto* fn = std::get_if<FuncType>(&t->kind))
+                return std::any_of(fn->params.begin(), fn->params.end(),
+                                   typeContainsVar) ||
+                       typeContainsVar(fn->result);
+            if (auto* named = std::get_if<NamedType>(&t->kind))
+                return std::any_of(named->typeArgs.begin(),
+                                   named->typeArgs.end(), typeContainsVar);
+            if (auto* intersection =
+                    std::get_if<IntersectionType>(&t->kind))
+                return std::any_of(intersection->members.begin(),
+                                   intersection->members.end(),
+                                   typeContainsVar);
+            if (auto* record = std::get_if<RecordType>(&t->kind))
+                return std::any_of(
+                    record->fields.begin(), record->fields.end(),
+                    [&](const auto& field) {
+                        return typeContainsVar(field.second);
+                    });
             return false;
         };
         for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++) {
@@ -6480,6 +6895,35 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     for (size_t i = 0; i < pf->params.size(); i++)
                         bindGenerics(pf->params[i], af->params[i]);
                     bindGenerics(pf->result, af->result);
+                } else if (auto* pi =
+                               std::get_if<IntersectionType>(&pattern->kind)) {
+                    // Each constraint applies to the same actual value. This
+                    // is what binds R in `R & { name: String }` to the full
+                    // nominal argument rather than to its visible row alone.
+                    for (const auto& member : pi->members)
+                        bindGenerics(member, actual);
+                } else if (auto* pr = std::get_if<RecordType>(&pattern->kind)) {
+                    if (auto* ar = std::get_if<RecordType>(&actual->kind)) {
+                        for (const auto& [name, fieldPattern] : pr->fields) {
+                            auto found = std::find_if(
+                                ar->fields.begin(), ar->fields.end(),
+                                [&](const auto& field) {
+                                    return field.first == name;
+                                });
+                            if (found != ar->fields.end())
+                                bindGenerics(fieldPattern, found->second);
+                        }
+                    } else if (auto* named =
+                                   std::get_if<NamedType>(&actual->kind)) {
+                        auto record = m_recordFields.find(
+                            resolveRecordName(named->name));
+                        if (record != m_recordFields.end())
+                            for (const auto& [name, fieldPattern] : pr->fields) {
+                                auto found = record->second.find(name);
+                                if (found != record->second.end())
+                                    bindGenerics(fieldPattern, found->second);
+                            }
+                    }
                 }
             };
         for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++)
@@ -6532,9 +6976,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     return Type::func(std::move(params),
                                       applyGenerics(function->result));
                 }
+                if (auto* intersection =
+                        std::get_if<IntersectionType>(&type->kind)) {
+                    std::vector<TypePtr> members;
+                    for (const auto& member : intersection->members)
+                        members.push_back(applyGenerics(member));
+                    return Type::intersection(std::move(members));
+                }
+                if (auto* record = std::get_if<RecordType>(&type->kind)) {
+                    std::vector<std::pair<std::string, TypePtr>> fields;
+                    for (const auto& [name, fieldType] : record->fields)
+                        fields.emplace_back(name, applyGenerics(fieldType));
+                    return Type::record(std::move(fields));
+                }
                 return type;
             };
-        auto selectedResult = applyGenerics(matched.result);
+        auto selectedResult =
+            normalizeIntersection(applyGenerics(matched.result));
         if (callExpr) {
             Signature selected = matched;
             selected.name = name;
@@ -6755,8 +7213,12 @@ auto containsOpenType(const TypePtr& type) -> bool {
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected,
                                const TypePtr& actual) -> void {
-    error(loc, "Type mismatch: expected " + typeToString(expected) +
-          ", got " + typeToString(actual));
+    std::string message = "Type mismatch: expected " + typeToString(expected) +
+        ", got " + typeToString(actual);
+    if (const auto* never = std::get_if<VoidType>(&expected->kind);
+        never && !never->reason.empty())
+        message += " (" + never->reason + ")";
+    error(loc, std::move(message));
 }
 
 auto TypeChecker::freshTypeVar() -> TypePtr {

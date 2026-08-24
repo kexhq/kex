@@ -499,6 +499,22 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
       } else {
         variant = parseTypeExpr();
       }
+
+      // Capitalized alias targets take the constructor-aware path above so
+      // `type Result = Ok(A) | Error(E)` keeps its ADT reading. Continue an
+      // `&` tail here, though: `type NamedActive = Named & { active: Bool }`
+      // is one intersection alias, not a constructor followed by an
+      // expression-level receiver shorthand.
+      while (match(TokenType::Amp)) {
+        auto startOffset = variant->location.startOffset;
+        auto intersection = std::make_unique<ast::TypeExpr>();
+        intersection->location = currentLocation();
+        intersection->location.startOffset = startOffset;
+        auto right = parseTypeOr();
+        intersection->kind =
+            ast::IntersectionType{std::move(variant), std::move(right)};
+        variant = std::move(intersection);
+      }
       return complete(std::move(variant));
     };
 
@@ -1088,7 +1104,7 @@ auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
 }
 
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
-  auto left = parseTypeOr();
+  auto left = parseTypeIntersection();
 
   if (match(TokenType::Arrow)) {
     auto startOffset = left->location.startOffset;
@@ -1098,6 +1114,23 @@ auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
     auto right = parseTypeFunction(); // right-associative
     funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
     return complete(std::move(funcType));
+  }
+
+  return complete(std::move(left));
+}
+
+auto Parser::parseTypeIntersection() -> ast::TypeExprPtr {
+  auto left = parseTypeOr();
+
+  while (match(TokenType::Amp)) {
+    auto startOffset = left->location.startOffset;
+    auto intersection = std::make_unique<ast::TypeExpr>();
+    intersection->location = currentLocation();
+    intersection->location.startOffset = startOffset;
+    auto right = parseTypeOr();
+    intersection->kind =
+        ast::IntersectionType{std::move(left), std::move(right)};
+    left = std::move(intersection);
   }
 
   return complete(std::move(left));
@@ -1130,8 +1163,29 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     return complete(std::move(type));
   }
 
-  // Map type: { K: V }
+  // Open record type: { name: String, age: Integer }. A lowercase field name
+  // disambiguates it from the existing map type { K: V }, whose key begins a
+  // type expression and therefore cannot start lowercase.
   if (match(TokenType::LBrace)) {
+    if (check(TokenType::LowerIdent)) {
+      std::vector<std::pair<std::string, ast::TypeExprPtr>> fields;
+      do {
+        auto name =
+            expect(TokenType::LowerIdent, "Expected field name in record type")
+                .value;
+        if (std::any_of(fields.begin(), fields.end(), [&](const auto& field) {
+              return field.first == name;
+            }))
+          error("Duplicate field `" + name + "` in record type");
+        expect(TokenType::Colon, "Expected ':' after record type field");
+        fields.emplace_back(std::move(name), parseTypeExpr());
+      } while (match(TokenType::Comma));
+      expect(TokenType::RBrace, "Expected '}' in record type");
+      type->kind = ast::RecordType{std::move(fields)};
+      return complete(std::move(type));
+    }
+
+    // Map type: { K: V }
     auto key = parseTypeExpr();
     expect(TokenType::Colon, "Expected ':' in map type");
     auto val = parseTypeExpr();

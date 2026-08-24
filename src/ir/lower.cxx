@@ -92,6 +92,19 @@ auto renderDispatchType(const ast::TypeExpr& type) -> std::string {
             return (node.left ? renderDispatchType(*node.left) : "Any") +
                 " | " +
                 (node.right ? renderDispatchType(*node.right) : "Any");
+        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            return (node.left ? renderDispatchType(*node.left) : "Any") +
+                " & " +
+                (node.right ? renderDispatchType(*node.right) : "Any");
+        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            std::string out = "{";
+            for (size_t i = 0; i < node.fields.size(); i++) {
+                if (i) out += ", ";
+                out += node.fields[i].first + ": " +
+                    (node.fields[i].second
+                         ? renderDispatchType(*node.fields[i].second) : "Any");
+            }
+            return out + "}";
         } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             return (node.inner ? renderDispatchType(*node.inner) : "Any") + "?";
         } else if constexpr (std::is_same_v<T, ast::BlockType>) {
@@ -5679,10 +5692,19 @@ struct Lowering {
     void addFieldAccessor(const std::string& field, const std::string& record,
                           int position, int tupleSize, bool local) {
         auto& entries = fieldAccessors[field];
-        for (const auto& entry : entries)
+        for (const auto& entry : entries) {
             if (entry.record == record && entry.position == position &&
                 entry.tupleSize == tupleSize)
                 return; // the same layout seen twice (two loaded modules)
+            if (entry.record == record && entry.tupleSize == tupleSize &&
+                entry.position != position)
+                throw LowerError(
+                    "ambiguous record layout for field `" + field +
+                    "` on `" + record + "`: indistinguishable " +
+                    std::to_string(tupleSize) + "-element layouts place it " +
+                    "at positions " + std::to_string(entry.position) +
+                    " and " + std::to_string(position));
+        }
         // A local layout goes FIRST, so it wins wherever a tag is all the
         // dispatch has to go on (`fieldAccess`, and same-size collisions).
         if (local) entries.insert(entries.begin(), {record, position, tupleSize});

@@ -47,6 +47,18 @@ auto typeExprText(const ast::TypeExpr& type) -> std::string {
         } else if constexpr (std::is_same_v<T, ast::UnionType>) {
             return (node.left ? typeExprText(*node.left) : "?") + " | " +
                    (node.right ? typeExprText(*node.right) : "?");
+        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            return (node.left ? typeExprText(*node.left) : "?") + " & " +
+                   (node.right ? typeExprText(*node.right) : "?");
+        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            std::string result = "{";
+            for (size_t i = 0; i < node.fields.size(); i++) {
+                if (i) result += ", ";
+                result += node.fields[i].first + ": " +
+                    (node.fields[i].second
+                         ? typeExprText(*node.fields[i].second) : "?");
+            }
+            return result + "}";
         } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             return (node.inner ? typeExprText(*node.inner) : "?") + "?";
         } else if constexpr (std::is_same_v<T, ast::BlockType>) {

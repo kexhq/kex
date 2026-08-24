@@ -494,6 +494,15 @@ public:
             } else if constexpr (std::is_same_v<T, UnionType>) {
                 return variant("UnionType", {m_builder.list(
                     {typeRef(*node.left), typeRef(*node.right)})});
+            } else if constexpr (std::is_same_v<T, IntersectionType>) {
+                return variant("IntersectionType", {m_builder.list(
+                    {typeRef(*node.left), typeRef(*node.right)})});
+            } else if constexpr (std::is_same_v<T, RecordType>) {
+                std::vector<Value> fields;
+                for (const auto& [name, fieldType] : node.fields)
+                    fields.push_back(m_builder.tuple(
+                        {m_builder.string(name), typeRef(*fieldType)}));
+                return variant("RecordType", {m_builder.list(std::move(fields))});
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 return variant("NullableType", {typeRef(*node.inner)});
             } else if constexpr (std::is_same_v<T, BlockType>) {

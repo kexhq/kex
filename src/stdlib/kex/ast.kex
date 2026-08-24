@@ -49,6 +49,8 @@ module Kex.AST do
     | ListType(TypeRef)
     | MapType(TypeRef, TypeRef)
     | UnionType([TypeRef])
+    | IntersectionType([TypeRef])
+    | RecordType([(String, TypeRef)])
     | NullableType(TypeRef)
     | BlockType(TypeRef)
     | AtomType(String)
@@ -64,6 +66,8 @@ module Kex.AST do
   let typeRefText(ListType(element)) -> String = "[${Kex.AST.typeRefText(element)}]"
   let typeRefText(MapType(key, value)) -> String = "{${Kex.AST.typeRefText(key)}: ${Kex.AST.typeRefText(value)}}"
   let typeRefText(UnionType(members)) -> String = members.map { |member| Kex.AST.typeRefText(member) }.join(" | ")
+  let typeRefText(IntersectionType(members)) -> String = members.map { |member| Kex.AST.typeRefText(member) }.join(" & ")
+  let typeRefText(RecordType(fields)) -> String = "{" + fields.map { |name, fieldType| "${name}: ${Kex.AST.typeRefText(fieldType)}" }.join(", ") + "}"
   let typeRefText(NullableType(inner)) -> String = "${Kex.AST.typeRefText(inner)}?"
   let typeRefText(BlockType(inner)) -> String = "Block<${Kex.AST.typeRefText(inner)}>"
   let typeRefText(AtomType(name)) -> String = ":${name}"

@@ -1229,6 +1229,58 @@ int main() {
             auto program = parse("let foo(block: Block<[Int]>) = block()");
             assertTrue(firstItemIs<std::unique_ptr<ast::FunctionDef>>(program));
         });
+
+        it("parses intersection types tighter than function and union types", []() {
+            auto program = parse("reader : A & B -> C | D");
+            auto& annotation =
+                std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
+            auto* unionType =
+                std::get_if<ast::UnionType>(&annotation->type->kind);
+            assertTrue(unionType != nullptr);
+            auto* functionType =
+                std::get_if<ast::FunctionType>(&unionType->left->kind);
+            assertTrue(functionType != nullptr);
+            assertTrue(std::holds_alternative<ast::IntersectionType>(
+                functionType->param->kind));
+        });
+
+        it("parses an intersection on the right side of a type alias", []() {
+            auto program = parse(
+                "type ActiveNamed = Named & { active: Bool }");
+            auto& definition =
+                std::get<std::unique_ptr<ast::TypeDef>>(program.items[0]);
+            assertTrue(definition->variants.has_value());
+            assertEqual(definition->variants->size(), size_t(1));
+            assertTrue(std::holds_alternative<ast::IntersectionType>(
+                (*definition->variants)[0]->kind));
+        });
+
+        it("disambiguates open record types from map types", []() {
+            auto records = parse("labelOf : { label: String, age: Integer } -> String");
+            auto& recordAnnotation =
+                std::get<std::unique_ptr<ast::TypeAnnotation>>(records.items[0]);
+            auto* functionType =
+                std::get_if<ast::FunctionType>(&recordAnnotation->type->kind);
+            assertTrue(functionType != nullptr);
+            auto* recordType =
+                std::get_if<ast::RecordType>(&functionType->param->kind);
+            assertTrue(recordType != nullptr);
+            assertEqual(recordType->fields.size(), size_t(2));
+
+            auto maps = parse("lookup : { String: Integer } -> Integer");
+            auto& mapAnnotation =
+                std::get<std::unique_ptr<ast::TypeAnnotation>>(maps.items[0]);
+            auto* mapFunction =
+                std::get_if<ast::FunctionType>(&mapAnnotation->type->kind);
+            assertTrue(mapFunction != nullptr);
+            assertTrue(std::holds_alternative<ast::MapType>(
+                mapFunction->param->kind));
+        });
+
+        it("rejects duplicate labels in an open record type", []() {
+            assertTrue(parseFails(
+                "bad : { name: String, name: Integer } -> String"));
+        });
     });
 
     describe("Parser — Using", []() {

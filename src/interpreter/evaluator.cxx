@@ -3509,6 +3509,21 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
         } else if constexpr (std::is_same_v<T, ast::UnionType>) {
             return (node.left && runtimeTypeMatches(value, *node.left)) ||
                    (node.right && runtimeTypeMatches(value, *node.right));
+        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            return node.left && node.right &&
+                runtimeTypeMatches(value, *node.left) &&
+                runtimeTypeMatches(value, *node.right);
+        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            if (!value) return false;
+            const auto* record = std::get_if<RecordValue>(&value->data);
+            if (!record) return false;
+            for (const auto& [name, fieldType] : node.fields) {
+                auto field = record->fields.find(name);
+                if (field == record->fields.end() || !fieldType ||
+                    !runtimeTypeMatches(field->second, *fieldType))
+                    return false;
+            }
+            return true;
         } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             auto actual = dispatchTypeName(value);
             return actual == "None" || actual == "Just" ||
@@ -3546,6 +3561,18 @@ auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
         } else if constexpr (std::is_same_v<T, ast::UnionType>) {
             return (node.left ? runtimeTypeKey(*node.left) : "*") + "|" +
                 (node.right ? runtimeTypeKey(*node.right) : "*");
+        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            return (node.left ? runtimeTypeKey(*node.left) : "*") + "&" +
+                (node.right ? runtimeTypeKey(*node.right) : "*");
+        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            std::string out = "{";
+            for (std::size_t i = 0; i < node.fields.size(); i++) {
+                if (i) out += ",";
+                out += node.fields[i].first + ":";
+                out += node.fields[i].second
+                    ? runtimeTypeKey(*node.fields[i].second) : "*";
+            }
+            return out + "}";
         } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
             return node.name;
         } else {

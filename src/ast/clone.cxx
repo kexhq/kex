@@ -49,6 +49,14 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
                 out->kind = MapType{clone(node.key), clone(node.value)};
             } else if constexpr (std::is_same_v<T, UnionType>) {
                 out->kind = UnionType{clone(node.left), clone(node.right)};
+            } else if constexpr (std::is_same_v<T, IntersectionType>) {
+                out->kind =
+                    IntersectionType{clone(node.left), clone(node.right)};
+            } else if constexpr (std::is_same_v<T, RecordType>) {
+                RecordType copy;
+                for (const auto& [name, fieldType] : node.fields)
+                    copy.fields.emplace_back(name, clone(fieldType));
+                out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 out->kind = OptionalType{clone(node.inner)};
             } else if constexpr (std::is_same_v<T, BlockType>) {

@@ -142,6 +142,12 @@ private:
             } else if constexpr (std::is_same_v<T, ast::UnionType>) {
                 if (node.left) type(*node.left, generics, allowThis);
                 if (node.right) type(*node.right, generics, allowThis);
+            } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+                if (node.left) type(*node.left, generics, allowThis);
+                if (node.right) type(*node.right, generics, allowThis);
+            } else if constexpr (std::is_same_v<T, ast::RecordType>) {
+                for (const auto& [_, fieldType] : node.fields)
+                    if (fieldType) type(*fieldType, generics, allowThis);
             }
             // AtomType and GenericVar are self-validating. TypeQuery names an
             // expression query, not a source type spelling.
