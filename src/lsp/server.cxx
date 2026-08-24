@@ -1198,6 +1198,7 @@ auto functionDetail(const ast::FunctionDef& function,
     for (const auto& signature : signatures) {
         if (!result.empty()) result += '\n';
         if (signature.isFoul || function.isFoul) result += "foul ";
+        if (function.isSlot) result += "slot ";
         result += analyzer.displaySignature(function.name, signature);
     }
     // A capability requirement is written nowhere in the source — that is the
@@ -1392,6 +1393,35 @@ auto recordFieldType(const std::string& recordDetail, const std::string& field)
         lineStart = newline + 1;
     }
     return {};
+}
+
+auto recordFields(const std::string& recordDetail)
+    -> std::vector<std::pair<std::string, std::string>> {
+    std::vector<std::pair<std::string, std::string>> fields;
+    size_t lineStart = 0;
+    while (lineStart <= recordDetail.size()) {
+        const auto newline = recordDetail.find('\n', lineStart);
+        const auto end = newline == std::string::npos
+            ? recordDetail.size() : newline;
+        size_t name = lineStart;
+        while (name < end && std::isspace(
+                   static_cast<unsigned char>(recordDetail[name]))) ++name;
+        size_t nameEnd = name;
+        while (nameEnd < end && (std::isalnum(static_cast<unsigned char>(
+                   recordDetail[nameEnd])) || recordDetail[nameEnd] == '_'))
+            ++nameEnd;
+        size_t colon = nameEnd;
+        while (colon < end && std::isspace(
+                   static_cast<unsigned char>(recordDetail[colon]))) ++colon;
+        if (nameEnd > name && colon < end && recordDetail[colon] == ':') {
+            const auto field = recordDetail.substr(name, nameEnd - name);
+            if (auto type = recordFieldType(recordDetail, field); !type.empty())
+                fields.emplace_back(field, std::move(type));
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return fields;
 }
 
 // Whether the word at this position is a KEY in a map literal (`{ name: "Ada" }`)
@@ -2374,6 +2404,97 @@ private:
         const auto prefix = completionPrefix(found->second.text,
                                              params.position.line,
                                              params.position.character);
+
+        // Inside a typed record literal only fields are legal. Generic lexical
+        // completion here floods `New { ... }` with every function, module and
+        // trait in scope, even though none can be written as a record key.
+        // Recover the unmatched opening brace directly so this also works
+        // while the literal is deliberately incomplete.
+        {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            for (unsigned int line = 0; line < params.position.line; ++line) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) break;
+                lineStart = newline + 1;
+            }
+            const auto lineEndPosition = text.find('\n', lineStart);
+            const auto lineEnd = lineEndPosition == std::string::npos
+                ? text.size() : lineEndPosition;
+            const auto cursor = byteOffsetForUtf16Column(
+                text, lineStart, lineEnd, params.position.character);
+            size_t depth = 0;
+            size_t brace = std::string::npos;
+            for (size_t i = cursor; i > 0; --i) {
+                if (text[i - 1] == '}') ++depth;
+                else if (text[i - 1] == '{') {
+                    if (depth) --depth;
+                    else { brace = i - 1; break; }
+                }
+            }
+            if (brace != std::string::npos) {
+                size_t end = brace;
+                while (end && std::isspace(static_cast<unsigned char>(text[end - 1])))
+                    --end;
+                size_t start = end;
+                while (start && (std::isalnum(static_cast<unsigned char>(
+                           text[start - 1])) || text[start - 1] == '_' ||
+                           text[start - 1] == '.')) --start;
+                auto record = text.substr(start, end - start);
+                if (record == "New" || record == "This") {
+                    const auto binding = record == "New" ? "new" : "this";
+                    if (auto known = found->second.localReceiverTypes.find(binding);
+                        known != found->second.localReceiverTypes.end())
+                        record = known->second;
+                    // An incomplete literal may prevent the fresh analysis
+                    // from retaining implicit bindings. The surrounding
+                    // make/serving header still states the same type plainly.
+                    if (record == "New" || record == "This") {
+                        const auto make = text.rfind("make ", brace);
+                        const auto serving = text.rfind("serving ", brace);
+                        const auto header = make == std::string::npos
+                            ? serving : serving == std::string::npos
+                            ? make : std::max(make, serving);
+                        if (header != std::string::npos) {
+                            size_t type = header + (header == make ? 5 : 8);
+                            while (type < brace && std::isspace(
+                                       static_cast<unsigned char>(text[type])))
+                                ++type;
+                            size_t typeEnd = type;
+                            while (typeEnd < brace && (std::isalnum(
+                                       static_cast<unsigned char>(text[typeEnd])) ||
+                                       text[typeEnd] == '_' || text[typeEnd] == '.'))
+                                ++typeEnd;
+                            if (typeEnd > type)
+                                record = text.substr(type, typeEnd - type);
+                        }
+                    }
+                }
+                if (!record.empty() && std::isupper(
+                        static_cast<unsigned char>(record.front())))
+                    if (const auto* declaration =
+                            m_db.findSymbol(record, found->second.path);
+                        declaration && declaration->kind ==
+                            semantic::SymbolKind::Record) {
+                        ::lsp::Array<::lsp::CompletionItem> fields;
+                        const auto written = text.substr(brace + 1,
+                                                         cursor - brace - 1);
+                        for (const auto& [name, type] :
+                             recordFields(declaration->detail)) {
+                            if (written.find(name + ":") != std::string::npos)
+                                continue;
+                            fields.push_back({
+                                .label = name,
+                                .kind = ::lsp::CompletionItemKind::Field,
+                                .detail = name + " : " + type,
+                                .filterText = name,
+                                .insertText = name + ": ",
+                            });
+                        }
+                        return fields;
+                    }
+            }
+        }
         auto query = resolveCompletionQuery(prefix.c_str(), 0, prefix.c_str());
 
         // Ask the analyzer what the receiver actually is, before falling back
@@ -2487,8 +2608,28 @@ private:
                     signatures.end())
                     signatures.push_back(std::move(rendered));
             }
-            const auto* localSymbol = m_db.findSymbol(
-                leaf, found->second.path);
+            std::string servingState;
+            if (query.rewriteFrom.rfind("Server<", 0) == 0 &&
+                query.rewriteFrom.ends_with('>'))
+                servingState = query.rewriteFrom.substr(
+                    7, query.rewriteFrom.size() - 8);
+            const auto* localSymbol = servingState.empty()
+                ? m_db.findSymbol(leaf, found->second.path)
+                : m_db.receiverSymbol(servingState, leaf);
+            std::string completionFieldType;
+            if (servingState.empty() && !query.rewriteFrom.empty())
+                if (const auto* record = m_db.findSymbol(
+                        query.rewriteFrom, found->second.path);
+                    record && record->kind == semantic::SymbolKind::Record)
+                    completionFieldType = recordFieldType(record->detail, leaf);
+            // A slot's local protocol declaration is authoritative. A global
+            // or imported function sharing its short name must not supply the
+            // completion signature (`counter.get` used to show String.get).
+            if ((localSymbol && localSymbol->isServingSlot) ||
+                !completionFieldType.empty())
+                functions.clear();
+            if (!completionFieldType.empty())
+                signatures.push_back(leaf + " : " + completionFieldType);
             if (signatures.empty() && localSymbol &&
                 !localSymbol->detail.empty()) {
                 std::istringstream details(localSymbol->detail);
@@ -2506,6 +2647,7 @@ private:
                 auto suffix = signatures.front();
                 const bool foulSignature = suffix.rfind("foul ", 0) == 0;
                 if (foulSignature) suffix.erase(0, 5);
+                if (suffix.rfind("slot ", 0) == 0) suffix.erase(0, 5);
                 const auto name = suffix.find(leaf + " :");
                 if (name != std::string::npos)
                     suffix.erase(name, leaf.size());
@@ -2548,10 +2690,17 @@ private:
             }
             const bool foulCompletion = !signatures.empty() &&
                 signatures.front().rfind("foul ", 0) == 0;
+            const bool slotCompletion = localSymbol && localSymbol->isServingSlot;
             ::lsp::CompletionItem item{
-                .label = foulCompletion ? "foul " + leaf : leaf,
+                .label = slotCompletion
+                    ? (foulCompletion ? "foul slot " : "slot ") + leaf
+                    : (foulCompletion ? "foul " + leaf : leaf),
                 .labelDetails = std::move(labelDetails),
-                .kind = !leaf.empty() &&
+                .kind = !completionFieldType.empty()
+                    ? ::lsp::CompletionItemKind::Field
+                    : slotCompletion
+                    ? ::lsp::CompletionItemKind::Event
+                    : !leaf.empty() &&
                                 std::isupper(static_cast<unsigned char>(leaf.front()))
                             ? ::lsp::CompletionItemKind::Class
                             : ::lsp::CompletionItemKind::Function,
@@ -2560,19 +2709,21 @@ private:
                 .insertText = std::move(leaf),
             };
             const std::vector<std::string>* completionDocs = nullptr;
-            const auto documentationName = foulCompletion
-                ? item.label.substr(5) : item.label;
-            if (auto docs = found->second.documentation.find(documentationName);
-                docs != found->second.documentation.end())
-                completionDocs = &docs->second;
-            else {
-                const auto standardName =
-                    !qualifier.empty() && m_interfaces.modules.count(qualifier)
+            const auto documentationName = leaf;
+            if (completionFieldType.empty()) {
+                if (auto docs = found->second.documentation.find(documentationName);
+                    docs != found->second.documentation.end()) {
+                    completionDocs = &docs->second;
+                } else {
+                    const auto standardName = !qualifier.empty() &&
+                            m_interfaces.modules.count(qualifier)
                         ? qualifier + "." + documentationName
                         : documentationName;
-                if (auto docs = m_standardDocumentation.find(standardName);
-                    docs != m_standardDocumentation.end())
-                    completionDocs = &docs->second;
+                    if (auto standard =
+                            m_standardDocumentation.find(standardName);
+                        standard != m_standardDocumentation.end())
+                        completionDocs = &standard->second;
+                }
             }
             if (completionDocs) {
                 std::string documentation;

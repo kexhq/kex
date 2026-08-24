@@ -312,7 +312,8 @@ async function showRunning(
   if (mine !== generation || client !== started || !started.isRunning()) return;
 
   const version = info ? `Kex ${info.version}` : 'Kex';
-  const label = resolved.origin.kind === 'setting' || resolved.origin.kind === 'custom'
+  const label = resolved.origin.kind === 'setting' ||
+      resolved.origin.kind === 'custom' || resolved.origin.kind === 'workspace'
     ? `${version} (${displayPath(binary)})`
     : version;
   status.text = label;
@@ -358,6 +359,7 @@ function describeOrigin(resolved: ResolvedToolchain): string {
   switch (resolved.origin.kind) {
     case 'setting': return '`kex.executablePath`';
     case 'custom': return '`kex.toolchain`, a binary of your own';
+    case 'workspace': return "this Kex checkout's `build/kex`";
     case 'toolchain': return '`kex.toolchain`, a Tey toolchain';
     case 'lock': return "`tey.lock`, this package's Kex";
     case 'tey': return "Tey's selection";

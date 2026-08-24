@@ -767,7 +767,11 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":19}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":8,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","version":2},"contentChanges":[{"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This do\n    New {\n      \n    }\n  end\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":6,"character":6}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":9,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -798,6 +802,12 @@ int main() {
                            std::string::npos,
                        "this receiver produced no record field completions: " +
                            result);
+            assertTrue(responseForId(result, 8).find(R"("label":"age")") !=
+                           std::string::npos &&
+                           responseForId(result, 8).find(R"("label":"assert")") ==
+                               std::string::npos,
+                       "New record completion was not restricted to writable fields: " +
+                           result);
             assertTrue(result.find("Undefined variable: new") ==
                            std::string::npos,
                        "LSP diagnosed the implicit new binding as undefined");
@@ -809,19 +819,19 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.later(1)\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.later(1)\nend\n"}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":5}}})");
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":6,"character":5}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":6,"character":6}}})");
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":7,"character":6}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":4,"character":14}}})");
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":14}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":11}}})");
+                R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":13,"character":11}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":2},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}]}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":2},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}]}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":10}}})");
+                R"({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":13,"character":10}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":7,"method":"shutdown"})");
             messages += frame(
@@ -837,7 +847,7 @@ int main() {
             assertTrue(responseForId(result, 3).find("From<Integer>") !=
                            std::string::npos,
                        "serving from hover omitted its reply type: " + result);
-            assertTrue(responseForId(result, 4).find("later") != std::string::npos &&
+            assertTrue(responseForId(result, 4).find("foul slot later") != std::string::npos &&
                            responseForId(result, 4).find("Reply<Integer>") !=
                                std::string::npos,
                        "slot declaration hover omitted its signature: " + result);
@@ -847,7 +857,11 @@ int main() {
                        "remote slot hover omitted its Result/CallError projection: " +
                            result);
             assertTrue(responseForId(result, 6).find(R"("filterText":"later")") !=
-                           std::string::npos,
+                           std::string::npos &&
+                           responseForId(result, 6).find(R"("label":"foul slot later")") !=
+                               std::string::npos &&
+                           responseForId(result, 6).find(R"("label":"slot reset")") !=
+                               std::string::npos,
                        "Server<Counter> produced no slot completion: " + result);
             assertTrue(result.find("Undefined variable: new") == std::string::npos &&
                            result.find("Undefined variable: from") == std::string::npos,
