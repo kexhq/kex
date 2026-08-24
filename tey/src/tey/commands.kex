@@ -328,9 +328,9 @@ foul new(name: String, library: Bool) -> Integer do
   if !FS.Directory.create(name)
     return Tey.Commands.fail("could not create project '${name}'")
   end
+  IO.printLine(Tey.Commands.creating(name, library, name))
   let status = Tey.Commands.scaffold(name, name, library)
   return status if status != 0
-  IO.printLine("Created ${name}")
   0
 end
 
@@ -349,9 +349,9 @@ foul init(name: String, library: Bool) -> Integer do
   if chosen == ""
     return Tey.Commands.fail("could not name the package after this directory; pass a name")
   end
+  IO.printLine(Tey.Commands.creating(chosen, library, "."))
   let status = Tey.Commands.scaffold(".", chosen, library)
   return status if status != 0
-  IO.printLine("Initialized ${chosen} in this directory")
   0
 end
 
@@ -510,11 +510,81 @@ private do
                .substitute(fields.merge({"$T$": "`"}))
   end
 
+  # The line above the file list: what is being made, and where. `tey new`
+  # printed nothing until it had finished, so six files appeared as one line
+  # of output after the fact.
+  let creating(name: String, library: Bool, directory: String) -> String do
+    let kind = library then "library" else "package"
+    let place = directory == "." then "this directory" else directory
+    return "${Console.BOLD}Creating${Console.RESET} ${kind} ${Console.CYAN}${name}${Console.RESET} in ${place}"
+  end
+
+  # One scaffolded path: the verb, then the path as it looks from inside the
+  # package. Right-aligned in a narrow column the way a generator log is, so
+  # the verbs line up and the paths all start at the same place — the list is
+  # then scannable without being read.
+  #
+  # Six wide, which is `create`, and every other verb is shorter. Green for
+  # what was written, yellow for what was left alone because something was
+  # already there, dim for what was already exactly right.
+  foul report(verb: String, directory: String, path: String) -> Void do
+    let inside = path.startsWith?("${directory}/")
+    let shown = inside then path.drop(directory.count + 1) else path
+    let color = match verb do
+      "create" => Console.GREEN
+      "skip" => Console.YELLOW
+      _ => Console.DIM
+    end
+    let padding = " ".repeat(6 - verb.count)
+    IO.printLine("  ${padding}${color}${verb}${Console.RESET}  ${shown}")
+  end
+
+  # Writes a scaffolded file and says so, in one step.
+  #
+  # One step deliberately: a separate list of "what was created" printed
+  # beside the code that creates it is a list that goes stale the first time a
+  # template is added. What the user is told is what actually happened.
+  #
+  # A file already there is never overwritten. `tey init` exists FOR a
+  # directory somebody already has — a checkout with its own README.md and
+  # .gitignore is the normal case, not the exception — and it used to replace
+  # both with the scaffold's, silently, with no way to get them back. Keeping
+  # the file and saying so is the only safe default; the scaffold's version is
+  # a starting point, and the one on disk is somebody's work.
+  foul writeCreated(directory: String, path: String, contents: String) -> Bool do
+    match FS.File.read(path) do
+      Just(existing) => do
+        Tey.Commands.report(existing == contents then "exist" else "skip", directory, path)
+        return true
+      end
+      None => ()
+    end
+    return false if !FS.File.write(path, contents)
+    Tey.Commands.report("create", directory, path)
+    true
+  end
+
+  # The same for a directory, so the tree appears in the order it is built
+  # rather than as a set of files whose parents were never mentioned. An
+  # existing directory is not a collision: a scaffold writing INTO `src/` is
+  # exactly what `tey init` on a source tree should do.
+  foul createDirectory(directory: String, path: String) -> Bool do
+    if FS.Directory.directory?(path)
+      Tey.Commands.report("exist", directory, path)
+      return true
+    end
+    return false if !FS.Directory.create(path)
+    Tey.Commands.report("create", directory, path)
+    true
+  end
+
   # Writes a package into `directory`. Shared by `new` and `init` so the two
   # cannot drift into producing different packages — the bug that shape of
   # duplication always ends in.
   foul scaffold(directory: String, name: String, library: Bool) -> Integer do
-    if !FS.Directory.create("${directory}/src") || !FS.Directory.create("${directory}/spec")
+    let sources = Tey.Commands.createDirectory(directory, "${directory}/src")
+    let specs = Tey.Commands.createDirectory(directory, "${directory}/spec")
+    if !sources || !specs
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
@@ -568,7 +638,9 @@ private do
     # package whose own spec could not see it.
     let moduleFile = moduleName.lowerCase
     let sourcePath = library then "${directory}/src/${moduleFile}.kex" else "${directory}/src/main.kex"
-    if !FS.File.write("${directory}/package.kex", manifestText) || !FS.File.write(sourcePath, source)
+    let wroteManifest = Tey.Commands.writeCreated(directory, "${directory}/package.kex", manifestText)
+    let wroteSource = Tey.Commands.writeCreated(directory, sourcePath, source)
+    if !wroteManifest || !wroteSource
       return Tey.Commands.fail("could not write project '${name}'")
     end
     if library
@@ -579,7 +651,7 @@ private do
           end
         end
       `.substitute(fields)
-      if !FS.File.write("${directory}/spec/${moduleFile}.spec.kex", spec)
+      if !Tey.Commands.writeCreated(directory, "${directory}/spec/${moduleFile}.spec.kex", spec)
         return Tey.Commands.fail("could not write project '${name}'")
       end
     end
@@ -588,15 +660,16 @@ private do
     # IS the distribution: there is no registry rendering a description
     # somewhere else. Generated with the manifest's own description so the two
     # start out saying the same thing.
-    if !FS.File.write("${directory}/README.md", Tey.Commands.readme(fields, library))
+    if !Tey.Commands.writeCreated(directory, "${directory}/README.md",
+                                  Tey.Commands.readme(fields, library))
       return Tey.Commands.fail("could not write project '${name}'")
     end
-    FS.File.write("${directory}/.gitattributes", "tey.lock merge=tey\n")
+    Tey.Commands.writeCreated(directory, "${directory}/.gitattributes", "tey.lock merge=tey\n")
     # tey.lock IS committed — only build output is ignored. erl_crash.dump is
     # not build output but it lands in the project root the same way: the BEAM
     # writes one wherever it died, and nobody wants it in a commit.
-    FS.File.write("${directory}/.gitignore",
-                  "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
+    Tey.Commands.writeCreated(directory, "${directory}/.gitignore",
+                              "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
     0
   end
 

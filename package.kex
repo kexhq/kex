@@ -9,4 +9,8 @@ bundle "kex" do
   # runtime/*.beam and stdlib/*.kex always come from this same version.
   toolchain("kex", compiler: "bin/kex", runtime: "share/kex/runtime",
             stdlib: "share/kex/stdlib")
+
+  command("fmt", run: "kex --format src", description: "Format the sources")
+  command("db:migrate", run: "script/migrate.kex")
+  command("release", run: "script/release.kex")
 end
