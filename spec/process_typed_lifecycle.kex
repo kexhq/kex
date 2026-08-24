@@ -1,0 +1,12 @@
+# kex: check-only
+# A typed handle returned by spawn retains lifecycle operations; this is the
+# type-level half of receiving raw DOWN/EXIT messages.
+
+main do
+  let child = spawn do true end
+  let reference : Reference = child.monitor
+  child.link
+  child.unlink
+  let alive : Bool = child.alive?
+  reference.demonitor
+end

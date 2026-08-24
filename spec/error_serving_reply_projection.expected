@@ -1,0 +1,2 @@
+spec/error_serving_reply_projection.kex:10:1: error: `bad` declared to return String but body returns Result<Integer, CallError>
+Aborted: 1 type error — fix before running (use --no-check to skip).

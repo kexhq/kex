@@ -31,6 +31,8 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Record: return "record";
         case TokenType::Rescue: return "rescue";
         case TokenType::Return: return "return";
+        case TokenType::Serving: return "serving";
+        case TokenType::Slot: return "slot";
         case TokenType::Spawn: return "spawn";
         case TokenType::Then: return "then";
         case TokenType::This: return "this";
@@ -53,6 +55,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Colon: return ":";
         case TokenType::Caret: return "^";
         case TokenType::TypeAnnotation: return ":>";
+        case TokenType::SlotAnnotation: return "::>";
         case TokenType::Comma: return ",";
         case TokenType::Dot: return ".";
         case TokenType::DotDot: return "..";

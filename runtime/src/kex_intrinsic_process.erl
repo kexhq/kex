@@ -2,9 +2,13 @@
 %% intrinsics. Thin wrappers over Erlang BIFs with Kex's message format.
 %% Receiver is the first argument.
 -module(kex_intrinsic_process).
--export(['send'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
+-behaviour(gen_server).
+-export(['send'/2, 'sendFrom'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1, run/2, stream/2]).
+          self/0, exit/2, register/2, whereis/1, run/2, stream/2,
+          spawn/1, 'spawnServing'/3, server_call/4, server_cast/3, reply/1, cast/0,
+          replyFrom/2, fromPid/1]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% Execute a program and capture its output with the streams KEPT APART, the
 %% same result the tree walker produces.
@@ -48,7 +52,7 @@ run_split(Shell, Executable, Arguments, Fifo) ->
     %% still being drained meanwhile — otherwise a child that filled one
     %% pipe while we waited on the other would stall.
     Collector = erlang:self(),
-    Reader = spawn(fun() -> Collector ! {kex_stderr, erlang:self(), read_fifo(Fifo)} end),
+    Reader = erlang:spawn(fun() -> Collector ! {kex_stderr, erlang:self(), read_fifo(Fifo)} end),
     Script = "exec \"$0\" \"$@\" 2>'" ++ Fifo ++ "'",
     Port = open_port({spawn_executable, Shell},
                      [binary, exit_status, use_stdio, hide,
@@ -88,7 +92,7 @@ stream(Command, Args) ->
             %% input that can never arrive. The feeder reads this process's
             %% own stdin and forwards it, in its own process so that waiting
             %% for a line never stops the output loop below.
-            Feeder = spawn(fun() -> feed_port(Port) end),
+            Feeder = erlang:spawn(fun() -> feed_port(Port) end),
             Status = pump_port(Port),
             %% The child is gone; whatever the feeder is waiting for is no
             %% longer wanted, and leaving it blocked on stdin would eat the
@@ -206,7 +210,7 @@ await_stderr(Reader, Fifo) ->
     receive
         {kex_stderr, Reader, Data} -> Data
     after 100 ->
-        _ = spawn(fun() ->
+        _ = erlang:spawn(fun() ->
                       case file:open(Fifo, [write, binary, raw]) of
                           {ok, Handle} -> file:close(Handle);
                           _            -> ok
@@ -227,8 +231,9 @@ collect_port(Port, Chunks) ->
             {Status, iolist_to_binary(lists:reverse(Chunks))}
     end.
 
-%% pid.send(msg) — send a Kex-formatted message.
-'send'(Pid, Msg) -> erlang:send(Pid, {'kex_msg', Msg, erlang:self()}).
+%% Raw BEAM messaging, plus the conventional sender-bearing {Pid, Payload} form.
+'send'(Pid, Msg) -> erlang:send(Pid, Msg).
+'sendFrom'(Pid, Msg) -> erlang:send(Pid, {erlang:self(), Msg}).
 
 %% pid.link() — bidirectional exit propagation.
 'link'(Pid) -> erlang:link(Pid).
@@ -262,3 +267,93 @@ register(Pid, Name) -> erlang:register(Name, Pid).
 
 %% Process.whereis(name) — look up a registered process by name.
 whereis(Name) -> erlang:whereis(Name).
+
+%% A typed Kex Server<X> is represented by the ordinary Server record tuple.
+%% The process itself is a real OTP gen_server; slot-specific code arrives as
+%% a closure so this generic callback module can serve every Kex state type.
+spawn(State) ->
+    'spawnServing'(State, undefined, []).
+
+'spawnServing'(State, Module, Slots) ->
+    case gen_server:start_link(?MODULE, {State, Module, Slots}, []) of
+        {ok, Pid} -> {'Server', Pid, 5000};
+        {error, Reason} -> erlang:error(Reason)
+    end.
+
+server_call({'Server', Pid, DefaultTimeout}, Method, Args, Timeout) ->
+    Effective = case Timeout of default -> DefaultTimeout; _ -> Timeout end,
+    Request = list_to_tuple([Method | Args]),
+    try gen_server:call(Pid, Request, Effective) of
+        Reply -> {'Ok', Reply}
+    catch
+        exit:{timeout, _} -> {'Error', 'Timeout'};
+        exit:{noproc, _} -> {'Error', 'NoProcess'};
+        exit:_ -> {'Error', 'CallFailed'}
+    end.
+
+server_cast({'Server', Pid, _DefaultTimeout}, Method, Args) ->
+    gen_server:cast(Pid, list_to_tuple([Method | Args])).
+
+reply(Value) -> {'Reply', Value}.
+cast() -> ok.
+'replyFrom'({'From', Pid, Tag}, Value) -> gen_server:reply({Pid, Tag}, Value).
+'fromPid'({'From', Pid, _Tag}) -> Pid.
+
+init({State, Module, Slots}) ->
+    erlang:put(kex_serving_module, Module),
+    erlang:put(kex_serving_slots, Slots),
+    {ok, State}.
+
+handle_call(Request, {Pid, Tag}, State) ->
+    erlang:put(kex_serving_from, {'From', Pid, Tag}),
+    Result = invoke_slot(Request, State),
+    erlang:erase(kex_serving_from),
+    case Result of
+        {'Reply', Reply} -> {reply, Reply, State};
+        {'Transition', Next, Reply} -> {reply, Reply, Next};
+        #{stop := Reason, new := Next, reply := Reply} -> {stop, Reason, Reply, Next};
+        #{stop := Reason, state := Next, reply := Reply} -> {stop, Reason, Reply, Next};
+        #{stop := Reason, reply := Reply} -> {stop, Reason, Reply, State};
+        #{new := Next, reply := Reply} -> {reply, Reply, Next};
+        #{state := Next, reply := Reply} -> {reply, Reply, Next};
+        #{reply := Reply} -> {reply, Reply, State};
+        #{new := Next} -> {noreply, Next};
+        #{state := Next} -> {noreply, Next};
+        Other -> erlang:error({invalid_serving_reply, Other})
+    end.
+
+handle_cast(Request, State) ->
+    case invoke_slot(Request, State) of
+        {'Transition', Next, _} -> {noreply, Next};
+        #{stop := Reason, new := Next} -> {stop, Reason, Next};
+        #{stop := Reason, state := Next} -> {stop, Reason, Next};
+        #{stop := Reason} -> {stop, Reason, State};
+        #{new := Next} -> {noreply, Next};
+        #{state := Next} -> {noreply, Next};
+        Next when is_tuple(Next) -> {noreply, Next};
+        _ -> {noreply, State}
+    end.
+
+%% Task.start monitors its worker and reports completion to the process that
+%% started it. Deferred slots intentionally do not await that task: the task's
+%% useful result is delivered through From.reply, so consume its bookkeeping.
+handle_info({kex_task_done, _Ref, _Result}, State) -> {noreply, State};
+handle_info({'DOWN', _Ref, process, _Pid, normal}, State) -> {noreply, State};
+handle_info(_Message, State) -> {noreply, State}.
+
+invoke_slot(Request, State) when is_tuple(Request), tuple_size(Request) >= 1 ->
+    [Method | Args] = tuple_to_list(Request),
+    Module = erlang:get(kex_serving_module),
+    Slots = erlang:get(kex_serving_slots),
+    PlainArgs = [State | Args],
+    case lists:member(Method, Slots) of
+        false -> erlang:error({unknown_serving_slot, Method});
+        true ->
+            case erlang:function_exported(Module, Method, length(PlainArgs)) of
+                true -> erlang:apply(Module, Method, PlainArgs);
+                false -> erlang:apply(Module, Method, PlainArgs ++ [#{}])
+            end
+    end;
+invoke_slot(Method, State) when is_atom(Method) ->
+    invoke_slot({Method}, State);
+invoke_slot(Request, _State) -> erlang:error({unknown_serving_request, Request}).

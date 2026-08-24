@@ -153,7 +153,7 @@ module Router do
   end
 
   compiled do
-    let new() -> RouteTable = RouteTable {}
+    let build() -> RouteTable = RouteTable {}
 
     make RouteTable do
       let get(path: String, handler: (Request) -> Response) -> RouteTable do

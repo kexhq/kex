@@ -227,7 +227,7 @@ the evaluation.
 ```
 after  break  compiled  do  elif  else  end  false  final  foul
 if  let  loop  main  make  match  module  next  None  private
-public  receive  record  return  spawn  then  this
+public  receive  record  return  serving  slot  spawn  then  this
 trait  true  type  using  var  when  while
 ```
 
@@ -1371,7 +1371,7 @@ counter.send(Increment)
 
 ### Receive
 
-`receive do Pattern -> body end` blocks until a matching message arrives:
+`receive do Pattern => body end` blocks until a matching raw message arrives:
 
 ```kex
 foul counterLoop(n: Integer) do
@@ -1385,6 +1385,20 @@ foul counterLoop(n: Integer) do
   end
 end
 ```
+
+`receive do |sender|` matches the conventional `{SenderPid, Payload}` shape
+produced by `sendFrom`; each arm pattern is applied to the payload and
+`sender` is bound to the pid. Use raw `receive` with explicit tuple patterns
+when one mailbox mixes sender-bearing messages with OTP or foreign terms.
+
+### Typed Servers
+
+A `serving State do ... end` block attaches typed request slots to record
+state. `Reply<T>` slots are synchronous calls; `Void` slots are asynchronous
+casts. `Process.spawn(state)` returns `Server<State>`, whose remote calls return
+`Result<T, CallError>`. State/reply transitions, timeouts, deferred `From<T>`
+replies, and BEAM interoperability are specified in
+[Typed Servers](serving.md).
 
 ### Receive with Timeout
 
@@ -1954,7 +1968,7 @@ Build a server immutably, then `start`:
 
 ```kex
 main do
-  let server = Web.Server.new(8080)
+  let server = Web.Server.build(8080)
     .get("/") { |req| Web.Response.text("hello") }
     .get("/api") { |req| Web.Response.json("{\"ok\":true}") }
   match server.start() do

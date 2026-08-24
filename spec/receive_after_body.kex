@@ -36,7 +36,7 @@ main do
 
   # A message arrives: the arm binds it and `after` never runs.
   let server = pingServer()
-  server.send(:ping)
+  server.sendFrom(:ping)
   receive do
     msg => IO.printLine("got: ${msg}")
   after timeout: 1000
@@ -44,7 +44,7 @@ main do
   end
 
   # No `after` at all: blocks until a message matches.
-  server.send(:ping)
+  server.sendFrom(:ping)
   receive do
     :pong => IO.printLine("blocked until :pong")
   end

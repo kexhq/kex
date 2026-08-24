@@ -81,13 +81,13 @@ record Server do
   routes : [Route] = []
 end
 
-module Server do
-  let new(port: Integer) -> Server do
-    return Server { port: port }
+private do
+  let buildServer(port: Integer) -> Server do
+    return Web.Server { port: port }
   end
 end
 
-make Server do
+make Web.Server do
   let mount(path: String, handler: Handler) -> Server do
     let route = Route { method: "*", path: path, handler: handler }
     return Server { port: @port, routes: @routes + [route] }
@@ -121,5 +121,9 @@ make Server do
   foul start() -> Result<Void, String> do
     return Kex.Intrinsic.Web.serve(this)
   end
+end
+
+module Server do
+  let build(port: Integer) -> Server = buildServer(port)
 end
 end

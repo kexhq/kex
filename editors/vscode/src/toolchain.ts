@@ -17,6 +17,7 @@ import * as path from 'node:path';
 export type ToolchainOrigin =
   | { kind: 'setting' }            // kex.executablePath, set by hand
   | { kind: 'custom' }             // a binary picked from disk
+  | { kind: 'workspace' }          // build/kex in the Kex source checkout
   | { kind: 'toolchain' }          // a version pinned by kex.toolchain
   | { kind: 'lock' }               // the version this package's tey.lock names
   | { kind: 'tey' }                // whatever Tey has selected
@@ -223,8 +224,9 @@ function teyKexWhich(): string | undefined {
  * Resolves the compiler to spawn.
  *
  * In order: an explicitly set `kex.executablePath`, the toolchain pinned by
- * `kex.toolchain`, the version this package's `tey.lock` names, Tey's own
- * selection, and only then a bare `kex` from PATH.
+ * `kex.toolchain`, this repository's own `build/kex`, the version this
+ * package's `tey.lock` names, Tey's own selection, and only then a bare `kex`
+ * from PATH.
  * The bare name stays the fallback rather than the first choice — it is what
  * works before Tey is installed, not what should win once it is.
  */
@@ -262,6 +264,21 @@ export function resolveToolchain(folder?: vscode.Uri): ResolvedToolchain {
     void vscode.window.showWarningMessage(
       `Kex ${pinned} is not installed; using Tey's selection instead. ` +
       `Pick another with 'Kex: Select Toolchain'.`);
+  }
+
+  // Developing Kex is the one workspace where the compiler is part of the
+  // project itself. Prefer its completed local build automatically, but only
+  // when the source-tree markers make this unmistakably the Kex repository;
+  // an arbitrary package with a build/kex helper must still obey tey.lock.
+  // An explicit `kex.toolchain: tey` remains an opt-out.
+  if (pinned === '' && folder?.scheme === 'file') {
+    const local = path.join(folder.fsPath, 'build', process.platform === 'win32'
+      ? 'kex.exe' : 'kex');
+    const sourceCheckout = fs.existsSync(path.join(folder.fsPath, 'CMakeLists.txt')) &&
+      fs.existsSync(path.join(folder.fsPath, 'src', 'main.cxx')) &&
+      fs.existsSync(path.join(folder.fsPath, 'src', 'stdlib'));
+    if (sourceCheckout && isExecutableFile(local))
+      return { command: local, origin: { kind: 'workspace' } };
   }
 
   // An unset setting follows this package's lock file first. Writing `tey`

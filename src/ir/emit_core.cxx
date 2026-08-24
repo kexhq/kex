@@ -289,16 +289,21 @@ struct Emitter {
         return out;
     }
 
-    // Native Core Erlang `receive`. Each message is the wire tuple
-    // {'kex_msg', Payload, Sender}; the clause pattern matches Payload and the
-    // sender var binds Sender. A blocking receive uses `after 'infinity'`.
+    // Native Core Erlang `receive`. Plain clauses match raw messages; a
+    // sender-binding receive matches the conventional {SenderPid, Payload}.
     auto emitReceive(const Receive& r) -> std::string {
         std::string out = "receive\n";
         for (const auto& cl : r.clauses) {
             beginPatGuards();
             std::string pat = emitPattern(*cl.pattern);
-            out += "  {'kex_msg', " + pat + ", " + erlVar(r.senderVar) + "}";
-            out += " when " + takePatGuards("") + " ->\n    " + emit(cl.body) + "\n";
+            if (r.senderVar)
+                out += "  {" + erlVar(*r.senderVar) + ", " + pat + "}";
+            else
+                out += "  " + pat;
+            const auto senderGuard = r.senderVar
+                ? "call 'erlang':'is_pid'(" + erlVar(*r.senderVar) + ")"
+                : "";
+            out += " when " + takePatGuards(senderGuard) + " ->\n    " + emit(cl.body) + "\n";
         }
         if (r.timeout && r.afterBody)
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);

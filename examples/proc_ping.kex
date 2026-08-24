@@ -14,7 +14,7 @@ end
 
 main do
   let server = pingServer()
-  server.send(:ping)
+  server.sendFrom(:ping)
   receive do
     :pong => IO.printLine("pong")
   end

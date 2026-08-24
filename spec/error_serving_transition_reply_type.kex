@@ -1,0 +1,10 @@
+# kex: check-only
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  bad ::> Reply<Integer>
+  slot bad -> Reply<Integer> = { new, reply: "wrong" }
+end

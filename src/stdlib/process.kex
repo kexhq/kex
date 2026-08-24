@@ -7,7 +7,38 @@ type Task<A>
 type Reference
 type Process<A>
 
+# A process termination reason. This remains open because the BEAM permits any
+# term as an exit reason; conventional values include `:normal`, `:shutdown`,
+# and structured application errors.
+type ProcessExitReason = Any
+
+# Describes the transition returned by a synchronous serving slot.
+#
+# `reply` answers the caller immediately. A slot may omit it only when it sends
+# a deferred response with `from.reply(...)`. `new` installs the next serving
+# state; omitting it preserves the current state. `stop` terminates the server
+# after applying the transition. Within a `serving X` block, the checker narrows
+# `new` from `Any?` to `X?`.
+record Reply<A> do
+  reply : A
+  new : Any? = None
+  stop : ProcessExitReason? = None
+end
+
+type From<A>
+
+type CallError = Timeout | NoProcess | CallFailed
+
+record Server<X> do
+  process : Process<X>
+  timeout : Integer = 5000
+end
+
 module Process do
+  # Starts a process-backed server for the serving implementation attached to X.
+  spawn : X -> Server<X>
+  foul spawn(state) = Kex.Intrinsic.Process.spawn(state)
+
   # Run an executable directly with an argv vector. No shell is involved.
   # Output is captured as UTF-8 strings; a non-zero child status is still a
   # successful ProcessResult, while failure to start the child is Error.
@@ -53,9 +84,13 @@ record ProcessResult do
 end
 
 make Pid do
-  # Sends +msg+ to the process, wrapped in the standard Kex message format.
+  # Sends +msg+ unchanged as a raw BEAM term.
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
+
+  # Sends the conventional Erlang sender-bearing pair {Process.self, msg}.
+  sendFrom :> X -> Void
+  let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
   # Links the calling process to this one (bidirectional exit propagation).
   link :> Void
@@ -66,12 +101,62 @@ make Pid do
   let unlink = Kex.Intrinsic.Process.unlink(this)
 
   # Starts monitoring this process. Returns a reference for +demonitor+.
-  monitor :> Void
+  monitor :> Reference
   let monitor = Kex.Intrinsic.Process.monitor(this)
 
   # Returns +true+ if the process is currently alive.
   alive? :> Bool
   let alive? = Kex.Intrinsic.Process.alive?(this)
+end
+
+# A spawned Process<X> is a typed process handle backed by the same runtime pid.
+# It therefore supports the ordinary pid lifecycle operations without erasing
+# its message type.
+make Process<X> do
+  send :> X -> Void
+  let send(msg) = Kex.Intrinsic.Process.send(this, msg)
+
+  sendFrom :> X -> Void
+  let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
+
+  link :> Void
+  let link = Kex.Intrinsic.Process.link(this)
+
+  unlink :> Void
+  let unlink = Kex.Intrinsic.Process.unlink(this)
+
+  monitor :> Reference
+  let monitor = Kex.Intrinsic.Process.monitor(this)
+
+  alive? :> Bool
+  let alive? = Kex.Intrinsic.Process.alive?(this)
+end
+
+make Server<X> do
+  # Return an immutable view of the same server with a new default call timeout.
+  within :> Integer -> Server<X>
+  let within(timeout) = New { timeout: timeout }
+
+  link :> Void
+  let link = @process.link
+
+  unlink :> Void
+  let unlink = @process.unlink
+
+  monitor :> Reference
+  let monitor = @process.monitor
+
+  alive? :> Bool
+  let alive? = @process.alive?
+end
+
+make From<X> do
+  # Completes the pending call identified by this caller/reference pair.
+  reply :> X -> Void
+  foul reply(value) = Kex.Intrinsic.Process.replyFrom(this, value)
+
+  pid :> Pid
+  let pid = Kex.Intrinsic.Process.fromPid(this)
 end
 
 module Task do

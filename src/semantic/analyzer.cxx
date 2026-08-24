@@ -291,6 +291,9 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
         if (m_inMakeBlock)
             m_symbols.define(Symbol{"new", SymbolKind::Variable, false, true,
                                     true, def.location});
+        if (def.isSlot)
+            m_symbols.define(Symbol{"from", SymbolKind::Variable, false, false,
+                                    true, def.location});
 
         // Register parameters as variables
         for (const auto& param : clause.params) {

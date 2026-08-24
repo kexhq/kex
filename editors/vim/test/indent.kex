@@ -31,6 +31,15 @@ module Demo do
     end
   end
 
+  serving Point do
+    position ::> Reply<Point>
+    slot position = Kex.Intrinsic.Process.reply(this)
+    slot move(dx: Integer) -> Reply<Point> do
+      new.x = @x + dx
+      return { new, reply: new }
+    end
+  end
+
   # A multi-line raw string keeps its own indentation, and the code after it
   # takes its bearings from the line that opened the string.
   let query = `

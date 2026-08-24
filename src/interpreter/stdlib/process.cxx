@@ -236,6 +236,42 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
+    defineDual("Process::spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        return Value::server(m_scheduler->startServer(args[0]), m_scheduler.get());
+    });
+
+    defineIntrinsic("Process::reply", [](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::record("Reply", {{"reply", args.empty() ? Value::unit() : args[0]}});
+    });
+
+    defineIntrinsic("Process::cast", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::unit();
+    });
+
+    defineIntrinsic("Process::replyFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        auto* from = std::get_if<RecordValue>(&args[0]->data);
+        if (!from || from->typeName != "From") return Value::unit();
+        auto pidIt = from->fields.find("pid");
+        auto refIt = from->fields.find("ref");
+        if (pidIt == from->fields.end() || refIt == from->fields.end()) return Value::unit();
+        auto* pid = std::get_if<ProcessValue>(&pidIt->second->data);
+        auto* ref = std::get_if<IntValue>(&refIt->second->data);
+        if (!pid || !ref) return Value::unit();
+        pid->scheduler->send(pid->pid, Value::tuple({Value::atom("server_reply"),
+            Value::integer(ref->value), Value::ok(args[1])}));
+        return Value::unit();
+    });
+
+    defineIntrinsic("Process::fromPid", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* from = std::get_if<RecordValue>(&args[0]->data);
+        if (!from) return Value::none();
+        auto found = from->fields.find("pid");
+        return found == from->fields.end() ? Value::none() : found->second;
+    });
+
     // Private receiver primitives. The public methods are defined by
     // process.kex and call these category-qualified identities.
     defineIntrinsic("Process::send", [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -243,6 +279,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
         p->scheduler->send(p->pid, args[1]);
+        return Value::unit();
+    });
+
+    defineIntrinsic("Process::sendFrom", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        auto* p = std::get_if<ProcessValue>(&args[0]->data);
+        if (!p) return Value::unit();
+        auto sender = Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
+        p->scheduler->send(p->pid, Value::tuple({std::move(sender), args[1]}));
         return Value::unit();
     });
 

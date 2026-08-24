@@ -1,0 +1,11 @@
+# kex: check-only
+
+record Queue do
+  depth : Integer = 0
+end
+
+serving Queue do
+  slot take -> Reply<Integer> do
+    return { new }
+  end
+end

@@ -425,6 +425,7 @@ auto ResolvePass::resolveRescue(const ast::RescueBlock& rescue) -> void {
 
 auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
     pushScope();
+    if (def.isSlot) defineLocal("from");
     for (const auto& clause : def.clauses) {
         bindParams(clause.params);
         resolveBody(clause.body);
@@ -615,7 +616,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             for (const auto& clause : node.clauses) {
                 pushScope();
                 // When a sender binding is present (`receive do |sender|
-                // ... end`), every message is a {Payload, Sender} tuple and
+                // ... end`), every message is a {Sender, Payload} tuple and
                 // the sender name is in scope for every clause, alongside
                 // the pattern vars — matches analyzer.cxx's equivalent
                 // handling of the same construct.

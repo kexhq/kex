@@ -56,12 +56,13 @@ syn region kexBlockParams matchgroup=kexPipe start=/\%({\)\@<=\s*|/ end=/|/ onel
 syn region kexBlockParams matchgroup=kexPipe start=/\%(\<do\>\)\@<=\s*|/ end=/|/ oneline contains=kexBlockParam,kexBlockParamSep
 
 " ===== Declarations =====
-" `name :> Type` — a method declaration inside make/record blocks.
-syn match kexMethodDecl /^\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:>/
+" `name :> Type` and `name ::> Type` declarations.
+syn match kexMethodDecl /^\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*::\=>/
 " `let name(` / `foul name(` — a function definition. A lookbehind rather
 " than \zs: a match that starts at the `let` keyword loses to the keyword
 " item, and the lookbehind starts the match at the name itself.
 syn match kexFuncDecl /\%(^\s*\<\%(let\|foul\)\s\+\)\@<=[a-z_][A-Za-z0-9_?!]*\ze\s*(/
+syn match kexSlotDecl /\%(^\s*\<\%(foul\s\+\)\=slot\s\+\)\@<=[a-z_][A-Za-z0-9_?!]*/
 " A record field declaration starting a line (`size : Integer`); not `::`,
 " `:>`, or `:=`.
 syn match kexMemberDecl /^\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:\%([:>=]\)\@!/
@@ -72,14 +73,14 @@ syn match kexHashKey /\%(,\)\@<=\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:\%([:>=]\)\@!/
 syn match kexImplement /\<implement\>\%(\s*:\)\@=/
 
 " ===== Keywords and types =====
-syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return spawn then timeout try trying using var when while with
+syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return slot spawn then timeout try trying using var when while with
 syn keyword kexConstant true false None
 " `new` is an ordinary, shadowable binding, but make methods supply it as a
 " language-level receiver copy. Highlight it alongside `this`, not as Keyword.
 syn keyword kexThis this new
 syn keyword kexModifier distinct
-syn keyword kexStorage module record type trait make capability
-syn keyword kexBuiltinType Any Atom Bool Byte Char Float Float32 Float64 Int Integer Int8 Int16 Int32 Int64 List Map Optional Process Result Stream String UInt8 UInt16 UInt32 UInt64 Void
+syn keyword kexStorage module record type trait make serving capability
+syn keyword kexBuiltinType Any Atom Bool Byte CallError Char Float Float32 Float64 From Int Integer Int8 Int16 Int32 Int64 List Map Optional Pid Process Reference Reply Result Server Stream String UInt8 UInt16 UInt32 UInt64 Void
 syn match kexType /\<[A-Z][A-Za-z0-9_]*\>/
 " Contextual make-block constructors; neither spelling is globally reserved.
 " Keep this after kexType so the more specific match wins.
@@ -92,7 +93,7 @@ syn match kexOr /\%([.A-Za-z0-9_]\)\@<!or!\=\%([A-Za-z0-9_(]\)\@!/
 syn match kexAtom /:[A-Za-z_][A-Za-z0-9_?!]*/
 syn match kexInstanceVar /@[a-z_][A-Za-z0-9_?!]*/
 syn match kexNumber /\%([A-Za-z0-9_]\)\@<!\%(0[xX][0-9a-fA-F_]\+\|0[bB][01_]\+\|0[oO][0-7_]\+\|[0-9][0-9_]*\%(\.[0-9][0-9_]*\)\=\%([eE][+-]\=[0-9]\+\)\=\)\%([A-Za-z0-9_]\)\@!/
-syn match kexOperator /->\|=>\|:>\|\.\.\.\?\|==\|!=\|<=\|>=\|&&\|||\|[+\-*/%=<>!?&|~^]/
+syn match kexOperator /->\|=>\|::>\|:>\|\.\.\.\?\|==\|!=\|<=\|>=\|&&\|||\|[+\-*/%=<>!?&|~^]/
 " Keep this after kexOperator so the member wins over the preceding dot.
 syn match kexFieldAssign /\.\zs[a-z_][A-Za-z0-9_?!]*\ze\s*=/
 
@@ -109,6 +110,7 @@ hi def link kexModifier StorageClass
 hi def link kexStorage StorageClass
 hi def link kexImplement Label
 hi def link kexFuncDecl Function
+hi def link kexSlotDecl Function
 hi def link kexMethodDecl Function
 hi def link kexMemberDecl Identifier
 hi def link kexHashKey Constant

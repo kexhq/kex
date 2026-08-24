@@ -58,6 +58,8 @@ struct ResolvedCallTarget {
     int backendArity = 0;
     bool passesReceiver = false;
     bool isFoul = false;
+    // A serving slot with no Reply<T>: lower as asynchronous gen_server:cast.
+    bool isServingCast = false;
     // Source parameter names excluding the receiver when passesReceiver is
     // true; otherwise names all function parameters.
     std::vector<std::string> paramNames;

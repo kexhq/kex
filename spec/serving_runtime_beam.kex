@@ -1,0 +1,61 @@
+# kex: run-beam
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  get ::> Reply<Integer>
+  slot get = Kex.Intrinsic.Process.reply(@count)
+
+  peek ::> Reply<Integer>
+  slot peek -> Reply<Integer> = Kex.Intrinsic.Process.reply(@count)
+
+  slot increment(by: Integer) -> Reply<Integer> do
+    new.count = new.count + by
+    return { new, reply: new.count }
+  end
+
+  slot reset(to: Integer) -> Void do
+    new.count = to
+    new
+  end
+
+  slot shutdown -> Reply<Integer> = { stop: :normal, reply: @count }
+
+  foul slot later(value: Integer) -> Reply<Integer> do
+    Task.start { from.reply(value) }
+    return { new }
+  end
+
+  foul slot caller -> Reply<Pid> = { reply: from.pid }
+end
+
+main do
+  let counter = Process.spawn(Counter { count: 12 })
+  assert(counter.get() == Ok(12), "server call should return its reply")
+  assert(counter.peek() == Ok(12), "matching duplicate slot signatures should agree")
+  assert(counter.get(within: 1000) == Ok(12), "per-call timeout should preserve the reply")
+  let patient = counter.within(10_000)
+  assert(patient.get() == Ok(12), "configured handles should address the same server")
+  assert(patient.increment(3) == Ok(15), "slot should install its next state")
+  assert(counter.increment(2) == Ok(17), "timeout views should share server state")
+  patient.reset(4)
+  assert(counter.get() == Ok(4), "a later call should observe the preceding cast")
+  assert(patient.alive?, "the server process should remain alive across calls")
+  counter.link
+  counter.unlink
+  let disposable = Process.spawn(Counter { count: 9 })
+  assert(disposable.shutdown() == Ok(9), "a stopping call should reply first")
+  assert(!disposable.alive?, "the server should terminate after its reply")
+  assert(counter.later(23) == Ok(23), "a captured From should complete a deferred call")
+  assert(counter.caller() == Ok(Process.self), "From.pid should expose the waiting caller")
+  let first = Task.start { counter.later(31) }
+  let second = Task.start { counter.later(47) }
+  assert(first.await(1000) == Ok(Ok(31)), "first outstanding call should keep its reference")
+  assert(second.await(1000) == Ok(Ok(47)), "second outstanding call should keep its reference")
+  let foreignReply = Erlang.Erlang.apply(:gen_server, :call, [counter.process, (:increment, 5)])
+  assert(foreignReply == 9, "plain Erlang gen_server.call should invoke a Kex slot")
+  Erlang.Erlang.apply(:gen_server, :cast, [counter.process, (:reset, 6)])
+  assert(counter.get() == Ok(6), "plain Erlang gen_server.cast should preserve mailbox ordering")
+end

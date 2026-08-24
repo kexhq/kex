@@ -620,7 +620,63 @@ int main() {
         });
     });
 
+    describe("Parser — Serving Blocks", []() {
+        it("parses serving with call and cast slots", []() {
+            auto program = parse(
+                "record Counter do count : Integer = 0 end\n"
+                "serving Counter do\n"
+                "  increment ::> Integer -> Reply<Integer>\n"
+                "  slot increment(by: Integer) = { reply: by }\n"
+                "  slot reset = new\n"
+                "end\n");
+            assertEqual(program.items.size(), size_t(2));
+            auto& serving = std::get<std::unique_ptr<ast::MakeDef>>(program.items[1]);
+            assertTrue(serving->isServing);
+            assertEqual(serving->body.size(), size_t(3));
+            auto& ann = std::get<std::unique_ptr<ast::TypeAnnotation>>(serving->body[0]);
+            assertTrue(ann->implicitThis);
+            assertTrue(ann->implicitFrom);
+            auto& call = std::get<std::unique_ptr<ast::FunctionDef>>(serving->body[1]);
+            auto& cast = std::get<std::unique_ptr<ast::FunctionDef>>(serving->body[2]);
+            assertTrue(call->isSlot);
+            assertTrue(cast->isSlot);
+        });
+
+        it("desugars the new transition shorthand", []() {
+            auto program = parse("main do\n  { new, reply: 1 }\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& map = std::get<ast::MapExpr>(main->body[0]->kind);
+            assertEqual(map.entries.size(), size_t(2));
+            auto& key = std::get<ast::AtomLiteral>(map.entries[0].key->kind);
+            auto& value = std::get<ast::Identifier>(map.entries[0].value->kind);
+            assertEqual(key.name, std::string("new"));
+            assertEqual(value.name, std::string("new"));
+
+            auto singleton = parse("main do\n  { new }\nend");
+            auto& singletonMain = std::get<std::unique_ptr<ast::MainBlock>>(singleton.items[0]);
+            auto& singletonMap = std::get<ast::MapExpr>(singletonMain->body[0]->kind);
+            assertEqual(singletonMap.entries.size(), size_t(1));
+        });
+    });
+
     describe("Parser — Expressions", []() {
+        it("allows spawn as a callable member name", []() {
+            auto program = parse("main do\n  Process.spawn(1)\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& call = std::get<ast::MethodCall>(main->body[0]->kind);
+            assertEqual(call.method, std::string("spawn"));
+        });
+
+        it("allows spawn as a module function name", []() {
+            auto program = parse(
+                "module Process do\n"
+                "  spawn : X -> X\n"
+                "  foul spawn(value) = value\n"
+                "end\n");
+            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(module->body.size(), size_t(2));
+        });
+
         it("parses let binding", []() {
             auto program = parse("main do\n  let x = 5\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
@@ -718,6 +774,19 @@ int main() {
             auto& body = fn->clauses[0].body;
             return std::get<ast::ReceiveExpr>(body[0]->kind);
         };
+
+        it("parses sender binding", []() {
+            auto prog = parse(
+                "foul wait do\n"
+                "  receive do |sender|\n"
+                "    :ping => sender\n"
+                "  end\n"
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertTrue(recv.senderBinding.has_value());
+            assertEqual(*recv.senderBinding, std::string("sender"));
+        });
 
         it("parses inline single-expression clause body", []() {
             auto prog = parse(

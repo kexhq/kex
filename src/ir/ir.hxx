@@ -167,16 +167,15 @@ struct TryCatch {
     std::vector<MatchClause> clauses;
 };
 
-// A selective `receive`. Each message is the wire tuple {'kex_msg', Payload,
-// Sender}; a clause matches Payload with `pattern` (and optional guard), with
-// `senderVar` bound to the sender pid. Emits Core Erlang's native `receive`.
+// A native selective `receive`. Plain receives match raw terms. Sender-binding
+// receives match the conventional Erlang pair {SenderPid, Payload}.
 struct ReceiveClause {
     PatternPtr pattern; // matched against the payload
     ExprPtr body;
 };
 struct Receive {
     std::vector<ReceiveClause> clauses;
-    std::string senderVar;              // sender pid binding (fresh if unused)
+    std::optional<std::string> senderVar;
     std::optional<ExprPtr> timeout;     // `after <timeout> -> afterBody`
     std::optional<ExprPtr> afterBody;
 };

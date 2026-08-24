@@ -9,7 +9,7 @@ main do
       Ping => sender.send(Pong)
     end
   end
-  server.send(Ping)
+  server.sendFrom(Ping)
   receive do
     Pong => IO.printLine("pong received")
   end

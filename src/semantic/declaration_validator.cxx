@@ -149,6 +149,13 @@ private:
     }
 
     auto function(const ast::FunctionDef& def, bool allowThis) -> void {
+        if (def.name == "new" && !def.isFoul) {
+            diagnostics.push_back({
+                Diagnostic::Level::Error, def.location,
+                "`new` is reserved for the next-state binding; use a name "
+                "such as `build` for constructor functions"
+            });
+        }
         for (const auto& clause : def.clauses) {
             for (const auto& param : clause.params)
                 if (param.type && *param.type)

@@ -369,6 +369,8 @@ private:
                              semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
     const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
         m_expressionTypes = nullptr;
+    // Current server caller/reference, saved per process by Scheduler.
+    ValuePtr m_servingFrom;
     auto registerBitsBuiltins() -> void;
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;

@@ -38,6 +38,8 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"record", TokenType::Record},
     {"rescue", TokenType::Rescue},
     {"return", TokenType::Return},
+    {"serving", TokenType::Serving},
+    {"slot", TokenType::Slot},
     {"spawn", TokenType::Spawn},
     {"then", TokenType::Then},
     {"this", TokenType::This},
@@ -209,6 +211,10 @@ auto Lexer::scanToken() -> Token {
             return makeToken(TokenType::Amp);
 
         case ':':
+            if (match(':')) {
+                if (match('>')) return makeToken(TokenType::SlotAnnotation);
+                return errorToken("Expected '>' after '::'");
+            }
             if (match('>')) return makeToken(TokenType::TypeAnnotation);
             if (isLowerAlpha(peek())) return lexAtom();
             return makeToken(TokenType::Colon);

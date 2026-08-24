@@ -54,6 +54,7 @@ private:
     auto parseRecordBody(ast::RecordDef& into) -> void;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
+    auto parseServingDef() -> std::unique_ptr<ast::MakeDef>;
     // The two halves of a `make` that `make %name` generation reuses: it has a
     // spliced name where parseMakeDef has a target type, but everything after
     // is identical, and must stay identical.

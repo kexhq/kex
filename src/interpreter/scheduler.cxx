@@ -56,6 +56,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     m_evaluator.m_env = proc.savedEnv;
     auto callerCapabilities = std::move(m_evaluator.m_capabilityBindings);
     m_evaluator.m_capabilityBindings = std::move(proc.savedCapabilities);
+    auto callerServingFrom = std::move(m_evaluator.m_servingFrom);
+    m_evaluator.m_servingFrom = std::move(proc.savedServingFrom);
 
     proc.fiber->resume();
 
@@ -65,6 +67,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     proc.savedEnv = m_evaluator.m_env;
     proc.savedCapabilities = std::move(m_evaluator.m_capabilityBindings);
     m_evaluator.m_capabilityBindings = std::move(callerCapabilities);
+    proc.savedServingFrom = std::move(m_evaluator.m_servingFrom);
+    m_evaluator.m_servingFrom = std::move(callerServingFrom);
     m_current = prevCurrent;
 }
 
@@ -245,12 +249,173 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
         }
         procPtr->exitValue = resultMsg;
         procPtr->finished = true;
-        self->send(spawner, resultMsg);
+        self->send(spawner, Value::tuple({Value::atom("task_result"),
+                                         Value::integer(procPtr->id),
+                                         resultMsg}));
     });
 
     m_processes.emplace(id, std::move(proc));
     m_ready.push_back(id);
     return id;
+}
+
+auto Scheduler::startServer(ValuePtr initialState) -> ProcessId {
+    ProcessId id = m_nextId++;
+    auto proc = std::make_unique<Process>();
+    proc->id = id;
+    proc->env = std::make_shared<Environment>(m_evaluator.m_env);
+    proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
+    Process* procPtr = proc.get();
+    Scheduler* self = this;
+
+    proc->fiber = std::make_unique<Fiber>([self, procPtr, state = std::move(initialState)]() mutable {
+        try {
+            while (true) {
+                if (procPtr->mailbox.empty()) {
+                    procPtr->blockedOnReceive = true;
+                    Fiber::yieldToScheduler();
+                    continue;
+                }
+                auto envelope = procPtr->mailbox.front();
+                procPtr->mailbox.pop_front();
+                auto* request = std::get_if<TupleValue>(&envelope->data);
+                if (!request || request->elements.empty()) continue;
+                auto* tag = std::get_if<AtomValue>(&request->elements[0]->data);
+                const bool isCast = tag && tag->name == "server_cast" &&
+                    request->elements.size() == 3;
+                if (isCast) {
+                    self->m_evaluator.m_servingFrom.reset();
+                    auto* method = std::get_if<StringValue>(&request->elements[1]->data);
+                    auto* arguments = std::get_if<ListValue>(&request->elements[2]->data);
+                    if (!method || !arguments) continue;
+                    std::vector<ValuePtr> callArgs{state};
+                    callArgs.insert(callArgs.end(), arguments->elements.begin(), arguments->elements.end());
+                    auto transition = self->m_evaluator.callFunction(
+                        self->m_evaluator.resolveMethodName(state, method->value, &callArgs),
+                        std::move(callArgs), {}, SourceLocation{});
+                    ValuePtr stop;
+                    if (auto* record = std::get_if<RecordValue>(&transition->data)) {
+                        if (record->typeName != "Reply") state = transition;
+                        if (auto next = record->fields.find("state"); next != record->fields.end()) state = next->second;
+                    } else if (auto* map = std::get_if<MapValue>(&transition->data)) {
+                        for (const auto& [key, value] : map->entries) {
+                            std::string name;
+                            if (auto* string = std::get_if<StringValue>(&key->data)) name = string->value;
+                            else if (auto* atom = std::get_if<AtomValue>(&key->data)) name = atom->name;
+                            if (name == "state" || name == "new") state = value;
+                            if (name == "stop") stop = value;
+                        }
+                    }
+                    if (stop) {
+                        procPtr->exitValue = stop;
+                        procPtr->finished = true;
+                        return;
+                    }
+                    continue;
+                }
+                if (!tag || tag->name != "server_call" || request->elements.size() != 5) continue;
+                auto* ref = std::get_if<IntValue>(&request->elements[1]->data);
+                auto* method = std::get_if<StringValue>(&request->elements[2]->data);
+                auto* arguments = std::get_if<ListValue>(&request->elements[3]->data);
+                auto* caller = std::get_if<ProcessValue>(&request->elements[4]->data);
+                if (!ref || !method || !arguments || !caller) continue;
+
+                std::vector<ValuePtr> callArgs{state};
+                self->m_evaluator.m_servingFrom = Value::record("From", {
+                    {"pid", Value::process(caller->pid, self)},
+                    {"ref", Value::integer(ref->value)},
+                });
+                callArgs.insert(callArgs.end(), arguments->elements.begin(), arguments->elements.end());
+                auto transition = self->m_evaluator.callFunction(
+                    self->m_evaluator.resolveMethodName(state, method->value, &callArgs),
+                    std::move(callArgs), {}, SourceLocation{});
+                ValuePtr reply = transition;
+                bool hasReply = false;
+                ValuePtr stop;
+                if (auto* record = std::get_if<RecordValue>(&transition->data)) {
+                    if (auto next = record->fields.find("state"); next != record->fields.end()) state = next->second;
+                    if (auto value = record->fields.find("reply"); value != record->fields.end()) {
+                        reply = value->second;
+                        hasReply = true;
+                    }
+                } else if (auto* map = std::get_if<MapValue>(&transition->data)) {
+                    for (const auto& [key, value] : map->entries) {
+                        std::string name;
+                        if (auto* string = std::get_if<StringValue>(&key->data)) name = string->value;
+                        else if (auto* atom = std::get_if<AtomValue>(&key->data)) name = atom->name;
+                        else continue;
+                        if (name == "state" || name == "new") state = value;
+                        if (name == "reply") { reply = value; hasReply = true; }
+                        if (name == "stop") stop = value;
+                    }
+                }
+                if (hasReply)
+                    self->send(caller->pid, Value::tuple({Value::atom("server_reply"),
+                        Value::integer(ref->value), Value::ok(reply)}));
+                if (stop) {
+                    procPtr->exitValue = stop;
+                    procPtr->finished = true;
+                    return;
+                }
+            }
+        } catch (...) {
+            rethrowIfForcedUnwind();
+            procPtr->error = std::current_exception();
+            procPtr->exitValue = Value::none();
+        }
+        procPtr->finished = true;
+    });
+    m_processes.emplace(id, std::move(proc));
+    m_ready.push_back(id);
+    return id;
+}
+
+auto Scheduler::castServer(ProcessId server, std::string method,
+                           std::vector<ValuePtr> args) -> bool {
+    return send(server, Value::tuple({Value::atom("server_cast"),
+                                     Value::string(std::move(method)),
+                                     Value::list(std::move(args))}));
+}
+
+auto Scheduler::callServer(ProcessId server, std::string method,
+                           std::vector<ValuePtr> args,
+                           std::optional<int64_t> timeoutMs)
+    -> std::optional<ValuePtr> {
+    const auto caller = m_current;
+    const auto ref = m_nextServerCall++;
+    if (!send(server, Value::tuple({Value::atom("server_call"), Value::integer(ref),
+                                   Value::string(std::move(method)), Value::list(std::move(args)),
+                                   Value::process(caller, this)})))
+        return Value::error(Value::atom("no_process"));
+    auto it = m_processes.find(caller);
+    if (it == m_processes.end()) return std::nullopt;
+    auto& proc = *it->second;
+    const auto generation = ++proc.waitGeneration;
+    bool registered = false;
+    const auto deadline = timeoutMs
+        ? std::optional{std::chrono::steady_clock::now() + std::chrono::milliseconds(*timeoutMs)}
+        : std::nullopt;
+    while (true) {
+        for (size_t i = 0; i < proc.mailbox.size(); ++i) {
+            auto* response = std::get_if<TupleValue>(&proc.mailbox[i]->data);
+            if (!response || response->elements.size() != 3) continue;
+            auto* tag = std::get_if<AtomValue>(&response->elements[0]->data);
+            auto* gotRef = std::get_if<IntValue>(&response->elements[1]->data);
+            if (!tag || tag->name != "server_reply" || !gotRef || gotRef->value != static_cast<int64_t>(ref)) continue;
+            auto result = response->elements[2];
+            proc.mailbox.erase(proc.mailbox.begin() + static_cast<long>(i));
+            return result;
+        }
+        if (deadline && !registered) {
+            m_timeouts.emplace(*deadline, TimeoutEntry{caller, generation});
+            registered = true;
+        }
+        proc.blockedOnReceive = true;
+        proc.wokeByTimeout = false;
+        Fiber::yieldToScheduler();
+        if (proc.wokeByTimeout) { proc.wokeByTimeout = false; return std::nullopt; }
+    }
 }
 
 auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr> {
@@ -272,17 +437,17 @@ auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeou
     while (true) {
         for (size_t i = 0; i < proc.mailbox.size(); i++) {
             auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
-            if (!tup || tup->elements.size() != 2) continue;
-            const ValuePtr& payload = tup->elements[0];
-            const ValuePtr& sender = tup->elements[1];
-            auto* senderProc = std::get_if<ProcessValue>(&sender->data);
-            if (!senderProc || senderProc->pid != taskId) continue;
-            auto* payloadTup = std::get_if<TupleValue>(&payload->data);
+            if (!tup || tup->elements.size() != 3) continue;
+            auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
+            auto* senderId = std::get_if<IntValue>(&tup->elements[1]->data);
+            if (!tag || tag->name != "task_result" || !senderId ||
+                senderId->value != static_cast<int64_t>(taskId)) continue;
+            auto* payloadTup = std::get_if<TupleValue>(&tup->elements[2]->data);
             if (!payloadTup || payloadTup->elements.size() != 2) continue;
-            auto* tag = std::get_if<AtomValue>(&payloadTup->elements[0]->data);
-            if (!tag || (tag->name != "task_done" && tag->name != "task_failed")) continue;
+            auto* resultTag = std::get_if<AtomValue>(&payloadTup->elements[0]->data);
+            if (!resultTag || (resultTag->name != "task_done" && resultTag->name != "task_failed")) continue;
 
-            auto result = payload;
+            auto result = tup->elements[2];
             proc.mailbox.erase(proc.mailbox.begin() + static_cast<long>(i));
             return result;
         }
@@ -370,9 +535,7 @@ auto Scheduler::send(ProcessId target, ValuePtr payload) -> bool {
     if (it == m_processes.end() || it->second->finished) return false;
     auto& proc = *it->second;
 
-    auto sender = Value::process(m_current, this);
-    auto wrapped = Value::tuple({std::move(payload), std::move(sender)});
-    proc.mailbox.push_back(std::move(wrapped));
+    proc.mailbox.push_back(std::move(payload));
 
     if (proc.blockedOnReceive) {
         proc.blockedOnReceive = false;
@@ -409,9 +572,16 @@ auto Scheduler::blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr {
 
     while (true) {
         for (size_t i = 0; i < proc.mailbox.size(); i++) {
-            auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
-            ValuePtr payload = (tup && tup->elements.size() == 2) ? tup->elements[0] : proc.mailbox[i];
-            ValuePtr sender = (tup && tup->elements.size() == 2) ? tup->elements[1] : Value::none();
+            ValuePtr payload = proc.mailbox[i];
+            ValuePtr sender = Value::none();
+            if (expr.senderBinding) {
+                auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
+                if (!tup || tup->elements.size() != 2 ||
+                    !std::holds_alternative<ProcessValue>(tup->elements[0]->data))
+                    continue;
+                sender = tup->elements[0];
+                payload = tup->elements[1];
+            }
 
             for (const auto& clause : expr.clauses) {
                 m_evaluator.pushEnv();

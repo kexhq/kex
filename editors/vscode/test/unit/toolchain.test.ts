@@ -103,6 +103,30 @@ describe('resolution order', () => {
     expect(resolved.origin.kind).toBe('tey');
   });
 
+  test("a Kex source checkout uses its own build", () => {
+    fs.writeFileSync(path.join(workspace, 'CMakeLists.txt'), 'project(kex)');
+    fs.mkdirSync(path.join(workspace, 'src', 'stdlib'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'src', 'main.cxx'), 'int main() {}');
+    const local = writeStubBinary(path.join(workspace, 'build', 'kex'));
+    const resolved = resolveToolchain(folder(workspace));
+    expect(resolved.command).toBe(local);
+    expect(resolved.origin.kind).toBe('workspace');
+  });
+
+  test('an unrelated workspace does not claim a build/kex helper', () => {
+    writeStubBinary(path.join(workspace, 'build', 'kex'));
+    expect(resolveToolchain(folder(workspace)).origin.kind).toBe('tey');
+  });
+
+  test("an explicit toolchain selection overrides a checkout's own build", () => {
+    fs.writeFileSync(path.join(workspace, 'CMakeLists.txt'), 'project(kex)');
+    fs.mkdirSync(path.join(workspace, 'src', 'stdlib'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'src', 'main.cxx'), 'int main() {}');
+    writeStubBinary(path.join(workspace, 'build', 'kex'));
+    settings['kex.toolchain'] = 'tey';
+    expect(resolveToolchain(folder(workspace)).origin.kind).toBe('tey');
+  });
+
   test('TEY_KEX wins over the selected version', () => {
     const custom = writeStubBinary(path.join(workspace, 'elsewhere', 'kex'));
     process.env.TEY_KEX = custom;

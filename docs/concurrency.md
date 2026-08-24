@@ -4,12 +4,10 @@
 
 Kex uses an Elixir-style process model with lightweight, isolated processes communicating via message passing.
 
-> **Status.** The process primitives — `spawn`, `receive`, `send`, `loop`, and
-> `Task` — are implemented and run on both the interpreter and the BEAM
-> backend (see `spec/process_spawn_receive.kex`). The *typed* process surface
-> (`Process<Message>` with a compile error on a mismatched `send`) and
-> `Supervisor` shown below are the intended design but are **not yet
-> enforced/implemented**; treat those sections as forward-looking.
+> **Status.** Process primitives and typed `Process<Message>` handles run on
+> both the interpreter and BEAM. Typed record-backed servers are documented in
+> [Typed Servers](serving.md). The richer supervision DSL shown below remains
+> forward-looking.
 
 ## Spawning Processes
 
