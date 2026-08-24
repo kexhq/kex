@@ -1343,7 +1343,8 @@ auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
         else if constexpr (std::is_same_v<T, semantic::OptionalType>)
             return "Optional";
         else if constexpr (std::is_same_v<T, semantic::NamedType>)
-            return value.name;
+            return value.typeArgs.empty() ? value.name
+                                          : semantic::typeToString(type);
         else if constexpr (std::is_same_v<T, semantic::PrimitiveType> ||
                            std::is_same_v<T, semantic::SizedIntType> ||
                            std::is_same_v<T, semantic::SizedFloatType>)

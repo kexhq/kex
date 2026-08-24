@@ -87,6 +87,8 @@ Kex tries to make the common path feel light:
 - Domain behavior lives near the type through `make`, without classes or inheritance-heavy hierarchies. `@field` is shorthand for `this.field` inside those blocks, and operators (`+`, `==`, ...) can be overloaded the same way.
 - Pattern matching works in function clauses, `match` expressions, and receiver patterns.
 - Effects are visible: functions are pure unless marked `foul`, and `main` is the effect boundary.
+- Immutable record updates stay concise: `New { field: value }` copies a receiver, while repeated `new.field = value` assignments functionally rebind a local copy.
+- `serving` turns a record into a typed OTP-style server protocol with checked calls, asynchronous casts, timeouts, and deferred replies.
 - Records, sum types, optional values, result values, ranges, streams, maps, and lists are built into the language model.
 
 ## Language Tour
@@ -183,6 +185,55 @@ main do
     .each { |s| IO.printLine(s) }
 end
 ```
+
+### Functional Record Updates
+
+Inside a record's `make` block, `New { ... }` copies the current receiver and
+replaces selected fields. For several updates, implicit `new` starts as the
+receiver and field assignment functionally rebinds that local copy:
+
+```rb
+make User do
+  let birthday -> User = New { age: @age + 1 }
+
+  let activateAs(name: String) -> User do
+    new.name = name
+    new.active? = true
+    return new
+  end
+end
+```
+
+The original record is never mutated. See
+[`docs/records-and-updates.md`](docs/records-and-updates.md).
+
+### Typed Servers
+
+`serving` attaches checked call and cast slots to record state:
+
+```rb
+record ShoppingList do
+  items : [String] = []
+end
+
+serving ShoppingList do
+  slot items -> Reply<[String]> = { reply: @items }
+
+  slot add(item: String) -> Reply<Integer> do
+    new.items = [item | @items]
+    return { new, reply: new.items.count }
+  end
+
+  slot clear -> Void = New { items: [] }
+end
+
+let groceries = Process.spawn(ShoppingList {})
+groceries.add("coffee", within: 10_000)
+```
+
+On BEAM these are OTP `gen_server` processes using ordinary tuple requests,
+including direct Erlang/Elixir interoperability. See
+[`docs/serving.md`](docs/serving.md).
 
 ### Records, Sum Types, Optional, Result
 
@@ -549,6 +600,7 @@ Working today:
 - Lexer, parser, AST, semantic analysis, and tree-walk evaluation
 - BEAM backend: lowering IR → Core Erlang codegen (`kex -c`/`-R`/`-e`), at full spec parity with the interpreter
 - Process primitives (`spawn`, `receive`, `send`, `loop`, `Task`) on both the interpreter and BEAM
+- Typed `Process<Message>` handles and `serving` state machines with calls, casts, state/stop transitions, timeouts, and deferred replies
 - Records, sum types, functions, lambdas, pattern matching, destructuring
 - Lists, maps, ranges, streams, strings, chars, numbers, optional values, result values
 - UFCS, `make` dispatch, `to` conversion convention, operator overloading
@@ -566,7 +618,7 @@ Working today:
 Planned or incomplete:
 
 - Compiling Kex itself to WASM (today only the interpreter is compiled to wasm, for the in-browser REPL)
-- Typed processes (`Process<Message>`) and supervision (`Supervisor`) beyond the current primitives
+- Richer supervision DSL and generated child specifications for typed servers
 - A full module system across BEAM modules
 - `is?` / `as` type introspection and explicit conversion
 - Namespace/import resolution beyond `using` blocks

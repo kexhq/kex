@@ -347,6 +347,13 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
         // "Module.mem" or "Type.mem" — complete members by module name or make target
         std::string qualifier = prefix.substr(0, dotPos);
         std::string memberPrefix = prefix.substr(dotPos + 1);
+        // A typed server exposes the declared slots of its STATE in addition
+        // to Server's own lifecycle methods. Slot identity is indexed
+        // explicitly so ordinary `make Counter` helpers never leak into the
+        // remote protocol completion list.
+        std::string servingState;
+        if (qualifier.rfind("Server<", 0) == 0 && qualifier.ends_with('>'))
+            servingState = qualifier.substr(7, qualifier.size() - 8);
         for (const auto& [path, state] : m_files) {
             for (const auto& sym : state.symbols) {
                 // A record's fields and a make block's methods carry the
@@ -361,6 +368,10 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                     && sym.name.rfind(memberPrefix, 0) == 0) {
                     results.push_back(qualifier + "." + sym.name);
                 }
+                if (!servingState.empty() && sym.isServingSlot &&
+                    sym.makeTarget == servingState && sym.isExported &&
+                    sym.name.rfind(memberPrefix, 0) == 0)
+                    results.push_back(qualifier + "." + sym.name);
             }
         }
         if (m_imports) {
@@ -398,7 +409,16 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                     // all for any module-qualified type.
                     const auto tail = qualifier.rfind('.') == std::string::npos
                         ? qualifier : qualifier.substr(qualifier.rfind('.') + 1);
-                    const bool matches = receiver == qualifier || receiver == tail;
+                    const auto generic = tail.find('<');
+                    const auto base = generic == std::string::npos
+                        ? tail : tail.substr(0, generic);
+                    const auto receiverGeneric = receiver.find('<');
+                    const auto receiverBase = receiverGeneric == std::string::npos
+                        ? receiver : receiver.substr(0, receiverGeneric);
+                    const bool matches = receiver == qualifier || receiver == tail ||
+                        (generic != std::string::npos &&
+                         receiverGeneric != std::string::npos &&
+                         receiverBase == base);
                     if (!matches) continue;
                     results.push_back(qualifier + "." + name);
                     break;

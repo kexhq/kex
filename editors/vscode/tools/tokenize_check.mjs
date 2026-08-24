@@ -23,6 +23,12 @@ make Box do
   push :> X -> [X]
 end
 
+serving Box do
+  size ::> Reply<Integer>
+  slot size = Kex.Intrinsic.Process.reply(@size)
+  slot resize(to: Integer) -> Void = New { size: to }
+end
+
 let copied = Box { ...source, label: "copy" }
 `;
 

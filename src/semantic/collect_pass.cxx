@@ -380,11 +380,13 @@ static auto makeTargetName(const ast::TypeExprPtr& te) -> std::string {
 auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module) -> void {
     std::string target = makeTargetName(def.target);
 
-    auto tagTarget = [&](const std::string& funcName) {
+    auto tagTarget = [&](const std::string& funcName, bool isServingSlot) {
         if (target.empty()) return;
         for (auto& sym : m_state->symbols) {
-            if (sym.name == funcName && sym.module == module && sym.makeTarget.empty())
+            if (sym.name == funcName && sym.module == module && sym.makeTarget.empty()) {
                 sym.makeTarget = target;
+                sym.isServingSlot = isServingSlot;
+            }
         }
     };
 
@@ -400,6 +402,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
         info.module = module;
         info.isFoul = ann.isFoul;
         info.makeTarget = target;
+        info.isServingSlot = def.isServing;
         info.type = Type::unknown();
         m_state->symbols.push_back(std::move(info));
     };
@@ -409,7 +412,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                 collectFunction(*ptr, module);
-                tagTarget(ptr->name);
+                tagTarget(ptr->name, def.isServing && ptr->isSlot);
             } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
                 collectMakeAnnotation(*ptr);
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
@@ -418,7 +421,8 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
                             collectFunction(*vptr, module);
-                            tagTarget(vptr->name);
+                            tagTarget(vptr->name,
+                                      def.isServing && vptr->isSlot);
                         } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {
                             collectMakeAnnotation(*vptr);
                         }

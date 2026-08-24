@@ -779,6 +779,43 @@ int main() {
                            std::string::npos,
                        "LSP diagnosed the implicit new binding as undefined");
         });
+        it("understands implicit serving bindings and server slots", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":5}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":6,"character":6}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":10}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(responseForId(result, 2).find("new : Counter") !=
+                           std::string::npos,
+                       "serving new hover omitted its state type: " + result);
+            assertTrue(responseForId(result, 3).find("From<Integer>") !=
+                           std::string::npos,
+                       "serving from hover omitted its reply type: " + result);
+            assertTrue(responseForId(result, 4).find(R"("filterText":"later")") !=
+                           std::string::npos,
+                       "Server<Counter> produced no slot completion: " + result);
+            assertTrue(result.find("Undefined variable: new") == std::string::npos &&
+                           result.find("Undefined variable: from") == std::string::npos,
+                       "LSP diagnosed an implicit serving binding as undefined: " +
+                           result);
+        });
         it("keeps local navigation and pattern receiver completion semantic", []() {
             std::string messages;
             messages += frame(
