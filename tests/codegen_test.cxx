@@ -923,6 +923,24 @@ int main() {
                        "external record field should use its compiled layout");
         });
 
+        it("rejects indistinguishable conflicting record layouts", []() {
+            std::vector<kex::ir::ExternalRecordLayout> records = {
+                {"Shared", {"left", "right"}},
+                {"Shared", {"right", "left"}},
+            };
+            bool rejected = false;
+            try {
+                (void)emitWithExternalRecords(
+                    "main do Shared { left: 1, right: 2 }.left end\n",
+                    records);
+            } catch (const kex::ir::LowerError& error) {
+                rejected = contains(error.what(),
+                                    "ambiguous record layout for field");
+            }
+            assertTrue(rejected,
+                       "a field read cannot choose between identical tags and sizes");
+        });
+
         it("defers unknown free-function errors until the function is called", []() {
             auto output = runIrOnBeam(
                 "let unused() = missingFunction()\n"

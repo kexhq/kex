@@ -119,6 +119,16 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
     case KexiType::Union:
         return std::make_shared<kex::semantic::Type>(
             kex::semantic::Type{kex::semantic::UnionType{convertAll(type->typeArgs)}});
+    case KexiType::Intersection:
+        return Type::intersection(convertAll(type->typeArgs));
+    case KexiType::Record: {
+        std::vector<std::pair<std::string, kex::semantic::TypePtr>> fields;
+        for (size_t i = 0; i < type->typeArgs.size(); i++)
+            fields.emplace_back(
+                i < type->fieldNames.size() ? type->fieldNames[i] : "",
+                semanticType(type->typeArgs[i], vars));
+        return Type::record(std::move(fields));
+    }
     case KexiType::Constrained:
         {
             int genericId = 0;
@@ -741,10 +751,16 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 interfaces.recordArities.try_emplace(record.name,
                                                      record.fields.size());
                 auto& fieldNames = interfaces.recordFieldNames[qualified];
-                for (const auto& field : record.fields)
+                TypeVarMap recordVars;
+                auto& fieldTypes = interfaces.recordFields[qualified];
+                for (const auto& field : record.fields) {
                     fieldNames.insert(field.name);
+                    fieldTypes[field.name] =
+                        semanticType(field.type, recordVars);
+                }
                 interfaces.recordFieldNames.try_emplace(
                     record.name, fieldNames);
+                interfaces.recordFields.try_emplace(record.name, fieldTypes);
                 interfaces.typeNames.insert(record.name);
                 interfaces.typeNames.insert(qualified);
             }

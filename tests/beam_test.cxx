@@ -686,6 +686,32 @@ int main() {
             test::assertTrue(rt->typeArgs[0]->kind == KexiType::List);
             test::assertTrue(rt->typeArgs[0]->typeArgs[0]->kind == KexiType::Map);
         });
+
+        test::it("round-trips intersections and open records", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "kex_intersections";
+            KexiExport exp;
+            exp.name = "named";
+            exp.beamArity = 1;
+            exp.paramTypes = {kexiIntersection({
+                kexiNamed("Inspectable"),
+                kexiRecord({"name"}, {kexiPrimitive("String")}),
+            })};
+            exp.returnType = kexiPrimitive("String");
+            chunk.typeInterface.exports.push_back(std::move(exp));
+            chunk.interfaceHash = computeInterfaceHash(chunk);
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            const auto& param =
+                decoded.typeInterface.exports.front().paramTypes.front();
+            test::assertTrue(param->kind == KexiType::Intersection);
+            test::assertTrue(param->typeArgs.size() == 2);
+            const auto& record = param->typeArgs[1];
+            test::assertTrue(record->kind == KexiType::Record);
+            test::assertEqual(record->fieldNames.front(), std::string("name"));
+            test::assertEqual(record->typeArgs.front()->name,
+                              std::string("String"));
+        });
     });
 
     test::describe("KexI analyzed interfaces", []() {

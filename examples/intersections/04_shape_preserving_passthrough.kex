@@ -1,0 +1,26 @@
+# Intersection-type example. See docs/intersections-spec.md.
+
+record Account do
+  enabled : Bool
+  email   : String
+end
+
+record FeatureFlag do
+  enabled : Bool
+  key     : String
+end
+
+auditEnabled : R & { enabled: Bool } -> R & { enabled: Bool }
+foul auditEnabled(value) do
+  IO.printLine("enabled: ${value.enabled}")
+  return value
+end
+
+main do
+  let account = auditEnabled(Account { enabled: false, email: "ada@example.test" })
+  let flag = auditEnabled(FeatureFlag { enabled: true, key: "new-checkout" })
+
+  # The inferred results are Account and FeatureFlag, not merely the row.
+  IO.printLine(account.email)
+  IO.printLine(flag.key)
+end

@@ -32,8 +32,8 @@ auto Type::unknown() -> TypePtr {
     return std::make_shared<Type>(Type{UnknownType{}});
 }
 
-auto Type::voidType() -> TypePtr {
-    return std::make_shared<Type>(Type{VoidType{}});
+auto Type::voidType(std::string reason) -> TypePtr {
+    return std::make_shared<Type>(Type{VoidType{std::move(reason)}});
 }
 
 auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr {
@@ -58,6 +58,77 @@ auto Type::map(TypePtr key, TypePtr value) -> TypePtr {
 
 auto Type::optional(TypePtr inner) -> TypePtr {
     return std::make_shared<Type>(Type{OptionalType{std::move(inner)}});
+}
+
+auto Type::intersection(std::vector<TypePtr> members) -> TypePtr {
+    std::vector<TypePtr> flattened;
+    for (auto& member : members) {
+        if (auto* nested = std::get_if<IntersectionType>(&member->kind)) {
+            flattened.insert(flattened.end(), nested->members.begin(),
+                             nested->members.end());
+        } else {
+            flattened.push_back(std::move(member));
+        }
+    }
+    // Structural rows form a meet by combining their required fields. When a
+    // label occurs on both sides, a value must satisfy both field types too.
+    // Keep the first spelling order for stable diagnostics.
+    std::vector<std::pair<std::string, TypePtr>> rowFields;
+    std::vector<TypePtr> nonRows;
+    for (auto& member : flattened) {
+        if (auto* row = std::get_if<RecordType>(&member->kind)) {
+            for (const auto& [name, fieldType] : row->fields) {
+                auto existing = std::find_if(
+                    rowFields.begin(), rowFields.end(),
+                    [&](const auto& field) { return field.first == name; });
+                if (existing == rowFields.end()) {
+                    rowFields.emplace_back(name, fieldType);
+                } else if (!typesEqual(existing->second, fieldType)) {
+                    existing->second = Type::intersection(
+                        {existing->second, fieldType});
+                }
+            }
+        } else {
+            nonRows.push_back(std::move(member));
+        }
+    }
+    if (!rowFields.empty())
+        nonRows.push_back(Type::record(std::move(rowFields)));
+    flattened = std::move(nonRows);
+    std::vector<TypePtr> normalized;
+    for (auto& member : flattened) {
+        if (std::holds_alternative<VoidType>(member->kind))
+            return Type::voidType();
+        if (std::holds_alternative<UnknownType>(member->kind))
+            continue; // Unknown is the gradual top/escape hatch.
+        for (const auto& existing : normalized) {
+            const auto* left = std::get_if<PrimitiveType>(&existing->kind);
+            const auto* right = std::get_if<PrimitiveType>(&member->kind);
+            if (left && right && left->kind != right->kind)
+                return Type::voidType();
+            if (left && right && left->kind == PrimitiveType::Atom &&
+                !left->atomName.empty() && !right->atomName.empty() &&
+                left->atomName != right->atomName)
+                return Type::voidType();
+        }
+        if (std::none_of(normalized.begin(), normalized.end(),
+                         [&](const TypePtr& existing) {
+                             return typesEqual(existing, member);
+                         }))
+            normalized.push_back(std::move(member));
+    }
+    if (normalized.empty()) return Type::unknown();
+    if (normalized.size() == 1) return normalized.front();
+    return std::make_shared<Type>(
+        Type{IntersectionType{std::move(normalized)}});
+}
+
+auto Type::record(std::vector<std::pair<std::string, TypePtr>> fields)
+    -> TypePtr {
+    for (const auto& [_, fieldType] : fields)
+        if (fieldType && std::holds_alternative<VoidType>(fieldType->kind))
+            return Type::voidType();
+    return std::make_shared<Type>(Type{RecordType{std::move(fields)}});
 }
 
 auto Type::typeVar(int id) -> TypePtr {
@@ -226,6 +297,23 @@ auto typeToString(const TypePtr& type) -> std::string {
             }
             return result;
         }
+        else if constexpr (std::is_same_v<T, IntersectionType>) {
+            std::string result;
+            for (size_t i = 0; i < t.members.size(); i++) {
+                if (i > 0) result += " & ";
+                result += typeToString(t.members[i]);
+            }
+            return result;
+        }
+        else if constexpr (std::is_same_v<T, RecordType>) {
+            std::string result = "{";
+            for (size_t i = 0; i < t.fields.size(); i++) {
+                if (i > 0) result += ", ";
+                result += t.fields[i].first + ": " +
+                          typeToString(t.fields[i].second);
+            }
+            return result + "}";
+        }
         else if constexpr (std::is_same_v<T, TypeVar>) {
             if (t.id < 0) {
                 // Table-level generic placeholder: -1 -> 'A', -2 -> 'B', ...
@@ -275,7 +363,9 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
         if constexpr (std::is_same_v<T, UnknownType> ||
                       std::is_same_v<T, TypeVar> ||
                       std::is_same_v<T, ConstrainedType> ||
-                      std::is_same_v<T, UnionType>) {
+                      std::is_same_v<T, UnionType> ||
+                      std::is_same_v<T, IntersectionType> ||
+                      std::is_same_v<T, RecordType>) {
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, FuncType>) {
             // Parameters then the result, matching how a signature is written.
@@ -337,6 +427,12 @@ auto isFullyConcrete(const TypePtr& type) -> bool {
             return all(t.elements);
         } else if constexpr (std::is_same_v<T, UnionType>) {
             return all(t.members);
+        } else if constexpr (std::is_same_v<T, IntersectionType>) {
+            return all(t.members);
+        } else if constexpr (std::is_same_v<T, RecordType>) {
+            for (const auto& [_, fieldType] : t.fields)
+                if (!isFullyConcrete(fieldType)) return false;
+            return true;
         } else if constexpr (std::is_same_v<T, FuncType>) {
             return all(t.params) && isFullyConcrete(t.result);
         } else {
@@ -454,6 +550,33 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
                     }
                 }
                 if (!found) return false;
+            }
+            return true;
+        }
+        else if constexpr (std::is_same_v<AT, IntersectionType>) {
+            if (at.members.size() != bt->members.size()) return false;
+            std::vector<bool> paired(bt->members.size(), false);
+            for (const auto& mine : at.members) {
+                bool found = false;
+                for (size_t i = 0; i < bt->members.size() && !found; i++) {
+                    if (!paired[i] && typesEqual(mine, bt->members[i])) {
+                        paired[i] = true;
+                        found = true;
+                    }
+                }
+                if (!found) return false;
+            }
+            return true;
+        }
+        else if constexpr (std::is_same_v<AT, RecordType>) {
+            if (at.fields.size() != bt->fields.size()) return false;
+            for (const auto& [name, mine] : at.fields) {
+                auto other = std::find_if(
+                    bt->fields.begin(), bt->fields.end(),
+                    [&](const auto& field) { return field.first == name; });
+                if (other == bt->fields.end() ||
+                    !typesEqual(mine, other->second))
+                    return false;
             }
             return true;
         }

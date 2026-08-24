@@ -183,6 +183,24 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             return std::make_shared<Type>(
                 Type{kex::semantic::UnionType{std::move(members)}});
         }
+        else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
+            return Type::intersection({
+                node.left
+                    ? resolveSourceType(*node.left, vars, aliases, traits)
+                    : Type::unknown(),
+                node.right
+                    ? resolveSourceType(*node.right, vars, aliases, traits)
+                    : Type::unknown()});
+        }
+        else if constexpr (std::is_same_v<T, ast::RecordType>) {
+            std::vector<std::pair<std::string, kex::semantic::TypePtr>> fields;
+            for (const auto& [name, fieldType] : node.fields)
+                fields.emplace_back(
+                    name, fieldType
+                        ? resolveSourceType(*fieldType, vars, aliases, traits)
+                        : Type::unknown());
+            return Type::record(std::move(fields));
+        }
         else if constexpr (std::is_same_v<T, ast::AtomType>) {
             // Without this an atom literal in an interface signature came back
             // as Unknown, so `:macos | :linux` printed as "? | ?".
@@ -628,10 +646,24 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     ifaces.recordArities.try_emplace(
                         (*record)->name, (*record)->fields.size());
                     auto& fields = ifaces.recordFieldNames[qualified];
-                    for (const auto& field : (*record)->fields)
+                    std::unordered_map<std::string,
+                                       kex::semantic::TypePtr> vars;
+                    auto& fieldTypes = ifaces.recordFields[qualified];
+                    for (size_t i = 0; i < (*record)->typeParams.size(); ++i)
+                        vars[(*record)->typeParams[i]] =
+                            kex::semantic::Type::typeVar(
+                                -static_cast<int>(i + 1));
+                    for (const auto& field : (*record)->fields) {
                         fields.insert(field.name);
+                        fieldTypes[field.name] = field.type
+                            ? resolveSourceType(*field.type, vars,
+                                                &typeAliases, &traitNames)
+                            : kex::semantic::Type::unknown();
+                    }
                     ifaces.recordFieldNames.try_emplace((*record)->name,
                                                         fields);
+                    ifaces.recordFields.try_emplace((*record)->name,
+                                                    fieldTypes);
                     ifaces.typeNames.insert((*record)->name);
                     ifaces.typeNames.insert(qualified);
                 }
@@ -735,8 +767,20 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (*rd) {
                     ifaces.recordArities[(*rd)->name] = (*rd)->fields.size();
                     auto& fieldNames = ifaces.recordFieldNames[(*rd)->name];
-                    for (const auto& field : (*rd)->fields)
+                    std::unordered_map<std::string,
+                                       kex::semantic::TypePtr> vars;
+                    auto& fieldTypes = ifaces.recordFields[(*rd)->name];
+                    for (size_t i = 0; i < (*rd)->typeParams.size(); ++i)
+                        vars[(*rd)->typeParams[i]] =
+                            kex::semantic::Type::typeVar(
+                                -static_cast<int>(i + 1));
+                    for (const auto& field : (*rd)->fields) {
                         fieldNames.insert(field.name);
+                        fieldTypes[field.name] = field.type
+                            ? resolveSourceType(*field.type, vars,
+                                                &typeAliases, &traitNames)
+                            : kex::semantic::Type::unknown();
+                    }
                     ifaces.typeNames.insert((*rd)->name);
                 }
             }
@@ -847,6 +891,8 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         base.recordArities.try_emplace(name, arity);
     for (auto& [name, fields] : extra.recordFieldNames)
         base.recordFieldNames.try_emplace(name, std::move(fields));
+    for (auto& [name, fields] : extra.recordFields)
+        base.recordFields.try_emplace(name, std::move(fields));
     base.typeNames.insert(extra.typeNames.begin(), extra.typeNames.end());
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),

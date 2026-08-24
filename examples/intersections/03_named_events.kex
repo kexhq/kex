@@ -1,0 +1,23 @@
+# Intersection-type example. See docs/intersections-spec.md.
+
+record Deployment do
+  name       : String
+  occurredAt : DateTime
+  revision   : String
+end
+
+make Deployment, implement: Inspectable do
+  let inspectValue(_) = "${@name}@${@revision}"
+end
+
+eventLine : Inspectable & { name: String, occurredAt: DateTime } -> String
+let eventLine(event) = "${event.occurredAt} ${event.name}: ${event.inspectValue(false)}"
+
+main do
+  let event = Deployment {
+    name: "production",
+    occurredAt: DateTime.now,
+    revision: "a9371d3"
+  }
+  IO.printLine(eventLine(event))
+end

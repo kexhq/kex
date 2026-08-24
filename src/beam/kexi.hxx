@@ -34,6 +34,8 @@ struct KexiType {
         Map,          // key + value
         Optional,     // inner
         Union,        // members
+        Intersection, // members
+        Record,       // fieldNames + field types
         Constrained,  // varName + traitName
         Never,
         Unknown,
@@ -42,6 +44,7 @@ struct KexiType {
     std::string name;
     std::string traitName; // for Constrained
     std::vector<KexiTypePtr> typeArgs;
+    std::vector<std::string> fieldNames; // for Record, parallel to typeArgs
     KexiTypePtr result; // for Func
 };
 
@@ -53,6 +56,9 @@ auto kexiList(KexiTypePtr element) -> KexiTypePtr;
 auto kexiMap(KexiTypePtr key, KexiTypePtr value) -> KexiTypePtr;
 auto kexiOptional(KexiTypePtr inner) -> KexiTypePtr;
 auto kexiUnion(std::vector<KexiTypePtr> members) -> KexiTypePtr;
+auto kexiIntersection(std::vector<KexiTypePtr> members) -> KexiTypePtr;
+auto kexiRecord(std::vector<std::string> names,
+                std::vector<KexiTypePtr> types) -> KexiTypePtr;
 auto kexiConstrained(const std::string& var, const std::string& trait) -> KexiTypePtr;
 auto kexiNever() -> KexiTypePtr;
 auto kexiUnknown() -> KexiTypePtr;

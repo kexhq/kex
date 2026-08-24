@@ -195,6 +195,7 @@ private:
     // clause, not a fresh one per occurrence.
     auto resolveTypeExpr(const ast::TypeExpr& typeExpr,
                         std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
+    auto normalizeIntersection(TypePtr type) const -> TypePtr;
 
     // Type inference for expressions
     auto inferExpr(const ast::Expr& expr) -> TypePtr;

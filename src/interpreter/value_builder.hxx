@@ -23,6 +23,9 @@ struct ValueBuilder {
     auto list(std::vector<Value> values) const -> Value {
         return interpreter::Value::list(std::move(values));
     }
+    auto tuple(std::vector<Value> values) const -> Value {
+        return interpreter::Value::tuple(std::move(values));
+    }
     auto string(std::string value) const -> Value {
         return interpreter::Value::string(std::move(value));
     }

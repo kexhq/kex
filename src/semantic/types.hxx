@@ -66,6 +66,14 @@ struct UnionType {
     std::vector<TypePtr> members;
 };
 
+struct IntersectionType {
+    std::vector<TypePtr> members;
+};
+
+struct RecordType {
+    std::vector<std::pair<std::string, TypePtr>> fields;
+};
+
 struct TypeVar {
     int id;
 };
@@ -75,7 +83,12 @@ struct UnknownType {};
 // Bottom type — for expressions that never return (infinite loop, panic, exit).
 // Unifies with any type as a universal subtype: a Never-typed branch is compatible
 // with any other branch type because it never actually produces a value at runtime.
-struct VoidType {};
+struct VoidType {
+    // Empty for ordinary non-returning expressions. Populated when Never is
+    // the normalization of an explicitly uninhabited type, so diagnostics can
+    // retain the reason after normalization.
+    std::string reason;
+};
 
 // A signature-table placeholder meaning "any type satisfying `traitName`"
 // (e.g. `even? : T -> Bool` where T is constrained to Integer). `varName`
@@ -102,6 +115,8 @@ struct Type {
         MapType,
         OptionalType,
         UnionType,
+        IntersectionType,
+        RecordType,
         TypeVar,
         UnknownType,
         VoidType,
@@ -115,13 +130,16 @@ struct Type {
     static auto atom(std::string atomName = "") -> TypePtr;
     static auto unit() -> TypePtr;
     static auto unknown() -> TypePtr;
-    static auto voidType() -> TypePtr;
+    static auto voidType(std::string reason = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
     static auto func(std::vector<TypePtr> params, TypePtr result) -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;
     static auto tuple(std::vector<TypePtr> elements) -> TypePtr;
     static auto map(TypePtr key, TypePtr value) -> TypePtr;
     static auto optional(TypePtr inner) -> TypePtr;
+    static auto intersection(std::vector<TypePtr> members) -> TypePtr;
+    static auto record(std::vector<std::pair<std::string, TypePtr>> fields)
+        -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
     static auto constrained(const std::string& varName,
                             const std::string& traitName,

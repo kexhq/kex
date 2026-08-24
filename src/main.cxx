@@ -758,6 +758,19 @@ auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
           std::string l = node.left ? typeExprToString(*node.left) : "?";
           std::string r = node.right ? typeExprToString(*node.right) : "?";
           return l + " | " + r;
+        } else if constexpr (std::is_same_v<T, kex::ast::IntersectionType>) {
+          std::string l = node.left ? typeExprToString(*node.left) : "?";
+          std::string r = node.right ? typeExprToString(*node.right) : "?";
+          return l + " & " + r;
+        } else if constexpr (std::is_same_v<T, kex::ast::RecordType>) {
+          std::string result = "{";
+          for (size_t i = 0; i < node.fields.size(); i++) {
+            if (i) result += ", ";
+            result += node.fields[i].first + ": " +
+                (node.fields[i].second
+                     ? typeExprToString(*node.fields[i].second) : "?");
+          }
+          return result + "}";
         } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
           return (node.inner ? typeExprToString(*node.inner) : "?") + "?";
         } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {

@@ -68,6 +68,17 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
             members.push_back(convertTypeExprImpl(*node.left));
             members.push_back(convertTypeExprImpl(*node.right));
             return kexiUnion(std::move(members));
+        } else if constexpr (std::is_same_v<T, kex::ast::IntersectionType>) {
+            return kexiIntersection({convertTypeExprImpl(*node.left),
+                                     convertTypeExprImpl(*node.right)});
+        } else if constexpr (std::is_same_v<T, kex::ast::RecordType>) {
+            std::vector<std::string> names;
+            std::vector<KexiTypePtr> types;
+            for (const auto& [name, fieldType] : node.fields) {
+                names.push_back(name);
+                types.push_back(convertTypeExprImpl(*fieldType));
+            }
+            return kexiRecord(std::move(names), std::move(types));
         } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
             return kexiOptional(convertTypeExprImpl(*node.inner));
         } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
@@ -135,6 +146,19 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
             for (const auto& member : node.members)
                 members.push_back(convertSemanticType(member));
             return kexiUnion(std::move(members));
+        } else if constexpr (std::is_same_v<T, kex::semantic::IntersectionType>) {
+            std::vector<KexiTypePtr> members;
+            for (const auto& member : node.members)
+                members.push_back(convertSemanticType(member));
+            return kexiIntersection(std::move(members));
+        } else if constexpr (std::is_same_v<T, kex::semantic::RecordType>) {
+            std::vector<std::string> names;
+            std::vector<KexiTypePtr> types;
+            for (const auto& [name, fieldType] : node.fields) {
+                names.push_back(name);
+                types.push_back(convertSemanticType(fieldType));
+            }
+            return kexiRecord(std::move(names), std::move(types));
         } else if constexpr (std::is_same_v<T, kex::semantic::VoidType>) {
             return kexiNever();
         } else if constexpr (std::is_same_v<T, kex::semantic::ConstrainedType>) {

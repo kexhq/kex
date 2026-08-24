@@ -122,6 +122,12 @@ struct ImportedInterfaces {
     // the field's TYPE is not carried, so such a read stays gradual.
     std::unordered_map<std::string, std::unordered_set<std::string>>
         recordFieldNames;
+    // Complete declared field types, used for open-record width/depth checks
+    // across module boundaries. Keys include qualified runtime identities;
+    // bare aliases are retained only where the existing record registry can
+    // resolve them unambiguously.
+    std::unordered_map<
+        std::string, std::unordered_map<std::string, TypePtr>> recordFields;
     // Every type NAME the imported sources declare: ADTs, records, and
     // constructor-less aliases such as `type List<X> = [X]`. `adts` only
     // carries types that have constructors, and it is indexed by those

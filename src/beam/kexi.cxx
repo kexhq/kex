@@ -64,6 +64,20 @@ auto kexiUnion(std::vector<KexiTypePtr> members) -> KexiTypePtr {
     t->typeArgs = std::move(members);
     return t;
 }
+auto kexiIntersection(std::vector<KexiTypePtr> members) -> KexiTypePtr {
+    auto t = std::make_shared<KexiType>();
+    t->kind = KexiType::Intersection;
+    t->typeArgs = std::move(members);
+    return t;
+}
+auto kexiRecord(std::vector<std::string> names,
+                std::vector<KexiTypePtr> types) -> KexiTypePtr {
+    auto t = std::make_shared<KexiType>();
+    t->kind = KexiType::Record;
+    t->fieldNames = std::move(names);
+    t->typeArgs = std::move(types);
+    return t;
+}
 auto kexiConstrained(const std::string& var, const std::string& trait) -> KexiTypePtr {
     auto t = std::make_shared<KexiType>();
     t->kind = KexiType::Constrained;
@@ -124,6 +138,22 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
         for (const auto& m : type->typeArgs) members.push_back(typeToTerm(m));
         return Term::tuple({Term::atom("union"), Term::list(std::move(members))});
     }
+    case KexiType::Intersection: {
+        std::vector<TermPtr> members;
+        for (const auto& m : type->typeArgs) members.push_back(typeToTerm(m));
+        return Term::tuple(
+            {Term::atom("intersection"), Term::list(std::move(members))});
+    }
+    case KexiType::Record: {
+        std::vector<TermPtr> fields;
+        for (size_t i = 0; i < type->typeArgs.size(); i++)
+            fields.push_back(Term::tuple({
+                Term::binary(i < type->fieldNames.size()
+                                 ? type->fieldNames[i] : ""),
+                typeToTerm(type->typeArgs[i])}));
+        return Term::tuple(
+            {Term::atom("record"), Term::list(std::move(fields))});
+    }
     case KexiType::Constrained:
         return Term::tuple({Term::atom("constrained"),
                             Term::binary(type->name), Term::binary(type->traitName)});
@@ -167,6 +197,22 @@ auto termToType(const TermPtr& term) -> KexiTypePtr {
         std::vector<KexiTypePtr> ms;
         for (const auto& m : elems[1]->asList()) ms.push_back(termToType(m));
         return kexiUnion(std::move(ms));
+    }
+    if (tag == "intersection" && elems.size() >= 2) {
+        std::vector<KexiTypePtr> ms;
+        for (const auto& m : elems[1]->asList()) ms.push_back(termToType(m));
+        return kexiIntersection(std::move(ms));
+    }
+    if (tag == "record" && elems.size() >= 2) {
+        std::vector<std::string> names;
+        std::vector<KexiTypePtr> types;
+        for (const auto& field : elems[1]->asList()) {
+            const auto& pair = field->asTuple();
+            if (pair.size() < 2) continue;
+            names.push_back(pair[0]->asBinaryStr());
+            types.push_back(termToType(pair[1]));
+        }
+        return kexiRecord(std::move(names), std::move(types));
     }
     if (tag == "constrained" && elems.size() >= 3)
         return kexiConstrained(elems[1]->asBinaryStr(), elems[2]->asBinaryStr());
