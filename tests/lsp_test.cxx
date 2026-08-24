@@ -771,7 +771,15 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":6,"character":6}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":9,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","version":3},"contentChanges":[{"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This do\n    return new { }\n  end\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":9,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":17}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","version":4},"contentChanges":[{"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This = New { age: @ }\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":10,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":4,"character":37}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -808,6 +816,18 @@ int main() {
                                std::string::npos,
                        "New record completion was not restricted to writable fields: " +
                            result);
+            assertTrue(responseForId(result, 9).find(R"("label":"age")") !=
+                           std::string::npos &&
+                           responseForId(result, 9).find(R"("label":"assert")") ==
+                               std::string::npos,
+                       "incomplete new record completion exposed global symbols: " +
+                           result);
+            assertTrue(responseForId(result, 10).find(R"("label":"age")") !=
+                           std::string::npos &&
+                           responseForId(result, 10).find(R"("label":"assert")") ==
+                               std::string::npos,
+                       "@ field completion did not use the receiver record: " +
+                           result);
             assertTrue(result.find("Undefined variable: new") ==
                            std::string::npos,
                        "LSP diagnosed the implicit new binding as undefined");
@@ -833,7 +853,15 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":13,"character":10}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":7,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":3},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot increment(by: Integer) -> Reply<Integer> do\n    return { new, }\n  end\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":18}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":4},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot increment(by: Integer) -> Reply<Integer> do\n    return { }\n  end\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":13}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":9,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -861,8 +889,25 @@ int main() {
                            responseForId(result, 6).find(R"("label":"foul slot later")") !=
                                std::string::npos &&
                            responseForId(result, 6).find(R"("label":"slot reset")") !=
-                               std::string::npos,
+                           std::string::npos,
                        "Server<Counter> produced no slot completion: " + result);
+            assertTrue(responseForId(result, 7).find(R"("label":"reply")") !=
+                           std::string::npos &&
+                           responseForId(result, 7).find(R"("label":"stop")") !=
+                               std::string::npos &&
+                           responseForId(result, 7).find(R"("label":"assert")") ==
+                               std::string::npos,
+                       "serving transition completion exposed global symbols: " +
+                           result);
+            assertTrue(responseForId(result, 8).find(R"("label":"new")") !=
+                           std::string::npos &&
+                           responseForId(result, 8).find(R"("label":"reply")") !=
+                               std::string::npos &&
+                           responseForId(result, 8).find(R"("label":"stop")") !=
+                               std::string::npos &&
+                           responseForId(result, 8).find(R"("label":"assert")") ==
+                               std::string::npos,
+                       "empty serving transition exposed global symbols: " + result);
             assertTrue(result.find("Undefined variable: new") == std::string::npos &&
                            result.find("Undefined variable: from") == std::string::npos,
                        "LSP diagnosed an implicit serving binding as undefined: " +
@@ -904,6 +949,37 @@ int main() {
                            responseForId(result, 4).find(
                                R"("filterText":"sendFrom")") != std::string::npos,
                        "Process<Message> produced no message-method completions: " +
+                           result);
+        });
+        it("provides signature help for methods and serving slots", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\nend\nmain do\n  let hello = \"hello\"\n  hello.at(0)\n  let counter = Process.spawn(Counter {})\n  counter.reset(1)\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex"},"position":{"line":8,"character":11}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex"},"position":{"line":10,"character":16}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(responseForId(result, 2).find("at(") != std::string::npos &&
+                           responseForId(result, 2).find("Integer") !=
+                               std::string::npos,
+                       "ordinary method signature help was empty: " + result);
+            assertTrue(responseForId(result, 3).find("reset(to: Integer") !=
+                           std::string::npos &&
+                           responseForId(result, 3).find("within: Integer?") !=
+                               std::string::npos,
+                       "serving slot signature help omitted parameters/options: " +
                            result);
         });
         it("keeps local navigation and pattern receiver completion semantic", []() {

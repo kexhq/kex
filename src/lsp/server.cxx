@@ -1881,9 +1881,13 @@ private:
                     .save = ::lsp::SaveOptions{.includeText = true},
                 },
                 .completionProvider = ::lsp::CompletionOptions{
-                    .triggerCharacters = ::lsp::Array<::lsp::String>{"."},
+                    .triggerCharacters = ::lsp::Array<::lsp::String>{".", "@"},
                 },
                 .hoverProvider = true,
+                .signatureHelpProvider = ::lsp::SignatureHelpOptions{
+                    .triggerCharacters = ::lsp::Array<::lsp::String>{"(", ","},
+                    .retriggerCharacters = ::lsp::Array<::lsp::String>{","},
+                },
                 .definitionProvider = true,
                 .referencesProvider = true,
             },
@@ -2423,6 +2427,126 @@ private:
                 ? text.size() : lineEndPosition;
             const auto cursor = byteOffsetForUtf16Column(
                 text, lineStart, lineEnd, params.position.character);
+            // A Server<State> slot call has one compiler-owned named option,
+            // `within:`. Once all positional parameters are present, global
+            // lexical completion is pure noise (`counter.shutdown(|)` used to
+            // offer Assert, Bits, after, ...).
+            size_t parenDepth = 0;
+            size_t callOpen = std::string::npos;
+            for (size_t i = cursor; i > 0; --i) {
+                if (text[i - 1] == ')') ++parenDepth;
+                else if (text[i - 1] == '(') {
+                    if (parenDepth) --parenDepth;
+                    else { callOpen = i - 1; break; }
+                }
+            }
+            if (callOpen != std::string::npos) {
+                size_t methodEnd = callOpen;
+                while (methodEnd && std::isspace(
+                           static_cast<unsigned char>(text[methodEnd - 1])))
+                    --methodEnd;
+                size_t methodStart = methodEnd;
+                while (methodStart && (std::isalnum(static_cast<unsigned char>(
+                           text[methodStart - 1])) || text[methodStart - 1] == '_' ||
+                           text[methodStart - 1] == '?')) --methodStart;
+                if (methodStart > 0 && text[methodStart - 1] == '.') {
+                    size_t receiverEnd = methodStart - 1;
+                    size_t receiverStart = receiverEnd;
+                    while (receiverStart && (std::isalnum(
+                               static_cast<unsigned char>(text[receiverStart - 1])) ||
+                               text[receiverStart - 1] == '_')) --receiverStart;
+                    const auto receiver = text.substr(
+                        receiverStart, receiverEnd - receiverStart);
+                    if (auto known = found->second.localReceiverTypes.find(receiver);
+                        known != found->second.localReceiverTypes.end() &&
+                        known->second.rfind("Server<", 0) == 0 &&
+                        known->second.ends_with('>')) {
+                        const auto state = known->second.substr(
+                            7, known->second.size() - 8);
+                        const auto method = text.substr(
+                            methodStart, methodEnd - methodStart);
+                        if (const auto* slot = m_db.receiverSymbol(state, method);
+                            slot && slot->isServingSlot) {
+                            const auto supplied = text.substr(
+                                callOpen + 1, cursor - callOpen - 1);
+                            const auto commas = static_cast<size_t>(std::count(
+                                supplied.begin(), supplied.end(), ','));
+                            const bool empty = std::all_of(
+                                supplied.begin(), supplied.end(), [](char c) {
+                                    return std::isspace(static_cast<unsigned char>(c));
+                                });
+                            const bool positionalComplete =
+                                (empty && slot->params.empty()) ||
+                                (!slot->params.empty() && commas >= slot->params.size());
+                            if (positionalComplete) {
+                                ::lsp::Array<::lsp::CompletionItem> options;
+                                if (supplied.find("within:") == std::string::npos)
+                                    options.push_back({
+                                        .label = "within",
+                                        .kind = ::lsp::CompletionItemKind::Property,
+                                        .detail = "within : Integer (milliseconds)",
+                                        .filterText = "within",
+                                        .insertText = "within: ",
+                                    });
+                                return options;
+                            }
+                        }
+                    }
+                }
+            }
+            size_t atName = cursor;
+            while (atName > lineStart && (std::isalnum(
+                       static_cast<unsigned char>(text[atName - 1])) ||
+                       text[atName - 1] == '_')) --atName;
+            if (atName > 0 && text[atName - 1] == '@') {
+                std::string receiver;
+                if (auto known = found->second.localReceiverTypes.find("new");
+                    known != found->second.localReceiverTypes.end())
+                    receiver = known->second;
+                if (receiver.empty())
+                    if (auto known = found->second.localReceiverTypes.find("this");
+                        known != found->second.localReceiverTypes.end())
+                        receiver = known->second;
+                // As with an incomplete New literal, syntax recovery may have
+                // dropped implicit bindings. The nearest make/serving header
+                // still gives the receiver type.
+                if (receiver.empty()) {
+                    const auto make = text.rfind("make ", cursor);
+                    const auto serving = text.rfind("serving ", cursor);
+                    const auto header = make == std::string::npos
+                        ? serving : serving == std::string::npos
+                        ? make : std::max(make, serving);
+                    if (header != std::string::npos) {
+                        size_t type = header + (header == make ? 5 : 8);
+                        while (type < cursor && std::isspace(
+                                   static_cast<unsigned char>(text[type]))) ++type;
+                        size_t end = type;
+                        while (end < cursor && (std::isalnum(
+                                   static_cast<unsigned char>(text[end])) ||
+                                   text[end] == '_' || text[end] == '.')) ++end;
+                        receiver = text.substr(type, end - type);
+                    }
+                }
+                if (const auto* declaration =
+                        m_db.findSymbol(receiver, found->second.path);
+                    declaration && declaration->kind ==
+                        semantic::SymbolKind::Record) {
+                    const auto typed = text.substr(atName, cursor - atName);
+                    ::lsp::Array<::lsp::CompletionItem> fields;
+                    for (const auto& [name, type] :
+                         recordFields(declaration->detail)) {
+                        if (name.rfind(typed, 0) != 0) continue;
+                        fields.push_back({
+                            .label = name,
+                            .kind = ::lsp::CompletionItemKind::Field,
+                            .detail = "@" + name + " : " + type,
+                            .filterText = name,
+                            .insertText = name,
+                        });
+                    }
+                    return fields;
+                }
+            }
             size_t depth = 0;
             size_t brace = std::string::npos;
             for (size_t i = cursor; i > 0; --i) {
@@ -2433,6 +2557,55 @@ private:
                 }
             }
             if (brace != std::string::npos) {
+                const auto written = text.substr(brace + 1,
+                                                 cursor - brace - 1);
+                size_t first = 0;
+                while (first < written.size() && std::isspace(
+                           static_cast<unsigned char>(written[first]))) ++first;
+                size_t beforeBrace = brace;
+                while (beforeBrace && std::isspace(
+                           static_cast<unsigned char>(text[beforeBrace - 1])))
+                    --beforeBrace;
+                const auto currentLine = text.rfind('\n', brace);
+                const auto returnStart = text.rfind("return", brace);
+                const bool emptyServingReturn = first == written.size() &&
+                    returnStart != std::string::npos &&
+                    (currentLine == std::string::npos ||
+                     returnStart > currentLine) &&
+                    text.rfind("serving ", brace) != std::string::npos;
+                const bool servingTransition = emptyServingReturn ||
+                    written.compare(first, 3, "new") == 0 &&
+                    (first + 3 == written.size() ||
+                     std::isspace(static_cast<unsigned char>(written[first + 3])) ||
+                     written[first + 3] == ',');
+                if (servingTransition) {
+                    ::lsp::Array<::lsp::CompletionItem> fields;
+                    if (written.find("new") == std::string::npos)
+                        fields.push_back({
+                            .label = "new",
+                            .kind = ::lsp::CompletionItemKind::Field,
+                            .detail = "new : updated serving state",
+                            .filterText = "new",
+                            .insertText = "new, ",
+                        });
+                    if (written.find("reply:") == std::string::npos)
+                        fields.push_back({
+                            .label = "reply",
+                            .kind = ::lsp::CompletionItemKind::Field,
+                            .detail = "reply : slot reply value",
+                            .filterText = "reply",
+                            .insertText = "reply: ",
+                        });
+                    if (written.find("stop:") == std::string::npos)
+                        fields.push_back({
+                            .label = "stop",
+                            .kind = ::lsp::CompletionItemKind::Field,
+                            .detail = "stop : process exit reason",
+                            .filterText = "stop",
+                            .insertText = "stop: ",
+                        });
+                    return fields;
+                }
                 size_t end = brace;
                 while (end && std::isspace(static_cast<unsigned char>(text[end - 1])))
                     --end;
@@ -2441,15 +2614,18 @@ private:
                            text[start - 1])) || text[start - 1] == '_' ||
                            text[start - 1] == '.')) --start;
                 auto record = text.substr(start, end - start);
-                if (record == "New" || record == "This") {
-                    const auto binding = record == "New" ? "new" : "this";
+                if (record == "New" || record == "new" ||
+                    record == "This" || record == "this") {
+                    const auto binding = record == "New" || record == "new"
+                        ? "new" : "this";
                     if (auto known = found->second.localReceiverTypes.find(binding);
                         known != found->second.localReceiverTypes.end())
                         record = known->second;
                     // An incomplete literal may prevent the fresh analysis
                     // from retaining implicit bindings. The surrounding
                     // make/serving header still states the same type plainly.
-                    if (record == "New" || record == "This") {
+                    if (record == "New" || record == "new" ||
+                        record == "This" || record == "this") {
                         const auto make = text.rfind("make ", brace);
                         const auto serving = text.rfind("serving ", brace);
                         const auto header = make == std::string::npos
@@ -2477,8 +2653,6 @@ private:
                         declaration && declaration->kind ==
                             semantic::SymbolKind::Record) {
                         ::lsp::Array<::lsp::CompletionItem> fields;
-                        const auto written = text.substr(brace + 1,
-                                                         cursor - brace - 1);
                         for (const auto& [name, type] :
                              recordFields(declaration->detail)) {
                             if (written.find(name + ":") != std::string::npos)
@@ -2626,8 +2800,10 @@ private:
             // or imported function sharing its short name must not supply the
             // completion signature (`counter.get` used to show String.get).
             if ((localSymbol && localSymbol->isServingSlot) ||
-                !completionFieldType.empty())
+                !completionFieldType.empty()) {
                 functions.clear();
+                signatures.clear();
+            }
             if (!completionFieldType.empty())
                 signatures.push_back(leaf + " : " + completionFieldType);
             if (signatures.empty() && localSymbol &&
@@ -2790,6 +2966,16 @@ private:
             hoverLineStart = newline + 1;
         }
         const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
+        const auto hoverLineEndPosition = document.text.find('\n', hoverLineStart);
+        const auto hoverLineEnd = hoverLineEndPosition == std::string::npos
+            ? document.text.size() : hoverLineEndPosition;
+        const auto hoverLine = document.text.substr(
+            hoverLineStart, hoverLineEnd - hoverLineStart);
+        const bool slotDeclarationPosition =
+            hoverLine.find("slot ") != std::string::npos ||
+            (hoverLine.find("::>") != std::string::npos &&
+             document.text.rfind("serving ", hoverWordOffset) !=
+                 std::string::npos);
         const auto localDefinition =
             (!resolvedSymbolAtPosition && moduleQualifier.empty())
                 ? sourceLocalDefinition(
@@ -2805,6 +2991,28 @@ private:
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
             symbol = m_db.findSymbol(lookupName, document.path);
+        const semantic::SymbolInfo* slotDeclarationSymbol = nullptr;
+        if (slotDeclarationPosition && moduleQualifier.empty()) {
+            const auto serving = document.text.rfind("serving ", hoverWordOffset);
+            if (serving != std::string::npos) {
+                size_t target = serving + 8;
+                while (target < document.text.size() && std::isspace(
+                           static_cast<unsigned char>(document.text[target])))
+                    ++target;
+                size_t targetEnd = target;
+                while (targetEnd < document.text.size() && (std::isalnum(
+                           static_cast<unsigned char>(document.text[targetEnd])) ||
+                           document.text[targetEnd] == '_' ||
+                           document.text[targetEnd] == '.')) ++targetEnd;
+                slotDeclarationSymbol = m_db.receiverSymbol(
+                    document.text.substr(target, targetEnd - target), lookupName);
+                if (slotDeclarationSymbol &&
+                    slotDeclarationSymbol->isServingSlot)
+                    symbol = slotDeclarationSymbol;
+                else
+                    slotDeclarationSymbol = nullptr;
+            }
+        }
         // A source-recognized lexical binding always shadows global/module
         // symbols, even when inference could not produce a hover entry for
         // it. Returning no type is preferable to claiming that a lambda
@@ -2940,6 +3148,11 @@ private:
         } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
             symbol = nullptr;
+        } else if (slotDeclarationSymbol) {
+            detail = slotDeclarationSymbol->detail.empty()
+                ? "slot " + slotDeclarationSymbol->name
+                : slotDeclarationSymbol->detail;
+            documentation.clear();
         } else if (!thisTypeDetail.empty()) {
             detail = std::move(thisTypeDetail);
             symbol = nullptr;
@@ -3184,6 +3397,168 @@ private:
                 .start = protocolPosition(start, &document.text),
                 .end = protocolPosition(end, &document.text),
             },
+        };
+    }
+
+    auto signatureHelp(::lsp::SignatureHelpParams&& params)
+        -> ::lsp::requests::TextDocument_SignatureHelp::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end()) return {};
+        const auto& document = found->second;
+        size_t lineStart = 0;
+        for (unsigned int line = 0; line < params.position.line; ++line) {
+            const auto newline = document.text.find('\n', lineStart);
+            if (newline == std::string::npos) return {};
+            lineStart = newline + 1;
+        }
+        const auto lineEndPosition = document.text.find('\n', lineStart);
+        const auto lineEnd = lineEndPosition == std::string::npos
+            ? document.text.size() : lineEndPosition;
+        const auto cursor = byteOffsetForUtf16Column(
+            document.text, lineStart, lineEnd, params.position.character);
+        size_t depth = 0;
+        size_t open = std::string::npos;
+        for (size_t i = cursor; i > 0; --i) {
+            if (document.text[i - 1] == ')') ++depth;
+            else if (document.text[i - 1] == '(') {
+                if (depth) --depth;
+                else { open = i - 1; break; }
+            }
+        }
+        if (open == std::string::npos) return {};
+        size_t methodEnd = open;
+        while (methodEnd && std::isspace(
+                   static_cast<unsigned char>(document.text[methodEnd - 1])))
+            --methodEnd;
+        size_t methodStart = methodEnd;
+        while (methodStart && (std::isalnum(static_cast<unsigned char>(
+                   document.text[methodStart - 1])) ||
+                   document.text[methodStart - 1] == '_' ||
+                   document.text[methodStart - 1] == '?')) --methodStart;
+        const auto method = document.text.substr(
+            methodStart, methodEnd - methodStart);
+        const bool hasReceiver = methodStart > 0 &&
+            document.text[methodStart - 1] == '.';
+        std::string receiver;
+        std::string qualifier;
+        if (hasReceiver) {
+            const size_t receiverEnd = methodStart - 1;
+            size_t receiverStart = receiverEnd;
+            while (receiverStart && (std::isalnum(static_cast<unsigned char>(
+                       document.text[receiverStart - 1])) ||
+                       document.text[receiverStart - 1] == '_' ||
+                       document.text[receiverStart - 1] == '.')) --receiverStart;
+            receiver = document.text.substr(receiverStart,
+                                            receiverEnd - receiverStart);
+            if (auto known = document.localReceiverTypes.find(receiver);
+                known != document.localReceiverTypes.end())
+                qualifier = known->second;
+            else
+                qualifier = receiver;
+        }
+
+        ::lsp::Array<::lsp::SignatureInformation> signatures;
+        auto append = [&](const std::vector<std::string>& names,
+                          const std::vector<semantic::TypePtr>& types,
+                          const semantic::TypePtr& result,
+                          bool addWithin = false) {
+            ::lsp::Array<::lsp::ParameterInformation> parameters;
+            std::string label = method + "(";
+            const size_t offset = types.size() > names.size()
+                ? types.size() - names.size() : 0;
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (i) label += ", ";
+                const auto parameter = names[i] + ": " +
+                    (i + offset < types.size()
+                        ? semantic::typeToString(types[i + offset]) : "Any");
+                label += parameter;
+                parameters.push_back({.label = parameter});
+            }
+            if (addWithin) {
+                if (!names.empty()) label += ", ";
+                label += "within: Integer?";
+                parameters.push_back({
+                    .label = ::lsp::String{"within: Integer?"}});
+            }
+            label += ')';
+            if (result) label += " -> " + semantic::typeToString(result);
+            signatures.push_back({
+                .label = std::move(label),
+                .parameters = std::move(parameters),
+            });
+        };
+
+        const semantic::SymbolInfo* local = nullptr;
+        if (hasReceiver && !qualifier.empty()) {
+            if (qualifier.rfind("Server<", 0) == 0 && qualifier.ends_with('>'))
+                local = m_db.receiverSymbol(
+                    qualifier.substr(7, qualifier.size() - 8), method);
+            if (!local) local = m_db.receiverSymbol(qualifier, method);
+        } else {
+            local = m_db.findSymbol(method, document.path);
+        }
+        if (local && !local->params.empty() ||
+            local && local->isServingSlot) {
+            std::vector<std::string> names;
+            std::vector<semantic::TypePtr> types;
+            for (const auto& [name, type] : local->params) {
+                names.push_back(name);
+                types.push_back(type);
+            }
+            semantic::TypePtr result;
+            if (local->type)
+                if (const auto* function =
+                        std::get_if<semantic::FuncType>(&local->type->kind))
+                    result = function->result;
+            append(names, types, result, local->isServingSlot);
+        }
+
+        if (signatures.empty() && hasReceiver) {
+            if (auto module = m_interfaces.modules.find(qualifier);
+                module != m_interfaces.modules.end())
+                if (auto overloads = module->second.exports.find(method);
+                    overloads != module->second.exports.end())
+                    for (const auto& function : overloads->second)
+                        append(function.paramNames, function.signature.params,
+                               function.signature.result);
+            if (auto overloads = m_interfaces.receiverFunctions.find(method);
+                overloads != m_interfaces.receiverFunctions.end())
+                for (const auto& function : overloads->second) {
+                    if (function.signature.params.empty()) continue;
+                    const auto declared = semantic::typeToString(
+                        function.signature.params.front());
+                    const auto generic = declared.find('<');
+                    const auto expected = generic == std::string::npos
+                        ? declared : declared.substr(0, generic);
+                    const auto actualGeneric = qualifier.find('<');
+                    const auto actual = actualGeneric == std::string::npos
+                        ? qualifier : qualifier.substr(0, actualGeneric);
+                    if (declared != qualifier && expected != actual) continue;
+                    append(function.paramNames, function.signature.params,
+                           function.signature.result);
+                }
+        } else if (signatures.empty()) {
+            for (const auto& [_, module] : m_interfaces.modules) {
+                if (!module.automaticImport) continue;
+                if (auto overloads = module.exports.find(method);
+                    overloads != module.exports.end())
+                    for (const auto& function : overloads->second)
+                        append(function.paramNames, function.signature.params,
+                               function.signature.result);
+            }
+        }
+        if (signatures.empty()) return {};
+        const auto supplied = document.text.substr(open + 1, cursor - open - 1);
+        const auto active = std::min<size_t>(
+            std::count(supplied.begin(), supplied.end(), ','),
+            signatures.front().parameters &&
+                    !signatures.front().parameters->empty()
+                ? signatures.front().parameters->size() - 1 : 0);
+        return ::lsp::SignatureHelp{
+            .signatures = std::move(signatures),
+            .activeSignature = 0,
+            .activeParameter = static_cast<unsigned int>(active),
         };
     }
 
@@ -3501,6 +3876,10 @@ private:
             .add<::lsp::requests::TextDocument_Hover>(
                 [this](::lsp::HoverParams&& params) {
                     return hover(std::move(params));
+                })
+            .add<::lsp::requests::TextDocument_SignatureHelp>(
+                [this](::lsp::SignatureHelpParams&& params) {
+                    return signatureHelp(std::move(params));
                 })
             .add<::lsp::requests::TextDocument_Definition>(
                 [this](::lsp::DefinitionParams&& params) {

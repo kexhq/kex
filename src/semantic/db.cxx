@@ -234,11 +234,15 @@ auto SemanticDB::symbolInModule(const std::string& moduleName,
 auto SemanticDB::receiverSymbol(const std::string& receiver,
                                 const std::string& name) const
     -> const SymbolInfo* {
+    const SymbolInfo* best = nullptr;
     for (const auto& [_, state] : m_files)
         for (const auto& symbol : state.symbols)
-            if (symbol.name == name && symbol.makeTarget == receiver)
-                return &symbol;
-    return nullptr;
+            if (symbol.name == name && symbol.makeTarget == receiver) {
+                if (!best || (best->detail.empty() && !symbol.detail.empty()) ||
+                    (best->definition.line <= 0 && symbol.definition.line > 0))
+                    best = &symbol;
+            }
+    return best;
 }
 
 auto SemanticDB::isModuleLoading(const std::string& moduleName,
