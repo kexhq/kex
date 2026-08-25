@@ -20,7 +20,8 @@ module Tey.Docgen.Html do
   # Landing page for <pkg>/<version>/index.html: every module as a card.
   foul versionIndexHtml(model: PackageModel) -> String do
     let label = labelOf(model)
-    let cards = model.modules.map { |m| moduleCard(m) }.join("\n")
+    let top = firstModulesOfPages(model.pages)
+    let cards = model.modules.map { |m| moduleCard(m, top.contains?(m.qualifiedName)) }.join("\n")
     let body = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>\n<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>\n<div class=\"cards\">\n${cards}\n</div>"
     return layout(label, "", body, model)
   end
@@ -42,6 +43,8 @@ module Tey.Docgen.Html do
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="icon" type="image/png" href="../icon.png">
 </head>
 <body>
 <header class="top">
@@ -85,6 +88,8 @@ ${cards}
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" type="image/svg+xml" href="../../favicon.svg">
+<link rel="icon" type="image/png" href="../../icon.png">
 </head>
 <body>
 <header class="top">
@@ -232,6 +237,8 @@ ${cards}
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" href="icon.png">
 </head>
 <body>
 <header class="top">
@@ -288,6 +295,8 @@ ${cards}
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${root}assets/style.css">
+<link rel="icon" type="image/svg+xml" href="${root}favicon.svg">
+<link rel="icon" type="image/png" href="${root}icon.png">
 <script src="${root}assets/site.js" defer></script>
 </head>
 <body>
@@ -341,13 +350,31 @@ ${bodyContent}
     return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
   end
 
-  foul moduleCard(m: Tey.Docgen.Model.ModuleIndexEntry) -> String do
+  # The modules that OPEN a page — their section sits at the very top, so a
+  # card for one links to the page itself rather than to an anchor that lands
+  # where the page already starts. A page whose first declaration is a type or
+  # record has no such module.
+  foul firstModulesOfPages(pages: [SourcePage]) -> [String] do
+    return pages.flatMap { |p|
+      match p.entities.first do
+        Just(ModuleDecl(entry)) => [entry.qualifiedName]
+        _ => []
+      end
+    }
+  end
+
+  foul moduleCard(m: Tey.Docgen.Model.ModuleIndexEntry, top: Bool) -> String do
+    let href = if top
+      "${m.urlPath}.html"
+    else
+      "${m.urlPath}.html#module-${slug(m.qualifiedName)}"
+    end
     let summary = if m.summary.empty?
       ""
     else
       "<span class=\"card-meta\">${esc(m.summary)}</span>"
     end
-    return "<a class=\"card\" href=\"${m.urlPath}.html#module-${slug(m.qualifiedName)}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
+    return "<a class=\"card\" href=\"${href}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
 
   # ── Entity sections ──────────────────────────────────────────────────────

@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Regenerate the full docs site: every released tag plus the current
-# (unreleased) checkout, for the prelude/stdlib and for tey.
+# Regenerate the docs site: every released tag plus the current (unreleased)
+# checkout, for the prelude/stdlib and for tey.
 #
 #   tools/build-docs.sh [output-dir]
 #
-# output-dir defaults to ../kdocs relative to the repo root — the kdocs
-# checkout that is published to docs.kex.run. Each released tag is built
-# from a temporary git worktree; the unreleased build uses the working
-# tree as-is. Builds run through the CURRENT toolchain — `tey docs` is a
-# built-in of this checkout's Tey, and docgen parses old sources with the
-# current compiler, so files that no longer parse are skipped with a
-# warning rather than failing the release.
+# output-dir defaults to ../kdocs relative to the repo root — the checkout
+# that is published to docs.kex.run. Each released tag is built from a
+# temporary git worktree; the unreleased build uses the working tree as-is.
+# Builds run through the CURRENT toolchain — `tey docs` is a built-in of
+# this checkout's Tey, and docgen parses old sources with the current
+# compiler, so files that no longer parse are skipped with a warning rather
+# than failing the release.
+#
+# Environment:
+#   SKIP_TAGS=1   build only the unreleased checkout (used on main pushes,
+#                 where the released tags have not changed)
+#   BASE_URL      the site base URL for sitemap/robots (docgen --base-url)
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -45,6 +50,9 @@ build_docs() {
     return 0
   fi
   local args=(docs build --source "$source" --out "$OUT" --package "$package" --label "$label")
+  if [ -n "${BASE_URL:-}" ]; then
+    args+=(--base-url "$BASE_URL")
+  fi
   if [ -n "$version" ]; then
     args+=(--release "$version")
   fi
@@ -58,17 +66,19 @@ tey_version() {
   sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/tey/package.kex" | head -1
 }
 
-for tag in $(git -C "$ROOT" tag --sort=v:refname); do
-  version="${tag#v}"
-  wt="$WORKTREES/$version"
-  git -C "$ROOT" worktree add --detach --force "$wt" "$tag" >/dev/null 2>&1 || {
-    echo "build-docs: WARNING cannot worktree $tag — skipped" >&2
-    continue
-  }
-  build_docs "$wt/src/stdlib" prelude "Prelude" "$version"
-  build_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
-  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
-done
+if [ -z "${SKIP_TAGS:-}" ]; then
+  for tag in $(git -C "$ROOT" tag --sort=v:refname); do
+    version="${tag#v}"
+    wt="$WORKTREES/$version"
+    git -C "$ROOT" worktree add --detach --force "$wt" "$tag" >/dev/null 2>&1 || {
+      echo "build-docs: WARNING cannot worktree $tag — skipped" >&2
+      continue
+    }
+    build_docs "$wt/src/stdlib" prelude "Prelude" "$version"
+    build_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
+    git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  done
+fi
 
 # The unreleased builds. Prelude's version is the compiler's (the working
 # tree's package.kex tracks it). Tey's comes from its own manifest via
@@ -76,7 +86,18 @@ done
 # "-dev" release, so an unreleased build cannot overwrite the released docs
 # of the same version number.
 build_docs "$ROOT/src/stdlib" prelude "Prelude"
-(cd "$ROOT/tey" && "$TEY_RUN" docs build --out "$OUT" --release "$(tey_version "$ROOT")-dev") || \
+(cd "$ROOT/tey" && "$TEY_RUN" docs build --out "$OUT" \
+  ${BASE_URL:+--base-url "$BASE_URL"} \
+  --release "$(tey_version "$ROOT")-dev") || \
   echo "build-docs: WARNING tey unreleased failed — keeping previous output" >&2
+
+# Static site assets docgen does not own — the favicon, borrowed from
+# kex-run-site. Copied here rather than generated, so docgen stays a
+# documentation generator and the branding lives in the output.
+for f in favicon.svg icon.png; do
+  if [ -f "$ROOT/tools/docs-assets/$f" ]; then
+    cp "$ROOT/tools/docs-assets/$f" "$OUT/$f"
+  fi
+done
 
 echo "build-docs: done -> $OUT"

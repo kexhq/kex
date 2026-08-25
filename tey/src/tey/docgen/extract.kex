@@ -26,9 +26,10 @@ module Tey.Docgen.Extract do
     }
   end
 
-  # A page's title is the module it declares — "OptionParser", not the file
-  # name's "Optionparser". Only a file with exactly one top-level module gets
-  # that name; several modules (or none) fall back to the file name.
+  # A page's title is the declaration it is really about — "OptionParser",
+  # not the file name's "Optionparser", and "FileHandle", not "Filehandle".
+  # Preference order: a single top-level module, then a single top-level
+  # type/record/trait, then the file name title-cased.
   foul pageTitle(source: String, entities: [Entity]) -> String do
     let tops = entities.flatMap { |e|
       match e do
@@ -38,6 +39,17 @@ module Tey.Docgen.Extract do
     }
     if tops.count == 1
       return tops.first.or("")
+    end
+    let primaries = entities.flatMap { |e|
+      match e do
+        TypeDecl(entry) => [entry.name]
+        RecordDecl(entry) => [entry.name]
+        TraitDecl(entry) => [entry.name]
+        _ => []
+      end
+    }.uniq
+    if primaries.count == 1
+      return primaries.first.or("")
     end
     return titleCase(stripExt(source))
   end

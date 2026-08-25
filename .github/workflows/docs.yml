@@ -1,0 +1,73 @@
+name: Docs
+
+# Generates the documentation site and publishes it to the kexhq/docs
+# repository, which GitHub Pages serves. The site is built here — not in the
+# docs repo — because docgen is part of this repo's toolchain: `tey docs`
+# parses sources with the compiler built by this very workflow, and old
+# releases are built from git worktrees only this repo has.
+#
+# A tag push means a new release and a full rebuild of every version (old
+# tags parse through the CURRENT docgen). A main push only changes the
+# unreleased docs, so that build skips the tag worktrees. `workflow_dispatch`
+# rebuilds everything by hand.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: build-docs.sh adds a worktree per release tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same toolchain CI uses for the compiler + Tey jobs: erlang for erlc
+      # (Tey compiles to .beam and runs on the BEAM, which is how it serves
+      # and how `tey docs build` runs at all).
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
+            libssl-dev erlang-base libboost-context-dev
+
+      - name: Build kex
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
+
+      - name: Build Tey
+        run: make build-tey
+
+      # The site base URL for sitemap/robots/llms. Override to a custom
+      # domain (e.g. https://docs.kex.run) if one is pointed at Pages.
+      - name: Generate docs
+        env:
+          BASE_URL: https://kexhq.github.io/docs
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            tools/build-docs.sh docs-out
+          else
+            SKIP_TAGS=1 tools/build-docs.sh docs-out
+          fi
+
+      # Pushes docs-out to kexhq/docs' gh-pages branch, which GitHub Pages
+      # serves. Requires the DOCS_PUBLISH_TOKEN secret: a fine-grained PAT
+      # with Contents: read+write on kexhq/docs.
+      - name: Publish to kexhq/docs
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.DOCS_PUBLISH_TOKEN }}
+          external_repository: kexhq/docs
+          publish_branch: gh-pages
+          publish_dir: docs-out
+          enable_jekyll: false
+          commit_message: "docs: publish ${{ github.ref_name }}"
