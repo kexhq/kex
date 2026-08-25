@@ -1,8 +1,0 @@
-bundle "docgen" do
-  version("0.1.0")
-  kex(">= 0.3.0")
-  license("MIT")
-  description("Documentation generator for Kex source trees")
-  entrypoint("src/main.kex")
-  command("docs", run: "src/main.kex", description: "Generate and serve Kex documentation")
-end
