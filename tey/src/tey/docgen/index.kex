@@ -159,6 +159,7 @@ module Tey.Docgen.Index do
       n + 1
     })
     let _ = FS.File.write(FS.Path.join(versionDir, "index.html"), Tey.Docgen.Html.versionIndexHtml(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "search.html"), Tey.Docgen.Html.searchPageHtml(model))
     ensureDirectory(FS.Path.join(out, "assets"))
     let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
     let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())

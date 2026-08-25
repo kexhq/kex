@@ -70,6 +70,149 @@ ${cards}
     return "<a class=\"card\" href=\"${esc(v.id)}/index.html\"><span class=\"card-title\">${esc(v.label)} ${esc(v.id)}</span><span class=\"card-meta\">generated ${esc(v.generatedAt.take(10))}</span></a>"
   end
 
+  # <pkg>/<version>/search.html: the shareable full-page search. The modal on
+  # every page links here with ?q=<term>, so a results page is a URL rather
+  # than a state — the page reads the term back from the query string.
+  foul searchPageHtml(model: PackageModel) -> String do
+    let label = labelOf(model)
+    return $`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search — ${esc(label)} ${esc(model.version)} — kex docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="../../index.html">kex</a>
+    <span class="brand-sub">docs</span>
+    <span class="spacer"></span>
+    <a class="back" href="index.html">${esc(label)} ${esc(model.version)}</a>
+  </div>
+</header>
+<div class="wrap">
+  <main class="content search-page">
+    <h1>Search ${esc(label)} <span class="ver">${esc(model.version)}</span></h1>
+    <p class="lede">Names, types and signatures across the whole package.</p>
+    <div class="search-page-box">
+      <input id="sp-input" type="search" placeholder="Search names, types, signatures…" autocomplete="off">
+    </div>
+    <div id="sp-results" class="search-page-results"></div>
+  </main>
+</div>
+<script>
+(function () {
+  var input = document.getElementById("sp-input");
+  var results = document.getElementById("sp-results");
+  var entries = null;
+
+  function term() { return input.value.trim().toLowerCase(); }
+
+  function rank(e, tokens) {
+    var name = (e.name || "").toLowerCase();
+    var qname = (e.qualifiedName || "").toLowerCase();
+    var types = (e.types || []).join(" ").toLowerCase();
+    var sigs = (e.signatures || []).join(" ").toLowerCase();
+    var summary = (e.summary || "").toLowerCase();
+    var total = 0;
+    var ok = tokens.every(function (t) {
+      var local = 0;
+      if (name === t) local = 100;
+      else if (name.indexOf(t) === 0) local = 50;
+      else if (name.indexOf(t) !== -1) local = 20;
+      if (qname === t) local = Math.max(local, 90);
+      else if (qname.indexOf(t) !== -1) local = Math.max(local, 30);
+      if (types === t) local = Math.max(local, 60);
+      else if (types.indexOf(t) !== -1) local = Math.max(local, 25);
+      if (sigs.indexOf(t) !== -1) local = Math.max(local, 10);
+      if (summary.indexOf(t) !== -1) local = Math.max(local, 5);
+      if (local === 0) return false;
+      total += local;
+      return true;
+    });
+    if (!ok) return -1;
+    if (tokens.indexOf("->") !== -1) total += e.kind === "function" ? 80 : -300;
+    return total;
+  }
+
+  function render(list) {
+    results.innerHTML = "";
+    if (list.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "search-empty";
+      empty.textContent = "No matches.";
+      results.appendChild(empty);
+      return;
+    }
+    list.forEach(function (e) {
+      var a = document.createElement("a");
+      a.className = "search-page-hit";
+      a.href = e.urlPath + ".html" + (e.anchor ? "#" + e.anchor : "");
+      var head = document.createElement("span");
+      head.className = "search-head";
+      var kind = document.createElement("span");
+      kind.className = "search-kind search-kind-" + e.kind; kind.textContent = e.kind;
+      var name = document.createElement("span");
+      name.className = "search-name"; name.textContent = e.name;
+      head.appendChild(kind); head.appendChild(name);
+      if (e.qualifiedName && e.qualifiedName !== e.name) {
+        var qual = document.createElement("span");
+        qual.className = "search-qual"; qual.textContent = e.qualifiedName;
+        head.appendChild(qual);
+      }
+      a.appendChild(head);
+      var sig = document.createElement("span");
+      sig.className = "search-sig";
+      sig.textContent = (e.signatures && e.signatures[0]) || "";
+      a.appendChild(sig);
+      if (e.summary) {
+        var sum = document.createElement("span");
+        sum.className = "search-summary";
+        sum.textContent = e.summary;
+        a.appendChild(sum);
+      }
+      results.appendChild(a);
+    });
+  }
+
+  function run() {
+    if (term().length === 0) { results.innerHTML = ""; return; }
+    var tokens = term().split(" ").filter(function (t) { return t.length > 0; });
+    var scored = entries
+      .map(function (e) { return { e: e, s: rank(e, tokens) }; })
+      .filter(function (x) { return x.s >= 0; })
+      .sort(function (a, b) { return b.s - a.s; });
+    render(scored.slice(0, 200).map(function (x) { return x.e; }));
+  }
+
+  function syncUrl() {
+    var url = new URL(window.location.href);
+    if (term()) url.searchParams.set("q", input.value.trim()); else url.searchParams.delete("q");
+    window.history.replaceState({}, "", url);
+  }
+
+  input.addEventListener("input", function () { run(); syncUrl(); });
+
+  fetch("search.json")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      entries = d.entries || [];
+      var initial = new URLSearchParams(window.location.search).get("q") || "";
+      if (initial) { input.value = initial; run(); }
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>
+`
+  end
+
   # Site root index.html: one card per PACKAGE (its newest build), not per
   # build — a reader arrives at "the docs" for a thing, and the thing is a
   # package; its versions are one click down. Built from the accumulated
@@ -151,6 +294,11 @@ ${cards}
     <a class="brand" href="${root}index.html">kex</a>
     <span class="brand-sub">docs</span>
     <span class="spacer"></span>
+    <button class="search-trigger" id="search" aria-label="Search documentation"
+            data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}"
+            data-page="${esc(pageTarget(current))}">
+      <span>Search</span><kbd>/</kbd>
+    </button>
     <span class="pkg-badge" id="version-badge" data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}" data-page="${esc(pageTarget(current))}">${esc(label)} ${esc(model.version)}</span>
     <a class="back" href="https://kex.run/docs">kex.run ↗</a>
   </div>
@@ -175,11 +323,38 @@ ${bodyContent}
   # The sidebar navigates by MODULE, not by file: a reader thinks "where is
   # String defined", not "which .kex file is it in" — the two coincide only
   # by accident. Nesting follows the qualified names ("Web.Server" under
-  # "Web"); the active module expands to its members.
+  # "Web"); the active module expands to its members. Below it, a per-page
+  # table of contents lists what THIS page declares.
   foul sidebar(model: PackageModel, current: String) -> String do
     let vpre = versionPrefix(current)
     let rows = sidebarRows(model, current, vpre)
-    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${rows}\n</ul></nav></aside>"
+    let toc = pageToc(model, current)
+    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${rows}\n</ul></nav>${toc}</aside>"
+  end
+
+  # On-this-page: the page's sections in order, modules expanded to their
+  # nested sections — a jump list for the reader already here.
+  foul pageToc(model: PackageModel, current: String) -> String do
+    match model.pages.find { |p| p.urlPath == current } do
+      None => ""
+      Just(page) => do
+        let items = tocItems(page.entities).join("\n")
+        if items.empty?
+          return ""
+        end
+        return "<nav class=\"toc\" aria-label=\"On this page\"><p class=\"side-heading\">On this page</p><ul class=\"side-list\">\n${items}\n</ul></nav>"
+      end
+    end
+  end
+
+  foul tocItems(entities: [Entity]) -> [String] do
+    return entities.flatMap { |e|
+      match e do
+        ModuleDecl(entry) =>
+          ["<li><a href=\"#module-${slug(entry.qualifiedName)}\">${esc(entry.qualifiedName)}</a></li>"] + tocItems(entry.children)
+        _ => ["<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>"]
+      end
+    }
   end
 
   # One <li> per top-level module, plus one per page for the entities that
@@ -307,7 +482,7 @@ ${bodyContent}
     else
       " : " + e.parents.map { |p| link(p) }.join(", ")
     end
-    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${parents}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
+    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind kind-type\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${parents}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
   end
 
   foul variantsHtml(variants: [VariantEntry]?) -> String do
@@ -333,7 +508,7 @@ ${bodyContent}
   foul recordSection(e: RecordEntry, page: SourcePage, model: PackageModel) -> String do
     let link = Tey.Docgen.Html.linker(page, model)
     let rows = e.fields.map { |f| fieldRow(f, link) }.join("\n")
-    return "<section class=\"entity\" id=\"record-${slug(e.name)}\">\n<h2><span class=\"kind\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n</section>"
+    return "<section class=\"entity\" id=\"record-${slug(e.name)}\">\n<h2><span class=\"kind kind-record\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n</section>"
   end
 
   foul fieldRow(f: Tey.Docgen.Model.FieldEntry, link: (String -> String)) -> String do
@@ -367,7 +542,7 @@ ${bodyContent}
 
   foul traitSection(e: TraitEntry, page: SourcePage, model: PackageModel) -> String do
     let link = Tey.Docgen.Html.linker(page, model)
-    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
+    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind kind-trait\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
   end
 
   foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
@@ -377,17 +552,17 @@ ${bodyContent}
     else
       " implements " + e.implements.map { |i| link(i) }.join(", ")
     end
-    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind\">make</span> <code>${esc(e.target)}</code>${impls}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
+    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind kind-make\">make</span> <code>${esc(e.target)}</code>${impls}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
   end
 
   foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
     let children = e.children.map { |c| entitySection(c, page, model) }.join("\n")
-    return "<section class=\"entity\" id=\"module-${slug(e.qualifiedName)}\">\n<h2><span class=\"kind\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
+    return "<section class=\"entity\" id=\"module-${slug(e.qualifiedName)}\">\n<h2><span class=\"kind kind-module\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
   end
 
   foul functionSection(e: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
     let link = Tey.Docgen.Html.linker(page, model)
-    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc, link)}${returnsHtml(e.doc, link)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
+    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind kind-function\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc, link)}${returnsHtml(e.doc, link)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
   end
 
   foul constantSection(e: ConstantEntry) -> String do
@@ -396,7 +571,7 @@ ${bodyContent}
     else
       " <code>${esc(e.typeName)}</code>"
     end
-    return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
+    return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind kind-constant\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
   end
 
   # ── Functions inside traits, makes, modules ──────────────────────────────

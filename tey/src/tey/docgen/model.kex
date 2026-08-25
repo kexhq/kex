@@ -101,6 +101,7 @@ module Tey.Docgen.Model do
     clauseCount : Integer
     doc : Doc
     line : Integer
+    types : [String] = []
   end
 
   record ConstantEntry do
@@ -170,14 +171,19 @@ module Tey.Docgen.Model do
   end
 
   # A flattened search row: one per entity (and per function inside traits,
-  # makes and modules), joining name/kind/signature to the page URL.
+  # makes and modules), joining name/kind/signature to the page URL. The
+  # `types` are the type names the entity is about — the types its signature
+  # mentions — so search can answer by name AND by type; `anchor` is the
+  # section id a result deep-links to.
   record SearchEntry do
     name : String
     qualifiedName : String
     kind : String
     signatures : [String]
+    types : [String] = []
     summary : String
     urlPath : String
+    anchor : String = ""
     line : Integer
   end
 

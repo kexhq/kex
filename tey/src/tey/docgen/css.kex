@@ -81,6 +81,181 @@ module Tey.Docgen.Css do
 
       .top-inner { display: flex; align-items: center; gap: 0.75rem; height: 3.5rem; }
 
+      /* ── Search ─────────────────────────────────────────────────────────── */
+
+      .search-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        height: 2.1rem;
+        padding: 0 0.7rem;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--ink-soft);
+        background: var(--bg-subtle);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .search-trigger:hover { border-color: var(--accent); color: var(--ink); }
+      .search-trigger kbd {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        line-height: 1;
+        padding: 0.2rem 0.35rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        color: var(--faint);
+      }
+
+      /* The modal is frosted glass: a translucent warm panel over a blurred
+         backdrop, in the same voice as the sticky header. */
+      .search-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 15vh;
+        background: rgba(42, 28, 10, 0.35);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      .search-modal[hidden] { display: none; }
+
+      .search-modal-panel {
+        width: min(44rem, 92vw);
+        border-radius: 16px;
+        overflow: hidden;
+        background: rgba(255, 253, 248, 0.78);
+        backdrop-filter: blur(28px) saturate(140%);
+        -webkit-backdrop-filter: blur(28px) saturate(140%);
+        border: 1px solid rgba(236, 220, 180, 0.9);
+        box-shadow: 0 24px 72px rgba(42, 28, 10, 0.35);
+      }
+
+      .search-modal-panel input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 1.05rem 1.3rem;
+        font-family: var(--font-mono);
+        font-size: 16px;
+        color: var(--ink);
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid rgba(236, 220, 180, 0.9);
+        outline: none;
+      }
+      .search-modal-panel input::placeholder { color: var(--faint); }
+
+      .search-modal-results { max-height: 55vh; overflow-y: auto; padding: 0.5rem; }
+
+      .search-hit {
+        display: block;
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.1rem;
+        border-radius: 10px;
+        text-decoration: none;
+      }
+      .search-hit:hover { background: rgba(246, 236, 208, 0.6); }
+      .search-hit.selected { background: rgba(244, 226, 184, 0.9); }
+
+      .search-head { display: flex; align-items: baseline; gap: 0.6rem; }
+
+      .search-kind {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent-strong);
+      }
+      /* Each kind has its own hue, so a scan down the list separates
+         functions from types from modules at a glance. */
+      .search-kind-module { color: #6b5bd2; }
+      .search-kind-function { color: #2f855a; }
+      .search-kind-make { color: #b06a14; }
+      .search-kind-trait { color: #c2498a; }
+      .search-kind-record { color: #2b6cb0; }
+      .search-kind-type { color: #0f8a8a; }
+      .search-kind-constant { color: #9a5a13; }
+      .search-name { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--ink); }
+      .search-qual { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+      .search-sig {
+        display: block;
+        margin-top: 0.15rem;
+        font-size: 12.5px;
+        color: var(--faint);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .search-empty { padding: 0.8rem 0.9rem; font-size: 13px; color: var(--faint); }
+
+      .search-modal-footer {
+        border-top: 1px solid rgba(236, 220, 180, 0.9);
+        padding: 0.55rem 0.9rem;
+        font-size: 12.5px;
+      }
+      .search-modal-footer a { color: var(--accent-strong); text-decoration: none; }
+      .search-modal-footer a:hover { text-decoration: underline; }
+
+      /* The empty state: an explainer, example chips, and this page's items. */
+      .search-hint, .search-local { padding: 0.8rem 1rem 0.6rem; }
+
+      .search-hint-title { margin: 0 0 0.25rem; font-size: 13px; font-weight: 600; color: var(--ink); }
+      .search-hint-body { margin: 0 0 0.6rem; font-size: 12.5px; color: var(--muted); }
+
+      .search-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+      .search-chip {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        padding: 0.25rem 0.6rem;
+        color: var(--ink-soft);
+        background: var(--bg-subtle);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .search-chip:hover { border-color: var(--accent); color: var(--ink); }
+
+      .search-local { border-top: 1px solid rgba(236, 220, 180, 0.7); }
+
+      /* ── Full search page ──────────────────────────────────────────────── */
+
+      .search-page { max-width: 52rem; }
+
+      .search-page-box input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.85rem 1rem;
+        font-family: var(--font-mono);
+        font-size: 15px;
+        color: var(--ink);
+        background: rgba(246, 236, 208, 0.6);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        outline: none;
+      }
+      .search-page-box input:focus { border-color: var(--accent); }
+
+      .search-page-results { margin-top: 1.25rem; }
+
+      .search-page-hit {
+        display: block;
+        padding: 0.8rem 0.9rem;
+        border-bottom: 1px solid var(--line);
+        text-decoration: none;
+      }
+      .search-page-hit:hover { background: var(--bg-subtle); }
+
+      .search-summary {
+        display: block;
+        margin-top: 0.25rem;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
       .brand {
         font-family: var(--font-display);
         font-weight: 700;
@@ -134,7 +309,15 @@ module Tey.Docgen.Css do
         padding-block: 2.5rem;
       }
 
-      .side nav { position: sticky; top: 5rem; }
+      .side {
+        position: sticky;
+        top: 5rem;
+        align-self: start;
+        max-height: calc(100vh - 6rem);
+        overflow-y: auto;
+      }
+
+      .toc { margin-top: 1.75rem; }
 
       .side-heading {
         margin: 0 0 0.6rem;
@@ -270,6 +453,10 @@ module Tey.Docgen.Css do
 
       /* ── Entities ───────────────────────────────────────────────────────── */
 
+      /* Anchor navigation lands a heading below the sticky header, not under
+         it: reserve the header's height (3.5rem) plus breathing room. */
+      .entity, .fn { scroll-margin-top: 4.75rem; }
+
       .entity h2 code { font-size: 0.95em; }
 
       .kind {
@@ -286,6 +473,16 @@ module Tey.Docgen.Css do
         margin-right: 0.5rem;
         vertical-align: middle;
       }
+      /* Each declaration kind has its own hue — the same palette as the
+         search results — so a module, a trait and a make are told apart at
+         a glance rather than all reading as one amber badge. */
+      .kind-module { color: #6b5bd2; border-color: #d6cdf3; background: #efeafc; }
+      .kind-function { color: #2f855a; border-color: #c6e6d4; background: #e8f4ec; }
+      .kind-make { color: #b06a14; border-color: #ecd6ac; background: #f7ecd6; }
+      .kind-trait { color: #c2498a; border-color: #efcfe0; background: #f9ecf3; }
+      .kind-record { color: #2b6cb0; border-color: #c8dcf0; background: #e9f1fa; }
+      .kind-type { color: #0f8a8a; border-color: #c0e4e2; background: #e4f4f3; }
+      .kind-constant { color: #9a5a13; border-color: #e6d2b4; background: #f6ecdd; }
 
       .fields, .params { margin: 0 0 1.1rem; }
 

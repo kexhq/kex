@@ -4,7 +4,7 @@
 # index for dynamic name/kind/type search on the docs site).
 
 module Tey.Docgen.Json do
-  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf]
+  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf, anchorOf, slugOf]
 
   # ── model.json ───────────────────────────────────────────────────────────
 
@@ -194,11 +194,36 @@ module Tey.Docgen.Json do
       qualifiedName: qualifiedNameOf(e),
       kind: kindOf(e),
       signatures: entitySignatures(e),
+      types: entityTypes(e),
       summary: entitySummary(e),
       urlPath: page.urlPath,
+      anchor: anchorOf(e),
       line: lineOf(e)
     }]
     return own + childSearchEntries(e, page)
+  end
+
+  # The type names an entity is "about" — the search-by-type dimension.
+  # For a function that is its signature's types; for a record its field
+  # types; for a type its parents and variant fields; for a trait/make the
+  # types its methods mention; for a module the union of its children.
+  foul entityTypes(e: Entity) -> [String] do
+    match e do
+      FuncDecl(entry) => entry.types
+      TraitDecl(entry) => entry.functions.map { |f| f.types }.flatten.uniq
+      MakeDecl(entry) => entry.functions.map { |f| f.types }.flatten.uniq
+      ModuleDecl(entry) => entry.children.map { |c| entityTypes(c) }.flatten.uniq
+      RecordDecl(entry) => entry.fields.map { |f| f.typeName }.uniq
+      TypeDecl(entry) => entry.parents + variantFieldTypes(entry.variants)
+      ConstDecl(entry) => [entry.typeName]
+    end
+  end
+
+  foul variantFieldTypes(variants: [VariantEntry]?) -> [String] do
+    match variants do
+      Just(vs) => vs.map { |v| v.fields }.flatten
+      None => []
+    end
   end
 
   foul childSearchEntries(e: Entity, page: SourcePage) -> [SearchEntry] do
@@ -216,8 +241,10 @@ module Tey.Docgen.Json do
       qualifiedName: f.qualifiedName,
       kind: "function",
       signatures: f.signatures,
+      types: f.types,
       summary: f.doc.summary,
       urlPath: page.urlPath,
+      anchor: "fn-${slugOf(f.name)}",
       line: f.line
     }
   end
@@ -228,8 +255,10 @@ module Tey.Docgen.Json do
       qualifiedName: entry.qualifiedName,
       kind: entry.kind,
       signatures: entry.signatures,
+      types: entry.types,
       summary: entry.summary,
       urlPath: entry.urlPath,
+      anchor: entry.anchor,
       line: entry.line
     }
   end

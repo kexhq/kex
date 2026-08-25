@@ -337,8 +337,28 @@ module Tey.Docgen.Extract do
       signatures: fn.annotations.map { |a| renderSignature(a, fn.paramLists) },
       clauseCount: fn.clauseCount,
       doc: fn.doc,
-      line: fn.line
+      line: fn.line,
+      types: functionTypes(fn.annotations, fn.paramLists)
     }
+  end
+
+  # The type names a function is about — every parameter type plus the
+  # result type of each annotation, deduplicated. This is what lets search
+  # answer "what touches Integer" rather than just "what is called Integer".
+  foul functionTypes(annotations: [Kex.AST.AnnotationInfo], paramLists: [[String]]) -> [String] do
+    let per = annotations.map { |a| annotationTypes(a, paramLists) }
+    return per.flatten.uniq
+  end
+
+  foul annotationTypes(info: Kex.AST.AnnotationInfo, paramLists: [[String]]) -> [String] do
+    let ref = annotationRef(info)
+    match matchingParamList(ref, paramLists) do
+      Just(names) => match flattenToArity(ref, names.count) do
+        FunctionType(params, result) => params.map { |p| typeText(p) } + [typeText(result)]
+        _ => []
+      end
+      None => []
+    end
   end
 
   # ── Signature rendering ──────────────────────────────────────────────────
