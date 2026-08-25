@@ -206,10 +206,24 @@ auto Evaluator::registerMapBuiltins() -> void {
             r->data = MapValue{};
             return r;
         }
+        // A later entry REPLACES an earlier one with the same key, the way
+        // `merge` above already does and the way BEAM's real map does for
+        // free. Appending unconditionally produced a "map" holding the same
+        // key twice, so `keys` reported a count no map can have and every
+        // prelude operation that round-trips through fromEntries — mapKeys,
+        // mapValues, filter, reject — disagreed with BEAM (kexhq/kex#204).
         std::vector<std::pair<ValuePtr, ValuePtr>> entries;
         for (const auto& elem : list->elements) {
             auto* tv = std::get_if<TupleValue>(&elem->data);
-            if (tv && tv->elements.size() >= 2)
+            if (!tv || tv->elements.size() < 2) continue;
+            bool replaced = false;
+            for (auto& [key, value] : entries)
+                if (valuesEqual(key, tv->elements[0])) {
+                    value = tv->elements[1];
+                    replaced = true;
+                    break;
+                }
+            if (!replaced)
                 entries.push_back({tv->elements[0], tv->elements[1]});
         }
         auto result = std::make_shared<Value>();

@@ -413,6 +413,29 @@ let scores = { alice: 95, bob: 72 }              # atom keys (:alice, :bob)
 let config = { "host": "localhost", "port": 80 }  # string keys
 ```
 
+### Sets
+
+Collections of distinct elements, in two flavours. Both are built from a list
+and compare their elements structurally, the way map keys do.
+
+```kex
+let tags = Set.from(["b", "a", "b"])   # Set(a, b) — sorted, duplicate free
+tags.contains?("a")                    # true
+tags + ["c"]                           # Set(a, b, c)
+tags - Set.from(["a"])                 # Set(b)
+tags.map { |t| t.upperCase }           # Set(A, B)
+
+let seen = UnorderedSet.from([3, 1, 2])
+seen.contains?(2)                      # true — a hash lookup
+seen.items.sort                        # [1, 2, 3]
+```
+
+`Set` iterates in ascending element order, so its elements must be `Orderable`.
+`UnorderedSet` trades that for cheaper membership; its iteration order is
+unspecified, so sort `items` before comparing them. Both implement `Enumerable`,
+`Foldable` and `Monoid`, and offer `union`/`intersect`/`difference`/
+`symmetricDifference`, `subset?`/`superset?`/`disjoint?`, and `add`/`delete`.
+
 ### Spread (`...`)
 
 `...` splices a collection into the one being built. It is a spread, not an

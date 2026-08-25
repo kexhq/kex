@@ -124,6 +124,112 @@ auto substituteInterfaceGenerics(const TypePtr& type,
     return type;
 }
 
+// How many type parameters a record has, read back off its registered field
+// types. A record's parameters occupy the negative TypeVar slots -1, -2, …
+// (the convention `substituteInterfaceGenerics` consumes), so the highest
+// slot any field mentions is the arity. Deriving it this way keeps LOCAL and
+// IMPORTED records on one code path: the KexI reader assigns the same
+// negative ids when it rebuilds an imported record's fields, and neither
+// KexiRecord nor ImportedInterfaces carries a parameter LIST to consult.
+auto recordTypeParamCount(
+    const std::unordered_map<std::string, TypePtr>& fields) -> size_t {
+    size_t count = 0;
+    std::function<void(const TypePtr&)> scan = [&](const TypePtr& type) {
+        if (!type) return;
+        if (auto* var = std::get_if<TypeVar>(&type->kind)) {
+            if (var->id < 0)
+                count = std::max(count, static_cast<size_t>(-var->id));
+            return;
+        }
+        if (auto* named = std::get_if<NamedType>(&type->kind)) {
+            for (const auto& arg : named->typeArgs) scan(arg);
+            return;
+        }
+        if (auto* list = std::get_if<ListType>(&type->kind)) return scan(list->element);
+        if (auto* optional = std::get_if<OptionalType>(&type->kind))
+            return scan(optional->inner);
+        if (auto* map = std::get_if<MapType>(&type->kind)) {
+            scan(map->key);
+            return scan(map->value);
+        }
+        if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+            for (const auto& element : tuple->elements) scan(element);
+            return;
+        }
+        if (auto* fn = std::get_if<FuncType>(&type->kind)) {
+            for (const auto& param : fn->params) scan(param);
+            return scan(fn->result);
+        }
+        if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
+            for (const auto& member : intersection->members) scan(member);
+            return;
+        }
+        if (auto* record = std::get_if<RecordType>(&type->kind))
+            for (const auto& [_, fieldType] : record->fields) scan(fieldType);
+    };
+    for (const auto& [_, fieldType] : fields) scan(fieldType);
+    return count;
+}
+
+// Match a record field's DECLARED type against the type of the value supplied
+// for it, recording what each parameter slot was filled with. First binding
+// wins, so two fields disagreeing about `A` leave the first one's answer
+// rather than silently taking the last.
+auto bindRecordTypeParams(const TypePtr& declared, const TypePtr& actual,
+                          std::unordered_map<int, TypePtr>& slots) -> void {
+    if (!declared || !actual) return;
+    if (auto* var = std::get_if<TypeVar>(&declared->kind)) {
+        if (var->id >= 0) return;
+        // An open actual says nothing about the slot — `Box { items: [] }`
+        // must stay `Box<Any>` rather than pinning A to the empty list's
+        // placeholder variable.
+        if (std::holds_alternative<UnknownType>(actual->kind) ||
+            std::holds_alternative<TypeVar>(actual->kind))
+            return;
+        slots.try_emplace(var->id, actual);
+        return;
+    }
+    if (auto* named = std::get_if<NamedType>(&declared->kind)) {
+        auto* other = std::get_if<NamedType>(&actual->kind);
+        if (!other || other->typeArgs.size() != named->typeArgs.size()) return;
+        for (size_t i = 0; i < named->typeArgs.size(); ++i)
+            bindRecordTypeParams(named->typeArgs[i], other->typeArgs[i], slots);
+        return;
+    }
+    if (auto* list = std::get_if<ListType>(&declared->kind)) {
+        if (auto* other = std::get_if<ListType>(&actual->kind))
+            bindRecordTypeParams(list->element, other->element, slots);
+        return;
+    }
+    if (auto* optional = std::get_if<OptionalType>(&declared->kind)) {
+        if (auto* other = std::get_if<OptionalType>(&actual->kind))
+            bindRecordTypeParams(optional->inner, other->inner, slots);
+        return;
+    }
+    if (auto* map = std::get_if<MapType>(&declared->kind)) {
+        if (auto* other = std::get_if<MapType>(&actual->kind)) {
+            bindRecordTypeParams(map->key, other->key, slots);
+            bindRecordTypeParams(map->value, other->value, slots);
+        }
+        return;
+    }
+    if (auto* tuple = std::get_if<TupleType>(&declared->kind)) {
+        auto* other = std::get_if<TupleType>(&actual->kind);
+        if (!other || other->elements.size() != tuple->elements.size()) return;
+        for (size_t i = 0; i < tuple->elements.size(); ++i)
+            bindRecordTypeParams(tuple->elements[i], other->elements[i], slots);
+        return;
+    }
+    if (auto* fn = std::get_if<FuncType>(&declared->kind)) {
+        auto* other = std::get_if<FuncType>(&actual->kind);
+        if (!other || other->params.size() != fn->params.size()) return;
+        for (size_t i = 0; i < fn->params.size(); ++i)
+            bindRecordTypeParams(fn->params[i], other->params[i], slots);
+        bindRecordTypeParams(fn->result, other->result, slots);
+        return;
+    }
+}
+
 } // namespace
 
 auto TypeChecker::check(const ast::Program& program,
@@ -636,7 +742,6 @@ auto TypeChecker::reportUnknownMethods() -> void {
 // first, and the field types are filled in on the second pass.
 auto TypeChecker::registerRecordFields(const ast::Program& program,
                                        bool namesOnly) -> void {
-    std::unordered_map<std::string, TypePtr> noGenerics;
     auto registerRecord = [&](const ast::RecordDef& record,
                               const std::string& owner = std::string{}) {
         const auto name = owner.empty()
@@ -645,10 +750,21 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
         if (namesOnly) return;
         const auto previousModule = m_currentModulePath;
         m_currentModulePath = owner;
+        // `record Box<A>` binds A to the parameter slot -1 for the whole
+        // declaration, the convention `substituteInterfaceGenerics` reads and
+        // the one the KexI reader rebuilds imported records with. A map
+        // shared across ALL records — which this used to be — did neither:
+        // every record's `A` collapsed onto one fresh positive TypeVar, so a
+        // field's element type could never be recovered from a receiver's
+        // type arguments (kexhq/kex#203).
+        std::unordered_map<std::string, TypePtr> generics;
+        for (size_t i = 0; i < record.typeParams.size(); ++i)
+            generics[record.typeParams[i]] =
+                Type::typeVar(-static_cast<int>(i + 1));
         for (const auto& field : record.fields)
         {
             auto fieldType = field.type
-                ? resolveTypeExpr(*field.type, noGenerics)
+                ? resolveTypeExpr(*field.type, generics)
                 : Type::unknown();
             fields[field.name] = fieldType;
             if ((!field.defaultValue || !*field.defaultValue) &&
@@ -4694,6 +4810,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto record = m_recordFields.find(recordName);
             bool hasSpread = node.typeName == "New";
             std::unordered_set<std::string> supplied;
+            // Type arguments recovered from the values, slot by slot.
+            std::unordered_map<int, TypePtr> typeParamSlots;
             for (const auto& entry : node.fields) {
                 const auto& fieldName = entry.name;
                 const auto& val = entry.value;
@@ -4701,6 +4819,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto valueType = resolve(inferExpr(*val));
                 if (entry.spread) {
                     hasSpread = true;
+                    // `Box { ...other, items: … }` keeps whatever `other`
+                    // already pinned for the slots the new fields don't.
+                    if (auto* spreadNamed =
+                            std::get_if<NamedType>(&valueType->kind))
+                        for (size_t i = 0; i < spreadNamed->typeArgs.size(); ++i)
+                            bindRecordTypeParams(
+                                Type::typeVar(-static_cast<int>(i + 1)),
+                                spreadNamed->typeArgs[i], typeParamSlots);
                     if (!containsOpenType(valueType) &&
                         !argMatchesParam(valueType, Type::named(recordName)))
                         error(val->location, "record spread expects `" +
@@ -4741,6 +4867,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     continue;
                 }
                 auto expected = resolve(declared->second);
+                bindRecordTypeParams(expected, valueType, typeParamSlots);
                 // Stay quiet where either side is open ANYWHERE inside it: a
                 // type variable, a type the checker could not pin down, or a
                 // trait constraint, which names a set rather than a concrete
@@ -4776,8 +4903,22 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // found, so the resolved identity is always the right answer here:
             // a literal must have the same type name that annotations
             // mentioning the same record resolve to.
-            return contextualRecordType ? contextualRecordType
-                                        : Type::named(recordName);
+            if (contextualRecordType) return contextualRecordType;
+            // A generic record's literal has to carry its arguments, or the
+            // value can never flow back into anything that names them:
+            // `Box { items: [1, 2, 3] }` is a `Box<Integer>`, and only that
+            // spelling matches a `Box<A>` receiver or reads `.items` back as
+            // `[Integer]` (kexhq/kex#203). Slots no field pinned stay open,
+            // which is what `Box { items: [] }` deserves.
+            const size_t paramCount = record == m_recordFields.end()
+                ? 0 : recordTypeParamCount(record->second);
+            if (paramCount == 0) return Type::named(recordName);
+            std::vector<TypePtr> typeArgs(paramCount, Type::unknown());
+            for (const auto& [slot, bound] : typeParamSlots) {
+                const auto index = static_cast<size_t>(-slot - 1);
+                if (index < typeArgs.size()) typeArgs[index] = bound;
+            }
+            return Type::named(recordName, std::move(typeArgs));
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
             if (node.condition) {
@@ -5894,7 +6035,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 record != m_recordFields.end())
                 if (auto field = record->second.find(name);
                     field != record->second.end()) {
-                    return field->second;
+                    // Same substitution the main field-access path does: a
+                    // `Box<Integer>` reads `.items` as `[Integer]`, not as
+                    // the declaration's bare parameter slot.
+                    return substituteInterfaceGenerics(field->second,
+                                                       named->typeArgs);
                 }
             // The same rule for a record the PRELUDE declares. Interfaces
             // carry field names but not their types, so the read is answered
@@ -6560,11 +6705,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (isVacuous(am) ||
                     std::find(fullMatches.begin(), fullMatches.end(), am) != fullMatches.end())
                     continue;
-                // For receiver calls, only a concrete sig that agrees on the
-                // receiver speaks for this call. Concrete sigs for other
-                // receiver types must not mask a legitimately matching
-                // generic default (e.g. a user type's trait default method).
-                if (isMethodCall && !am->params.empty() &&
+                // Only a concrete sig that accepts the FIRST argument speaks
+                // for this call. For a receiver call that argument is the
+                // receiver, and a concrete sig for some other receiver type
+                // must not mask a legitimately matching generic default (a
+                // user type's trait default method, say).
+                //
+                // The same holds for a plain call, where the rule used to be
+                // skipped: the prelude's receiver functions are all callable
+                // bare through UFCS, so `merge : {A: B} -> {A: B} -> {A: B}`
+                // was a "concrete candidate" for a user's own
+                // `merge : Number -> Number -> Number`, cleared its full match
+                // and reported `merge(4, 2)` as expecting a Map. Any prelude
+                // method name a program reused as a free function with
+                // trait-bounded parameters was unusable (kexhq/kex#208).
+                if (!am->params.empty() && !argTypes.empty() &&
                     !argMatchesParam(argTypes[0], am->params[0]))
                     continue;
                 hasConcrete = true;
@@ -7054,15 +7209,37 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         return typeToString(a->result) < typeToString(b->result);
     };
-    const Signature* firstPtr =
-        *std::min_element(arityMatches.begin(), arityMatches.end(), signatureOrder);
+    // Among the candidates that could plausibly have been meant, headline the
+    // one the call comes CLOSEST to: fewest arguments that do not fit, ties
+    // broken by the listing's own order. Taking the first acceptable candidate
+    // in registration order — which this used to do — put the message back at
+    // the mercy of what the prelude happens to declare: adding `Set.add` made
+    // `add("oops", 1)` on a user's own `add : Integer -> Integer -> Integer`
+    // report "expects argument 1 to be Set<A>".
+    auto mismatchCount = [&](const Signature* sig) {
+        size_t count = 0;
+        for (size_t i = 0; i < sig->params.size() && i < argTypes.size(); ++i)
+            if (!argMatchesParam(argTypes[i], sig->params[i])) ++count;
+        return count;
+    };
+    const Signature* firstPtr = nullptr;
+    size_t fewestMismatches = 0;
     for (const auto* am : arityMatches) {
         if (isVacuousSig(am)) continue;
         if (isMethodCall && !am->params.empty() &&
             !argMatchesParam(argTypes[0], am->params[0])) continue;
-        firstPtr = am;
-        break;
+        const auto mismatches = mismatchCount(am);
+        if (!firstPtr || mismatches < fewestMismatches ||
+            (mismatches == fewestMismatches && signatureOrder(am, firstPtr))) {
+            firstPtr = am;
+            fewestMismatches = mismatches;
+        }
     }
+    // When NO candidate qualifies, the listing's order is the only principled
+    // answer left — see the comment above `signatureOrder`.
+    if (!firstPtr)
+        firstPtr = *std::min_element(arityMatches.begin(), arityMatches.end(),
+                                     signatureOrder);
     // Same rule as the receiver-mismatch guard above, for the path a
     // PRIMITIVE receiver takes: when every candidate carries an Unknown
     // parameter, this candidate list is not the whole truth and no mismatch
