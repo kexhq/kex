@@ -162,7 +162,9 @@ ${cards}
       head.appendChild(kind); head.appendChild(name);
       if (e.qualifiedName && e.qualifiedName !== e.name) {
         var qual = document.createElement("span");
-        qual.className = "search-qual"; qual.textContent = e.qualifiedName;
+        qual.className = "search-qual";
+        var dot = e.qualifiedName.lastIndexOf(".");
+        qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
         head.appendChild(qual);
       }
       a.appendChild(head);
@@ -198,7 +200,7 @@ ${cards}
 
   input.addEventListener("input", function () { run(); syncUrl(); });
 
-  fetch("search.json")
+  fetch("search.json", { cache: "no-store" })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       entries = d.entries || [];
@@ -320,130 +322,23 @@ ${bodyContent}
 `
   end
 
-  # The sidebar navigates by MODULE, not by file: a reader thinks "where is
-  # String defined", not "which .kex file is it in" — the two coincide only
-  # by accident. Nesting follows the qualified names ("Web.Server" under
-  # "Web"); the active module expands to its members. Below it, a per-page
-  # table of contents lists what THIS page declares.
+  # The sidebar lists one entry per source FILE, in scan order. The active
+  # file expands to its top-level declarations so a reader can jump straight
+  # to one. The label is the page's title (the module it declares), not the
+  # raw file name.
   foul sidebar(model: PackageModel, current: String) -> String do
     let vpre = versionPrefix(current)
-    let rows = sidebarRows(model, current, vpre)
-    let toc = pageToc(model, current)
-    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${rows}\n</ul></nav>${toc}</aside>"
+    let entries = model.pages.map { |p| sidebarEntry(p, current, vpre) }.join("\n")
+    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
   end
 
-  # On-this-page: the page's sections in order, modules expanded to their
-  # nested sections — a jump list for the reader already here.
-  foul pageToc(model: PackageModel, current: String) -> String do
-    match model.pages.find { |p| p.urlPath == current } do
-      None => ""
-      Just(page) => do
-        let items = tocItems(page.entities).join("\n")
-        if items.empty?
-          return ""
-        end
-        return "<nav class=\"toc\" aria-label=\"On this page\"><p class=\"side-heading\">On this page</p><ul class=\"side-list\">\n${items}\n</ul></nav>"
-      end
+  foul sidebarEntry(page: SourcePage, current: String, vpre: String) -> String do
+    let href = "${vpre}${page.urlPath}.html"
+    if page.urlPath == current
+      let entityLinks = page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
+      return "<li><a class=\"active\" href=\"${href}\">${esc(page.title)}</a><ul class=\"side-sub\">\n${entityLinks}\n</ul></li>"
     end
-  end
-
-  foul tocItems(entities: [Entity]) -> [String] do
-    return entities.flatMap { |e|
-      match e do
-        ModuleDecl(entry) =>
-          ["<li><a href=\"#module-${slug(entry.qualifiedName)}\">${esc(entry.qualifiedName)}</a></li>"] + tocItems(entry.children)
-        _ => ["<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>"]
-      end
-    }
-  end
-
-  # One <li> per top-level module, plus one per page for the entities that
-  # live outside any module (traits and makes usually) — those group under
-  # the page's own name, since that is the only grouping they have.
-  foul sidebarRows(model: PackageModel, current: String, vpre: String) -> String do
-    let nested = nestedModules(model)
-    let rows = model.pages.flatMap { |p| rowsForPage(p, model, nested, current, vpre) }
-    return rows.join("\n")
-  end
-
-  foul rowsForPage(p: SourcePage, model: PackageModel,
-                   nested: [Tey.Docgen.Model.ModuleIndexEntry], current: String,
-                   vpre: String) -> [String] do
-    let moduleRows = p.entities.flatMap { |e|
-      match e do
-        ModuleDecl(entry) => do
-          let index = model.modules.find { |m| m.qualifiedName == entry.qualifiedName }
-          match index do
-            Just(m) => [sidebarModule(m, nested, current, vpre)]
-            None => []
-          end
-        end
-        _ => []
-      end
-    }
-    let leftovers = p.entities.filter { |e| !isModule?(e) }
-    let leftoverRow = if leftovers.empty?
-      []
-    else
-      [leftoverGroup(p, leftovers, current, vpre)]
-    end
-    return moduleRows + leftoverRow
-  end
-
-  foul isModule?(e: Entity) -> Bool do
-    match e do
-      ModuleDecl(_) => true
-      _ => false
-    end
-  end
-
-  foul leftoverGroup(p: SourcePage, entities: [Entity], current: String, vpre: String) -> String do
-    let href = "${vpre}${p.urlPath}.html"
-    if p.urlPath == current
-      let links = entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
-      return "<li><a class=\"active\" href=\"${href}\">${esc(p.title)}</a><ul class=\"side-sub\">\n${links}\n</ul></li>"
-    end
-    return "<li><a href=\"${href}\">${esc(p.title)}</a></li>"
-  end
-
-  foul topModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
-    return model.modules.filter { |m| !m.qualifiedName.contains?(".") }
-  end
-
-  foul nestedModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
-    return model.modules.filter { |m| m.qualifiedName.contains?(".") }
-  end
-
-  foul sidebarModule(m: Tey.Docgen.Model.ModuleIndexEntry, nested: [Tey.Docgen.Model.ModuleIndexEntry],
-                     current: String, vpre: String) -> String do
-    let href = "${vpre}${m.urlPath}.html#module-${slug(m.qualifiedName)}"
-    let active = isActive?(m, current)
-    let memberList = if active
-      let links = m.members.map { |mem|
-        "<li><a href=\"${vpre}${m.urlPath}.html#${mem.anchor}\">${esc(mem.name)}</a></li>"
-      }.join("\n")
-      "<ul class=\"side-sub\">\n${links}\n</ul>"
-    else
-      ""
-    end
-    let children = nested
-      .filter { |n| n.qualifiedName.startsWith?("${m.qualifiedName}.") }
-      .filter { |n| n.qualifiedName.split(".").count == m.qualifiedName.split(".").count + 1 }
-      .map { |n| sidebarModule(n, nested, current, vpre) }
-      .join("\n")
-    let nest = if children.empty?
-      ""
-    else
-      "<ul class=\"side-nest\">\n${children}\n</ul>"
-    end
-    let cls = active then "active" else ""
-    return "<li><a class=\"${cls}\" href=\"${href}\">${esc(m.qualifiedName)}</a>${memberList}${nest}</li>"
-  end
-
-  # A module is "active" when its section is on the current page: the page
-  # is the file, the module is what the reader navigates by.
-  foul isActive?(m: Tey.Docgen.Model.ModuleIndexEntry, current: String) -> Bool do
-    return m.urlPath == current
+    return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
   end
 
   foul moduleCard(m: Tey.Docgen.Model.ModuleIndexEntry) -> String do

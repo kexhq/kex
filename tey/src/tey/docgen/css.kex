@@ -86,8 +86,10 @@ module Tey.Docgen.Css do
       .search-trigger {
         display: inline-flex;
         align-items: center;
+        justify-content: space-between;
         gap: 0.5rem;
         height: 2.1rem;
+        min-width: 14rem;
         padding: 0 0.7rem;
         font-family: var(--font-mono);
         font-size: 13px;
@@ -128,7 +130,7 @@ module Tey.Docgen.Css do
         width: min(44rem, 92vw);
         border-radius: 16px;
         overflow: hidden;
-        background: rgba(255, 253, 248, 0.78);
+        background: rgba(255, 253, 248, 0.82);
         backdrop-filter: blur(28px) saturate(140%);
         -webkit-backdrop-filter: blur(28px) saturate(140%);
         border: 1px solid rgba(236, 220, 180, 0.9);
@@ -180,7 +182,7 @@ module Tey.Docgen.Css do
       .search-kind-type { color: #0f8a8a; }
       .search-kind-constant { color: #9a5a13; }
       .search-name { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--ink); }
-      .search-qual { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+      .search-qual { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); text-align: right; }
       .search-sig {
         display: block;
         margin-top: 0.15rem;
@@ -309,15 +311,7 @@ module Tey.Docgen.Css do
         padding-block: 2.5rem;
       }
 
-      .side {
-        position: sticky;
-        top: 5rem;
-        align-self: start;
-        max-height: calc(100vh - 6rem);
-        overflow-y: auto;
-      }
-
-      .toc { margin-top: 1.75rem; }
+      .side nav { position: sticky; top: 5rem; }
 
       .side-heading {
         margin: 0 0 0.6rem;

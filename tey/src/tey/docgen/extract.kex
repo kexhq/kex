@@ -21,9 +21,25 @@ module Tey.Docgen.Extract do
     return SourcePage {
       source: source,
       urlPath: stripExt(source),
-      title: titleCase(stripExt(source)),
+      title: pageTitle(source, entities),
       entities: entities
     }
+  end
+
+  # A page's title is the module it declares — "OptionParser", not the file
+  # name's "Optionparser". Only a file with exactly one top-level module gets
+  # that name; several modules (or none) fall back to the file name.
+  foul pageTitle(source: String, entities: [Entity]) -> String do
+    let tops = entities.flatMap { |e|
+      match e do
+        ModuleDecl(entry) => [entry.qualifiedName]
+        _ => []
+      end
+    }
+    if tops.count == 1
+      return tops.first.or("")
+    end
+    return titleCase(stripExt(source))
   end
 
   # ── Body walking ─────────────────────────────────────────────────────────
@@ -119,7 +135,7 @@ module Tey.Docgen.Extract do
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
       typeParams: info.typeParams,
-      functions: functionEntries(info.body),
+      functions: functionEntries(info.body, qualify(prefix, info.name)),
       doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
@@ -130,7 +146,7 @@ module Tey.Docgen.Extract do
       target: typeText(info.target),
       isFinal: info.isFinal,
       implements: info.implements.map { |t| typeText(t) },
-      functions: functionEntries(info.body),
+      functions: functionEntries(info.body, typeText(info.target)),
       doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
@@ -159,8 +175,8 @@ module Tey.Docgen.Extract do
 
   # ── Function collection ──────────────────────────────────────────────────
 
-  foul functionEntries(body: [Kex.AST.Node]) -> [FunctionEntry] do
-    let entities = entitiesIn(body, "")
+  foul functionEntries(body: [Kex.AST.Node], prefix: String) -> [FunctionEntry] do
+    let entities = entitiesIn(body, prefix)
     let grouped = entities.map { |e|
       match e do
         FuncDecl(fn) => [fn]
@@ -334,7 +350,7 @@ module Tey.Docgen.Extract do
     return FunctionEntry {
       name: fn.name,
       qualifiedName: fn.qualifiedName,
-      signatures: fn.annotations.map { |a| renderSignature(a, fn.paramLists) },
+      signatures: signatureTexts(fn),
       clauseCount: fn.clauseCount,
       doc: fn.doc,
       line: fn.line,
@@ -357,36 +373,61 @@ module Tey.Docgen.Extract do
         FunctionType(params, result) => params.map { |p| typeText(p) } + [typeText(result)]
         _ => []
       end
-      None => []
+      # An abstract method has no clause to pair with, but its type is still
+      # the thing a reader might search for — keep it as one string.
+      None => [typeText(ref)]
     end
   end
 
   # ── Signature rendering ──────────────────────────────────────────────────
   #
-  # The annotation type is curried (`FilePath -> Read -> Result<...>`); a
-  # clause's parameter list says how many arguments the function really
-  # takes, so single-parameter layers are absorbed until the arity matches,
-  # and the flattened parameter types are paired with the clause's names.
+  # A function's signature is its EXACT Kex type — `Integer -> Integer ->
+  # Integer`, written the way Kex reads it (curried, right-associative) —
+  # rather than the flattened clause form. The parameter NAMES ride along
+  # before the colon (`and(a, b) : Integer -> Integer -> Integer`) so the
+  # names stay visible without flattening the type; an abstract method has
+  # no clause, so it shows only `name : Type`. Without an annotation there
+  # is no type to show, and the names stand alone.
+
+  foul signatureTexts(fn: PendingFunction) -> [String] do
+    if fn.annotations.empty?
+      return match fn.paramLists.first do
+        Just(names) => ["${fn.name}(${names.join(", ")})"]
+        None => []
+      end
+    end
+    return fn.annotations.map { |a| renderSignature(a, fn.paramLists) }
+  end
 
   foul renderSignature(info: Kex.AST.AnnotationInfo, paramLists: [[String]]) -> String do
-    let ref = annotationRef(info)
-    match matchingParamList(ref, paramLists) do
-      Just(names) => "${info.name}${renderFlattened(ref, names)}"
-      None => "${info.name} : ${typeText(ref)}"
+    let head = match matchingParamList(annotationRef(info), paramLists) do
+      Just(names) => "${info.name}(${names.join(", ")})"
+      None => info.name
+    end
+    return "${head} : ${signatureTypeText(annotationRef(info))}"
+  end
+
+  # Source-style type text: function arrows chain to the right without the
+  # redundant parentheses typeRefText adds, and a function-typed parameter is
+  # parenthesized so `(X -> Y) -> Z` stays distinct from `X -> Y -> Z`.
+  foul signatureTypeText(ref: Kex.AST.TypeRef) -> String do
+    match ref do
+      FunctionType(params, result) =>
+        "${params.map { |p| signatureParamText(p) }.join(", ")} -> ${signatureTypeText(result)}"
+      _ => typeText(ref)
+    end
+  end
+
+  foul signatureParamText(p: Kex.AST.TypeRef) -> String do
+    match p do
+      FunctionType(_, _) => "(${signatureTypeText(p)})"
+      _ => typeText(p)
     end
   end
 
   foul annotationRef(info: Kex.AST.AnnotationInfo) -> Kex.AST.TypeRef do
     match info do
       Kex.AST.AnnotationInfo { type: t } => t
-    end
-  end
-
-  foul renderFlattened(ref: Kex.AST.TypeRef, names: [String]) -> String do
-    let flattened = flattenToArity(ref, names.count)
-    match flattened do
-      FunctionType(params, result) => "(${pairParams(params, names)}) -> ${typeText(result)}"
-      _ => "() -> ${typeText(flattened)}"
     end
   end
 
@@ -399,21 +440,6 @@ module Tey.Docgen.Extract do
       FunctionType(params, _) => params.count == names.count
       _ => names.empty?
     end
-  end
-
-  foul pairParams(params: [Kex.AST.TypeRef], names: [String]) -> String do
-    return indexedPairs(params, names).join(", ")
-  end
-
-  foul indexedPairs(params: [Kex.AST.TypeRef], names: [String]) -> [String] do
-    if params.empty?
-      return names
-    end
-    if names.empty?
-      return params.map { |p| typeText(p) }
-    end
-    let head = "${names.first.or("_")}: ${typeTextOpt(params.first)}"
-    return [head] + indexedPairs(params.drop(1), names.drop(1))
   end
 
   # Absorbs single-parameter curried layers while more than one argument
@@ -447,7 +473,7 @@ module Tey.Docgen.Extract do
   foul paramName(p: Kex.AST.ParamInfo) -> String do
     match p do
       Kex.AST.ParamInfo { name: Just(n) } => n
-      Kex.AST.ParamInfo { name: None, pattern: Just(pattern) } => pattern.to(String).or("_")
+      Kex.AST.ParamInfo { name: None, pattern: Just(pattern) } => Kex.AST.patternRefText(pattern)
       _ => "_"
     end
   end

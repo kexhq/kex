@@ -15,7 +15,7 @@ module Tey.Docgen.Assets do
           var pkg = badge.getAttribute("data-package");
           var current = badge.getAttribute("data-version");
           var page = badge.getAttribute("data-page");
-          fetch(root + "versions.json")
+          fetch(root + "versions.json", { cache: "no-store" })
             .then(function (res) { return res.json(); })
             .then(function (data) {
               var versions = (data.versions || []).filter(function (v) { return v.package === pkg; });
@@ -36,7 +36,7 @@ module Tey.Docgen.Assets do
                 // The same page may not exist in the target version (renamed
                 // module, or a source that no longer parses): fall back to the
                 // version's index rather than landing on a 404.
-                fetch(target, { method: "HEAD" })
+                fetch(target, { method: "HEAD", cache: "no-store" })
                   .then(function (res) { window.location.href = res.ok ? target : base + "index.html"; })
                   .catch(function () { window.location.href = base + "index.html"; });
               });
@@ -75,7 +75,7 @@ module Tey.Docgen.Assets do
           function loadIndex() {
             if (index) return Promise.resolve(index);
             if (!pending) {
-              pending = fetch(base + "search.json")
+              pending = fetch(base + "search.json", { cache: "no-store" })
                 .then(function (res) { return res.json(); })
                 .then(function (data) { index = data.entries || []; return index; })
                 .catch(function () { index = []; return index; });
@@ -135,7 +135,10 @@ module Tey.Docgen.Assets do
             if (e.qualifiedName && e.qualifiedName !== e.name) {
               var qual = document.createElement("span");
               qual.className = "search-qual";
-              qual.textContent = e.qualifiedName;
+              // The DEFINING module or entity, not the full qualified name —
+              // "Enumerable" for Enumerable.map, "[X]" for [X].map.
+              var dot = e.qualifiedName.lastIndexOf(".");
+              qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
               head.appendChild(qual);
             }
             var sig = document.createElement("span");
