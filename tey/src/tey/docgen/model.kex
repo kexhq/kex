@@ -3,9 +3,9 @@
 # Extraction produces these records; Markdown, JSON and the search index are
 # all derived from them. Field names avoid `type` (a keyword after `.`), so
 # every field is dot-accessible; JSON keys are chosen at the emission
-# boundary in Docgen.Json.
+# boundary in Tey.Docgen.Json.
 
-module Docgen.Model do
+module Tey.Docgen.Model do
   # ── Documentation (parsed RDoc) ──────────────────────────────────────────
 
   record Param do
@@ -129,6 +129,35 @@ module Docgen.Model do
     entities : [Entity]
   end
 
+  # The navigation unit: one per module in the package, pointing at the page
+  # its entities live on. The sidebar and the module index of model.json are
+  # built from these — a FILE is where source lives, a MODULE is what a
+  # reader navigates by, and the two only coincide by accident.
+  record ModuleIndexEntry do
+    qualifiedName : String
+    summary : String
+    urlPath : String
+    members : [MemberEntry]
+  end
+
+  # One documented member of a module, with the anchor its section renders
+  # at — the sidebar's expanded list and the JSON index both use these.
+  record MemberEntry do
+    name : String
+    anchor : String
+  end
+
+  # One row of the cross-link index: a name a type reference elsewhere in
+  # the package may mention ("String", "FS.Path") and where it lands. The
+  # index is what makes interlinked docs possible without per-renderer
+  # guesswork: every renderer resolves names against the same list.
+  record LinkEntry do
+    name : String
+    urlPath : String
+    anchor : String
+    kind : String
+  end
+
   record PackageModel do
     package : String
     version : String
@@ -136,6 +165,8 @@ module Docgen.Model do
     baseUrl : String
     generatedAt : String
     pages : [SourcePage]
+    modules : [ModuleIndexEntry] = []
+    links : [LinkEntry] = []
   end
 
   # A flattened search row: one per entity (and per function inside traits,
@@ -208,5 +239,27 @@ module Docgen.Model do
       FuncDecl(e) => e.line
       ConstDecl(e) => e.line
     end
+  end
+
+  # The anchor id an entity's HTML section renders at. Lives here — not in
+  # the HTML renderer — because the cross-link index and the sidebar compute
+  # the same ids, and the HTML must match whatever they resolved to.
+  foul anchorOf(entity: Entity) -> String do
+    return "${kindOf(entity)}-${slugOf(anchorNameOf(entity))}"
+  end
+
+  # A make's anchor is keyed by its full target spelling (type params
+  # included), a module's by its qualified name — the section ids are
+  # derived from the same texts.
+  foul anchorNameOf(entity: Entity) -> String do
+    match entity do
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.qualifiedName
+      _ => nameOf(entity)
+    end
+  end
+
+  foul slugOf(name: String) -> String do
+    return name.lowerCase.replace(" ", "-").replace(".", "-").replace("/", "-")
   end
 end

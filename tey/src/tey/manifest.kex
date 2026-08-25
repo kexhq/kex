@@ -82,8 +82,8 @@ end
 # `.command(...)` in Tey.Cli, one name here (the first word is enough: `kex`
 # covers every `kex ...` subcommand).
 let reservedCommands -> [String] do
-  return ["add", "build", "clean", "help", "init", "install", "kex", "list",
-          "lock", "new", "run", "setup", "test", "update"]
+  return ["add", "build", "clean", "docs", "help", "init", "install", "kex",
+          "list", "lock", "new", "run", "setup", "test", "update"]
 end
 
 # Reads a `package.kex`.

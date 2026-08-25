@@ -3,8 +3,8 @@
 # can serialise them: model.json (the full model) and search.json (a flat
 # index for dynamic name/kind/type search on the docs site).
 
-module Docgen.Json do
-  using Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf]
+module Tey.Docgen.Json do
+  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf]
 
   # ── model.json ───────────────────────────────────────────────────────────
 
@@ -15,8 +15,23 @@ module Docgen.Json do
       label: labelOrPackage(model),
       baseUrl: model.baseUrl,
       generatedAt: model.generatedAt,
-      pages: model.pages.map { |p| pageValue(p) }
+      pages: model.pages.map { |p| pageValue(p) },
+      modules: model.modules.map { |m| moduleIndexValue(m) },
+      links: model.links.map { |l| linkValue(l) }
     })
+  end
+
+  foul moduleIndexValue(m: Tey.Docgen.Model.ModuleIndexEntry) -> Any do
+    return {
+      qualifiedName: m.qualifiedName,
+      summary: m.summary,
+      urlPath: m.urlPath,
+      members: m.members.map { |mem| { name: mem.name, anchor: mem.anchor } }
+    }
+  end
+
+  foul linkValue(l: Tey.Docgen.Model.LinkEntry) -> Any do
+    return { name: l.name, urlPath: l.urlPath, anchor: l.anchor, kind: l.kind }
   end
 
   foul labelOrPackage(model: PackageModel) -> String do

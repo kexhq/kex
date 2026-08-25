@@ -2,24 +2,26 @@
 # derived from it — model.json, search.json, Markdown pages, manifest,
 # versions, llms.txt/llms-full.txt, robots.txt and sitemap.xml.
 
-module Docgen.Index do
-  using Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, kindOf, nameOf, lineOf]
+module Tey.Docgen.Index do
+  using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, kindOf, nameOf, lineOf]
 
   foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
-    let source = optString(parsed.values.get("source"))
     let out = optString(parsed.values.get("out"))
-    let pkg = optString(parsed.values.get("package"))
-    let versionArg = optString(parsed.values.get("version"))
-    let version = if versionArg.empty? then Kex.Kernel.VERSION.release else versionArg end
-    if source.empty?
-      IO.printError("docgen: --source is required")
-      return 1
-    end
     if out.empty?
       IO.printError("docgen: --out is required")
       return 1
     end
-    let files = Docgen.Scan.sourceFiles(source)
+    # Source, package and version default to THIS directory's package:
+    # `tey docs build --out <site>` inside any package documents its own
+    # src/, under its own name, at its own version. The explicit flags stay
+    # for the one case the defaults cannot know — the compiler's own
+    # checkout documenting src/stdlib as "prelude" (where the versions ARE
+    # Kex releases, which is why the compiler's own package.kex carries the
+    # compiler version and the default still holds).
+    let source = defaultSource(optString(parsed.values.get("source")))
+    let pkg = defaultPackage(optString(parsed.values.get("package")))
+    let version = defaultVersion(optString(parsed.values.get("release")))
+    let files = Tey.Docgen.Scan.sourceFiles(source)
     if files.empty?
       IO.printError("docgen: no .kex files found in ${source}")
       return 1
@@ -38,14 +40,16 @@ module Docgen.Index do
       label: optString(parsed.values.get("label")),
       baseUrl: optString(parsed.values.get("base-url")),
       generatedAt: DateTime.now().iso,
-      pages: pages
+      pages: pages,
+      modules: Tey.Docgen.Nav.buildModules(pages),
+      links: Tey.Docgen.Nav.buildLinks(pages)
     }
-    let _ = FS.File.write(FS.Path.join(out, "model.json"), Docgen.Json.modelJson(model))
-    let _ = FS.File.write(FS.Path.join(out, "search.json"), Docgen.Json.searchJson(model))
+    let _ = FS.File.write(FS.Path.join(out, "model.json"), Tey.Docgen.Json.modelJson(model))
+    let _ = FS.File.write(FS.Path.join(out, "search.json"), Tey.Docgen.Json.searchJson(model))
     # Per-version copies: the root files describe the last build, these stay
     # true for their own version directory no matter what builds afterwards.
-    let _ = FS.File.write(FS.Path.join(versionDir, "model.json"), Docgen.Json.modelJson(model))
-    let _ = FS.File.write(FS.Path.join(versionDir, "search.json"), Docgen.Json.searchJson(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "model.json"), Tey.Docgen.Json.modelJson(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "search.json"), Tey.Docgen.Json.searchJson(model))
     let written = writePages(pages, versionDir, model)
     writeHtml(pages, versionDir, out, model)
     writeIndexFiles(pages, model, out)
@@ -55,6 +59,56 @@ module Docgen.Index do
 
   foul optString(value: String?) -> String do
     return value.or("")
+  end
+
+  # `src/` when it is standing there, else the flag as given (an empty one is
+  # reported by the scan: "no .kex files found in").
+  foul defaultSource(given: String) -> String do
+    return given if !given.empty?
+    return "src" if FS.File.directory?("src")
+    return ""
+  end
+
+  # The manifest's name when the CWD is a package — the identity docgen
+  # should not have to be told. Outside one, "prelude": the compiler's own
+  # stdlib documenting without a manifest of its own is the original use.
+  foul defaultPackage(given: String) -> String do
+    return given if !given.empty?
+    match manifestVersion() do
+      Just(pair) => do
+        let (name, _) = pair
+        return name.or("prelude")
+      end
+      None => "prelude"
+    end
+  end
+
+  # The version of the thing being documented: a package's own release when
+  # standing in one, the compiler's release otherwise. What a package's
+  # versions ARE differs from the stdlib — its own releases against Kex
+  # releases — and the default follows that distinction automatically
+  # because the compiler's own package.kex carries the compiler version.
+  foul defaultVersion(given: String) -> String do
+    return given if !given.empty?
+    match manifestVersion() do
+      Just(pair) => do
+        let (_, version) = pair
+        return version.or(Kex.Kernel.VERSION.release)
+      end
+      None => Kex.Kernel.VERSION.release
+    end
+  end
+
+  # (name, version) of the package.kex in the CWD, if there is a readable
+  # one. Both defaults read it; one read, one parse.
+  foul manifestVersion() -> (String?, String?)? do
+    match FS.File.read("package.kex") do
+      None => None
+      Just(text) => match Tey.Manifest.read(text) do
+        Ok(package) => Just((package.name, package.version))
+        Error(_) => None
+      end
+    end
   end
 
   # ── Page construction ────────────────────────────────────────────────────
@@ -72,7 +126,7 @@ module Docgen.Index do
     let fullPath = FS.Path.join(sourceDir, fileName)
     match Kex.AST.parseFile(fullPath) do
       Ok(Kex.AST.Program { items }) => do
-        let page = Docgen.Extract.pageFor(fileName, items)
+        let page = Tey.Docgen.Extract.pageFor(fileName, items)
         IO.printLine("  ok ${fileName} (${page.entities.count} entities)")
         return buildPagesLoop(rest, sourceDir, pages + [page])
       end
@@ -89,7 +143,7 @@ module Docgen.Index do
     let count = pages.reduce(0, { |n, page|
       let outPath = FS.Path.join(versionDir, page.urlPath + ".md")
       ensureDirectory(FS.Path.join(versionDir, dirNameOf(page.urlPath)))
-      let _ = FS.File.write(outPath, Docgen.Markdown.pageMarkdown(page, model))
+      let _ = FS.File.write(outPath, Tey.Docgen.Markdown.pageMarkdown(page, model))
       n + 1
     })
     return count
@@ -101,13 +155,13 @@ module Docgen.Index do
     let _ = pages.reduce(0, { |n, page|
       let outPath = FS.Path.join(versionDir, page.urlPath + ".html")
       ensureDirectory(FS.Path.join(versionDir, dirNameOf(page.urlPath)))
-      let _ = FS.File.write(outPath, Docgen.Html.pageHtml(page, model))
+      let _ = FS.File.write(outPath, Tey.Docgen.Html.pageHtml(page, model))
       n + 1
     })
-    let _ = FS.File.write(FS.Path.join(versionDir, "index.html"), Docgen.Html.versionIndexHtml(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "index.html"), Tey.Docgen.Html.versionIndexHtml(model))
     ensureDirectory(FS.Path.join(out, "assets"))
-    let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Docgen.Css.siteCss())
-    let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Docgen.Assets.siteJs())
+    let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
+    let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())
     IO.printLine("docgen: wrote HTML pages and assets/style.css")
     return ()
   end
@@ -131,7 +185,15 @@ module Docgen.Index do
     let versions = accumulateVersions(out, model)
     let _ = FS.File.write(FS.Path.join(out, "manifest.json"), manifestJson(pages))
     let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(versions))
-    let _ = FS.File.write(FS.Path.join(out, "index.html"), Docgen.Html.rootIndexHtml(versions))
+    # The browsing spine: the site root lists packages, each package's
+    # directory lists its versions. What a version IS differs per package —
+    # a library's own releases, the stdlib's Kex releases — but the shape
+    # (package → versions → pages) is the same, so the pages are too.
+    let _ = FS.File.write(FS.Path.join(out, "index.html"), Tey.Docgen.Html.rootIndexHtml(versions))
+    let packageDir = FS.Path.join(out, model.package)
+    ensureDirectory(packageDir)
+    let _ = FS.File.write(FS.Path.join(packageDir, "index.html"),
+                          Tey.Docgen.Html.packageVersionsHtml(model.package, versions))
     let _ = FS.File.write(FS.Path.join(out, "llms.txt"), llmsTxt(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "llms-full.txt"), llmsFullTxt(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "robots.txt"), robotsTxt(model.baseUrl))
@@ -163,7 +225,13 @@ module Docgen.Index do
       generatedAt: model.generatedAt,
       package: model.package
     }
-    let kept = readVersionEntries(out).filter { |e|
+    return upsertVersion(current, readVersionEntries(out))
+  end
+
+  # This build's entry first, the other packages' and versions' kept: the
+  # pure half of accumulate, so the upsert rule itself can be spec'd.
+  foul upsertVersion(current: VersionEntry, existing: [VersionEntry]) -> [VersionEntry] do
+    let kept = existing.filter { |e|
       !(e.package == current.package && e.id == current.id)
     }
     return [current] + kept
@@ -227,7 +295,7 @@ module Docgen.Index do
   end
 
   foul llmsFullTxt(pages: [SourcePage], model: PackageModel) -> String do
-    let texts = pages.map { |p| Docgen.Markdown.pageMarkdown(p, model) }
+    let texts = pages.map { |p| Tey.Docgen.Markdown.pageMarkdown(p, model) }
     return texts.join("\n\n---\n\n") + "\n"
   end
 

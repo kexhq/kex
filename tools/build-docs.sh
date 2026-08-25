@@ -2,14 +2,15 @@
 # Regenerate the full docs site: every released tag plus the current
 # (unreleased) checkout, for the prelude/stdlib and for tey.
 #
-#   tools/docgen/build-all.sh [output-dir]
+#   tools/build-docs.sh [output-dir]
 #
 # output-dir defaults to ../kdocs relative to the repo root — the kdocs
 # checkout that is published to docs.kex.run. Each released tag is built
 # from a temporary git worktree; the unreleased build uses the working
-# tree as-is. Builds run through the CURRENT toolchain: docgen parses old
-# sources with the current compiler, and files that no longer parse are
-# skipped with a warning rather than failing the release.
+# tree as-is. Builds run through the CURRENT toolchain — `tey docs` is a
+# built-in of this checkout's Tey, and docgen parses old sources with the
+# current compiler, so files that no longer parse are skipped with a
+# warning rather than failing the release.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -32,35 +33,50 @@ cleanup() {
 trap cleanup EXIT
 
 # build_docs <source-dir> <package> <label> [version]
+#
+# The version passed is the PACKAGE's own version story: prelude versions are
+# Kex releases (the stdlib ships with the compiler), tey versions are read
+# from that tag's tey/package.kex. The unreleased tey build passes no version
+# and lets docgen default it from tey/package.kex in the CWD.
 build_docs() {
   local source="$1" package="$2" label="$3" version="${4:-}"
   if [ ! -d "$source" ]; then
-    echo "build-all: skip $package (no $source)"
+    echo "build-docs: skip $package (no $source)"
     return 0
   fi
-  local args=(docs -- build --source "$source" --out "$OUT" --package "$package" --label "$label")
+  local args=(docs build --source "$source" --out "$OUT" --package "$package" --label "$label")
   if [ -n "$version" ]; then
-    args+=(--version "$version")
+    args+=(--release "$version")
   fi
-  echo "build-all: $package $version"
-  (cd "$ROOT/tools/docgen" && "$TEY_RUN" "${args[@]}") || \
-    echo "build-all: WARNING $package $version failed — keeping previous output" >&2
+  echo "build-docs: $package $version"
+  "$TEY_RUN" "${args[@]}" || \
+    echo "build-docs: WARNING $package $version failed — keeping previous output" >&2
+}
+
+# tey's own version as declared by a checkout's tey/package.kex.
+tey_version() {
+  sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/tey/package.kex" | head -1
 }
 
 for tag in $(git -C "$ROOT" tag --sort=v:refname); do
   version="${tag#v}"
   wt="$WORKTREES/$version"
   git -C "$ROOT" worktree add --detach --force "$wt" "$tag" >/dev/null 2>&1 || {
-    echo "build-all: WARNING cannot worktree $tag — skipped" >&2
+    echo "build-docs: WARNING cannot worktree $tag — skipped" >&2
     continue
   }
   build_docs "$wt/src/stdlib" prelude "Prelude" "$version"
-  build_docs "$wt/tey/src" tey "Tey" "$version"
+  build_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
   git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
 done
 
-# The unreleased build: version defaults to the compiler's own.
+# The unreleased builds. Prelude's version is the compiler's (the working
+# tree's package.kex tracks it). Tey's comes from its own manifest via
+# docgen's default, so that build runs from inside tey/ — but as a distinct
+# "-dev" release, so an unreleased build cannot overwrite the released docs
+# of the same version number.
 build_docs "$ROOT/src/stdlib" prelude "Prelude"
-build_docs "$ROOT/tey/src" tey "Tey"
+(cd "$ROOT/tey" && "$TEY_RUN" docs build --out "$OUT" --release "$(tey_version "$ROOT")-dev") || \
+  echo "build-docs: WARNING tey unreleased failed — keeping previous output" >&2
 
-echo "build-all: done -> $OUT"
+echo "build-docs: done -> $OUT"

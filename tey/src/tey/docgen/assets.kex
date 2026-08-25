@@ -4,7 +4,7 @@
 # still offer versions published after them. Without JavaScript the badge
 # stays and the site is fully usable.
 
-module Docgen.Assets do
+module Tey.Docgen.Assets do
   foul siteJs() -> String do
     return `
       (function () {
@@ -18,7 +18,7 @@ module Docgen.Assets do
           .then(function (res) { return res.json(); })
           .then(function (data) {
             var versions = (data.versions || []).filter(function (v) { return v.package === pkg; });
-            if (versions.length < 2) return;
+            if (versions.length < 1) return;
             var select = document.createElement("select");
             select.className = "version-select";
             select.setAttribute("aria-label", "Documentation version");

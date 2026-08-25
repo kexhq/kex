@@ -1,6 +1,7 @@
-# Serves a generated output directory over HTTP (BEAM backend: kex -R).
+# Serves a generated output directory over HTTP. Tey runs on the BEAM, so
+# Web.Server is available wherever `tey docs -- serve` runs.
 
-module Docgen.Serve do
+module Tey.Docgen.Serve do
   record ServedFile do
     route : String
     path : String
@@ -19,7 +20,7 @@ module Docgen.Serve do
       return 1
     end
     IO.printLine("docgen: serving ${files.count} file(s) on http://localhost:${port}")
-    let server = files.reduce(Web.Server.new(port), { |s, f| s.get(f.route, fileHandler(f.path)) })
+    let server = files.reduce(Web.Server.build(port), { |s, f| s.get(f.route, fileHandler(f.path)) })
     match server.start() do
       Ok(_) => return 0
       Error(msg) => do
@@ -29,11 +30,24 @@ module Docgen.Serve do
     end
   end
 
+  # The URL paths a browser would type for this file: an index.html is
+  # reached by its directory ("/", "/prelude/0.4.0-alpha/") as much as by
+  # its name, and the router matches exactly — so it answers the bare, the
+  # slash-terminated, and the named spelling. Every other file answers its
+  # own path only.
+  foul routesFor(prefix: String, name: String) -> [String] do
+    let path = FS.Path.join(prefix, name)
+    if name == "index.html"
+      return [path, prefix, "${prefix}/"]
+    end
+    return [path]
+  end
+
   foul collectServeFiles(dir: String, prefix: String) -> [ServedFile] do
     let names = FS.Directory.files(dir).or([])
     let subdirs = FS.Directory.directories(dir).or([])
-    let fileEntries = names.map { |n|
-      ServedFile { route: FS.Path.join(prefix, n), path: FS.Path.join(dir, n) }
+    let fileEntries = names.flatMap { |n|
+      routesFor(prefix, n).map { |r| ServedFile { route: r, path: FS.Path.join(dir, n) } }
     }
     let subEntries = subdirs.map { |d| collectServeFiles(FS.Path.join(dir, d), FS.Path.join(prefix, d)) }.flatten
     return fileEntries + subEntries

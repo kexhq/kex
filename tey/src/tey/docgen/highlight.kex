@@ -7,7 +7,7 @@
 # braces, and `and`/`or` are colored as keywords even where the compiler
 # treats them as identifiers — same trade-offs as the site version.
 
-module Docgen.Highlight do
+module Tey.Docgen.Highlight do
   record Tok do
     cls : String
     text : String
@@ -297,7 +297,7 @@ module Docgen.Highlight do
     return "<span class=\"tok-${t.cls}\">${esc(t.text)}</span>"
   end
 
-  # Local copy of Docgen.Html.esc — duplicating four replaces keeps the
+  # Local copy of Tey.Docgen.Html.esc — duplicating four replaces keeps the
   # modules acyclic (Html calls Highlight for code blocks).
   foul esc(s: String) -> String do
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")

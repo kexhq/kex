@@ -111,7 +111,7 @@ make OptionConfig do
   end
 
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
-    OptionParser.parse(@options, args)
+    OptionParser.parse(@options, @commands, args)
   end
 
   # Parses `args` and runs the command they name, returning its exit code.
@@ -237,8 +237,9 @@ module OptionParser do
     InvalidInteger(option, value) => "--${option} expects an integer, got '${value}'"
   end
 
-  let parse(options: [OptionSpec], args: [String]) -> Result<ParsedOptions, OptionParseError> do
-    walk(options, args, {}, [], false)
+  let parse(options: [OptionSpec], commands: [CommandSpec], args: [String])
+      -> Result<ParsedOptions, OptionParseError> do
+    walk(options, commands, args, {}, [], false)
   end
 
   private do
@@ -251,7 +252,7 @@ module OptionParser do
       end
     end
 
-    let finish(options: [OptionSpec], values: { String: String },
+    let finish(options: [OptionSpec], commands: [CommandSpec], values: { String: String },
                arguments: [String]) -> Result<ParsedOptions, OptionParseError> do
       let missing = options.find { |option| option.required? && !values.has?(option.long) }
       OptionParser.finishRequired(missing, options, values, arguments)
@@ -268,48 +269,63 @@ module OptionParser do
       Ok(ParsedOptions { values: complete, arguments: arguments })
     end
 
-    walk : [OptionSpec] -> [String] -> { String: String } -> [String] -> Bool -> Result<ParsedOptions, OptionParseError>
-    let walk(options, [], values, arguments, _) = OptionParser.finish(options, values, arguments)
-    let walk(options, [argument | rest], values, arguments, stopped?: Bool) do
+    # `commands` rides along only for the rule in the None branch below.
+    walk : [OptionSpec] -> [CommandSpec] -> [String] -> { String: String } -> [String] -> Bool -> Result<ParsedOptions, OptionParseError>
+    let walk(options, commands, [], values, arguments, _) = OptionParser.finish(options, commands, values, arguments)
+    let walk(options, commands, [argument | rest], values, arguments, stopped?: Bool) do
       if stopped?
-        return OptionParser.walk(options, rest, values, [...arguments, argument], true)
+        return OptionParser.walk(options, commands, rest, values, [...arguments, argument], true)
       end
       if argument == "--"
-        return OptionParser.walk(options, rest, values, arguments, true)
+        return OptionParser.walk(options, commands, rest, values, arguments, true)
       end
       if !argument.startsWith?("-") || argument == "-"
-        return OptionParser.walk(options, rest, values, [...arguments, argument], false)
+        return OptionParser.walk(options, commands, rest, values, [...arguments, argument], false)
       end
 
       let equals = argument.startsWith?("--") then argument.split("=") else [argument]
       let spelling = equals.first.or(argument)
-      OptionParser.consume(OptionParser.findOption(options, spelling), options, rest,
-                           values, arguments, equals.second, spelling)
+      match OptionParser.findOption(options, spelling) do
+        # An option the tool itself does not know, meeting the line AFTER a
+        # command word, is the command's own vocabulary — `tey docs build
+        # --source src` must reach the docs handler with `--source src` in
+        # its arguments rather than die as Tey's unknown option. Before any
+        # command word it is still this parser's error to report: nothing
+        # else has claimed it.
+        None => match OptionParser.commandFor(commands, arguments) do
+          Just(_) => OptionParser.walk(options, commands, rest, values,
+                                       [...arguments, argument], false)
+          None => Error(UnknownOption(spelling))
+        end
+        Just(option) =>
+          OptionParser.consume(OptionParser.findOption(options, spelling), options, commands,
+                               rest, values, arguments, equals.second, spelling)
+      end
     end
 
-    let consume(None, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
-    let consume(Just(option), options, rest, values, arguments, inlineValue, _) do
+    let consume(None, _, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
+    let consume(Just(option), options, commands, rest, values, arguments, inlineValue, _) do
       match option.kind do
-        FlagValue => OptionParser.consumeFlag(inlineValue, option, options,
+        FlagValue => OptionParser.consumeFlag(inlineValue, option, options, commands,
                                                rest, values, arguments)
         _ => OptionParser.consumeValue(
                OptionParser.valueAndRest(inlineValue, rest), option,
-               options, values, arguments)
+               options, commands, values, arguments)
       end
     end
 
-    let consumeFlag(Just(_), option, _, _, _, _) = Error(UnexpectedValue(option.long))
-    let consumeFlag(None, option, options, rest, values, arguments) do
-      OptionParser.walk(options, rest,
+    let consumeFlag(Just(_), option, _, _, _, _, _) = Error(UnexpectedValue(option.long))
+    let consumeFlag(None, option, options, commands, rest, values, arguments) do
+      OptionParser.walk(options, commands, rest,
         Kex.Intrinsic.Map.put(values, option.long, "true"), arguments, false)
     end
 
-    let consumeValue(None, option, _, _, _) = Error(MissingValue(option.long))
-    let consumeValue(Just((value, remaining)), option, options, values, arguments) do
+    let consumeValue(None, option, _, _, _, _) = Error(MissingValue(option.long))
+    let consumeValue(Just((value, remaining)), option, options, commands, values, arguments) do
       if option.kind == IntegerValue && Integer.parse(value).error?
         return Error(InvalidInteger(option.long, value))
       end
-      OptionParser.walk(options, remaining,
+      OptionParser.walk(options, commands, remaining,
         Kex.Intrinsic.Map.put(values, option.long, value), arguments, false)
     end
 

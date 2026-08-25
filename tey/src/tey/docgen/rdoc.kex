@@ -10,10 +10,10 @@
 #   #   [1, 2].sum   # => 3
 #
 # Inline `+code+` pairs are rewritten to `` `code` ``. The result is a
-# Docgen.Model.Doc record.
+# Tey.Docgen.Model.Doc record.
 
-module Docgen.Rdoc do
-  using Docgen.Model, only: [Doc, Param, Return, Example, emptyDoc]
+module Tey.Docgen.Rdoc do
+  using Tey.Docgen.Model, only: [Doc, Param, Return, Example, emptyDoc]
 
   record Bracketed do
     content : String
@@ -54,7 +54,12 @@ module Docgen.Rdoc do
     end
   end
 
-  # Splits lines into paragraphs (blocks) separated by blank lines.
+  # Splits lines into paragraphs (blocks). Prose groups until a blank line;
+  # directives are LINE-based, so each `@param`/`@return`/`@example` line
+  # begins its own paragraph — consecutive `@param a` / `@param b` lines must
+  # not merge into one block, or only the first would be parsed. An
+  # `@example`'s indented code lines follow it and stay in its block (they
+  # do not open with `@`).
   foul splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
     if lines.empty?
       if current.empty?
@@ -69,6 +74,10 @@ module Docgen.Rdoc do
         return splitParagraphs(rest, [], accum)
       end
       return splitParagraphs(rest, [], accum + [current])
+    end
+    if line.trim.startsWith?("@")
+      let flushed = if current.empty? then accum else accum + [current] end
+      return splitParagraphs(rest, [line], flushed)
     end
     return splitParagraphs(rest, current + [line], accum)
   end

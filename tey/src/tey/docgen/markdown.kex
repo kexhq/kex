@@ -1,12 +1,12 @@
 # Model records → Markdown pages (LLM-friendly: stable headings, fenced
 # kex signatures, frontmatter with the entity index).
 
-module Docgen.Markdown do
-  using Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, Doc, Return, Example, SourcePage, PackageModel, kindOf, nameOf]
+module Tey.Docgen.Markdown do
+  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, Doc, Return, Example, SourcePage, PackageModel, kindOf, nameOf]
 
   foul pageMarkdown(page: SourcePage, model: PackageModel) -> String do
     let frontmatter = pageFrontmatter(page, model)
-    let body = pageBody(page)
+    let body = pageBody(page, model)
     return frontmatter + "\n\n" + body
   end
 
@@ -29,31 +29,57 @@ module Docgen.Markdown do
     return "  - { kind: ${kindOf(e)}, name: \"${name}\" }"
   end
 
-  foul pageBody(page: SourcePage) -> String do
-    let sections = page.entities.map { |e| entitySection(e) }.join("\n\n")
+  foul pageBody(page: SourcePage, model: PackageModel) -> String do
+    let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n\n")
     return "# ${page.title}\n\n${sections}\n"
   end
 
   # ── Entity sections ──────────────────────────────────────────────────────
 
-  foul entitySection(e: Entity) -> String do
+  foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
-      TypeDecl(entry) => typeSection(entry)
-      RecordDecl(entry) => recordSection(entry)
-      TraitDecl(entry) => traitSection(entry)
-      MakeDecl(entry) => makeSection(entry)
-      ModuleDecl(entry) => moduleSection(entry)
-      FuncDecl(entry) => functionSection(entry)
+      TypeDecl(entry) => typeSection(entry, page, model)
+      RecordDecl(entry) => recordSection(entry, page, model)
+      TraitDecl(entry) => Tey.Docgen.Markdown.traitSection(entry)
+      MakeDecl(entry) => makeSection(entry, page, model)
+      ModuleDecl(entry) => moduleSection(entry, page, model)
+      FuncDecl(entry) => Tey.Docgen.Markdown.functionSection(entry)
       ConstDecl(entry) => constantSection(entry)
     end
   end
 
-  foul typeSection(e: TypeEntry) -> String do
+  # Cross-links in Markdown resolve against the same package index the HTML
+  # renderer uses — one resolution rule, two renderings. Targets are the .md
+  # siblings of this page.
+  foul linkMd(model: PackageModel, fromPath: String, name: String) -> String do
+    match Tey.Docgen.Nav.resolve(model.links, name) do
+      Just(entry) => do
+        if fromPath == entry.urlPath
+          return "[${name}](#${entry.anchor})"
+        end
+        let prefix = Tey.Docgen.Nav.upsToVersionDir(fromPath)
+        return "[${name}](${prefix}${entry.urlPath}.md#${entry.anchor})"
+      end
+      None => name
+    end
+  end
+
+  foul linkTypeMd(model: PackageModel, fromPath: String, text: String) -> String do
+    return Tey.Docgen.Nav.segmentsOf(text).map { |seg|
+      if seg != "" && Tey.Docgen.Nav.isIdentChar?(seg.take(1))
+        linkMd(model, fromPath, seg)
+      else
+        seg
+      end
+    }.join("")
+  end
+
+  foul typeSection(e: TypeEntry, page: SourcePage, model: PackageModel) -> String do
     let params = typeParamSuffix(e.typeParams)
     let parents = if e.parents.empty?
       ""
     else
-      " : " + e.parents.join(", ")
+      " : " + e.parents.map { |p| linkTypeMd(model, page.urlPath, p) }.join(", ")
     end
     let variantLines = match e.variants do
       Just(vs) => do
@@ -75,11 +101,12 @@ module Docgen.Markdown do
     return "  - \`${name}(${fields.join(", ")})\`"
   end
 
-  foul recordSection(e: RecordEntry) -> String do
+  foul recordSection(e: RecordEntry, page: SourcePage, model: PackageModel) -> String do
     let params = typeParamSuffix(e.typeParams)
     let bullets = e.fields.map { |f|
+      let typeName = linkTypeMd(model, page.urlPath, f.typeName)
       let suffix = if f.hasDefault then " (optional)" else "" end
-      "  - \`${f.name}\` : \`${f.typeName}\`${suffix}"
+      "  - \`${f.name}\` : ${typeName}${suffix}"
     }.join("\n")
     return "## record \`${e.name}${params}\`\n\n${docBlock(e.doc)}**Fields**\n\n${bullets}"
   end
@@ -90,18 +117,18 @@ module Docgen.Markdown do
     return "## trait \`${e.name}${params}\`\n\n${docBlock(e.doc)}${details}"
   end
 
-  foul makeSection(e: MakeEntry) -> String do
+  foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
     let impls = if e.implements.empty?
       ""
     else
-      " implements " + e.implements.join(", ")
+      " implements " + e.implements.map { |i| linkTypeMd(model, page.urlPath, i) }.join(", ")
     end
     let details = renderFunctions(e.functions)
     return "## make \`${e.target}\`${impls}\n\n${docBlock(e.doc)}${details}"
   end
 
-  foul moduleSection(e: ModuleEntry) -> String do
-    let details = e.children.map { |c| entitySection(c) }.join("\n\n")
+  foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
+    let details = e.children.map { |c| entitySection(c, page, model) }.join("\n\n")
     return "## module \`${e.qualifiedName}\`\n\n${docBlock(e.doc)}${details}"
   end
 
@@ -126,11 +153,11 @@ module Docgen.Markdown do
     if functions.empty?
       return ""
     end
-    let sections = functions.map { |f| functionDetail(f) }
+    let sections = functions.map { |f| functionBlock(f) }
     return "\n" + sections.join("\n\n")
   end
 
-  foul functionDetail(f: FunctionEntry) -> String do
+  foul functionBlock(f: FunctionEntry) -> String do
     let parts = ["#### \`${f.name}\`"]
     let withSummary = if f.doc.summary.empty?
       parts

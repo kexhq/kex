@@ -1,18 +1,18 @@
 # Model records → static HTML pages, styled after kex.run's docs section
 # (warm honey/cream palette, Fraunces/Plus Jakarta Sans/JetBrains Mono,
 # dark code surface with tok-* syntax classes). The stylesheet lives in
-# Docgen.Css and is written to assets/style.css by the build driver.
+# Tey.Docgen.Css and is written to assets/style.css by the build driver.
 #
 # HTML is a sibling renderer of the Markdown one: both walk the typed
 # PackageModel, so nothing here parses Markdown or JSON.
 
-module Docgen.Html do
-  using Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, kindOf, nameOf]
+module Tey.Docgen.Html do
+  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, LinkEntry, kindOf, nameOf, anchorOf]
 
   # ── Public API ───────────────────────────────────────────────────────────
 
   foul pageHtml(page: SourcePage, model: PackageModel) -> String do
-    let sections = page.entities.map { |e| entitySection(e) }.join("\n")
+    let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n")
     let body = "<h1>${esc(page.title)}</h1>\n${sections}"
     return layout(page.title, page.urlPath, body, model)
   end
@@ -20,17 +20,63 @@ module Docgen.Html do
   # Landing page for <pkg>/<version>/index.html: every module as a card.
   foul versionIndexHtml(model: PackageModel) -> String do
     let label = labelOf(model)
-    let cards = model.pages.map { |p| pageCard(p) }.join("\n")
+    let cards = model.modules.map { |m| moduleCard(m) }.join("\n")
     let body = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>\n<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>\n<div class=\"cards\">\n${cards}\n</div>"
     return layout(label, "", body, model)
   end
 
-  # Site root index.html: every published package/version as a card. Built
-  # from the accumulated versions.json entries, not just this build's model.
+  # <pkg>/index.html: the versions of one package, newest first — the page a
+  # reader lands on when they want a different release of what they are
+  # reading. What the ids MEAN is the package's own story: a library's own
+  # releases, the stdlib's Kex releases. The page does not need to know.
+  foul packageVersionsHtml(packageName: String, versions: [VersionEntry]) -> String do
+    let mine = versions.filter { |v| v.package == packageName }
+    let cards = mine.map { |v| versionCard(v) }.join("\n")
+    return $`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(packageName)} versions — kex docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="../index.html">kex</a>
+    <span class="brand-sub">docs</span>
+    <span class="spacer"></span>
+    <a class="back" href="../index.html">all packages</a>
+  </div>
+</header>
+<div class="wrap">
+  <main class="content prose">
+    <h1>${esc(packageName)}</h1>
+    <p class="lede">Every published documentation build of the <strong>${esc(packageName)}</strong> package, newest first.</p>
+    <div class="cards">
+${cards}
+    </div>
+  </main>
+</div>
+</body>
+</html>
+`
+  end
+
+  foul versionCard(v: VersionEntry) -> String do
+    return "<a class=\"card\" href=\"${esc(v.id)}/index.html\"><span class=\"card-title\">${esc(v.label)} ${esc(v.id)}</span><span class=\"card-meta\">generated ${esc(v.generatedAt.take(10))}</span></a>"
+  end
+
+  # Site root index.html: one card per PACKAGE (its newest build), not per
+  # build — a reader arrives at "the docs" for a thing, and the thing is a
+  # package; its versions are one click down. Built from the accumulated
+  # versions.json entries, not just this build's model.
   foul rootIndexHtml(versions: [VersionEntry]) -> String do
-    let cards = versions.map { |v|
-      "<a class=\"card\" href=\"${v.package}/${v.id}/index.html\"><span class=\"card-title\">${esc(v.label)}</span><span class=\"card-meta\">${esc(v.package)} ${esc(v.id)} · generated ${esc(v.generatedAt.take(10))}</span></a>"
-    }.join("\n")
+    let packages = packageNames(versions)
+    let cards = packages.map { |name| packageCard(name, versions) }.join("\n")
     return $`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -45,7 +91,7 @@ module Docgen.Html do
 <body>
 <header class="top">
   <div class="wrap top-inner">
-    <a class="brand" href="https://kex.run">kex</a>
+    <a class="brand" href="index.html">kex</a>
     <span class="brand-sub">docs</span>
     <span class="spacer"></span>
     <a class="back" href="https://kex.run/docs">kex.run ↗</a>
@@ -63,6 +109,23 @@ ${cards}
 </body>
 </html>
 `
+  end
+
+  # Package names in first-seen order of their newest entry: versions arrive
+  # newest-first from accumulateVersions, so the first entry of each package
+  # is that package's newest build.
+  foul packageNames(versions: [VersionEntry]) -> [String] do
+    let names = versions.map { |v| v.package }
+    return names.uniq
+  end
+
+  foul packageCard(name: String, versions: [VersionEntry]) -> String do
+    let newest = versions.find { |v| v.package == name }
+    let count = versions.filter { |v| v.package == name }.count
+    return match newest do
+      Just(v) => "<a class=\"card\" href=\"${esc(name)}/index.html\"><span class=\"card-title\">${esc(v.label)}</span><span class=\"card-meta\">${esc(name)} · latest ${esc(v.id)} · ${count} version(s)</span></a>"
+      None => ""
+    end
   end
 
   # ── Layout ───────────────────────────────────────────────────────────────
@@ -85,7 +148,7 @@ ${cards}
 <body>
 <header class="top">
   <div class="wrap top-inner">
-    <a class="brand" href="https://kex.run">kex</a>
+    <a class="brand" href="${root}index.html">kex</a>
     <span class="brand-sub">docs</span>
     <span class="spacer"></span>
     <span class="pkg-badge" id="version-badge" data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}" data-page="${esc(pageTarget(current))}">${esc(label)} ${esc(model.version)}</span>
@@ -109,46 +172,142 @@ ${bodyContent}
 `
   end
 
+  # The sidebar navigates by MODULE, not by file: a reader thinks "where is
+  # String defined", not "which .kex file is it in" — the two coincide only
+  # by accident. Nesting follows the qualified names ("Web.Server" under
+  # "Web"); the active module expands to its members.
   foul sidebar(model: PackageModel, current: String) -> String do
     let vpre = versionPrefix(current)
-    let entries = model.pages.map { |p| sidebarEntry(p, current, vpre) }.join("\n")
-    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
+    let rows = sidebarRows(model, current, vpre)
+    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${rows}\n</ul></nav></aside>"
   end
 
-  foul sidebarEntry(page: SourcePage, current: String, vpre: String) -> String do
-    let href = "${vpre}${page.urlPath}.html"
-    if page.urlPath == current
-      let entityLinks = page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
-      return "<li><a class=\"active\" href=\"${href}\">${esc(page.title)}</a><ul class=\"side-sub\">\n${entityLinks}\n</ul></li>"
+  # One <li> per top-level module, plus one per page for the entities that
+  # live outside any module (traits and makes usually) — those group under
+  # the page's own name, since that is the only grouping they have.
+  foul sidebarRows(model: PackageModel, current: String, vpre: String) -> String do
+    let nested = nestedModules(model)
+    let rows = model.pages.flatMap { |p| rowsForPage(p, model, nested, current, vpre) }
+    return rows.join("\n")
+  end
+
+  foul rowsForPage(p: SourcePage, model: PackageModel,
+                   nested: [Tey.Docgen.Model.ModuleIndexEntry], current: String,
+                   vpre: String) -> [String] do
+    let moduleRows = p.entities.flatMap { |e|
+      match e do
+        ModuleDecl(entry) => do
+          let index = model.modules.find { |m| m.qualifiedName == entry.qualifiedName }
+          match index do
+            Just(m) => [sidebarModule(m, nested, current, vpre)]
+            None => []
+          end
+        end
+        _ => []
+      end
+    }
+    let leftovers = p.entities.filter { |e| !isModule?(e) }
+    let leftoverRow = if leftovers.empty?
+      []
+    else
+      [leftoverGroup(p, leftovers, current, vpre)]
     end
-    return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
+    return moduleRows + leftoverRow
   end
 
-  foul pageCard(p: SourcePage) -> String do
-    return "<a class=\"card\" href=\"${p.urlPath}.html\"><span class=\"card-title\">${esc(p.title)}</span><span class=\"card-meta\">${p.entities.count} entities · ${esc(p.source)}</span></a>"
+  foul isModule?(e: Entity) -> Bool do
+    match e do
+      ModuleDecl(_) => true
+      _ => false
+    end
+  end
+
+  foul leftoverGroup(p: SourcePage, entities: [Entity], current: String, vpre: String) -> String do
+    let href = "${vpre}${p.urlPath}.html"
+    if p.urlPath == current
+      let links = entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
+      return "<li><a class=\"active\" href=\"${href}\">${esc(p.title)}</a><ul class=\"side-sub\">\n${links}\n</ul></li>"
+    end
+    return "<li><a href=\"${href}\">${esc(p.title)}</a></li>"
+  end
+
+  foul topModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
+    return model.modules.filter { |m| !m.qualifiedName.contains?(".") }
+  end
+
+  foul nestedModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
+    return model.modules.filter { |m| m.qualifiedName.contains?(".") }
+  end
+
+  foul sidebarModule(m: Tey.Docgen.Model.ModuleIndexEntry, nested: [Tey.Docgen.Model.ModuleIndexEntry],
+                     current: String, vpre: String) -> String do
+    let href = "${vpre}${m.urlPath}.html#module-${slug(m.qualifiedName)}"
+    let active = isActive?(m, current)
+    let memberList = if active
+      let links = m.members.map { |mem|
+        "<li><a href=\"${vpre}${m.urlPath}.html#${mem.anchor}\">${esc(mem.name)}</a></li>"
+      }.join("\n")
+      "<ul class=\"side-sub\">\n${links}\n</ul>"
+    else
+      ""
+    end
+    let children = nested
+      .filter { |n| n.qualifiedName.startsWith?("${m.qualifiedName}.") }
+      .filter { |n| n.qualifiedName.split(".").count == m.qualifiedName.split(".").count + 1 }
+      .map { |n| sidebarModule(n, nested, current, vpre) }
+      .join("\n")
+    let nest = if children.empty?
+      ""
+    else
+      "<ul class=\"side-nest\">\n${children}\n</ul>"
+    end
+    let cls = active then "active" else ""
+    return "<li><a class=\"${cls}\" href=\"${href}\">${esc(m.qualifiedName)}</a>${memberList}${nest}</li>"
+  end
+
+  # A module is "active" when its section is on the current page: the page
+  # is the file, the module is what the reader navigates by.
+  foul isActive?(m: Tey.Docgen.Model.ModuleIndexEntry, current: String) -> Bool do
+    return m.urlPath == current
+  end
+
+  foul moduleCard(m: Tey.Docgen.Model.ModuleIndexEntry) -> String do
+    let summary = if m.summary.empty?
+      ""
+    else
+      "<span class=\"card-meta\">${esc(m.summary)}</span>"
+    end
+    return "<a class=\"card\" href=\"${m.urlPath}.html#module-${slug(m.qualifiedName)}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
 
   # ── Entity sections ──────────────────────────────────────────────────────
 
-  foul entitySection(e: Entity) -> String do
+  foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
-      TypeDecl(entry) => typeSection(entry)
-      RecordDecl(entry) => recordSection(entry)
-      TraitDecl(entry) => traitSection(entry)
-      MakeDecl(entry) => makeSection(entry)
-      ModuleDecl(entry) => moduleSection(entry)
-      FuncDecl(entry) => functionSection(entry)
+      TypeDecl(entry) => typeSection(entry, page, model)
+      RecordDecl(entry) => recordSection(entry, page, model)
+      TraitDecl(entry) => traitSection(entry, page, model)
+      MakeDecl(entry) => makeSection(entry, page, model)
+      ModuleDecl(entry) => moduleSection(entry, page, model)
+      FuncDecl(entry) => functionSection(entry, page, model)
       ConstDecl(entry) => constantSection(entry)
     end
   end
 
-  foul typeSection(e: TypeEntry) -> String do
+  # A reference resolver scoped to one page: links resolve against the whole
+  # package index, but the href is relative to the page doing the referring.
+  foul linker(page: SourcePage, model: PackageModel) -> (String -> String) do
+    return { |name| linkType(model.links, page.urlPath, name) }
+  end
+
+  foul typeSection(e: TypeEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = Tey.Docgen.Html.linker(page, model)
     let parents = if e.parents.empty?
       ""
     else
-      " : " + e.parents.join(", ")
+      " : " + e.parents.map { |p| link(p) }.join(", ")
     end
-    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${esc(parents)}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
+    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${parents}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
   end
 
   foul variantsHtml(variants: [VariantEntry]?) -> String do
@@ -171,36 +330,64 @@ ${bodyContent}
     return "<li><code>${esc(v.name)}(${esc(v.fields.join(", "))})</code></li>"
   end
 
-  foul recordSection(e: RecordEntry) -> String do
-    let rows = e.fields.map { |f| fieldRow(f.name, f.typeName, f.hasDefault) }.join("\n")
+  foul recordSection(e: RecordEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = Tey.Docgen.Html.linker(page, model)
+    let rows = e.fields.map { |f| fieldRow(f, link) }.join("\n")
     return "<section class=\"entity\" id=\"record-${slug(e.name)}\">\n<h2><span class=\"kind\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n</section>"
   end
 
-  foul fieldRow(name: String, typeName: String, hasDefault: Bool) -> String do
-    let opt = if hasDefault then " <span class=\"opt\">optional</span>" else "" end
-    return "<div class=\"field\"><dt><code>${esc(name)}</code></dt><dd><code>${esc(typeName)}</code>${opt}</dd></div>"
+  foul fieldRow(f: Tey.Docgen.Model.FieldEntry, link: (String -> String)) -> String do
+    let opt = if f.hasDefault then " <span class=\"opt\">optional</span>" else "" end
+    return "<div class=\"field\"><dt><code>${esc(f.name)}</code></dt><dd><code>${linkTypeText(link, f.typeName)}</code>${opt}</dd></div>"
   end
 
-  foul traitSection(e: TraitEntry) -> String do
-    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions)}\n</section>"
+  # A type text is code with links inside it: split into identifier and
+  # punctuation segments, link the identifiers that resolve, escape the rest.
+  foul linkTypeText(link: (String -> String), text: String) -> String do
+    return Tey.Docgen.Nav.segmentsOf(text).map { |seg|
+      if seg != "" && Tey.Docgen.Nav.isIdentChar?(seg.take(1))
+        link(seg)
+      else
+        esc(seg)
+      end
+    }.join("")
   end
 
-  foul makeSection(e: MakeEntry) -> String do
+  # The whole-package resolution one segment goes through: an exact name hit
+  # links (display text escaped); anything else is plain escaped code.
+  foul linkType(links: [LinkEntry], fromPath: String, name: String) -> String do
+    match Tey.Docgen.Nav.resolve(links, name) do
+      Just(entry) => do
+        let href = Tey.Docgen.Nav.hrefFrom(fromPath, entry.urlPath, entry.anchor)
+        return "<a class=\"xref\" href=\"${href}\">${esc(name)}</a>"
+      end
+      None => esc(name)
+    end
+  end
+
+  foul traitSection(e: TraitEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = Tey.Docgen.Html.linker(page, model)
+    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
+  end
+
+  foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = Tey.Docgen.Html.linker(page, model)
     let impls = if e.implements.empty?
       ""
     else
-      " implements " + e.implements.join(", ")
+      " implements " + e.implements.map { |i| link(i) }.join(", ")
     end
-    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind\">make</span> <code>${esc(e.target)}</code>${esc(impls)}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions)}\n</section>"
+    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind\">make</span> <code>${esc(e.target)}</code>${impls}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
   end
 
-  foul moduleSection(e: ModuleEntry) -> String do
-    let children = e.children.map { |c| entitySection(c) }.join("\n")
-    return "<section class=\"entity\" id=\"module-${slug(e.name)}\">\n<h2><span class=\"kind\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
+  foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
+    let children = e.children.map { |c| entitySection(c, page, model) }.join("\n")
+    return "<section class=\"entity\" id=\"module-${slug(e.qualifiedName)}\">\n<h2><span class=\"kind\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
   end
 
-  foul functionSection(e: FunctionEntry) -> String do
-    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc)}${returnsHtml(e.doc)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
+  foul functionSection(e: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = Tey.Docgen.Html.linker(page, model)
+    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc, link)}${returnsHtml(e.doc, link)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
   end
 
   foul constantSection(e: ConstantEntry) -> String do
@@ -214,23 +401,23 @@ ${bodyContent}
 
   # ── Functions inside traits, makes, modules ──────────────────────────────
 
-  foul functionsHtml(functions: [FunctionEntry]) -> String do
+  foul functionsHtml(functions: [FunctionEntry], link: (String -> String)) -> String do
     if functions.empty?
       return ""
     end
-    let sections = functions.map { |f| functionDetail(f) }.join("\n")
+    let sections = functions.map { |f| functionDetail(f, link) }.join("\n")
     return "\n<div class=\"functions\">\n${sections}\n</div>"
   end
 
-  foul functionDetail(f: FunctionEntry) -> String do
-    return "<div class=\"fn\" id=\"fn-${slug(f.name)}\">\n<h4><code>${esc(f.name)}</code></h4>\n${docHtml(f.doc)}${signaturesHtml(f)}${paramsHtml(f.doc)}${returnsHtml(f.doc)}${examplesHtml(f.doc)}${deprecatedHtml(f.doc)}\n</div>"
+  foul functionDetail(f: FunctionEntry, link: (String -> String)) -> String do
+    return "<div class=\"fn\" id=\"fn-${slug(f.name)}\">\n<h4><code>${esc(f.name)}</code></h4>\n${docHtml(f.doc)}${signaturesHtml(f)}${paramsHtml(f.doc, link)}${returnsHtml(f.doc, link)}${examplesHtml(f.doc)}${deprecatedHtml(f.doc)}\n</div>"
   end
 
   foul signaturesHtml(f: FunctionEntry) -> String do
     if f.signatures.empty?
       return ""
     end
-    return "<pre class=\"code\"><code>${Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
+    return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
   end
 
   # ── Doc fragments ────────────────────────────────────────────────────────
@@ -263,24 +450,24 @@ ${bodyContent}
     return html
   end
 
-  foul paramsHtml(doc: Doc) -> String do
+  foul paramsHtml(doc: Doc, link: (String -> String)) -> String do
     if doc.params.empty?
       return ""
     end
     let rows = doc.params.map { |p|
-      let typePart = if p.typeName.empty? then "" else " <code>${esc(p.typeName)}</code>" end
+      let typePart = if p.typeName.empty? then "" else " <code>${linkTypeText(link, p.typeName)}</code>" end
       "<div class=\"param\"><dt><code>${esc(p.name)}</code>${typePart}</dt><dd>${inlineCode(p.description)}</dd></div>"
     }.join("\n")
     return "<h5>Parameters</h5>\n<dl class=\"params\">\n${rows}\n</dl>\n"
   end
 
-  foul returnsHtml(doc: Doc) -> String do
+  foul returnsHtml(doc: Doc, link: (String -> String)) -> String do
     match doc.returns do
       Just(r) => do
         if r.typeName.empty? && r.description.empty?
           return ""
         end
-        let typePart = if r.typeName.empty? then "" else "<code>${esc(r.typeName)}</code> — " end
+        let typePart = if r.typeName.empty? then "" else "<code>${linkTypeText(link, r.typeName)}</code> — " end
         return "<p class=\"returns\"><strong>Returns:</strong> ${typePart}${inlineCode(r.description)}</p>\n"
       end
       None => ""
@@ -293,7 +480,7 @@ ${bodyContent}
     end
     let blocks = doc.examples.map { |ex|
       let caption = if ex.caption.empty? then "" else "<p class=\"caption\"><em>${inlineCode(ex.caption)}</em></p>\n" end
-      "${caption}<pre class=\"code\"><code>${Docgen.Highlight.highlight(ex.code)}</code></pre>"
+      "${caption}<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(ex.code)}</code></pre>"
     }.join("\n")
     return "<h5>Examples</h5>\n${blocks}\n"
   end
@@ -325,10 +512,6 @@ ${bodyContent}
       return "index.html"
     end
     return current + ".html"
-  end
-
-  foul anchorOf(e: Entity) -> String do
-    return "${kindOf(e)}-${slug(nameOf(e))}"
   end
 
   foul slug(name: String) -> String do

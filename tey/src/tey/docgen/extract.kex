@@ -1,4 +1,4 @@
-# Kex.AST nodes → the typed entity model (Docgen.Model).
+# Kex.AST nodes → the typed entity model (Tey.Docgen.Model).
 #
 # Declaration bodies interleave TypeAnnotations (`name : type`) with
 # FunctionDefs (`let name(args) ...`); overloads repeat both. Functions are
@@ -7,8 +7,8 @@
 # pairing an annotation's curried type with a clause's parameter names needs
 # both sides.
 
-module Docgen.Extract do
-  using Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc]
+module Tey.Docgen.Extract do
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc]
 
   # ── Entry point ──────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ module Docgen.Extract do
       typeParams: info.typeParams,
       parents: info.parents.map { |p| typeText(p) },
       variants: variants,
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -109,7 +109,7 @@ module Docgen.Extract do
       fields: info.fields.map { |f|
         FieldEntry { name: f.name, typeName: fieldTypeName(f), hasDefault: f.hasDefault }
       },
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -120,7 +120,7 @@ module Docgen.Extract do
       qualifiedName: qualify(prefix, info.name),
       typeParams: info.typeParams,
       functions: functionEntries(info.body),
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -131,7 +131,7 @@ module Docgen.Extract do
       isFinal: info.isFinal,
       implements: info.implements.map { |t| typeText(t) },
       functions: functionEntries(info.body),
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -142,7 +142,7 @@ module Docgen.Extract do
       name: info.name,
       qualifiedName: nested,
       children: entitiesIn(info.items, nested),
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -152,7 +152,7 @@ module Docgen.Extract do
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
       typeName: annotationTypeOf(info),
-      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
   end
@@ -178,7 +178,7 @@ module Docgen.Extract do
         annotations: [info],
         paramLists: [],
         clauseCount: 0,
-        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
         line: info.location.line
       })]
       Just(_) => accum.map { |p| addAnnotation(p, info) }
@@ -192,7 +192,7 @@ module Docgen.Extract do
           return p
         end
         let doc = if fn.doc.summary.empty?
-          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+          Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
         else
           fn.doc
         end
@@ -226,7 +226,7 @@ module Docgen.Extract do
         annotations: [],
         paramLists: [paramNames],
         clauseCount: info.clauses.count,
-        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
         line: info.location.line
       })]
       Just(_) => accum.map { |p| addClause(p, info, paramNames) }
@@ -246,7 +246,7 @@ module Docgen.Extract do
         name: info.name,
         qualifiedName: qualify(prefix, info.name),
         typeName: returnTypeText(info),
-        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
         line: info.location.line
       }))]
       Just(_) => accum.map { |p| constantFromPending(p, info, prefix) }
@@ -262,7 +262,7 @@ module Docgen.Extract do
           return p
         end
         let doc = if fn.doc.summary.empty?
-          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+          Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
         else
           fn.doc
         end
@@ -296,7 +296,7 @@ module Docgen.Extract do
           return p
         end
         let doc = if fn.doc.summary.empty?
-          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+          Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
         else
           fn.doc
         end
@@ -456,12 +456,14 @@ module Docgen.Extract do
     end
   end
 
+  # Modules may be written fully qualified (`module FS.File do` inside
+  # `module FS do`), so a dotted name already carries its prefix — never
+  # prepend twice. A short name gets the parent's prefix as usual.
   foul qualify(prefix: String, name: String) -> String do
-    if prefix.empty?
-      name
-    else
-      "${prefix}.${name}"
+    if prefix.empty? || name.startsWith?("${prefix}.")
+      return name
     end
+    return "${prefix}.${name}"
   end
 
   foul stripExt(name: String) -> String do

@@ -5,9 +5,9 @@
 # so the output stays host-anywhere static files.
 #
 # Embedded as a raw backtick literal so the build stays self-contained:
-# Docgen.Index writes this to <out>/assets/style.css.
+# Tey.Docgen.Index writes this to <out>/assets/style.css.
 
-module Docgen.Css do
+module Tey.Docgen.Css do
   foul siteCss() -> String do
     return `
       /* kex docs — design tokens ported from kex.run (see module comment) */
@@ -175,6 +175,29 @@ module Docgen.Css do
       }
 
       .side-sub a:hover { color: var(--accent-strong); background: var(--bg-subtle); }
+
+      /* Nested modules ("FS" → "FS.Path"): same voice as the top list, one
+         step quieter and indented under their parent. */
+      .side-nest { list-style: none; margin: 0; padding: 0 0 0.25rem 0.75rem; }
+      .side-nest > li > a {
+        display: block;
+        border-radius: 6px;
+        padding: 0.18rem 0.6rem;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--faint);
+      }
+      .side-nest > li > a:hover { background: var(--bg-subtle); color: var(--ink); }
+      .side-nest > li > a.active {
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+        font-weight: 500;
+      }
+
+      /* Cross-reference links inside code spans: the code face stays, the
+         colour signals "this goes somewhere". */
+      a.xref { color: var(--accent-strong); text-decoration: none; border-bottom: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); }
+      a.xref:hover { border-bottom-color: var(--accent-strong); }
 
       .content { min-width: 0; max-width: 48rem; }
 
