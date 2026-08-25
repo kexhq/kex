@@ -6376,6 +6376,40 @@ struct Lowering {
         auto it = primGuardBifs().find(written);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
+        // Structural spellings name a SHAPE, not a tag. `let +(other: [A])`
+        // records its parameter as `[A]`, which no value carries: the tagged
+        // fallback below asked `element(1, X) =:= '[A]'`, no dispatcher clause
+        // could match, and an operator overloaded on a list argument died
+        // `function_clause` on BEAM while the walker dispatched it
+        // (kexhq/kex#205). A function type is checked first because it is
+        // parenthesized too.
+        if (written.find("->") != std::string::npos)
+            return callE("erlang", "is_function", 1, one(std::move(v)));
+        if (written.size() >= 2 && written.front() == '[' &&
+            written.back() == ']') {
+            // A Kex String IS `[Char]`, and it is a binary at runtime, so
+            // that one spelling has to admit both shapes.
+            if (written == "[Char]") {
+                auto vRef = snap(v);
+                return callE("erlang", "or", 2,
+                             two(callE("erlang", "is_list", 1, one(vRef.get())),
+                                 callE("erlang", "is_binary", 1,
+                                       one(vRef.get()))));
+            }
+            return callE("erlang", "is_list", 1, one(std::move(v)));
+        }
+        if (written.size() >= 2 && written.front() == '{' &&
+            written.back() == '}')
+            return callE("erlang", "is_map", 1, one(std::move(v)));
+        if (written.size() >= 2 && written.front() == '(' &&
+            written.back() == ')')
+            return callE("erlang", "is_tuple", 1, one(std::move(v)));
+        // Type arguments are erased at runtime: a `Set<A>` value is tagged
+        // `Set`, so guard on the base name rather than on the applied
+        // spelling, which is nothing's tag.
+        if (auto angle = written.find('<');
+            angle != std::string::npos && angle > 0 && written.back() == '>')
+            return typeGuard(written.substr(0, angle), std::move(v));
         // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
         // (the source-level is_record/2 form is a compiler macro).
         // The guard tests the value's TAG, so it is the record's canonical
@@ -6534,6 +6568,22 @@ struct Lowering {
                                 broad);
         };
         deferBroader("Number", {"Integer", "Float"});
+        // `is_tuple` is the widest guard in the family: a record, a variant
+        // with a payload and a Char are all Erlang tuples. Left among the
+        // primitives, a `make Tuple` clause shadowed every record sharing the
+        // method's name — `unorderedSet.items` matched Tuple's `items` and
+        // came back as `tuple_to_list` of the record itself (kexhq/kex#207).
+        // Held back here and re-emitted after the record field clauses, which
+        // is the last position anything can occupy. `deferBroader` cannot
+        // express that: the clauses Tuple has to sink below are not owners at
+        // all.
+        bool hasTupleOwner = false;
+        if (auto tuple = std::find(sortedOwners.begin(), sortedOwners.end(),
+                                   "Tuple");
+            tuple != sortedOwners.end()) {
+            hasTupleOwner = true;
+            sortedOwners.erase(tuple);
+        }
         sortedOwners.insert(sortedOwners.end(), deferredOwners.begin(), deferredOwners.end());
         // A plain generic function is already the dynamic fallback. A trait
         // receiver guard is unconditional at runtime and would make that
@@ -6647,6 +6697,24 @@ struct Lowering {
             m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
         appendFieldClauses(name, arity, m);
+        // Tuple last, for the reason its extraction above records: it accepts
+        // every record and variant, so it is only ever the right answer once
+        // the types that actually own the name have declined.
+        if (hasTupleOwner) {
+            MatchClause mc;
+            auto gv = std::make_unique<Pattern>();
+            gv->kind = PatKind::Var; gv->name = "_gv";
+            mc.patterns.push_back(std::move(gv));
+            mc.guard = typeGuard("Tuple", var("_gv"));
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < arity; i++)
+                args.push_back(var("_a" + std::to_string(i)));
+            auto call = std::make_unique<Expr>();
+            call->node = Call{"", mangleReceiverImplementation(name, "Tuple"),
+                              arity, std::move(args), false};
+            mc.body = std::move(call);
+            m.clauses.push_back(std::move(mc));
+        }
         // A receiver no clause covers is a call that should not have compiled
         // — `Date.of(...).iso`, where `iso` belongs to Date and the receiver
         // is a Result. The checker rejects that now, but `--no-check` and

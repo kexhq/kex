@@ -6705,11 +6705,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (isVacuous(am) ||
                     std::find(fullMatches.begin(), fullMatches.end(), am) != fullMatches.end())
                     continue;
-                // For receiver calls, only a concrete sig that agrees on the
-                // receiver speaks for this call. Concrete sigs for other
-                // receiver types must not mask a legitimately matching
-                // generic default (e.g. a user type's trait default method).
-                if (isMethodCall && !am->params.empty() &&
+                // Only a concrete sig that accepts the FIRST argument speaks
+                // for this call. For a receiver call that argument is the
+                // receiver, and a concrete sig for some other receiver type
+                // must not mask a legitimately matching generic default (a
+                // user type's trait default method, say).
+                //
+                // The same holds for a plain call, where the rule used to be
+                // skipped: the prelude's receiver functions are all callable
+                // bare through UFCS, so `merge : {A: B} -> {A: B} -> {A: B}`
+                // was a "concrete candidate" for a user's own
+                // `merge : Number -> Number -> Number`, cleared its full match
+                // and reported `merge(4, 2)` as expecting a Map. Any prelude
+                // method name a program reused as a free function with
+                // trait-bounded parameters was unusable (kexhq/kex#208).
+                if (!am->params.empty() && !argTypes.empty() &&
                     !argMatchesParam(argTypes[0], am->params[0]))
                     continue;
                 hasConcrete = true;
@@ -7199,15 +7209,37 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         return typeToString(a->result) < typeToString(b->result);
     };
-    const Signature* firstPtr =
-        *std::min_element(arityMatches.begin(), arityMatches.end(), signatureOrder);
+    // Among the candidates that could plausibly have been meant, headline the
+    // one the call comes CLOSEST to: fewest arguments that do not fit, ties
+    // broken by the listing's own order. Taking the first acceptable candidate
+    // in registration order — which this used to do — put the message back at
+    // the mercy of what the prelude happens to declare: adding `Set.add` made
+    // `add("oops", 1)` on a user's own `add : Integer -> Integer -> Integer`
+    // report "expects argument 1 to be Set<A>".
+    auto mismatchCount = [&](const Signature* sig) {
+        size_t count = 0;
+        for (size_t i = 0; i < sig->params.size() && i < argTypes.size(); ++i)
+            if (!argMatchesParam(argTypes[i], sig->params[i])) ++count;
+        return count;
+    };
+    const Signature* firstPtr = nullptr;
+    size_t fewestMismatches = 0;
     for (const auto* am : arityMatches) {
         if (isVacuousSig(am)) continue;
         if (isMethodCall && !am->params.empty() &&
             !argMatchesParam(argTypes[0], am->params[0])) continue;
-        firstPtr = am;
-        break;
+        const auto mismatches = mismatchCount(am);
+        if (!firstPtr || mismatches < fewestMismatches ||
+            (mismatches == fewestMismatches && signatureOrder(am, firstPtr))) {
+            firstPtr = am;
+            fewestMismatches = mismatches;
+        }
     }
+    // When NO candidate qualifies, the listing's order is the only principled
+    // answer left — see the comment above `signatureOrder`.
+    if (!firstPtr)
+        firstPtr = *std::min_element(arityMatches.begin(), arityMatches.end(),
+                                     signatureOrder);
     // Same rule as the receiver-mismatch guard above, for the path a
     // PRIMITIVE receiver takes: when every candidate carries an Unknown
     // parameter, this candidate list is not the whole truth and no mismatch

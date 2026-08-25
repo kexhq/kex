@@ -1,8 +1,12 @@
 spec/error_lambda_return_type.kex:5:15: error: `filter` expects argument 2 to be A -> Bool, but got Integer -> Integer
 
+filter : Set<A> -> (A -> Bool) -> Set<A>
+
 filter : Stream<A> -> (A -> Bool) -> Stream<A>
 
 filter : String -> (Char -> Bool) -> String
+
+filter : UnorderedSet<A> -> (A -> Bool) -> UnorderedSet<A>
 
 filter : [A] -> (A -> Bool) -> [A]
 
