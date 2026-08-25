@@ -91,13 +91,11 @@ build_docs "$ROOT/src/stdlib" prelude "Prelude"
   --release "$(tey_version "$ROOT")-dev") || \
   echo "build-docs: WARNING tey unreleased failed — keeping previous output" >&2
 
-# Static site assets docgen does not own — the favicon, borrowed from
-# kex-run-site. Copied here rather than generated, so docgen stays a
-# documentation generator and the branding lives in the output.
-for f in favicon.svg icon.png; do
-  if [ -f "$ROOT/tools/docs-assets/$f" ]; then
-    cp "$ROOT/tools/docs-assets/$f" "$OUT/$f"
-  fi
-done
+# Static site assets docgen does not own — the favicon, the kexhq GitHub org
+# icon. Copied here rather than generated, so docgen stays a documentation
+# generator and the branding lives in the output.
+if [ -f "$ROOT/tools/docs-assets/icon.png" ]; then
+  cp "$ROOT/tools/docs-assets/icon.png" "$OUT/icon.png"
+fi
 
 echo "build-docs: done -> $OUT"

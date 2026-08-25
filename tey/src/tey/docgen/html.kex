@@ -33,40 +33,40 @@ module Tey.Docgen.Html do
   foul packageVersionsHtml(packageName: String, versions: [VersionEntry]) -> String do
     let mine = versions.filter { |v| v.package == packageName }
     let cards = mine.map { |v| versionCard(v) }.join("\n")
-    return $`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(packageName)} versions — kex docs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/style.css">
-<link rel="icon" type="image/svg+xml" href="../favicon.svg">
-<link rel="icon" type="image/png" href="../icon.png">
-</head>
-<body>
-<header class="top">
-  <div class="wrap top-inner">
-    <a class="brand" href="../index.html">kex</a>
-    <span class="brand-sub">docs</span>
-    <span class="spacer"></span>
-    <a class="back" href="../index.html">all packages</a>
-  </div>
-</header>
-<div class="wrap">
-  <main class="content prose">
-    <h1>${esc(packageName)}</h1>
-    <p class="lede">Every published documentation build of the <strong>${esc(packageName)}</strong> package, newest first.</p>
-    <div class="cards">
-${cards}
-    </div>
-  </main>
-</div>
-</body>
-</html>
-`
+    return $`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>${esc(packageName)} versions | kex docs</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="../assets/style.css">
+      <link rel="icon" type="image/png" href="../icon.png">
+      </head>
+      <body>
+      <header class="top">
+      <div class="wrap top-inner">
+      <a class="brand" href="../index.html">kex</a>
+      <span class="brand-sub">docs</span>
+      <span class="spacer"></span>
+      <a class="back" href="../index.html">all packages</a>
+      </div>
+      </header>
+      <div class="wrap">
+      <main class="content prose">
+      <h1>${esc(packageName)}</h1>
+      <p class="lede">Every published documentation build of the <strong>${esc(packageName)}</strong> package, newest first.</p>
+      <div class="cards">
+      ${cards}
+      </div>
+      </main>
+      </div>
+      </body>
+      </html>
+    `
   end
 
   foul versionCard(v: VersionEntry) -> String do
@@ -78,54 +78,54 @@ ${cards}
   # than a state — the page reads the term back from the query string.
   foul searchPageHtml(model: PackageModel) -> String do
     let label = labelOf(model)
-    return $`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Search — ${esc(label)} ${esc(model.version)} — kex docs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../../assets/style.css">
-<link rel="icon" type="image/svg+xml" href="../../favicon.svg">
-<link rel="icon" type="image/png" href="../../icon.png">
-</head>
-<body>
-<header class="top">
-  <div class="wrap top-inner">
-    <a class="brand" href="../../index.html">kex</a>
-    <span class="brand-sub">docs</span>
-    <span class="spacer"></span>
-    <a class="back" href="index.html">${esc(label)} ${esc(model.version)}</a>
-  </div>
-</header>
-<div class="wrap">
-  <main class="content search-page">
-    <h1>Search ${esc(label)} <span class="ver">${esc(model.version)}</span></h1>
-    <p class="lede">Names, types and signatures across the whole package.</p>
-    <div class="search-page-box">
+    return $`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Search | ${esc(label)} ${esc(model.version)} | kex docs</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="../../assets/style.css">
+      <link rel="icon" type="image/png" href="../../icon.png">
+      </head>
+      <body>
+      <header class="top">
+      <div class="wrap top-inner">
+      <a class="brand" href="../../index.html">kex</a>
+      <span class="brand-sub">docs</span>
+      <span class="spacer"></span>
+      <a class="back" href="index.html">${esc(label)} ${esc(model.version)}</a>
+      </div>
+      </header>
+      <div class="wrap">
+      <main class="content search-page">
+      <h1>Search ${esc(label)} <span class="ver">${esc(model.version)}</span></h1>
+      <p class="lede">Names, types and signatures across the whole package.</p>
+      <div class="search-page-box">
       <input id="sp-input" type="search" placeholder="Search names, types, signatures…" autocomplete="off">
-    </div>
-    <div id="sp-results" class="search-page-results"></div>
-  </main>
-</div>
-<script>
-(function () {
-  var input = document.getElementById("sp-input");
-  var results = document.getElementById("sp-results");
-  var entries = null;
+      </div>
+      <div id="sp-results" class="search-page-results"></div>
+      </main>
+      </div>
+      <script>
+      (function () {
+      var input = document.getElementById("sp-input");
+      var results = document.getElementById("sp-results");
+      var entries = null;
 
-  function term() { return input.value.trim().toLowerCase(); }
+      function term() { return input.value.trim().toLowerCase(); }
 
-  function rank(e, tokens) {
-    var name = (e.name || "").toLowerCase();
-    var qname = (e.qualifiedName || "").toLowerCase();
-    var types = (e.types || []).join(" ").toLowerCase();
-    var sigs = (e.signatures || []).join(" ").toLowerCase();
-    var summary = (e.summary || "").toLowerCase();
-    var total = 0;
-    var ok = tokens.every(function (t) {
+      function rank(e, tokens) {
+      var name = (e.name || "").toLowerCase();
+      var qname = (e.qualifiedName || "").toLowerCase();
+      var types = (e.types || []).join(" ").toLowerCase();
+      var sigs = (e.signatures || []).join(" ").toLowerCase();
+      var summary = (e.summary || "").toLowerCase();
+      var total = 0;
+      var ok = tokens.every(function (t) {
       var local = 0;
       if (name === t) local = 100;
       else if (name.indexOf(t) === 0) local = 50;
@@ -139,22 +139,22 @@ ${cards}
       if (local === 0) return false;
       total += local;
       return true;
-    });
-    if (!ok) return -1;
-    if (tokens.indexOf("->") !== -1) total += e.kind === "function" ? 80 : -300;
-    return total;
-  }
+      });
+      if (!ok) return -1;
+      if (tokens.indexOf("->") !== -1) total += e.kind === "function" ? 80 : -300;
+      return total;
+      }
 
-  function render(list) {
-    results.innerHTML = "";
-    if (list.length === 0) {
+      function render(list) {
+      results.innerHTML = "";
+      if (list.length === 0) {
       var empty = document.createElement("p");
       empty.className = "search-empty";
       empty.textContent = "No matches.";
       results.appendChild(empty);
       return;
-    }
-    list.forEach(function (e) {
+      }
+      list.forEach(function (e) {
       var a = document.createElement("a");
       a.className = "search-page-hit";
       a.href = e.urlPath + ".html" + (e.anchor ? "#" + e.anchor : "");
@@ -166,11 +166,11 @@ ${cards}
       name.className = "search-name"; name.textContent = e.name;
       head.appendChild(kind); head.appendChild(name);
       if (e.qualifiedName && e.qualifiedName !== e.name) {
-        var qual = document.createElement("span");
-        qual.className = "search-qual";
-        var dot = e.qualifiedName.lastIndexOf(".");
-        qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
-        head.appendChild(qual);
+      var qual = document.createElement("span");
+      qual.className = "search-qual";
+      var dot = e.qualifiedName.lastIndexOf(".");
+      qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
+      head.appendChild(qual);
       }
       a.appendChild(head);
       var sig = document.createElement("span");
@@ -178,46 +178,46 @@ ${cards}
       sig.textContent = (e.signatures && e.signatures[0]) || "";
       a.appendChild(sig);
       if (e.summary) {
-        var sum = document.createElement("span");
-        sum.className = "search-summary";
-        sum.textContent = e.summary;
-        a.appendChild(sum);
+      var sum = document.createElement("span");
+      sum.className = "search-summary";
+      sum.textContent = e.summary;
+      a.appendChild(sum);
       }
       results.appendChild(a);
-    });
-  }
+      });
+      }
 
-  function run() {
-    if (term().length === 0) { results.innerHTML = ""; return; }
-    var tokens = term().split(" ").filter(function (t) { return t.length > 0; });
-    var scored = entries
+      function run() {
+      if (term().length === 0) { results.innerHTML = ""; return; }
+      var tokens = term().split(" ").filter(function (t) { return t.length > 0; });
+      var scored = entries
       .map(function (e) { return { e: e, s: rank(e, tokens) }; })
       .filter(function (x) { return x.s >= 0; })
       .sort(function (a, b) { return b.s - a.s; });
-    render(scored.slice(0, 200).map(function (x) { return x.e; }));
-  }
+      render(scored.slice(0, 200).map(function (x) { return x.e; }));
+      }
 
-  function syncUrl() {
-    var url = new URL(window.location.href);
-    if (term()) url.searchParams.set("q", input.value.trim()); else url.searchParams.delete("q");
-    window.history.replaceState({}, "", url);
-  }
+      function syncUrl() {
+      var url = new URL(window.location.href);
+      if (term()) url.searchParams.set("q", input.value.trim()); else url.searchParams.delete("q");
+      window.history.replaceState({}, "", url);
+      }
 
-  input.addEventListener("input", function () { run(); syncUrl(); });
+      input.addEventListener("input", function () { run(); syncUrl(); });
 
-  fetch("search.json", { cache: "no-store" })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
+      fetch("search.json", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
       entries = d.entries || [];
       var initial = new URLSearchParams(window.location.search).get("q") || "";
       if (initial) { input.value = initial; run(); }
-    })
-    .catch(function () {});
-})();
-</script>
-</body>
-</html>
-`
+      })
+      .catch(function () {});
+      })();
+      </script>
+      </body>
+      </html>
+    `
   end
 
   # Site root index.html: one card per PACKAGE (its newest build), not per
@@ -227,40 +227,40 @@ ${cards}
   foul rootIndexHtml(versions: [VersionEntry]) -> String do
     let packages = packageNames(versions)
     let cards = packages.map { |name| packageCard(name, versions) }.join("\n")
-    return $`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kex docs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/style.css">
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="icon" type="image/png" href="icon.png">
-</head>
-<body>
-<header class="top">
-  <div class="wrap top-inner">
-    <a class="brand" href="index.html">kex</a>
-    <span class="brand-sub">docs</span>
-    <span class="spacer"></span>
-    <a class="back" href="https://kex.run/docs">kex.run ↗</a>
-  </div>
-</header>
-<div class="wrap">
-  <main class="content prose">
-    <h1>kex documentation</h1>
-    <p class="lede">Reference documentation generated from source by docgen. Machine-readable entry points: <a href="llms.txt">llms.txt</a>, <a href="search.json">search.json</a>, <a href="versions.json">versions.json</a>.</p>
-    <div class="cards">
-${cards}
-    </div>
-  </main>
-</div>
-</body>
-</html>
-`
+    return $`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>kex docs</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="assets/style.css">
+      <link rel="icon" type="image/png" href="icon.png">
+      </head>
+      <body>
+      <header class="top">
+      <div class="wrap top-inner">
+      <a class="brand" href="index.html">kex</a>
+      <span class="brand-sub">docs</span>
+      <span class="spacer"></span>
+      <a class="back" href="https://kex.run/docs">kex.run ↗</a>
+      </div>
+      </header>
+      <div class="wrap">
+      <main class="content prose">
+      <h1>kex documentation</h1>
+      <p class="lede">Reference documentation generated from source by docgen. Machine-readable entry points: <a href="llms.txt">llms.txt</a>, <a href="search.json">search.json</a>, <a href="versions.json">versions.json</a>.</p>
+      <div class="cards">
+      ${cards}
+      </div>
+      </main>
+      </div>
+      </body>
+      </html>
+    `
   end
 
   # Package names in first-seen order of their newest entry: versions arrive
@@ -285,50 +285,50 @@ ${cards}
   foul layout(title: String, current: String, bodyContent: String, model: PackageModel) -> String do
     let label = labelOf(model)
     let root = rootPrefix(current)
-    return $`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} — ${esc(label)} ${esc(model.version)} — kex docs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="${root}assets/style.css">
-<link rel="icon" type="image/svg+xml" href="${root}favicon.svg">
-<link rel="icon" type="image/png" href="${root}icon.png">
-<script src="${root}assets/site.js" defer></script>
-</head>
-<body>
-<header class="top">
-  <div class="wrap top-inner">
-    <a class="brand" href="${root}index.html">kex</a>
-    <span class="brand-sub">docs</span>
-    <span class="spacer"></span>
-    <button class="search-trigger" id="search" aria-label="Search documentation"
-            data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}"
-            data-page="${esc(pageTarget(current))}">
+    return $`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>${esc(title)} | ${esc(label)} ${esc(model.version)} | kex docs</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="${root}assets/style.css">
+      <link rel="icon" type="image/png" href="${root}icon.png">
+      <script src="${root}assets/site.js" defer></script>
+      </head>
+      <body>
+      <header class="top">
+      <div class="wrap top-inner">
+      <a class="brand" href="${root}index.html">kex</a>
+      <span class="brand-sub">docs</span>
+      <span class="spacer"></span>
+      <button class="search-trigger" id="search" aria-label="Search documentation"
+      data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}"
+      data-page="${esc(pageTarget(current))}">
       <span>Search</span><kbd>/</kbd>
-    </button>
-    <span class="pkg-badge" id="version-badge" data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}" data-page="${esc(pageTarget(current))}">${esc(label)} ${esc(model.version)}</span>
-    <a class="back" href="https://kex.run/docs">kex.run ↗</a>
-  </div>
-</header>
-<div class="wrap layout">
-  ${sidebar(model, current)}
-  <main class="content">
-    <nav class="crumbs"><a href="${versionPrefix(current)}index.html">${esc(label)}</a> <span class="sep">/</span> <span>${esc(title)}</span></nav>
-    <article class="prose">
-${bodyContent}
-    </article>
-  </main>
-</div>
-<footer class="foot">
-  <div class="wrap">Generated by kex docgen at ${esc(model.generatedAt)} · <a href="${root}llms.txt">llms.txt</a> · <a href="${root}search.json">search.json</a></div>
-</footer>
-</body>
-</html>
-`
+      </button>
+      <span class="pkg-badge" id="version-badge" data-root="${root}" data-package="${esc(model.package)}" data-version="${esc(model.version)}" data-page="${esc(pageTarget(current))}">${esc(label)} ${esc(model.version)}</span>
+      <a class="back" href="https://kex.run/docs">kex.run ↗</a>
+      </div>
+      </header>
+      <div class="wrap layout">
+      ${sidebar(model, current)}
+      <main class="content">
+      <nav class="crumbs"><a href="${versionPrefix(current)}index.html">${esc(label)}</a> <span class="sep">/</span> <span>${esc(title)}</span></nav>
+      <article class="prose">
+      ${bodyContent}
+      </article>
+      </main>
+      </div>
+      <footer class="foot">
+      <div class="wrap">Generated by kex docgen at ${esc(model.generatedAt)} · <a href="${root}llms.txt">llms.txt</a> · <a href="${root}search.json">search.json</a></div>
+      </footer>
+      </body>
+      </html>
+    `
   end
 
   # The sidebar lists one entry per source FILE, in scan order. The active

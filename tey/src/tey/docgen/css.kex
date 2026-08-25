@@ -45,6 +45,15 @@ module Tey.Docgen.Css do
         scroll-behavior: smooth;
       }
 
+      /* JetBrains Mono ships programming ligatures (-> to a single arrow, =>,
+         !=, ...) on by default. They read well in code blocks, so they stay
+         there — but in the search box the reader is TYPING, and -> must
+         appear exactly as entered. Disable ligatures there only. */
+      .search-modal-panel input, .search-page-box input {
+        font-variant-ligatures: none;
+        font-feature-settings: "liga" 0, "calt" 0, "dlig" 0;
+      }
+
       body {
         margin: 0;
         background-color: var(--bg);
