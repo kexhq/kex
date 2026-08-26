@@ -6421,13 +6421,24 @@ struct Lowering {
                          three(std::move(v), lit(LitKind::Atom, ty),
                                litInt(static_cast<int64_t>(
                                    record->second.fields.size() + 1))));
-        // Unknown tagged type fallback.
+        // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
+        // fixed arity, so is_record/3 above does not apply and the tag has to
+        // be read with element/2.
+        //
+        // A `case`, NOT `erlang:and(is_tuple(V), element(1,V) =:= Ty)`. That
+        // conjunction is STRICT — `element/2` runs even when V is a binary —
+        // and on OTP < 28 `erlc +from_core` lets the resulting badarg ESCAPE
+        // the guard instead of failing the clause. So `"${s}"` on a plain
+        // String crashed wherever Optional or Result were in scope, which is
+        // most programs; OTP 28 merely masks it. `is_record/2` would say this
+        // directly but is not a legal Core Erlang guard, unlike is_record/3.
         auto vRef = snap(v);
-        return callE("erlang", "and", 2, two(
+        return matchBool(
             callE("erlang", "is_tuple", 1, one(vRef.get())),
             intrin(Op::Eq, two(callE("erlang", "element", 2,
                                      two(litInt(1), vRef.get())),
-                               lit(LitKind::Atom, ty)))));
+                               lit(LitKind::Atom, ty))),
+            litBool(false));
     }
 
     auto makeArgumentDispatcher(
