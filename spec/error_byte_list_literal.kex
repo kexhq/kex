@@ -1,0 +1,3 @@
+main do
+  Binary.fromBytes([104, 300])
+end

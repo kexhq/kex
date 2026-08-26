@@ -12,7 +12,7 @@ using FS
 # Just([abcd])
 # [abcd]
 # true
-# None
+# Error(ReadFailed(spec/io_scratch.txt))
 
 main do
   IO.printLine("hello")

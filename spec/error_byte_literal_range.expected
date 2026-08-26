@@ -1,0 +1,4 @@
+spec/error_byte_literal_range.kex:2:24: error: Byte literal must be in 0..255
+spec/error_byte_literal_range.kex:3:24: error: Byte literal must be in 0..255
+spec/error_byte_literal_range.kex:4:28: error: Byte literal must be in 0..255
+Aborted: 3 type errors — fix before running (use --no-check to skip).

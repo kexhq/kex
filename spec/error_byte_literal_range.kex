@@ -1,0 +1,5 @@
+main do
+  let negative: Byte = -1
+  let tooLarge: Byte = 256
+  let list: [Byte] = [104, 300]
+end

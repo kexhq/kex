@@ -19,7 +19,6 @@ main do
 
   # --- a String is TEXT, so bytes that are not valid UTF-8 are not a String
   IO.printLine(String.fromBytes([255]))
-  IO.printLine(String.fromBytes([104, 300]))
 
   # --- a tuple is not a list; `items` is the explicit conversion
   IO.printLine((1, "a").items)

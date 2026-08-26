@@ -23,7 +23,7 @@ describe("Mock.FS.files") do
   end
 
   it("does not leak into the next test") do
-    assert(FS.File.read("/kexmock/a.txt") == None)
+    assert(FS.File.read("/kexmock/a.txt") == Error(ReadFailed("/kexmock/a.txt")))
   end
 end
 
@@ -31,13 +31,13 @@ describe("Mock.FS.onRead") do
   it("answers by rule, and None means absent") do
     Mock.FS.onRead({ |path| path.endsWith?(".md") then Just("# ${path}") else None })
     assert(FS.File.read("/kexmock/guide.md").or("") == "# /kexmock/guide.md")
-    assert(FS.File.read("/kexmock/notes.txt") == None)
+    assert(FS.File.read("/kexmock/notes.txt") == Error(ReadFailed("/kexmock/notes.txt")))
     assert(FS.File.exists?("/kexmock/guide.md"))
     assert(!FS.File.exists?("/kexmock/notes.txt"))
   end
 
   it("is discarded with the rest of the mock state") do
-    assert(FS.File.read("/kexmock/guide.md") == None, "callback leaked between tests")
+    assert(FS.File.read("/kexmock/guide.md") == Error(ReadFailed("/kexmock/guide.md")), "callback leaked between tests")
   end
 end
 

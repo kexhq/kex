@@ -384,6 +384,16 @@ int main() {
             assertTrue(contains(out, "call 'kex_intrinsic_fs':'directory'"), out);
             assertTrue(contains(out, "call 'kex_intrinsic_fs':'clear'"), out);
         });
+
+        it("Binary primitives call their intrinsic module", []() {
+            auto out = emit(
+                "main do\n"
+                "  Kex.Intrinsic.Binary.take(Kex.Intrinsic.Binary.fromBytes([0, 1]), 1)\n"
+                "end\n");
+            assertTrue(contains(out, "call 'kex_intrinsic_binary':'fromBytes'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_binary':'take'"), out);
+            assertFalse(contains(out, "binary_to_list"), out);
+        });
     });
 
     describe("IR Core Erlang emitter — let bindings", []() {

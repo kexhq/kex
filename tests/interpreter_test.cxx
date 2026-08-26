@@ -1492,18 +1492,21 @@ int main() {
                         std::string("failed"));
         });
 
-        it("reading a nonexistent file returns None", []() {
+        it("reading a nonexistent file returns ReadFailed", []() {
             auto result = runFS("main do\n  FS.File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
-            assertTrue(result->isNone());
+            const auto* error = std::get_if<VariantValue>(&result->data);
+            assertTrue(error && error->tag == "Error" && !error->args.empty());
+            const auto* failure = std::get_if<VariantValue>(&error->args[0]->data);
+            assertTrue(failure && failure->tag == "ReadFailed");
         });
 
-        it("filesystem Optional success values are wrapped in Just", []() {
+        it("filesystem text reads are wrapped in Result", []() {
             auto result = runFSMocking(
                 "main do\n"
                 "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
-                "  let Just(content) = FS.File.read(\"wrapped.txt\")\n"
+                "  let Ok(content) = FS.File.read(\"wrapped.txt\")\n"
                 "  let handle = FS.File.open(\"wrapped.txt\", FS.Read).try\n"
-                "  let Just(line) = handle.readLine\n"
+                "  let Ok(Just(line)) = handle.readLine\n"
                 "  content + line\n"
                 "end\n");
             assertEqual(std::get<StringValue>(result->data).value,

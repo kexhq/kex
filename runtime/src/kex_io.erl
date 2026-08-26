@@ -1,5 +1,6 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, print_error_raw/1, read_line/0, read_char/0,
+-export([print_line/1, print/1, print_error/1, print_error_raw/1,
+           print_binary/1, print_error_binary/1, read_line/0, read_char/0,
            inspect/1, inspect_rendered/2, inspect_repl/1, inspect_value/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
@@ -113,6 +114,18 @@ print_error_raw(X) ->
     case mock_active() of
         true -> mock_append(X, <<>>);
         false -> io:format(standard_error, "~ts", [to_string(X)]), 'Kex.Unit'
+    end.
+
+print_binary(Bin) when is_binary(Bin) ->
+    case mock_active() of
+        true -> mock_append(Bin, <<>>);
+        false -> io:put_chars(Bin), 'Kex.Unit'
+    end.
+
+print_error_binary(Bin) when is_binary(Bin) ->
+    case mock_active() of
+        true -> mock_append(Bin, <<>>);
+        false -> io:put_chars(standard_error, Bin), 'Kex.Unit'
     end.
 
 %% IO.getLine — read a line from stdin.
@@ -521,6 +534,8 @@ inspect_string(X) when is_atom(X) ->
     end;
 inspect_string({'FileHandle', _Device, Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
+inspect_string({'Binary', Bin}) when is_binary(Bin) ->
+    "#Binary<" ++ integer_to_list(byte_size(Bin)) ++ " bytes>";
 inspect_string({'MockFileHandle', Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
 inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
@@ -612,6 +627,7 @@ value_type_name(X) when is_float(X) -> "Float";
 value_type_name(true) -> "Bool";
 value_type_name(false) -> "Bool";
 value_type_name({'Char', _}) -> "Char";
+value_type_name({'Binary', Bin}) when is_binary(Bin) -> "Binary";
 value_type_name(X) when is_list(X) -> list_type_name(X);
 value_type_name(X) when is_map(X) -> "Map";
 value_type_name({'Just', V}) -> "Option<" ++ value_type_name(V) ++ ">";
@@ -713,6 +729,8 @@ to_string(X) when is_map(X)     ->
 % TupleValue toString) — this doesn't generalize to arbitrary user-defined
 % ADT tags used as a tuple's first element, but covers the tags that
 % actually appear from Kex's own prelude constructors.
+to_string({'Binary', Bin}) when is_binary(Bin) ->
+    "#Binary<" ++ integer_to_list(byte_size(Bin)) ++ " bytes>";
 to_string(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->

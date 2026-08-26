@@ -19,7 +19,7 @@ foul writeToReader(path: String) -> Void do
   return reader.write("no")
 end
 
-foul readFromWriter(path: String) -> String? do
+foul readFromWriter(path: String) -> Result<String, ReadError> do
   let writer = FS.File.open(path, FS.Write).try
   return writer.read
 end

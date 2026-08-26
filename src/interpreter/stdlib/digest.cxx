@@ -23,6 +23,10 @@ auto Evaluator::registerDigestBuiltins() -> void {
     defineModule("Digest");
     defineIntrinsic("Digest::sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string(sha256Hex({}));
+        if (const auto* binary = std::get_if<BinaryValue>(&args[0]->data)) {
+            const auto digest = beam::computeSha256(binary->bytes);
+            return Value::binary({digest.begin(), digest.end()});
+        }
         const auto* text = std::get_if<StringValue>(&args[0]->data);
         if (!text) return Value::string(sha256Hex({}));
         return Value::string(sha256Hex(

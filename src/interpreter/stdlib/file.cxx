@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "../evaluator.hxx"
+#include "../../common/utf8.hxx"
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -34,6 +35,56 @@ static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
         result.push_back(Value::string(line));
     }
     return result;
+}
+
+static auto invalidUtf8Offset(std::string_view text) -> std::optional<size_t> {
+    for (size_t i = 0; i < text.size();) {
+        const auto lead = static_cast<uint8_t>(text[i]);
+        size_t width = lead < 0x80 ? 1 : lead >= 0xc2 && lead <= 0xdf ? 2
+                     : lead >= 0xe0 && lead <= 0xef ? 3
+                     : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+        if (!width || i + width > text.size()) return i;
+        for (size_t j = 1; j < width; ++j)
+            if ((static_cast<uint8_t>(text[i + j]) & 0xc0) != 0x80) return i;
+        if (width == 3) {
+            const auto b = static_cast<uint8_t>(text[i + 1]);
+            if ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b >= 0xa0)) return i;
+        }
+        if (width == 4) {
+            const auto b = static_cast<uint8_t>(text[i + 1]);
+            if ((lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b >= 0x90)) return i;
+        }
+        i += width;
+    }
+    return std::nullopt;
+}
+
+static auto readError(const char* tag, std::optional<size_t> offset = std::nullopt)
+    -> ValuePtr {
+    std::vector<ValuePtr> args;
+    if (offset) args.push_back(Value::integer(static_cast<int64_t>(*offset)));
+    return Value::error(Value::variant(tag, "ReadError", std::move(args)));
+}
+
+static auto textReadResult(std::string text) -> ValuePtr {
+    if (auto offset = invalidUtf8Offset(text)) return readError("InvalidUtf8", offset);
+    return Value::ok(Value::string(std::move(text)));
+}
+
+static auto optionalTextReadResult(std::optional<std::string> text) -> ValuePtr {
+    if (!text) return Value::ok(Value::none());
+    if (auto offset = invalidUtf8Offset(*text)) return readError("InvalidUtf8", offset);
+    return Value::ok(Value::just(Value::string(std::move(*text))));
+}
+
+static auto optionalValueReadResult(const ValuePtr& value) -> ValuePtr {
+    if (!value || value->isNone()) return Value::ok(Value::none());
+    if (auto* variant = std::get_if<VariantValue>(&value->data);
+        variant && variant->tag == "Just" && !variant->args.empty()) {
+        if (auto* text = std::get_if<StringValue>(&variant->args[0]->data))
+            return optionalTextReadResult(text->value);
+    }
+    return readError("ReadFailed");
 }
 
 auto Evaluator::registerFileBuiltins() -> void {
@@ -138,7 +189,8 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.getLine -> String?
     reg("FileHandle::getLine", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO::getLine")) return *forwarded;
+        if (auto forwarded = standardRead(args, "IO::getLine"))
+            return optionalValueReadResult(*forwarded);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
@@ -146,7 +198,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (mockIt != m_mockFiles.end()) {
             size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
-            if (pos >= content.size()) return Value::none();
+            if (pos >= content.size()) return Value::ok(Value::none());
             auto end = content.find('\n', pos);
             std::string line;
             if (end == std::string::npos) {
@@ -157,19 +209,21 @@ auto Evaluator::registerFileBuiltins() -> void {
                 pos = end + 1;
             }
             setMockCursor(h->path, pos);
-            return Value::just(Value::string(line));
+            return optionalTextReadResult(std::move(line));
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::none();
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
         std::string line;
-        if (!std::getline(*h->stream, line)) return Value::none();
-        return Value::just(Value::string(line));
+        if (!std::getline(*h->stream, line))
+            return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
+        return optionalTextReadResult(std::move(line));
     });
 
     // handle.get -> String? (single character)
     reg("FileHandle::get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO::get")) return *forwarded;
+        if (auto forwarded = standardRead(args, "IO::get"))
+            return optionalValueReadResult(*forwarded);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
@@ -177,15 +231,32 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (mockIt != m_mockFiles.end()) {
             size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
-            if (pos >= content.size()) return Value::none();
-            setMockCursor(h->path, pos + 1);
-            return Value::just(Value::string(std::string(1, content[pos])));
+            if (pos >= content.size()) return Value::ok(Value::none());
+            const auto rest = std::string_view(content).substr(pos);
+            const auto width = utf8::sequenceLength(rest, 0);
+            const auto consumed = std::min(width, rest.size());
+            auto scalar = content.substr(pos, consumed);
+            setMockCursor(h->path, pos + consumed);
+            return optionalTextReadResult(std::move(scalar));
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::none();
-        char c;
-        if (!h->stream->get(c)) return Value::none();
-        return Value::just(Value::string(std::string(1, c)));
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        char lead;
+        if (!h->stream->get(lead))
+            return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
+        std::string scalar(1, lead);
+        const auto width = utf8::sequenceLength(std::string_view(&lead, 1), 0);
+        size_t wanted = static_cast<unsigned char>(lead) < 0x80 ? 1
+                      : (static_cast<unsigned char>(lead) & 0xe0) == 0xc0 ? 2
+                      : (static_cast<unsigned char>(lead) & 0xf0) == 0xe0 ? 3
+                      : (static_cast<unsigned char>(lead) & 0xf8) == 0xf0 ? 4 : 1;
+        (void)width;
+        for (size_t i = 1; i < wanted; ++i) {
+            char byte;
+            if (!h->stream->get(byte)) break;
+            scalar += byte;
+        }
+        return optionalTextReadResult(std::move(scalar));
     });
 
     // handle.printLine(msg) -> Void. The Bool these three used to answer was
@@ -244,11 +315,11 @@ auto Evaluator::registerFileBuiltins() -> void {
                     drained += m_mockIOInputLines.front() + "\n";
                     m_mockIOInputLines.pop_front();
                 }
-                return Value::just(Value::string(drained));
+                return textReadResult(std::move(drained));
             }
             std::ostringstream buf;
             buf << std::cin.rdbuf();
-            return Value::just(Value::string(buf.str()));
+            return textReadResult(buf.str());
         }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
@@ -258,16 +329,17 @@ auto Evaluator::registerFileBuiltins() -> void {
             size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
             if (pos >= content.size())
-                return Value::just(Value::string(""));
+                return Value::ok(Value::string(""));
             auto remaining = content.substr(pos);
             setMockCursor(h->path, content.size());
-            return Value::just(Value::string(remaining));
+            return textReadResult(std::move(remaining));
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::none();
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
         std::ostringstream buf;
         buf << h->stream->rdbuf();
-        return Value::just(Value::string(buf.str()));
+        if (h->stream->bad()) return readError("ReadFailed");
+        return textReadResult(buf.str());
     });
 
     // handle.write(data) -> Void
@@ -286,6 +358,47 @@ auto Evaluator::registerFileBuiltins() -> void {
 
         if (!h->stream || !h->stream->is_open()) return Value::unit();
         *h->stream << content;
+        return Value::unit();
+    });
+
+    reg("FileHandle::readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return readError("ReadFailed");
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) return readError("ReadFailed");
+        if (isStandardHandle(h->path)) {
+            if (h->path != kStdinPath) return readError("ReadFailed");
+            std::ostringstream out; out << std::cin.rdbuf();
+            const auto text = out.str();
+            return Value::ok(Value::binary({text.begin(), text.end()}));
+        }
+        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+            const auto pos = std::min(mockCursor(h->path), it->second.size());
+            std::vector<uint8_t> bytes(it->second.begin() + pos, it->second.end());
+            setMockCursor(h->path, it->second.size());
+            return Value::ok(Value::binary(std::move(bytes)));
+        }
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(*h->stream), {});
+        return h->stream->bad() ? readError("ReadFailed")
+                                : Value::ok(Value::binary(std::move(bytes)));
+    });
+
+    reg("FileHandle::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        auto* value = std::get_if<BinaryValue>(&args[1]->data);
+        if (!h || !value) return Value::unit();
+        const std::string bytes(value->bytes.begin(), value->bytes.end());
+        if (h->path == kStdoutPath || h->path == kStderrPath) {
+            if (m_mockIO) m_mockIOOutput += bytes;
+            else if (h->path == kStdoutPath) std::cout.write(bytes.data(), bytes.size());
+            else std::cerr.write(bytes.data(), bytes.size());
+            return Value::unit();
+        }
+        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+            it->second.append(bytes); return Value::unit();
+        }
+        if (h->stream && h->stream->is_open()) h->stream->write(bytes.data(), bytes.size());
         return Value::unit();
     });
 
@@ -341,19 +454,52 @@ auto Evaluator::registerFileBuiltins() -> void {
             : Value::none();
     });
 
-    // File.read(path) -> String?
+    // File.read(path) -> Result<String, FileError>
     reg("File::read", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
-        if (auto mocked = mockFileContent(pathStr->value))
-            return Value::just(Value::string(*mocked));
+        if (!pathStr) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
+        auto finish = [&](std::string content) -> ValuePtr {
+            if (auto offset = invalidUtf8Offset(content))
+                return Value::error(Value::variant("InvalidUtf8", "FileError",
+                    {Value::string(pathStr->value), Value::integer(static_cast<int64_t>(*offset))}));
+            return Value::ok(Value::string(std::move(content)));
+        };
+        if (auto mocked = mockFileContent(pathStr->value)) return finish(*mocked);
         std::ifstream file(pathStr->value, std::ios::binary);
-        if (!file.is_open()) return Value::none();
+        if (!file.is_open()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
         std::ostringstream buf;
         buf << file.rdbuf();
-        if (file.bad()) return Value::none();
-        return Value::just(Value::string(buf.str()));
+        if (file.bad()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        return finish(buf.str());
+    });
+
+    reg("File::readBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* path = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        const auto name = path ? path->value : std::string{};
+        if (!path) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        if (auto mocked = mockFileContent(name))
+            return Value::ok(Value::binary({mocked->begin(), mocked->end()}));
+        std::ifstream file(name, std::ios::binary);
+        if (!file) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(file), {});
+        return file.bad() ? Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}))
+                          : Value::ok(Value::binary(std::move(bytes)));
+    });
+
+    reg("File::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto* path = std::get_if<StringValue>(&args[0]->data);
+        auto* value = std::get_if<BinaryValue>(&args[1]->data);
+        if (!path || !value) return Value::boolean(false);
+        const std::string bytes(value->bytes.begin(), value->bytes.end());
+        if (m_mockFiles.count(path->value)) {
+            m_mockFiles[path->value] = bytes; return Value::boolean(true);
+        }
+        std::ofstream file(path->value, std::ios::binary | std::ios::trunc);
+        if (!file) return Value::boolean(false);
+        file.write(bytes.data(), bytes.size());
+        return Value::boolean(static_cast<bool>(file));
     });
 
     // File.write(path, content) -> Bool
@@ -754,6 +900,29 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         const char* home = std::getenv("HOME");
         if (home) return Value::just(Value::string(home));
         return Value::none();
+    });
+
+    // Directory.temporary() -> String
+    //
+    // Total, so it never needs an Option: the environment's temporary
+    // directory when it names one, and /tmp when it does not. The BEAM side
+    // (kex_file:dir_temporary/0) reads the same variables in the same order,
+    // because the two backends have to agree on the answer.
+    reg("Directory::temporary", [](std::vector<ValuePtr>) -> ValuePtr {
+        std::string dir;
+        for (const char* var : {"TMPDIR", "TEMP", "TMP"}) {
+            if (const char* value = std::getenv(var); value && *value) {
+                dir = value;
+                break;
+            }
+        }
+        if (dir.empty()) dir = "/tmp";
+        // Trailing separators are common in TMPDIR (macOS sets one) and would
+        // double up under FS.Path.join. "/" itself keeps its slash.
+        while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) {
+            dir.pop_back();
+        }
+        return Value::string(dir);
     });
 }
 

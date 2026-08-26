@@ -1,0 +1,8 @@
+Binary
+  ✓ stores arbitrary bytes without exposing text
+  ✓ uses strict canonical hex and base64
+  ✓ converts explicitly between binary and text
+  ✓ hashes binary to raw binary
+  ✓ keeps large payloads in binary storage
+
+5 passed, 0 failed

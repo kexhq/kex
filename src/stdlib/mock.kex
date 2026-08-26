@@ -447,7 +447,14 @@ module Mock do
       None         => @files.get(path)
     end
 
-    foul read(path) = this.cannedRead(path)
+    foul read(path) = match this.cannedRead(path) do
+      Just(content) => Ok(content)
+      None => Error(ReadFailed(path))
+    end
+    foul readBytes(path) = match this.cannedRead(path) do
+      Just(content) => Ok(content.to(Binary).try)
+      None => Error(ReadFailed(path))
+    end
     foul readLines(path) = this.cannedRead(path).map { |content| content.lines }
     foul feed(path) = this.cannedRead(path).map { |content| content.lines }
     foul size(path) = this.cannedRead(path).map { |content| content.bytes.count }
@@ -461,6 +468,7 @@ module Mock do
     # write sees it fail rather than silently succeed.
     foul open(path, mode) = Error(OpenFailed(path))
     foul write(path, content) = false
+    foul writeBytes(path, content) = false
     foul append(path, content) = false
     foul delete(path) = false
     foul copy(src, dst) = false

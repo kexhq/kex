@@ -1,0 +1,15 @@
+using FS
+describe("FS.Directory.temporary") do
+  it("names a usable, separator-free directory") do
+    let dir = FS.Directory.temporary
+    assert(!dir.empty?, "non-empty")
+    assert(FS.Directory.directory?(dir), "is a directory")
+    assert(!dir.endsWith?("/"), "no trailing separator")
+
+    let scratch = FS.Path.join(dir, "kex_tmpdir_probe.bin")
+    FS.File.delete(scratch)
+    assert(FS.File.writeBytes(scratch, Binary.fromBytes([1, 2])), "writable")
+    assert(FS.File.readBytes(scratch) == Ok(Binary.fromBytes([1, 2])), "readable")
+    assert(FS.File.delete(scratch), "deletable")
+  end
+end
