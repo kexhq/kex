@@ -1,5 +1,5 @@
 spec/error_readonly_alias_write.kex:12:53: error: `write` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
 
-write : FileHandle<A, CanWrite> -> String -> Bool
+write : FileHandle<A, CanWrite> -> Showable -> Void
 
 write : String -> String -> Bool

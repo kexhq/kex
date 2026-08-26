@@ -4,6 +4,7 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <iostream>
 
 namespace kex::interpreter {
 
@@ -38,6 +39,44 @@ static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
 auto Evaluator::registerFileBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
         defineIntrinsic(name, std::move(fn));
+    };
+    // `IO.out` / `IO.error` / `IO.in` are FileHandle values carrying a
+    // sentinel path and no fstream (kexhq/kex#139). Every handle intrinsic
+    // below asks this first: when the receiver is one of them the call is
+    // forwarded to the matching IO intrinsic, so a handle write is literally
+    // the same operation as `IO.print` — same terminal, same Mock.IO capture,
+    // no second code path to keep in step.
+    auto viaStandardStream =
+        [this](const ValuePtr& receiver, const char* stdoutName,
+               const char* stderrName, const char* stdinName,
+               std::vector<ValuePtr> args) -> std::optional<ValuePtr> {
+        auto* handle = std::get_if<FileHandleValue>(&receiver->data);
+        if (!handle || !isStandardHandle(handle->path)) return std::nullopt;
+        const char* target = handle->path == kStdoutPath   ? stdoutName
+                             : handle->path == kStderrPath ? stderrName
+                                                           : stdinName;
+        // No target means the operation is meaningless on that stream —
+        // reading stdout, writing stdin. The typestate on `IO.out` and
+        // `IO.in` already rejects those at compile time; this is the
+        // runtime floor under it.
+        if (!target) return Value::none();
+        auto intrinsic = m_intrinsicEnv->get(target);
+        auto* function = intrinsic ? std::get_if<FunctionValue>(&intrinsic->data) : nullptr;
+        if (!function || !function->native) return Value::none();
+        return function->native(std::move(args));
+    };
+    // Drops the receiver: the IO intrinsics take only what is written.
+    auto standardWrite = [viaStandardStream](const std::vector<ValuePtr>& args,
+                                             const char* stdoutName,
+                                             const char* stderrName)
+        -> std::optional<ValuePtr> {
+        return viaStandardStream(args[0], stdoutName, stderrName, nullptr,
+                                 {args.begin() + 1, args.end()});
+    };
+    auto standardRead = [viaStandardStream](const std::vector<ValuePtr>& args,
+                                            const char* stdinName)
+        -> std::optional<ValuePtr> {
+        return viaStandardStream(args[0], nullptr, nullptr, stdinName, {});
     };
 
     // FS.File.open(path, mode) -> Result<FileHandle<R, W>, FileError>
@@ -97,8 +136,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     };
 
     // handle.getLine -> String?
-    reg("FileHandle::getLine", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle::getLine", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
+        if (auto forwarded = standardRead(args, "IO::getLine")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
@@ -127,8 +167,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.get -> String? (single character)
-    reg("FileHandle::get", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle::get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
+        if (auto forwarded = standardRead(args, "IO::get")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
@@ -147,40 +188,44 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::just(Value::string(std::string(1, c)));
     });
 
-    // handle.printLine(msg) -> Bool
-    reg("FileHandle::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+    // handle.printLine(msg) -> Void. The Bool these three used to answer was
+    // never an error channel — nothing checked it — so kexhq/kex#139 dropped
+    // it: the call says `ok`, and failure belongs to the device.
+    reg("FileHandle::printLine", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        if (auto forwarded = standardWrite(args, "IO::printLine", "IO::printError")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::boolean(false);
+        if (!h) return Value::unit();
         std::string content = args[1]->toString();
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
             mockIt->second += content + "\n";
-            return Value::boolean(true);
+            return Value::unit();
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
+        if (!h->stream || !h->stream->is_open()) return Value::unit();
         *h->stream << content << "\n";
-        return Value::boolean(static_cast<bool>(*h->stream));
+        return Value::unit();
     });
 
-    // handle.print(msg) -> Bool
-    reg("FileHandle::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+    // handle.print(msg) -> Void
+    reg("FileHandle::print", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        if (auto forwarded = standardWrite(args, "IO::print", "IO::printErrorRaw")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::boolean(false);
+        if (!h) return Value::unit();
         std::string content = args[1]->toString();
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
             mockIt->second += content;
-            return Value::boolean(true);
+            return Value::unit();
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
+        if (!h->stream || !h->stream->is_open()) return Value::unit();
         *h->stream << content;
-        return Value::boolean(static_cast<bool>(*h->stream));
+        return Value::unit();
     });
 
     // --- Binary/raw I/O ---
@@ -188,6 +233,23 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.read -> String? (remaining content)
     reg("FileHandle::read", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
+        // `read` is "the rest of it", so on stdin it drains to EOF rather
+        // than forwarding to a line-at-a-time IO intrinsic.
+        if (auto* std_ = std::get_if<FileHandleValue>(&args[0]->data);
+            std_ && isStandardHandle(std_->path)) {
+            if (std_->path != kStdinPath) return Value::none();
+            if (m_mockIO) {
+                std::string drained;
+                while (!m_mockIOInputLines.empty()) {
+                    drained += m_mockIOInputLines.front() + "\n";
+                    m_mockIOInputLines.pop_front();
+                }
+                return Value::just(Value::string(drained));
+            }
+            std::ostringstream buf;
+            buf << std::cin.rdbuf();
+            return Value::just(Value::string(buf.str()));
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
@@ -208,22 +270,23 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::just(Value::string(buf.str()));
     });
 
-    // handle.write(data) -> Bool
-    reg("FileHandle::write", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+    // handle.write(data) -> Void
+    reg("FileHandle::write", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        if (auto forwarded = standardWrite(args, "IO::print", "IO::printErrorRaw")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::boolean(false);
+        if (!h) return Value::unit();
         std::string content = args[1]->toString();
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
             mockIt->second += content;
-            return Value::boolean(true);
+            return Value::unit();
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
+        if (!h->stream || !h->stream->is_open()) return Value::unit();
         *h->stream << content;
-        return Value::boolean(static_cast<bool>(*h->stream));
+        return Value::unit();
     });
 
     // --- Lifecycle ---
@@ -231,6 +294,10 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.atEnd? -> Bool
     reg("FileHandle::atEnd?", [this, mockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(true);
+        // stdin has no cheap end-of-input test that does not consume a
+        // character; report "not at end" and let the read answer None.
+        if (auto* h = std::get_if<FileHandleValue>(&args[0]->data))
+            if (isStandardHandle(h->path)) return Value::boolean(false);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::boolean(true);
 

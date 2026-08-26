@@ -1,0 +1,42 @@
+# `FS.File.open` with a block: opens, runs the block with the handle, closes.
+#
+# `Ok` carries whatever the block returned, so the handle does not outlive the
+# region allowed to use it and no call site has to remember `close`. The
+# typestate is the mode's, exactly as in the handle-returning form — a block
+# given a `FS.Read` handle still cannot write through it.
+#
+# The close is NOT an `ensure`: Kex has no such form, so a block that raises
+# still leaks the handle. `trying` inside the block covers that today.
+
+using FS
+
+main do
+  Mock.FS.File("block.txt", "")
+
+  # The block's value becomes the Ok payload.
+  let wrote = FS.File.open("block.txt", FS.Write) do |file|
+    file.printLine("first")
+    file.printLine("second")
+    "done"
+  end
+  IO.printLine(wrote)
+
+  let count = FS.File.open("block.txt", FS.Read) do |file|
+    file.read.or("").lines.length
+  end
+  IO.printLine(count)
+
+  # A failure to open never runs the block, and surfaces as Error.
+  let missing = FS.File.open("does-not-exist.txt", FS.Read) do |file|
+    file.read.or("")
+  end
+  IO.printLine(missing)
+
+  # Append preserves what is there; ReadWrite exposes both halves.
+  FS.File.open("block.txt", FS.Append) do |file|
+    file.writeLine("appended")
+  end
+  IO.print(FS.File.read("block.txt").or("(missing)"))
+
+  Mock.FS.clear()
+end

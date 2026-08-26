@@ -1,3 +1,100 @@
+# +Readable+ — a source that yields text.
+#
+# Named so that anything can be one, not just a file: the vocabulary
+# +FileHandle<CanRead, W>+ already carried was an abstraction without a name,
+# so nothing else could implement it and +IO+ did not go through it
+# (kexhq/kex#139). +IO.in+ is a +Readable+; so is any handle opened for
+# reading.
+#
+#   foul firstLine(source: Readable) -> String do
+#     source.getLine.or("(empty)")
+#   end
+#
+#   firstLine(IO.in)
+#   firstLine(FS.File.open("notes.txt", Read).try)
+trait Readable do
+  # Reads the next line, without its newline.
+  #
+  # @return [String?] the next line, or +None+ at end of input
+  getLine :> String?
+
+  # Reads a single character, as a one-character +String+.
+  #
+  # @return [String?] the next character, or +None+ at end of input
+  get :> String?
+
+  # Reads the next line, without its newline. The same as +getLine+.
+  #
+  # @return [String?] the next line, or +None+ at end of input
+  readLine :> String?
+
+  # Reads everything remaining, as one +String+.
+  #
+  # @return [String?] the remaining contents, or +None+
+  read :> String?
+
+  # Returns +true+ when the source has reached its end.
+  #
+  # @return [Bool] +true+ at end of input
+  eof? :> Bool
+
+  # Returns +true+ when the source has reached its end. The same as +eof?+.
+  #
+  # @return [Bool] +true+ at end of input
+  atEnd? :> Bool
+end
+
+# +Writable+ — a sink that accepts text.
+#
+# The payoff of naming it is that a sink becomes a VALUE a library can accept,
+# rather than a global switch it can only sit underneath: output from one
+# library can go to a buffer while another's goes to the terminal
+# (kexhq/kex#139).
+#
+#   foul report(out: Writable, lines: [String]) -> Void do
+#     lines.each { |line| out.printLine(line) }
+#   end
+#
+#   report(IO.out, results)
+#   report(IO.error, warnings)
+#   report(FS.File.open("report.txt", Write).try, results)
+#
+# Two deliberate choices, both settled in kexhq/kex#139:
+#
+# - The argument is +Showable+, not +String+. +IO.printLine+ always took a
+#   +Showable+ while the handle methods took a +String+; the wider one is
+#   right, and it is what makes +IO.printLine(x)+ and +IO.out.printLine(x)+
+#   the same call.
+# - The result is +Void+, not +Bool+. A boolean nobody checks is not an error
+#   channel, and +Result<Void, IOError>+ on every print is miserable to use.
+#   Erlang's answer is the one taken here: the call says +ok+, and failure
+#   belongs to the device rather than to the call site.
+trait Writable do
+  # Writes +content+ followed by a newline.
+  #
+  # @param content [Showable] the value to write
+  # @return [Void]
+  printLine :> Showable -> Void
+
+  # Writes +content+ with no trailing newline.
+  #
+  # @param content [Showable] the value to write
+  # @return [Void]
+  print :> Showable -> Void
+
+  # Writes +content+ followed by a newline. The same as +printLine+.
+  #
+  # @param content [Showable] the value to write
+  # @return [Void]
+  writeLine :> Showable -> Void
+
+  # Writes +content+ with no trailing newline. The same as +print+.
+  #
+  # @param content [Showable] the value to write
+  # @return [Void]
+  write :> Showable -> Void
+end
+
 # An open file, obtained from +FS.File.open+.
 #
 # The two type parameters record what the handle is allowed to do: +R+ is
@@ -19,10 +116,16 @@
 #
 # Reach for a handle when you want to walk a large file a line at a time, or
 # make many small writes. When a file fits comfortably in memory,
-# +FS.File.read+ and +FS.File.write+ are shorter and need no closing.
+# +FS.File.read+ and +FS.File.write+ are shorter and need no closing. To be
+# rid of the closing entirely, pass +FS.File.open+ a block.
+#
+# The handle methods are +foul+: obtaining a handle is not an effect, but
+# reading or writing through one is, so a function that does so is +foul+ no
+# matter where the handle came from. Injection makes a thing substitutable,
+# not pure.
 type FileHandle<R, W>
 
-make FileHandle<CanRead, W> do
+make FileHandle<CanRead, W>, implement: Readable do
   # Reads the next line from the handle, without its newline.
   #
   # Answers +None+ at end of file, which is what makes it usable as a loop
@@ -42,7 +145,7 @@ make FileHandle<CanRead, W> do
   #     end
   #   end
   getLine :> String?
-  let getLine = Kex.Intrinsic.FileHandle.getLine(this)
+  foul getLine = Kex.Intrinsic.FileHandle.getLine(this)
 
   # Reads a single character from the handle, as a one-character +String+.
   #
@@ -53,7 +156,7 @@ make FileHandle<CanRead, W> do
   # @example
   #   let firstChar = handle.get.or("")
   get :> String?
-  let get = Kex.Intrinsic.FileHandle.get(this)
+  foul get = Kex.Intrinsic.FileHandle.get(this)
 
   # Reads the next line from the handle, without its newline. The same as
   # +getLine+, named for reading from a file rather than from a console.
@@ -66,7 +169,7 @@ make FileHandle<CanRead, W> do
   # @example Reading the first three lines
   #   let head = (1..3).items.map { |_| handle.readLine.or("") }
   readLine :> String?
-  let readLine = Kex.Intrinsic.FileHandle.readLine(this)
+  foul readLine = Kex.Intrinsic.FileHandle.readLine(this)
 
   # Reads everything remaining in the file and returns it as one +String+.
   #
@@ -82,7 +185,7 @@ make FileHandle<CanRead, W> do
   #   handle.readLine
   #   let body = handle.read.or("")
   read :> String?
-  let read = Kex.Intrinsic.FileHandle.read(this)
+  foul read = Kex.Intrinsic.FileHandle.read(this)
 
   # Returns +true+ when the handle has reached the end of the file.
   #
@@ -91,7 +194,7 @@ make FileHandle<CanRead, W> do
   # @example
   #   handle.eof?   # => false, before anything has been read
   eof? :> Bool
-  let eof? = Kex.Intrinsic.FileHandle.eof?(this)
+  foul eof? = Kex.Intrinsic.FileHandle.eof?(this)
 
   # Returns +true+ when the handle has reached the end of the file. The same
   # as +eof?+, spelled out.
@@ -103,7 +206,7 @@ make FileHandle<CanRead, W> do
   #     IO.printLine(handle.readLine.or(""))
   #   end
   atEnd? :> Bool
-  let atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
+  foul atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
 
   # Returns the handle's remaining lines as a lazy +Stream+.
   #
@@ -114,6 +217,11 @@ make FileHandle<CanRead, W> do
   # file has yields +None+ past the end. Take only what you need, or drop the
   # tail with +reject { |line| line == None }+.
   #
+  # NOT part of +Readable+. +docs/streams.md+ describes a one-shot, stateful
+  # +Feed<A>+ that does not exist, and a file feed is neither pure nor
+  # reusable the way +Stream<A>+ claims to be. Until that is settled this is a
+  # FileHandle method rather than something every +Readable+ must answer.
+  #
   # @return [Stream<String>?] the lines as a stream, or +None+
   #
   # @example The first ten lines of a large file
@@ -122,59 +230,60 @@ make FileHandle<CanRead, W> do
   #     .or([])
   #     .reject { |line| line == None }
   feed :> Stream<String>?
-  let feed = Kex.Intrinsic.FileHandle.feed(this)
+  foul feed = Kex.Intrinsic.FileHandle.feed(this)
 end
 
-make FileHandle<R, CanWrite> do
+make FileHandle<R, CanWrite>, implement: Writable do
   # Writes +content+ followed by a newline.
   #
-  # @param content [String] the text to write
-  # @return [Bool] +true+ when the write succeeded
+  # @param content [Showable] the value to write
+  # @return [Void]
   #
   # @example Writing a report line by line
   #   rows.each { |row| handle.printLine(row) }
-  printLine :> String -> Bool
-  let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
+  printLine :> Showable -> Void
+  foul printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content.showValue)
 
   # Writes +content+ with no trailing newline.
   #
-  # @param content [String] the text to write
-  # @return [Bool] +true+ when the write succeeded
+  # @param content [Showable] the value to write
+  # @return [Void]
   #
   # @example Building a line from pieces
   #   handle.print("name,")
   #   handle.print("age")
   #   handle.printLine("")
-  print :> String -> Bool
-  let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
+  print :> Showable -> Void
+  foul print(content) = Kex.Intrinsic.FileHandle.print(this, content.showValue)
 
   # Writes +content+ followed by a newline. The same as +printLine+, named for
   # writing to a file rather than to a console.
   #
-  # @param content [String] the text to write
-  # @return [Bool] +true+ when the write succeeded
+  # @param content [Showable] the value to write
+  # @return [Void]
   #
   # @example
   #   handle.writeLine("done")
-  writeLine :> String -> Bool
-  let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
+  writeLine :> Showable -> Void
+  foul writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content.showValue)
 
   # Writes +content+ with no trailing newline. The same as +print+.
   #
-  # @param content [String] the text to write
-  # @return [Bool] +true+ when the write succeeded
+  # @param content [Showable] the value to write
+  # @return [Void]
   #
   # @example Writing a whole document in one call
   #   handle.write(rendered)
-  write :> String -> Bool
-  let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
+  write :> Showable -> Void
+  foul write(content) = Kex.Intrinsic.FileHandle.write(this, content.showValue)
 end
 
 make FileHandle<R, W> do
   # Closes the handle, flushing anything still buffered.
   #
   # Close every handle you open. A written file is not guaranteed to be
-  # complete on disk until its handle is closed.
+  # complete on disk until its handle is closed. Passing +FS.File.open+ a
+  # block closes the handle for you.
   #
   # @return [Void]
   #
@@ -187,5 +296,5 @@ make FileHandle<R, W> do
   #     Error(_) => IO.printError("cannot open out.txt")
   #   end
   close :> Void
-  let close = Kex.Intrinsic.FileHandle.close(this)
+  foul close = Kex.Intrinsic.FileHandle.close(this)
 end

@@ -9,7 +9,7 @@ using FS
 
 type ReadOnlyFile = FileHandle<CanRead, CannotWrite>
 
-foul writeThrough(h: ReadOnlyFile) -> Bool = h.write("no")
+foul writeThrough(h: ReadOnlyFile) -> Void = h.write("no")
 
 main do
   IO.printLine("unreachable")

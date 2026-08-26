@@ -1,0 +1,13 @@
+# kex: check-only
+# The standard streams are `FileHandle` values, so their typestate is the same
+# check a file opened `FS.Read` gets (kexhq/kex#139).
+#
+# `IO.out` and `IO.error` are `FileHandle<CannotRead, CanWrite>`, `IO.in`
+# is `FileHandle<CanRead, CannotWrite>`. Writing to stdin or reading from
+# stdout is rejected here, not at runtime.
+
+main do
+  IO.in.printLine("stdin is not a sink")
+  IO.out.getLine
+  IO.error.read
+end

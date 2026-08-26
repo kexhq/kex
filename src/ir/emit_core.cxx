@@ -203,10 +203,17 @@ struct Emitter {
 
     auto beginPatGuards() -> void { patGuards.clear(); }
 
-    // Combines the collected conjuncts with a clause's own guard. Guards admit
-    // only BIFs (no `case`), so this nests `erlang:and`. Eager evaluation is
-    // safe: every conjunct compares a variable the pattern already bound, and
-    // a raising guard fails the clause rather than crashing.
+    // Combines the collected conjuncts with a clause's own guard, nesting
+    // `erlang:and`. Eager evaluation is safe HERE for one narrow reason: every
+    // conjunct compares a variable the pattern already bound, so none of them
+    // can raise.
+    //
+    // It is not safe in general, and must not be relied on elsewhere. A
+    // raising guard does NOT reliably fail the clause: on OTP < 28 `erlc
+    // +from_core` lets the exception escape, which is how the strict
+    // `and(is_tuple(V), element(1,V) =:= Ty)` dispatch guard crashed on any
+    // String (see typeGuard in lower.cxx). A conjunct that can raise needs a
+    // short-circuiting `case`, not this.
     auto takePatGuards(const std::string& own) -> std::string {
         std::string acc;
         for (const auto& g : patGuards) {

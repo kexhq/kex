@@ -14,7 +14,7 @@
 
 using FS
 
-foul writeToReader(path: String) -> Bool do
+foul writeToReader(path: String) -> Void do
   let reader = FS.File.open(path, FS.Read).try
   return reader.write("no")
 end

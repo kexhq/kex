@@ -226,7 +226,17 @@ mode_flags(_)           -> [read, binary].
 %% ── FileHandle methods (receiver-first UFCS) ────────────────────────────
 %% Text I/O — mirrors IO.getLine / IO.get / IO.printLine / IO.print.
 
+%% The three standard streams are FileHandle VALUES whose device is the
+%% atom `stdout` / `stderr` / `stdin` rather than an open file (kexhq/kex#139).
+%% Each such clause forwards to the matching kex_io function, so a handle
+%% write IS `IO.print` — same device, same Mock.IO capture (whose buffer is
+%% the group leader, issue #141), and no second code path to keep in step.
+%% These clauses come first: `stdout =/= mock` would otherwise match the
+%% file clauses below and hand an atom to file:write/2.
+
 %% getLine → String? (newline stripped, None at EOF).
+handle_getLine({'FileHandle', stdin, _}) -> kex_io:read_line();
+handle_getLine({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
 handle_getLine({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read_line(Dev) of
         {ok, Line} -> {'Just', string:trim(Line, trailing, "\n")};
@@ -236,6 +246,8 @@ handle_getLine({'FileHandle', mock, Path}) -> mock_read_line(Path);
 handle_getLine(_) -> 'None'.
 
 %% get → String? (single character, 'None' at EOF).
+handle_get({'FileHandle', stdin, _}) -> kex_io:read_char();
+handle_get({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
 handle_get({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read(Dev, 1) of
         {ok, <<C>>} -> {'Just', <<C>>};
@@ -244,27 +256,49 @@ handle_get({'FileHandle', Dev, _}) when Dev =/= mock ->
 handle_get({'FileHandle', mock, Path}) -> mock_read_char(Path);
 handle_get(_) -> 'None'.
 
-%% printLine(content) → Bool (write + newline).
+%% printLine(content) → Void (write + newline). The Bool these three used to
+%% answer was never an error channel — nothing checked it — so kexhq/kex#139
+%% dropped it: the call says `ok`, and failure belongs to the device.
+handle_printLine({'FileHandle', stdout, _}, Content) -> kex_io:print_line(Content);
+handle_printLine({'FileHandle', stderr, _}, Content) -> kex_io:print_error(Content);
+handle_printLine({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
 handle_printLine({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
-    file:write(Dev, [kex_io:to_string_bin(Content), $\n]) =:= ok;
+    file:write(Dev, [kex_io:to_string_bin(Content), $\n]),
+    'Kex.Unit';
 handle_printLine({'FileHandle', mock, Path}, Content) ->
-    mock_append(Path, <<(kex_io:to_string_bin(Content))/binary, "\n">>);
-handle_printLine(_, _) -> false.
+    mock_append(Path, <<(kex_io:to_string_bin(Content))/binary, "\n">>),
+    'Kex.Unit';
+handle_printLine(_, _) -> 'Kex.Unit'.
 
-%% print(content) → Bool (write, no newline).
+%% print(content) → Void (write, no newline).
+handle_print({'FileHandle', stdout, _}, Content) -> kex_io:print(Content);
+handle_print({'FileHandle', stderr, _}, Content) -> kex_io:print_error_raw(Content);
+handle_print({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
 handle_print({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
-    file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
+    file:write(Dev, kex_io:to_string_bin(Content)),
+    'Kex.Unit';
 handle_print({'FileHandle', mock, Path}, Content) ->
-    mock_append(Path, kex_io:to_string_bin(Content));
-handle_print(_, _) -> false.
+    mock_append(Path, kex_io:to_string_bin(Content)),
+    'Kex.Unit';
+handle_print(_, _) -> 'Kex.Unit'.
 
 %% Binary/raw I/O.
 
 %% read → String? (remaining content).
+%% `read` is "the rest of it", so on stdin it drains to end of input.
+handle_read({'FileHandle', stdin, _}) -> {'Just', drain_stdin(<<>>)};
+handle_read({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
 handle_read({'FileHandle', Dev, _}) when Dev =/= mock ->
     {'Just', read_rest(Dev, <<>>)};
 handle_read({'FileHandle', mock, Path}) -> {'Just', mock_read_rest(Path)};
 handle_read(_) -> 'None'.
+
+%% Reads through kex_io:read_line/0 so a Mock.IO input queue drains too.
+drain_stdin(Acc) ->
+    case kex_io:read_line() of
+        'None' -> Acc;
+        {'Just', Line} -> drain_stdin(<<Acc/binary, Line/binary, "\n">>)
+    end.
 
 read_rest(Dev, Acc) ->
     case file:read(Dev, 65536) of
@@ -273,12 +307,17 @@ read_rest(Dev, Acc) ->
         _          -> Acc
     end.
 
-%% write(data) → Bool (raw write).
+%% write(data) → Void (raw write).
+handle_write({'FileHandle', stdout, _}, Content) -> kex_io:print(Content);
+handle_write({'FileHandle', stderr, _}, Content) -> kex_io:print_error_raw(Content);
+handle_write({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
 handle_write({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
-    file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
+    file:write(Dev, kex_io:to_string_bin(Content)),
+    'Kex.Unit';
 handle_write({'FileHandle', mock, Path}, Content) ->
-    mock_append(Path, kex_io:to_string_bin(Content));
-handle_write(_, _) -> false.
+    mock_append(Path, kex_io:to_string_bin(Content)),
+    'Kex.Unit';
+handle_write(_, _) -> 'Kex.Unit'.
 
 mock_append(Path, Content) ->
     P = pth(Path),
@@ -289,6 +328,9 @@ mock_append(Path, Content) ->
 %% Lifecycle.
 
 %% atEnd? → Bool.
+%% No cheap end-of-input test on a standard stream that does not consume a
+%% character; report "not at end" and let the read answer None.
+'handle_atEnd?'({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr; Std =:= stdin -> false;
 'handle_atEnd?'({'FileHandle', Dev, _}) when Dev =/= mock ->
     {ok, Pos} = file:position(Dev, cur),
     {ok, End} = file:position(Dev, eof),
@@ -299,6 +341,8 @@ mock_append(Path, Content) ->
 'handle_atEnd?'(_) -> true.
 
 %% close → Unit.
+%% Closing a standard stream is a no-op, not a `file:close(stdout)`.
+handle_close({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr; Std =:= stdin -> ok;
 handle_close({'FileHandle', Dev, _}) when Dev =/= mock ->
     file:close(Dev),
     ok;

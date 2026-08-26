@@ -18,7 +18,9 @@ main do
   reader.close
 
   let writer = FS.File.open("out.txt", FS.Write).try
-  IO.printLine(writer.write("written"))
+  # The write answers Void now, not the Bool it used to (kexhq/kex#139), so
+  # the evidence that it dispatched is the content read back below.
+  writer.write("written")
   writer.close
   IO.printLine(FS.File.read("out.txt").or("(missing)"))
 

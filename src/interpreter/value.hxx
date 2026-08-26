@@ -107,6 +107,19 @@ struct FileHandleValue {
     std::string path;
 };
 
+// The three standard streams are ordinary FileHandle VALUES (kexhq/kex#139),
+// so `IO.printLine(x)` and `IO.out.printLine(x)` are one call and a sink
+// can be passed rather than switched globally. They carry no fstream: these
+// sentinel paths mark them, and the FileHandle intrinsics route them through
+// the IO ones so Mock.IO capture keeps covering them.
+inline constexpr const char* kStdoutPath = "<stdout>";
+inline constexpr const char* kStderrPath = "<stderr>";
+inline constexpr const char* kStdinPath = "<stdin>";
+
+inline auto isStandardHandle(const std::string& path) -> bool {
+    return path == kStdoutPath || path == kStderrPath || path == kStdinPath;
+}
+
 struct RecordValue {
     std::string typeName;
     std::unordered_map<std::string, ValuePtr> fields;

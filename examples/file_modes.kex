@@ -9,11 +9,14 @@ using FS
 
 # Put capability requirements in helper signatures. Any readable handle can
 # call readAll; any writable handle can call writeText.
+#
+# `writeText` names the TRAIT rather than the handle type, so it also accepts
+# `IO.out` and anything else that implements `Writable` (kexhq/kex#139).
 foul readAll(file: FileHandle<CanRead, W>) -> String do
   file.read().or("")
 end
 
-foul writeText(file: FileHandle<R, CanWrite>, text: String) -> Bool do
+foul writeText(file: Writable, text: String) -> Void do
   file.write(text)
 end
 
@@ -67,6 +70,16 @@ main do
   finalReader.close()
 
   IO.printLine(readOrMissing("does-not-exist.txt"))
+
+  # A block form opens, runs, and closes — no `close` to forget. `Ok` carries
+  # whatever the block returned.
+  let lineCount = FS.File.open("file_modes.txt", FS.Read) do |file|
+    readAll(file).lines.length
+  end
+  IO.printLine("lines: ${lineCount}")
+
+  # The standard streams are handles too, so the same helper serves them.
+  writeText(IO.out, "written to stdout through the same helper\n")
 
   Mock.FS.clear()
 end
