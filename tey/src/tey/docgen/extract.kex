@@ -10,8 +10,6 @@
 module Tey.Docgen.Extract do
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc]
 
-  # ── Entry point ──────────────────────────────────────────────────────────
-
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
     return entitiesIn(items, "")
   end
@@ -53,8 +51,6 @@ module Tey.Docgen.Extract do
     end
     return titleCase(stripExt(source))
   end
-
-  # ── Body walking ─────────────────────────────────────────────────────────
 
   foul entitiesIn(body: [Kex.AST.Node], prefix: String) -> [Entity] do
     return finalize(bodyEntities(body, prefix, []))
@@ -104,8 +100,6 @@ module Tey.Docgen.Extract do
       PendingFn(fn) => FuncDecl(finalizeFunction(fn))
     end
   end
-
-  # ── Per-kind entities ────────────────────────────────────────────────────
 
   foul typeEntity(info: Kex.AST.TypeInfo, prefix: String) -> Entity do
     let variants = match info.variants do
@@ -184,8 +178,6 @@ module Tey.Docgen.Extract do
       line: info.location.line
     })
   end
-
-  # ── Function collection ──────────────────────────────────────────────────
 
   foul functionEntries(body: [Kex.AST.Node], prefix: String) -> [FunctionEntry] do
     let entities = entitiesIn(body, prefix)
@@ -391,7 +383,6 @@ module Tey.Docgen.Extract do
     end
   end
 
-  # ── Signature rendering ──────────────────────────────────────────────────
   #
   # A function's signature is its EXACT Kex type — `Integer -> Integer ->
   # Integer`, written the way Kex reads it (curried, right-associative) —
@@ -470,7 +461,6 @@ module Tey.Docgen.Extract do
     end
   end
 
-  # ── AST accessors and helpers ────────────────────────────────────────────
   #
   # `type` is a keyword after `.`, so typed-record access goes through
   # pattern matching instead.
@@ -533,6 +523,9 @@ module Tey.Docgen.Extract do
     if s.empty?
       return s
     end
-    return s.get(0).upperCase + s.drop(1)
+    # The total `get`: the empty string already returned above, so the
+    # fallback never fires. (`capitalize` is not this — it lower-cases the
+    # tail, and a title here keeps whatever case the source wrote.)
+    return s.get(0, ' ').upperCase + s.drop(1)
   end
 end

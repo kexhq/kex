@@ -9,8 +9,6 @@
 module Tey.Docgen.Html do
   using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, LinkEntry, kindOf, nameOf, anchorOf]
 
-  # ── Public API ───────────────────────────────────────────────────────────
-
   foul pageHtml(page: SourcePage, model: PackageModel) -> String do
     let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n")
     let body = "<h1>${esc(page.title)}</h1>\n${sections}"
@@ -280,8 +278,6 @@ module Tey.Docgen.Html do
     end
   end
 
-  # ── Layout ───────────────────────────────────────────────────────────────
-
   foul layout(title: String, current: String, bodyContent: String, model: PackageModel) -> String do
     let label = labelOf(model)
     let root = rootPrefix(current)
@@ -376,8 +372,6 @@ module Tey.Docgen.Html do
     end
     return "<a class=\"card\" href=\"${href}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
-
-  # ── Entity sections ──────────────────────────────────────────────────────
 
   foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
@@ -496,8 +490,6 @@ module Tey.Docgen.Html do
     return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind kind-constant\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
   end
 
-  # ── Functions inside traits, makes, modules ──────────────────────────────
-
   foul functionsHtml(functions: [FunctionEntry], link: (String -> String)) -> String do
     if functions.empty?
       return ""
@@ -516,8 +508,6 @@ module Tey.Docgen.Html do
     end
     return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
   end
-
-  # ── Doc fragments ────────────────────────────────────────────────────────
 
   foul docHtml(doc: Doc) -> String do
     if doc.summary.empty?
@@ -627,8 +617,6 @@ module Tey.Docgen.Html do
       None => ""
     end
   end
-
-  # ── Shared helpers ───────────────────────────────────────────────────────
 
   # Escape text for HTML (content and double-quoted attributes).
   foul esc(s: String) -> String do

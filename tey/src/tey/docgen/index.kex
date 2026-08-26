@@ -111,8 +111,6 @@ module Tey.Docgen.Index do
     end
   end
 
-  # ── Page construction ────────────────────────────────────────────────────
-
   foul buildPages(files: [String], sourceDir: String) -> [SourcePage] do
     return buildPagesLoop(files, sourceDir, [])
   end
@@ -136,8 +134,6 @@ module Tey.Docgen.Index do
       end
     end
   end
-
-  # ── Output files ─────────────────────────────────────────────────────────
 
   foul writePages(pages: [SourcePage], versionDir: String, model: PackageModel) -> Integer do
     let count = pages.reduce(0, { |n, page|
@@ -213,8 +209,6 @@ module Tey.Docgen.Index do
       }
     })
   end
-
-  # ── versions.json (accumulates across builds) ────────────────────────────
 
   # The output directory is the published site, so a build must not clobber
   # the versions other builds published: read what is there, upsert this

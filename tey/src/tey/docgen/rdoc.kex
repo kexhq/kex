@@ -73,6 +73,12 @@ module Tey.Docgen.Rdoc do
       if current.empty?
         return splitParagraphs(rest, [], accum)
       end
+      # A blank line inside an `@example`'s code is part of the example — a
+      # `describe` with a `before` block and an `it` block has one. Indented
+      # code on the far side of it means the directive has not ended.
+      if directiveBlock?(current) && indented?(rest.first.or(""))
+        return splitParagraphs(rest, current + [""], accum)
+      end
       return splitParagraphs(rest, [], accum + [current])
     end
     if line.trim.startsWith?("@")
@@ -93,8 +99,10 @@ module Tey.Docgen.Rdoc do
     return (current.first.or("")).trim.startsWith?("@")
   end
 
-  # ── Verbatim (indented) blocks ───────────────────────────────────────────
-  #
+  foul indented?(line: String) -> Bool do
+    return !line.trim.empty? && indentWidth(line) >= 2
+  end
+
   # RDoc's verbatim marker is indentation: a prose block whose every line is
   # indented is code — or a hand-laid-out table — that the author positioned
   # deliberately. Reflowing it into a paragraph loses both the line breaks and

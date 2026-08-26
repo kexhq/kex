@@ -86,8 +86,12 @@ let parse(text: String, options: {Atom: Bool}) -> Result<Any, Error> = parseWith
 private do
   # Camel-case atom literals are represented by map-field syntax today.
   # Derive the key from that syntax so the compiler has no JSON-specific
-  # constant or option-name special case.
-  let allowCommentsKey = Kex.Intrinsic.Map.keys({ allowComments: false }).at(0)
+  # constant or option-name special case. The one-field map has exactly one
+  # key, so the single-element pattern is what unwraps it — `at(0)` would
+  # answer `Just(key)`, and there is no atom literal to `or` it with.
+  let allowCommentsKey = match Kex.Intrinsic.Map.keys({ allowComments: false }) do
+    [key] => key
+  end
 
   let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Any, Error> do
     let optionError = validateOptions(options)
@@ -225,10 +229,10 @@ private do
     var current = cursor
     var index = 0
     while index < literal.count
-      match current.peek do
-        Just(c) when c == literal.at(index) => current = current.advance
-        _ => return Error(InvalidLiteral(literal, cursor.pos))
-      end
+      # Both sides are `Char?`, and `index < literal.count` keeps the right
+      # one a `Just`, so a spent cursor's `None` never compares equal.
+      return Error(InvalidLiteral(literal, cursor.pos)) if current.peek != literal.at(index)
+      current = current.advance
       index = index + 1
     end
     return Ok((value, current))
@@ -449,15 +453,16 @@ private do
     var index = 0
     while index < value.count
       match value.at(index) do
-        '"' => pieces.push!("\\\"")
-        '\\' => pieces.push!("\\\\")
-        c when c.codepoint == 8 => pieces.push!("\\b")
-        c when c.codepoint == 12 => pieces.push!("\\f")
-        '\n' => pieces.push!("\\n")
-        '\r' => pieces.push!("\\r")
-        '\t' => pieces.push!("\\t")
-        c when c.codepoint < 32 => pieces.push!("\\u${hex4(c.codepoint)}")
-        c => pieces.push!("${c}")
+        Just('"') => pieces.push!("\\\"")
+        Just('\\') => pieces.push!("\\\\")
+        Just(c) when c.codepoint == 8 => pieces.push!("\\b")
+        Just(c) when c.codepoint == 12 => pieces.push!("\\f")
+        Just('\n') => pieces.push!("\\n")
+        Just('\r') => pieces.push!("\\r")
+        Just('\t') => pieces.push!("\\t")
+        Just(c) when c.codepoint < 32 => pieces.push!("\\u${hex4(c.codepoint)}")
+        Just(c) => pieces.push!("${c}")
+        None => pieces.push!("")
       end
       index = index + 1
     end
@@ -465,9 +470,12 @@ private do
     return pieces.join("")
   end
 
+  # A codepoint as the four lowercase hex digits a `\uXXXX` escape needs.
+  # JSON's only escape that is not a single character, and there is no hex
+  # formatter in the prelude to borrow.
   let hex4(value: Integer) -> String do
     let digits = "0123456789abcdef"
-    return "${digits.at((value / 4096).modulo(16))}${digits.at((value / 256).modulo(16))}${digits.at((value / 16).modulo(16))}${digits.at(value.modulo(16))}"
+    return [4096, 256, 16, 1].map { |place| digits.get((value / place).modulo(16), '0') }.join("")
   end
 end
 

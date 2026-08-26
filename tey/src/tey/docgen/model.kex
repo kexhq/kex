@@ -6,7 +6,6 @@
 # boundary in Tey.Docgen.Json.
 
 module Tey.Docgen.Model do
-  # ── Documentation (parsed RDoc) ──────────────────────────────────────────
 
   record Param do
     name : String
@@ -35,8 +34,6 @@ module Tey.Docgen.Model do
   foul emptyDoc() -> Doc do
     return Doc { summary: "", params: [], returns: None, examples: [], deprecated: None }
   end
-
-  # ── Entities ─────────────────────────────────────────────────────────────
 
   record VariantEntry do
     name : String
@@ -120,8 +117,6 @@ module Tey.Docgen.Model do
     | ModuleDecl(ModuleEntry)
     | FuncDecl(FunctionEntry)
     | ConstDecl(ConstantEntry)
-
-  # ── Pages and packages ───────────────────────────────────────────────────
 
   record SourcePage do
     source : String

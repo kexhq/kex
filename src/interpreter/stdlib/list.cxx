@@ -49,15 +49,22 @@ auto Evaluator::registerListBuiltins() -> void {
     };
 
     // getElements, not a ListValue cast: a String IS a [Char], so indexing
-    // one yields its Chars (`"hi".get(1)` is `'i'`), as it does on BEAM.
+    // one yields its Chars (`"hi".get(1)` is `Just('i')`), as it does on BEAM.
+    //
+    // Two arities, two answers: `get(i)` is the partial form and wraps in
+    // `Just` — it is what `xs[i]` desugars to, and what `Map.get` has always
+    // done — while `get(i, default)` is the total one and hands the element
+    // back bare.
     reg("get", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
-        auto fallback = [&] { return args.size() >= 3 ? args[2] : Value::none(); };
+        bool total = args.size() >= 3;
+        auto fallback = [&] { return total ? args[2] : Value::none(); };
         auto* idx = std::get_if<IntValue>(&args[1]->data);
         if (!idx || idx->value < 0) return fallback();
         auto i = static_cast<size_t>(idx->value);
         auto elems = getElements(args[0]);
-        return i < elems.size() ? elems[i] : fallback();
+        if (i >= elems.size()) return fallback();
+        return total ? elems[i] : Value::just(elems[i]);
     });
 
 

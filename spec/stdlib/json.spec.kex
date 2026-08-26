@@ -9,9 +9,9 @@ describe("JSON.parse") do
     assert(JSON.parse("1.25e2") == Ok(125.0))
     assert(JSON.parse("\"Kex\"") == Ok("Kex"))
     let array = JSON.parse("[1,\"two\",false]").try
-    assert(array[0] == 1)
-    assert(array[1] == "two")
-    assert(array[2] == false)
+    assert(array[0] == Just(1))
+    assert(array[1] == Just("two"))
+    assert(array[2] == Just(false))
     assert(JSON.parse("{\"name\":\"Kex\"}") == Ok({ "name": "Kex" }))
   end
 

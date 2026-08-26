@@ -1,13 +1,16 @@
-# list[i] / list.get(i) — was silently broken: the shared `get` builtin
-# only checked MapValue, so any list index returned None instead of the
-# element. Indexing returns the raw element directly (or None/the given
-# default when out of range) — same convention as String.at(i), not
-# Map.get's Just(value)-wrapping.
+# list[i] / list.get(i) — was silently broken twice over: the shared `get`
+# builtin only checked MapValue, so any list index returned None instead of
+# the element, and the fix then handed the element back RAW while the
+# signature said `X?` (issue #218). Indexing is the partial form and answers
+# `Just(element)` / `None`, the same shape `Map.get` has always had; the total
+# form is `get(i, default)`, which answers the element bare.
 main do
   let list = [10, 20, 30]
-  IO.printLine(list[0])
-  IO.printLine(list[2])
-  IO.printLine(list.get(1))
-  IO.printLine(list[10])
-  IO.printLine(list.get(10, 99))
+  IO.printLine(list[0].inspected)
+  IO.printLine(list[2].inspected)
+  IO.printLine(list.get(1).inspected)
+  IO.printLine(list.at(1).inspected)
+  IO.printLine(list[10].inspected)
+  IO.printLine(list.get(10, 99).inspected)
+  IO.printLine(list.get(1, 99).inspected)
 end

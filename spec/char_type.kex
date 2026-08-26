@@ -5,7 +5,7 @@
 # text does this contribute", which is a different question from "is this the
 # same type". See docs/types.md.
 main do
-  let c = "hello".at(1)
+  let c = "hello".at(1).or('?')   # at is `Char?`, like Map.get
   IO.printLine(c)
   IO.printLine(c == 'e')
   IO.printLine(c == "e")        # false — Char is not a 1-char String
@@ -23,8 +23,8 @@ main do
   IO.printLine(letters.join("") == "hi")   # convert, then compare
   IO.printLine("hi".chars == letters)      # and the other direction
 
-  IO.printLine("abc".at(1) == 'b')
-  IO.printLine("abc".at(1) == "b")  # false — Char vs String
+  IO.printLine("abc".at(1) == Just('b'))
+  IO.printLine("abc".at(1) == Just("b"))  # false — Char vs String
   IO.printLine("abc".at(10))        # None — out of range
 
   match "x" do
@@ -33,7 +33,7 @@ main do
   end
 
   match "abc".at(0) do
-    'a' => IO.printLine("char pattern matches char value")
+    Just('a') => IO.printLine("char pattern matches char value")
     _ => IO.printLine("no match")
   end
 

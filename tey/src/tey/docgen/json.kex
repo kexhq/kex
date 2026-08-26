@@ -6,8 +6,6 @@
 module Tey.Docgen.Json do
   using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf, anchorOf, slugOf]
 
-  # ── model.json ───────────────────────────────────────────────────────────
-
   foul modelJson(model: PackageModel) -> String do
     return JSON.stringify({
       package: model.package,
@@ -166,8 +164,6 @@ module Tey.Docgen.Json do
       end
     end
   end
-
-  # ── search.json ──────────────────────────────────────────────────────────
 
   foul searchJson(model: PackageModel) -> String do
     return JSON.stringify({

@@ -34,8 +34,6 @@ module Tey.Docgen.Markdown do
     return "# ${page.title}\n\n${sections}\n"
   end
 
-  # ── Entity sections ──────────────────────────────────────────────────────
-
   foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
       TypeDecl(entry) => typeSection(entry, page, model)
@@ -147,8 +145,6 @@ module Tey.Docgen.Markdown do
     return "## constant \`${e.name}\`\n\n${docBlock(e.doc)}"
   end
 
-  # ── Function details (inside traits, makes, modules) ────────────────────
-
   foul renderFunctions(functions: [FunctionEntry]) -> String do
     if functions.empty?
       return ""
@@ -219,8 +215,6 @@ module Tey.Docgen.Markdown do
     end
     return caption + ["```kex", ex.code, "```"]
   end
-
-  # ── Shared fragments ─────────────────────────────────────────────────────
 
   foul docBlock(doc: Doc) -> String do
     if doc.summary.empty?

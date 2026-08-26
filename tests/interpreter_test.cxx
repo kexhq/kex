@@ -1817,8 +1817,10 @@ int main() {
     });
 
     describe("Interpreter — String at", []() {
-        it("returns the Char at an index", []() {
-            auto result = run("main do\n  \"hello\".at(1)\nend\n");
+        it("returns the Char at an index, wrapped in Just", []() {
+            // at/get are the partial forms: `Char?`, like Map.get. `or` is
+            // what unwraps one here.
+            auto result = run("main do\n  \"hello\".at(1).or('?')\nend\n");
             assertEqual(std::get<CharValue>(result->data).value, 'e');
         });
 
@@ -1828,7 +1830,7 @@ int main() {
         });
 
         it("Char is its own type, not a 1-char String", []() {
-            auto result = run("main do\n  \"hello\".at(1) == \"e\"\nend\n");
+            auto result = run("main do\n  \"hello\".at(1).or('?') == \"e\"\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 

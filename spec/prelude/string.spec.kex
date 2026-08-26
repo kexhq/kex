@@ -15,9 +15,9 @@ describe("String — length and emptiness") do
 end
 
 describe("String — indexing") do
-  it("at returns the character for valid indices") do
-    assert("hello".at(0) == 'h')
-    assert("hello".at(4) == 'o')
+  it("at wraps the character for valid indices") do
+    assert("hello".at(0) == Just('h'))
+    assert("hello".at(4) == Just('o'))
   end
 
   it("at returns None for out-of-range indices") do

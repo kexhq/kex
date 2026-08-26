@@ -70,8 +70,8 @@ push(L, X) -> as_list(L) ++ [X].
 sum(L)     -> lists:sum(as_list(L)).
 product(L) -> list_product(as_list(L)).
 indexOf(L, X) -> index_of(X, as_list(L)).
-at(L, I)   -> list_get(L, I).
-get(L, I)  -> list_get(L, I).
+at(L, I)   -> list_at(L, I).
+get(L, I)  -> list_at(L, I).
 get(L, I, Default) -> list_get(L, I, Default).
 %% foldLeft/3 — the universal left fold backing Enumerable.reduce (and so every
 %% HOF derived from it). Kex's reducer takes (acc, elem); Erlang's lists:foldl
@@ -126,10 +126,17 @@ join(L, Sep) ->
     Text = [kex_io:to_string_bin(E) || E <- as_list(L)],
     iolist_to_binary(lists:join(kex_io:to_string_bin(Sep), Text)).
 
-%% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
-%% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's
-%% 2-arg form.
-list_get(List, Idx) -> list_get(List, Idx, 'None').
+%% list_at/2 — `list[i]`, `list.at(i)`, `list.get(i)`: the element wrapped in
+%% Just, or None when the index is out of range — the same shape Map.get's
+%% 2-arg form answers with.
+list_at(List, Idx) ->
+    case list_get(List, Idx, 'kex_missing') of
+        'kex_missing' -> 'None';
+        Element -> {'Just', Element}
+    end.
+
+%% list_get/3 — `list.get(i, default)`, the total form: the raw element, or
+%% Default when the index is out of range.
 list_get(Bin, Idx, Default) when is_binary(Bin) ->
     list_get(as_list(Bin), Idx, Default);
 list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < erlang:length(List) ->

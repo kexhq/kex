@@ -29,22 +29,22 @@ auto Evaluator::registerStringBuiltins() -> void {
         defineIntrinsic("Char::" + intrinsicName, std::move(fn));
     };
 
-    // String.at(i) -> Char (not a 1-char String) — Char and String are
-    // interchangeable for comparisons/concatenation (see valuesEqual/+),
-    // so existing code comparing the result against a string literal
-    // keeps working either way.
+    // String.at(i) -> Char? (a Char, not a 1-char String) — Char and String
+    // are interchangeable for comparisons/concatenation (see valuesEqual/+),
+    // so code comparing the unwrapped result against a string literal keeps
+    // working either way.
     NativeFunc at = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* idx = std::get_if<IntValue>(&args[1]->data);
         if (!idx || idx->value < 0) return Value::none();
         auto i = static_cast<size_t>(idx->value);
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            return i < list->elements.size() ? list->elements[i] : Value::none();
+            return i < list->elements.size() ? Value::just(list->elements[i]) : Value::none();
         }
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::none();
         auto cps = utf8::decode(str->value);
-        return i < cps.size() ? Value::character(cps[i]) : Value::none();
+        return i < cps.size() ? Value::just(Value::character(cps[i])) : Value::none();
     };
     defineIntrinsic("List::at", std::move(at));
 
