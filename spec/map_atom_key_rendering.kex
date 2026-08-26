@@ -1,0 +1,18 @@
+# A map literal writes an atom key bare — `{ a: 1 }` — so `inspect` must not
+# double the atom's colon onto the key separator and produce `{ :a: 1 }`,
+# which is not syntax the parser accepts (issue #212).
+
+main do
+  IO.printLine({ a: 1 }.inspected)
+  IO.printLine({ a: 1 }.showValue)
+
+  # A string key keeps its quotes under inspect, which round-trips too; show
+  # drops them, as it drops quotes everywhere.
+  IO.printLine({ "a": 1 }.inspected)
+  IO.printLine({ "a": 1 }.showValue)
+
+  # Atoms outside the key position are unaffected.
+  IO.printLine(:a.inspected)
+  IO.printLine([:a, :b].inspected)
+  IO.printLine({ a: :b }.inspected)
+end

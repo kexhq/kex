@@ -497,8 +497,10 @@ auto Evaluator::registerFileBuiltins() -> void {
         }
         auto stream = std::make_shared<Value>();
         stream->data = StreamValue{[lines](int64_t index) -> ValuePtr {
+            // A file has an end: past the last line the stream is exhausted,
+            // not producing None forever (issue #215).
             if (index < 0 || static_cast<size_t>(index) >= lines->size())
-                return Value::none();
+                return nullptr;
             return Value::string((*lines)[index]);
         }, 0};
         return Value::just(stream);

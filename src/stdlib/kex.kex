@@ -277,7 +277,8 @@ end
 #
 # @example
 #   [1, 2].inspected            # => "[1, 2]"
-#   { "a": 1 }.inspected        # => "{ a: 1 }"
+#   { a: 1 }.inspected          # => "{ a: 1 }"
+#   { "a": 1 }.inspected        # => "{ \"a\": 1 }"
 #   Just("hi").inspected        # => "Just(\"hi\")"
 #
 # @example Putting a rendering into a message

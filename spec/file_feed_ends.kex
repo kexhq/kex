@@ -1,0 +1,30 @@
+# A file has an end, so its feed stops there instead of yielding None forever
+# (issue #215). `Stream.Sequence` stays deliberately infinite.
+
+using FS
+
+main do
+  let path = "/tmp/kex_spec_file_feed_ends.txt"
+  FS.File.write(path, "one\ntwo\n")
+
+  # Taking more lines than the file has answers just the lines there are.
+  IO.printLine(FS.File.feed(path).map { |lines| lines.take(5) }.or([]))
+
+  # The element type is honest, so a downstream filter sees Strings.
+  IO.printLine(
+    FS.File.feed(path)
+      .map { |lines| lines.filter { |line| line.contains?("t") } }
+      .map { |lines| lines.take(5) }
+      .or([]))
+
+  # The same through a handle.
+  match FS.File.open(path, Read) do
+    Ok(handle) => IO.printLine(handle.feed.map { |lines| lines.take(10) }.or([]))
+    Error(_)   => IO.printLine("cannot open")
+  end
+
+  # An infinite stream is still infinite.
+  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }.take(5))
+
+  FS.File.delete(path)
+end

@@ -42,7 +42,11 @@ auto Evaluator::registerStreamBuiltins() -> void {
             if (!n) return Value::list({});
             std::vector<ValuePtr> result;
             for (int64_t i = 0; i < n->value; i++) {
-                result.push_back(stream->generator(stream->offset + i));
+                // A null answer means the stream ended: take what there is
+                // rather than padding the list out to `n`.
+                auto element = stream->generator(stream->offset + i);
+                if (!element) break;
+                result.push_back(std::move(element));
             }
             return Value::list(std::move(result));
         }

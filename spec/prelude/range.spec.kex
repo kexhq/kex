@@ -60,3 +60,26 @@ describe("Range — Enumerable via reduce") do
     assert(result == [2, 4])
   end
 end
+
+describe("Range — list-shaped operations") do
+  it("indexOf works on a numeric range, not only a char one") do
+    assert((10..20).indexOf(12) == Just(2))
+    assert(('a'..'e').indexOf('c') == Just(2))
+    assert((10..20).indexOf(99) == None)
+  end
+
+  it("at is partial") do
+    assert((10..20).at(99) == None)
+  end
+
+  it("get takes a fallback for an out-of-range index") do
+    assert((10..20).get(0, 0) == 10)
+    assert((10..20).get(99, 0) == 0)
+    assert((10..20).get(99) == None)
+  end
+
+  it("blocks over a numeric range see integers") do
+    assert((1..10).partition { |n| n.even? } == ([2, 4, 6, 8, 10], [1, 3, 5, 7, 9]))
+    assert((1..5).reject { |n| n.even? } == [1, 3, 5])
+  end
+end
