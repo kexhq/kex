@@ -1,4 +1,26 @@
+# Types that can be rendered structurally, for a person reading output.
+#
+# The rendering shows the value's STRUCTURE — quotes on strings, +Just(...)+
+# around an optional — which is what makes it right for debugging and wrong
+# for user-facing text. +Showable+ is the other half of that pair.
+#
+# Every type is inspectable through a structural fallback, so +inspected+ and
+# +IO.inspect+ work on anything; a type that wants a different rendering
+# overrides +inspectValue+.
+#
+#   [1, 2].inspected       # => "[1, 2]"
+#   Just("hi").inspected   # => "Just(\"hi\")"
 trait Inspectable do
+  # Renders the value structurally, with ANSI colors when +colors+ is true.
+  #
+  # +inspected+ and +IO.inspect+ call this for you, passing the console's own
+  # color setting — call it directly only when you need to force one.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered value
+  #
+  # @example
+  #   [1, 2].inspectValue(false)   # => "[1, 2]"
   inspectValue :> Bool -> String
 end
 
@@ -44,15 +66,48 @@ make Result<X, E>, implement: Showable do
   let showValue(@Error(e)) = "Error(${e.showValue})"
 end
 
+# The running toolchain: which backend, which version, which features.
+#
+#   Kex.BACKEND                  # => Interpreter
+#   Kex.Kernel.VERSION.release   # => "0.4.0"
+#   Kex.Feature.has?(Kex.FS)     # => true
 module Kex do
+  # Which backend is executing the program: the tree-walking +Interpreter+, or
+  # the +Beam+ virtual machine.
   type Backend = Interpreter | Beam
 
+  # An optional capability a build may or may not include. Ask about one with
+  # +Kex.Feature.has?+ before relying on it.
   type Feature = Http | FS | Process | WebServer
 
+  # Which backend is executing this program.
+  #
+  # +interpreted?+ and +underBeam?+ below are the readable way to ask.
+  #
+  # @return [Backend] the running backend
+  #
+  # @example
+  #   Kex.BACKEND   # => Interpreter
   BACKEND : Backend
   let BACKEND = Kex.Intrinsic.Kex.backend()
 
+  # Returns +true+ when running on the tree-walking interpreter.
+  #
+  # @return [Bool] +true+ under the interpreter
+  #
+  # @example
+  #   Kex.interpreted?   # => true under `kex file.kex`
   let interpreted? = Kex.BACKEND == Kex.Interpreter
+
+  # Returns +true+ when running on the BEAM.
+  #
+  # The backend a program is on decides what is available — processes and the
+  # web server need the BEAM (+kex -R file.kex+).
+  #
+  # @return [Bool] +true+ under the BEAM
+  #
+  # @example
+  #   Kex.underBeam?   # => true under `kex -R file.kex`
   let underBeam? = Kex.BACKEND == Kex.Beam
 
   module Kernel do
@@ -68,17 +123,54 @@ module Kex do
     #   Kex.Kernel.VERSION.revision     # => Just("a1b2c3d")
     #   Kex.Kernel.VERSION.to(String)   # => "0.3.0 (a1b2c3d)"
     record Version do
+      # The major version number.
       major : Integer
+
+      # The minor version number.
       minor : Integer
+
+      # The patch version number.
       patch : Integer
+
+      # The git commit the compiler was built from, or +None+ when it was
+      # built from a source archive rather than a checkout.
       revision : String?
+
       # The release channel: "" for a stable build, otherwise "rc.1",
       # "beta.2", "prealpha.1" — the part of VERSION after the dash.
       preRelease : String = ""
     end
 
     make Version do
-      # The three numbers, without the revision.
+      # The version's four values as a tuple, for destructuring.
+      #
+      # A tuple cannot carry accessors of its own — there is no named type for
+      # a `make` block to target — so the record is the value and this is the
+      # view.
+      #
+      # @return [(Integer, Integer, Integer, String?)] major, minor, patch, revision
+      #
+      # @example
+      #   let (major, minor, patch, revision) = Kex.Kernel.VERSION.tuple
+      #   major   # => 0
+      tuple : (Integer, Integer, Integer, String?)
+      let tuple = (this.major, this.minor, this.patch, this.revision)
+
+      # The three numbers, plus the pre-release channel when there is one.
+      #
+      # `0.4.0`, or `0.4.0-rc.1` on a pre-release build. What a version RANGE
+      # is matched against, so the channel has to be in it.
+      #
+      # @return [String] the release string
+      #
+      # @example
+      #   Kex.Kernel.VERSION.release   # => "0.4.0-alpha.2"
+      release : String
+      let release = @preRelease.empty? then "${this.major}.${this.minor}.${this.patch}" else "${this.major}.${this.minor}.${this.patch}-${@preRelease}"
+
+      # The release string with the build revision after it, when there is one.
+      #
+      # This is what +kex --version+ and the REPL banner print.
       #
       # `to(String)` — the language's conversion protocol, and what this
       # should really be — is deliberately NOT defined here: a second
@@ -88,22 +180,13 @@ module Kex do
       # spec/prelude_to_string_dispatch.kex; restore this as `to(String)` once
       # that dispatcher is fixed.
       #
-      # @example
-      #   Kex.Kernel.VERSION.number       # => "0.3.0"
-      # The same four values as a tuple, for destructuring. A tuple cannot
-      # carry accessors of its own — there is no named type for a `make` block
-      # to target — so the record is the value and this is the view.
+      # @return [String] the full version string
       #
       # @example
-      #   let (major, minor, patch, revision) = Kex.Kernel.VERSION.tuple
-      tuple : (Integer, Integer, Integer, String?)
-      let tuple = (this.major, this.minor, this.patch, this.revision)
-
-      # `0.4.0`, or `0.4.0-rc.1` on a pre-release build. What a version
-      # RANGE is matched against, so the channel has to be in it.
-      release : String
-      let release = @preRelease.empty? then "${this.major}.${this.minor}.${this.patch}" else "${this.major}.${this.minor}.${this.patch}-${@preRelease}"
-
+      #   Kex.Kernel.VERSION.number   # => "0.4.0-alpha.2 (219e625)"
+      #
+      # @example Reporting the toolchain in a tool's output
+      #   IO.printLine("built with Kex ${Kex.Kernel.VERSION.number}")
       number : String
       let number = match this.revision do
         Just(hash) => "${this.release} (${hash})"
@@ -111,6 +194,16 @@ module Kex do
       end
     end
 
+    # This build's version.
+    #
+    # @return [Version] the running toolchain's version
+    #
+    # @example
+    #   Kex.Kernel.VERSION.major     # => 0
+    #   Kex.Kernel.VERSION.release   # => "0.4.0-alpha.2"
+    #
+    # @example Reporting the version in a tool's output
+    #   IO.printLine("built with Kex ${Kex.Kernel.VERSION.number}")
     VERSION : Version
     let VERSION = match Kex.Intrinsic.Kex.version() do
       (major, minor, patch, revision) =>
@@ -119,13 +212,55 @@ module Kex do
     end
   end
 
+  # Which optional capabilities this build includes.
+  #
+  # A slim build may leave out the network or the web server; asking first is
+  # how a program degrades gracefully instead of failing at the call.
   module Feature do
+    # Returns +true+ when this build includes +f+.
+    #
+    # @param f [Feature] the capability to ask about
+    # @return [Bool] +true+ when it is available
+    #
+    # @example
+    #   Kex.Feature.has?(Kex.FS)     # => true
+    #
+    # @example Degrading when a capability is missing
+    #   if !Kex.Feature.has?(Kex.Http)
+    #     IO.printError("this build has no network support")
+    #   end
     has? : Feature -> Bool
     let has?(f) = Kex.Intrinsic.Kex.featureHas?(f)
 
+    # Every optional capability this build includes.
+    #
+    # @return [[Feature]] the available capabilities
+    #
+    # @example
+    #   Kex.Feature.list   # => [FS]
     list : [Feature]
     let list = Kex.Intrinsic.Kex.featureList()
   end
+end
+
+# Reading the typed public surface of a compiled Kex module.
+module Kex.Interface do
+  # Reads the KexI interface chunk of a compiled Kex module — its typed public
+  # surface — and answers the decoded term, or None when the file has no such
+  # chunk, does not exist, or is not a BEAM artifact.
+  #
+  # The term is an ordinary tree of tuples, lists, atoms, integers and
+  # strings, so it is walked with normal pattern matching and `Tuple.items`.
+  # This exists so that reading it needs no `Erlang.*` interop: it is the one
+  # intentional entry point rather than a general term decoder.
+  #
+  # @param path [FS.FilePath] the compiled .beam file to read
+  # @return [Any?] the decoded interface term, or +None+
+  #
+  # @example
+  #   Kex.Interface.read("build/runtime/beam/kex_prelude.beam")
+  read : FS.FilePath -> Any?
+  let read(path) = Kex.Intrinsic.Interface.read(path)
 end
 
 # Returns the pretty-printed representation of any value as a STRING — the
@@ -137,42 +272,28 @@ end
 # `IO.inspect(x)` — so `[1, 2].inspect.count` answered 24, the length of the
 # rendered string, rather than 2.
 #
-# @param value [A]
-# @return [String]
+# @param value [A] any value
+# @return [String] its rendered form
 #
 # @example
-#   [1, 2].inspected          # => "[1, 2]"
-#   { a: 1 }.inspected        # => "{ a: 1 }"
-#   Just("hi").inspected      # => "Just(\"hi\")"
-module Kex.Interface do
-  # Reads the KexI interface chunk of a compiled Kex module — its typed public
-  # surface — and answers the decoded term, or None when the file has no such
-  # chunk, does not exist, or is not a BEAM artifact.
-  #
-  # The term is an ordinary tree of tuples, lists, atoms, integers and
-  # strings, so it is walked with normal pattern matching and `Tuple.items`.
-  # This exists so that reading it needs no `Erlang.*` interop: it is the one
-  # intentional entry point rather than a general term decoder.
-  #
-  # @param path [FS.FilePath]
-  # @return [Any?]
-  #
-  # @example
-  #   Kex.Interface.read("build/runtime/beam/kex_prelude.beam")
-  read : FS.FilePath -> Any?
-  let read(path) = Kex.Intrinsic.Interface.read(path)
-end
-
+#   [1, 2].inspected            # => "[1, 2]"
+#   { "a": 1 }.inspected        # => "{ a: 1 }"
+#   Just("hi").inspected        # => "Just(\"hi\")"
+#
+# @example Putting a rendering into a message
+#   IO.printError("unexpected value: ${value.inspected}")
 let inspected(value: Inspectable) = value.inspectValue(Console.enabled?)
 
 # Prints the pretty-printed form of +value+ to stderr and returns +value+
 # unchanged, so it can be dropped into any pipeline without changing what
 # flows through it. The same operation as `IO.inspect`, reachable by UFCS.
 #
-# @param value [A]
-# @return [A]
+# @param value [A] the value to show
+# @return [A] the same value, unchanged
 #
 # @example
-#   xs.map(~double).inspect.filter(~even?)
+#   [1, 2, 3, 4].map { |n| n * 3 }.inspect.filter(~even?)
+#   # stderr: [3, 6, 9, 12] : [Int]
+#   # => [6, 12]
 inspect : A -> A
 let inspect(value) = IO.inspect(value)

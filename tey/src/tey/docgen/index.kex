@@ -1,0 +1,329 @@
+# The build driver: scan → extract → PackageModel, then emit everything
+# derived from it — model.json, search.json, Markdown pages, manifest,
+# versions, llms.txt/llms-full.txt, robots.txt and sitemap.xml.
+
+module Tey.Docgen.Index do
+  using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, kindOf, nameOf, lineOf]
+
+  foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+    let out = optString(parsed.values.get("out"))
+    if out.empty?
+      IO.printError("docgen: --out is required")
+      return 1
+    end
+    # Source, package and version default to THIS directory's package:
+    # `tey docs build --out <site>` inside any package documents its own
+    # src/, under its own name, at its own version. The explicit flags stay
+    # for the one case the defaults cannot know — the compiler's own
+    # checkout documenting src/stdlib as "prelude" (where the versions ARE
+    # Kex releases, which is why the compiler's own package.kex carries the
+    # compiler version and the default still holds).
+    let source = defaultSource(optString(parsed.values.get("source")))
+    let pkg = defaultPackage(optString(parsed.values.get("package")))
+    let version = defaultVersion(optString(parsed.values.get("release")))
+    let files = Tey.Docgen.Scan.sourceFiles(source)
+    if files.empty?
+      IO.printError("docgen: no .kex files found in ${source}")
+      return 1
+    end
+    let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
+    let _ = FS.Directory.create(versionDir)
+    IO.printLine("docgen: ${files.count} file(s) => ${versionDir}")
+    let pages = buildPages(files, source)
+    if pages.empty?
+      IO.printError("docgen: no files parsed successfully")
+      return 1
+    end
+    let model = PackageModel {
+      package: pkg,
+      version: version,
+      label: optString(parsed.values.get("label")),
+      baseUrl: optString(parsed.values.get("base-url")),
+      generatedAt: DateTime.now().iso,
+      pages: pages,
+      modules: Tey.Docgen.Nav.buildModules(pages),
+      links: Tey.Docgen.Nav.buildLinks(pages)
+    }
+    let _ = FS.File.write(FS.Path.join(out, "model.json"), Tey.Docgen.Json.modelJson(model))
+    let _ = FS.File.write(FS.Path.join(out, "search.json"), Tey.Docgen.Json.searchJson(model))
+    # Per-version copies: the root files describe the last build, these stay
+    # true for their own version directory no matter what builds afterwards.
+    let _ = FS.File.write(FS.Path.join(versionDir, "model.json"), Tey.Docgen.Json.modelJson(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "search.json"), Tey.Docgen.Json.searchJson(model))
+    let written = writePages(pages, versionDir, model)
+    writeHtml(pages, versionDir, out, model)
+    writeIndexFiles(pages, model, out)
+    IO.printLine("docgen: wrote ${written} page(s), model.json and search.json")
+    return 0
+  end
+
+  foul optString(value: String?) -> String do
+    return value.or("")
+  end
+
+  # `src/` when it is standing there, else the flag as given (an empty one is
+  # reported by the scan: "no .kex files found in").
+  foul defaultSource(given: String) -> String do
+    return given if !given.empty?
+    return "src" if FS.File.directory?("src")
+    return ""
+  end
+
+  # The manifest's name when the CWD is a package — the identity docgen
+  # should not have to be told. Outside one, "prelude": the compiler's own
+  # stdlib documenting without a manifest of its own is the original use.
+  foul defaultPackage(given: String) -> String do
+    return given if !given.empty?
+    match manifestVersion() do
+      Just(pair) => do
+        let (name, _) = pair
+        return name.or("prelude")
+      end
+      None => "prelude"
+    end
+  end
+
+  # The version of the thing being documented: a package's own release when
+  # standing in one, the compiler's release otherwise. What a package's
+  # versions ARE differs from the stdlib — its own releases against Kex
+  # releases — and the default follows that distinction automatically
+  # because the compiler's own package.kex carries the compiler version.
+  foul defaultVersion(given: String) -> String do
+    return given if !given.empty?
+    match manifestVersion() do
+      Just(pair) => do
+        let (_, version) = pair
+        return version.or(Kex.Kernel.VERSION.release)
+      end
+      None => Kex.Kernel.VERSION.release
+    end
+  end
+
+  # (name, version) of the package.kex in the CWD, if there is a readable
+  # one. Both defaults read it; one read, one parse.
+  foul manifestVersion() -> (String?, String?)? do
+    match FS.File.read("package.kex") do
+      None => None
+      Just(text) => match Tey.Manifest.read(text) do
+        Ok(package) => Just((package.name, package.version))
+        Error(_) => None
+      end
+    end
+  end
+
+  # ── Page construction ────────────────────────────────────────────────────
+
+  foul buildPages(files: [String], sourceDir: String) -> [SourcePage] do
+    return buildPagesLoop(files, sourceDir, [])
+  end
+
+  foul buildPagesLoop(files: [String], sourceDir: String, pages: [SourcePage]) -> [SourcePage] do
+    if files.empty?
+      return pages
+    end
+    let fileName = files.first.or("")
+    let rest = files.drop(1)
+    let fullPath = FS.Path.join(sourceDir, fileName)
+    match Kex.AST.parseFile(fullPath) do
+      Ok(Kex.AST.Program { items }) => do
+        let page = Tey.Docgen.Extract.pageFor(fileName, items)
+        IO.printLine("  ok ${fileName} (${page.entities.count} entities)")
+        return buildPagesLoop(rest, sourceDir, pages + [page])
+      end
+      Error(Kex.AST.ParseError { message: msg }) => do
+        IO.printError("  fail ${fileName}: ${msg}")
+        return buildPagesLoop(rest, sourceDir, pages)
+      end
+    end
+  end
+
+  # ── Output files ─────────────────────────────────────────────────────────
+
+  foul writePages(pages: [SourcePage], versionDir: String, model: PackageModel) -> Integer do
+    let count = pages.reduce(0, { |n, page|
+      let outPath = FS.Path.join(versionDir, page.urlPath + ".md")
+      ensureDirectory(FS.Path.join(versionDir, dirNameOf(page.urlPath)))
+      let _ = FS.File.write(outPath, Tey.Docgen.Markdown.pageMarkdown(page, model))
+      n + 1
+    })
+    return count
+  end
+
+  # HTML mirrors the Markdown layout: one page per source file, plus the
+  # version landing page, the site-root redirect and the shared stylesheet.
+  foul writeHtml(pages: [SourcePage], versionDir: String, out: String, model: PackageModel) -> () do
+    let _ = pages.reduce(0, { |n, page|
+      let outPath = FS.Path.join(versionDir, page.urlPath + ".html")
+      ensureDirectory(FS.Path.join(versionDir, dirNameOf(page.urlPath)))
+      let _ = FS.File.write(outPath, Tey.Docgen.Html.pageHtml(page, model))
+      n + 1
+    })
+    let _ = FS.File.write(FS.Path.join(versionDir, "index.html"), Tey.Docgen.Html.versionIndexHtml(model))
+    let _ = FS.File.write(FS.Path.join(versionDir, "search.html"), Tey.Docgen.Html.searchPageHtml(model))
+    ensureDirectory(FS.Path.join(out, "assets"))
+    let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
+    let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())
+    IO.printLine("docgen: wrote HTML pages and assets/style.css")
+    return ()
+  end
+
+  # "kex/ast" → "kex"; "fs" → "" (already inside versionDir).
+  foul dirNameOf(urlPath: String) -> String do
+    let parts = urlPath.split("/")
+    if parts.count <= 1
+      return ""
+    end
+    return parts.take(parts.count - 1).join("/")
+  end
+
+  foul ensureDirectory(path: String) -> () do
+    return () if path.empty?
+    let _ = FS.Directory.create(path)
+    return ()
+  end
+
+  foul writeIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
+    let versions = accumulateVersions(out, model)
+    let _ = FS.File.write(FS.Path.join(out, "manifest.json"), manifestJson(pages))
+    let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(versions))
+    # The browsing spine: the site root lists packages, each package's
+    # directory lists its versions. What a version IS differs per package —
+    # a library's own releases, the stdlib's Kex releases — but the shape
+    # (package → versions → pages) is the same, so the pages are too.
+    let _ = FS.File.write(FS.Path.join(out, "index.html"), Tey.Docgen.Html.rootIndexHtml(versions))
+    let packageDir = FS.Path.join(out, model.package)
+    ensureDirectory(packageDir)
+    let _ = FS.File.write(FS.Path.join(packageDir, "index.html"),
+                          Tey.Docgen.Html.packageVersionsHtml(model.package, versions))
+    let _ = FS.File.write(FS.Path.join(out, "llms.txt"), llmsTxt(pages, model))
+    let _ = FS.File.write(FS.Path.join(out, "llms-full.txt"), llmsFullTxt(pages, model))
+    let _ = FS.File.write(FS.Path.join(out, "robots.txt"), robotsTxt(model.baseUrl))
+    let _ = FS.File.write(FS.Path.join(out, "sitemap.xml"), sitemapXml(pages, model))
+    IO.printLine("docgen: wrote index files")
+    return ()
+  end
+
+  foul manifestJson(pages: [SourcePage]) -> String do
+    return JSON.stringify(pages.map { |p|
+      {
+        path: p.urlPath,
+        title: p.title,
+        source: p.source,
+        entities: p.entities.map { |e| { kind: kindOf(e), name: nameOf(e), line: lineOf(e) } }
+      }
+    })
+  end
+
+  # ── versions.json (accumulates across builds) ────────────────────────────
+
+  # The output directory is the published site, so a build must not clobber
+  # the versions other builds published: read what is there, upsert this
+  # (package, version), write the union back, newest first.
+  foul accumulateVersions(out: String, model: PackageModel) -> [VersionEntry] do
+    let current = VersionEntry {
+      id: model.version,
+      label: labelOrPackage(model),
+      generatedAt: model.generatedAt,
+      package: model.package
+    }
+    return upsertVersion(current, readVersionEntries(out))
+  end
+
+  # This build's entry first, the other packages' and versions' kept: the
+  # pure half of accumulate, so the upsert rule itself can be spec'd.
+  foul upsertVersion(current: VersionEntry, existing: [VersionEntry]) -> [VersionEntry] do
+    let kept = existing.filter { |e|
+      !(e.package == current.package && e.id == current.id)
+    }
+    return [current] + kept
+  end
+
+  foul readVersionEntries(out: String) -> [VersionEntry] do
+    match FS.File.read(FS.Path.join(out, "versions.json")) do
+      None => []
+      Just(text) => do
+        match JSON.parse(text) do
+          Error(_) => []
+          Ok(root) => do
+            match root["versions"] do
+              Just(list) => list.map { |v| parseVersionEntry(v) }
+              None => []
+            end
+          end
+        end
+      end
+    end
+  end
+
+  foul parseVersionEntry(v: Any) -> VersionEntry do
+    return VersionEntry {
+      id: jsonText(v["id"]),
+      label: jsonText(v["label"]),
+      generatedAt: jsonText(v["generatedAt"]),
+      package: jsonText(v["package"])
+    }
+  end
+
+  foul jsonText(value: Any?) -> String do
+    match value do
+      Just(v) => "${v}"
+      None => ""
+    end
+  end
+
+  foul labelOrPackage(model: PackageModel) -> String do
+    if model.label.empty?
+      return model.package
+    end
+    return model.label
+  end
+
+  foul versionsJson(entries: [VersionEntry]) -> String do
+    return JSON.stringify({ versions: entries.map { |e| versionEntryValue(e) } })
+  end
+
+  foul versionEntryValue(e: VersionEntry) -> Any do
+    let value: Any = { id: e.id, label: e.label, generatedAt: e.generatedAt, package: e.package }
+    return value
+  end
+
+  foul llmsTxt(pages: [SourcePage], model: PackageModel) -> String do
+    let label = if model.label.empty? then model.package else model.label end
+    let root = normalizeBaseUrl(model.baseUrl)
+    let header = "# ${label} ${model.version}\n\nGenerated by kex docgen at ${model.generatedAt}.\n\n## Pages\n\n"
+    let links = pages.map { |p| "- [${p.title}](${root}/${p.urlPath})" }.join("\n")
+    return header + links + "\n"
+  end
+
+  foul llmsFullTxt(pages: [SourcePage], model: PackageModel) -> String do
+    let texts = pages.map { |p| Tey.Docgen.Markdown.pageMarkdown(p, model) }
+    return texts.join("\n\n---\n\n") + "\n"
+  end
+
+  foul robotsTxt(baseUrl: String) -> String do
+    if baseUrl.empty?
+      return "User-agent: *\nAllow: /\n"
+    end
+    return "User-agent: *\nAllow: /\nSitemap: ${normalizeBaseUrl(baseUrl)}/sitemap.xml\n"
+  end
+
+  foul sitemapXml(pages: [SourcePage], model: PackageModel) -> String do
+    let root = normalizeBaseUrl(model.baseUrl)
+    let urls = pages.map { |p|
+      "  <url>\n    <loc>${root}/${p.urlPath}</loc>\n    <lastmod>${model.generatedAt}</lastmod>\n  </url>"
+    }.join("\n")
+    return [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+      "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+      urls,
+      "\n</urlset>\n"
+    ].join("")
+  end
+
+  foul normalizeBaseUrl(url: String) -> String do
+    if url.endsWith?("/")
+      return url.take(url.count - 1)
+    end
+    return url
+  end
+end

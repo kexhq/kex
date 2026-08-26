@@ -1,3 +1,29 @@
+# An ordered, immutable sequence, written [1, 2, 3].
+#
+# Lists are the default collection in Kex. Every operation answers with a new
+# list rather than changing the receiver, so a chain of transformations is
+# safe to read from either end.
+#
+#   let scores = [7, 2, 9, 4]
+#   scores.filter { |n| n > 3 }      # => [7, 9, 4]
+#   scores.sort                      # => [2, 4, 7, 9]
+#   scores.map { |n| n * 10 }.sum    # => 220
+#
+# Anything that might not be there — the first element, an element at an
+# index, a search result — answers with an +Optional+, so an empty list is an
+# ordinary case rather than a crash:
+#
+#   [].first.or(0)        # => 0
+#   [1, 2].at(9).or(0)    # => 0
+#
+# A list is +Enumerable+ and +Foldable+, which is where +map+, +filter+,
+# +find+, +all?+ and +reduce+ come from.
+#
+# @example Building a report line by line
+#   users
+#     .filter { |u| u.active? }
+#     .map { |u| "${u.name} <${u.email}>" }
+#     .join("\n")
 type List<X> = [X]
 
 make [Number] do
@@ -118,10 +144,24 @@ make [X], implement: Enumerable, Foldable do
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
 
-  # Compatibility spelling shared with String.
+  # Returns the number of elements. The same as +count+, under the name
+  # +String+ uses.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   [1, 2, 3].length   # => 3
   length :> Integer
   let length = Kex.Intrinsic.List.length(this)
 
+  # Returns how many elements satisfy +pred+.
+  #
+  # @param pred [X -> Bool] the test applied to each element
+  # @return [Integer] the number of matches
+  #
+  # @example
+  #   [1, 2, 3, 4].count(~even?)              # => 2
+  #   ["a", "", "b"].count { |s| s.empty? }   # => 1
   # count(pred) is provided by the Enumerable trait.
   count :> (X -> Bool) -> Integer
 
@@ -241,9 +281,32 @@ make [X], implement: Enumerable, Foldable do
   at :> Integer -> X?
   let at(i) = Kex.Intrinsic.List.at(this, i)
 
+  # Returns the element at position +i+ (0-based), or +None+ when the index is
+  # out of range. The same as +at+.
+  #
+  # @param i [Integer] the 0-based index
+  # @return [X?] the element, or +None+
+  #
+  # @example
+  #   [10, 20, 30].get(1)   # => Just(20)
+  #   [10, 20, 30].get(9)   # => None
   get :> Integer -> X?
   let get(i) = Kex.Intrinsic.List.get(this, i)
 
+  # Returns the element at position +i+ (0-based), or +default+ when the index
+  # is out of range. The total form of +get+: the value comes back unwrapped.
+  #
+  # @param i [Integer] the 0-based index
+  # @param default [X] the value to use when out of range
+  # @return [X] the element, or +default+
+  #
+  # @example
+  #   [10, 20, 30].get(1, 0)   # => 20
+  #   [10, 20, 30].get(9, 0)   # => 0
+  #
+  # @example Reading positional arguments with defaults
+  #   let host = args.get(0, "localhost")
+  #   let port = args.get(1, "8080")
   get :> Integer -> X -> X
   let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
 

@@ -1,0 +1,271 @@
+# The canonical documentation model.
+#
+# Extraction produces these records; Markdown, JSON and the search index are
+# all derived from them. Field names avoid `type` (a keyword after `.`), so
+# every field is dot-accessible; JSON keys are chosen at the emission
+# boundary in Tey.Docgen.Json.
+
+module Tey.Docgen.Model do
+  # ── Documentation (parsed RDoc) ──────────────────────────────────────────
+
+  record Param do
+    name : String
+    typeName : String
+    description : String
+  end
+
+  record Return do
+    typeName : String
+    description : String
+  end
+
+  record Example do
+    caption : String
+    code : String
+  end
+
+  record Doc do
+    summary : String
+    params : [Param]
+    returns : Return?
+    examples : [Example]
+    deprecated : String?
+  end
+
+  foul emptyDoc() -> Doc do
+    return Doc { summary: "", params: [], returns: None, examples: [], deprecated: None }
+  end
+
+  # ── Entities ─────────────────────────────────────────────────────────────
+
+  record VariantEntry do
+    name : String
+    fields : [String]
+  end
+
+  record FieldEntry do
+    name : String
+    typeName : String
+    hasDefault : Bool
+  end
+
+  record TypeEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    parents : [String]
+    variants : [VariantEntry]?
+    doc : Doc
+    line : Integer
+  end
+
+  record RecordEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    fields : [FieldEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record TraitEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    functions : [FunctionEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record MakeEntry do
+    target : String
+    isFinal : Bool
+    implements : [String]
+    functions : [FunctionEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record ModuleEntry do
+    name : String
+    qualifiedName : String
+    children : [Entity]
+    doc : Doc
+    line : Integer
+  end
+
+  record FunctionEntry do
+    name : String
+    qualifiedName : String
+    signatures : [String]
+    clauseCount : Integer
+    doc : Doc
+    line : Integer
+    types : [String] = []
+  end
+
+  record ConstantEntry do
+    name : String
+    qualifiedName : String
+    typeName : String
+    doc : Doc
+    line : Integer
+  end
+
+  type Entity
+    = TypeDecl(TypeEntry)
+    | RecordDecl(RecordEntry)
+    | TraitDecl(TraitEntry)
+    | MakeDecl(MakeEntry)
+    | ModuleDecl(ModuleEntry)
+    | FuncDecl(FunctionEntry)
+    | ConstDecl(ConstantEntry)
+
+  # ── Pages and packages ───────────────────────────────────────────────────
+
+  record SourcePage do
+    source : String
+    urlPath : String
+    title : String
+    entities : [Entity]
+  end
+
+  # The navigation unit: one per module in the package, pointing at the page
+  # its entities live on. The sidebar and the module index of model.json are
+  # built from these — a FILE is where source lives, a MODULE is what a
+  # reader navigates by, and the two only coincide by accident.
+  record ModuleIndexEntry do
+    qualifiedName : String
+    summary : String
+    urlPath : String
+    members : [MemberEntry]
+  end
+
+  # One documented member of a module, with the anchor its section renders
+  # at — the sidebar's expanded list and the JSON index both use these.
+  record MemberEntry do
+    name : String
+    anchor : String
+  end
+
+  # One row of the cross-link index: a name a type reference elsewhere in
+  # the package may mention ("String", "FS.Path") and where it lands. The
+  # index is what makes interlinked docs possible without per-renderer
+  # guesswork: every renderer resolves names against the same list.
+  record LinkEntry do
+    name : String
+    urlPath : String
+    anchor : String
+    kind : String
+  end
+
+  record PackageModel do
+    package : String
+    version : String
+    label : String
+    baseUrl : String
+    generatedAt : String
+    pages : [SourcePage]
+    modules : [ModuleIndexEntry] = []
+    links : [LinkEntry] = []
+  end
+
+  # A flattened search row: one per entity (and per function inside traits,
+  # makes and modules), joining name/kind/signature to the page URL. The
+  # `types` are the type names the entity is about — the types its signature
+  # mentions — so search can answer by name AND by type; `anchor` is the
+  # section id a result deep-links to.
+  record SearchEntry do
+    name : String
+    qualifiedName : String
+    kind : String
+    signatures : [String]
+    types : [String] = []
+    summary : String
+    urlPath : String
+    anchor : String = ""
+    line : Integer
+  end
+
+  # One row of versions.json. The file accumulates across builds — the
+  # output directory IS the site, so each build upserts its (package, id)
+  # entry into whatever is already published there.
+  record VersionEntry do
+    id : String
+    label : String
+    generatedAt : String
+    package : String
+  end
+
+  # The kind label used in indexes and JSON for each entity variant.
+  foul kindOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(_) => "type"
+      RecordDecl(_) => "record"
+      TraitDecl(_) => "trait"
+      MakeDecl(_) => "make"
+      ModuleDecl(_) => "module"
+      FuncDecl(_) => "function"
+      ConstDecl(_) => "constant"
+    end
+  end
+
+  # The primary display name of an entity (a make's is its target type).
+  foul nameOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(e) => e.name
+      RecordDecl(e) => e.name
+      TraitDecl(e) => e.name
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.name
+      FuncDecl(e) => e.name
+      ConstDecl(e) => e.name
+    end
+  end
+
+  foul qualifiedNameOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(e) => e.qualifiedName
+      RecordDecl(e) => e.qualifiedName
+      TraitDecl(e) => e.qualifiedName
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.qualifiedName
+      FuncDecl(e) => e.qualifiedName
+      ConstDecl(e) => e.qualifiedName
+    end
+  end
+
+  foul lineOf(entity: Entity) -> Integer do
+    match entity do
+      TypeDecl(e) => e.line
+      RecordDecl(e) => e.line
+      TraitDecl(e) => e.line
+      MakeDecl(e) => e.line
+      ModuleDecl(e) => e.line
+      FuncDecl(e) => e.line
+      ConstDecl(e) => e.line
+    end
+  end
+
+  # The anchor id an entity's HTML section renders at. Lives here — not in
+  # the HTML renderer — because the cross-link index and the sidebar compute
+  # the same ids, and the HTML must match whatever they resolved to.
+  foul anchorOf(entity: Entity) -> String do
+    return "${kindOf(entity)}-${slugOf(anchorNameOf(entity))}"
+  end
+
+  # A make's anchor is keyed by its full target spelling (type params
+  # included), a module's by its qualified name — the section ids are
+  # derived from the same texts.
+  foul anchorNameOf(entity: Entity) -> String do
+    match entity do
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.qualifiedName
+      _ => nameOf(entity)
+    end
+  end
+
+  foul slugOf(name: String) -> String do
+    return name.lowerCase.replace(" ", "-").replace(".", "-").replace("/", "-")
+  end
+end

@@ -3,6 +3,13 @@ let OPTION_PARSER = OptionParser.define("testapp", "A test CLI")
   .integer("port", Just('p'), "Port number", Just("3000"), false)
   .flag("verbose", Just('v'), "Enable verbose output")
 
+# Commands whose handler exercises nothing: the specs below parse, never run.
+let COMMAND_PARSER = OptionParser.define("testcli", "A test CLI with commands")
+  .flag("verbose", None, "Chatty output")
+  .command("docs", "<build|serve>", "generate documentation") do |options|
+    0
+  end
+
 describe("OptionParser") do
   it("parses long, short, typed, and flag options") do
     match OPTION_PARSER.parse(["--name", "Alice", "-p", "8080", "-v"]) do
@@ -41,6 +48,30 @@ describe("OptionParser") do
     assert(OPTION_PARSER.parse(["--port", "7"]) == Error(MissingRequired("name")))
     assert(OPTION_PARSER.parse(["--name", "A", "--port", "x"]) == Error(InvalidInteger("port", "x")))
     assert(OPTION_PARSER.parse(["--name", "A", "--verbose=yes"]) == Error(UnexpectedValue("verbose")))
+  end
+
+  it("passes unknown options after a command word through to the command") do
+    match COMMAND_PARSER.parse(["docs", "build", "--source", "src", "--out=dist"]) do
+      Ok(parsed) => do
+        assert(parsed.arguments == ["docs", "build", "--source", "src", "--out=dist"])
+        assert(!parsed.flagEnabled?("verbose"))
+      end
+      Error(_) => assert(false)
+    end
+  end
+
+  it("still parses the tool's own options after a command word") do
+    match COMMAND_PARSER.parse(["docs", "--verbose", "build"]) do
+      Ok(parsed) => do
+        assert(parsed.flagEnabled?("verbose"))
+        assert(parsed.arguments == ["docs", "build"])
+      end
+      Error(_) => assert(false)
+    end
+  end
+
+  it("still rejects unknown options before a command word") do
+    assert(COMMAND_PARSER.parse(["--source", "src", "docs"]) == Error(UnknownOption("--source")))
   end
 
   it("renders options in declaration order") do

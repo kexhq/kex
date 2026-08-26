@@ -181,7 +181,7 @@ public:
     }
 
     auto traitDef(const TraitDef& def, const std::string& doc,
-                  const std::string& filename) -> Value {
+                  const std::string& filename, const Docs& docs) -> Value {
         std::vector<Value> typeParams;
         for (const auto& typeParam : def.typeParams)
             typeParams.push_back(m_builder.string(typeParam));
@@ -192,9 +192,11 @@ public:
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T,
                               std::unique_ptr<TypeAnnotation>>) {
-                    body.push_back(typeAnnotation(*node, "", filename));
+                    body.push_back(typeAnnotation(
+                        *node, docAt(docs, node->location.line), filename));
                 } else {
-                    body.push_back(functionDef(*node, "", filename));
+                    body.push_back(functionDef(
+                        *node, docAt(docs, node->location.line), filename));
                 }
             }, item);
         }
@@ -221,6 +223,7 @@ public:
 
         auto info = m_builder.record("MakeInfo", {
             {"target", typeRef(*def.target)},
+            {"doc", optionalString(docAt(docs, def.location.line))},
             {"isFinal", m_builder.boolean(def.isFinal)},
             {"implements", m_builder.list(std::move(implements))},
             {"body", m_builder.list(std::move(body))},
@@ -300,7 +303,8 @@ public:
                                        filename);
                 else if constexpr (std::is_same_v<T,
                                                   std::unique_ptr<TypeAnnotation>>)
-                    return typeAnnotation(*node, "", filename);
+                    return typeAnnotation(
+                        *node, docAt(docs, node->location.line), filename);
                 else if constexpr (std::is_same_v<T,
                                                   std::unique_ptr<MakeDef>>)
                     return makeDef(*node, filename, docs);
@@ -386,13 +390,14 @@ public:
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<TraitDef>>) {
                 return traitDef(*node, docAt(docs, node->location.line),
-                                filename);
+                                filename, docs);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<MakeDef>>) {
                 return makeDef(*node, filename, docs);
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                return typeAnnotation(*node, "", filename);
+                return typeAnnotation(
+                    *node, docAt(docs, node->location.line), filename);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<CompiledBlock>>) {
                 return compiledBlock(*node, filename, docs);
@@ -433,7 +438,7 @@ public:
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<TraitDef>>) {
                 return traitDef(*node, docAt(docs, node->location.line),
-                                filename);
+                                filename, docs);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<MakeDef>>) {
                 return makeDef(*node, filename, docs);
@@ -442,7 +447,8 @@ public:
                 return pragma(*node, filename);
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                return typeAnnotation(*node, "", filename);
+                return typeAnnotation(
+                    *node, docAt(docs, node->location.line), filename);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<CompiledBlock>>) {
                 return compiledBlock(*node, filename, docs);
@@ -895,7 +901,8 @@ private:
                     *node, docAt(docs, node->location.line), filename));
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                body.push_back(typeAnnotation(*node, "", filename));
+                body.push_back(typeAnnotation(
+                    *node, docAt(docs, node->location.line), filename));
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<VisibilityBlock>>) {
                 for (const auto& nested : node->items)

@@ -1,40 +1,140 @@
+# Numbers that carry a unit.
+#
+# Writing +5.sec+ or +90.minute+ gives you a +Measure+: a number, the unit it
+# was written in, and the same quantity in that dimension's base unit. Adding,
+# subtracting and converting all go through the canonical value, so the
+# arithmetic is right regardless of which units the operands were written in —
+# and mixing dimensions is an +Error+ rather than a silently wrong number.
+#
+#   5.sec.to(String)                     # => "5.0 s"
+#   1.5.hour.to(String)                  # => "1.5 h"
+#   (1.hour + 30.minute).map(~to(String))  # => Ok("1.5 h")
+#   90.minute.convert(Hour)              # => Ok(1.5 h)
+#
+# The time units — +nanosecond+ through +week+ — are in the prelude. Other
+# dimensions live in opt-in modules under +Units+, and every one of them
+# measures against the same machinery here.
+#
+# A +Measure+ is a measurement, not an elapsed span: +5.sec+ describes a
+# quantity, while +Duration+ is what +Time+ and +Date+ use for a span between
+# two moments.
+
+# The trait a unit implements: how it converts to its dimension's base unit,
+# which dimension that is, and how it is written.
 trait Unit do
+  # How many base units one of this unit is — +60.0+ for a minute, whose base
+  # unit is the second.
+  #
+  # @return [Float] the conversion factor
+  #
+  # @example
+  #   Minute.factor   # => 60.0
   factor :> Float
+
+  # Which dimension this unit measures, as an atom. Only measures of the same
+  # kind can be added or converted between.
+  #
+  # @return [Atom] the dimension tag
+  #
+  # @example
+  #   Second.kind   # => :time
   kind :> Atom
+
+  # How this unit is written when a measure is displayed.
+  #
+  # @return [String] the unit's symbol
+  #
+  # @example
+  #   Minute.symbol   # => "min"
   symbol :> String
 end
 
+# The dimension a measure belongs to.
+#
+# @param measure [Measure] the measure to inspect
+# @return [Atom] the dimension tag
+#
+# @example
+#   measureKind(5.sec)   # => :time
 let measureKind(measure: Measure) -> Atom = measure.unit.dimension
+
+# The symbol a measure displays with.
+#
+# @param measure [Measure] the measure to inspect
+# @return [String] the unit's symbol
+#
+# @example
+#   measureSymbol(5.minute)   # => "min"
 let measureSymbol(measure: Measure) -> String = measure.unit.notation
+
+# The conversion factor of a measure's unit.
+#
+# @param measure [Measure] the measure to inspect
+# @return [Float] the conversion factor
+#
+# @example
+#   measureFactor(5.minute)   # => 60.0
 let measureFactor(measure: Measure) -> Float = measure.unit.conversionFactor
 
-# Runtime-defined units are used for prefixes and units derived by arithmetic.
+# A unit described at run time rather than by a constructor.
+#
+# Runtime-defined units are used for prefixes and units derived by arithmetic —
+# +s^2+ from squaring a duration, a kilo- prefix applied to a base unit.
 record UnitDefinition do
+  # How many base units one of this unit is.
   conversionFactor : Float
+
+  # Which dimension this unit measures.
   dimension : Atom
+
+  # How the unit is written.
   notation : String
 end
 
 make UnitDefinition, implement: Unit do
+  # How many base units one of this unit is.
+  #
+  # @return [Float] the conversion factor
   let factor = @conversionFactor
+
+  # Which dimension this unit measures.
+  #
+  # @return [Atom] the dimension tag
   let kind = @dimension
+
+  # How the unit is written.
+  #
+  # @return [String] the unit's symbol
   let symbol = @notation
 end
 
+# A quantity with a unit.
+#
 # A Measure is shared by every unit module. `canonical` stores the value in
-# that dimension's base unit; its Unit controls its display.
+# that dimension's base unit; its Unit controls its display. That split is what
+# makes +1.hour + 30.minute+ correct and still print in hours.
 record Measure do
+  # The quantity in the dimension's base unit — seconds, for time. Arithmetic
+  # and conversion go through this.
   canonical : Float
+
+  # The quantity as written, in this measure's own unit.
   value : Float
+
+  # The unit this measure displays in.
   unit : UnitDefinition
 end
 
+# An elapsed span of time, in seconds.
+#
 # Duration is an elapsed span used by Time, Date, and DateTime. A time Measure
 # is deliberately not a Duration: `5.sec` describes a measurement.
 record Duration do
+  # The length of the span, in seconds.
   seconds : Float
 end
 
+# The time units, from nanoseconds to weeks. The base unit is the second.
 type TimeUnit = Nanosecond | Microsecond | Millisecond
               | Second | Minute | Hour | Day | Week
 
@@ -60,14 +160,74 @@ make TimeUnit, implement: Unit do
   let symbol(@Week) = "wk"
 end
 
+# Time-unit constructors on +Integer+: +5.sec+, +90.minute+, +2.week+.
+#
+# Each answers a +Measure+ whose display unit is the one you named, so
+# +90.minute+ prints as minutes even though it is stored as 5400 seconds.
 make Integer do
+  # This many nanoseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in nanoseconds
+  #
+  # @example
+  #   100.nanosecond.to(String)   # => "100.0 ns"
   let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+
+  # This many microseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in microseconds
+  #
+  # @example
+  #   250.microsecond.to(String)   # => "250.0 μs"
   let microsecond -> Measure = this.timeMeasure(Microsecond)
+
+  # This many milliseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in milliseconds
+  #
+  # @example
+  #   500.millisecond.to(String)   # => "500.0 ms"
   let millisecond -> Measure = this.timeMeasure(Millisecond)
+
+  # This many seconds, as a +Measure+. Seconds are the base unit of time, so
+  # this is the one everything else converts through.
+  #
+  # @return [Measure] the quantity, displayed in seconds
+  #
+  # @example
+  #   5.sec.to(String)   # => "5.0 s"
   let sec -> Measure = this.timeMeasure(Second)
+
+  # This many minutes, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in minutes
+  #
+  # @example
+  #   90.minute.convert(Hour)   # => Ok(1.5 h)
   let minute -> Measure = this.timeMeasure(Minute)
+
+  # This many hours, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in hours
+  #
+  # @example
+  #   (1.hour + 30.minute).map { |m| m.to(String) }   # => Ok("1.5 h")
   let hour -> Measure = this.timeMeasure(Hour)
+
+  # This many days, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in days
+  #
+  # @example
+  #   1.day.convertTo(Hour).map { |m| m.to(String) }   # => Ok("24.0 h")
   let day -> Measure = this.timeMeasure(Day)
+
+  # This many weeks, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in weeks
+  #
+  # @example
+  #   2.week.to(String)   # => "2.0 wk"
   let week -> Measure = this.timeMeasure(Week)
 
   private do
@@ -86,14 +246,56 @@ make Integer do
   end
 end
 
+# The same time-unit constructors on +Float+, for fractional quantities:
+# +1.5.hour+, +0.25.sec+.
 make Float do
+  # This many nanoseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in nanoseconds
   let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+
+  # This many microseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in microseconds
   let microsecond -> Measure = this.timeMeasure(Microsecond)
+
+  # This many milliseconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in milliseconds
+  #
+  # @example
+  #   2.5.millisecond.to(String)   # => "2.5 ms"
   let millisecond -> Measure = this.timeMeasure(Millisecond)
+
+  # This many seconds, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in seconds
+  #
+  # @example
+  #   0.25.sec.to(String)   # => "0.25 s"
   let sec -> Measure = this.timeMeasure(Second)
+
+  # This many minutes, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in minutes
   let minute -> Measure = this.timeMeasure(Minute)
+
+  # This many hours, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in hours
+  #
+  # @example
+  #   1.5.hour.to(String)   # => "1.5 h"
   let hour -> Measure = this.timeMeasure(Hour)
+
+  # This many days, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in days
   let day -> Measure = this.timeMeasure(Day)
+
+  # This many weeks, as a +Measure+.
+  #
+  # @return [Measure] the quantity, displayed in weeks
   let week -> Measure = this.timeMeasure(Week)
 
   private do
@@ -120,6 +322,17 @@ make Measure do
   # here would answer `None` for an un-imported module instead — a silently
   # empty Optional in place of "you need `using Units.SI`".
 
+  # Multiplies the measure by a plain number, keeping its unit.
+  #
+  # The unit is unchanged, so this scales a quantity rather than converting
+  # it: three of a two-second interval is six seconds.
+  #
+  # @param multiplier [Number] the factor to multiply by
+  # @return [Measure] the scaled measure
+  #
+  # @example
+  #   2.sec.scale(3).to(String)     # => "6.0 s"
+  #   1.hour.scale(0.5).to(String)  # => "0.5 h"
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
     return Measure {
@@ -129,10 +342,18 @@ make Measure do
     }
   end
 
+  # Raises the measure to a power, recording the derived unit in its notation.
+  #
   # Raising a measure preserves its display unit while applying the power to
   # its canonical value, display value, and conversion factor. The current
   # Unit trait represents a dimension as one Atom, so the dimension remains
   # the base kind; the notation records the derived unit (for example `s^2`).
+  #
+  # @param exponent [Number] the power to raise to
+  # @return [Measure] the raised measure
+  #
+  # @example
+  #   (2.sec ^ 2).to(String)   # => "4.0 s^2"
   let ^(exponent: Number) -> Measure do
     return Measure {
       canonical: Kex.Intrinsic.Math.pow(this.canonical, exponent),
@@ -145,8 +366,20 @@ make Measure do
     }
   end
 
+  # Converts the measure to another unit of the same dimension.
+  #
+  # Answers +Error+ when the dimensions differ — you cannot express seconds in
+  # bytes, and this says so rather than producing a wrong number.
+  #
   # Convert through the Unit trait so units from opt-in modules (SI, Data,
   # and future domains) remain interchangeable with prelude time units.
+  #
+  # @param unit [Unit] the unit to convert to
+  # @return [Result<Measure, String>] the converted measure, or why it could not be
+  #
+  # @example
+  #   1.day.convertTo(Hour).map { |m| m.to(String) }     # => Ok("24.0 h")
+  #   90.minute.convertTo(Hour).map { |m| m.to(String) } # => Ok("1.5 h")
   let convertTo(unit: Unit) -> Result<Measure, String> do
     let target = UnitDefinition {
       conversionFactor: unit.factor,
@@ -163,11 +396,30 @@ make Measure do
     end
   end
 
-  # Short time-unit spelling retained for prelude time measures.
+  # Converts the measure to another time unit. The short spelling of
+  # +convertTo+, kept for prelude time measures.
+  #
+  # @param unit [TimeUnit] the time unit to convert to
+  # @return [Result<Measure, String>] the converted measure, or why it could not be
+  #
+  # @example
+  #   90.minute.convert(Hour).map { |m| m.to(String) }   # => Ok("1.5 h")
   let convert(unit: TimeUnit) -> Result<Measure, String> do
     return this.convertTo(unit)
   end
 
+  # Adds two measures of the same dimension.
+  #
+  # The units need not match — the sum goes through the canonical values, and
+  # comes back displayed in the LEFT operand's unit. Adding measures of
+  # different dimensions is an +Error+.
+  #
+  # @param other [Measure] the measure to add
+  # @return [Result<Measure, String>] the sum, or why they could not be added
+  #
+  # @example
+  #   (1.hour + 30.minute).map { |m| m.to(String) }   # => Ok("1.5 h")
+  #   (30.minute + 1.hour).map { |m| m.to(String) }   # => Ok("90.0 min")
   let +(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
       true => do
@@ -182,6 +434,16 @@ make Measure do
     end
   end
 
+  # Subtracts a measure of the same dimension.
+  #
+  # Like +++, the result is displayed in the left operand's unit, and mixing
+  # dimensions is an +Error+.
+  #
+  # @param other [Measure] the measure to subtract
+  # @return [Result<Measure, String>] the difference, or why they could not be subtracted
+  #
+  # @example
+  #   (1.hour - 30.minute).map { |m| m.to(String) }   # => Ok("0.5 h")
   let -(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
       true => do

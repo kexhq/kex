@@ -1,28 +1,51 @@
+# A lazy, potentially infinite sequence.
+#
+# A stream describes how to produce its elements rather than holding them, so
+# an infinite one is an ordinary value. Nothing is computed until you ask for
+# elements with +take+.
+#
+#   let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+#   naturals.take(5)                              # => [0, 1, 2, 3, 4]
+#   naturals.map { |n| n * n }.take(4)            # => [0, 1, 4, 9]
+#   naturals.filter { |n| n.even? }.take(3)       # => [0, 2, 4]
+#
+# +map+, +filter+ and +drop+ all answer with another stream, so a pipeline
+# stays lazy end to end; +take+ is what turns it into a list.
+#
+# +FS.File.feed+ hands back a stream of a file's lines, which is how to walk a
+# file too large to hold in memory.
 type Stream<A>
 
+# Constructors for +Stream+.
 module Stream do
-  # Creates an infinite stream starting at +from+, applying +step+ to
-  # produce each successive element.
+  # Builds an infinite stream from a first element and a step function.
   #
-  # @param from [A]       the first element
-  # @param step [A -> A]  produces the next element from the current one
-  # @return [Stream<A>]
+  # The stream is +from+, then +step(from)+, then +step(step(from))+, and so
+  # on — nothing is computed until you take from it.
   #
-  # @example
+  # @param from [A] the first element
+  # @param step [A -> A] produces the next element from the current one
+  # @return [Stream<A>] the generated stream
+  #
+  # @example Counting up
   #   let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
   #   naturals.take(5)   # => [0, 1, 2, 3, 4]
   #
+  # @example Powers of two
   #   let powers = Stream.Sequence(from: 1) { |n| n * 2 }
   #   powers.take(6)     # => [1, 2, 4, 8, 16, 32]
+  #
+  # @example A geometric decay
+  #   Stream.Sequence(from: 1.0) { |x| x / 2.0 }.take(4)
+  #   # => [1.0, 0.5, 0.25, 0.125]
   let Sequence(from, step) = Kex.Intrinsic.Stream.generate(from, step)
 
-  # Creates an infinite stream seeded with +seed+, applying +f+ to each
-  # element to produce the next. Equivalent to +Sequence+; use whichever
-  # reads more clearly at the call site.
+  # Builds an infinite stream from a seed and a step function. The same thing
+  # as +Sequence+ — use whichever reads better where you are.
   #
-  # @param seed [A]
-  # @param f    [A -> A]
-  # @return [Stream<A>]
+  # @param seed [A] the first element
+  # @param step [A -> A] produces the next element from the current one
+  # @return [Stream<A>] the generated stream
   #
   # @example
   #   let odds = Stream.Iterate(1) { |n| n + 2 }
@@ -31,47 +54,79 @@ module Stream do
 end
 
 make Stream<A> do
-  # Returns the first +n+ elements as a list. Evaluates the stream up to
-  # that point.
+  # Returns the first +n+ elements as a list, computing the stream up to that
+  # point.
   #
-  # @param n [Integer]
-  # @return [[A]]
+  # This is the operation that ends a lazy pipeline and gives you real data.
+  #
+  # @param n [Integer] how many elements to produce
+  # @return [[A]] the first +n+ elements
   #
   # @example
   #   Stream.Sequence(from: 1) { |n| n + 1 }.take(3)   # => [1, 2, 3]
+  #
+  # @example The first ten squares
+  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #     .map { |n| n * n }
+  #     .take(10)
   take :> Integer -> [A]
   let take(n) = Kex.Intrinsic.Stream.take(this, n)
 
-  # Skips the first +n+ elements and returns a new stream offset by +n+.
+  # Returns a new stream that skips the first +n+ elements.
   #
-  # @param n [Integer]
-  # @return [Stream<A>]
+  # Still a stream, so the result stays lazy — pair it with +take+ to get a
+  # window out of the middle.
+  #
+  # @param n [Integer] how many elements to skip
+  # @return [Stream<A>] the stream, offset by +n+
   #
   # @example
   #   Stream.Sequence(from: 0) { |n| n + 1 }.drop(3).take(3)   # => [3, 4, 5]
+  #
+  # @example Paging through a generated sequence
+  #   let page(n: Integer) = source.drop(n * 20).take(20)
   drop :> Integer -> Stream<A>
   let drop(n) = Kex.Intrinsic.Stream.drop(this, n)
 
-  # Returns a new stream applying +f+ to each element.
+  # Returns a new stream with +f+ applied to each element.
   #
-  # @param f [A -> B]
-  # @return [Stream<B>]
+  # +f+ is not called until elements are taken, and then only for those that
+  # are.
+  #
+  # @param f [A -> B] applied to each element
+  # @return [Stream<B>] the mapped stream
   #
   # @example
   #   Stream.Sequence(from: 1) { |n| n + 1 }.map { |n| n * n }.take(4)
   #   # => [1, 4, 9, 16]
+  #
+  # @example Formatting as it goes
+  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #     .map { |n| "item ${n}" }
+  #     .take(3)
+  #   # => ["item 1", "item 2", "item 3"]
   map :> (A -> B) -> Stream<B>
   let map(f) = Kex.Intrinsic.Stream.map(this, f)
 
-  # Returns a new stream keeping only elements for which +pred+ is +true+.
-  # Note: consuming +n+ elements may require evaluating many upstream elements.
+  # Returns a new stream with only the elements +pred+ accepts.
   #
-  # @param pred [A -> Bool]
-  # @return [Stream<A>]
+  # Producing +n+ filtered elements may require walking many more upstream
+  # ones, so a predicate that almost never holds makes +take+ run for a long
+  # time — and one that never holds makes it run forever.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [Stream<A>] the filtered stream
   #
   # @example
   #   let evens = Stream.Sequence(from: 0) { |n| n + 1 }.filter { |n| n.even? }
   #   evens.take(4)   # => [0, 2, 4, 6]
+  #
+  # @example Multiples of three, formatted
+  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #     .filter { |n| n.modulo(3) == 0 }
+  #     .map { |n| "#${n}" }
+  #     .take(3)
+  #   # => ["#3", "#6", "#9"]
   filter :> (A -> Bool) -> Stream<A>
   let filter(pred) = Kex.Intrinsic.Stream.filter(this, pred)
 end

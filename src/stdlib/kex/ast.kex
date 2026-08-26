@@ -1,47 +1,141 @@
-# Parses Kex source code into a structured AST at runtime.
+# Parses Kex source code into a structured AST, at run time.
 #
-# Returns +Result<Program, ParseError>+ — the AST includes module
-# definitions, function signatures, type/record definitions, traits,
-# make blocks, and doc-comments extracted from +#+ lines.
+# Opt-in — nothing here is in scope until `using Kex.AST`.
 #
+# This is the entry point for tools that read Kex source: linters, formatters,
+# documentation generators, code search. The AST includes module definitions,
+# function signatures, type/record definitions, traits, make blocks, and the
+# doc-comments extracted from +#+ lines — which is how the standard library's
+# own documentation is generated.
+#
+#   using Kex.AST
+#
+#   main do
+#     match Kex.AST.parseFile("src/main.kex") do
+#       Ok(program) => IO.printLine("${program.items.count} top-level items")
+#       Error(e)    => IO.printError(e.message)
+#     end
+#   end
+#
+# Everything answers a +Result+, so a source file that does not parse is a
+# value you handle rather than an exception.
 module Kex.AST do
+  # Where in a source file something appeared.
+  #
+  # Line and column are 1-based, for reporting to a person; the offsets are
+  # 0-based byte positions, for slicing the source.
   record Location do
+    # The file the node came from.
     file : String
+
+    # The 1-based line number.
     line : Integer
+
+    # The 1-based column number.
     column : Integer
+
+    # The 0-based byte offset where the node starts.
     startOffset : Integer
+
+    # The 0-based byte offset just past where it ends.
     endOffset : Integer
   end
 
+  # A parsed source file: its schema version, and its top-level items.
   record Program do
+    # The AST schema version this program was produced against. Check it
+    # before relying on a node shape, so a tool fails loudly rather than
+    # silently misreading a newer tree.
     schemaVersion : Integer
+
+    # The file's top-level declarations, in source order.
     items : [Node]
   end
 
+  # Why a source file could not be parsed.
   record ParseError do
+    # A human-readable description of the problem.
     message : String
+
+    # Where the parser stopped, when it can say.
     location : Location?
   end
 
-  # Parses a Kex source string into a structured AST.
+  # Parses Kex source text into a structured AST.
+  #
+  # Pass +filename+ when you have one — it is what appears in every +Location+
+  # and in the error message, so diagnostics can point at a real file.
+  #
+  # @param source [String] the Kex source text
+  # @param filename [String] the name to report locations against; optional
+  # @return [Result<Program, ParseError>] the parsed program, or why it failed
+  #
+  # @example
+  #   Kex.AST.parse("let double(n: Integer) -> Integer = n * 2\n")
+  #   # => Ok(Program { schemaVersion: 2, items: [...] })
+  #   Kex.AST.parse("let x =").error?   # => true
+  #
+  # @example Counting a file's top-level items
+  #   Kex.AST.parse(source, "main.kex").map { |p| p.items.count }
   parse : String -> Result<Program, ParseError>
   parse : String -> String -> Result<Program, ParseError>
   let parse(source) = Kex.Intrinsic.AST.parse(source)
   let parse(source, filename) = Kex.Intrinsic.AST.parse(source, filename)
 
-  # Reads a file and parses it.
+  # Reads a file and parses it, reporting locations against its path.
+  #
+  # A file that cannot be read is an +Error+ like one that cannot be parsed.
+  #
+  # @param path [FS.FilePath] the file to read and parse
+  # @return [Result<Program, ParseError>] the parsed program, or why it failed
+  #
+  # @example
+  #   match Kex.AST.parseFile("src/main.kex") do
+  #     Ok(program) => IO.printLine("${program.items.count} items")
+  #     Error(e)    => IO.printError(e.message)
+  #   end
+  #
+  # @example Parsing every source in a directory
+  #   FS.Directory.files(dir)
+  #     .or([])
+  #     .filter { |f| FS.Path.extension(f) == ".kex" }
+  #     .map { |f| Kex.AST.parseFile(FS.Path.join(dir, f)) }
   parseFile : FS.FilePath -> Result<Program, ParseError>
   let parseFile(path) = Kex.Intrinsic.AST.parseFile(path)
 
-  # Parses a type expression string into a TypeRef.
+  # Parses a type expression on its own, without a surrounding program.
+  #
+  # Use it to read a type written in data — a signature in a config file, a
+  # type named on a command line. +typeRefText+ renders the result back.
+  #
+  # @param source [String] the type expression
+  # @return [Result<TypeRef, ParseError>] the parsed type, or why it failed
+  #
+  # @example
+  #   Kex.AST.parseType("[Integer]").map { |t| Kex.AST.typeRefText(t) }
+  #   # => Ok("[Integer]")
+  #   Kex.AST.parseType("Map<String, Integer>").map { |t| Kex.AST.typeRefText(t) }
+  #   # => Ok("Map<String, Integer>")
   parseType : String -> Result<TypeRef, ParseError>
   let parseType(source) = Kex.Intrinsic.AST.parseType(source)
 
-  # Parses a single expression string into an Expression AST node.
+  # Parses a single expression on its own, without a surrounding program.
+  #
+  # This gives you the expression's SHAPE. To evaluate one instead, use
+  # +Evaluator.runExpression+.
+  #
+  # @param source [String] the expression text
+  # @return [Result<Expression, ParseError>] the parsed expression, or why it failed
+  #
+  # @example
+  #   Kex.AST.parseExpression("1 + 2").ok?   # => true
+  #   Kex.AST.parseExpression("1 +").ok?     # => false
   parseExpression : String -> Result<Expression, ParseError>
   let parseExpression(source) = Kex.Intrinsic.AST.parseExpression(source)
 
-  # Structured representation of type expressions.
+  # A type as it was written in source.
+  #
+  # +typeRefText+ renders one back to the source spelling.
   type TypeRef
     = NamedType(String, [TypeRef])
     | FunctionType([TypeRef], TypeRef)
@@ -59,6 +153,20 @@ module Kex.AST do
     | AnyType
     | NoneType
 
+  # Renders a +TypeRef+ back to the way it is written in source.
+  #
+  # A list reads as +[Integer]+, a map as +{String: Integer}+, an optional as
+  # +String?+ — the spelling a reader would recognise, not the constructor
+  # tree behind it.
+  #
+  # @param typeRef [TypeRef] the parsed type
+  # @return [String] the type, as source
+  #
+  # @example
+  #   Kex.AST.parseType("[Integer]").map { |t| Kex.AST.typeRefText(t) }
+  #   # => Ok("[Integer]")
+  #   Kex.AST.parseType("String?").map { |t| Kex.AST.typeRefText(t) }
+  #   # => Ok("String?")
   let typeRefText(NamedType(name, [])) -> String = name
   let typeRefText(NamedType(name, args)) -> String = "${name}<${args.map { |arg| Kex.AST.typeRefText(arg) }.join(", ")}>"
   let typeRefText(FunctionType(params, result)) -> String = "(${params.map { |param| Kex.AST.typeRefText(param) }.join(", ")}) -> ${Kex.AST.typeRefText(result)}"
@@ -94,6 +202,14 @@ module Kex.AST do
     stringKey : Bool
   end
 
+  # Renders a +PatternRef+ back to the way it is written in source.
+  #
+  # @param patternRef [PatternRef] the parsed pattern
+  # @return [String] the pattern, as source
+  #
+  # @example
+  #   Kex.AST.patternRefText(WildcardPattern)             # => "_"
+  #   Kex.AST.patternRefText(BindPattern("n"))            # => "n"
   let patternRefText(BindPattern(name)) -> String = name
   let patternRefText(LiteralPattern(value)) -> String = value
   let patternRefText(ConstructorPattern(name, [])) -> String = name
@@ -113,6 +229,17 @@ module Kex.AST do
   let patternFieldText(name, Just(pattern), false) -> String = "${name}: ${Kex.AST.patternRefText(pattern)}"
   let patternFieldText(name, Just(pattern), true) -> String = "\"${name}\": ${Kex.AST.patternRefText(pattern)}"
 
+  # Renders either a type or a pattern back to source.
+  #
+  # The one call to reach for when a node may carry either — it dispatches to
+  # +typeRefText+ or +patternRefText+ as appropriate.
+  #
+  # @param reference [TypeRef | PatternRef] the parsed node
+  # @return [String] the node, as source
+  #
+  # @example
+  #   Kex.AST.referenceText(WildcardPattern)   # => "_"
+  #   Kex.AST.referenceText(AnyType)           # => "Any"
   let referenceText(NamedType(name, args)) -> String = Kex.AST.typeRefText(NamedType(name, args))
   let referenceText(FunctionType(params, result)) -> String = Kex.AST.typeRefText(FunctionType(params, result))
   let referenceText(TupleType(elements)) -> String = Kex.AST.typeRefText(TupleType(elements))
@@ -313,6 +440,7 @@ module Kex.AST do
 
   record MakeInfo do
     target : TypeRef
+    doc : String?
     isFinal : Bool
     implements : [TypeRef]
     body : [Node]

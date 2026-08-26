@@ -1,8 +1,23 @@
-# JSON parsing and serialization. This module is opt-in:
+# JSON parsing and serialization.
+#
+# Opt-in — nothing here is in scope until `using JSON`.
 #
 #   using JSON
-#   JSON.parse(source)
-#   JSON.parse(source, options: { allowComments: true })
+#
+#   main do
+#     match JSON.parse(source) do
+#       Ok(value) => IO.printLine(value)
+#       Error(e)  => IO.printError("bad JSON: ${e}")
+#     end
+#   end
+#
+# Parsed JSON arrives as ordinary Kex values: an object becomes a +Map+ with
+# atom keys, an array becomes a +List+, +null+ becomes +None+, and numbers
+# become +Integer+ or +Float+ as written. Going the other way, +stringify+
+# accepts those same values and always emits strict JSON.
+#
+#   JSON.parse("{\"a\": 1}")           # => Ok({ a: 1 })
+#   JSON.stringify({ name: "Ada" })    # => "{\"name\":\"Ada\"}"
 #
 # Comments are accepted only when requested. Stringification always emits
 # strict JSON.
@@ -10,6 +25,11 @@ using Parsing
 
 module JSON do
 
+# Why a document could not be parsed. Every variant carries the position in
+# the input where the parser stopped, so a caller can point at the problem.
+#
+#   JSON.parse("[1, 2")    # => Error(UnexpectedEnd(5))
+#   JSON.parse("// c\n1")  # => Error(UnexpectedCharacter("/", 0))
 type Error
   = UnexpectedCharacter(String, Integer)
   | UnexpectedEnd(Integer)
@@ -21,9 +41,45 @@ type Error
   | TrailingInput(Integer)
   | UnknownOption(Atom)
 
+# Parses a JSON document, strictly.
+#
+# The whole text must be one JSON value with nothing after it — trailing input
+# is +TrailingInput+, not a silently ignored tail. Objects come back as maps
+# with atom keys, arrays as lists, +null+ as +None+.
+#
+# @param text [String] the JSON document
+# @return [Result<Any, Error>] the parsed value, or why it failed
+#
+# @example
+#   JSON.parse("{\"a\": 1, \"b\": [true, null, 2.5]}")
+#   # => Ok({ a: 1, b: [true, None, 2.5] })
+#   JSON.parse("[1, 2")   # => Error(UnexpectedEnd(5))
+#
+# @example Reading a config file
+#   match JSON.parse(FS.File.read("config.json").or("")) do
+#     Ok(config) => IO.printLine(config)
+#     Error(e)   => IO.printError("config.json is not valid JSON: ${e}")
+#   end
 parse : String -> Result<Any, Error>
 let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
 
+# Parses a JSON document with parsing options.
+#
+# The one option today is +allowComments+, which accepts +//+ and +/* */+
+# comments — the JSONC dialect config files often use. It is off by default,
+# so strict JSON stays strict unless you ask otherwise. An unrecognised option
+# is +UnknownOption+, not a silent no-op.
+#
+# @param text [String] the JSON document
+# @param options [{Atom: Bool}] parsing options, e.g. +{ allowComments: true }+
+# @return [Result<Any, Error>] the parsed value, or why it failed
+#
+# @example Accepting comments
+#   JSON.parse("// a note\n1", options: { allowComments: true })   # => Ok(1)
+#   JSON.parse("// a note\n1")   # => Error(UnexpectedCharacter("/", 0))
+#
+# @example Reading a JSONC config
+#   JSON.parse(text, options: { allowComments: true })
 parse : String -> {Atom: Bool} -> Result<Any, Error>
 let parse(text: String, options: {Atom: Bool}) -> Result<Any, Error> = parseWithOptions(text, options)
 
@@ -49,6 +105,30 @@ private do
   end
 end
 
+# Renders a Kex value as strict JSON text.
+#
+# Maps become objects, lists become arrays, +None+ becomes +null+, and strings
+# are escaped. A map written with atom keys — the usual Kex spelling — renders
+# with those names as strings, so +{ name: "Ada" }+ becomes +{"name":"Ada"}+.
+# Object keys come out in canonical key order.
+#
+# Anything the encoder does not recognise renders as +null+ rather than
+# failing, so this never raises.
+#
+# @param value [Any] the value to render
+# @return [String] the JSON text
+#
+# @example
+#   JSON.stringify({ name: "Ada", n: 1, ok: true })
+#   # => '{"n":1,"name":"Ada","ok":true}'
+#   JSON.stringify([1, 2, 3])
+#   # => '[1,2,3]'
+#
+# @example Writing a JSON file
+#   FS.File.write("out.json", JSON.stringify(report))
+#
+# @example A round trip
+#   JSON.parse(JSON.stringify({ a: 1 }))   # => Ok({ a: 1 })
 stringify : Any -> String
 let stringify(value: Any) -> String do
   match Kex.Intrinsic.Kex.kind(value) do

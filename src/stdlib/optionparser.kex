@@ -1,12 +1,56 @@
-# Declarative command-line parsing shared by Kex tools and applications.
+# Declarative command-line parsing, shared by Kex tools and applications.
+#
+# You describe the options and commands a tool accepts, and the parser turns
+# an argument list into typed values, dispatches to the right command, and
+# renders the help text.
+#
+#   foul greet(options: ParsedOptions) -> Integer do
+#     IO.printLine("hello, ${options.value("name", "world")}")
+#     return 0
+#   end
+#
+#   main(args) do
+#     let cli = OptionParser.define("demo", "a small demo tool")
+#       .string("name", Just('n'), "who to greet", Just("world"), false)
+#       .flag("help", Just('h'), "show this help")
+#       .command("greet", "", "print a greeting", ~greet)
+#     System.exit(cli.run(args))
+#   end
+#
+#   $ demo greet --name Ada
+#   hello, Ada
+#
+# Note that +--help+ is not automatic: +run+ shows the help when a flag named
+# +help+ is set, so declare that flag if you want it.
+#
+# Start at +OptionParser.define+, chain the +string+ / +integer+ / +flag+ /
+# +command+ builders, and finish with +run+ (dispatch and exit code) or
+# +parse+ (the parsed values, and nothing else).
+
+# What kind of value an option carries: +StringValue+ takes any text,
+# +IntegerValue+ must parse as a number, and +FlagValue+ takes none at all and
+# reads as +"true"+ when present.
 type OptionKind = StringValue | IntegerValue | FlagValue
 
+# One declared option. Built for you by the +OptionConfig+ builders — you
+# rarely construct one by hand.
 record OptionSpec do
+  # The long spelling, without its dashes: +"name"+ for +--name+.
   long : String
+
+  # The optional one-character short spelling: +Just('n')+ for +-n+.
   short : Char? = None
+
+  # Whether the option takes text, a number, or nothing.
   kind : OptionKind = StringValue
+
+  # The one-line description shown in the help text.
   description : String = ""
+
+  # The value used when the option is absent from the command line.
   default : String? = None
+
+  # When true, the parser reports +MissingRequired+ if the option is absent.
   required? : Bool = false
 end
 
@@ -15,13 +59,22 @@ end
 # hands its handler `["greet"]`, and returns the process exit code.
 type CommandHandler = ParsedOptions -> Integer
 
+# One declared command. Built for you by the +OptionConfig.command+ builders.
 record CommandSpec do
   # A name may be several words — `kex install` — and the longest match wins,
   # so a group and its subcommands can both be declared.
   name : String
+
+  # The one-line description shown in the help text.
   description : String = ""
+
+  # What the help line shows after the name — +"<file>"+, +"[args...]"+.
+  # Empty for a command that takes no further words.
   usage : String = ""
+
+  # What to run when this command is named.
   handler : CommandHandler
+
   # The help heading this command is listed under. "" is the tool's own
   # `Commands:` block; anything else gets its own heading, in the order the
   # sections were first declared. Commands a tool discovers at runtime — a
@@ -30,18 +83,42 @@ record CommandSpec do
   section : String = ""
 end
 
+# A tool's whole command-line interface: its name, its options, and its
+# commands.
+#
+# Build one with +OptionParser.define+ and add to it with the chainable
+# +string+, +integer+, +flag+ and +command+ methods. Each returns a new
+# +OptionConfig+, so the chain reads as one declaration.
 record OptionConfig do
+  # The tool's name, as it appears in the help text.
   name : String = "app"
+
+  # A one-line description of the tool, shown beside its name.
   description : String = ""
+
+  # The options declared so far.
   options : [OptionSpec] = []
+
+  # The commands declared so far.
   commands : [CommandSpec] = []
 end
 
+# The result of a successful parse: the option values, and the words that were
+# not options.
 record ParsedOptions do
+  # Every option's value, keyed by its long name. Defaults are already filled
+  # in, and a flag reads as +"true"+ or +"false"+.
   values : { String: String }
+
+  # The positional words left over, with any matched command's own words
+  # already removed.
   arguments : [String]
 end
 
+# Why a command line could not be parsed.
+#
+# +OptionParser.errorMessage+ turns one into a sentence for the user;
+# +OptionConfig.run+ does that for you.
 type OptionParseError = UnknownOption(String)
                       | MissingValue(String)
                       | UnexpectedValue(String)
@@ -49,9 +126,50 @@ type OptionParseError = UnknownOption(String)
                       | InvalidInteger(String, String)
 
 make ParsedOptions do
+  # Returns the value given for the option named +name+, or +None+ when it was
+  # neither supplied nor defaulted.
+  #
+  # @param name [String] the option's long name, without dashes
+  # @return [String?] the value, or +None+
+  #
+  # @example
+  #   options.value("name")     # => Just("Ada")
+  #   options.value("missing")  # => None
   let value(name: String) -> String? = @values.get(name)
+
+  # Returns the value given for the option named +name+, or +default+ when it
+  # was neither supplied nor defaulted.
+  #
+  # @param name [String] the option's long name, without dashes
+  # @param default [String] the value to use when the option is absent
+  # @return [String] the value, or +default+
+  #
+  # @example
+  #   IO.printLine("hello, ${options.value("name", "world")}")
   let value(name: String, default: String) -> String = @values.get(name, default)
+
+  # Returns +true+ when the flag named +name+ was given.
+  #
+  # @param name [String] the flag's long name, without dashes
+  # @return [Bool] +true+ when the flag is set
+  #
+  # @example
+  #   if options.flagEnabled?("verbose")
+  #     IO.printLine("verbose mode")
+  #   end
   let flagEnabled?(name: String) -> Bool = @values.get(name, "false") == "true"
+
+  # Returns the value of an integer option as an +Integer+, or +None+ when it
+  # is absent or does not parse.
+  #
+  # An option declared with +integer+ has already been checked at parse time,
+  # so +None+ here means absent rather than malformed.
+  #
+  # @param name [String] the option's long name, without dashes
+  # @return [Integer?] the number, or +None+
+  #
+  # @example
+  #   let times = options.integerValue("times").or(1)
   let integerValue(name: String) -> Integer? do
     match @values.get(name) do
       None => None
@@ -64,6 +182,21 @@ make ParsedOptions do
 end
 
 make OptionConfig do
+  # Declares an option that takes a text value.
+  #
+  # @param long [String] the long spelling, without dashes
+  # @param short [Char?] an optional one-character spelling
+  # @param description [String] the help-text description
+  # @param default [String?] the value used when the option is absent
+  # @param required? [Bool] whether the option must be given
+  # @return [OptionConfig] the config, with the option added
+  #
+  # @example
+  #   OptionParser.define("demo", "a small demo tool")
+  #     .string("name", Just('n'), "who to greet", Just("world"), false)
+  #
+  # @example An option the tool cannot run without
+  #   config.string("output", Just('o'), "where to write", None, true)
   let string(long: String, short: Char?, description: String,
                    default: String?, required?: Bool) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: StringValue,
@@ -72,6 +205,21 @@ make OptionConfig do
     New { options: [...@options, option] }
   end
 
+  # Declares an option that takes a whole number.
+  #
+  # A value that does not parse is rejected at parse time with
+  # +InvalidInteger+, so a handler never sees a malformed number. Read it back
+  # with +ParsedOptions.integerValue+.
+  #
+  # @param long [String] the long spelling, without dashes
+  # @param short [Char?] an optional one-character spelling
+  # @param description [String] the help-text description
+  # @param default [String?] the value used when the option is absent
+  # @param required? [Bool] whether the option must be given
+  # @return [OptionConfig] the config, with the option added
+  #
+  # @example
+  #   config.integer("port", Just('p'), "port to listen on", Just("8080"), false)
   let integer(long: String, short: Char?, description: String,
                     default: String?, required?: Bool) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: IntegerValue,
@@ -80,12 +228,49 @@ make OptionConfig do
     New { options: [...@options, option] }
   end
 
+  # Declares an option that takes no value and is either present or not.
+  #
+  # It defaults to +"false"+ and reads as +"true"+ when given. Read it back
+  # with +ParsedOptions.flagEnabled?+. Giving it a value is an error
+  # (+UnexpectedValue+).
+  #
+  # Declare a flag named +help+ if you want +--help+ to print the help text —
+  # +run+ looks for exactly that name, and adds nothing on its own.
+  #
+  # @param long [String] the long spelling, without dashes
+  # @param short [Char?] an optional one-character spelling
+  # @param description [String] the help-text description
+  # @return [OptionConfig] the config, with the flag added
+  #
+  # @example
+  #   config
+  #     .flag("verbose", Just('v'), "print more detail")
+  #     .flag("help", Just('h'), "show this help")
   let flag(long: String, short: Char?, description: String) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: FlagValue,
                               description: description, default: Just("false") }
     New { options: [...@options, option] }
   end
 
+  # Declares a command and the function that runs it.
+  #
+  # A command name may be several words — +"docs build"+ — and the longest
+  # match wins, so a group and its subcommands can both be declared. The
+  # handler receives the parsed options with the command's own words already
+  # removed, and returns the process exit code.
+  #
+  # @param name [String] the command's name, one or more words
+  # @param description [String] the help-text description
+  # @param handler [CommandHandler] what to run
+  # @return [OptionConfig] the config, with the command added
+  #
+  # @example
+  #   foul greet(options: ParsedOptions) -> Integer do
+  #     IO.printLine("hello, ${options.value("name", "world")}")
+  #     return 0
+  #   end
+  #
+  #   config.command("greet", "print a greeting", ~greet)
   # Declares a command. `usage` is what the help line shows after the name
   # (`<name>`, `[args...]`); leave it empty for a command that takes none.
   let command(name: String, description: String, handler: CommandHandler) -> OptionConfig do
@@ -94,12 +279,41 @@ make OptionConfig do
     New { commands: [...@commands, spec] }
   end
 
+  # Declares a command whose help line shows the shape of its arguments.
+  #
+  # +usage+ is what appears after the name — +"<file>"+, +"[args...]"+.
+  #
+  # @param name [String] the command's name, one or more words
+  # @param usage [String] the argument shape shown in the help text
+  # @param description [String] the help-text description
+  # @param handler [CommandHandler] what to run
+  # @return [OptionConfig] the config, with the command added
+  #
+  # @example
+  #   config.command("build", "<file>", "compile one source file", ~build)
   let command(name: String, usage: String, description: String, handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: usage, handler: handler }
     New { commands: [...@commands, spec] }
   end
 
+  # Declares a command listed under its own help heading, rather than with the
+  # tool's built-ins.
+  #
+  # Use it for commands a tool discovers at run time — a package manifest's
+  # own, a plugin's — so a reader can tell them apart from the tool's own
+  # vocabulary. Sections appear in the order they were first declared.
+  #
+  # @param name [String] the command's name, one or more words
+  # @param usage [String] the argument shape shown in the help text
+  # @param description [String] the help-text description
+  # @param section [String] the help heading to list it under
+  # @param handler [CommandHandler] what to run
+  # @return [OptionConfig] the config, with the command added
+  #
+  # @example
+  #   config.command("deploy", "", "run the project's deploy script",
+  #                  section: "Project commands", ~deploy)
   # The same, listed under its own help heading rather than with the tool's
   # built-ins. `section:` is a label at the call site so the fourth string
   # cannot be mistaken for the description.
@@ -110,14 +324,44 @@ make OptionConfig do
     New { commands: [...@commands, spec] }
   end
 
+  # Parses +args+ into option values and leftover words, without dispatching
+  # to a command.
+  #
+  # Use it when the tool has no commands, or when you want to inspect the
+  # parse before deciding what to do. +run+ is the one-call alternative.
+  #
+  # @param args [[String]] the command-line arguments
+  # @return [Result<ParsedOptions, OptionParseError>] the parse, or why it failed
+  #
+  # @example
+  #   match config.parse(args) do
+  #     Ok(options) => IO.printLine(options.value("name", "world"))
+  #     Error(e)    => IO.printError(OptionParser.errorMessage(e))
+  #   end
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
-    OptionParser.parse(@options, args)
+    OptionParser.parse(@options, @commands, args)
   end
 
-  # Parses `args` and runs the command they name, returning its exit code.
+  # Parses +args+, runs the command they name, and returns its exit code.
+  #
+  # This is the whole of a tool's +main+: hand it the argument list and pass
+  # the result to +System.exit+.
+  #
   # A parse failure, an unknown command, or a line with no command at all
-  # reports the problem with the help text and returns 1 — the one place that
-  # policy has to live for every tool to behave the same way.
+  # reports the problem along with the help text and returns 1 — the one place
+  # that policy has to live for every tool to behave the same way. A set
+  # +help+ flag prints the help and returns 0.
+  #
+  # @param args [[String]] the command-line arguments
+  # @return [Integer] the exit code to give the shell
+  #
+  # @example
+  #   main(args) do
+  #     let cli = OptionParser.define("demo", "a small demo tool")
+  #       .flag("help", Just('h'), "show this help")
+  #       .command("greet", "", "print a greeting", ~greet)
+  #     System.exit(cli.run(args))
+  #   end
   foul run(args: [String]) -> Integer do
     let options = match this.parse(args) do
       Error(error) => do
@@ -144,11 +388,31 @@ make OptionConfig do
     end
   end
 
+  # Prints the help text and returns 0, the exit code for a successful run.
+  #
+  # +run+ calls this for you when the +help+ flag is set; call it directly
+  # when a tool decides on its own that help is the right answer.
+  #
+  # @return [Integer] always 0
+  #
+  # @example A tool with no arguments shows its help
+  #   args.empty? then cli.printHelp else cli.run(args)
   foul printHelp -> Integer do
     IO.printLine(this.help)
     return 0
   end
 
+  # Returns the tool's help text: its name and description, its options, and
+  # its commands grouped by section.
+  #
+  # +run+ and +printHelp+ print this for you; reach for it directly when the
+  # text has to go somewhere other than stdout.
+  #
+  # @return [String] the rendered help text
+  #
+  # @example
+  #   IO.printError("${OptionParser.errorMessage(error)}\n\n${cli.help}")
+  #
   # The help text, styled. Every escape comes from `Console`, which the
   # runtime blanks under `--no-colors` and `KEX_COLORS=0`, so the same code
   # produces plain text down a pipe and this needs no second rendering path.
@@ -203,14 +467,32 @@ module OptionParser do
     OptionConfig { name: name, description: description }
   end
 
+  # Returns the label a command is listed under in the help text — its name,
+  # followed by its usage when it has one.
+  #
+  # @param command [CommandSpec] the command to label
+  # @return [String] the help-text label
+  #
+  # @example
+  #   OptionParser.commandLabel(spec)   # => "build <file>"
   let commandLabel(command: CommandSpec) -> String do
     return command.name if command.usage == ""
     return "${command.name} ${command.usage}"
   end
 
-  # The declared command whose words open `arguments`, with what is left
-  # after them. Longest match first, so `kex install` is preferred over a
-  # `kex` that also exists.
+  # Finds the declared command whose words open +arguments+, and returns it
+  # with whatever is left after them.
+  #
+  # Longest match first, so +"kex install"+ is preferred over a +"kex"+ that
+  # also exists. Answers +None+ when no command matches.
+  #
+  # @param commands [[CommandSpec]] the declared commands
+  # @param arguments [[String]] the positional words from the command line
+  # @return [(CommandSpec, [String])?] the command and the remaining words
+  #
+  # @example
+  #   OptionParser.commandFor(commands, ["docs", "build", "src"])
+  #   # => Just((docsBuildSpec, ["src"]))
   let commandFor(commands: [CommandSpec], arguments: [String])
       -> (CommandSpec, [String])? do
     let ordered = commands.sort { |a, b| a.name.split(" ").count > b.name.split(" ").count }
@@ -223,12 +505,37 @@ module OptionParser do
     end
   end
 
+  # Returns +true+ when +arguments+ begins with the words of +name+.
+  #
+  # The word-wise prefix test +commandFor+ matches with — +"docs build"+ opens
+  # +["docs", "build", "src"]+ but not +["docs"]+.
+  #
+  # @param arguments [[String]] the positional words from the command line
+  # @param name [String] the command name, one or more words
+  # @return [Bool] +true+ when the words match at the front
+  #
+  # @example
+  #   OptionParser.opensWith?(["docs", "build"], "docs")   # => true
+  #   OptionParser.opensWith?(["docs"], "docs build")      # => false
   let opensWith?(arguments: [String], name: String) -> Bool do
     let words = name.split(" ")
     return false if arguments.count < words.count
     return arguments.take(words.count) == words
   end
 
+  # Renders a parse error as a sentence for the user.
+  #
+  # +OptionConfig.run+ does this for you; call it directly when handling a
+  # +parse+ result yourself.
+  #
+  # @param error [OptionParseError] the failure to describe
+  # @return [String] the message to show
+  #
+  # @example
+  #   OptionParser.errorMessage(UnknownOption("--nope"))
+  #   # => "unknown option '--nope'"
+  #   OptionParser.errorMessage(MissingValue("output"))
+  #   # => "--output requires a value"
   let errorMessage(error: OptionParseError) -> String = match error do
     UnknownOption(option) => "unknown option '${option}'"
     MissingValue(option) => "--${option} requires a value"
@@ -237,8 +544,18 @@ module OptionParser do
     InvalidInteger(option, value) => "--${option} expects an integer, got '${value}'"
   end
 
-  let parse(options: [OptionSpec], args: [String]) -> Result<ParsedOptions, OptionParseError> do
-    walk(options, args, {}, [], false)
+  # Parses +args+ against a list of option and command specs.
+  #
+  # The engine behind +OptionConfig.parse+, which is the form to call from
+  # ordinary code.
+  #
+  # @param options [[OptionSpec]] the declared options
+  # @param commands [[CommandSpec]] the declared commands
+  # @param args [[String]] the command-line arguments
+  # @return [Result<ParsedOptions, OptionParseError>] the parse, or why it failed
+  let parse(options: [OptionSpec], commands: [CommandSpec], args: [String])
+      -> Result<ParsedOptions, OptionParseError> do
+    walk(options, commands, args, {}, [], false)
   end
 
   private do
@@ -251,7 +568,7 @@ module OptionParser do
       end
     end
 
-    let finish(options: [OptionSpec], values: { String: String },
+    let finish(options: [OptionSpec], commands: [CommandSpec], values: { String: String },
                arguments: [String]) -> Result<ParsedOptions, OptionParseError> do
       let missing = options.find { |option| option.required? && !values.has?(option.long) }
       OptionParser.finishRequired(missing, options, values, arguments)
@@ -268,48 +585,63 @@ module OptionParser do
       Ok(ParsedOptions { values: complete, arguments: arguments })
     end
 
-    walk : [OptionSpec] -> [String] -> { String: String } -> [String] -> Bool -> Result<ParsedOptions, OptionParseError>
-    let walk(options, [], values, arguments, _) = OptionParser.finish(options, values, arguments)
-    let walk(options, [argument | rest], values, arguments, stopped?: Bool) do
+    # `commands` rides along only for the rule in the None branch below.
+    walk : [OptionSpec] -> [CommandSpec] -> [String] -> { String: String } -> [String] -> Bool -> Result<ParsedOptions, OptionParseError>
+    let walk(options, commands, [], values, arguments, _) = OptionParser.finish(options, commands, values, arguments)
+    let walk(options, commands, [argument | rest], values, arguments, stopped?: Bool) do
       if stopped?
-        return OptionParser.walk(options, rest, values, [...arguments, argument], true)
+        return OptionParser.walk(options, commands, rest, values, [...arguments, argument], true)
       end
       if argument == "--"
-        return OptionParser.walk(options, rest, values, arguments, true)
+        return OptionParser.walk(options, commands, rest, values, arguments, true)
       end
       if !argument.startsWith?("-") || argument == "-"
-        return OptionParser.walk(options, rest, values, [...arguments, argument], false)
+        return OptionParser.walk(options, commands, rest, values, [...arguments, argument], false)
       end
 
       let equals = argument.startsWith?("--") then argument.split("=") else [argument]
       let spelling = equals.first.or(argument)
-      OptionParser.consume(OptionParser.findOption(options, spelling), options, rest,
-                           values, arguments, equals.second, spelling)
+      match OptionParser.findOption(options, spelling) do
+        # An option the tool itself does not know, meeting the line AFTER a
+        # command word, is the command's own vocabulary — `tey docs build
+        # --source src` must reach the docs handler with `--source src` in
+        # its arguments rather than die as Tey's unknown option. Before any
+        # command word it is still this parser's error to report: nothing
+        # else has claimed it.
+        None => match OptionParser.commandFor(commands, arguments) do
+          Just(_) => OptionParser.walk(options, commands, rest, values,
+                                       [...arguments, argument], false)
+          None => Error(UnknownOption(spelling))
+        end
+        Just(option) =>
+          OptionParser.consume(OptionParser.findOption(options, spelling), options, commands,
+                               rest, values, arguments, equals.second, spelling)
+      end
     end
 
-    let consume(None, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
-    let consume(Just(option), options, rest, values, arguments, inlineValue, _) do
+    let consume(None, _, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
+    let consume(Just(option), options, commands, rest, values, arguments, inlineValue, _) do
       match option.kind do
-        FlagValue => OptionParser.consumeFlag(inlineValue, option, options,
+        FlagValue => OptionParser.consumeFlag(inlineValue, option, options, commands,
                                                rest, values, arguments)
         _ => OptionParser.consumeValue(
                OptionParser.valueAndRest(inlineValue, rest), option,
-               options, values, arguments)
+               options, commands, values, arguments)
       end
     end
 
-    let consumeFlag(Just(_), option, _, _, _, _) = Error(UnexpectedValue(option.long))
-    let consumeFlag(None, option, options, rest, values, arguments) do
-      OptionParser.walk(options, rest,
+    let consumeFlag(Just(_), option, _, _, _, _, _) = Error(UnexpectedValue(option.long))
+    let consumeFlag(None, option, options, commands, rest, values, arguments) do
+      OptionParser.walk(options, commands, rest,
         Kex.Intrinsic.Map.put(values, option.long, "true"), arguments, false)
     end
 
-    let consumeValue(None, option, _, _, _) = Error(MissingValue(option.long))
-    let consumeValue(Just((value, remaining)), option, options, values, arguments) do
+    let consumeValue(None, option, _, _, _, _) = Error(MissingValue(option.long))
+    let consumeValue(Just((value, remaining)), option, options, commands, values, arguments) do
       if option.kind == IntegerValue && Integer.parse(value).error?
         return Error(InvalidInteger(option.long, value))
       end
-      OptionParser.walk(options, remaining,
+      OptionParser.walk(options, commands, remaining,
         Kex.Intrinsic.Map.put(values, option.long, value), arguments, false)
     end
 

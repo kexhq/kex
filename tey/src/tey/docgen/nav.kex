@@ -1,0 +1,170 @@
+# Navigation and cross-linking: the two indexes every renderer resolves
+# against, derived once from the extracted pages.
+#
+#   modules — one ModuleIndexEntry per module (the sidebar's structure)
+#   links   — one LinkEntry per linkable name (the interlink universe)
+#
+# Both are computed here rather than in each renderer so HTML, Markdown and
+# model.json cannot disagree about where a name lands — the same reasoning
+# that keeps the typed model the single source: resolve once, render often.
+
+module Tey.Docgen.Nav do
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, ModuleEntry, SourcePage, ModuleIndexEntry, MemberEntry, LinkEntry, kindOf, nameOf, anchorOf]
+
+  # ── Module index ──────────────────────────────────────────────────────────
+
+  # Every module in the package, in declaration order, pointing at the page
+  # it lives on. Nested modules are entries of their own (the sidebar nests
+  # them by name).
+  foul buildModules(pages: [SourcePage]) -> [ModuleIndexEntry] do
+    return pages.flatMap { |p| modulesOnPage(p.entities, p.urlPath) }
+  end
+
+  foul modulesOnPage(entities: [Entity], urlPath: String) -> [ModuleIndexEntry] do
+    return entities.flatMap { |e|
+      match e do
+        ModuleDecl(entry) => [moduleEntry(entry, urlPath)] + modulesOnPage(entry.children, urlPath)
+        _ => []
+      end
+    }
+  end
+
+  foul moduleEntry(entry: ModuleEntry, urlPath: String) -> ModuleIndexEntry do
+    return ModuleIndexEntry {
+      qualifiedName: entry.qualifiedName,
+      summary: firstLine(entry.doc.summary),
+      urlPath: urlPath,
+      members: entry.children.map { |c| MemberEntry { name: nameOf(c), anchor: anchorOf(c) } }
+    }
+  end
+
+  foul firstLine(summary: String) -> String do
+    return summary.split("\n").first.or("")
+  end
+
+  # ── Link index ────────────────────────────────────────────────────────────
+
+  # Linkable names, unique-target-wins: a name links while exactly one
+  # (page, anchor) answers it. A qualified name ("FS.Path") is its own name;
+  # a simple one ("Path") survives only while nothing else claims it — once
+  # two different entities answer "Request", the simple spelling stops
+  # linking and only the spelled-out names do.
+  foul buildLinks(pages: [SourcePage]) -> [LinkEntry] do
+    let entries = pages.flatMap { |p| linkEntriesOnPage(p.entities, p.urlPath) }
+    return entries.filter { |e| uniqueTarget?(entries, e) }
+  end
+
+  foul linkEntriesOnPage(entities: [Entity], urlPath: String) -> [LinkEntry] do
+    return entities.flatMap { |e|
+      let own = linkableNames(e).map { |n|
+        LinkEntry { name: n, urlPath: urlPath, anchor: anchorOf(e), kind: kindOf(e) }
+      }
+      let nested = match e do
+        ModuleDecl(entry) => linkEntriesOnPage(entry.children, urlPath)
+        TraitDecl(entry) => []
+        MakeDecl(entry) => []
+        _ => []
+      end
+      own + nested
+    }
+  end
+
+  # A type/reference name links under its qualified name; entities whose
+  # qualified name is the bare name (top-level declarations) offer that
+  # spelling too. A make's target with type parameters ("[X]",
+  # "Map<K, V>") links under the base name before the "<" — the anchor is
+  # still the full-target one, matching the section id.
+  foul linkableNames(e: Entity) -> [String] do
+    match e do
+      FuncDecl(_) => []
+      MakeDecl(entry) => do
+        let base = entry.target.split("<").first.or("")
+        return [] if base.empty? || base.startsWith?("[")
+        return [base.trim]
+      end
+      _ => do
+        let qualified = Tey.Docgen.Model.qualifiedNameOf(e)
+        if qualified == nameOf(e)
+          return [qualified]
+        end
+        return [qualified, nameOf(e)]
+      end
+    end
+  end
+
+  # Whether `candidate`'s name answers to exactly one target: every other
+  # entry under the same name must land on the same (page, anchor).
+  foul uniqueTarget?(entries: [LinkEntry], candidate: LinkEntry) -> Bool do
+    return entries.filter { |e|
+      e.name == candidate.name && differentTarget?(e, candidate)
+    }.empty?
+  end
+
+  foul differentTarget?(a: LinkEntry, b: LinkEntry) -> Bool do
+    return a.urlPath != b.urlPath || a.anchor != b.anchor
+  end
+
+  # ── Resolution ────────────────────────────────────────────────────────────
+
+  foul resolve(links: [LinkEntry], name: String) -> LinkEntry? do
+    return links.find { |l| l.name == name }
+  end
+
+  # Splits a type reference into identifier segments and separator runs, so
+  # a renderer can link the identifiers and leave the punctuation alone:
+  # "Map<String, FS.Path>" → ["Map", "<", "String", ", ", "FS.Path", ">"].
+  foul segmentsOf(typeText: String) -> [String] do
+    return splitLoop(typeText, "", "", [])
+  end
+
+  # `ident` is the identifier being read, `sep` the separator run since it;
+  # only one is non-empty at a time, and whichever it is goes out in order.
+  foul splitLoop(rest: String, ident: String, sep: String, out: [String]) -> [String] do
+    if rest.empty?
+      return flushIdent(ident, flushSep(sep, out))
+    end
+    let ch = rest.take(1)
+    if isIdentChar?(ch)
+      return splitLoop(rest.drop(1), ident + ch, "", flushSep(sep, out))
+    end
+    return splitLoop(rest.drop(1), "", sep + ch, flushIdent(ident, out))
+  end
+
+  foul flushIdent(ident: String, out: [String]) -> [String] do
+    if ident.empty?
+      return out
+    end
+    return out + [ident]
+  end
+
+  foul flushSep(sep: String, out: [String]) -> [String] do
+    if sep.empty?
+      return out
+    end
+    return out + [sep]
+  end
+
+  foul isIdentChar?(ch: String) -> Bool do
+    return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.".contains?(ch)
+  end
+
+  # The href from one page of this package to another, with anchor:
+  # same page → "#anchor"; else up to the version directory and back down.
+  foul hrefFrom(fromPath: String, toPath: String, anchor: String) -> String do
+    if fromPath == toPath
+      return "#${anchor}"
+    end
+    return "${upsToVersionDir(fromPath)}${toPath}.html#${anchor}"
+  end
+
+  foul upsToVersionDir(urlPath: String) -> String do
+    return ups(urlPath.split("/").count - 1)
+  end
+
+  foul ups(n: Integer) -> String do
+    if n <= 0
+      return ""
+    end
+    return "../" + ups(n - 1)
+  end
+end

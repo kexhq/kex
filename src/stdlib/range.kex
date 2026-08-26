@@ -1,29 +1,87 @@
-# Range — a range computes everything from its two bounds; `items`
-# materializes the elements into a real list when one is needed.
+# A span between two bounds, written +(1..10)+ or +('a'..'z')+.
+#
+# A range stores only its two endpoints and computes everything else from
+# them, so +(1..1000000)+ costs nothing to make. Both ends are included.
+#
+#   (1..5).items          # => [1, 2, 3, 4, 5]
+#   (1..5).sum            # => 15
+#   5.in?(1..10)          # => true
+#   ('a'..'e').items      # => ['a', 'b', 'c', 'd', 'e']
+#
+# It is +Enumerable+ and +Foldable+, so the traversal methods work directly,
+# and the list operations below answer in list terms. Use +items+ when you
+# want a real list to hand to something else.
+#
+#   (1..10).items.filter(~even?)   # => [2, 4, 6, 8, 10]
+#   (1..3).items.each { |n| IO.printLine(n) }
 type Range
 
 make Range, implement: Enumerable, Foldable do
-  # Shared primitive for Enumerable and Foldable. Range stays structurally
-  # minimal; inherited operations reduce over its materialized items in
-  # ascending range order.
+  # Folds over the range's elements in ascending order.
+  #
+  # This is +Range+'s +Enumerable+ primitive; the traversal methods are built
+  # on it. A range stays structurally minimal, so the fold runs over its
+  # materialized items.
+  #
+  # @param acc [A] the initial accumulator
+  # @param f [A -> B -> A] combines the accumulator with each element
+  # @return [A] the final accumulator
+  #
+  # @example
+  #   (1..4).reduce(0) { |sum, n| sum + n }   # => 10
   let reduce(acc, f) = this.items.reduce(acc, f)
 
-  # Numeric range aggregates are expressed in terms of the Enumerable
-  # primitive rather than relying on the walker's historical List fallback.
+  # Returns the sum of the range's elements.
+  #
+  # @return [Number] the sum
+  #
+  # @example
+  #   (1..10).sum   # => 55
+  #   (1..1).sum    # => 1
   let sum = this.reduce(0) { |acc, n| acc + n }
+
+  # Returns the product of the range's elements.
+  #
+  # @return [Number] the product
+  #
+  # @example
+  #   (1..5).product   # => 120   (five factorial)
   let product = this.reduce(1) { |acc, n| acc * n }
 
-  # Membership is a Range method, not a fallback into the bare String/List
-  # native dispatcher.
+  # Returns +true+ when +value+ falls inside the range, endpoints included.
+  #
+  # +5.in?(1..10)+ says the same thing from the value's side, and often reads
+  # better.
+  #
+  # @param value [A] the value to test
+  # @return [Bool] +true+ when the value is in range
+  #
+  # @example
+  #   (1..10).contains?(5)    # => true
+  #   (1..10).contains?(11)   # => false
   let contains?(value) = this.items.contains?(value)
 
-  # The range's elements as a list.
+  # Returns the range's elements as a list.
+  #
+  # This is where a range stops being two numbers and becomes real data, so it
+  # is also where a very large range starts to cost something.
+  #
+  # @return [[A]] the elements, in ascending order
   #
   # @example
   #   (1..3).items      # => [1, 2, 3]
   #   ('a'..'c').items  # => ['a', 'b', 'c']
+  #
+  # @example Building a lookup table
+  #   (1..12).items.map { |m| (m, monthName(m)) }
   let items = Kex.Intrinsic.Range.items(this)
 
+  # Returns the first element, or +None+ for an empty range.
+  #
+  # @return [A?] the first element, or +None+
+  #
+  # @example
+  #   (3..7).first   # => Just(3)
   # The list operations, over the materialized items. A range is an ordered
   # collection, so `(1..5).first` and `(1..5).length` are questions it can
   # answer — and on the BEAM backend, where a range IS its item list, they
@@ -31,27 +89,229 @@ make Range, implement: Enumerable, Foldable do
   # for Range"), so every one of these was a backend divergence rather than a
   # deliberate restriction.
   let first = this.items.first
+
+  # Returns the second element, or +None+ when the range is shorter than two.
+  #
+  # @return [A?] the second element, or +None+
+  #
+  # @example
+  #   (3..7).second   # => Just(4)
   let second = this.items.second
+
+  # Returns the third element, or +None+ when the range is shorter than three.
+  #
+  # @return [A?] the third element, or +None+
+  #
+  # @example
+  #   (3..7).third   # => Just(5)
   let third = this.items.third
+
+  # Returns the last element, or +None+ for an empty range.
+  #
+  # @return [A?] the last element, or +None+
+  #
+  # @example
+  #   (3..7).last   # => Just(7)
   let last = this.items.last
+
+  # Returns every element after the first, as a list.
+  #
+  # @return [[A]] the remaining elements
+  #
+  # @example
+  #   (1..4).rest   # => [2, 3, 4]
   let rest = this.items.rest
+
+  # Returns how many elements the range has.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   (1..10).length   # => 10
+  #   (5..5).length    # => 1
   let length = this.items.length
+
+  # Returns how many elements the range has. The same as +length+.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   (1..10).count   # => 10
   let count = this.items.length
+
+  # Returns +true+ when the range has no elements.
+  #
+  # @return [Bool] +true+ for an empty range
+  #
+  # @example
+  #   (1..3).empty?   # => false
   let empty? = this.items.empty?
+
+  # Returns the largest element, or +None+ for an empty range.
+  #
+  # @return [A?] the largest element, or +None+
+  #
+  # @example
+  #   (1..10).max   # => Just(10)
   let max = this.items.max
+
+  # Returns the smallest element, or +None+ for an empty range.
+  #
+  # @return [A?] the smallest element, or +None+
+  #
+  # @example
+  #   (1..10).min   # => Just(1)
   let min = this.items.min
+
+  # Returns the elements as a list, in descending order.
+  #
+  # @return [[A]] the elements, reversed
+  #
+  # @example
+  #   (1..4).reverse   # => [4, 3, 2, 1]
+  #
+  # @example Counting down
+  #   (1..3).reverse.each { |n| IO.printLine(n) }   # prints 3, 2, 1
   let reverse = this.items.reverse
+
+  # Returns the elements as a sorted list. A range is already ascending, so
+  # this is the identity — it exists so that generic code can call it.
+  #
+  # @return [[A]] the elements, sorted
+  #
+  # @example
+  #   (1..4).sort   # => [1, 2, 3, 4]
   let sort = this.items.sort
+
+  # Returns the elements as a list, ordered by +comparator+.
+  #
+  # @param comparator [A -> A -> Bool] +true+ when the first should come first
+  # @return [[A]] the sorted elements
+  #
+  # @example
+  #   (1..4).sort { |a, b| a > b }   # => [4, 3, 2, 1]
   let sort(comparator) = this.items.sort(comparator)
+
+  # Returns the elements as a list with duplicates removed. A range has none,
+  # so this is the identity — it exists so that generic code can call it.
+  #
+  # @return [[A]] the distinct elements
+  #
+  # @example
+  #   (1..3).uniq   # => [1, 2, 3]
   let uniq = this.items.uniq
+
+  # Renders the elements as text, with +separator+ between them.
+  #
+  # @param separator [String] placed between elements
+  # @return [String] the joined text
+  #
+  # @example
+  #   (1..4).join(", ")   # => "1, 2, 3, 4"
+  #
+  # @example A comma-separated header
+  #   "columns: ${(1..3).join(",")}"   # => "columns: 1,2,3"
   let join(separator) = this.items.join(separator)
+
+  # Returns the element at index +index+, counting from 0, or +None+ when out
+  # of range.
+  #
+  # Note that the index counts positions, not values: +(10..20).at(0)+ is
+  # +Just(10)+.
+  #
+  # @param index [Integer] the 0-based position
+  # @return [A?] the element, or +None+
+  #
+  # @example
+  #   (10..20).at(0)   # => Just(10)
+  #   (10..20).at(99)  # => None
   let at(index) = this.items.at(index)
+
+  # Returns the element at index +index+, or +fallback+ when out of range.
+  #
+  # Note: the fallback is not currently applied — an out-of-range index
+  # answers +None+ rather than +fallback+. Until that is fixed, use
+  # +items.get(index, fallback)+, which is total.
+  #
+  # @param index [Integer] the 0-based position
+  # @param fallback [A] the value to use when out of range
+  # @return [A] the element, or +fallback+
+  #
+  # @example Use the list form for a reliable default
+  #   (10..20).items.get(0, 0)    # => 10
+  #   (10..20).items.get(99, 0)   # => 0
   let at(index, fallback) = this.items.at(index, fallback)
+
+  # Returns the first +n+ elements as a list.
+  #
+  # @param n [Integer] how many elements to keep
+  # @return [[A]] the leading elements
+  #
+  # @example
+  #   (1..10).take(3)   # => [1, 2, 3]
   let take(n) = this.items.take(n)
+
+  # Returns everything after the first +n+ elements, as a list.
+  #
+  # @param n [Integer] how many elements to skip
+  # @return [[A]] the remaining elements
+  #
+  # @example
+  #   (1..5).drop(3)   # => [4, 5]
   let drop(n) = this.items.drop(n)
+
+  # Returns the position of +value+ in the range, or +None+ when it is not in
+  # it.
+  #
+  # Note: on a numeric range the argument is currently inferred as a +Char+,
+  # so +(10..20).indexOf(12)+ does not compile. Use
+  # +(10..20).items.indexOf(12)+ for numbers.
+  #
+  # @param value [A] the element to look for
+  # @return [Integer?] the 0-based position, or +None+
+  #
+  # @example
+  #   ('a'..'e').indexOf('c')      # => Just(2)
+  #   (10..20).items.indexOf(12)   # => Just(2)
   let indexOf(value) = this.items.indexOf(value)
+
+  # Pairs each element with the element at the same position in +other+,
+  # stopping at the shorter of the two.
+  #
+  # @param other [[B]] the list to pair with
+  # @return [[(A, B)]] the pairs, in order
+  #
+  # @example
+  #   (1..3).zip(["a", "b", "c"])   # => [(1, "a"), (2, "b"), (3, "c")]
+  #
+  # @example Numbering a list
+  #   (1..names.count).zip(names)
   let zip(other) = this.items.zip(other)
+
+  # Splits the elements into those satisfying +pred+ and those that do not.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [([A], [A])] the matching and non-matching elements
+  #
+  # @example
+  #   (1..4).partition { |n| n.even? }   # => ([2, 4], [1, 3])
   let partition(pred) = this.items.partition(pred)
+
+  # Returns the elements as a list with +value+ added at the end.
+  #
+  # @param value [A] the element to add
+  # @return [[A]] the elements plus +value+
+  #
+  # @example
+  #   (1..3).push(4)   # => [1, 2, 3, 4]
   let push(value) = this.items.push(value)
+
+  # Returns the elements that do NOT satisfy +pred+, as a list.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [[A]] the elements that failed the predicate
+  #
+  # @example
+  #   (1..5).reject { |n| n.even? }   # => [1, 3, 5]
   let reject(pred) = this.items.reject(pred)
 end

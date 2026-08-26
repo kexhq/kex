@@ -1,16 +1,51 @@
-# Algebraic structures.
+# Algebraic structures: ordering, and combining values associatively.
 #
 # Kex traits do not inherit from one another, so concrete types explicitly
 # implement every structure whose laws they satisfy.
+#
+# Two things live here that you will meet in everyday code. +Ordering+ is what
+# a comparison answers, and it composes — which is how a multi-key sort is
+# written without nested +if+s:
+#
+#   a.age.compare(b.age).thenBy { a.score.compare(b.score) }
+#
+# +Monoid+ is "these two values combine, and there is a neutral one". Numbers,
+# strings and lists all satisfy it, which is what lets +repeat+ be written
+# once:
+#
+#   "ab".repeat(3)   # => "ababab"
+#   [1].repeat(2)    # => [1, 1]
+#   5.repeat(3)      # => 15
 
-# The result of `Comparable.compare`. Declared here rather than only inside
-# the interpreter so that `Ordering`, `Less`, `Equal` and `Greater` reach the
-# semantic layer the same way every other stdlib type does — through the
-# collected interfaces — instead of existing solely as native environment
-# bindings the type checker and name resolver cannot see.
+# The result of a comparison: +Less+, +Equal+ or +Greater+.
+#
+# Declared here rather than only inside the interpreter so that `Ordering`,
+# `Less`, `Equal` and `Greater` reach the semantic layer the same way every
+# other stdlib type does — through the collected interfaces — instead of
+# existing solely as native environment bindings the type checker and name
+# resolver cannot see.
 type Ordering = Less | Equal | Greater
 
+# Types that have a total order.
+#
+# Implemented by +Number+, which covers both +Integer+ and +Float+.
 trait Comparable do
+  # Compares this value with +other+ and answers +Less+, +Equal+ or
+  # +Greater+.
+  #
+  # +==+ stays independent of this — a type may be equatable without being
+  # ordered.
+  #
+  # @param other [This] the value to compare against
+  # @return [Ordering] how this value orders against +other+
+  #
+  # @example
+  #   1.compare(2)     # => Less
+  #   2.compare(2)     # => Equal
+  #   3.compare(2)     # => Greater
+  #
+  # @example Sorting with an explicit comparison
+  #   people.sort { |a, b| a.age.compare(b.age) == Less }
   # A total order: `compare` answers Less, Equal or Greater. `==` stays
   # independent — a type may be Equatable without being ordered.
   compare :> This -> Ordering
@@ -20,6 +55,18 @@ end
 # rather than repeating the same three comparisons. Mixed receivers work
 # because `<` and `>` promote across the two (`1.compare(1.0)` is Equal).
 make Number, implement: Comparable do
+  # Compares two numbers, across the +Integer+/+Float+ boundary.
+  #
+  # Mixed receivers work because +<+ and +>+ promote across the two, so
+  # +1.compare(1.0)+ is +Equal+.
+  #
+  # @param other [Number] the number to compare against
+  # @return [Ordering] how this number orders against +other+
+  #
+  # @example
+  #   1.compare(2)      # => Less
+  #   1.compare(1.0)    # => Equal
+  #   2.5.compare(2)    # => Greater
   let compare(other: Number) -> Ordering do
     return Less if this < other
     return Greater if this > other
@@ -27,13 +74,56 @@ make Number, implement: Comparable do
   end
 end
 
+# Types whose values combine associatively and have a neutral element.
+#
+# Implemented by +Integer+ (addition), +String+ and +List+ (concatenation),
+# +Map+ and both +Set+ flavours (union), and +Ordering+ ("first decision
+# wins").
 trait Monoid do
+  # The neutral element: combining it with any value gives that value back.
+  #
+  # @return [This] the identity
+  #
+  # @example
+  #   Integer.identity   # => 0
+  #   String.identity    # => ""
   # `combine` must be associative and `identity` neutral on both sides.
   identity :> This
+
+  # Combines this value with +other+.
+  #
+  # Must be associative: +a.combine(b).combine(c)+ and
+  # +a.combine(b.combine(c))+ have to agree.
+  #
+  # @param other [This] the value to combine with
+  # @return [This] the combined value
+  #
+  # @example
+  #   5.combine(3)          # => 8
+  #   "ab".combine("cd")    # => "abcd"
+  #   [1].combine([2])      # => [1, 2]
+  #
+  # @example Folding a list of values into one
+  #   parts.reduce(String.identity) { |acc, s| acc.combine(s) }
   combine :> This -> This
 
-  # Combines this value with itself +n+ times. Repeating zero times returns
-  # the monoid identity; a negative repetition count is invalid.
+  # Combines this value with itself +n+ times.
+  #
+  # Repeating zero times gives the identity — +""+ for a string, +0+ for an
+  # integer, +[]+ for a list. A negative count is invalid and ends the
+  # program.
+  #
+  # @param n [Integer] how many copies to combine; must not be negative
+  # @return [This] the repeated value
+  #
+  # @example
+  #   "ab".repeat(3)   # => "ababab"
+  #   [1].repeat(2)    # => [1, 1]
+  #   5.repeat(3)      # => 15
+  #   "x".repeat(0)    # => ""
+  #
+  # @example Drawing a separator line
+  #   IO.printLine("-".repeat(40))
   let repeat(n: Integer) -> This do
     if n < 0 then die("repeat count cannot be negative")
     elif n == 0 then this.identity
@@ -42,30 +132,105 @@ trait Monoid do
   end
 end
 
+# A +Monoid+ in which every value has an inverse that combines with it to give
+# the identity.
+#
+# Implemented by +Integer+, where the inverse is negation.
 trait Group do
-  # Combining a value with its inverse must produce `identity`.
+  # The neutral element.
+  #
+  # @return [This] the identity
   identity :> This
+
+  # Combines this value with +other+.
+  #
+  # @param other [This] the value to combine with
+  # @return [This] the combined value
   combine :> This -> This
+
+  # The value that combines with this one to give the identity.
+  #
+  # @return [This] the inverse
+  #
+  # @example
+  #   5.inverse             # => -5
+  #   5.combine(5.inverse)  # => 0
   inverse :> This
 end
 
 make Integer, implement: Monoid, Group do
+  # +0+ — the neutral element for addition.
+  #
+  # @return [Integer] zero
+  #
+  # @example
+  #   Integer.identity   # => 0
   let identity = 0
+
+  # Adds +other+ to this integer. Addition is the monoid operation for
+  # +Integer+.
+  #
+  # @param other [This] the integer to add
+  # @return [This] the sum
+  #
+  # @example
+  #   5.combine(3)   # => 8
   let combine(other: This) -> This = this + other
+
+  # The additive inverse — this integer negated.
+  #
+  # @return [This] the negation
+  #
+  # @example
+  #   5.inverse    # => -5
+  #   (-5).inverse # => 5
   let inverse -> This = -this
 end
 
 make String, implement: Monoid do
+  # +""+ — the neutral element for concatenation.
+  #
+  # @return [String] the empty string
+  #
+  # @example
+  #   String.identity   # => ""
   let identity = ""
+
+  # Concatenates +other+ onto this string. Concatenation is the monoid
+  # operation for +String+.
+  #
+  # @param other [This] the string to append
+  # @return [This] the concatenation
+  #
+  # @example
+  #   "ab".combine("cd")   # => "abcd"
   let combine(other: This) -> This = this + other
 end
 
 make [A], implement: Monoid do
+  # +[]+ — the neutral element for concatenation.
+  #
+  # @return [[A]] the empty list
+  #
+  # @example
+  #   [1].combine(List.identity)   # => [1]
   let identity = []
+
+  # Concatenates +other+ onto this list. Concatenation is the monoid
+  # operation for +List+.
+  #
+  # @param other [This] the list to append
+  # @return [This] the concatenation
+  #
+  # @example
+  #   [1].combine([2, 3])   # => [1, 2, 3]
+  #
+  # @example Flattening a list of lists
+  #   groups.reduce([]) { |acc, g| acc.combine(g) }
   let combine(other: This) -> This = this + other
 end
 
-# Ordering is a Monoid under "first decision wins", with Equal as identity.
+# `Ordering` is a Monoid under "first decision wins", with Equal as identity.
 # That is what makes multi-key comparison compose instead of nesting ifs:
 #
 #   a.name.compare(b.name).combine(a.age.compare(b.age))
@@ -73,22 +238,68 @@ end
 # `combine` evaluates its argument eagerly, so the later comparison runs even
 # when the earlier one already decided. Use `thenBy` when that matters.
 make Ordering, implement: Monoid do
+  # +Equal+ — the neutral element, since an undecided comparison lets the next
+  # one decide.
+  #
+  # @return [Ordering] +Equal+
   let identity = Equal
 
+  # Returns the first decisive ordering: this one if it is not +Equal+,
+  # otherwise +other+.
+  #
+  # This is what makes multi-key comparison compose. Note that +other+ is
+  # evaluated eagerly, so the later comparison runs even when the earlier one
+  # has already decided — use +thenBy+ when that matters.
+  #
+  # @param other [Ordering] the tie-breaking ordering
+  # @return [Ordering] the first decisive ordering
+  #
+  # @example
+  #   Equal.combine(Less)     # => Less
+  #   Less.combine(Greater)   # => Less
+  #
+  # @example Sorting by surname, then by first name
+  #   a.last.compare(b.last).combine(a.first.compare(b.first))
   let combine(@Equal, other: Ordering) -> Ordering = other
   let combine(@Less, _) -> Ordering = Less
   let combine(@Greater, _) -> Ordering = Greater
 
-  # Swaps Less and Greater and fixes Equal — descending order.
+  # Returns the opposite ordering: +Less+ becomes +Greater+, +Greater+ becomes
+  # +Less+, and +Equal+ stays +Equal+.
+  #
+  # The one-word way to turn an ascending comparison into a descending one.
+  #
+  # @return [Ordering] the reversed ordering
+  #
+  # @example
+  #   Less.reverse      # => Greater
+  #   Greater.reverse   # => Less
+  #   Equal.reverse     # => Equal
+  #
+  # @example Sorting newest first
+  #   a.created.compare(b.created).reverse
   reverse :> Ordering
   let reverse(@Less) -> Ordering = Greater
   let reverse(@Greater) -> Ordering = Less
   let reverse(@Equal) -> Ordering = Equal
 
-  # Short-circuiting `combine`: the tie-breaker block runs only when this
-  # comparison is Equal, so it costs nothing once the order is decided.
+  # Returns this ordering if it is decisive, otherwise the result of calling
+  # +tieBreaker+.
   #
-  #   a.name.compare(b.name).thenBy { a.age.compare(b.age) }
+  # The short-circuiting form of +combine+: the block runs only when this
+  # comparison is +Equal+, so a tie-breaker costs nothing once the order is
+  # already decided. Prefer it whenever the tie-breaker is more than a field
+  # read.
+  #
+  # @param tieBreaker [Block<Ordering>] evaluated only on a tie
+  # @return [Ordering] the first decisive ordering
+  #
+  # @example
+  #   Equal.thenBy { 2.compare(1) }   # => Greater
+  #   Less.thenBy { 2.compare(1) }    # => Less
+  #
+  # @example Sorting by age, then by an expensive score
+  #   a.age.compare(b.age).thenBy { score(a).compare(score(b)) }
   thenBy :> Block<Ordering> -> Ordering
   let thenBy(@Equal, tieBreaker) -> Ordering = tieBreaker()
   let thenBy(@Less, _) -> Ordering = Less

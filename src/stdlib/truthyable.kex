@@ -1,45 +1,138 @@
-# Truthyable — types that can be checked for boolean truthiness (Crystal semantics).
-# Only false, None, and () (Void) are falsy; everything else is truthy.
+# +Truthyable+ — what counts as true when a value is used as a condition.
+#
+# The rule is Crystal's, and it is short: only +false+, +None+ and +()+ are
+# falsy. Everything else is truthy — including +0+, +""+ and +[]+, which some
+# languages treat as false and Kex deliberately does not.
+#
+#   0.truthy?       # => true
+#   "".truthy?      # => true
+#   [].truthy?      # => true
+#   None.truthy?    # => false
+#   false.truthy?   # => false
+#
+# When you want the "is there anything here" question instead, that is
+# +Blankable+'s +blank?+ / +present?+.
+#
 # There is no NaN to consider: a float operation that would produce one raises
 # instead, matching BEAM (see nonFiniteFloatError in src/interpreter/value.cxx).
-
 trait Truthyable do
+  # Returns +true+ when the value counts as true in a condition.
+  #
+  # @return [Bool] +true+ unless the value is +false+, +None+ or +()+
+  #
+  # @example
+  #   1.truthy?        # => true
+  #   None.truthy?     # => false
   truthy? :> Bool
+
+  # Returns +true+ when the value counts as false in a condition. The negation
+  # of +truthy?+.
+  #
+  # @return [Bool] +true+ for +false+, +None+ and +()+
+  #
+  # @example
+  #   None.falsy?    # => true
+  #   0.falsy?       # => false
+  #
+  # @example Reacting to a lookup that found nothing
+  #   if config.get(:host).falsy?
+  #     IO.printError("host is not configured")
+  #   end
   let falsy? = !this.truthy?
 end
 
 make Bool, implement: Truthyable do
+  # Returns the boolean itself.
+  #
+  # @return [Bool] the value
+  #
+  # @example
+  #   true.truthy?    # => true
+  #   false.truthy?   # => false
   truthy? :> Bool
   let truthy? = this
+
 end
 
 make Integer, implement: Truthyable do
+  # Always +true+ — including for zero.
+  #
+  # Zero is a number, not an absence. Compare it explicitly when zero means
+  # something: +count == 0+.
+  #
+  # @return [Bool] always +true+
+  #
+  # @example
+  #   0.truthy?    # => true
+  #   42.truthy?   # => true
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make Float, implement: Truthyable do
+  # Always +true+ — including for zero.
+  #
+  # @return [Bool] always +true+
+  #
+  # @example
+  #   0.0.truthy?   # => true
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make String, implement: Truthyable do
+  # Always +true+ — including for the empty string.
+  #
+  # Use +blank?+ from +Blankable+ when an empty or whitespace-only string
+  # should count as nothing.
+  #
+  # @return [Bool] always +true+
+  #
+  # @example
+  #   "".truthy?      # => true
+  #   "".blank?       # => true   (the question usually meant)
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make Optional<X>, implement: Truthyable do
+  # Returns +true+ for a +Just+ and +false+ for +None+.
+  #
+  # The one type where truthiness is genuinely about presence, which is what
+  # makes an optional usable directly as a condition.
+  #
+  # @return [Bool] +true+ when a value is present
+  #
+  # @example
+  #   Just(0).truthy?    # => true
+  #   None.truthy?       # => false
   truthy? :> Bool
   let truthy?(@None) = false
   let truthy?(@Just(_)) = true
 end
 
 make [X], implement: Truthyable do
+  # Always +true+ — including for the empty list.
+  #
+  # Use +empty?+ or +blank?+ when an empty list should count as nothing.
+  #
+  # @return [Bool] always +true+
+  #
+  # @example
+  #   [].truthy?   # => true
+  #   [].blank?    # => true   (the question usually meant)
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make Map<K,V>, implement: Truthyable do
+  # Always +true+ — including for the empty map.
+  #
+  # @return [Bool] always +true+
+  #
+  # @example
+  #   {}.truthy?   # => true
+  #   {}.blank?    # => true   (the question usually meant)
   truthy? :> Bool
   let truthy?(@_) = true
 end

@@ -1,0 +1,32 @@
+# Source discovery: walk a package tree, collect .kex files recursively.
+#
+# `spec/` directories are skipped: specs document the same declarations as
+# their base file, so a second page for them would duplicate every entry.
+
+module Tey.Docgen.Scan do
+  foul sourceFiles(sourceDir: String) -> [String] do
+    match FS.Directory.files(sourceDir) do
+      Just(names) => do
+        let kex = names.filter { |n| n.endsWith?(".kex") && !n.endsWith?(".spec.kex") }
+        let sorted = kex.sort
+        let nestedDirs = subdirectories(sourceDir)
+        return sorted + nested(nestedDirs, sourceDir)
+      end
+      None => []
+    end
+  end
+
+  foul subdirectories(sourceDir: String) -> [String] do
+    return (FS.Directory.directories(sourceDir).or([])).filter { |d| d != "spec" }.sort
+  end
+
+  foul nested(dirs: [String], sourceDir: String) -> [String] do
+    if dirs.empty?
+      return []
+    end
+    let head = dirs.first.or("")
+    let rest = dirs.drop(1)
+    let inner = sourceFiles(FS.Path.join(sourceDir, head))
+    return inner.map { |name| FS.Path.join(head, name) } + nested(rest, sourceDir)
+  end
+end

@@ -1,0 +1,176 @@
+using Tey.Docgen.Model
+using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?]
+using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText]
+using Tey.Docgen.Index, only: [upsertVersion]
+using Tey.Docgen.Rdoc, only: [parseDoc]
+
+# Navigation and interlinking: the indexes every renderer resolves against.
+# All pure — hand-built pages in, indexes and hrefs out — because the rules
+# ARE the feature: what a module is, when a simple name links, and where a
+# name lands must not vary between the HTML and Markdown renderings.
+
+let aPage(entities: [Entity], path: String) -> SourcePage do
+  return SourcePage { source: "${path}.kex", urlPath: path, title: path, entities: entities }
+end
+
+let aRecord(name: String, qualifiedName: String) -> Entity do
+  return RecordDecl(RecordEntry {
+    name: name, qualifiedName: qualifiedName, typeParams: [],
+    fields: [], doc: emptyDoc(), line: 1
+  })
+end
+
+let aModule(name: String, qualifiedName: String, children: [Entity]) -> Entity do
+  return ModuleDecl(ModuleEntry {
+    name: name, qualifiedName: qualifiedName, children: children,
+    doc: emptyDoc(), line: 1
+  })
+end
+
+let versionEntry(pkg: String, id: String) -> VersionEntry do
+  return VersionEntry { id: id, label: pkg, generatedAt: "", package: pkg }
+end
+
+describe("Tey.Docgen.Nav.buildModules") do
+  it("indexes nested modules with their members") do
+    let fileModule = aModule("File", "FS.File", [aRecord("Handle", "FS.File.Handle")])
+    let page = aPage([aModule("FS", "FS", [fileModule])], "fs")
+    let names = buildModules([page]).map { |m| m.qualifiedName }
+    assert(names == ["FS", "FS.File"])
+  end
+
+  it("carries member anchors that match the entity sections") do
+    let handle = aRecord("Handle", "FS.File.Handle")
+    let page = aPage([aModule("File", "FS.File", [handle])], "fs")
+    let modules = buildModules([page])
+    let anchor = match modules.first do
+      Just(first) => match first.members.first do
+        Just(member) => member.anchor
+        None => ""
+      end
+      None => ""
+    end
+    assert(anchor == anchorOf(handle))
+  end
+end
+
+describe("Tey.Docgen.Nav.buildLinks") do
+  it("links a qualified name and its simple spelling when unambiguous") do
+    let page = aPage([aModule("FS", "FS", [aRecord("Path", "FS.Path")])], "fs")
+    let links = buildLinks([page])
+    assert(resolve(links, "FS.Path") != None)
+    assert(resolve(links, "Path") != None)
+  end
+
+  it("drops the simple spelling once two entities claim it") do
+    # Web.Request and Mock.Request: plain "Request" must not choose a side.
+    let web = aPage([aModule("Web", "Web", [aRecord("Request", "Web.Request")])], "web")
+    let mock = aPage([aModule("Mock", "Mock", [aRecord("Request", "Mock.Request")])], "mock")
+    let links = buildLinks([web, mock])
+    assert(resolve(links, "Request") == None)
+    assert(resolve(links, "Web.Request") != None)
+    assert(resolve(links, "Mock.Request") != None)
+  end
+
+  it("links a make under its base name, parameters stripped") do
+    let mapMake = MakeDecl(MakeEntry {
+      target: "Map<K, V>", isFinal: false, implements: [],
+      functions: [], doc: emptyDoc(), line: 1
+    })
+    let links = buildLinks([aPage([mapMake], "map")])
+    assert(resolve(links, "Map") != None)
+    assert(resolve(links, "Map<K, V>") == None)
+  end
+
+  it("does not link bare functions") do
+    let fn = FuncDecl(FunctionEntry { name: "peek", qualifiedName: "FS.File.peek",
+                                      signatures: [], clauseCount: 1, doc: emptyDoc(), line: 1 })
+    let links = buildLinks([aPage([fn], "fs")])
+    assert(resolve(links, "peek") == None)
+  end
+end
+
+describe("Tey.Docgen.Nav.segmentsOf") do
+  it("splits a type reference into identifiers and punctuation") do
+    assert(segmentsOf("Map<String, FS.Path>") == ["Map", "<", "String", ", ", "FS.Path", ">"])
+  end
+
+  it("keeps a plain identifier as one segment") do
+    assert(segmentsOf("String") == ["String"])
+  end
+
+  it("classifies identifier characters") do
+    assert(isIdentChar?("a"))
+    assert(isIdentChar?("."))
+    assert(!isIdentChar?("<"))
+    assert(!isIdentChar?(" "))
+  end
+end
+
+describe("Tey.Docgen.Nav.hrefFrom") do
+  it("anchors within the same page") do
+    assert(hrefFrom("fs", "fs", "module-FS") == "#module-FS")
+  end
+
+  it("climbs out of nested pages to the version directory") do
+    assert(hrefFrom("kex/ast", "fs", "module-FS") == "../fs.html#module-FS")
+  end
+end
+
+describe("Tey.Docgen.Html.linkType") do
+  it("renders a resolved name as a link and an unknown one as text") do
+    let links = [LinkEntry { name: "String", urlPath: "string", anchor: "module-String", kind: "module" }]
+    let linked = linkType(links, "fs", "String")
+    let plain = linkType(links, "fs", "Nowhere")
+    assert(linked.contains?("href=\"string.html#module-String\""))
+    assert(!plain.contains?("<a"))
+  end
+
+  it("links only the identifiers inside a composite type") do
+    let links = [LinkEntry { name: "String", urlPath: "string", anchor: "module-String", kind: "module" }]
+    let link = { |name| linkType(links, "fs", name) }
+    let rendered = linkTypeText(link, "Map<String, Int>")
+    assert(rendered.contains?("<a class=\"xref\" href=\"string.html#module-String\">String</a>"))
+    assert(rendered.contains?("&lt;"))
+  end
+end
+
+describe("Tey.Docgen.Html.packageNames") do
+  it("groups versions by package, first-seen order") do
+    let versions = [versionEntry("prelude", "0.4"), versionEntry("tey", "0.2"),
+                    versionEntry("prelude", "0.3"), versionEntry("tey", "0.1")]
+    assert(packageNames(versions) == ["prelude", "tey"])
+  end
+end
+
+describe("Tey.Docgen.Index.upsertVersion") do
+  it("replaces this package's same version, keeps the rest") do
+    let existing = [versionEntry("prelude", "0.4"), versionEntry("tey", "0.2"),
+                    versionEntry("prelude", "0.3")]
+    let upserted = upsertVersion(versionEntry("prelude", "0.3"), existing)
+    let ids = upserted.map { |v| "${v.package}/${v.id}" }
+    assert(ids == ["prelude/0.3", "prelude/0.4", "tey/0.2"])
+  end
+end
+
+describe("Tey.Docgen.Rdoc.parseDoc") do
+  it("parses consecutive @param lines as separate parameters") do
+    # The Bits module's own shape: directives on consecutive lines, no blank
+    # line between them — each must start its own paragraph or the second
+    # @param is swallowed.
+    let doc = parseDoc("Bitwise AND.\n\n@param a [Integer]\n@param b [Integer]\n@return [Integer]").or(emptyDoc())
+    let names = doc.params.map { |p| p.name }
+    assert(names == ["a", "b"])
+    assert(doc.returns != None)
+  end
+
+  it("keeps an @example's code lines in its own block") do
+    let doc = parseDoc("Shifts.\n\n@example\n  Bits.not(0)  # => -1\n  Bits.not(5)  # => -6").or(emptyDoc())
+    assert(doc.examples.count == 1)
+    let code = match doc.examples.first do
+      Just(ex) => ex.code
+      None => ""
+    end
+    assert(code.contains?("Bits.not(0)"))
+  end
+end

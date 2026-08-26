@@ -1,9 +1,51 @@
-# Cryptographic content digests. Hex strings are used at the public boundary
-# so Kex programs never need to handle backend-specific binary values.
+# Cryptographic content digests.
+#
+# Digests are returned as lowercase hex strings, so a Kex program never has to
+# handle backend-specific binary values — they compare with +==+, print
+# directly, and go into a map key unchanged.
+#
+#   Digest.sha256("hello")
+#   # => "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+#
+# SHA-256 is a content fingerprint: use it to tell whether two things are the
+# same, to key a cache, or to check that a download arrived intact. It is not
+# a password hash — a purpose-built password KDF is what that needs.
 module Digest do
+  # Returns the SHA-256 digest of +content+, as a 64-character lowercase hex
+  # string.
+  #
+  # @param content [String] the text to hash
+  # @return [String] the hex digest
+  #
+  # @example
+  #   Digest.sha256("hello")
+  #   # => "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  #   Digest.sha256("")
+  #   # => "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  #
+  # @example A cache key derived from an input
+  #   let key = Digest.sha256(source).take(12)
+  #
+  # @example Detecting that content changed
+  #   Digest.sha256(newText) != Digest.sha256(oldText)
   sha256 : String -> String
   let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
 
+  # Returns the SHA-256 digest of the file at +path+, or +None+ when the file
+  # cannot be read.
+  #
+  # Reads the file for you, so a large file does not have to be pulled into a
+  # +String+ first.
+  #
+  # @param path [String] the file to hash
+  # @return [String?] the hex digest, or +None+
+  #
+  # @example
+  #   Digest.fileSha256("archive.tar.gz")   # => Just("a3f1...")
+  #   Digest.fileSha256("nowhere")          # => None
+  #
+  # @example Verifying a download against a published checksum
+  #   Digest.fileSha256(path).map { |actual| actual == expected }.or(false)
   fileSha256 : String -> String?
   let fileSha256(path) = Kex.Intrinsic.Digest.fileSha256(path)
 end

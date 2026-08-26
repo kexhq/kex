@@ -5,28 +5,57 @@ module Regex
 #
 # Opt-in, not prelude: nothing here is in scope until `using Regex`.
 #
-# @example
+# There are two ways to write a pattern. The tagged literal is the everyday
+# one: it is checked when your program is compiled, so it cannot fail at run
+# time and gives you a bare +Regex+.
+#
 #   using Regex
 #
-#   match regex("\\d+") do
-#     Ok(re)   -> IO.printLine("compiled")
-#     Error(e) -> IO.printLine("bad pattern at ${e.position}: ${e.message}")
+#   main do
+#     let line = "order #4271 shipped"
+#     IO.printLine(line.matches?(re`#\d+`))                     # => true
+#     IO.printLine(line.matches(re`#(\d+)`).map { |m| m.get(1) })  # => 4271
 #   end
+#
+# The call form takes a pattern built at run time and answers a +Result+,
+# because an arbitrary string may not be a valid pattern:
+#
+#   match regex(userSupplied) do
+#     Ok(pattern) => IO.printLine(text.matches?(pattern))
+#     Error(e)    => IO.printError("bad pattern at ${e.position}: ${e.message}")
+#   end
+#
+# The operations are +matches?+ (is it there), +matches+ (find the first),
+# +scan+ (find them all), +replace+, and +split+.
 
+# A compiled regular expression.
+#
 # +Regex+ carries only its pattern source. The compiled engine object lives in
 # a runtime cache keyed by that source, deliberately: a compiled pattern bakes
 # in the host's PCRE version and must never be embedded in a distributed
 # artifact, so the source string is the value's identity.
 record Regex do
+  # The pattern text this regex was built from.
   source : String
 end
 
-# +RegexError+ describes a pattern that failed to compile. Mirrors +ParseError+
-# — the +position+ is a *character* offset into the pattern, not a byte offset,
-# so it agrees across backends on patterns containing non-ASCII.
+# A pattern that failed to compile.
+#
+# Mirrors +ParseError+ — the +position+ is a *character* offset into the
+# pattern, not a byte offset, so it agrees across backends on patterns
+# containing non-ASCII.
+#
+#   regex("(")
+#   # => Error(RegexError { source: "(", position: 1,
+#   #                       message: "missing closing parenthesis" })
 record RegexError do
+  # The pattern text that failed to compile.
   source   : String
+
+  # The character offset in the pattern where compilation stopped.
   position : Integer
+
+  # A human-readable description of what was wrong.
   message  : String
 end
 
@@ -37,16 +66,28 @@ end
 # prelude's equivalent error record — carries a bare `message` field for the
 # same reason; nothing in the tree implements Errorable today.
 
-# Compiles a pattern. Returns +Result+ because an arbitrary string may not be a
-# valid pattern; the tag form `regex`...`` returns a bare +Regex+ instead, since
-# a literal is validated at compile time and cannot fail.
+# Compiles +source+ into a +Regex+.
 #
-# @param source [String]
-# @return [Result<Regex, RegexError>]
+# Answers a +Result+ because an arbitrary string may not be a valid pattern.
+# Use this form when the pattern is built at run time — from a config file,
+# from user input. For a pattern you write yourself, the tag form
+# `` regex`\d+` `` is checked at compile time and hands back a bare +Regex+.
+#
+# @param source [String] the pattern text
+# @return [Result<Regex, RegexError>] the compiled pattern, or why it failed
 #
 # @example
-#   regex("\\d+")        # => Ok(Regex)
-#   regex("(")           # => Error(RegexError)
+#   regex("\\d+")   # => Ok(Regex { source: "\\d+" })
+#   regex("(")      # => Error(RegexError { message: "missing closing parenthesis", ... })
+#
+# @example Compiling a user-supplied filter
+#   match regex(pattern) do
+#     Ok(re)   => lines.filter { |line| line.matches?(re) }
+#     Error(e) => do
+#       IO.printError("bad pattern at ${e.position}: ${e.message}")
+#       []
+#     end
+#   end
 regex : String -> Result<Regex, RegexError>
 let regex(source) = Kex.Intrinsic.Regex.compile(source)
 
@@ -63,22 +104,28 @@ let regex(source) = Kex.Intrinsic.Regex.compile(source)
 # syntax. There is no opt-out; building pattern *structure* from a value is
 # what the call form and its Result are for.
 #
-# @param parts [[String]]
-# @param values [[Any]]
-# @return [Regex]
+# @param parts [[String]] the literal pieces of the tagged literal
+# @param values [[Any]] the interpolated values, escaped before splicing
+# @return [Regex] the compiled pattern
+#
+# @example
+#   re`\d+`                 # matches a run of digits
+#   re`^(?<key>\w+)=(.*)$`  # named and positional groups
 regex : [String] -> [Any] -> Regex
 let regex(parts, values) = Kex.Intrinsic.Regex.tag(parts, values)
 
-# Companion validator for the `regex` tag, found by the compiler through the
-# standard `validate<Tag>` naming convention (nothing about regex is special-
-# cased). A raw `` regex`(` `` is a compile error, with the caret pointing at
-# the byte offset PCRE2 reported inside the literal.
+# Validates a `regex` tagged literal at compile time.
+#
+# Found by the compiler through the standard `validate<Tag>` naming convention
+# (nothing about regex is special-cased). A raw `` regex`(` `` is a compile
+# error, with the caret pointing at the byte offset PCRE2 reported inside the
+# literal.
 #
 # Must stay pure: the compiler evaluates it on the tree-walk interpreter at
 # compile time, so marking it `foul` would break builds, not just calls.
 #
-# @param source [String]
-# @return [[TaggedValidation.Issue]]
+# @param source [String] the literal's pattern text
+# @return [[TaggedValidation.Issue]] the problems found, if any
 let validateRegex(source: String) -> [TaggedValidation.Issue] do
   match Kex.Intrinsic.Regex.validate(source) do
     Just((offset, message)) => [TaggedValidation.fatalAt(offset, message)]
@@ -86,42 +133,64 @@ let validateRegex(source: String) -> [TaggedValidation.Issue] do
   end
 end
 
-# +re+ is a short alias for +regex+ — a second name bound to the same two
-# functions, not a lexer synonym, so every property of +regex+ (escaping,
-# backend mapping, error shape) applies to it unchanged.
+# A short alias for +regex+, in both its forms.
+#
+# A second name bound to the same two functions, not a lexer synonym, so every
+# property of +regex+ — escaping, backend mapping, error shape — applies to it
+# unchanged. Most code uses the tag form, where the shorter name reads better.
+#
+# @param source [String] the pattern text (call form)
+# @return [Result<Regex, RegexError>] the compiled pattern, or why it failed
 #
 # @example
-#   re`https?://\S+`     # tag form
-#   re("\\d+")             # call form -> Result
+#   re`https?://\S+`   # tag form  -> Regex
+#   re("\\d+")         # call form -> Result<Regex, RegexError>
 let re(source) = regex(source)
 let re(parts, values) = regex(parts, values)
 
-# Companion validator for the `re` tag, delegating to validateRegex. The
-# compiler finds it by the same `validate<Tag>` convention.
+# Validates an `re` tagged literal at compile time, delegating to
+# `validateRegex`. The compiler finds it by the same `validate<Tag>`
+# convention.
+#
+# @param source [String] the literal's pattern text
+# @return [[TaggedValidation.Issue]] the problems found, if any
 let validateRe(source: String) -> [TaggedValidation.Issue] do
   return validateRegex(source)
 end
 
 # Escapes every regex metacharacter in +s+, so the result matches +s+
-# literally. Escapes per character rather than wrapping in `\Q...\E`, which a
-# value containing `\E` would break out of.
+# literally.
 #
-# @param s [String]
-# @return [String]
+# This is how to search for text that may itself contain pattern syntax — a
+# search term typed by a user, a filename, a version string. It escapes per
+# character rather than wrapping in `\Q...\E`, which a value containing `\E`
+# would break out of.
+#
+# @param s [String] the text to escape
+# @return [String] a pattern matching +s+ literally
 #
 # @example
 #   Regex.quote("a.b")   # => "a\\.b"
+#
+# @example Searching for a literal term supplied by a user
+#   match regex(Regex.quote(term)) do
+#     Ok(needle) => lines.filter { |line| line.matches?(needle) }
+#     Error(_)   => []
+#   end
 quote : String -> String
 let quote(s) = Kex.Intrinsic.Regex.quote(s)
 
-# +Match+ is the result of a successful match. It behaves like a map keyed by
-# both group number (+0+ is the whole match) and group name (+:year+), but is a
-# named type so it can grow spans and surrounding context later without
-# breaking existing +get+ call sites.
+# A successful match, and the groups it captured.
 #
-# A group that did not participate is an absent key, so +get+ returns +None+ —
-# distinct from a group that matched the empty string, which returns +Just("")+.
+# It behaves like a map keyed by both group number (+0+ is the whole match) and
+# group name (+:year+), but is a named type so it can grow spans and
+# surrounding context later without breaking existing +get+ call sites.
+#
+# A group that did not participate is an absent key, so +get+ answers +None+ —
+# which is different from a group that matched the empty string, and answers
+# +Just("")+.
 record Match do
+  # The captured text, keyed by group number and by group name.
   captures : Map<Any, String>
 end
 
@@ -134,109 +203,156 @@ end
 # receiver type, name and arity.
 
 make Match do
-  # Returns the captured text for a group, by number or by name.
+  # Returns the text captured by a group, by number or by name.
   #
-  # @param key [Atom | Int]
-  # @return [String?]
+  # Group +0+ is the whole match; +1+ is the first parenthesised group. A
+  # named group +(?<year>...)+ is reached with the atom +:year+. A group that
+  # did not participate answers +None+.
+  #
+  # @param key [Atom | Integer] the group number or name
+  # @return [String?] the captured text, or +None+
   #
   # @example
-  #   m.get(0)      # whole match
-  #   m.get(1)      # first positional group
-  #   m.get(:year)  # named group
+  #   let found = "order #4271".matches(re`#(\d+)`)
+  #   found.flatMap { |m| m.get(0) }   # => Just("#4271")
+  #   found.flatMap { |m| m.get(1) }   # => Just("4271")
+  #
+  # @example Named groups
+  #   "2026-07-04".matches(re`(?<year>\d{4})-(?<month>\d{2})`)
+  #     .flatMap { |m| m.get(:year) }
+  #   # => Just("2026")
   get :> (Atom | Integer) -> String?
   let get(key) = Kex.Intrinsic.Map.get(this.captures, key)
 
-  # Returns the captured text for a group, or +default+ if the group is absent.
+  # Returns the text captured by a group, or +default+ when the group is
+  # absent.
   #
-  # @param key [Atom | Int]
-  # @param default [String]
-  # @return [String]
+  # The total form of +get+, which is what most +scan+ pipelines want — the
+  # value comes back unwrapped.
+  #
+  # @param key [Atom | Integer] the group number or name
+  # @param default [String] the value to use when the group did not match
+  # @return [String] the captured text, or +default+
+  #
+  # @example
+  #   "cat=1, dog=2".scan(re`(\w+)=(\d+)`).map { |m| m.get(1, "") }
+  #   # => ["cat", "dog"]
   get :> (Atom | Integer) -> String -> String
   let get(key, default) = Kex.Intrinsic.Map.getWithDefault(this.captures, key, default)
 end
 
-# Finds the first occurrence of +re+ anywhere in +s+. Unanchored — anchor with
-# +^...$+ in the pattern if a whole-string match is wanted.
+# Finds the first occurrence of +re+ in +s+ and returns what it matched.
 #
-# @param s [String]
-# @param re [Regex]
-# @return [Match?]
+# Unanchored: the pattern may match anywhere in the string. Anchor it with
+# +^...$+ when a whole-string match is what you mean. Answers +None+ when the
+# pattern does not occur.
+#
+# @param s [String] the text to search
+# @param re [Regex] the pattern to look for
+# @return [Match?] the first match, or +None+
 #
 # @example
-#   "order #4271".matches(re)   # => Just(Match)
+#   "order #4271".matches(re`#(\d+)`).flatMap { |m| m.get(1) }   # => Just("4271")
+#   "no number here".matches(re`#(\d+)`)                          # => None
+#
+# @example Pulling a version out of a line
+#   line.matches(re`v(\d+)\.(\d+)`).map { |m| (m.get(1, "0"), m.get(2, "0")) }
 matches : String -> Regex -> Match?
 let matches(s, re) = Kex.Intrinsic.Regex.matches(s, re)
 
-# Reports whether +re+ occurs anywhere in +s+. The boolean form of +matches+,
-# and unanchored for the same reason.
+# Returns +true+ when +re+ occurs anywhere in +s+.
 #
-# @param s [String]
-# @param re [Regex]
-# @return [Bool]
+# The boolean form of +matches+, and unanchored for the same reason. Use it
+# when you only need to know whether the pattern is there.
+#
+# @param s [String] the text to search
+# @param re [Regex] the pattern to look for
+# @return [Bool] +true+ when the pattern occurs
 #
 # @example
-#   "hello".matches?(re)   # => true
+#   "hello".matches?(re`^h`)      # => true
+#   "hello".matches?(re`\d`)      # => false
+#
+# @example Keeping only the lines that look like assignments
+#   lines.filter { |line| line.matches?(re`^\w+\s*=`) }
 matches? : String -> Regex -> Bool
 let matches?(s, re) = Kex.Intrinsic.Regex.matches?(s, re)
 
-# Every match of +re+ in +s+, left to right.
+# Returns every match of +re+ in +s+, left to right.
 #
-# Always returns +[Match]+, whether or not the pattern has capture groups —
+# Always answers +[Match]+, whether or not the pattern has capture groups —
 # adding a group to a pattern must not change the type flowing out of +scan+.
+# An empty list means nothing matched.
 #
-# @param s [String]
-# @param re [Regex]
-# @return [[Match]]
+# @param s [String] the text to search
+# @param re [Regex] the pattern to look for
+# @return [[Match]] every match, in order
 #
 # @example
-#   "cat=1, dog=2".scan(re).map do |m| m.get(1, "") end
+#   "cat=1, dog=2".scan(re`(\w+)=(\d+)`).map { |m| m.get(1, "") }
+#   # => ["cat", "dog"]
+#
+# @example Building a map out of key=value pairs
+#   Kex.Intrinsic.Map.fromEntries(
+#     text.scan(re`(\w+)=(\w+)`).map { |m| (m.get(1, ""), m.get(2, "")) }
+#   )
 scan : String -> Regex -> [Match]
 let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 
-# Replaces **every** match of +re+ in +s+ — this is +gsub+, not +sub+.
+# Replaces EVERY match of +re+ in +s+ — this is +gsub+, not +sub+.
 #
-# The replacement is either a literal String, inserted verbatim with no
-# +$1+/+\1+ backreference syntax, or a block receiving the +Match+.
+# The replacement is either a literal +String+, inserted verbatim with no
+# +$1+ / +\1+ backreference syntax, or a block receiving the +Match+, which is
+# how a replacement built from what was captured is written.
 #
-# @param s [String]
-# @param replacement [String]
-# @return [String]
+# @param s [String] the text to rewrite
+# @param re [Regex] the pattern to replace
+# @param replacement [String | (Match -> String)] the literal text, or a block
+# @return [String] the rewritten text
 #
-# @example
-#   "a-b-c".replace(re, "+")                       # => "a+b+c"
-#   "2026-7-4".replace(re) do |m| m.get(1, "") end
+# @example A literal replacement
+#   "a-b-c".replace(re`-`, "+")   # => "a+b+c"
+#
+# @example A replacement computed from the match
+#   "2026-7-4".replace(re`(\d+)`) do |m|
+#     m.get(1, "").length.to(String).or("")
+#   end
+#   # => "4-1-1"
+#
+# @example Redacting numbers in a log line
+#   line.replace(re`\d`, "x")
 replace : String -> Regex -> (String | (Match -> String)) -> String
 let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement)
 
-# Splits +s+ on +re+, following Ruby's semantics: trailing empty fields are
-# dropped (leading ones are kept), and any capture groups in the pattern are
-# interleaved into the result.
+# Splits +s+ on +re+, capping the number of fields.
 #
-# @param s [String]
-# @param re [Regex]
-# @return [[String]]
-#
-# @example
-#   "a, b ,c".split(regex("\\s*,\\s*"))   # => ["a", "b", "c"]
-# Splits with a field limit — the qualified-only companion to +s.split(re)+. A positive +limit+ caps the number of fields,
-# leaving the remainder unsplit in the last one; a negative +limit+ keeps
-# trailing empty fields instead of dropping them.
+# A positive +limit+ caps the field count, leaving the remainder unsplit in
+# the last field; a negative +limit+ keeps trailing empty fields instead of
+# dropping them.
 #
 # Plain +s.split(re)+ needs no function here at all: it resolves to
 # +String.split+, which dispatches to this engine when handed a Regex (in both
-# backends). Only the limit form needs a name, and it deliberately is NOT
-# `split` — this module must not export that name. On BEAM, a module in scope
-# via `using` captures a method name for EVERY receiver, so exporting `split`
-# here would route `"a,b".split(",")` and even the no-argument `"hi".split`
-# through this module and break them.
+# backends), and follows Ruby's semantics — trailing empty fields are dropped,
+# leading ones are kept, and capture groups are interleaved into the result.
 #
-# @param s [String]
-# @param re [Regex]
-# @param limit [Integer]
-# @return [[String]]
+# Only the limit form needs a name, and it deliberately is NOT `split` — this
+# module must not export that name. On BEAM, a module in scope via `using`
+# captures a method name for EVERY receiver, so exporting `split` here would
+# route `"a,b".split(",")` and even the no-argument `"hi".split` through this
+# module and break them.
 #
-# @example
-#   Regex.splitLimit("a,b,c", re, 2)    # => ["a", "b,c"]
-#   Regex.splitLimit("a,b,,", re, -1)   # => ["a", "b", "", ""]
+# @param s [String] the text to split
+# @param re [Regex] the separator pattern
+# @param limit [Integer] the field cap; negative keeps trailing empty fields
+# @return [[String]] the fields
+#
+# @example Plain splitting needs no limit
+#   "a, b ,c".split(re`\s*,\s*`)   # => ["a", "b", "c"]
+#
+# @example Splitting off just the first field
+#   Regex.splitLimit("a,b,c", re`,`, 2)    # => ["a", "b,c"]
+#
+# @example Keeping the trailing empty fields
+#   Regex.splitLimit("a,b,,", re`,`, -1)   # => ["a", "b", "", ""]
 splitLimit : String -> Regex -> Integer -> [String]
 let splitLimit(s, re, limit) = Kex.Intrinsic.Regex.split(s, re, limit)

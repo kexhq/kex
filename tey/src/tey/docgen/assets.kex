@@ -1,0 +1,291 @@
+# Browser-side assets for the docs site: the version switcher and search.
+# Both are progressive enhancements over static HTML — without JavaScript
+# the badge stays a badge and search is absent. Each page carries its
+# package and version in data- attributes, so the script fetches the right
+# index without being regenerated per version.
+
+module Tey.Docgen.Assets do
+  foul siteJs() -> String do
+    return `
+      (function () {
+        // ── Version switcher ────────────────────────────────────────────────
+        var badge = document.getElementById("version-badge");
+        if (badge) {
+          var root = badge.getAttribute("data-root");
+          var pkg = badge.getAttribute("data-package");
+          var current = badge.getAttribute("data-version");
+          var page = badge.getAttribute("data-page");
+          fetch(root + "versions.json", { cache: "no-store" })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+              var versions = (data.versions || []).filter(function (v) { return v.package === pkg; });
+              if (versions.length < 1) return;
+              var select = document.createElement("select");
+              select.className = "version-select";
+              select.setAttribute("aria-label", "Documentation version");
+              versions.forEach(function (v) {
+                var opt = document.createElement("option");
+                opt.value = v.id;
+                opt.textContent = v.label + " " + v.id;
+                if (v.id === current) opt.selected = true;
+                select.appendChild(opt);
+              });
+              select.addEventListener("change", function () {
+                var base = root + pkg + "/" + select.value + "/";
+                var target = base + page;
+                // The same page may not exist in the target version (renamed
+                // module, or a source that no longer parses): fall back to the
+                // version's index rather than landing on a 404.
+                fetch(target, { method: "HEAD", cache: "no-store" })
+                  .then(function (res) { window.location.href = res.ok ? target : base + "index.html"; })
+                  .catch(function () { window.location.href = base + "index.html"; });
+              });
+              badge.replaceWith(select);
+            })
+            .catch(function () {});
+        }
+
+        // ── Search (modal) ─────────────────────────────────────────────────
+        var trigger = document.getElementById("search");
+        if (trigger) {
+          var base = trigger.getAttribute("data-root")
+                   + trigger.getAttribute("data-package") + "/"
+                   + trigger.getAttribute("data-version") + "/";
+          var index = null;
+          var pending = null;
+
+          // The modal is built here so the static page stays bare; it never
+          // appears without the script that drives it.
+          var overlay = document.createElement("div");
+          overlay.className = "search-modal";
+          overlay.hidden = true;
+          var panel = document.createElement("div");
+          panel.className = "search-modal-panel";
+          var input = document.createElement("input");
+          input.type = "search";
+          input.placeholder = "Search " + trigger.getAttribute("data-package") + " " + trigger.getAttribute("data-version");
+          input.setAttribute("autocomplete", "off");
+          var results = document.createElement("div");
+          results.className = "search-modal-results";
+          panel.appendChild(input);
+          panel.appendChild(results);
+          overlay.appendChild(panel);
+          document.body.appendChild(overlay);
+
+          function loadIndex() {
+            if (index) return Promise.resolve(index);
+            if (!pending) {
+              pending = fetch(base + "search.json", { cache: "no-store" })
+                .then(function (res) { return res.json(); })
+                .then(function (data) { index = data.entries || []; return index; })
+                .catch(function () { index = []; return index; });
+            }
+            return pending;
+          }
+
+          // Rank, don't just filter: a name hit outranks a summary hit, an
+          // exact type outranks a mention in a signature, and an arrow in the
+          // query is a function's business, not a module's. Returns -1 when a
+          // token matches nowhere (all tokens must hit).
+          function rank(entry, tokens) {
+            var name = (entry.name || "").toLowerCase();
+            var qname = (entry.qualifiedName || "").toLowerCase();
+            var types = (entry.types || []).join(" ").toLowerCase();
+            var sigs = (entry.signatures || []).join(" ").toLowerCase();
+            var summary = (entry.summary || "").toLowerCase();
+            var total = 0;
+            var ok = tokens.every(function (t) {
+              var local = 0;
+              if (name === t) local = 100;
+              else if (name.indexOf(t) === 0) local = 50;
+              else if (name.indexOf(t) !== -1) local = 20;
+              if (qname === t) local = Math.max(local, 90);
+              else if (qname.indexOf(t) !== -1) local = Math.max(local, 30);
+              if (types === t) local = Math.max(local, 60);
+              else if (types.indexOf(t) !== -1) local = Math.max(local, 25);
+              if (sigs.indexOf(t) !== -1) local = Math.max(local, 10);
+              if (summary.indexOf(t) !== -1) local = Math.max(local, 5);
+              if (local === 0) return false;
+              total += local;
+              return true;
+            });
+            if (!ok) return -1;
+            if (tokens.indexOf("->") !== -1) {
+              total += entry.kind === "function" ? 80 : -300;
+            }
+            return total;
+          }
+
+          // A result row: kind, name, qualified path, signature. Shared by the
+          // result list and the idle suggestions.
+          function hitEl(e) {
+            var a = document.createElement("a");
+            a.className = "search-hit";
+            a.href = base + e.urlPath + ".html" + (e.anchor ? "#" + e.anchor : "");
+            var head = document.createElement("span");
+            head.className = "search-head";
+            var kind = document.createElement("span");
+            kind.className = "search-kind search-kind-" + e.kind;
+            kind.textContent = e.kind;
+            var name = document.createElement("span");
+            name.className = "search-name";
+            name.textContent = e.name;
+            head.appendChild(kind);
+            head.appendChild(name);
+            if (e.qualifiedName && e.qualifiedName !== e.name) {
+              var qual = document.createElement("span");
+              qual.className = "search-qual";
+              // The DEFINING module or entity, not the full qualified name —
+              // "Enumerable" for Enumerable.map, "[X]" for [X].map.
+              var dot = e.qualifiedName.lastIndexOf(".");
+              qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
+              head.appendChild(qual);
+            }
+            var sig = document.createElement("span");
+            sig.className = "search-sig";
+            sig.textContent = (e.signatures && e.signatures[0]) || e.summary || "";
+            a.appendChild(head);
+            a.appendChild(sig);
+            return a;
+          }
+
+          function appendFooter() {
+            var foot = document.createElement("div");
+            foot.className = "search-modal-footer";
+            var more = document.createElement("a");
+            more.href = base + "search.html" + (input.value.trim() ? "?q=" + encodeURIComponent(input.value.trim()) : "");
+            more.textContent = "Open full search results";
+            foot.appendChild(more);
+            results.appendChild(foot);
+          }
+
+          // The empty state: what a search can answer (name vs type), a few
+          // example terms, and the entities of the page you are on.
+          function showIdle() {
+            results.innerHTML = "";
+            var hint = document.createElement("div");
+            hint.className = "search-hint";
+            var title = document.createElement("p");
+            title.className = "search-hint-title";
+            title.textContent = "Search by name or type.";
+            hint.appendChild(title);
+            var body = document.createElement("p");
+            body.className = "search-hint-body";
+            body.textContent = "A name finds what it is called; a type finds everything that uses it.";
+            hint.appendChild(body);
+            var chips = document.createElement("div");
+            chips.className = "search-chips";
+            ["map", "Integer", "String?", "String -> String -> String", "FS.File"].forEach(function (ex) {
+              var chip = document.createElement("button");
+              chip.className = "search-chip";
+              chip.textContent = ex;
+              chip.addEventListener("click", function () { input.value = ex; run(); input.focus(); });
+              chips.appendChild(chip);
+            });
+            hint.appendChild(chips);
+            results.appendChild(hint);
+            appendFooter();
+
+            var here = currentUrlPath();
+            if (here) {
+              loadIndex().then(function (entries) {
+                var local = entries.filter(function (e) { return e.urlPath === here; }).slice(0, 4);
+                if (local.length === 0) return;
+                var section = document.createElement("div");
+                section.className = "search-local";
+                var heading = document.createElement("p");
+                heading.className = "search-hint-title";
+                heading.textContent = "On this page";
+                section.appendChild(heading);
+                local.forEach(function (e) { section.appendChild(hitEl(e)); });
+                results.insertBefore(section, results.lastElementChild);
+              });
+            }
+          }
+
+          function render(hits) {
+            results.innerHTML = "";
+            if (hits.length === 0) {
+              var empty = document.createElement("div");
+              empty.className = "search-empty";
+              empty.textContent = "No matches";
+              results.appendChild(empty);
+            } else {
+              hits.forEach(function (e, i) { results.appendChild(hitEl(e)); });
+            }
+            appendFooter();
+            highlight(0);
+          }
+
+          function hits() { return results.querySelectorAll(".search-hit"); }
+
+          function highlight(sel) {
+            var list = hits();
+            if (list.length === 0) return;
+            for (var i = 0; i < list.length; i++) {
+              list[i].classList.toggle("selected", i === sel);
+            }
+            list[sel].scrollIntoView({ block: "nearest" });
+          }
+
+          function run() {
+            var q = input.value.trim().toLowerCase();
+            if (q.length === 0) { showIdle(); return; }
+            var tokens = q.split(" ").filter(function (t) { return t.length > 0; });
+            loadIndex().then(function (entries) {
+              var scored = entries
+                .map(function (e) { return { e: e, s: rank(e, tokens) }; })
+                .filter(function (x) { return x.s >= 0; })
+                .sort(function (a, b) { return b.s - a.s; });
+              render(scored.slice(0, 50).map(function (x) { return x.e; }));
+            });
+          }
+
+          function open() {
+            overlay.hidden = false;
+            input.value = "";
+            showIdle();
+            input.focus();
+          }
+
+          // The urlPath of the page the trigger sits on, from its data-page
+          // ("fs.html" → "fs"; "index.html" → "").
+          function currentUrlPath() {
+            var page = trigger.getAttribute("data-page") || "";
+            if (page === "index.html") return "";
+            return page.replace(/\.html$/, "");
+          }
+          function close() { overlay.hidden = true; trigger.focus(); }
+
+          trigger.addEventListener("click", open);
+
+          input.addEventListener("input", run);
+          input.addEventListener("keydown", function (ev) {
+            var list = hits();
+            var sel = -1;
+            for (var i = 0; i < list.length; i++) if (list[i].classList.contains("selected")) sel = i;
+            if (ev.key === "Escape") { close(); return; }
+            if (ev.key === "ArrowDown" && list.length) { ev.preventDefault(); highlight((sel + 1) % list.length); }
+            else if (ev.key === "ArrowUp" && list.length) { ev.preventDefault(); highlight((sel - 1 + list.length) % list.length); }
+            else if (ev.key === "Enter" && sel >= 0) { window.location.href = list[sel].href; }
+          });
+
+          overlay.addEventListener("click", function (ev) {
+            if (ev.target === overlay) close();
+          });
+
+          document.addEventListener("keydown", function (ev) {
+            if (ev.key === "/" && !overlayIsOpen() && !isTyping(ev)) { ev.preventDefault(); open(); }
+            if ((ev.metaKey || ev.ctrlKey) && ev.key === "k") { ev.preventDefault(); open(); }
+          });
+
+          function overlayIsOpen() { return !overlay.hidden; }
+          function isTyping(ev) {
+            var t = ev.target;
+            return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+          }
+        }
+      })();
+    `
+  end
+end

@@ -1,26 +1,87 @@
+# Text. A +String+ is a sequence of Unicode characters, immutable like every
+# other Kex value — every method here answers with a new string rather than
+# changing the receiver.
+#
+# A +String+ is its own type, not a list of characters. It is +Enumerable+, so
+# +each+, +reduce+, +find+ and friends walk it one +Char+ at a time, and the
+# sequence operations that could reasonably answer in either currency pick the
+# useful one: +take+, +drop+ and +sort+ hand back a +String+, while +first+ and
+# +last+ hand back a +Char+. Use +chars+ to cross over to a real list.
+#
+#   let line = "  Hello, World  "
+#   line.trim.lowerCase.split(", ")   # => ["hello", "world"]
+#   line.trim.take(5)                 # => "Hello"
+#   line.trim.chars.count(~upper?)    # => 2
+#
+# Strings interpolate with +${...}+:
+#
+#   let name = "Ada"
+#   "hello, ${name}"                  # => "hello, Ada"
 make String, implement: Enumerable, Foldable do
-  # Enumerable primitive and string-preserving higher-order operations.
-  # The private List intrinsics understand String's [Char] representation;
-  # the public methods remain owned here in Kex source.
+  # Folds the string from the left, one +Char+ at a time.
+  #
+  # This is +String+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+
+  # and the rest are defined in terms of it. Reach for it directly when you are
+  # accumulating something that is neither a string nor a list.
+  #
+  # @param acc [A] the initial accumulator
+  # @param f [A -> Char -> A] combines the accumulator with each character
+  # @return [A] the final accumulator
+  #
+  # @example Summing digit values
+  #   "12345".reduce(0) { |sum, c| sum + c.codepoint - 48 }   # => 15
+  #
+  # @example Building a character histogram
+  #   "banana".reduce({}) do |counts, c|
+  #     counts.put(c.string, counts.get(c.string).or(0) + 1)
+  #   end
+  #   # => {"a": 3, "b": 1, "n": 2}
   reduce :> A -> (A -> Char -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
-  # No `map` override: the Enumerable default collects into a list, which is
-  # what `(Char -> B) -> [B]` says. A String-in/String-out mapping is a
-  # different operation with a different type, so it gets its own name.
+  # Applies +f+ to every character and joins the results back into a +String+.
   #
-  # @param f [Char -> Char]
-  # @return [String]
+  # This is the string-preserving counterpart of +map+. +map+ comes from
+  # +Enumerable+ and collects into a list, because its type says
+  # +(Char -> B) -> [B]+ and +B+ need not be a +Char+ at all. When you want a
+  # string out, name the operation that produces one.
+  #
+  # @param f [Char -> Char] applied to each character
+  # @return [String] the mapped characters, as a string
   #
   # @example
   #   "hi".mapChars(&.upperCase)   # => "HI"
   #   "hi".map(&.upperCase)        # => ['H', 'I']  (a list, per Enumerable)
+  #
+  # @example Shifting every character up one codepoint
+  #   "abc".mapChars do |c|
+  #     String.fromCodepoint(c.codepoint + 1).or("").first.or(c)
+  #   end
+  #   # => "bcd"
   mapChars :> (Char -> Char) -> String
   let mapChars(f) = Kex.Intrinsic.List.map(this, f)
 
+  # Returns the characters satisfying +pred+, as a +String+.
+  #
+  # @param pred [Char -> Bool] kept when it answers +true+
+  # @return [String] the matching characters, in order
+  #
+  # @example Keeping only the digits
+  #   "a1b2c3".filter(~digit?)   # => "123"
+  #
+  # @example Stripping punctuation before comparing
+  #   "Hello, World!".filter(~alpha?).lowerCase   # => "helloworld"
   filter :> (Char -> Bool) -> String
   let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
 
+  # Returns the string with repeated characters removed, keeping the first
+  # occurrence of each.
+  #
+  # @return [String] the distinct characters, in first-seen order
+  #
+  # @example
+  #   "banana".uniq   # => "ban"
+  #   "hello".uniq    # => "helo"
   uniq :> String
   let uniq = Kex.Intrinsic.List.uniq(this)
 
@@ -31,173 +92,250 @@ make String, implement: Enumerable, Foldable do
   # they delegate to already understand the String representation, so there is
   # one implementation for both backends.
 
-  # Returns the first character, or None when the string is empty.
+  # Returns the first character, or +None+ when the string is empty.
   #
-  # @return [Char?]
+  # @return [Char?] the first character, or +None+
   #
   # @example
   #   "hi".first   # => Just('h')
   #   "".first     # => None
+  #
+  # @example Testing an initial without risking an empty string
+  #   "hello".first.map(~upper?).or(false)   # => false
   first :> Char?
   let first = Kex.Intrinsic.List.first(this)
 
-  # Returns the last character, or None when the string is empty.
+  # Returns the last character, or +None+ when the string is empty.
   #
-  # @return [Char?]
+  # @return [Char?] the last character, or +None+
   #
   # @example
   #   "hi".last   # => Just('i')
+  #   "".last     # => None
   last :> Char?
   let last = Kex.Intrinsic.List.last(this)
 
-  # Returns the character at +i+, or None when out of range.
+  # Returns the character at index +i+, counting from 0.
   #
-  # @param i [Integer]
-  # @return [Char?]
+  # Answers +None+ for an index past either end rather than failing, so it is
+  # safe to index with a computed position.
+  #
+  # @param i [Integer] the 0-based index
+  # @return [Char?] the character, or +None+ when out of range
   #
   # @example
-  #   "hi".get(1)   # => 'i'
+  #   "hi".get(1)    # => Just('i')
+  #   "hi".get(9)    # => None
   get :> Integer -> Char?
   let get(i) = Kex.Intrinsic.List.get(this, i)
 
-  # Returns the character at +i+, or +default+ when out of range.
+  # Returns the character at index +i+, or +default+ when the index is out of
+  # range. The total form of +get+, for when a missing character has an
+  # obvious stand-in.
   #
-  # @param i [Integer]
-  # @param default [Char]
-  # @return [Char]
+  # @param i [Integer] the 0-based index
+  # @param default [Char] used when the index is out of range
+  # @return [Char] the character, or +default+
+  #
+  # @example
+  #   "hi".get(1, '?')   # => 'i'
+  #   "hi".get(9, '?')   # => '?'
   get :> Integer -> Char -> Char
   let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
 
-  # Returns the first +n+ characters.
+  # Returns the first +n+ characters. A short string is returned whole, so
+  # +take+ never fails on an +n+ that is too large.
   #
-  # @param n [Integer]
-  # @return [String]
+  # @param n [Integer] how many characters to keep
+  # @return [String] the leading +n+ characters
   #
   # @example
-  #   "hello".take(2)   # => "he"
+  #   "hello".take(2)    # => "he"
+  #   "hello".take(99)   # => "hello"
+  #   "hello".take(0)    # => ""
+  #
+  # @example Truncating for display
+  #   let preview = title.take(30) + (title.count > 30 then "…" else "")
   take :> Integer -> String
   let take(n) = Kex.Intrinsic.List.take(this, n)
 
-  # Returns everything after the first +n+ characters.
+  # Returns everything after the first +n+ characters. The complement of
+  # +take+: +s.take(n) + s.drop(n)+ is +s+.
   #
-  # @param n [Integer]
-  # @return [String]
+  # @param n [Integer] how many characters to skip
+  # @return [String] the remaining characters
   #
   # @example
-  #   "hello".drop(2)   # => "llo"
+  #   "hello".drop(2)    # => "llo"
+  #   "hello".drop(99)   # => ""
+  #
+  # @example Removing a known prefix
+  #   let flag = "--verbose"
+  #   flag.startsWith?("--") then flag.drop(2) else flag   # => "verbose"
   drop :> Integer -> String
   let drop(n) = Kex.Intrinsic.List.drop(this, n)
 
-  # Returns the characters that do NOT satisfy the predicate — filter's
-  # complement.
+  # Returns the characters that do NOT satisfy +pred+ — the complement of
+  # +filter+.
   #
-  # @param pred [Char -> Bool]
-  # @return [String]
+  # @param pred [Char -> Bool] dropped when it answers +true+
+  # @return [String] the characters that failed the predicate
   #
   # @example
   #   "hello".reject { |c| c == 'l' }   # => "heo"
+  #
+  # @example Removing whitespace
+  #   "1 234 567".reject(~space?)   # => "1234567"
   reject :> (Char -> Bool) -> String
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
 
-  # Returns the characters in ascending order.
+  # Returns the characters in ascending codepoint order.
   #
-  # @return [String]
+  # @return [String] the sorted characters
   #
   # @example
   #   "hello".sort   # => "ehllo"
+  #
+  # @example An anagram check
+  #   "listen".sort == "silent".sort   # => true
   sort :> String
   let sort = Kex.Intrinsic.List.sort(this)
 
-  # Returns the index of the first occurrence of +c+, or None.
+  # Returns the index of the first occurrence of +c+, or +None+ when the
+  # character does not appear.
   #
-  # @param c [Char]
-  # @return [Integer?]
+  # @param c [Char] the character to look for
+  # @return [Integer?] the 0-based index, or +None+
   #
   # @example
-  #   "hello".indexOf('l')   # => 2
+  #   "hello".indexOf('l')   # => Just(2)
+  #   "hello".indexOf('z')   # => None
+  #
+  # @example Splitting a +key=value+ pair at the first +=+
+  #   let pair = "host=localhost"
+  #   pair.indexOf('=').map { |i| (pair.take(i), pair.drop(i + 1)) }
+  #   # => Just(("host", "localhost"))
   indexOf :> Char -> Integer?
   let indexOf(c) = Kex.Intrinsic.List.indexOf(this, c)
 
-  # Returns the index of the first character satisfying the predicate, or
-  # None. Goes through `chars` because there is no direct intrinsic.
+  # Returns the index of the first character satisfying +pred+, or +None+.
   #
-  # @param pred [Char -> Bool]
-  # @return [Integer?]
+  # The predicate counterpart of +indexOf+, which searches for one known
+  # character.
+  #
+  # @param pred [(Char) -> Bool] the test applied to each character
+  # @return [Integer?] the 0-based index, or +None+
   #
   # @example
-  #   "hello".findIndex { |c| c == 'l' }   # => 2
+  #   "hello".findIndex { |c| c == 'l' }   # => Just(2)
+  #   "hello".findIndex(~digit?)           # => None
+  #
+  # @example Finding where the leading indentation ends
+  #   "    text".findIndex { |c| !c.space? }   # => Just(4)
   findIndex :> ((Char) -> Bool) -> Integer?
   let findIndex(pred) = this.chars.findIndex(pred)
 
   # Pairs each character with the element at the same index in +other+,
   # stopping at the shorter of the two.
   #
-  # @param other [[Y]]
-  # @return [[(Char, Y)]]
+  # @param other [[Y]] the list to pair with
+  # @return [[(Char, Y)]] the pairs, in order
   #
   # @example
-  #   "ab".zip([1, 2])   # => [('a', 1), ('b', 2)]
+  #   "ab".zip([1, 2])      # => [('a', 1), ('b', 2)]
+  #   "abc".zip([1, 2])     # => [('a', 1), ('b', 2)]
+  #
+  # @example Numbering the characters
+  #   "abc".zip((0..2).items)   # => [('a', 0), ('b', 1), ('c', 2)]
   zip :> [Y] -> [(Char, Y)]
   let zip(other) = Kex.Intrinsic.List.zip(this, other)
 
-  # Splits into the characters that satisfy the predicate and those that do
-  # not, in that order.
+  # Splits the string in two: the characters satisfying +pred+, then those
+  # that do not. One pass, both answers.
   #
-  # @param pred [Char -> Bool]
-  # @return [(String, String)]
+  # @param pred [Char -> Bool] the test applied to each character
+  # @return [(String, String)] the matching and non-matching characters
   #
   # @example
   #   "hello".partition { |c| c == 'l' }   # => ("ll", "heo")
+  #
+  # @example Separating digits from the rest
+  #   let (digits, other) = "a1b2".partition(~digit?)
+  #   digits   # => "12"
+  #   other    # => "ab"
   partition :> (Char -> Bool) -> (String, String)
   let partition(pred) = Kex.Intrinsic.List.partition(this, pred)
 
-  # Returns the number of characters in the string.
+  # Returns the number of characters — characters, not bytes. See +bytes+ for
+  # the storage-level length.
   #
-  # @return [Integer]
+  # @return [Integer] the character count
   #
   # @example
   #   "hello".count   # => 5
   #   "".count        # => 0
+  #   "é".count       # => 1   (but "é".bytes.count is 2)
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
 
-  # Compatibility spelling retained as a source-owned String method.
+  # Returns the number of characters. The same as +count+, under the name
+  # familiar from other languages.
+  #
+  # @return [Integer] the character count
+  #
+  # @example
+  #   "hello".length   # => 5
   length :> Integer
   let length = Kex.Intrinsic.List.length(this)
 
-  # Returns +true+ if the string contains no characters.
+  # Returns +true+ when the string has no characters.
   #
-  # @return [Bool]
+  # Note that a string of spaces is not empty — use +blank?+ from the
+  # +Blankable+ trait when whitespace should not count.
+  #
+  # @return [Bool] +true+ for the empty string
   #
   # @example
-  #   "".empty?       # => true
-  #   "hi".empty?     # => false
+  #   "".empty?      # => true
+  #   "hi".empty?    # => false
+  #   "  ".empty?    # => false
   empty? :> Bool
   let empty? = Kex.Intrinsic.List.length(this) == 0
 
-  # Returns an enclosed string, with +wrapper+ on both ends.
-  # @param wrapper String
-  # @return String
+  # Returns the string with +wrapper+ added at both ends.
+  #
+  # @param wrapper [String] placed before and after the string
+  # @return [String] the wrapped string
+  #
   # @example
-  #   "hello".enclose("*")   # => "*hello*"
+  #   "hello".enclose("*")    # => "*hello*"
   #   "hello".enclose("__")   # => "__hello__"
+  #
+  # @example Quoting a value for output
+  #   value.enclose("\"")   # => "\"localhost\""
   enclose :> String -> String
   let enclose(wrapper) = "${wrapper}${this}${wrapper}"
 
-  # Returns an enclosed string, +left+ and +right+ on the ends.
-  # @param left String
-  # @param right String
-  # @return String
+  # Returns the string with +left+ added at the front and +right+ at the end.
+  #
+  # @param left [String] placed before the string
+  # @param right [String] placed after the string
+  # @return [String] the wrapped string
+  #
   # @example
   #   "hello".enclose("<", ">")   # => "<hello>"
   #   "hello".enclose("{", "}")   # => "{hello}"
+  #
+  # @example Rendering a list literal
+  #   items.join(", ").enclose("[", "]")   # => "[a, b, c]"
   enclose :> String -> String -> String
   let enclose(left, right) = "${left}${this}${right}"
 
-  # Returns the character at position +i+ (0-based), or +None+ if out of range.
+  # Returns the character at index +i+, counting from 0, or +None+ when the
+  # index is out of range. The same as the one-argument +get+.
   #
-  # @param i [Integer]
-  # @return [Char?]
+  # @param i [Integer] the 0-based index
+  # @return [Char?] the character, or +None+
   #
   # @example
   #   "hello".at(1)   # => Just('e')
@@ -205,50 +343,85 @@ make String, implement: Enumerable, Foldable do
   at :> Integer -> Char?
   let at(i) = Kex.Intrinsic.List.at(this, i)
 
-  # Returns the second character wrapped in +Just+, or +None+ when absent.
+  # Returns the second character, or +None+ when the string is shorter than
+  # two characters.
+  #
+  # @return [Char?] the second character, or +None+
+  #
+  # @example
+  #   "hi".second   # => Just('i')
+  #   "h".second    # => None
   second :> Char?
   let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
 
-  # Returns the third character wrapped in +Just+, or +None+ when absent.
+  # Returns the third character, or +None+ when the string is shorter than
+  # three characters.
+  #
+  # @return [Char?] the third character, or +None+
+  #
+  # @example
+  #   "hip".third   # => Just('p')
+  #   "hi".third    # => None
   third :> Char?
   let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
 
-  # Returns all characters after the first.
+  # Returns everything after the first character. The empty string has no
+  # rest, and answers with itself.
+  #
+  # @return [String] the string without its first character
+  #
+  # @example
+  #   "hello".rest   # => "ello"
+  #   "h".rest       # => ""
   rest :> String
   let rest = Kex.Intrinsic.List.drop(this, 1)
 
-  # Returns a list of the individual characters in the string.
+  # Returns the string's characters as a list.
   #
-  # @return [[Char]]
+  # The bridge from +String+ to the +List+ methods that a string does not have
+  # of its own. Join back with +.join("")+.
+  #
+  # @return [[Char]] the characters, in order
   #
   # @example
   #   "hi".chars   # => ['h', 'i']
+  #
+  # @example Going out to List and back
+  #   "hello".chars.reverse.join("")   # => "olleh"
   chars :> [Char]
   let chars = Kex.Intrinsic.String.chars(this)
 
-  # Returns the string's UTF-8 encoding, one Byte per byte.
+  # Returns the string's UTF-8 encoding, one +Byte+ per byte.
   #
-  # `chars` is the TEXT view of a String and `bytes` is the STORAGE view, so
-  # they differ for anything outside ASCII: "é" is one Char and two Bytes.
+  # +chars+ is the TEXT view of a string and +bytes+ is the STORAGE view, so
+  # they differ for anything outside ASCII: +"é"+ is one +Char+ and two
+  # +Byte+s. Use +bytes+ when the length that matters is the encoded one — a
+  # network frame, a file offset, a size limit.
   #
-  # @return [[Byte]]
+  # +String.fromBytes+ is the inverse.
+  #
+  # @return [[Byte]] the UTF-8 bytes
   #
   # @example
   #   "hi".bytes    # => [104, 105]
   #   "é".bytes     # => [195, 169]
   #   "é".chars     # => ['é']
+  #
+  # @example Measuring the encoded size
+  #   "héllo".count         # => 5
+  #   "héllo".bytes.count   # => 6
   bytes :> [Byte]
   let bytes = Kex.Intrinsic.String.bytes(this)
 
-  # Splits on every occurrence of +sep+. With no argument, splits into
-  # individual characters.
+  # Splits the string into its individual characters, as one-character
+  # strings.
   #
-  # @param sep [String]
-  # @return [[String]]
+  # Use +chars+ instead when you want +Char+ values rather than strings.
+  #
+  # @return [[String]] one string per character
   #
   # @example
-  #   "a,b,c".split(",")   # => ["a", "b", "c"]
-  #   "hi".split           # => ["h", "i"]
+  #   "hi".split   # => ["h", "i"]
   # Separator-less: one part per character, as the example above shows. Only
   # the intrinsic had this form, so the walker answered `"hi".split` with
   # "'this' used outside of a method context" while BEAM returned the parts.
@@ -257,19 +430,45 @@ make String, implement: Enumerable, Foldable do
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 
+  # Splits the string on every occurrence of +sep+, which may be a literal
+  # string or a +Regex+.
+  #
+  # Separators at the ends produce empty parts, so splitting +",a,"+ on +","+
+  # gives three parts. Filter or trim afterwards when that is not wanted.
+  #
+  # @param sep [String | Regex] the separator to split on
+  # @return [[String]] the parts, in order
+  #
+  # @example Splitting a delimited line
+  #   "a,b,c".split(",")     # => ["a", "b", "c"]
+  #   "a, b, c".split(", ")  # => ["a", "b", "c"]
+  #
+  # @example Splitting on a pattern (needs `using Regex`)
+  #   "a1b22c".split(re`[0-9]+`)   # => ["a", "b", "c"]
+  #
+  # @example Empty parts at the edges are kept
+  #   ",a,".split(",")   # => ["", "a", ""]
   split :> (String | Regex) -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
 
-  # Splits into lines on +\n+, dropping a single trailing newline so a file
-  # ending in one does not yield a final empty line. Windows line endings are
-  # not stripped — split on +\r\n+ explicitly if that matters.
+  # Splits the string into lines on +\n+.
   #
-  # @return [[String]]
+  # A single trailing newline is dropped, so a file that ends in one does not
+  # produce a final empty line. Windows line endings are not stripped — split
+  # on +\r\n+ explicitly, or +trim+ each line, when that matters.
+  #
+  # @return [[String]] the lines, without their newlines
   #
   # @example
   #   "a\nb".lines      # => ["a", "b"]
   #   "a\nb\n".lines    # => ["a", "b"]
   #   "".lines          # => []
+  #
+  # @example Numbering the lines of a file
+  #   text.lines.zip((1..text.lines.count).items).each do |pair|
+  #     let (line, n) = pair
+  #     IO.printLine("${n}: ${line}")
+  #   end
   lines :> [String]
   let lines do
     let parts = this.split("\n")
@@ -279,18 +478,25 @@ make String, implement: Enumerable, Foldable do
     end
   end
 
-  # Indents every line but the first by +prefix+. That is what splicing a
-  # multi-line value into an indented `${...}` hole needs: the hole's own
-  # indentation already covers line one, the rest have to catch up. Blank
-  # lines stay blank, and — through `lines` — one trailing newline is
-  # dropped, so a block does not push a stray empty line into its slot.
+  # Indents every line but the first by +prefix+.
   #
-  # @param prefix [String]
-  # @return [String]
+  # This is what splicing a multi-line value into an indented +${...}+ hole
+  # needs: the hole's own indentation already covers line one, and the rest
+  # have to catch up. Blank lines stay blank, and — through +lines+ — a single
+  # trailing newline is dropped, so a block does not push a stray empty line
+  # into its slot.
+  #
+  # @param prefix [String] the indentation to add
+  # @return [String] the re-indented string
   #
   # @example
   #   "a\nb\n".indentRest("  ")   # => "a\n  b"
   #   "a".indentRest("  ")        # => "a"
+  #
+  # @example Splicing a block into a template
+  #   let body = "one\ntwo"
+  #   "items:\n  ${body.indentRest("  ")}"
+  #   # => "items:\n  one\n  two"
   indentRest :> String -> String
   let indentRest(prefix) do
     let all = this.lines
@@ -303,30 +509,37 @@ make String, implement: Enumerable, Foldable do
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 
-  # Replaces every literal occurrence of +pattern+. An empty pattern matches
-  # at every character boundary, including both ends.
+  # Replaces every literal occurrence of +pattern+ with +replacement+.
   #
-  # @param pattern [String]
-  # @param replacement [String]
-  # @return [String]
+  # The pattern is matched literally, not as a regular expression. An empty
+  # pattern matches at every character boundary, including both ends.
+  #
+  # @param pattern [String] the text to look for
+  # @param replacement [String] what to put in its place
+  # @return [String] the rewritten string
   #
   # @example
   #   "a-b-c".replace("-", "+")   # => "a+b+c"
   #   "abc".replace("", "-")      # => "-a-b-c-"
+  #
+  # @example Normalising a path separator
+  #   "a\\b\\c".replace("\\", "/")   # => "a/b/c"
   replace :> String -> String -> String
   let replace(pattern, replacement) = Kex.Intrinsic.String.replace(this, pattern, replacement)
 
   # Replaces every key of +replacements+ with its value, in one pass over the
-  # map. The keys are the placeholders exactly as written — no syntax is
-  # imposed, and nothing is reserved — so `$NAME$`, `__NAME__`, `{{name}}` and
-  # `%name%` are all equally valid, and a template needs no escaping to be a
-  # template. `$NAME$` is the convention to reach for when there is no reason
-  # to prefer another.
+  # map.
   #
-  # Note that a placeholder is NOT `${name}`: that is interpolation, which the
+  # The keys are the placeholders exactly as written — no syntax is imposed and
+  # nothing is reserved — so +$NAME$+, +__NAME__+, +{{name}}+ and +%name%+ are
+  # all equally valid, and a template needs no escaping to be a template.
+  # +$NAME$+ is the convention to reach for when there is no reason to prefer
+  # another.
+  #
+  # Note that a placeholder is NOT +${name}+: that is interpolation, which the
   # compiler resolves before this ever sees the string.
   #
-  # This is what a template wants instead of a chain of `.replace` calls: the
+  # This is what a template wants instead of a chain of +replace+ calls: the
   # chain reads as a pipeline when it is really a substitution table, and it
   # quietly depends on its own order, since an earlier replacement's OUTPUT is
   # still visible to every later one.
@@ -336,61 +549,84 @@ make String, implement: Enumerable, Foldable do
   # can still be rewritten by a later one. Keep values placeholder-free when
   # that matters.
   #
-  # @param replacements [{String: String}]
-  # @return [String]
+  # @param replacements [{String: String}] placeholder to replacement text
+  # @return [String] the filled-in template
   #
   # @example
   #   "Hello, $WHO$!".substitute({"$WHO$": "world"})           # => "Hello, world!"
   #   "$A$ and $B$".substitute({"$A$": "x", "$B$": "y"})       # => "x and y"
   #   "__A__".substitute({"__A__": "any key works"})           # => "any key works"
+  #
+  # @example A reusable template
+  #   let greeting = "Dear $NAME$,\n\nYour order $ID$ has shipped."
+  #   greeting.substitute({"$NAME$": "Ada", "$ID$": "A-1701"})
   substitute :> {String: String} -> String
   let substitute(replacements) = replacements.entries.reduce(this) do |text, entry|
     let (key, value) = entry
     text.replace(key, value)
   end
 
-  # Removes leading and trailing whitespace.
+  # Removes leading and trailing whitespace. Whitespace inside the string is
+  # left alone.
   #
-  # @return [String]
+  # @return [String] the trimmed string
   #
   # @example
-  #   "  hello  ".trim   # => "hello"
+  #   "  hello  ".trim     # => "hello"
+  #   "\n hi \t".trim      # => "hi"
+  #   "a  b".trim          # => "a  b"
+  #
+  # @example Cleaning up user input
+  #   let name = IO.getLine.or("").trim
   trim :> String
   let trim = Kex.Intrinsic.String.trim(this)
 
-  # Returns the string with all characters converted to upper case.
+  # Returns the string with every character converted to upper case.
   #
-  # @return [String]
+  # @return [String] the upper-cased string
   #
   # @example
-  #   "hello".upperCase   # => "HELLO"
+  #   "hello".upperCase       # => "HELLO"
+  #   "Hello, ada".upperCase  # => "HELLO, ADA"
+  #
+  # @example Case-insensitive comparison
+  #   input.lowerCase == "yes"
   upperCase :> String
   let upperCase = Kex.Intrinsic.String.upperCase(this)
 
-  # Returns the string with all characters converted to lower case.
+  # Returns the string with every character converted to lower case.
   #
-  # @return [String]
+  # @return [String] the lower-cased string
   #
   # @example
   #   "HELLO".lowerCase   # => "hello"
+  #
+  # @example Normalising a lookup key
+  #   settings.get(key.trim.lowerCase)
   lowerCase :> String
   let lowerCase = Kex.Intrinsic.String.lowerCase(this)
 
   # Returns the string with its first character upper-cased and the rest
-  # LOWER-cased, matching Ruby's String#capitalize — so "hELLO" becomes
-  # "Hello", not "HELLO". Unlike +upperCase+, which shouts the whole string.
+  # LOWER-cased.
   #
-  # Needed to build type names from data: a generated `type %name = ...`
-  # inside a `compiled do` block requires an upper-case identifier, so a list
-  # of lower-case words has to be capitalized first.
+  # This matches Ruby's +String#capitalize+, so +"hELLO"+ becomes +"Hello"+,
+  # not +"HELLO"+. Use +upperCase+ when the whole string should shout.
   #
-  # @return [String]
+  # It is also what building a type name from data needs: a generated
+  # +type %name = ...+ inside a +compiled do+ block requires an upper-case
+  # identifier, so a list of lower-case words has to be capitalized first.
+  #
+  # @return [String] the capitalized string
   #
   # @example
-  #   "hello".capitalize          # => "Hello"
-  #   "hELLO".capitalize          # => "Hello"   (tail is lower-cased)
+  #   "hello".capitalize           # => "Hello"
+  #   "hELLO".capitalize           # => "Hello"   (tail is lower-cased)
   #   "already Capital".capitalize # => "Already capital"
-  #   "".capitalize               # => ""
+  #   "".capitalize                # => ""
+  #
+  # @example Title-casing a sentence
+  #   "the quick brown fox".split(" ").map(~capitalize).join(" ")
+  #   # => "The Quick Brown Fox"
   capitalize :> String
   # Destructures the characters rather than using `"${at(0).upperCase}${rest}"`:
   # `rest` returns an empty LIST instead of an empty String when nothing
@@ -417,131 +653,298 @@ make String, implement: Enumerable, Foldable do
 
   # Returns the string with its characters in reverse order.
   #
-  # @return [String]
+  # @return [String] the reversed string
   #
   # @example
   #   "hello".reverse   # => "olleh"
+  #
+  # @example A palindrome check
+  #   let cleaned = "A man, a plan, a canal: Panama".filter(~alpha?).lowerCase
+  #   cleaned == cleaned.reverse   # => true
   reverse :> String
   let reverse = Kex.Intrinsic.List.reverse(this)
 
-  # Returns +true+ if +sub+ appears anywhere within the string.
+  # Returns +true+ when +sub+ appears anywhere in the string.
   #
-  # @param sub [String]
-  # @return [Bool]
+  # The search is literal and case-sensitive. Lower-case both sides to ignore
+  # case; use +Regex+ when the needle is a pattern.
+  #
+  # @param sub [String] the text to look for
+  # @return [Bool] +true+ when it is present
   #
   # @example
   #   "hello world".contains?("world")   # => true
   #   "hello world".contains?("xyz")     # => false
+  #   "hello world".contains?("World")   # => false
+  #
+  # @example Ignoring case
+  #   "Hello".lowerCase.contains?("hello")   # => true
   contains? :> String -> Bool
   let contains?(sub) = Kex.Intrinsic.String.contains?(this, sub)
 
-  # Returns +true+ if the string begins with +prefix+.
+  # Returns +true+ when the string begins with +prefix+.
   #
-  # @param prefix [String]
-  # @return [Bool]
+  # @param prefix [String] the expected opening text
+  # @return [Bool] +true+ when the string starts with it
   #
   # @example
   #   "hello".startsWith?("hel")   # => true
   #   "hello".startsWith?("llo")   # => false
+  #
+  # @example Recognising a command-line flag
+  #   args.filter { |a| a.startsWith?("--") }
   startsWith? :> String -> Bool
   let startsWith?(prefix) = Kex.Intrinsic.String.startsWith?(this, prefix)
 
-  # Returns +true+ if the string ends with +suffix+.
+  # Returns +true+ when the string ends with +suffix+.
   #
-  # @param suffix [String]
-  # @return [Bool]
+  # @param suffix [String] the expected closing text
+  # @return [Bool] +true+ when the string ends with it
   #
   # @example
   #   "hello".endsWith?("llo")   # => true
   #   "hello".endsWith?("hel")   # => false
+  #
+  # @example Selecting files by extension
+  #   paths.filter { |p| p.endsWith?(".kex") }
   endsWith? :> String -> Bool
   let endsWith?(suffix) = Kex.Intrinsic.String.endsWith?(this, suffix)
 
   # Converts to another type. The most common target is +Integer+ or +Float+.
 end
 
+# A single Unicode character.
+#
+# Character literals are written with single quotes — +'a'+ — and are a
+# different type from the one-character string +"a"+. The classification
+# methods (+digit?+, +alpha?+, +space?+ and the rest) are what most character
+# code needs; +codepoint+ and +String.fromCodepoint+ are the escape hatch to
+# raw Unicode values.
+#
+#   "hello world".chars.count(~alpha?)   # => 10
+#   'a'.upperCase                        # => 'A'
+#   'a'.string                           # => "a"
 make Char do
-  # A Char and a String are distinct types, so converting between them is
-  # explicit. `to(String)` is the fallible protocol and answers `String?` like
-  # every other conversion; `string` is the total one, because a character is
-  # always one character of text and has no failure case to report. It is the
-  # single-character counterpart of `String.chars` and `[Char].join("")`.
+  # Returns this character as a one-character +String+.
   #
-  #   'a'.string                      # => "a"
-  #   'a'.to(String)                  # => Just("a")
-  #   "hi".chars.map(&.string)        # => ["h", "i"]
+  # A +Char+ and a +String+ are distinct types, so converting between them is
+  # explicit. +to(String)+ is the fallible conversion protocol and answers
+  # +String?+ like every other conversion; +string+ is the total one, because a
+  # character is always one character of text and has no failure case to
+  # report. It is the single-character counterpart of +String.chars+ and
+  # +[Char].join("")+.
+  #
+  # @return [String] the character as text
+  #
+  # @example
+  #   'a'.string                 # => "a"
+  #   'a'.to(String)             # => Just("a")
+  #   "hi".chars.map(&.string)   # => ["h", "i"]
   string :> String
   let string = this.showValue
 
-  # Converts this character to upper/lower case while preserving Char.
+  # Returns the upper-case form of this character, still as a +Char+.
+  #
+  # Characters with no upper-case form — digits, punctuation — are returned
+  # unchanged.
+  #
+  # @return [Char] the upper-case character
+  #
+  # @example
+  #   'a'.upperCase   # => 'A'
+  #   '1'.upperCase   # => '1'
   upperCase :> Char
   let upperCase = Kex.Intrinsic.String.upperCase(this)
+
+  # Returns the lower-case form of this character, still as a +Char+.
+  #
+  # Characters with no lower-case form are returned unchanged.
+  #
+  # @return [Char] the lower-case character
+  #
+  # @example
+  #   'A'.lowerCase   # => 'a'
+  #   '!'.lowerCase   # => '!'
   lowerCase :> Char
   let lowerCase = Kex.Intrinsic.String.lowerCase(this)
 
-  # Returns +true+ if the character is a decimal digit (+0+..+9+).
+  # Returns +true+ when the character is a decimal digit, +'0'+ through +'9'+.
   #
-  # @return [Bool]
+  # @return [Bool] +true+ for a decimal digit
   #
   # @example
   #   '3'.digit?   # => true
   #   'a'.digit?   # => false
+  #
+  # @example Validating that a field is all digits
+  #   "12345".chars.all?(~digit?)   # => true
   digit? :> Bool
   let digit? = Kex.Intrinsic.Char.is_digit(this)
+
+  # Returns +true+ when the character is alphabetic.
+  #
+  # @return [Bool] +true+ for a letter
+  #
+  # @example
+  #   'a'.alpha?   # => true
+  #   '1'.alpha?   # => false
+  #   ' '.alpha?   # => false
+  #
+  # @example Keeping only letters
+  #   "Hello, World!".filter(~alpha?)   # => "HelloWorld"
   alpha? :> Bool
   let alpha? = Kex.Intrinsic.Char.is_alpha(this)
+
+  # Returns +true+ when the character is a letter. The Unicode-letter spelling
+  # of +alpha?+.
+  #
+  # @return [Bool] +true+ for a letter
+  #
+  # @example
+  #   'z'.letter?   # => true
+  #   '-'.letter?   # => false
   letter? :> Bool
   let letter? = Kex.Intrinsic.Char.is_letter(this)
+
+  # Returns +true+ when the character is upper case.
+  #
+  # Characters without case — digits, punctuation — answer +false+.
+  #
+  # @return [Bool] +true+ for an upper-case letter
+  #
+  # @example
+  #   'A'.upper?   # => true
+  #   'a'.upper?   # => false
+  #   '1'.upper?   # => false
+  #
+  # @example Splitting a camelCase name
+  #   "camelCaseName".findIndex(~upper?)   # => Just(5)
   upper? :> Bool
   let upper? = Kex.Intrinsic.Char.is_upper(this)
+
+  # Returns +true+ when the character is lower case.
+  #
+  # @return [Bool] +true+ for a lower-case letter
+  #
+  # @example
+  #   'a'.lower?   # => true
+  #   'A'.lower?   # => false
   lower? :> Bool
   let lower? = Kex.Intrinsic.Char.is_lower(this)
+
+  # Returns +true+ when the character is whitespace — a space, tab, newline or
+  # carriage return.
+  #
+  # @return [Bool] +true+ for whitespace
+  #
+  # @example
+  #   ' '.space?    # => true
+  #   '\t'.space?   # => true
+  #   'a'.space?    # => false
+  #
+  # @example Counting the words on a line
+  #   "one two  three".split(" ").reject(~empty?).count   # => 3
   space? :> Bool
   let space? = Kex.Intrinsic.Char.is_space(this)
 
-  # Returns this character's numeric codepoint.
+  # Returns the character's Unicode codepoint.
+  #
+  # +String.fromCodepoint+ is the inverse.
+  #
+  # @return [Integer] the codepoint
+  #
+  # @example
+  #   'A'.codepoint   # => 65
+  #   'é'.codepoint   # => 233
+  #
+  # @example Converting a digit character to its value
+  #   '7'.codepoint - '0'.codepoint   # => 7
   codepoint :> Integer
   let codepoint = Kex.Intrinsic.Char.codepoint(this)
 
-  # Returns +true+ if the character falls within the given range (inclusive).
+  # Returns +true+ when the character falls inside +range+, endpoints
+  # included.
   #
-  # @param range [Range<Char>]
-  # @return [Bool]
+  # @param range [Range<Char>] the inclusive character range
+  # @return [Bool] +true+ when the character is in range
   #
   # @example
   #   'b'.in?('a'..'z')   # => true
   #   'B'.in?('a'..'z')   # => false
+  #
+  # @example A hexadecimal-digit test
+  #   let hex?(c: Char) -> Bool = c.digit? || c.lowerCase.in?('a'..'f')
   in? :> Range<Char> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 end
 
+# Constructors for +String+ values that are built from something other than
+# text — a Unicode codepoint, or raw UTF-8 bytes.
 module String do
-  # Constructs a one-codepoint UTF-8 string. Surrogates and values outside
-  # the Unicode scalar range return None.
+  # Builds a one-character string from a Unicode codepoint.
+  #
+  # Answers +None+ for a surrogate or a value outside the Unicode scalar
+  # range, so the result is always valid text. +Char.codepoint+ is the
+  # inverse.
+  #
+  # @param value [Integer] the Unicode codepoint
+  # @return [String?] the one-character string, or +None+
+  #
+  # @example
+  #   String.fromCodepoint(65)       # => Just("A")
+  #   String.fromCodepoint(233)      # => Just("é")
+  #   String.fromCodepoint(-1)       # => None
+  #
+  # @example Building the alphabet
+  #   (0..25).items.map { |i| String.fromCodepoint(97 + i).or("") }.join("")
+  #   # => "abcdefghijklmnopqrstuvwxyz"
   fromCodepoint : Integer -> String?
   let fromCodepoint(value) = Kex.Intrinsic.String.fromCodepoint(value)
 
-  # Rebuilds a String from its UTF-8 bytes — the inverse of `bytes`. A String
-  # is TEXT, so bytes outside 0..255 or a malformed encoding return None
-  # rather than a string that would decode to replacement characters.
+  # Rebuilds a string from its UTF-8 bytes — the inverse of +bytes+.
   #
-  #   String.fromBytes([104, 105])    # => Just("hi")
-  #   String.fromBytes([195, 169])    # => Just("é")
-  #   String.fromBytes([255])         # => None
+  # A +String+ is TEXT, so bytes outside 0..255 or a malformed encoding answer
+  # +None+ rather than a string that would decode to replacement characters.
+  # That makes it a decoding step you can check, not a lossy cast.
+  #
+  # @param values [[Byte]] the UTF-8 bytes
+  # @return [String?] the decoded string, or +None+
+  #
+  # @example
+  #   String.fromBytes([104, 105])   # => Just("hi")
+  #   String.fromBytes([195, 169])   # => Just("é")
+  #   String.fromBytes([255])        # => None
+  #
+  # @example A round trip
+  #   String.fromBytes("héllo".bytes)   # => Just("héllo")
   fromBytes : [Byte] -> String?
   let fromBytes(values) = Kex.Intrinsic.String.fromBytes(values)
 end
 
+# A fixed-size group of values, written +(a, b)+. Unlike a list, a tuple's
+# size and the type of each position are part of its type, so the +List+
+# methods do not apply to it — destructure it, match on it, or convert it with
+# +items+.
+#
+#   let (name, age) = ("Ada", 36)
+#   [1, 2, 3].partition { |n| n.even? }   # => ([2], [1, 3])
 make Tuple do
   # Returns the tuple's elements as a list.
   #
-  # A tuple is not a list — its arity is part of its type — so the List
-  # methods do not apply to it. This is the explicit conversion.
+  # A tuple is not a list — its arity is part of its type — so the +List+
+  # methods do not apply to it. This is the explicit conversion, and it loses
+  # the per-position typing in exchange.
   #
-  # @return [[Any]]
+  # Destructuring is usually clearer when you know the shape:
+  # +let (a, b) = pair+.
+  #
+  # @return [[Any]] the elements, in order
   #
   # @example
   #   (1, "a").items   # => [1, "a"]
+  #
+  # @example Iterating over a pair
+  #   ("host", "port").items.each { |s| IO.printLine(s) }
   items :> [Any]
   let items = Kex.Intrinsic.Tuple.items(this)
 end

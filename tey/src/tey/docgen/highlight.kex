@@ -1,0 +1,315 @@
+# A small syntax highlighter for Kex source, ported from kex-run-site's
+# src/lib/highlight.ts: a "good enough" tokenizer rather than a full grammar.
+# Emits <span class="tok-*"> HTML at docgen build time, so the docs carry no
+# client-side JavaScript. Runs over [Char] lists; pure recursion, no state.
+#
+# Fidelity note: backtick raw strings are not tracked inside interpolation
+# braces, and `and`/`or` are colored as keywords even where the compiler
+# treats them as identifiers — same trade-offs as the site version.
+
+module Tey.Docgen.Highlight do
+  record Tok do
+    cls : String
+    text : String
+  end
+
+  foul highlight(source: String) -> String do
+    return renderTokens(lexAll(source.chars, []))
+  end
+
+  # ── Entry loop ───────────────────────────────────────────────────────────
+
+  # out accumulates newest-first; the final reverse restores source order.
+  foul lexAll(cs: [Char], out: [Tok]) -> [Tok] do
+    if cs.empty?
+      return out.reverse
+    end
+    let (toks, rest) = nextToken(cs, out)
+    return lexAll(rest, toks + out)
+  end
+
+  foul nextToken(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
+    let c = cs.first.or(' ')
+    if c.space?
+      let spaces = cs.takeWhile { |ch| ch.space? }
+      return ([Tok { cls: "plain", text: textOf(spaces) }], cs.drop(spaces.count))
+    end
+    if c == '#'
+      let comment = cs.takeWhile { |ch| ch.codepoint != 10 }
+      return ([Tok { cls: "comment", text: textOf(comment) }], cs.drop(comment.count))
+    end
+    if c == '"'
+      let (toks, rest) = lexString(cs.drop(1), [Tok { cls: "string", text: "\"" }])
+      return (toks, rest)
+    end
+    if c.digit?
+      return lexNumber(cs)
+    end
+    if c == '@'
+      let field = cs.drop(1).takeWhile { |ch| identChar?(ch) }
+      if field.empty?
+        return ([Tok { cls: "op", text: "@" }], cs.drop(1))
+      end
+      return ([Tok { cls: "field", text: textOf(field) }, Tok { cls: "op", text: "@" }], cs.drop(1 + field.count))
+    end
+    if c.letter? || c == '_'
+      return lexIdentifier(cs, out)
+    end
+    return lexOperator(cs)
+  end
+
+  # ── Strings (with ${...} interpolation) ─────────────────────────────────
+
+  # cs starts after the opening quote; acc is newest-first tokens so far.
+  foul lexString(cs: [Char], acc: [Tok]) -> ([Tok], [Char]) do
+    let (text, rest) = takeStringText(cs, [])
+    let withText = if text.empty?
+      acc
+    else
+      [Tok { cls: "string", text: text }] + acc
+    end
+    if rest.empty?
+      return (withText, rest)
+    end
+    let c = rest.first.or(' ')
+    if c == '"'
+      return ([Tok { cls: "string", text: "\"" }] + withText, rest.drop(1))
+    end
+    # rest starts with "${": emit it, lex the interpolation, then continue
+    # the string after the matching brace.
+    let withOpen = [Tok { cls: "string", text: "$" + "{" }] + withText
+    let (inner, afterInner) = balancedBraces(rest.drop(2), 1, [])
+    let withInner = lexAll(inner, []).reverse + withOpen
+    let withClose = [Tok { cls: "string", text: "}" }] + withInner
+    return lexString(afterInner, withClose)
+  end
+
+  # Collect literal string text up to (not including) the closing quote, an
+  # interpolation opener, or the end of input. Backslash escapes are opaque.
+  foul takeStringText(cs: [Char], acc: [Char]) -> (String, [Char]) do
+    if cs.empty?
+      return (textOf(acc.reverse), cs)
+    end
+    let c = cs.first.or(' ')
+    if c == '"' || startsWithChars(cs, "$" + "{")
+      return (textOf(acc.reverse), cs)
+    end
+    if c == '\\'
+      let escaped = cs.drop(1).first.or('\\')
+      return takeStringText(cs.drop(2), [escaped, c] + acc)
+    end
+    return takeStringText(cs.drop(1), [c] + acc)
+  end
+
+  # From just after "${", collect the interpolation body up to its matching
+  # "}" (which is consumed but not collected). Embedded "..." strings are
+  # skipped whole so braces inside them do not count.
+  foul balancedBraces(cs: [Char], depth: Integer, acc: [Char]) -> ([Char], [Char]) do
+    if cs.empty?
+      return (acc.reverse, cs)
+    end
+    let c = cs.first.or(' ')
+    if c == '"'
+      let (consumed, rest) = skipString(cs)
+      return balancedBraces(rest, depth, consumed.reverse + acc)
+    end
+    if c == '{'
+      return balancedBraces(cs.drop(1), depth + 1, [c] + acc)
+    end
+    if c == '}'
+      if depth == 1
+        return (acc.reverse, cs.drop(1))
+      end
+      return balancedBraces(cs.drop(1), depth - 1, [c] + acc)
+    end
+    return balancedBraces(cs.drop(1), depth, [c] + acc)
+  end
+
+  # Consume a whole "..." literal starting at the opening quote; returns the
+  # consumed characters (both quotes included) and the remainder.
+  foul skipString(cs: [Char]) -> ([Char], [Char]) do
+    return skipStringBody(cs.drop(1), ['"'])
+  end
+
+  foul skipStringBody(cs: [Char], acc: [Char]) -> ([Char], [Char]) do
+    if cs.empty?
+      return (acc.reverse, cs)
+    end
+    let c = cs.first.or(' ')
+    if c == '\\'
+      let escaped = cs.drop(1).first.or('\\')
+      return skipStringBody(cs.drop(2), [escaped, c] + acc)
+    end
+    if c == '"'
+      return (([c] + acc).reverse, cs.drop(1))
+    end
+    return skipStringBody(cs.drop(1), [c] + acc)
+  end
+
+  # ── Numbers ──────────────────────────────────────────────────────────────
+
+  foul lexNumber(cs: [Char]) -> ([Tok], [Char]) do
+    if startsWithChars(cs, "0x") || startsWithChars(cs, "0X")
+      let digits = cs.drop(2).takeWhile { |ch| hexDigit?(ch) }
+      let count = 2 + digits.count
+      return ([Tok { cls: "number", text: textOf(cs.take(count)) }], cs.drop(count))
+    end
+    let intPart = cs.takeWhile { |ch| ch.digit? || ch == '_' }
+    let afterInt = cs.drop(intPart.count)
+    let hasFrac = startsWithChars(afterInt, ".") && afterInt.drop(1).first.or(' ').digit?
+    let fracCount = if hasFrac
+      1 + afterInt.drop(1).takeWhile { |ch| ch.digit? || ch == '_' }.count
+    else
+      0
+    end
+    let afterFrac = afterInt.drop(fracCount)
+    let expCount = exponentLength(afterFrac)
+    let total = intPart.count + fracCount + expCount
+    return ([Tok { cls: "number", text: textOf(cs.take(total)) }], cs.drop(total))
+  end
+
+  foul exponentLength(cs: [Char]) -> Integer do
+    let c = cs.first.or(' ')
+    if c != 'e' && c != 'E'
+      return 0
+    end
+    let rest = cs.drop(1)
+    let signCount = if startsWithChars(rest, "+") || startsWithChars(rest, "-") then 1 else 0 end
+    let digits = rest.drop(signCount).takeWhile { |ch| ch.digit? }
+    if digits.empty?
+      return 0
+    end
+    return 1 + signCount + digits.count
+  end
+
+  foul hexDigit?(c: Char) -> Bool do
+    return c.digit? || c.in?('a'..'f') || c.in?('A'..'F') || c == '_'
+  end
+
+  # ── Identifiers and keywords ─────────────────────────────────────────────
+
+  foul lexIdentifier(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
+    let span = cs.takeWhile { |ch| identChar?(ch) }
+    let word = textOf(span)
+    let rest = cs.drop(span.count)
+    let prevDot = previousIsDot(out)
+    let nextCh = rest.dropWhile { |ch| ch == ' ' || ch.codepoint == 9 }.first.or(' ')
+    let cls = classifyWord(word, prevDot, nextCh)
+    return ([Tok { cls: cls, text: word }], rest)
+  end
+
+  foul classifyWord(word: String, prevDot: Bool, nextCh: Char) -> String do
+    if keywords().contains?(word)
+      return "keyword"
+    end
+    if constants().contains?(word) && !prevDot
+      return "bool"
+    end
+    if word.first.or('a').upper?
+      return "type"
+    end
+    if prevDot
+      return "method"
+    end
+    if nextCh == '('
+      return "fn"
+    end
+    if typeNames().contains?(word)
+      return "type"
+    end
+    return "ident"
+  end
+
+  # The most recent token that is not whitespace: out is newest-first, so a
+  # plain find walks backwards in time.
+  foul previousIsDot(out: [Tok]) -> Bool do
+    match out.find { |t| !(t.cls == "plain" && t.text.trim.empty?) } do
+      Just(t) => t.text == "."
+      None => false
+    end
+  end
+
+  foul identChar?(c: Char) -> Bool do
+    return c.letter? || c.digit? || c == '_' || c == '?' || c == '!'
+  end
+
+  # ── Operators and punctuation ────────────────────────────────────────────
+
+  foul lexOperator(cs: [Char]) -> ([Tok], [Char]) do
+    if startsWithChars(cs, "...")
+      return ([Tok { cls: "op", text: "..." }], cs.drop(3))
+    end
+    let two = twoCharOp(cs)
+    if two != ""
+      return ([Tok { cls: "op", text: two }], cs.drop(2))
+    end
+    let c = cs.first.or(' ')
+    if "+-*/%<>!=&|~?:.".chars.contains?(c)
+      return ([Tok { cls: "op", text: c.string }], cs.drop(1))
+    end
+    if "(){}[],;".chars.contains?(c)
+      return ([Tok { cls: "punct", text: c.string }], cs.drop(1))
+    end
+    return ([Tok { cls: "plain", text: c.string }], cs.drop(1))
+  end
+
+  foul twoCharOp(cs: [Char]) -> String do
+    let s = textOf(cs.take(2))
+    if ["->", "=>", "<-", "==", "!=", "<=", ">=", "&&", "||", "::", "??"].contains?(s)
+      return s
+    end
+    return ""
+  end
+
+  # ── Word tables ──────────────────────────────────────────────────────────
+  # Functions rather than module constants: on BEAM, method calls on a
+  # module-level constant fail to dispatch.
+
+  foul keywords() -> [String] do
+    return ["let", "var", "make", "record", "type", "do", "end", "match", "return",
+            "if", "elif", "else", "then", "unless", "trait", "foul", "implement",
+            "main", "static", "using", "module", "in", "loop", "receive", "spawn",
+            "where", "while", "for", "break", "next", "begin", "fn", "and", "or",
+            "not", "as", "is", "with", "from", "into"]
+  end
+
+  foul constants() -> [String] do
+    return ["true", "false", "nil", "Just", "None", "Some", "Ok", "Error",
+            "Less", "Greater", "Equal", "This"]
+  end
+
+  foul typeNames() -> [String] do
+    return ["Int", "Float", "Bool", "String", "Char", "Symbol", "Integer", "List",
+            "Map", "Vector", "Set", "Result", "Optional", "Range", "Stream", "Feed",
+            "Process", "IO", "Math", "File", "Http", "A", "B", "T", "K", "V"]
+  end
+
+  # ── Rendering ────────────────────────────────────────────────────────────
+
+  foul renderTokens(toks: [Tok]) -> String do
+    return toks.map { |t| renderTok(t) }.join("")
+  end
+
+  foul renderTok(t: Tok) -> String do
+    if t.cls == "plain" || t.cls == "ident"
+      return esc(t.text)
+    end
+    return "<span class=\"tok-${t.cls}\">${esc(t.text)}</span>"
+  end
+
+  # Local copy of Tey.Docgen.Html.esc — duplicating four replaces keeps the
+  # modules acyclic (Html calls Highlight for code blocks).
+  foul esc(s: String) -> String do
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+  end
+
+  # ── Small helpers ────────────────────────────────────────────────────────
+
+  foul textOf(cs: [Char]) -> String do
+    return cs.map { |c| c.string }.join("")
+  end
+
+  foul startsWithChars(cs: [Char], s: String) -> Bool do
+    return cs.take(s.count) == s.chars
+  end
+end
