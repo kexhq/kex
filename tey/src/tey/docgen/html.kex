@@ -523,8 +523,47 @@ module Tey.Docgen.Html do
     if doc.summary.empty?
       return ""
     end
-    let paras = doc.summary.split("\n\n").map { |p| "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>" }.join("\n")
+    let paras = summaryParagraphs(doc.summary).map { |p| paragraphHtml(p) }.join("\n")
     return paras + "\n"
+  end
+
+  # Paragraphs break on blank lines — except inside a fenced block, where a
+  # blank line is part of the code rather than the end of a paragraph.
+  foul summaryParagraphs(summary: String) -> [String] do
+    return groupParagraphs(summary.split("\n"), [], [], false)
+  end
+
+  foul groupParagraphs(lines: [String], current: [String], accum: [String],
+                       fenced: Bool) -> [String] do
+    if lines.empty?
+      return current.empty? then accum else accum + [current.join("\n")]
+    end
+    let line = lines.first.or("")
+    let rest = lines.drop(1)
+    if line.startsWith?("```")
+      if fenced
+        return groupParagraphs(rest, [], accum + [(current + [line]).join("\n")], false)
+      end
+      let beforeFence = current.empty? then accum else accum + [current.join("\n")]
+      return groupParagraphs(rest, [line], beforeFence, true)
+    end
+    if !fenced && line.trim.empty?
+      let flushed = current.empty? then accum else accum + [current.join("\n")]
+      return groupParagraphs(rest, [], flushed, false)
+    end
+    return groupParagraphs(rest, current + [line], accum, fenced)
+  end
+
+  # A summary paragraph is either prose or a fenced block that Rdoc produced
+  # from an indented (verbatim) block — the latter is highlighted code, not
+  # text to reflow.
+  foul paragraphHtml(p: String) -> String do
+    if p.startsWith?("```")
+      let lines = p.split("\n")
+      let body = lines.drop(1).takeWhile { |l| l != "```" }.join("\n")
+      return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
+    end
+    return "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>"
   end
 
   # Minimal inline Markdown for doc prose: `code` spans. Splitting on the

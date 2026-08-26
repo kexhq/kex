@@ -173,4 +173,32 @@ describe("Tey.Docgen.Rdoc.parseDoc") do
     end
     assert(code.contains?("Bits.not(0)"))
   end
+
+  it("strips an @example's common indentation") do
+    let doc = parseDoc("Reads.\n\n@example\n  read(\"hosts\")\n    .or([])").or(emptyDoc())
+    let code = exampleCode(doc, 0)
+    assert(code == "read(\"hosts\")\n  .or([])")
+  end
+
+  it("ends an @example at the first unindented line") do
+    # An implementation note written straight under the last example, with no
+    # blank line between them, must not become part of the example.
+    let doc = parseDoc("Reads.\n\n@example\n  read(\"a\")\nNOT `lines`: the name would collide.").or(emptyDoc())
+    let code = exampleCode(doc, 0)
+    assert(code == "read(\"a\")")
+    assert(doc.summary.contains?("would collide"))
+  end
+
+  it("keeps an indented block as a fenced code block in the summary") do
+    let doc = parseDoc("Start with:\n\n  using FS\n\n  main do\n    read(\"x\")\n  end\n\nThat is all.").or(emptyDoc())
+    assert(doc.summary.contains?("```kex\nusing FS\n\nmain do\n  read(\"x\")\nend\n```"))
+    assert(doc.summary.contains?("That is all."))
+  end
+end
+
+foul exampleCode(doc: Doc, index: Integer) -> String do
+  match doc.examples.drop(index).first do
+    Just(ex) => ex.code
+    None => ""
+  end
 end
