@@ -1,47 +1,57 @@
-# Kex ships a minimal RSpec-style testing DSL: +describe+, +it+, +before+,
-# +after+, and assertion helpers. These are always in scope — no import needed.
+# The built-in testing DSL: +describe+, +it+, +before+, +after+, and
+# assertion helpers.
 #
-# A test file typically looks like:
+# Everything here is always in scope — no import, and no separate test
+# runner. Write a test file and run it with +kex+:
 #
-# @example
 #   describe "arithmetic" do
 #     it "adds numbers" do
 #       assert(1 + 1 == 2)
 #     end
 #
 #     it "multiplies numbers" do
-#       assert(3 * 4 == 12, "expected 12")
+#       Assert.equal(3 * 4, 12)
 #     end
 #   end
 #
-# Run with:
-#   kex my_test.kex
+#   $ kex my_test.kex
+#   arithmetic
+#     ✓ adds numbers
+#     ✓ multiplies numbers
 #
-# Output uses ✓ / ✗ markers and nests by describe depth.
+# Output uses ✓ / ✗ markers and nests by +describe+ depth. A failing +assert+
+# marks its test failed and moves on; the rest of the suite still runs.
+#
+# A file named +<name>.spec.kex+ automatically loads the declarations of
+# +<name>.kex+ beside it, so a spec needs no import and no +main+ wrapper.
 
-# Groups related test cases under a label. Calls the block immediately.
-# +describe+ blocks may be nested. This is a foul function — it prints output.
+# Groups related test cases under a label, and runs them.
 #
-# @param label [String]
-# @param block [Block]
+# The block is called immediately. +describe+ blocks nest, and the output is
+# indented to match. This is a foul function — it prints.
+#
+# @param label [String] what this group is about
+# @param block [Block] the tests, and any nested groups
 # @return [Void]
 #
 # @example
 #   describe "String" do
 #     describe "count" do
-#       it "returns character count" do
+#       it "returns the character count" do
 #         assert("hello".count == 5)
 #       end
 #     end
 #   end
 describe : String -> Block<Void> -> Void
 
-# Defines a single test case. The block is run and any exception thrown
-# inside it (typically a failed +assert+) marks the test failed without
-# aborting the rest of the suite. This is a foul function — it prints output.
+# Defines a single test case, and runs it.
 #
-# @param label [String]
-# @param block [Block]
+# The block runs, and anything thrown inside it — typically a failed +assert+ —
+# marks the test failed without aborting the rest of the suite. This is a foul
+# function — it prints.
+#
+# @param label [String] what this case establishes, phrased as a claim
+# @param block [Block] the case body
 # @return [Void]
 #
 # @example
@@ -49,46 +59,205 @@ describe : String -> Block<Void> -> Void
 #     assert(2.even?)
 #     assert(!3.even?)
 #   end
+#
+# @example One behaviour per case reads better than one big case
+#   it "trims leading whitespace" do
+#     Assert.equal("  hi".trim, "hi")
+#   end
+#
+#   it "trims trailing whitespace" do
+#     Assert.equal("hi  ".trim, "hi")
+#   end
 it : String -> Block<Void> -> Void
 
-# Registers setup for the current group. +before { ... }+ and
-# +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
-# once before the group's tests, following RSpec's scope convention.
+# Registers setup to run before the current group's tests.
+#
+# +before { ... }+ and +before(:each) { ... }+ run before every test in the
+# group; +before(:all) { ... }+ runs once before the group's first test,
+# following RSpec's scope convention.
+#
+# @param block [Block] the setup to run
+# @return [Void]
+#
+# @example
+#   describe "the parser" do
+#     before do
+#       Mock.FS.file("input.txt", "one\ntwo\n")
+#     end
+#
+#     it "reads two lines" do
+#       Assert.equal(FS.File.readLines("input.txt").or([]).count, 2)
+#     end
+#   end
 before : Block<Void> -> Void
+
+# Registers setup with an explicit scope: +:each+ before every test in the
+# group, +:all+ once before the first.
+#
+# Use +:all+ for setup that is expensive and that the tests do not change —
+# and +:each+ for anything a test might leave in a different state.
+#
+# @param scope [Atom] +:each+ or +:all+
+# @param block [Block] the setup to run
+# @return [Void]
+#
+# @example
+#   before(:all) do
+#     FS.Directory.create("tmp")
+#   end
+#
+#   before(:each) do
+#     counter = 0
+#   end
 # The scoped form the runtime has always accepted, and the paragraph above has
 # always documented, but which was never declared — so every spec using
 # `before(:all)` had to be `# kex: no-check` (kexhq/kex#143).
 before : Atom -> Block<Void> -> Void
 
-# Registers cleanup for the current group. +after { ... }+ defaults to +:each+;
-# +after(:all) { ... }+ runs once when the group finishes. Cleanup is
-# unconditional, and inner per-test hooks run before outer hooks.
+# Registers cleanup to run after the current group's tests.
+#
+# Defaults to +:each+. Cleanup is unconditional — it runs whether the test
+# passed or failed — and inner per-test hooks run before outer hooks.
+#
+# @param block [Block] the cleanup to run
+# @return [Void]
+#
+# @example
+#   after do
+#     FS.File.delete("tmp/out.txt")
+#   end
 after : Block<Void> -> Void
+
+# Registers cleanup with an explicit scope: +:each+ after every test in the
+# group, +:all+ once when the group finishes.
+#
+# @param scope [Atom] +:each+ or +:all+
+# @param block [Block] the cleanup to run
+# @return [Void]
+#
+# @example
+#   after(:all) do
+#     FS.Directory.deleteAll("tmp")
+#   end
 after : Atom -> Block<Void> -> Void
 
-# Throws a runtime error if +value+ is falsy, failing the enclosing +it+.
-# The optional +message+ is included in the failure output.
+# Fails the enclosing +it+ when +value+ is falsy.
 #
-# @param value   [Bool]
-# @param message [String]  (optional)
-# @return [Bool]
+# The primitive every other assertion is built on. Prefer the +Assert+ helpers
+# where one fits — they report what was expected and what arrived, which a
+# bare +assert+ cannot.
+#
+# @param value [Bool] the condition that must hold
+# @return [Bool] the value, when it held
 #
 # @example
 #   assert(42 == 42)
-#   assert("hello".count == 5, "count should be 5")
+#   assert("hello".count == 5)
 assert : Bool -> Bool
+
+# Fails the enclosing +it+ when +value+ is falsy, showing +message+ in the
+# failure output.
+#
+# Say what should have been true, not what went wrong — the runner already
+# reports that the assertion failed.
+#
+# @param value [Bool] the condition that must hold
+# @param message [String] what the failure output should say
+# @return [Bool] the value, when it held
+#
+# @example
+#   assert("hello".count == 5, "count should be 5")
+#   assert(users.any?(~admin?), "at least one user should be an admin")
 assert : Bool -> String -> Bool
 
-# Focused assertions are ordinary Kex stdlib functions layered on the primitive
-# +assert+, so adding another helper does not require compiler or runtime work.
+# Focused assertions, each reporting what was expected and what arrived.
+#
+# These are ordinary Kex stdlib functions layered on the primitive +assert+,
+# so adding another helper does not require compiler or runtime work.
+#
+#   Assert.equal("hi".upperCase, "HI")
+#   Assert.some(users.first)
+#   Assert.ok(Integer.parse("42"))
 module Assert do
+  # Fails unless +actual+ equals +expected+, reporting both.
+  #
+  # The assertion to reach for by default: a failure tells you what arrived,
+  # which +assert(a == b)+ does not.
+  #
+  # @param actual [A] the value produced
+  # @param expected [A] the value it should equal
+  # @return [Bool] +true+ when they are equal
+  #
+  # @example
+  #   Assert.equal("hi".upperCase, "HI")
+  #   Assert.equal([1, 2, 3].sum, 6)
+  #   Assert.equal(config.get(:port), Just(8080))
   let equal(actual, expected) = assert(actual == expected, "expected ${expected}, got ${actual}")
+
+  # Fails when +actual+ equals +expected+.
+  #
+  # @param actual [A] the value produced
+  # @param expected [A] the value it should differ from
+  # @return [Bool] +true+ when they differ
+  #
+  # @example
+  #   Assert.notEqual(newId, oldId)
   let notEqual(actual, expected) = assert(actual != expected, "expected values to differ, both were ${actual}")
 
+  # Fails unless +value+ is truthy — anything except +false+, +None+ and
+  # +()+.
+  #
+  # @param value [A] the value to test
+  # @return [Bool] +true+ when the value is truthy
+  #
+  # @example
+  #   Assert.truthy("hello".contains?("ell"))
   let truthy(value) = assert(value, "expected a truthy value")
+
+  # Fails unless +value+ is falsy — +false+, +None+ or +()+.
+  #
+  # @param value [A] the value to test
+  # @return [Bool] +true+ when the value is falsy
+  #
+  # @example
+  #   Assert.falsy([].any? { |x| x > 0 })
   let falsy(value) = assert(!value, "expected a falsy value")
+
+  # Fails unless +value+ is a +Just+.
+  #
+  # @param value [A?] the optional to test
+  # @return [Bool] +true+ when a value is present
+  #
+  # @example
+  #   Assert.some([1, 2].first)
+  #   Assert.some(config.get(:host))
   let some(value) = assert(value.present?, "expected Just, got ${value}")
+
+  # Fails unless +value+ is +None+.
+  #
+  # @param value [A?] the optional to test
+  # @return [Bool] +true+ when there is no value
+  #
+  # @example
+  #   Assert.none([].first)
+  #   Assert.none("abc".to(Integer))
   let none(value) = assert(value.none?, "expected None, got ${value}")
+
+  # Fails unless +value+ is an +Ok+.
+  #
+  # @param value [Result<A, E>] the result to test
+  # @return [Bool] +true+ when the result succeeded
+  #
+  # @example
+  #   Assert.ok(Integer.parse("42"))
   let ok(value) = assert(value.ok?, "expected Ok, got ${value}")
+
+  # Fails unless +value+ is an +Error+.
+  #
+  # @param value [Result<A, E>] the result to test
+  # @return [Bool] +true+ when the result failed
+  #
+  # @example
+  #   Assert.error(Integer.parse("4x"))
   let error(value) = assert(value.error?, "expected Error, got ${value}")
 end

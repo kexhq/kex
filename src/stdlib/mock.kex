@@ -53,7 +53,10 @@ module Mock do
   # what was asked for. It is consulted first and its `None` means "no such
   # file", so a callback can model absence too.
   record Files do
+    # The fixture: a path to its content. A path not listed reads as absent.
     files  : Map<FS.FilePath, String> = {}
+
+    # A rule consulted before the map. +None+ from it means "no such file".
     onRead : Reader? = None
   end
 
@@ -66,8 +69,14 @@ module Mock do
   #     assert(configHome() == "/fake/.config")
   #   end
   record Env do
+    # The fixture: a variable name to its value. A name not listed reads as
+    # unset.
     vars  : Map<String, String> = {}
+
+    # A rule consulted instead of the map, when a test wants derived answers.
     onGet : Lookup? = None
+
+    # Where a write goes. Without it, writes go quietly nowhere.
     onSet : Writer? = None
   end
 
@@ -80,24 +89,97 @@ module Mock do
   # capability rather than the record — every request then reaches the real
   # network while the test looks like it is faking one.
   record Response do
+    # The status code every request answers with.
     status  : Integer
+
+    # The body every request answers with.
     body    : String
+
+    # The headers every request answers with.
     headers : Map<String, String> = {}
   end
 
+  # A stateful stand-in for the filesystem: files a test declares, that the
+  # real +FS.File+ then reads back.
+  #
+  # The store is global and lives until +clear+, which is what makes a write
+  # followed by a read testable — and what makes two tests able to interfere.
+  # Clear it in an +after+ hook.
+  #
+  #   describe "the config loader" do
+  #     before do
+  #       Mock.FS.files({ "app.conf": "port = 8080\n" })
+  #     end
+  #
+  #     after do
+  #       Mock.FS.clear()
+  #     end
+  #
+  #     it "reads the port" do
+  #       Assert.equal(loadPort(), 8080)
+  #     end
+  #   end
   module FS do
+    # Declares one file and its content.
+    #
+    # @param path [FS.FilePath] the path the file appears at
+    # @param content [String] its contents
+    # @return [Void]
+    #
+    # @example
+    #   Mock.FS.File("app.conf", "port = 8080\n")
     File : FS.FilePath -> String -> Void
+
+    # Declares a directory at +path+.
+    #
+    # @param path [FS.FilePath] the directory to declare
+    # @return [Void]
+    #
+    # @example
+    #   Mock.FS.Directory("src")
     Directory : FS.FilePath -> Void
+
+    # Empties the store, so nothing declared so far is visible any more.
+    #
+    # Call it in an +after+ hook — the store is global, and what one test
+    # leaves behind the next one sees.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   after do
+    #     Mock.FS.clear()
+    #   end
     clear : Void
 
-    # The whole fixture in one call, the same shape `Mock.Files { files: ... }`
-    # takes — one line instead of one per file (kexhq/kex#143).
+    # Declares the whole fixture in one call.
+    #
+    # The same shape `Mock.Files { files: ... }` takes — one line instead of
+    # one per file (kexhq/kex#143).
+    #
+    # @param entries [Map<FS.FilePath, String>] paths to their contents
+    # @return [Void]
+    #
+    # @example
+    #   Mock.FS.files({
+    #     "app.conf": "port = 8080\n",
+    #     "hosts":    "localhost\n"
+    #   })
     files : Map<FS.FilePath, String> -> Void
 
-    # Answer reads by RULE rather than from a fixture: content derived from
-    # the path, a failure on the third call, a record of what was asked for.
-    # Consulted before the map, and returning `None` means "no such file", so
-    # absence is expressible too.
+    # Answers reads by RULE rather than from a fixture.
+    #
+    # Content derived from the path, a failure on the third call, a record of
+    # what was asked for. Consulted before the map, and returning +None+ means
+    # "no such file", so absence is expressible too.
+    #
+    # @param reader [Reader] the rule to answer reads with
+    # @return [Void]
+    #
+    # @example Every .txt path has content, nothing else exists
+    #   Mock.FS.onRead do |path|
+    #     path.endsWith?(".txt") then Just("stub") else None
+    #   end
     onRead : Reader -> Void
 
     foul files(entries: Map<FS.FilePath, String>) -> Void do
@@ -121,10 +203,53 @@ module Mock do
     end
   end
 
+  # A stateful stand-in for the network: responses a test queues, that the real
+  # +Http+ then hands back.
+  #
+  # Responses are consumed in FIFO order — the first +respond+ answers the
+  # first request. When the queue runs out, the next request answers
+  # +Error(HttpError)+ with kind +MockEmpty+, so a test that made more calls
+  # than it expected fails rather than reaching the network.
+  #
+  #   Mock.Http.start()
+  #   Mock.Http.respond(200, "{\"ok\": true}")
+  #   assert(fetchStatus() == "ok")
+  #   Mock.Http.stop()
   module Http do
+    # Starts intercepting HTTP requests. Call it before queueing responses.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   before do
+    #     Mock.Http.start()
+    #   end
     start   : Void
+
+    # Queues one response, to be handed to the next request.
+    #
+    # @param status [Integer] the status code to answer with
+    # @param body [String] the body to answer with
+    # @param headers [Map<String, String>] the headers; omitted for none
+    # @return [Void]
+    #
+    # @example Two requests, two queued answers
+    #   Mock.Http.respond(200, "first")
+    #   Mock.Http.respond(404, "not found")
+    #
+    # @example With headers
+    #   Mock.Http.respond(200, "{}", { "Content-Type": "application/json" })
     respond : Integer -> String -> Void
     respond : Integer -> String -> Map<String, String> -> Void
+
+    # Stops intercepting, and discards anything still queued.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   after do
+    #     Mock.Http.stop()
+    #   end
     stop    : Void
 
     foul start() -> Void do
@@ -144,18 +269,61 @@ module Mock do
     end
   end
 
-  # Overlays the process environment, so a test can say what `ENV` holds
-  # instead of depending on how it was launched. `unset` is separate because
-  # a variable being ABSENT is an answer programs act on.
+  # Overlays the process environment, so a test can say what +ENV+ holds
+  # instead of depending on how it was launched.
+  #
+  # The overlay is global and lives until +clear+ — clear it in an +after+
+  # hook.
+  #
+  #   Mock.ENV.vars({ "HOME": "/fake", "LOG_LEVEL": "debug" })
+  #   assert(configPath() == "/fake/.config")
+  #   Mock.ENV.clear()
   module ENV do
+    # Sets one variable in the overlay.
+    #
+    # @param name [String] the variable name
+    # @param value [String] its value
+    # @return [Void]
+    #
+    # @example
+    #   Mock.ENV.set("LOG_LEVEL", "debug")
     set : String -> String -> Void
+
+    # Removes one variable from the overlay, so it reads as unset.
+    #
+    # Separate from +set+ because a variable being ABSENT is an answer
+    # programs act on, and there is no value that means it.
+    #
+    # @param name [String] the variable to remove
+    # @return [Void]
+    #
+    # @example Testing the unset path
+    #   Mock.ENV.unset("HOME")
+    #   Assert.equal(configPath(), ".")
     unset : String -> Void
+
+    # Removes the whole overlay, restoring the real environment.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   after do
+    #     Mock.ENV.clear()
+    #   end
     clear : Void
 
-    # The whole overlay in one call, the same shape `Mock.Env { vars: ... }`
-    # takes (kexhq/kex#143). There is no `onGet` here: global `ENV` is a
-    # materialised Map, so there is nothing for a callback to intercept — use
-    # `with ENV = Mock.Env { onGet: ... }` when a rule is what you want.
+    # Declares the whole overlay in one call.
+    #
+    # The same shape `Mock.Env { vars: ... }` takes (kexhq/kex#143). There is
+    # no `onGet` here: global `ENV` is a materialised Map, so there is nothing
+    # for a callback to intercept — use `with ENV = Mock.Env { onGet: ... }`
+    # when a rule is what you want.
+    #
+    # @param entries [Map<String, String>] variable names to their values
+    # @return [Void]
+    #
+    # @example
+    #   Mock.ENV.vars({ "HOME": "/fake", "LOG_LEVEL": "debug" })
     vars : Map<String, String> -> Void
 
     foul vars(entries: Map<String, String>) -> Void do
@@ -175,23 +343,85 @@ module Mock do
     end
   end
 
+  # A stateful stand-in for the console: captures what a program prints, and
+  # feeds it lines as if they had been typed.
+  #
+  # The way to test a program that talks to a person without one being there.
+  #
+  #   Mock.IO.start()
+  #   Mock.IO.input("Ada", "42")
+  #   greet()
+  #   Assert.equal(Mock.IO.output(), "hello, Ada\n")
+  #   Mock.IO.stop()
   module IO do
+    # Starts capturing output and serving queued input.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   before do
+    #     Mock.IO.start()
+    #   end
     foul start() -> Void do
       return Kex.Intrinsic.IO.ioMockStart()
     end
 
+    # Stops capturing, and restores the real console.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   after do
+    #     Mock.IO.stop()
+    #   end
     foul stop() -> Void do
       return Kex.Intrinsic.IO.ioMockStop()
     end
 
+    # Everything the program has printed since capturing started.
+    #
+    # Newlines are included, so a single +IO.printLine("hi")+ gives
+    # +"hi\n"+.
+    #
+    # @return [String] the captured output
+    #
+    # @example
+    #   Mock.IO.start()
+    #   IO.printLine("hello")
+    #   Assert.equal(Mock.IO.output(), "hello\n")
     foul output() -> String do
       return Kex.Intrinsic.IO.ioMockOutput()
     end
 
+    # Discards the captured output, while continuing to capture.
+    #
+    # Useful between phases of one test, when only the later output matters.
+    #
+    # @return [Void]
+    #
+    # @example
+    #   setUpNoisily()
+    #   Mock.IO.clear()
+    #   theThingUnderTest()
+    #   Assert.equal(Mock.IO.output(), "done\n")
     foul clear() -> Void do
       return Kex.Intrinsic.IO.ioMockClear()
     end
 
+    # Queues the lines +IO.getLine+ will return, in order.
+    #
+    # Takes a list, or up to four lines as separate arguments. Once they run
+    # out, +IO.getLine+ answers +None+ — end of input, exactly as a closed
+    # stdin would.
+    #
+    # @param lines [[String]] the lines to serve, in order
+    # @return [Void]
+    #
+    # @example A list of lines
+    #   Mock.IO.input(["Ada", "42"])
+    #
+    # @example The same, as separate arguments
+    #   Mock.IO.input("Ada", "42")
     foul input(lines) -> Void do
       return Kex.Intrinsic.IO.ioMockInput(lines)
     end

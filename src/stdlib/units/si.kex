@@ -1,10 +1,37 @@
+# SI units: metres, grams, watts, volts and the rest, with prefixes and
+# dimensional arithmetic.
+#
+# Opt-in — nothing here is in scope until `using Units.SI`.
+#
+#   using Units.SI
+#
+#   main do
+#     IO.printLine(3.kilo.watt.to(String))          # prints: 3000.0 W
+#     IO.printLine(5000.meter.kilo.to(String))      # prints: 5.0 km
+#     IO.printLine((100.meter / 10.sec).to(String)) # prints: 10.0 m/s
+#   end
+#
+# Every value is a +Measure+ from the prelude, so the arithmetic, conversion
+# and comparison described there apply unchanged. What this module adds is the
+# SI vocabulary, the prefixes, and a table of which dimension results from
+# multiplying or dividing two others — so +2.newton * 3.meter+ answers in
+# joules and +100.meter / 10.sec+ in metres per second.
 module Units.SI
 
+# The SI units this module names.
+#
+# Each carries its dimension (+:length+, +:mass+, +:power+, …) and its symbol,
+# which is what a +Measure+ built from it displays with.
 type SIUnit = Meter | Gram | Kilogram | Kelvin | Liter | Newton | Joule | Watt
             | Volt | Ampere | Ohm | Coulomb
 
+# A decimal prefix applied to a unit, for display.
+#
 # A display prefix carries the unit it will display, for example
-# `Kilo(Watt * Hour)`.
+# `Kilo(Watt * Hour)`. Pass one to +to(String, in:)+ to render a measure at
+# that scale.
+#
+#   1500.watt.to(String, in: Kilo(Watt))   # => Just("1.5 kW")
 type SIPrefix = Kilo(Unit) | Mega(Unit) | Giga(Unit)
               | Milli(Unit) | Micro(Unit) | Nano(Unit)
 
@@ -72,17 +99,106 @@ make Measure do
   let symbol -> String = @unit.symbol
 end
 
+# +value+ metres, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the length
+#
+# @example
+#   5000.meter.to(String)        # => "5000.0 m"
+#   5000.meter.kilo.to(String)   # => "5.0 km"
 let meter(value: Number) -> Measure = measure(value, Meter)
+# +value+ grams, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the mass
+#
+# @example
+#   500.gram.to(String)   # => "500.0 g"
 let gram(value: Number) -> Measure = measure(value, Gram)
+# +value+ kilograms, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the mass
+#
+# @example
+#   1.kilogram.to(String)   # => "1.0 kg"
 let kilogram(value: Number) -> Measure = measure(value, Kilogram)
+# +value+ kelvin, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the temperature
+#
+# @example
+#   300.kelvin.to(String)   # => "300.0 K"
 let kelvin(value: Number) -> Measure = measure(value, Kelvin)
+# +value+ litres, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the volume
+#
+# @example
+#   2.liter.to(String)   # => "2.0 L"
 let liter(value: Number) -> Measure = measure(value, Liter)
+# +value+ newtons, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the force
+#
+# @example Force times distance is energy
+#   (2.newton * 3.meter).to(String)   # => "6.0 J"
 let newton(value: Number) -> Measure = measure(value, Newton)
+# +value+ joules, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the energy
+#
+# @example
+#   100.joule.to(String)   # => "100.0 J"
 let joule(value: Number) -> Measure = measure(value, Joule)
+# +value+ watts, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the power
+#
+# @example
+#   3.kilo.watt.to(String)                 # => "3000.0 W"
+#   1500.watt.to(String, in: Kilo(Watt))   # => Just("1.5 kW")
+#
+# @example Power times time is energy
+#   (3.kilo.watt * 2.hour).to(String)   # => "21600000.0 J"
 let watt(value: Number) -> Measure = measure(value, Watt)
+# +value+ volts, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the voltage
+#
+# @example
+#   12.volt.to(String)   # => "12.0 V"
 let volt(value: Number) -> Measure = measure(value, Volt)
+# +value+ amperes, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the current
+#
+# @example Voltage times current is power
+#   (12.volt * 2.ampere).to(String)   # => "24.0 W"
 let ampere(value: Number) -> Measure = measure(value, Ampere)
+# +value+ ohms, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the resistance
+#
+# @example
+#   470.ohm.to(String)   # => "470.0 Ω"
 let ohm(value: Number) -> Measure = measure(value, Ohm)
+# +value+ coulombs, as a +Measure+.
+#
+# @param value [Number] the quantity
+# @return [Measure] the charge
+#
+# @example
+#   3.coulomb.to(String)   # => "3.0 C"
 let coulomb(value: Number) -> Measure = measure(value, Coulomb)
 
 make SIUnit do
@@ -93,6 +209,14 @@ make SIUnit do
   }
 end
 
+# Renders a measure as its value followed by its unit symbol.
+#
+# @param String [Type] the target type
+# @return [String] the rendered measure
+#
+# @example
+#   5000.meter.to(String)   # => "5000.0 m"
+#   12.volt.to(String)      # => "12.0 V"
 let to(measure: Measure, String) -> String = "${measure.value} ${measure.unit.symbol}"
 let to(measure: Measure, String, @Kilo) -> String? = Just(displayWithPrefix(measure, 1000.0, "k"))
 let to(measure: Measure, String, @Mega) -> String? = Just(displayWithPrefix(measure, 1000000.0, "M"))
@@ -100,6 +224,21 @@ let to(measure: Measure, String, @Giga) -> String? = Just(displayWithPrefix(meas
 let to(measure: Measure, String, @Milli) -> String? = Just(displayWithPrefix(measure, 0.001, "m"))
 let to(measure: Measure, String, @Micro) -> String? = Just(displayWithPrefix(measure, 0.000001, "μ"))
 let to(measure: Measure, String, @Nano) -> String? = Just(displayWithPrefix(measure, 0.000000001, "n"))
+# Renders a measure at a chosen prefix and unit.
+#
+# Answers +None+ when the measure and the target unit are of different
+# dimensions — you cannot express watts in metres, and this says so rather
+# than producing a wrong number.
+#
+# @param String [Type] the target type
+# @param in [SIPrefix] the prefix and unit to display at
+# @return [String?] the rendered measure, or +None+
+#
+# @example
+#   1500.watt.to(String, in: Kilo(Watt))   # => Just("1.5 kW")
+#
+# @example A mismatched dimension answers None
+#   1500.watt.to(String, in: Kilo(Meter))   # => None
 let to(measure: Measure, String, in: SIPrefix) -> String? do
   match measure.kind == in.kind do
     true => return Just("${prefixScaled(measure.canonical, in.factor)} ${in.symbol}")
@@ -107,21 +246,78 @@ let to(measure: Measure, String, in: SIPrefix) -> String? do
   end
 end
 
+# The same measure, displayed with the mega- prefix.
+#
+# @param measure [Measure] the measure to rescale for display
+# @return [Measure] the same quantity, displayed in mega-units
+#
+# @example
+#   5000000.watt.mega.to(String)   # => "5.0 MW"
 let mega(measure: Measure) -> Measure = prefixed(measure, 1000000.0, "M")
+# The same measure, displayed with the giga- prefix.
+#
+# @param measure [Measure] the measure to rescale for display
+# @return [Measure] the same quantity, displayed in giga-units
 let giga(measure: Measure) -> Measure = prefixed(measure, 1000000000.0, "G")
+# The same measure, displayed with the milli- prefix.
+#
+# @param measure [Measure] the measure to rescale for display
+# @return [Measure] the same quantity, displayed in milli-units
+#
+# @example
+#   0.5.watt.milli.to(String)   # => "500.0 mW"
 let milli(measure: Measure) -> Measure = prefixed(measure, 0.001, "m")
+# The same measure, displayed with the micro- prefix.
+#
+# @param measure [Measure] the measure to rescale for display
+# @return [Measure] the same quantity, displayed in micro-units
 let micro(measure: Measure) -> Measure = prefixed(measure, 0.000001, "μ")
+# The same measure, displayed with the nano- prefix.
+#
+# @param measure [Measure] the measure to rescale for display
+# @return [Measure] the same quantity, displayed in nano-units
 let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
 
+# Divides one measure by another, naming the resulting dimension.
+#
+# The spelled-out form of +/+: +100.meter.per(10.sec)+ and
+# +100.meter / 10.sec+ are the same call. Metres over seconds is speed, energy
+# over time is power, force over area is pressure — the dimension table
+# decides, and the symbol follows it.
+#
+# @param measure [Measure] the numerator
+# @param other [Measure] the denominator
+# @return [Measure] the quotient, in its derived unit
+#
+# @example
+#   100.meter.per(10.sec).to(String)   # => "10.0 m/s"
 per : Measure -> Measure -> Measure
 let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
 
+# Multiplies one measure by another, naming the resulting dimension.
+#
+# The spelled-out form of +*+. Force times distance is energy, voltage times
+# current is power, power times time is energy.
+#
+# @param measure [Measure] the first factor
+# @param other [Measure] the second factor
+# @return [Measure] the product, in its derived unit
+#
+# @example
+#   2.newton.times(3.meter).to(String)   # => "6.0 J"
+#   (12.volt * 2.ampere).to(String)      # => "24.0 W"
 times : Measure -> Measure -> Measure
 let times(measure: Measure, other: Measure) = multiplyMeasures(measure, other)
 
 # Prefixes work both on an existing measure (`5000.meter.kilo`) and at the
 # beginning of a postfix unit expression (`3.kilo.watt`).
 make Measure do
+  # The same measure, displayed with the kilo- prefix.
+  #
+  # @return [Measure] the same quantity, displayed in kilo-units
+  #
+  # @example
+  #   5000.meter.kilo.to(String)   # => "5.0 km"
   let kilo -> Measure = Measure {
     canonical: this.canonical,
     value: prefixScaled(this.canonical, this.factor * 1000.0),

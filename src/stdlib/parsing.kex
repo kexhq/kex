@@ -1,38 +1,137 @@
-# Parser combinators for user-defined text formats.
+# Parser combinators, for reading a text format you define yourself.
 #
-# An Input is immutable: successful parsers return the parsed value together
-# with an advanced cursor. Failure leaves the caller free to try an alternative.
+# Opt-in — nothing here is in scope until `using Parsing`.
+#
+# An +Input+ is an immutable cursor over a string. A parser takes one and
+# answers either the value it read together with an advanced cursor, or a
+# +ParseError+ saying where it gave up. Because the cursor is immutable, a
+# failed attempt costs nothing: the caller still holds the position it started
+# from and can try something else.
+#
+#   using Parsing
+#
+#   main do
+#     let cursor = Input { input: "abc 123" }
+#     let word = cursor.takeWhile(~alpha?)
+#     let (text, rest) = word
+#     IO.printLine(text)              # prints: abc
+#     IO.printLine(rest.pos)          # prints: 3
+#   end
+#
+# The building blocks are +char+ and +charWhen+ for one character, +string+ for
+# a literal, +takeWhile+ for a run, and +many+ / +some+ / +choice+ for
+# repetition and alternatives. +JSON+ in this same stdlib is written with them.
 module Parsing
 
+# Why a parser gave up, and at which position.
+#
 # `Expected` carries what the grammar WANTED rather than what it found — the
 # difference between "unexpected `d`" and "expected `version(`". It is what
 # `label` and `string` report.
+#
+#   Input { input: "abc" }.char('z')      # => Error(Unexpected("a", 0))
+#   Input { input: "abc" }.string("abd")  # => Error(Expected("abd", 0))
 type ParseError = Unexpected(String, Integer)
                 | Expected(String, Integer)
                 | NoMatch(Integer)
 
+# An immutable cursor over a string: the text, and where in it you are.
+#
+# Create one with +Input { input: text }+ and pass it to a parser. Every
+# operation that consumes input answers a NEW cursor rather than moving this
+# one, which is what makes backtracking free.
 record Input do
+  # The text being parsed. It never changes as parsing proceeds.
   input : String
+
+  # The current character offset into +input+.
   pos   : Integer = 0
 end
 
 make Input do
+  # The character at the cursor, or +None+ at the end of the input.
+  #
+  # Looking does not consume: the cursor is unchanged.
+  #
+  # @return [Char?] the current character, or +None+
+  #
+  # @example
+  #   Input { input: "abc" }.peek           # => Just('a')
+  #   Input { input: "abc", pos: 3 }.peek   # => None
   let peek = @pos < @input.count then Just(@input.at(@pos)) else None
 
+  # The character +offset+ positions ahead of the cursor, or +None+ when that
+  # is outside the input.
+  #
+  # The lookahead a grammar needs when one character is not enough to decide.
+  # A negative offset looks backwards.
+  #
+  # @param offset [Integer] how far ahead to look
+  # @return [Char?] the character there, or +None+
+  #
+  # @example
+  #   Input { input: "abc" }.peekAt(1)   # => Just('b')
+  #   Input { input: "abc" }.peekAt(9)   # => None
   let peekAt(offset: Integer) -> Char? do
     let index = @pos + offset
     return None if index < 0 || index >= @input.count
     return Just(@input.at(index))
   end
 
+  # Returns +true+ when the cursor has consumed the whole input.
+  #
+  # The check a top-level parser makes at the end, to be sure nothing was left
+  # over.
+  #
+  # @return [Bool] +true+ at the end of the input
+  #
+  # @example
+  #   Input { input: "abc" }.atEnd?           # => false
+  #   Input { input: "abc", pos: 3 }.atEnd?   # => true
   let atEnd? = @pos >= @input.count
 
+  # A cursor one character further on.
+  #
+  # @return [Input] the advanced cursor
+  #
+  # @example
+  #   Input { input: "abc" }.advance.peek   # => Just('b')
   let advance = Input { input: @input, pos: @pos + 1 }
 
+  # A cursor +count+ characters further on.
+  #
+  # @param count [Integer] how far to advance
+  # @return [Input] the advanced cursor
+  #
+  # @example
+  #   Input { input: "abc 123" }.advanceBy(4).peek   # => Just('1')
   let advanceBy(count: Integer) -> Input = Input { input: @input, pos: @pos + count }
 
+  # Everything from the cursor to the end of the input, as a +String+.
+  #
+  # Useful for reporting an error, or for handing the tail to something that
+  # does not speak +Input+.
+  #
+  # @return [String] the unconsumed remainder
+  #
+  # @example
+  #   Input { input: "abc 123", pos: 4 }.remaining   # => "123"
   let remaining = @input.chars.drop(@pos).join("")
 
+  # Reads one character, if it satisfies +pred+.
+  #
+  # Answers the character and the advanced cursor, or an +Unexpected+ error
+  # naming what was there instead — +"EOF"+ at the end of the input.
+  #
+  # @param pred [Char -> Bool] the test the character must pass
+  # @return [Result<(Char, Input), ParseError>] the character and cursor, or why not
+  #
+  # @example
+  #   Input { input: "abc" }.charWhen(~alpha?)   # => Ok(('a', cursor at 1))
+  #   Input { input: "123" }.charWhen(~alpha?)   # => Error(Unexpected("1", 0))
+  #
+  # @example Reading one digit
+  #   cursor.charWhen(~digit?)
   let charWhen(pred: Char -> Bool) -> Result<(Char, Input), ParseError> do
     match this.peek do
       Just(c) when pred(c) => Ok((c, this.advance))
@@ -41,10 +140,33 @@ make Input do
     end
   end
 
+  # Reads one specific character.
+  #
+  # @param expected [Char] the character that must be next
+  # @return [Result<(Char, Input), ParseError>] the character and cursor, or why not
+  #
+  # @example
+  #   Input { input: "abc" }.char('a')   # => Ok(('a', cursor at 1))
+  #   Input { input: "abc" }.char('z')   # => Error(Unexpected("a", 0))
+  #
+  # @example Consuming a separator
+  #   let (_, afterComma) = cursor.char(',').try
   let char(expected: Char) -> Result<(Char, Input), ParseError> do
     this.charWhen { |c| c == expected }
   end
 
+  # A cursor advanced past any run of whitespace.
+  #
+  # Cannot fail: no whitespace at all leaves the cursor where it was, which is
+  # what makes it safe to call between every token of a grammar.
+  #
+  # @return [Input] the cursor, past the whitespace
+  #
+  # @example
+  #   Input { input: "abc 123", pos: 3 }.whiteSpaces.peek   # => Just('1')
+  #
+  # @example Skipping space between tokens
+  #   let (value, rest) = parseValue(cursor.whiteSpaces).try
   let whiteSpaces -> Input do
     var cursor = this
     loop do
@@ -56,6 +178,22 @@ make Input do
     return cursor
   end
 
+  # Applies +f+ as many times as it succeeds, collecting the results.
+  #
+  # Cannot fail: zero matches is an empty list, which is what makes it right
+  # for the optional parts of a grammar. A parser that succeeds without
+  # consuming anything stops the loop rather than spinning forever.
+  #
+  # @param f [Input -> Result<(T, Input), ParseError>] the parser to repeat
+  # @return [([T], Input)] the results, and the cursor after them
+  #
+  # @example
+  #   Input { input: "abc 1" }.many { |p| p.charWhen(~alpha?) }
+  #   # => (['a', 'b', 'c'], cursor at 3)
+  #
+  # @example Zero matches is not an error
+  #   Input { input: "123" }.many { |p| p.charWhen(~alpha?) }
+  #   # => ([], cursor at 0)
   let many(f: Input -> Result<(T, Input), ParseError>) -> ([T], Input) do
     var results: [T] = []
     var p = this
@@ -70,16 +208,41 @@ make Input do
     end
   end
 
+  # Applies +f+ at least once, then as many more times as it succeeds.
+  #
+  # The one-or-more counterpart of +many+: the first failure IS a failure, so
+  # use it where the grammar requires something to be there.
+  #
+  # @param f [Input -> Result<(T, Input), ParseError>] the parser to repeat
+  # @return [([T], Input)] the results and the cursor, or the first failure
+  #
+  # @example
+  #   Input { input: "abc" }.some { |p| p.charWhen(~alpha?) }
+  #   # => Ok((['a', 'b', 'c'], cursor at 3))
+  #   Input { input: "123" }.some { |p| p.charWhen(~alpha?) }
+  #   # => Error(Unexpected("1", 0))
   let some(f: Input -> Result<(T, Input), ParseError>) -> ([T], Input) or! ParseError do
     let (first, p) = f(this).try
     let (rest, advanced) = p.many(f)
     Ok(([first, ...rest], advanced))
   end
 
-  # An exact literal. A keyword grammar is mostly literals — `version(` is one
-  # token to a reader and eight calls to `char` — and matching it here reports
-  # the failure at the START of the literal, which is where a person looking at
-  # the error expects the caret.
+  # Reads an exact literal.
+  #
+  # A keyword grammar is mostly literals — `version(` is one token to a reader
+  # and eight calls to `char` — and matching it here reports the failure at the
+  # START of the literal, which is where a person looking at the error expects
+  # the caret.
+  #
+  # @param expected [String] the literal that must be next
+  # @return [(String, Input)] the literal and the cursor, or an +Expected+ error
+  #
+  # @example
+  #   Input { input: "abc" }.string("abc")   # => Ok(("abc", cursor at 3))
+  #   Input { input: "abc" }.string("abd")   # => Error(Expected("abd", 0))
+  #
+  # @example Matching a keyword
+  #   let (_, rest) = cursor.string("version(").try
   let string(expected: String) -> (String, Input) or! ParseError do
     let wanted = expected.chars
     var index = 0
@@ -91,10 +254,22 @@ make Input do
     Ok((expected, this.advanceBy(wanted.count)))
   end
 
-  # Every character while +pred+ holds, as a String. `many(charWhen(...))` gives
-  # a [Char] the caller has to join, and a run of characters is almost always
-  # wanted as text. Cannot fail: an empty run is an empty String, which is what
-  # makes it safe for the optional parts of a grammar.
+  # Reads every character while +pred+ holds, as a +String+.
+  #
+  # `many(charWhen(...))` gives a [Char] the caller has to join, and a run of
+  # characters is almost always wanted as text. Cannot fail: an empty run is an
+  # empty String, which is what makes it safe for the optional parts of a
+  # grammar.
+  #
+  # @param pred [Char -> Bool] the test each character must pass
+  # @return [(String, Input)] the text read, and the cursor after it
+  #
+  # @example
+  #   Input { input: "abc 123" }.takeWhile(~alpha?)   # => ("abc", cursor at 3)
+  #   Input { input: "123" }.takeWhile(~alpha?)       # => ("", cursor at 0)
+  #
+  # @example Reading an identifier
+  #   let name = cursor.takeWhile { |c| c.alpha? || c == '_' }
   let takeWhile(pred: Char -> Bool) -> (String, Input) do
     var cursor = this
     var collected: [Char] = []
@@ -108,6 +283,21 @@ make Input do
     return (collected.join(""), cursor)
   end
 
+  # Tries each parser in +alts+ in turn, and answers the first that succeeds.
+  #
+  # This is alternation: how a grammar says "a value is a string, or a number,
+  # or an object". Because the cursor is immutable, a failed alternative costs
+  # nothing. When none of them match, the answer is +NoMatch+ at the position
+  # they all started from.
+  #
+  # @param alts [[Input -> Result<(T, Input), ParseError>]] the parsers to try, in order
+  # @return [(T, Input)] the first success, or +NoMatch+
+  #
+  # @example
+  #   cursor.choice([
+  #     { |p| p.charWhen(~digit?) },
+  #     { |p| p.charWhen(~alpha?) }
+  #   ])
   let choice(alts: [Input -> Result<(T, Input), ParseError>]) -> (T, Input) or! ParseError do
     var index = 0
     loop do

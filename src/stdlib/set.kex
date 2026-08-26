@@ -1,18 +1,30 @@
-# Sets are immutable collections of distinct elements. Mutation methods
-# (suffixed `!`) return a new set and rebind the receiver variable — they do
-# not modify in place. Membership is structural equality, the same equality
-# `==` and Map keys use, so records and tuples are compared by value. `==`
-# between two sets needs no overload of its own for the same reason: each
-# flavour keeps its backing canonical — sorted and duplicate free, or a map —
-# so comparing the records structurally already IS set equality.
+# Immutable collections of distinct elements.
 #
-# Two flavours, differing only in how they store their elements:
+# Membership is decided by structural equality — the same equality +==+ and
+# map keys use — so records and tuples are compared by value, not identity.
+# Every method answers with a new set; the +!+ forms (+add!+, +delete!+) build
+# a new set and rebind the receiver variable rather than modifying anything in
+# place.
+#
+#   let tags = Set.from(["kex", "beam", "kex"])
+#   tags.count                     # => 2
+#   tags.contains?("beam")         # => true
+#   tags.add("erlang").items       # => ["beam", "erlang", "kex"]
+#
+# There are two flavours, differing only in how they store their elements:
 #
 #   Set           sorted, so iteration is in ascending element order and the
 #                 elements must be Orderable.
 #   UnorderedSet  hash-backed, so membership does not pay for ordering and
 #                 the elements need only be comparable. Iteration order is
 #                 unspecified — never write a test against it.
+#
+# Reach for +Set+ when you will read the elements back out, and for
+# +UnorderedSet+ when the set exists to answer +contains?+ quickly.
+#
+# +==+ between two sets needs no overload of its own: each flavour keeps its
+# backing canonical — sorted and duplicate free, or a map — so comparing the
+# records structurally already IS set equality.
 #
 # Both wrap structures the runtime already has (a list and a map), so no set
 # is opaque: `.items` is always a real list you can hand to anything.
@@ -25,300 +37,632 @@
 # produce an opaque BEAM term, and a set that only one backend can build is
 # not a set the prelude can offer.
 
-# The invariant every Set method preserves: `items` is sorted and duplicate
-# free. Build one with `Set.from` rather than by hand — the record literal
-# does no deduplication. Reading `.items` back is the field itself, so handing
-# a set's elements to list code costs nothing:
+# A set whose elements are kept sorted and duplicate free.
+#
+# Build one with +Set.from+ rather than by hand — the record literal does no
+# deduplication and no sorting, and every method here relies on both. Reading
+# +items+ back is the field itself, so handing a set's elements to list code
+# costs nothing.
 #
 #   Set.from([3, 1, 2]).items   # => [1, 2, 3]
 record Set<A> do
   items : [A] = []
 end
 
-# The invariant every UnorderedSet method preserves: `slots` maps each member
-# to `true` and holds nothing else. Its keys ARE the elements.
+# A set backed by a map from each member to +true+; its keys ARE the elements.
+#
+# Build one with +UnorderedSet.from+. Iteration order is whatever the map
+# hands back, so use +items.sort+ when you need a stable order.
+#
+#   UnorderedSet.from([3, 1, 2]).contains?(2)   # => true
 record UnorderedSet<A> do
   slots : {A: Bool} = {}
 end
 
+# Constructors for the sorted +Set+.
 module Set do
-  # Builds a set from any list, discarding duplicates and sorting what is
-  # left. Deduplication goes through a Map rather than `List.uniq`: map keys
-  # are unique under exactly the structural equality a set wants, and each
-  # element costs one insertion instead of a scan of everything kept so far.
+  # Builds a sorted set from a list, discarding duplicates.
+  #
+  # This is the normal way to make a +Set+. Deduplication goes through a map
+  # rather than +List.uniq+: map keys are unique under exactly the structural
+  # equality a set wants, and each element costs one insertion instead of a
+  # scan of everything kept so far.
+  #
+  # @param items [[A]] the elements, in any order and with any duplicates
+  # @return [Set<A>] the distinct elements, sorted
   #
   # @example
-  #   Set.from([3, 1, 2, 3])   # => Set(1, 2, 3)
-  #   Set.from("hello".chars)  # => Set('e', 'h', 'l', 'o')
+  #   Set.from([3, 1, 2, 3])    # => Set(1, 2, 3)
+  #   Set.from("hello".chars)   # => Set(e, h, l, o)
+  #
+  # @example Removing duplicates from a list
+  #   Set.from(["b", "a", "b"]).items   # => ["a", "b"]
   let from(items: [A]) -> Set<A> do
     let unique = Kex.Intrinsic.Map.fromEntries(items.map { |x| (x, true) })
     return Set { items: unique.keys.sort }
   end
 
-  # The empty set. Also the Monoid identity.
+  # The set with no elements. Also the +Monoid+ identity, so
+  # +s.combine(Set.empty)+ is +s+.
+  #
+  # @return [Set<A>] the empty set
   #
   # @example
   #   Set.empty.empty?   # => true
+  #   Set.empty.add(1)   # => Set(1)
   let empty -> Set<A> = Set { items: [] }
 end
 
+# Constructors for the hash-backed +UnorderedSet+.
 module UnorderedSet do
-  # Builds an unordered set from any list, discarding duplicates. Nothing is
-  # sorted, so this does not require Orderable elements.
+  # Builds an unordered set from a list, discarding duplicates.
+  #
+  # Nothing is sorted, so unlike +Set.from+ this does not require the elements
+  # to be +Orderable+.
+  #
+  # @param items [[A]] the elements, in any order and with any duplicates
+  # @return [UnorderedSet<A>] the distinct elements
   #
   # @example
   #   UnorderedSet.from([3, 1, 2, 3]).count   # => 3
+  #
+  # @example A fast membership test over a large list
+  #   let stopWords = UnorderedSet.from(["the", "a", "of"])
+  #   words.reject { |w| stopWords.contains?(w) }
   let from(items: [A]) -> UnorderedSet<A> do
     return UnorderedSet { slots: Kex.Intrinsic.Map.fromEntries(items.map { |x| (x, true) }) }
   end
 
-  # The empty unordered set. Also the Monoid identity.
+  # The unordered set with no elements. Also the +Monoid+ identity.
+  #
+  # @return [UnorderedSet<A>] the empty set
+  #
+  # @example
+  #   UnorderedSet.empty.empty?   # => true
   let empty -> UnorderedSet<A> = UnorderedSet { slots: {} }
 end
 
 make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
-  # Enumerable primitive: fold over the elements in ascending order.
-  # Collection-producing operations come from Enumerable and traversal
-  # queries from Foldable; the set-returning ones are overridden below,
-  # because Enumerable's defaults answer with a list.
+  # Folds over the elements in ascending order.
+  #
+  # This is +Set+'s +Enumerable+ primitive; +each+, +find+, +any?+ and the
+  # rest are built on it. The collection-returning operations are overridden
+  # below, because +Enumerable+'s defaults answer with a list.
+  #
+  # @param acc [A] the initial accumulator
+  # @param f [B -> A -> B] combines the accumulator with each element
+  # @return [B] the final accumulator
+  #
+  # @example
+  #   Set.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
   let reduce(acc, f) = @items.reduce(acc, f)
 
-  # Sets form a Monoid under union.
+  # The empty set — the +Monoid+ identity, since union with nothing changes
+  # nothing.
+  #
+  # @return [Set<A>] the empty set
   let identity = Set { items: [] }
+
+  # Combines two sets by union. The +Monoid+ operation.
+  #
+  # @param other [Set<A>] the set to combine with
+  # @return [Set<A>] every element of either set
+  #
+  # @example Merging many sets into one
+  #   [Set.from([1]), Set.from([2]), Set.from([1, 3])]
+  #     .reduce(Set.empty) { |acc, s| acc.combine(s) }
+  #   # => Set(1, 2, 3)
   let combine(other) = this.union(other)
 
-  # Returns `true` if `value` is a member.
+  # Returns +true+ when +value+ is a member.
+  #
+  # @param value [A] the element to look for
+  # @return [Bool] +true+ when it is present
   #
   # @example
   #   Set.from([1, 2, 3]).contains?(2)   # => true
+  #   Set.from([1, 2, 3]).contains?(9)   # => false
+  #
+  # @example Filtering a list against an allow-list
+  #   let allowed = Set.from(["get", "post"])
+  #   methods.filter { |m| allowed.contains?(m.lowerCase) }
   contains? :> A -> Bool
   let contains?(value) = @items.contains?(value)
 
-  # The number of distinct elements.
+  # Returns the number of distinct elements. Duplicates in the source list
+  # were already discarded, so this is the size of the set, not of what it was
+  # built from.
+  #
+  # @return [Integer] the number of elements
   #
   # @example
   #   Set.from([1, 1, 2]).count   # => 2
+  #
+  # @example Counting distinct words
+  #   Set.from(text.split(" ")).count
   count :> Integer
   let count = @items.count
 
-  # Returns `true` if the set has no elements.
+  # Returns +true+ when the set has no elements.
+  #
+  # @return [Bool] +true+ for the empty set
+  #
+  # @example
+  #   Set.empty.empty?           # => true
+  #   Set.from([1]).empty?       # => false
   empty? :> Bool
   let empty? = @items.empty?
 
-  # Returns a new set with `value` added. No-op if it is already a member.
-  # Use `add!` to rebind the receiver variable.
+  # Returns a new set with +value+ added. Adding an element that is already a
+  # member changes nothing — that is what makes a set a set.
+  #
+  # Use +add!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to add
+  # @return [Set<A>] a set including +value+
   #
   # @example
   #   Set.from([1, 2]).add(3)   # => Set(1, 2, 3)
+  #   Set.from([1, 2]).add(2)   # => Set(1, 2)
+  #
+  # @example Accumulating as you go
+  #   var seen = Set.empty
+  #   ids.each { |id| seen.add!(id) }
   add :> A -> Set<A>
   let add(value) = this.contains?(value) then this else Set { items: (@items + [value]).sort }
 
-  # Returns a new set without `value`. No-op if it is not a member.
-  # Use `delete!` to rebind the receiver variable.
+  # Returns a new set without +value+. Removing something that is not a member
+  # changes nothing.
+  #
+  # Use +delete!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to remove
+  # @return [Set<A>] a set without +value+
   #
   # @example
   #   Set.from([1, 2, 3]).delete(2)   # => Set(1, 3)
+  #   Set.from([1, 2, 3]).delete(9)   # => Set(1, 2, 3)
   delete :> A -> Set<A>
   let delete(value) = Set { items: @items.reject { |x| x == value } }
 
-  # Every element of either set.
+  # Returns every element of either set.
+  #
+  # @param other [Set<A>] the other set
+  # @return [Set<A>] the union
   #
   # @example
   #   Set.from([1, 2]).union(Set.from([2, 3]))   # => Set(1, 2, 3)
+  #
+  # @example Collecting every tag used across posts
+  #   posts.reduce(Set.empty) { |all, p| all.union(Set.from(p.tags)) }
   union :> Set<A> -> Set<A>
   let union(other) = Set.from(@items + other.items)
 
-  # The elements both sets share.
+  # Returns the elements both sets have.
+  #
+  # @param other [Set<A>] the other set
+  # @return [Set<A>] the intersection
   #
   # @example
   #   Set.from([1, 2, 3]).intersect(Set.from([2, 3, 4]))   # => Set(2, 3)
+  #   Set.from([1]).intersect(Set.from([2]))               # => Set()
+  #
+  # @example Which requested permissions the user actually has
+  #   requested.intersect(granted)
   intersect :> Set<A> -> Set<A>
   let intersect(other) do
     let lookup = UnorderedSet.from(other.items)
     return Set { items: @items.filter { |x| lookup.contains?(x) } }
   end
 
-  # The elements of this set that `other` does not have.
+  # Returns the elements of this set that +other+ does not have.
+  #
+  # Order matters: +a.difference(b)+ and +b.difference(a)+ are different
+  # questions. Use +symmetricDifference+ when you want both answers.
+  #
+  # @param other [Set<A>] the set to subtract
+  # @return [Set<A>] the elements only this set has
   #
   # @example
   #   Set.from([1, 2, 3]).difference(Set.from([2]))   # => Set(1, 3)
+  #
+  # @example Which required fields are still missing
+  #   required.difference(Set.from(form.keys))
   difference :> Set<A> -> Set<A>
   let difference(other) do
     let lookup = UnorderedSet.from(other.items)
     return Set { items: @items.reject { |x| lookup.contains?(x) } }
   end
 
-  # The elements in exactly one of the two sets.
+  # Returns the elements in exactly one of the two sets — everything they do
+  # not agree on.
+  #
+  # @param other [Set<A>] the other set
+  # @return [Set<A>] the symmetric difference
   #
   # @example
   #   Set.from([1, 2]).symmetricDifference(Set.from([2, 3]))   # => Set(1, 3)
+  #
+  # @example What changed between two snapshots
+  #   before.symmetricDifference(after)
   symmetricDifference :> Set<A> -> Set<A>
   let symmetricDifference(other) = this.difference(other).union(other.difference(this))
 
-  # Returns `true` if every element of this set is in `other`.
+  # Returns +true+ when every element of this set is also in +other+. The
+  # empty set is a subset of everything.
+  #
+  # @param other [Set<A>] the candidate superset
+  # @return [Bool] +true+ when this set is contained in +other+
   #
   # @example
   #   Set.from([1, 2]).subset?(Set.from([1, 2, 3]))   # => true
+  #   Set.from([1, 9]).subset?(Set.from([1, 2, 3]))   # => false
+  #
+  # @example An authorisation check
+  #   required.subset?(granted)
   subset? :> Set<A> -> Bool
   let subset?(other) do
     let lookup = UnorderedSet.from(other.items)
     return @items.all? { |x| lookup.contains?(x) }
   end
 
-  # Returns `true` if this set has every element of `other`.
+  # Returns +true+ when this set has every element of +other+. The mirror
+  # image of +subset?+.
+  #
+  # @param other [Set<A>] the candidate subset
+  # @return [Bool] +true+ when this set contains all of +other+
+  #
+  # @example
+  #   Set.from([1, 2, 3]).superset?(Set.from([1, 2]))   # => true
+  #   Set.from([1, 2]).superset?(Set.from([1, 9]))      # => false
   superset? :> Set<A> -> Bool
   let superset?(other) = other.subset?(this)
 
-  # Returns `true` if the two sets share no element.
+  # Returns +true+ when the two sets share no element.
+  #
+  # @param other [Set<A>] the other set
+  # @return [Bool] +true+ when the intersection is empty
   #
   # @example
-  #   Set.from([1, 2]).disjoint?(Set.from([3]))   # => true
+  #   Set.from([1, 2]).disjoint?(Set.from([3]))      # => true
+  #   Set.from([1, 2]).disjoint?(Set.from([2, 3]))   # => false
+  #
+  # @example Checking that two rulesets cannot both apply
+  #   allowList.disjoint?(denyList)
   disjoint? :> Set<A> -> Bool
   let disjoint?(other) do
     let lookup = UnorderedSet.from(other.items)
     return !@items.any? { |x| lookup.contains?(x) }
   end
 
-  # `+` unions, with either another set or a plain list — `xs + [y]` is the
-  # everyday way to add one element without naming a method.
+  # Unions with another set, or with a plain list.
+  #
+  # The list form is the everyday way to add one element without naming a
+  # method: +s + [x]+.
+  #
+  # @param other [Set<A> | [A]] the elements to add
+  # @return [Set<A>] the union
   #
   # @example
-  #   Set.from([1, 2]) + [3]              # => Set(1, 2, 3)
-  #   Set.from([1]) + Set.from([2])       # => Set(1, 2)
+  #   Set.from([1, 2]) + [3]           # => Set(1, 2, 3)
+  #   Set.from([1]) + Set.from([2])    # => Set(1, 2)
   let +(other: Set<A>) -> Set<A> = this.union(other)
   let +(other: [A]) -> Set<A> = Set.from(@items + other)
 
-  # `-` removes, taking either another set or a plain list.
+  # Removes another set's elements, or a plain list's.
+  #
+  # @param other [Set<A> | [A]] the elements to remove
+  # @return [Set<A>] the difference
   #
   # @example
-  #   Set.from([1, 2, 3]) - [2]           # => Set(1, 3)
+  #   Set.from([1, 2, 3]) - [2]                # => Set(1, 3)
+  #   Set.from([1, 2, 3]) - Set.from([2, 3])   # => Set(1)
   let -(other: Set<A>) -> Set<A> = this.difference(other)
   let -(other: [A]) -> Set<A> = this.difference(Set.from(other))
 
-  # Set overrides the collection-returning HOFs: Enumerable's defaults answer
-  # with a list, and mapping a set should give back a set. `map` may collapse
-  # elements — `Set.from([1, -1]).map { |x| x.abs }` has one member, not two.
+  # Applies +f+ to every element and returns a set of the results.
+  #
+  # Mapping a set may collapse elements: if +f+ sends two members to the same
+  # value, the result has one. That is not a loss of information so much as
+  # the point of a set — +Set.from([1, -1]).map(~abs)+ has one member.
+  #
+  # @param f [A -> B] applied to each element
+  # @return [Set<B>] the distinct results
   #
   # @example
-  #   Set.from([1, 2, 3]).map { |x| x * 2 }        # => Set(2, 4, 6)
+  #   Set.from([1, 2, 3]).map { |x| x * 2 }   # => Set(2, 4, 6)
+  #   Set.from([1, -1]).map { |x| x.abs }     # => Set(1)
+  #
+  # @example Collecting the distinct extensions in a file list
+  #   Set.from(paths).map { |p| p.split(".").last.or("") }
   map :> (A -> B) -> Set<B>
   let map(f) = Set.from(@items.map(f))
 
-  # Returns a new set keeping only the elements `pred` accepts.
+  # Returns a new set with only the elements +pred+ accepts.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [Set<A>] the matching elements
   #
   # @example
   #   Set.from([1, 2, 3]).filter { |x| x > 1 }   # => Set(2, 3)
   filter :> (A -> Bool) -> Set<A>
   let filter(pred) = Set { items: @items.filter(pred) }
 
-  # Returns a new set without the elements `pred` accepts.
+  # Returns a new set without the elements +pred+ accepts. The complement of
+  # +filter+.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [Set<A>] the elements that failed the predicate
+  #
+  # @example
+  #   Set.from([1, 2, 3]).reject { |x| x > 1 }   # => Set(1)
   reject :> (A -> Bool) -> Set<A>
   let reject(pred) = Set { items: @items.reject(pred) }
 
-  # Sets print as `Set(...)` in element order rather than exposing the record
-  # layout behind them.
+  # Renders the set as +Set(...)+ in element order, rather than exposing the
+  # record layout behind it.
+  #
+  # @return [String] the rendered set
+  #
+  # @example
+  #   Set.from([2, 1]).showValue   # => "Set(1, 2)"
   showValue :> String
   let showValue = "Set(${@items.map { |x| x.showValue }.join(", ")})"
 end
 
 make Set<A>, implement: Blankable do
+  # Returns +true+ when the set has no elements. The +Blankable+ view of
+  # +empty?+, so generic code can test a set the same way it tests a string.
+  #
+  # @return [Bool] +true+ for the empty set
+  #
+  # @example
+  #   Set.empty.blank?         # => true
+  #   Set.from([1]).blank?     # => false
   blank? :> Bool
   let blank? = @items.empty?
 end
 
 make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
-  # Enumerable primitive: fold over the elements. The order is whatever the
-  # underlying map hands back — unspecified, and not to be relied on.
+  # Folds over the elements.
+  #
+  # The order is whatever the underlying map hands back — unspecified, and not
+  # to be relied on. Use a +Set+ when the order of the fold matters.
+  #
+  # @param acc [B] the initial accumulator
+  # @param f [B -> A -> B] combines the accumulator with each element
+  # @return [B] the final accumulator
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
   let reduce(acc, f) = @slots.keys.reduce(acc, f)
 
-  # Unordered sets form a Monoid under union.
+  # The empty unordered set — the +Monoid+ identity.
+  #
+  # @return [UnorderedSet<A>] the empty set
   let identity = UnorderedSet { slots: {} }
+
+  # Combines two sets by union. The +Monoid+ operation.
+  #
+  # @param other [UnorderedSet<A>] the set to combine with
+  # @return [UnorderedSet<A>] every element of either set
   let combine(other) = this.union(other)
 
-  # Returns `true` if `value` is a member. This is the operation the flavour
-  # exists for: a map lookup, with no ordering to maintain.
+  # Returns +true+ when +value+ is a member.
+  #
+  # This is the operation the flavour exists for: a map lookup, with no
+  # ordering to maintain.
+  #
+  # @param value [A] the element to look for
+  # @return [Bool] +true+ when it is present
   #
   # @example
   #   UnorderedSet.from([1, 2, 3]).contains?(2)   # => true
+  #   UnorderedSet.from([1, 2, 3]).contains?(9)   # => false
   contains? :> A -> Bool
   let contains?(value) = @slots.has?(value)
 
-  # The number of distinct elements.
+  # Returns the number of distinct elements.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   UnorderedSet.from([1, 1, 2]).count   # => 2
   count :> Integer
   let count = @slots.count
 
-  # Returns `true` if the set has no elements.
+  # Returns +true+ when the set has no elements.
+  #
+  # @return [Bool] +true+ for the empty set
+  #
+  # @example
+  #   UnorderedSet.empty.empty?   # => true
   empty? :> Bool
   let empty? = @slots.empty?
 
-  # The elements as a list, in unspecified order.
+  # Returns the elements as a list, in unspecified order.
+  #
+  # Sort the result when the order has to be stable — a test, a rendering, a
+  # comparison.
+  #
+  # @return [[A]] the elements
   #
   # @example
-  #   UnorderedSet.from([1, 2, 3]).items.sort   # => [1, 2, 3]
+  #   UnorderedSet.from([3, 1, 2]).items.sort   # => [1, 2, 3]
   items :> [A]
   let items = @slots.keys
 
-  # Returns a new set with `value` added. Use `add!` to rebind the receiver.
+  # Returns a new set with +value+ added. Adding an existing member changes
+  # nothing.
+  #
+  # Use +add!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to add
+  # @return [UnorderedSet<A>] a set including +value+
+  #
+  # @example
+  #   UnorderedSet.from([1]).add(2).count   # => 2
+  #   UnorderedSet.from([1]).add(1).count   # => 1
   add :> A -> UnorderedSet<A>
   let add(value) = UnorderedSet { slots: @slots.put(value, true) }
 
-  # Returns a new set without `value`. Use `delete!` to rebind the receiver.
+  # Returns a new set without +value+. Removing a non-member changes nothing.
+  #
+  # Use +delete!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to remove
+  # @return [UnorderedSet<A>] a set without +value+
+  #
+  # @example
+  #   UnorderedSet.from([1, 2]).delete(1).count   # => 1
   delete :> A -> UnorderedSet<A>
   let delete(value) = UnorderedSet { slots: @slots.delete(value) }
 
-  # Every element of either set.
+  # Returns every element of either set.
+  #
+  # @param other [UnorderedSet<A>] the other set
+  # @return [UnorderedSet<A>] the union
+  #
+  # @example
+  #   UnorderedSet.from([1, 2]).union(UnorderedSet.from([2, 3])).count   # => 3
   union :> UnorderedSet<A> -> UnorderedSet<A>
   let union(other) = UnorderedSet { slots: @slots.merge(other.slots) }
 
-  # The elements both sets share.
+  # Returns the elements both sets have.
+  #
+  # @param other [UnorderedSet<A>] the other set
+  # @return [UnorderedSet<A>] the intersection
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).intersect(UnorderedSet.from([2, 3, 4])).items.sort
+  #   # => [2, 3]
   intersect :> UnorderedSet<A> -> UnorderedSet<A>
   let intersect(other) = UnorderedSet.from(@slots.keys.filter { |x| other.contains?(x) })
 
-  # The elements of this set that `other` does not have.
+  # Returns the elements of this set that +other+ does not have.
+  #
+  # @param other [UnorderedSet<A>] the set to subtract
+  # @return [UnorderedSet<A>] the elements only this set has
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).difference(UnorderedSet.from([2])).items.sort
+  #   # => [1, 3]
   difference :> UnorderedSet<A> -> UnorderedSet<A>
   let difference(other) = UnorderedSet.from(@slots.keys.reject { |x| other.contains?(x) })
 
-  # The elements in exactly one of the two sets.
+  # Returns the elements in exactly one of the two sets.
+  #
+  # @param other [UnorderedSet<A>] the other set
+  # @return [UnorderedSet<A>] the symmetric difference
+  #
+  # @example
+  #   UnorderedSet.from([1, 2]).symmetricDifference(UnorderedSet.from([2, 3])).items.sort
+  #   # => [1, 3]
   symmetricDifference :> UnorderedSet<A> -> UnorderedSet<A>
   let symmetricDifference(other) = this.difference(other).union(other.difference(this))
 
-  # Returns `true` if every element of this set is in `other`.
+  # Returns +true+ when every element of this set is also in +other+.
+  #
+  # @param other [UnorderedSet<A>] the candidate superset
+  # @return [Bool] +true+ when this set is contained in +other+
+  #
+  # @example
+  #   UnorderedSet.from([1, 2]).subset?(UnorderedSet.from([1, 2, 3]))   # => true
   subset? :> UnorderedSet<A> -> Bool
   let subset?(other) = @slots.keys.all? { |x| other.contains?(x) }
 
-  # Returns `true` if this set has every element of `other`.
+  # Returns +true+ when this set has every element of +other+.
+  #
+  # @param other [UnorderedSet<A>] the candidate subset
+  # @return [Bool] +true+ when this set contains all of +other+
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).superset?(UnorderedSet.from([1, 2]))   # => true
   superset? :> UnorderedSet<A> -> Bool
   let superset?(other) = other.subset?(this)
 
-  # Returns `true` if the two sets share no element.
+  # Returns +true+ when the two sets share no element.
+  #
+  # @param other [UnorderedSet<A>] the other set
+  # @return [Bool] +true+ when the intersection is empty
+  #
+  # @example
+  #   UnorderedSet.from([1, 2]).disjoint?(UnorderedSet.from([3]))   # => true
   disjoint? :> UnorderedSet<A> -> Bool
   let disjoint?(other) = !@slots.keys.any? { |x| other.contains?(x) }
 
-  # `+` unions, with either another set or a plain list.
+  # Unions with another unordered set, or with a plain list.
+  #
+  # @param other [UnorderedSet<A> | [A]] the elements to add
+  # @return [UnorderedSet<A>] the union
+  #
+  # @example
+  #   (UnorderedSet.from([1, 2]) + [3]).count   # => 3
   let +(other: UnorderedSet<A>) -> UnorderedSet<A> = this.union(other)
   let +(other: [A]) -> UnorderedSet<A> = this.union(UnorderedSet.from(other))
 
-  # `-` removes, taking either another set or a plain list.
+  # Removes another unordered set's elements, or a plain list's.
+  #
+  # @param other [UnorderedSet<A> | [A]] the elements to remove
+  # @return [UnorderedSet<A>] the difference
+  #
+  # @example
+  #   (UnorderedSet.from([1, 2, 3]) - [2]).count   # => 2
   let -(other: UnorderedSet<A>) -> UnorderedSet<A> = this.difference(other)
   let -(other: [A]) -> UnorderedSet<A> = this.difference(UnorderedSet.from(other))
 
-  # The collection-returning HOFs answer with a set, not a list.
+  # Applies +f+ to every element and returns an unordered set of the results.
+  # Elements that map to the same value collapse into one.
+  #
+  # @param f [A -> B] applied to each element
+  # @return [UnorderedSet<B>] the distinct results
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).map { |x| x * 2 }.items.sort   # => [2, 4, 6]
   map :> (A -> B) -> UnorderedSet<B>
   let map(f) = UnorderedSet.from(@slots.keys.map(f))
 
+  # Returns a new unordered set with only the elements +pred+ accepts.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [UnorderedSet<A>] the matching elements
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).filter { |x| x > 1 }.items.sort   # => [2, 3]
   filter :> (A -> Bool) -> UnorderedSet<A>
   let filter(pred) = UnorderedSet.from(@slots.keys.filter(pred))
 
+  # Returns a new unordered set without the elements +pred+ accepts.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [UnorderedSet<A>] the elements that failed the predicate
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).reject { |x| x > 1 }.items   # => [1]
   reject :> (A -> Bool) -> UnorderedSet<A>
   let reject(pred) = UnorderedSet.from(@slots.keys.reject(pred))
 
-  # Printed in sorted order where the elements allow it, so the rendering of
-  # a value is not at the mercy of map internals.
+  # Renders the set as +UnorderedSet(...)+.
+  #
+  # The elements are printed in sorted order where they allow it, so the
+  # rendering of a value is not at the mercy of map internals.
+  #
+  # @return [String] the rendered set
+  #
+  # @example
+  #   UnorderedSet.from([2, 1]).showValue   # => "UnorderedSet(1, 2)"
   showValue :> String
   let showValue = "UnorderedSet(${@slots.keys.map { |x| x.showValue }.sort.join(", ")})"
 end
 
 make UnorderedSet<A>, implement: Blankable do
+  # Returns +true+ when the set has no elements. The +Blankable+ view of
+  # +empty?+.
+  #
+  # @return [Bool] +true+ for the empty set
+  #
+  # @example
+  #   UnorderedSet.empty.blank?   # => true
   blank? :> Bool
   let blank? = @slots.empty?
 end

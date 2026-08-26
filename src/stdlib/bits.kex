@@ -1,4 +1,11 @@
-# The +Bits+ module provides bitwise operations on +Integer+.
+# Bitwise operations on +Integer+.
+#
+#   Bits.and(0xff, 0x0f)      # => 15
+#   Bits.shiftLeft(1, 8)      # => 256
+#   Bits.test?(0b1010, 1)     # => true
+#
+# Useful for packing flags into one number, reading a binary format, or
+# working with a protocol that describes its fields in bits.
 #
 # Integers are arbitrary precision, and a negative one behaves as if it were
 # written in infinite-precision two's complement — so +Bits.not(0)+ is +-1+ and
@@ -7,43 +14,55 @@
 module Bits do
   # Bitwise AND of +a+ and +b+.
   #
-  # @param a [Integer]
-  # @param b [Integer]
-  # @return [Integer]
+  # @param a [Integer] the first operand
+  # @param b [Integer] the second operand
+  # @return [Integer] the result
   #
   # @example
   #   Bits.and(0b1100, 0b1010)   # => 0b1000
   #   Bits.and(0xff, 0x0f)       # => 15
+  #
+  # @example Masking off the low byte of a value
+  #   Bits.and(value, 0xff)
+  #
+  # @example Testing whether a flag is present in a bitmask
+  #   Bits.and(flags, READONLY) != 0
   and : Integer -> Integer -> Integer
   let and(a, b) = Kex.Intrinsic.Bits.and(a, b)
 
   # Bitwise OR of +a+ and +b+.
   #
-  # @param a [Integer]
-  # @param b [Integer]
-  # @return [Integer]
+  # @param a [Integer] the first operand
+  # @param b [Integer] the second operand
+  # @return [Integer] the result
   #
   # @example
   #   Bits.or(0b1100, 0b1010)   # => 0b1110
+  #
+  # @example Combining flags into one value
+  #   Bits.or(Bits.or(READ, WRITE), APPEND)
   or : Integer -> Integer -> Integer
   let or(a, b) = Kex.Intrinsic.Bits.or(a, b)
 
   # Bitwise exclusive OR of +a+ and +b+.
   #
-  # @param a [Integer]
-  # @param b [Integer]
-  # @return [Integer]
+  # @param a [Integer] the first operand
+  # @param b [Integer] the second operand
+  # @return [Integer] the result
   #
   # @example
   #   Bits.xor(0b1100, 0b1010)   # => 0b0110
+  #
+  # @example Toggling a set of flags
+  #   Bits.xor(flags, VERBOSE)
   xor : Integer -> Integer -> Integer
   let xor(a, b) = Kex.Intrinsic.Bits.xor(a, b)
 
   # Bitwise complement of +a+. Every integer is signed and unbounded, so this
   # is always +-(a + 1)+ rather than a width-dependent mask.
   #
-  # @param a [Integer]
-  # @return [Integer]
+  # @param a [Integer] the operand
+  # @return [Integer] the complement
   #
   # @example
   #   Bits.not(0)   # => -1
@@ -53,21 +72,25 @@ module Bits do
 
   # Shifts +n+ left by +by+ bits. Raises if +by+ is negative.
   #
-  # @param n [Integer]
-  # @param by [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to shift
+  # @param by [Integer] how many bits to shift by
+  # @return [Integer] the shifted value
   #
   # @example
   #   Bits.shiftLeft(1, 8)   # => 256
+  #   Bits.shiftLeft(3, 2)   # => 12
+  #
+  # @example Building a flag constant for bit n
+  #   Bits.shiftLeft(1, n)
   shiftLeft : Integer -> Integer -> Integer
   let shiftLeft(n, by) = Kex.Intrinsic.Bits.shiftLeft(n, by)
 
   # Shifts +n+ right by +by+ bits, propagating the sign — the result of
   # shifting a negative number stays negative. Raises if +by+ is negative.
   #
-  # @param n [Integer]
-  # @param by [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to shift
+  # @param by [Integer] how many bits to shift by
+  # @return [Integer] the shifted value
   #
   # @example
   #   Bits.shiftRight(256, 8)   # => 1
@@ -77,9 +100,9 @@ module Bits do
 
   # True when the bit at +index+ of +n+ is set. Raises if +index+ is negative.
   #
-  # @param n [Integer]
-  # @param index [Integer]
-  # @return [Bool]
+  # @param n [Integer] the value to inspect
+  # @param index [Integer] the bit position, counting from 0
+  # @return [Bool] +true+ when that bit is set
   #
   # @example
   #   Bits.test?(0b1000, 3)   # => true
@@ -89,9 +112,9 @@ module Bits do
 
   # +n+ with the bit at +index+ set. Raises if +index+ is negative.
   #
-  # @param n [Integer]
-  # @param index [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to modify
+  # @param index [Integer] the bit position, counting from 0
+  # @return [Integer] the modified value
   #
   # @example
   #   Bits.set(0, 3)   # => 8
@@ -100,9 +123,9 @@ module Bits do
 
   # +n+ with the bit at +index+ cleared. Raises if +index+ is negative.
   #
-  # @param n [Integer]
-  # @param index [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to modify
+  # @param index [Integer] the bit position, counting from 0
+  # @return [Integer] the modified value
   #
   # @example
   #   Bits.clear(0b1111, 0)   # => 14
@@ -111,9 +134,9 @@ module Bits do
 
   # +n+ with the bit at +index+ flipped. Raises if +index+ is negative.
   #
-  # @param n [Integer]
-  # @param index [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to modify
+  # @param index [Integer] the bit position, counting from 0
+  # @return [Integer] the modified value
   #
   # @example
   #   Bits.toggle(0b1010, 0)   # => 11
@@ -123,19 +146,23 @@ module Bits do
   # Number of set bits in +n+ (population count). A negative value has
   # infinitely many under two's complement, so this raises for one.
   #
-  # @param n [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to measure
+  # @return [Integer] the count
   #
   # @example
   #   Bits.count(0b1011)   # => 3
+  #   Bits.count(255)      # => 8
+  #
+  # @example How many flags are set
+  #   Bits.count(flags)
   count : Integer -> Integer
   let count(n) = Kex.Intrinsic.Bits.count(n)
 
   # Number of bits needed to represent +n+, i.e. the position of its highest
   # set bit plus one. Zero needs none. Raises for a negative value.
   #
-  # @param n [Integer]
-  # @return [Integer]
+  # @param n [Integer] the value to measure
+  # @return [Integer] the count
   #
   # @example
   #   Bits.width(0)     # => 0

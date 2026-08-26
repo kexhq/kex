@@ -1,24 +1,81 @@
-# Sandboxed evaluation of Kex source code at runtime.
+# Running Kex source code at run time, in a sandbox.
 #
-# Creates a fresh, isolated evaluator for each call — the caller's
-# environment is never shared. Returns +Result<Any, String>+.
+# Each call builds a fresh, isolated evaluator: the caller's environment is
+# never shared, and the evaluated code sees only what +EvaluatorOptions+
+# allows. Step and depth limits make a runaway program stop rather than hang.
+#
+#   Evaluator.runExpression("1 + 2")           # => Ok(3)
+#   Evaluator.runExpression("[3,1,2].sort")    # => Ok([1, 2, 3])
+#
+# This is for evaluating expressions your program was given — a formula in a
+# config file, a filter typed by a user. Every result is a +Result+, so a
+# syntax error or a rejected call is a value you handle.
 module Evaluator do
-  # Evaluates a full Kex program string.
+  # Evaluates a whole Kex program and returns its result.
+  #
+  # The source may declare functions, records and a +main+, exactly as a file
+  # would. Anything that goes wrong — a parse error, a call the sandbox does
+  # not allow, running past the step limit — comes back as +Error+ with a
+  # message.
+  #
+  # @param source [String] the Kex program to run
+  # @param opts [EvaluatorOptions] what the sandbox allows; omitted for the defaults
+  # @return [Result<Any, String>] the program's result, or why it failed
+  #
+  # @example
+  #   Evaluator.run("main do 1 + 1 end")   # => Ok(2)
+  #
+  # @example Running a user-supplied script with a tighter budget
+  #   Evaluator.run(script, EvaluatorOptions {
+  #     allow: [:Math, :List],
+  #     maxSteps: 10_000
+  #   })
   run : String -> Result<Any, String>
   run : String -> EvaluatorOptions -> Result<Any, String>
   let run(source) = Kex.Intrinsic.Evaluator.run(source)
   let run(source, opts) = Kex.Intrinsic.Evaluator.run(source, opts)
 
-  # Evaluates a single Kex expression.
+  # Evaluates a single Kex expression and returns its value.
+  #
+  # The form to reach for when the input is a formula rather than a program —
+  # there is no +main+ to write and no declarations to skip past.
+  #
+  # @param source [String] the Kex expression to evaluate
+  # @param opts [EvaluatorOptions] what the sandbox allows; omitted for the defaults
+  # @return [Result<Any, String>] the value, or why it failed
+  #
+  # @example
+  #   Evaluator.runExpression("1 + 2")          # => Ok(3)
+  #   Evaluator.runExpression("[3,1,2].sort")   # => Ok([1, 2, 3])
+  #   Evaluator.runExpression("nope()")
+  #   # => Error("Runtime error: ... Undefined function: nope")
+  #
+  # @example Evaluating a formula from a config file
+  #   Evaluator.runExpression(formula).or(0)
   runExpression : String -> Result<Any, String>
   runExpression : String -> EvaluatorOptions -> Result<Any, String>
   let runExpression(source) = Kex.Intrinsic.Evaluator.runExpression(source)
   let runExpression(source, opts) = Kex.Intrinsic.Evaluator.runExpression(source, opts)
 
+  # What an evaluated program is allowed to reach, and how long it may run.
+  #
+  # The defaults are already conservative — pure computation over the common
+  # data types, no filesystem, no network, no processes. Narrow +allow+
+  # further, or lower the limits, when the source is less trusted still.
   record EvaluatorOptions do
+    # Which stdlib modules the evaluated code may call into. Anything not
+    # listed is unavailable, not merely discouraged.
     allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]
+
+    # Extra functions to expose, keyed by module name and then by function
+    # name. This is how a host program lends the sandbox something of its own.
     modules : {String: {String: (Any -> Any)}} = {}
+
+    # How many evaluation steps the program may take before it is stopped.
+    # A runaway loop ends as an +Error+ rather than hanging the host.
     maxSteps : Int = 1_000_000
+
+    # How deep recursion may go before it is stopped.
     maxDepth : Int = 256
   end
 end

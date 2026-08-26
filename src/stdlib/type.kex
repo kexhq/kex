@@ -1,6 +1,6 @@
 # Types as values.
 #
-# `Type.of(x)` answers what a value IS, as something you can hold, print,
+# +Type.of(x)+ answers what a value IS, as something you can hold, print,
 # compare, and take apart:
 #
 #   Type.of(42)                     # Type { name: "Integer", args: [] }
@@ -15,39 +15,87 @@
 # value itself is asked instead. That fallback is honest but lossy: an empty
 # list has no element to inspect, and a `Result` only ever holds one side.
 record Type do
+  # The type's own name, without its arguments — +"Integer"+, +"List"+,
+  # +"Point"+.
   name : String
+
+  # The type's arguments, themselves types. Empty for a plain type; one entry
+  # for +[Integer]+; two for +{String: Integer}+.
   args : [Type]
+
   # Functions only: false when calling it is a side effect — the question
   # `foul` answers in source, phrased positively because everything in Kex is
   # pure by default. True for every other type.
   pure : Bool
 end
 
+# Building and obtaining +Type+ values.
 module Type do
-  # What this value is. Prefer this over matching on the record directly.
+  # Returns the type of +value+.
+  #
+  # The entry point to everything else here. Prefer it over matching on the
+  # +Type+ record directly.
+  #
+  # @param value [Any] the value to inspect
+  # @return [Type] its type
+  #
+  # @example
+  #   Type.of(42)                # => Type { name: "Integer", args: [] }
+  #   Type.of([1, 2]).toString   # => "[Integer]"
+  #   Type.of("hi").toString     # => "String"
+  #
+  # @example Reporting an unexpected value
+  #   IO.printError("expected a list, got ${Type.of(value).toString}")
   let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)
 
-  # Builds a type by name, for comparing against something you already know:
-  # `Type.of(x) == Type.named("Date")`.
+  # Builds a type from its name, for comparing against something you already
+  # know.
+  #
+  # @param name [String] the type name
+  # @return [Type] the named type
+  #
+  # @example
+  #   Type.of(42) == Type.named("Integer")   # => true
+  #
+  # @example Checking that a value came back as expected
+  #   Type.of(parsed) == Type.named("Date")
   let named(name: String) -> Type = Type { name: name, args: [], pure: true }
 
-  # The same, for a type that takes arguments:
-  # `Type.of([1]) == Type.generic("List", [Type.named("Integer")])`.
+  # Builds a type that takes arguments, from its name and those arguments.
+  #
+  # @param name [String] the type name
+  # @param args [[Type]] its type arguments
+  # @return [Type] the generic type
+  #
+  # @example
+  #   Type.of([1]) == Type.generic("List", [Type.named("Integer")])   # => true
   # Renamed from `Type.with` when `with` became the capability-substitution
   # keyword (kexhq/kex#143).
   let generic(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
 
-  # A function type: parameters followed by the result, the way a signature
-  # is written — `Type.function([Type.named("String")], Type.named("String"))`.
+  # Builds a function type from its parameter types and its result type — in
+  # the order a signature is written.
+  #
+  # @param params [[Type]] the parameter types
+  # @param result [Type] the result type
+  # @return [Type] the function type
+  #
+  # @example
+  #   Type.function([Type.named("String")], Type.named("String")).toString
+  #   # => "String -> String"
   let function(params: [Type], result: Type) -> Type = Type { name: "Function", args: params + [result], pure: true }
 
-  # The type a named function returns, answered by the compiler:
-  #
-  #   Type.returnedBy(Date.parse).toString   # "Result<Date, TimeError>"
+  # Returns the type a named function returns, as answered by the compiler.
   #
   # Named functions only. A lambda or a function VALUE carries no signature at
   # runtime, and an overloaded name has no single answer — both are compile
   # errors rather than a guess.
+  #
+  # @param function [Any] a named function
+  # @return [Type] its return type
+  #
+  # @example
+  #   Type.returnedBy(Date.parse).toString   # => "Result<Date, TimeError>"
   let returnedBy(function: Any) -> Type = Kex.Intrinsic.Type.ofValue(function)
 
   # No `nameOf`/`argsOf`: `type.name` and `type.args` are the record's own
@@ -59,20 +107,71 @@ end
 # only reachable through UFCS in the interpreter, so `Type.of(x).fields`
 # worked there and raised on BEAM.
 make Type do
-  # The field names of a record type, in declaration order, or [] for
-  # anything else. Reads the layout the compiler already ships to the runtime
-  # for display; no separate metadata.
+  # Returns a record type's field names, in declaration order. Anything that
+  # is not a record answers with an empty list.
+  #
+  # Reads the layout the compiler already ships to the runtime for display;
+  # there is no separate metadata to keep in step.
+  #
+  # @return [[String]] the field names, or +[]+
+  #
+  # @example
+  #   Type.of(Point { x: 1, y: 2 }).fields   # => ["x", "y"]
+  #   Type.of(42).fields                     # => []
+  #
+  # @example Rendering a record generically
+  #   Type.of(value).fields.map { |name| "${name}: ..." }.join(", ")
   let fields -> [String] = Kex.Intrinsic.Type.fieldsOf(this.name)
 
-  # The constructor names of an ADT, or [] for anything else.
+  # Returns an ADT's constructor names. Anything that is not an ADT answers
+  # with an empty list.
+  #
+  # @return [[String]] the constructor names, or +[]+
+  #
+  # @example
+  #   Type.of(Circle(1)).constructors   # => ["Circle", "Square"]
+  #   Type.of(42).constructors          # => []
+  #
+  # @example Listing what a sum type can be
+  #   IO.printLine("one of: ${Type.of(shape).constructors.join(", ")}")
   let constructors -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
 
-  # "does this have fields" and "does this have constructors".
+  # Returns +true+ when the type is a record — that is, when it has fields.
+  #
+  # @return [Bool] +true+ for a record type
+  #
+  # @example
+  #   Type.of(Point { x: 1, y: 2 }).record?   # => true
+  #   Type.of(42).record?                     # => false
   let record? -> Bool = this.fields.count > 0
+
+  # Returns +true+ when the type is a sum type — that is, when it has
+  # constructors.
+  #
+  # @return [Bool] +true+ for an ADT
+  #
+  # @example
+  #   Type.of(Circle(1)).adt?   # => true
+  #   Type.of(42).adt?          # => false
   let adt? -> Bool = this.constructors.count > 0
 
-  # The type as it is written in SOURCE, not as it is stored: a list is
-  # `[Integer]`, a tuple `(Integer, String)`, an optional `String?`.
+  # Renders the type the way it is written in SOURCE, not the way it is
+  # stored.
+  #
+  # A list reads as +[Integer]+, a tuple as +(Integer, String)+, an optional
+  # as +String?+, a map as +{String: Integer}+, and a function as its
+  # signature.
+  #
+  # @return [String] the type, as source
+  #
+  # @example
+  #   Type.of([1, 2]).toString      # => "[Integer]"
+  #   Type.of((1, "a")).toString    # => "(Integer, String)"
+  #   Type.of(Just(1)).toString     # => "Integer?"
+  #   Type.of("hi").toString        # => "String"
+  #
+  # @example An error message that names the type
+  #   die("cannot serialise a ${Type.of(value).toString}")
   let toString -> String do
     # A function reads as its signature: `String -> String`, `foul () -> Void`.
     if this.name == "Function" && this.args.count > 0

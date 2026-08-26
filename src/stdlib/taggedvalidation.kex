@@ -1,29 +1,110 @@
-# Diagnostics returned by optional compile-time tagged-literal validators.
+# Diagnostics returned by compile-time validators for tagged literals.
+#
+# A tagged literal — `` re`\d+` ``, `` sql`SELECT ...` `` — can be checked while
+# your program is compiled rather than when it runs. The compiler finds the
+# checker by name: a tag +foo+ is validated by a function named +validateFoo+
+# taking the literal's text and returning a list of +Issue+ values. An empty
+# list means the literal is fine.
+#
+#   let validateHex(source: String) -> [TaggedValidation.Issue] do
+#     match source.chars.findIndex { |c| !c.digit? && !c.in?('a'..'f') } do
+#       Just(offset) => [TaggedValidation.fatalAt(offset, "not a hex digit")]
+#       None         => []
+#     end
+#   end
+#
+# A +Fatal+ issue stops the build with the message, pointing the caret at the
+# offset; a +Warn+ reports without stopping.
+#
 # Byte offsets are zero-based and relative to the cooked literal body.
 module TaggedValidation
 
+# Where in the literal an issue applies: a single offset, or a range.
+#
+# Both are byte offsets into the literal body, counted from zero.
 type ByteSpan = At(Integer) | Between(Integer, Integer)
 
+# One diagnostic about a tagged literal.
+#
+# +Fatal+ stops the build; +Warn+ reports and lets it continue. The span is
+# optional — an issue about the literal as a whole carries +None+.
 type Issue = Fatal(ByteSpan?, String)
   | Warn(ByteSpan?, String)
 
+# A fatal issue about the literal as a whole, with no particular position.
+#
+# @param message [String] what is wrong
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.fatal("an empty pattern matches nothing")
 fatal : String -> Issue
 let fatal(message) = Fatal(None, message)
 
+# A fatal issue at one offset in the literal.
+#
+# The offset is where the caret points in the compiler's error, so use the
+# position the underlying checker reported.
+#
+# @param offset [Integer] the zero-based byte offset in the literal body
+# @param message [String] what is wrong
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.fatalAt(3, "missing closing parenthesis")
+#
+# @example Reporting what a checker found
+#   match Kex.Intrinsic.Regex.validate(source) do
+#     Just((offset, message)) => [TaggedValidation.fatalAt(offset, message)]
+#     None                    => []
+#   end
 fatalAt : Integer -> String -> Issue
 let fatalAt(offset, message) = Fatal(At(offset), message)
 
+# A fatal issue spanning a range of the literal.
+#
+# @param start [Integer] the first byte offset of the span
+# @param finish [Integer] the offset just past its end
+# @param message [String] what is wrong
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.fatalBetween(0, 4, "this group can never match")
 fatalBetween : Integer -> Integer -> String -> Issue
 let fatalBetween(start, finish, message) do
   Fatal(Between(start, finish), message)
 end
 
+# A warning about the literal as a whole. Reported, but the build continues.
+#
+# @param message [String] what is questionable
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.warn("this pattern is very slow on long inputs")
 warn : String -> Issue
 let warn(message) = Warn(None, message)
 
+# A warning at one offset in the literal.
+#
+# @param offset [Integer] the zero-based byte offset in the literal body
+# @param message [String] what is questionable
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.warnAt(7, "redundant escape")
 warnAt : Integer -> String -> Issue
 let warnAt(offset, message) = Warn(At(offset), message)
 
+# A warning spanning a range of the literal.
+#
+# @param start [Integer] the first byte offset of the span
+# @param finish [Integer] the offset just past its end
+# @param message [String] what is questionable
+# @return [Issue] the diagnostic
+#
+# @example
+#   TaggedValidation.warnBetween(2, 6, "this alternation is always taken")
 warnBetween : Integer -> Integer -> String -> Issue
 let warnBetween(start, finish, message) do
   Warn(Between(start, finish), message)

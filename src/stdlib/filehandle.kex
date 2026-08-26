@@ -1,44 +1,191 @@
+# An open file, obtained from +FS.File.open+.
+#
+# The two type parameters record what the handle is allowed to do: +R+ is
+# +CanRead+ or +CannotRead+, +W+ is +CanWrite+ or +CannotWrite+. +FS.File.open+
+# picks them from the mode you pass, so calling +write+ on a handle opened
+# +Read+ is a compile error rather than a run-time failure.
+#
+#   using FS
+#
+#   main do
+#     match FS.File.open("notes.txt", Read) do
+#       Ok(handle) => do
+#         IO.printLine(handle.read.or(""))
+#         handle.close
+#       end
+#       Error(e) => IO.printError("cannot open: ${e}")
+#     end
+#   end
+#
+# Reach for a handle when you want to walk a large file a line at a time, or
+# make many small writes. When a file fits comfortably in memory,
+# +FS.File.read+ and +FS.File.write+ are shorter and need no closing.
 type FileHandle<R, W>
 
 make FileHandle<CanRead, W> do
-  # Compatibility names matching IO-style handle operations.
+  # Reads the next line from the handle, without its newline.
+  #
+  # Answers +None+ at end of file, which is what makes it usable as a loop
+  # condition. The same operation as +readLine+, under the name +IO.getLine+
+  # uses.
+  #
+  # @return [String?] the next line, or +None+ at end of file
+  #
+  # @example Walking a file line by line
+  #   foul echo(handle: FileHandle<CanRead, W>) -> Void do
+  #     match handle.getLine do
+  #       Just(line) => do
+  #         IO.printLine(line)
+  #         echo(handle)
+  #       end
+  #       None => ()
+  #     end
+  #   end
   getLine :> String?
   let getLine = Kex.Intrinsic.FileHandle.getLine(this)
 
+  # Reads a single character from the handle, as a one-character +String+.
+  #
+  # Answers +None+ at end of file.
+  #
+  # @return [String?] the next character, or +None+ at end of file
+  #
+  # @example
+  #   let firstChar = handle.get.or("")
   get :> String?
   let get = Kex.Intrinsic.FileHandle.get(this)
 
+  # Reads the next line from the handle, without its newline. The same as
+  # +getLine+, named for reading from a file rather than from a console.
+  #
+  # @return [String?] the next line, or +None+ at end of file
+  #
+  # @example
+  #   let header = handle.readLine.or("")
+  #
+  # @example Reading the first three lines
+  #   let head = (1..3).items.map { |_| handle.readLine.or("") }
   readLine :> String?
   let readLine = Kex.Intrinsic.FileHandle.readLine(this)
 
+  # Reads everything remaining in the file and returns it as one +String+.
+  #
+  # Reads from the current position, so calling it after a +readLine+ gives
+  # the rest of the file rather than the whole of it.
+  #
+  # @return [String?] the remaining contents, or +None+
+  #
+  # @example
+  #   let body = handle.read.or("")
+  #
+  # @example Skipping a header line, then taking the rest
+  #   handle.readLine
+  #   let body = handle.read.or("")
   read :> String?
   let read = Kex.Intrinsic.FileHandle.read(this)
 
+  # Returns +true+ when the handle has reached the end of the file.
+  #
+  # @return [Bool] +true+ at end of file
+  #
+  # @example
+  #   handle.eof?   # => false, before anything has been read
   eof? :> Bool
   let eof? = Kex.Intrinsic.FileHandle.eof?(this)
 
+  # Returns +true+ when the handle has reached the end of the file. The same
+  # as +eof?+, spelled out.
+  #
+  # @return [Bool] +true+ at end of file
+  #
+  # @example
+  #   if !handle.atEnd?
+  #     IO.printLine(handle.readLine.or(""))
+  #   end
   atEnd? :> Bool
   let atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
 
+  # Returns the handle's remaining lines as a lazy +Stream+.
+  #
+  # Lines are read on demand, so this is how to look at the start of a very
+  # large file, or process one without holding it all in memory.
+  #
+  # The stream does not end at the last line: asking for more lines than the
+  # file has yields +None+ past the end. Take only what you need, or drop the
+  # tail with +reject { |line| line == None }+.
+  #
+  # @return [Stream<String>?] the lines as a stream, or +None+
+  #
+  # @example The first ten lines of a large file
+  #   handle.feed
+  #     .map { |lines| lines.take(10) }
+  #     .or([])
+  #     .reject { |line| line == None }
   feed :> Stream<String>?
   let feed = Kex.Intrinsic.FileHandle.feed(this)
 end
 
 make FileHandle<R, CanWrite> do
+  # Writes +content+ followed by a newline.
+  #
+  # @param content [String] the text to write
+  # @return [Bool] +true+ when the write succeeded
+  #
+  # @example Writing a report line by line
+  #   rows.each { |row| handle.printLine(row) }
   printLine :> String -> Bool
   let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
 
+  # Writes +content+ with no trailing newline.
+  #
+  # @param content [String] the text to write
+  # @return [Bool] +true+ when the write succeeded
+  #
+  # @example Building a line from pieces
+  #   handle.print("name,")
+  #   handle.print("age")
+  #   handle.printLine("")
   print :> String -> Bool
   let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
 
+  # Writes +content+ followed by a newline. The same as +printLine+, named for
+  # writing to a file rather than to a console.
+  #
+  # @param content [String] the text to write
+  # @return [Bool] +true+ when the write succeeded
+  #
+  # @example
+  #   handle.writeLine("done")
   writeLine :> String -> Bool
   let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
 
+  # Writes +content+ with no trailing newline. The same as +print+.
+  #
+  # @param content [String] the text to write
+  # @return [Bool] +true+ when the write succeeded
+  #
+  # @example Writing a whole document in one call
+  #   handle.write(rendered)
   write :> String -> Bool
   let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
 end
 
 make FileHandle<R, W> do
+  # Closes the handle, flushing anything still buffered.
+  #
+  # Close every handle you open. A written file is not guaranteed to be
+  # complete on disk until its handle is closed.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   match FS.File.open("out.txt", Write) do
+  #     Ok(handle) => do
+  #       handle.printLine("hello")
+  #       handle.close
+  #     end
+  #     Error(_) => IO.printError("cannot open out.txt")
+  #   end
   close :> Void
   let close = Kex.Intrinsic.FileHandle.close(this)
 end
