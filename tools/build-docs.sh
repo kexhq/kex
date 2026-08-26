@@ -74,7 +74,7 @@ if [ -z "${SKIP_TAGS:-}" ]; then
       echo "build-docs: WARNING cannot worktree $tag — skipped" >&2
       continue
     }
-    build_docs "$wt/src/stdlib" prelude "Prelude" "$version"
+    build_docs "$wt/src/stdlib" prelude "Standard Library" "$version"
     build_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
     git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
   done
@@ -85,7 +85,7 @@ fi
 # docgen's default, so that build runs from inside tey/ — but as a distinct
 # "-dev" release, so an unreleased build cannot overwrite the released docs
 # of the same version number.
-build_docs "$ROOT/src/stdlib" prelude "Prelude"
+build_docs "$ROOT/src/stdlib" prelude "Standard Library"
 (cd "$ROOT/tey" && "$TEY_RUN" docs build --out "$OUT" \
   ${BASE_URL:+--base-url "$BASE_URL"} \
   --release "$(tey_version "$ROOT")-dev") || \

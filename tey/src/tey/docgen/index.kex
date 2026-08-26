@@ -34,6 +34,7 @@ module Tey.Docgen.Index do
       IO.printError("docgen: no files parsed successfully")
       return 1
     end
+    let (preludeFile, preludeNames, preludeText) = preludeInfo(source)
     let model = PackageModel {
       package: pkg,
       version: version,
@@ -42,7 +43,10 @@ module Tey.Docgen.Index do
       generatedAt: DateTime.now().iso,
       pages: pages,
       modules: Tey.Docgen.Nav.buildModules(pages),
-      links: Tey.Docgen.Nav.buildLinks(pages)
+      links: Tey.Docgen.Nav.buildLinks(pages),
+      preludeModules: preludeNames,
+      preludeSource: preludeFile,
+      preludeDoc: preludeText
     }
     let _ = FS.File.write(FS.Path.join(out, "model.json"), Tey.Docgen.Json.modelJson(model))
     let _ = FS.File.write(FS.Path.join(out, "search.json"), Tey.Docgen.Json.searchJson(model))
@@ -59,6 +63,41 @@ module Tey.Docgen.Index do
 
   foul optString(value: String?) -> String do
     return value.or("")
+  end
+
+  # A source tree with a `prelude.kex` has a subset that is visible without an
+  # import, and the reader wants to know which. The file is declarative by
+  # convention — an opening comment, then one bare `using <Module>` per line —
+  # so reading it is enough. A package without one gets empties, and nothing
+  # in the output mentions a prelude at all.
+  #
+  # Returns (the file, the modules it makes visible, its opening comment).
+  foul preludeInfo(source: String) -> (String, [String], String) do
+    match FS.File.readLines(FS.Path.join(source, "prelude.kex")) do
+      None => ("", [], "")
+      Just(lines) => do
+        let names = lines.map { |line| usingName(line.trim) }.reject { |name| name.empty? }
+        return ("prelude.kex", names, leadingComment(lines))
+      end
+    end
+  end
+
+  # The file's opening comment block, `#` markers stripped, ready for the same
+  # Rdoc parse every other doc comment goes through.
+  foul leadingComment(lines: [String]) -> String do
+    return lines.takeWhile { |line| line.startsWith?("#") }.map { |line| commentBody(line) }.join("\n")
+  end
+
+  foul commentBody(line: String) -> String do
+    return line.drop(2) if line.startsWith?("# ")
+    return line.drop(1)
+  end
+
+  # "using List" -> "List"; anything else (a comment, a blank line, an
+  # `only:` list) -> "".
+  foul usingName(line: String) -> String do
+    return "" if !line.startsWith?("using ")
+    return line.drop(6).split(",").first.or("").trim
   end
 
   # `src/` when it is standing there, else the flag as given (an empty one is

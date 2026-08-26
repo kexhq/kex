@@ -8,7 +8,7 @@
 # both sides.
 
 module Tey.Docgen.Extract do
-  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc]
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf]
 
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
     return entitiesIn(items, "")
@@ -49,7 +49,25 @@ module Tey.Docgen.Extract do
     if primaries.count == 1
       return primaries.first.or("")
     end
-    return titleCase(stripExt(source))
+    # Several declarations, so nothing is obviously THE one — but a file named
+    # filehandle.kex that declares `FileHandle` is about FileHandle, and the
+    # source's own spelling beats a title-cased file name ("Filehandle").
+    let stem = stripExt(source)
+    let named = entities.map { |e| baseSpelling(nameOf(e)) }.filter { |name|
+      name.lowerCase == fileStem(stem).lowerCase
+    }
+    return named.first.or(titleCase(stem))
+  end
+
+  # "FileHandle<CanRead, W>" -> "FileHandle", "FS.Path" -> "Path": what the
+  # file could plausibly be named after.
+  foul baseSpelling(name: String) -> String do
+    return (name.split("<").first.or("")).split(".").last.or("")
+  end
+
+  # "kex/ast" -> "ast".
+  foul fileStem(path: String) -> String do
+    return path.split("/").last.or(path)
   end
 
   foul entitiesIn(body: [Kex.AST.Node], prefix: String) -> [Entity] do
@@ -253,7 +271,15 @@ module Tey.Docgen.Extract do
     end
   end
 
+  # A binding with no parameter list is a constant — unless it is `foul`, in
+  # which case it is a zero-argument FUNCTION that Kex auto-calls. `IO.out` is
+  # a handle that is always the same one; `IO.getLine` reads a new line every
+  # time it is named, and calling that a constant is a lie about both what it
+  # does and when it happens.
   foul isConstantBinding(info: Kex.AST.FunctionInfo) -> Bool do
+    if info.isFoul
+      return false
+    end
     match info.clauses.first do
       Just(clause) => !clause.hasParamList
       None => false
@@ -280,6 +306,21 @@ module Tey.Docgen.Extract do
       PendingFn(fn) => do
         if fn.name != info.name
           return p
+        end
+        # `foul printError = ...` sitting under `foul printError(msg) = ...`
+        # is that function's zero-argument CLAUSE — the no-argument spelling
+        # Kex auto-calls — not a constant. Once parameter lists have been
+        # seen for a name, the name is a function and stays one.
+        if !fn.paramLists.empty?
+          return PendingFn(PendingFunction {
+            name: fn.name,
+            qualifiedName: fn.qualifiedName,
+            annotations: fn.annotations,
+            paramLists: fn.paramLists,
+            clauseCount: fn.clauseCount + info.clauses.count,
+            doc: fn.doc,
+            line: fn.line
+          })
         end
         let doc = if fn.doc.summary.empty?
           Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or(""))

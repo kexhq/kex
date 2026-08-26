@@ -163,6 +163,15 @@ module Tey.Docgen.Model do
     pages : [SourcePage]
     modules : [ModuleIndexEntry] = []
     links : [LinkEntry] = []
+    # The modules a `prelude.kex` in the source tree makes visible without an
+    # import. Empty for a package that has no prelude — then every module is
+    # reached the same way and the index says nothing about it.
+    preludeModules : [String] = []
+    # That file's own path (so its page can be recognised) and its opening
+    # comment, which is the only prose anyone has written about what the
+    # prelude IS. It declares no entities, so without this its page is blank.
+    preludeSource : String = ""
+    preludeDoc : String = ""
   end
 
   # A flattened search row: one per entity (and per function inside traits,
