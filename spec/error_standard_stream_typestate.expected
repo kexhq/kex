@@ -1,0 +1,9 @@
+spec/error_standard_stream_typestate.kex:10:18: error: `printLine` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
+
+printLine : FileHandle<A, CanWrite> -> Showable -> Void
+spec/error_standard_stream_typestate.kex:11:17: error: `getLine` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
+
+getLine : FileHandle<CanRead, A> -> String?
+spec/error_standard_stream_typestate.kex:12:16: error: `read` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
+
+read : FileHandle<CanRead, A> -> String?

@@ -1,0 +1,63 @@
+# `Readable` and `Writable` — the handle vocabulary as NAMED traits, and the
+# standard streams as ordinary handle values (kexhq/kex#139).
+#
+# `FileHandle<R, W>` already carried the whole vocabulary, gated by typestate,
+# but it was an abstraction with no name: nothing else could implement it and
+# `IO` did not go through it. Extracting the traits settles two
+# inconsistencies at the same time — the argument type was `Showable` on `IO`
+# and `String` on the handle (`Showable` is right), and the result was `Void`
+# on `IO` and `Bool` on the handle. `Void` is right: a boolean nobody checks
+# is not an error channel, and `Result<Void, IOError>` on every print is
+# miserable to use. Erlang's answer is the one taken — the call says `ok`, and
+# failure belongs to the device.
+
+using FS
+
+# The payoff: a sink is a VALUE a library can accept. `Mock.IO` cannot do this
+# — it is one global switch, so one library's output cannot go to a buffer
+# while another's goes to the terminal, and nothing can be PASSED.
+foul report(out: Writable, lines: [String]) -> Void do
+  lines.each do |line|
+    out.printLine(line)
+  end
+end
+
+# `Readable` works the same way. `IO.in` is one — see
+# error_standard_stream_typestate.kex for its typestate — but reading it here
+# would make the spec depend on what the runner hands it, so this reads a file.
+foul firstLine(source: Readable) -> String do
+  source.getLine.or("(empty)")
+end
+
+main do
+  # Same call, two spellings: `IO.printLine(x)` stays the ergonomic default
+  # meaning `IO.out.printLine(x)`.
+  IO.printLine("via IO")
+  IO.out.printLine("via IO.out")
+
+  # `Showable`, not `String` — the handle accepts anything the IO family did.
+  IO.out.printLine(42)
+  IO.out.writeLine([1, 2, 3])
+  IO.out.print("no newline")
+  IO.out.printLine("")
+
+  # A file handle and a standard stream are the same trait, so one function
+  # serves both.
+  report(IO.out, ["passed to stdout", "second line"])
+
+  Mock.FS.File("readable.txt", "from a file\nsecond\n")
+  # Mocked too — without this the write below escapes to the real filesystem
+  # and leaves a file in the repo.
+  Mock.FS.File("written.txt", "")
+  let reader = FS.File.open("readable.txt", FS.Read).try
+  IO.printLine(firstLine(reader))
+  reader.close
+
+  # Writing answers Void on every implementation now.
+  let writer = FS.File.open("written.txt", FS.Write).try
+  report(writer, ["through the trait"])
+  writer.close
+  IO.print(FS.File.read("written.txt").or("(missing)"))
+
+  Mock.FS.clear()
+end

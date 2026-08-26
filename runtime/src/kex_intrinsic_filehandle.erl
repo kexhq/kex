@@ -14,6 +14,7 @@ read(Handle) -> kex_file:handle_read(Handle).
 write(Handle, Content) -> kex_file:handle_write(Handle, Content).
 'eof?'(Handle) -> kex_file:'handle_atEnd?'(Handle).
 'atEnd?'(Handle) -> kex_file:'handle_atEnd?'(Handle).
+feed({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr; Std =:= stdin -> 'None';
 feed({'FileHandle', _, Path}) -> kex_file:feed(Path);
 feed(_) -> 'None'.
 close(Handle) -> kex_file:handle_close(Handle).

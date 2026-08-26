@@ -1,0 +1,9 @@
+via IO
+via IO.out
+42
+[1, 2, 3]
+no newline
+passed to stdout
+second line
+from a file
+through the trait

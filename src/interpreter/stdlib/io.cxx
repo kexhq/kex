@@ -122,6 +122,38 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::unit();
     });
 
+    // IO.printErrorRaw(msg) — stderr without the trailing newline. Not part
+    // of the IO capability's surface; it is what `IO.error.print(x)` needs,
+    // since `printError` is the newline-terminated one.
+    defineIntrinsic("IO::printErrorRaw", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+        std::string out;
+        for (const auto& a : args) out += protocolText(a, "showValue");
+        m_output += out;
+        if (m_mockIO) {
+            m_mockIOOutput += out;
+        } else {
+            std::cerr << out;
+        }
+        return Value::unit();
+    });
+
+    // IO.out / IO.error / IO.in — the standard streams as ordinary
+    // `FileHandle` values (kexhq/kex#139). What made `Mock.IO` a switch
+    // rather than a value was that there was nothing to pass; these are the
+    // values. They carry no fstream — the FileHandle intrinsics recognise
+    // their sentinel paths and route back through the IO intrinsics above, so
+    // Mock.IO capture covers a handle write exactly as it covers `IO.print`.
+    auto standardHandle = [](const char* path) {
+        return [path](std::vector<ValuePtr>) -> ValuePtr {
+            auto handle = std::make_shared<Value>();
+            handle->data = FileHandleValue{nullptr, path};
+            return handle;
+        };
+    };
+    defineDual("IO::stdout", standardHandle(kStdoutPath));
+    defineDual("IO::stderr", standardHandle(kStderrPath));
+    defineDual("IO::stdin", standardHandle(kStdinPath));
+
     // IO.warn / IO.warning — aliases for printError.
     aliasDual("IO::warn", "IO::printError");
     aliasDual("IO::warning", "IO::printError");

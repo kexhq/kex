@@ -99,6 +99,51 @@ module FS do
     open : FilePath -> ReadWrite -> Result<FileHandle<CanRead, CanWrite>, FileError>
     foul open(path, mode) = Kex.Intrinsic.File.open(path, mode)
 
+    # Block form: opens +path+, runs the block with the handle, and closes it.
+    #
+    # +Ok+ carries whatever the block returned, so the handle does not outlive
+    # the region allowed to use it and no call site has to remember +close+.
+    # The mode picks the handle's type here exactly as it does above, so a
+    # block given a +Read+ handle still cannot write through it.
+    #
+    # The close is NOT an +ensure+: Kex has no such form, so a block that
+    # raises still leaks the handle. Use +trying+ inside the block to cover
+    # that today.
+    #
+    # @param path [FilePath] the file to open
+    # @param mode [FileModes] +Read+, +Write+, +Append+ or +ReadWrite+
+    # @param block [FileHandle -> A] what to do with the open handle
+    # @return [Result<A, FileError>] the block's value, or +OpenFailed+
+    #
+    # @example Writing a report, with no +close+ to forget
+    #   FS.File.open("report.txt", Write) do |handle|
+    #     rows.each { |row| handle.printLine(row) }
+    #   end
+    #
+    # @example The block's value comes back in +Ok+
+    #   FS.File.open("log.txt", Read) do |handle|
+    #     handle.read.or("").lines.length
+    #   end
+    #   # => Ok(42)
+    #
+    # @example A failure to open never runs the block
+    #   FS.File.open("missing/x.txt", Read) { |h| h.read }
+    #   # => Error(OpenFailed("missing/x.txt"))
+    open : FilePath -> Read -> (FileHandle<CanRead, CannotWrite> -> A) -> Result<A, FileError>
+    open : FilePath -> Write -> (FileHandle<CannotRead, CanWrite> -> A) -> Result<A, FileError>
+    open : FilePath -> Append -> (FileHandle<CannotRead, CanWrite> -> A) -> Result<A, FileError>
+    open : FilePath -> ReadWrite -> (FileHandle<CanRead, CanWrite> -> A) -> Result<A, FileError>
+    foul open(path, mode, block) do
+      match Kex.Intrinsic.File.open(path, mode) do
+        Error(e) => Error(e)
+        Ok(handle) => do
+          let result = block(handle)
+          handle.close
+          Ok(result)
+        end
+      end
+    end
+
     # Reads the whole file and returns its contents as a +String+.
     #
     # Answers +None+ when the file does not exist or cannot be read, so a

@@ -162,4 +162,60 @@ capability IO do
   warning : Showable -> Void
   foul warning(msg: Showable) = Kex.Intrinsic.IO.warning(msg.showValue)
 
+  # The three standard streams, as ordinary handle VALUES.
+  #
+  # +IO.printLine(x)+ and +IO.out.printLine(x)+ are the same call: the
+  # convenience spelling stays, and the handle behind it is now something a
+  # program can name, pass and substitute. That is what +Mock.IO+ cannot do —
+  # it is one global switch, so output from one library cannot go to a buffer
+  # while another's goes to the terminal, and a library cannot ACCEPT a sink
+  # (kexhq/kex#139).
+  #
+  # Typestate says what each one permits: writing to +IO.in+, or reading from
+  # +IO.out+, is a compile error, exactly as it is for a file opened +Read+.
+  #
+  # These three are PURE, so they are not part of the capability interface a
+  # stand-in must implement — naming a device performs no effect, writing
+  # THROUGH it does, and the handle methods are the +foul+ ones. That also
+  # draws the seam between the two ways to redirect output: +with IO = ...+
+  # replaces the CALLS, so it does not touch a handle obtained here, while
+  # +Mock.IO+ replaces the DEVICE (a group leader, kexhq/kex#141) and so
+  # captures +IO.out.printLine(x)+ and +IO.printLine(x)+ alike.
+  #
+  # @return [FileHandle<CannotRead, CanWrite>] standard output, as a +Writable+
+  #
+  # @example Handing a library somewhere to write
+  #   foul report(out: Writable, lines: [String]) -> Void do
+  #     lines.each { |line| out.printLine(line) }
+  #   end
+  #
+  #   report(IO.out, results)
+  #   report(IO.error, warnings)
+  #   report(FS.File.open("report.txt", Write).try, results)
+  out : FileHandle<CannotRead, CanWrite>
+  let out = Kex.Intrinsic.IO.stdout
+
+  # Standard error, as a handle. The sink +IO.printError+ and +IO.warn+ write
+  # to, reachable as a value.
+  #
+  # @return [FileHandle<CannotRead, CanWrite>] standard error, as a +Writable+
+  #
+  # @example
+  #   IO.error.printLine("config file not found")
+  error : FileHandle<CannotRead, CanWrite>
+  let error = Kex.Intrinsic.IO.stderr
+
+  # Standard input, as a handle. The source +IO.getLine+ and +IO.get+ read
+  # from, reachable as a value.
+  #
+  # @return [FileHandle<CanRead, CannotWrite>] standard input, as a +Readable+
+  #
+  # @example Reading from a file or from a pipe, with one function
+  #   foul firstLine(source: Readable) -> String do
+  #     source.getLine.or("(empty)")
+  #   end
+  #
+  #   firstLine(IO.in)
+  in : FileHandle<CanRead, CannotWrite>
+  let in = Kex.Intrinsic.IO.stdin
 end

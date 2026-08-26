@@ -1,5 +1,5 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
+-export([print_line/1, print/1, print_error/1, print_error_raw/1, read_line/0, read_char/0,
            inspect/1, inspect_rendered/2, inspect_repl/1, inspect_value/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
@@ -104,6 +104,15 @@ print_error(X) ->
     case mock_active() of
         true -> mock_append(X, <<"\n">>);
         false -> io:format(standard_error, "~ts~n", [to_string(X)]), 'Kex.Unit'
+    end.
+
+%% `IO.error.print(x)` — stderr WITHOUT the trailing newline, which
+%% print_error/1 always adds. Not part of the IO capability surface
+%% (kexhq/kex#139).
+print_error_raw(X) ->
+    case mock_active() of
+        true -> mock_append(X, <<>>);
+        false -> io:format(standard_error, "~ts", [to_string(X)]), 'Kex.Unit'
     end.
 
 %% IO.getLine — read a line from stdin.

@@ -733,7 +733,12 @@ int main() {
                 "writer.write(\"ok\")\n");
             assertTrue(out.find("error:") != std::string::npos, out);
             assertTrue(out.find("=> None : Option") == std::string::npos, out);
-            assertTrue(out.find("=> true : Bool") != std::string::npos, out);
+            // The write SUCCEEDS, and answers Void rather than the Bool it
+            // used to (kexhq/kex#139) — so the REPL suppresses its result the
+            // way it suppresses `IO.printLine`, and the only "error:" above is
+            // the readLine one.
+            assertTrue(out.find("=> true : Bool") == std::string::npos, out);
+            assertTrue(out.find("badarg") == std::string::npos, out);
         });
 
         it("keeps loaded modules visible to later bindings", []() {
