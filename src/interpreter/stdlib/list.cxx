@@ -93,7 +93,9 @@ auto Evaluator::registerListBuiltins() -> void {
             auto mapFn = fn->native;
             auto newStream = std::make_shared<Value>();
             newStream->data = StreamValue{[gen, offset, mapFn](int64_t index) -> ValuePtr {
-                return mapFn({gen(offset + index)});
+                auto element = gen(offset + index);
+                if (!element) return nullptr;   // the source ended; so does this
+                return mapFn({std::move(element)});
             }, 0};
             return newStream;
         }
@@ -116,16 +118,20 @@ auto Evaluator::registerListBuiltins() -> void {
             auto filterFn = fn->native;
             auto newStream = std::make_shared<Value>();
             newStream->data = StreamValue{[gen, offset, filterFn](int64_t index) -> ValuePtr {
+                // The search cap keeps an infinite source with a predicate
+                // that almost never holds from hanging; a finite source ends
+                // on its own, which the null check below picks up.
                 int64_t found = 0, i = 0, maxSearch = index * 100 + 1000;
                 while (found <= index && i < maxSearch) {
                     auto val = gen(offset + i);
+                    if (!val) return nullptr;
                     if (filterFn({val})->isTrue()) {
                         if (found == index) return val;
                         found++;
                     }
                     i++;
                 }
-                return Value::none();
+                return nullptr;
             }, 0};
             return newStream;
         }

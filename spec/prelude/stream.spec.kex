@@ -99,3 +99,23 @@ describe("Stream — large take") do
     assert(result.last == Just(99))
   end
 end
+
+describe("Stream — a finite stream ends") do
+  it("a file feed stops at the last line instead of padding with None") do
+    let path = "/tmp/kex_prelude_stream_feed.txt"
+    FS.File.write(path, "one\ntwo\n")
+    assert(FS.File.feed(path).map { |lines| lines.take(5) }.or([]) == ["one", "two"])
+    FS.File.delete(path)
+  end
+
+  it("filter over a finite stream sees the elements, not Optionals") do
+    let path = "/tmp/kex_prelude_stream_feed_filter.txt"
+    FS.File.write(path, "one\ntwo\n")
+    let taken = FS.File.feed(path)
+      .map { |lines| lines.filter { |line| line.contains?("t") } }
+      .map { |lines| lines.take(5) }
+      .or([])
+    assert(taken == ["two"])
+    FS.File.delete(path)
+  end
+end

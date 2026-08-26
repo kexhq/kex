@@ -59,6 +59,7 @@ make Range, implement: Enumerable, Foldable do
   # @example
   #   (1..10).contains?(5)    # => true
   #   (1..10).contains?(11)   # => false
+  contains? :> A -> Bool
   let contains?(value) = this.items.contains?(value)
 
   # Returns the range's elements as a list.
@@ -74,6 +75,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example Building a lookup table
   #   (1..12).items.map { |m| (m, monthName(m)) }
+  items :> [A]
   let items = Kex.Intrinsic.Range.items(this)
 
   # Returns the first element, or +None+ for an empty range.
@@ -88,6 +90,7 @@ make Range, implement: Enumerable, Foldable do
   # already worked. Only the walker rejected them ("Undefined method: first
   # for Range"), so every one of these was a backend divergence rather than a
   # deliberate restriction.
+  first :> A?
   let first = this.items.first
 
   # Returns the second element, or +None+ when the range is shorter than two.
@@ -96,6 +99,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (3..7).second   # => Just(4)
+  second :> A?
   let second = this.items.second
 
   # Returns the third element, or +None+ when the range is shorter than three.
@@ -104,6 +108,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (3..7).third   # => Just(5)
+  third :> A?
   let third = this.items.third
 
   # Returns the last element, or +None+ for an empty range.
@@ -112,6 +117,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (3..7).last   # => Just(7)
+  last :> A?
   let last = this.items.last
 
   # Returns every element after the first, as a list.
@@ -120,6 +126,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..4).rest   # => [2, 3, 4]
+  rest :> [A]
   let rest = this.items.rest
 
   # Returns how many elements the range has.
@@ -129,6 +136,7 @@ make Range, implement: Enumerable, Foldable do
   # @example
   #   (1..10).length   # => 10
   #   (5..5).length    # => 1
+  length :> Integer
   let length = this.items.length
 
   # Returns how many elements the range has. The same as +length+.
@@ -137,6 +145,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..10).count   # => 10
+  count :> Integer
   let count = this.items.length
 
   # Returns +true+ when the range has no elements.
@@ -145,6 +154,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..3).empty?   # => false
+  empty? :> Bool
   let empty? = this.items.empty?
 
   # Returns the largest element, or +None+ for an empty range.
@@ -153,6 +163,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..10).max   # => Just(10)
+  max :> A?
   let max = this.items.max
 
   # Returns the smallest element, or +None+ for an empty range.
@@ -161,6 +172,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..10).min   # => Just(1)
+  min :> A?
   let min = this.items.min
 
   # Returns the elements as a list, in descending order.
@@ -172,6 +184,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example Counting down
   #   (1..3).reverse.each { |n| IO.printLine(n) }   # prints 3, 2, 1
+  reverse :> [A]
   let reverse = this.items.reverse
 
   # Returns the elements as a sorted list. A range is already ascending, so
@@ -181,6 +194,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..4).sort   # => [1, 2, 3, 4]
+  sort :> [A]
   let sort = this.items.sort
 
   # Returns the elements as a list, ordered by +comparator+.
@@ -190,6 +204,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..4).sort { |a, b| a > b }   # => [4, 3, 2, 1]
+  sort :> (A -> A -> Bool) -> [A]
   let sort(comparator) = this.items.sort(comparator)
 
   # Returns the elements as a list with duplicates removed. A range has none,
@@ -199,6 +214,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..3).uniq   # => [1, 2, 3]
+  uniq :> [A]
   let uniq = this.items.uniq
 
   # Renders the elements as text, with +separator+ between them.
@@ -211,6 +227,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example A comma-separated header
   #   "columns: ${(1..3).join(",")}"   # => "columns: 1,2,3"
+  join :> String -> String
   let join(separator) = this.items.join(separator)
 
   # Returns the element at index +index+, counting from 0, or +None+ when out
@@ -225,22 +242,37 @@ make Range, implement: Enumerable, Foldable do
   # @example
   #   (10..20).at(0)   # => Just(10)
   #   (10..20).at(99)  # => None
+  at :> Integer -> A?
   let at(index) = this.items.at(index)
+
+  # Returns the element at index +index+, counting from 0, or +None+ when out
+  # of range. The same as +at+, named to match +List+ and +Map+.
+  #
+  # @param index [Integer] the 0-based position
+  # @return [A?] the element, or +None+
+  #
+  # @example
+  #   (10..20).get(0)   # => Just(10)
+  #   (10..20).get(99)  # => None
+  get :> Integer -> A?
+  let get(index) = this.items.get(index)
 
   # Returns the element at index +index+, or +fallback+ when out of range.
   #
-  # Note: the fallback is not currently applied — an out-of-range index
-  # answers +None+ rather than +fallback+. Until that is fixed, use
-  # +items.get(index, fallback)+, which is total.
+  # This is the total form: it always answers a value, never an +Optional+.
+  # +at+ and +get+ with one argument are the partial forms — the split matches
+  # +List+, +String+ and +Map+, where +at+ is always optional and only +get+
+  # takes a fallback.
   #
   # @param index [Integer] the 0-based position
   # @param fallback [A] the value to use when out of range
   # @return [A] the element, or +fallback+
   #
-  # @example Use the list form for a reliable default
-  #   (10..20).items.get(0, 0)    # => 10
-  #   (10..20).items.get(99, 0)   # => 0
-  let at(index, fallback) = this.items.at(index, fallback)
+  # @example
+  #   (10..20).get(0, 0)    # => 10
+  #   (10..20).get(99, 0)   # => 0
+  get :> Integer -> A -> A
+  let get(index, fallback) = this.items.get(index, fallback)
 
   # Returns the first +n+ elements as a list.
   #
@@ -249,6 +281,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..10).take(3)   # => [1, 2, 3]
+  take :> Integer -> [A]
   let take(n) = this.items.take(n)
 
   # Returns everything after the first +n+ elements, as a list.
@@ -258,21 +291,19 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..5).drop(3)   # => [4, 5]
+  drop :> Integer -> [A]
   let drop(n) = this.items.drop(n)
 
   # Returns the position of +value+ in the range, or +None+ when it is not in
   # it.
   #
-  # Note: on a numeric range the argument is currently inferred as a +Char+,
-  # so +(10..20).indexOf(12)+ does not compile. Use
-  # +(10..20).items.indexOf(12)+ for numbers.
-  #
   # @param value [A] the element to look for
   # @return [Integer?] the 0-based position, or +None+
   #
   # @example
-  #   ('a'..'e').indexOf('c')      # => Just(2)
-  #   (10..20).items.indexOf(12)   # => Just(2)
+  #   ('a'..'e').indexOf('c')   # => Just(2)
+  #   (10..20).indexOf(12)      # => Just(2)
+  indexOf :> A -> Integer?
   let indexOf(value) = this.items.indexOf(value)
 
   # Pairs each element with the element at the same position in +other+,
@@ -286,6 +317,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example Numbering a list
   #   (1..names.count).zip(names)
+  zip :> [B] -> [(A, B)]
   let zip(other) = this.items.zip(other)
 
   # Splits the elements into those satisfying +pred+ and those that do not.
@@ -295,6 +327,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..4).partition { |n| n.even? }   # => ([2, 4], [1, 3])
+  partition :> (A -> Bool) -> ([A], [A])
   let partition(pred) = this.items.partition(pred)
 
   # Returns the elements as a list with +value+ added at the end.
@@ -304,6 +337,7 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..3).push(4)   # => [1, 2, 3, 4]
+  push :> A -> [A]
   let push(value) = this.items.push(value)
 
   # Returns the elements that do NOT satisfy +pred+, as a list.
@@ -313,5 +347,6 @@ make Range, implement: Enumerable, Foldable do
   #
   # @example
   #   (1..5).reject { |n| n.even? }   # => [1, 3, 5]
+  reject :> (A -> Bool) -> [A]
   let reject(pred) = this.items.reject(pred)
 end

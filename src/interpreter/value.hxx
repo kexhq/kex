@@ -96,6 +96,13 @@ struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
 struct RangeValue { int64_t start; int64_t end; bool isChar = false; };
 
+// A generator answers the element at `index`, or a null pointer once the
+// stream has ended. The null is a sentinel OUTSIDE the value domain on
+// purpose: a finite stream (`FS.File.feed`) used to signal end-of-file with
+// `None`, which is a perfectly good element of a `Stream<String?>` — so
+// `take` could not tell a real element from the end and padded the result
+// with Nones. Generators for genuinely infinite streams (`Stream.Sequence`)
+// never return null, and stay infinite.
 using StreamGenerator = std::function<std::shared_ptr<struct Value>(int64_t index)>;
 struct StreamValue {
     StreamGenerator generator;

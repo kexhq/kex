@@ -238,6 +238,16 @@ auto Value::isTrue() const -> bool {
     }, data);
 }
 
+// A map literal writes an atom key bare — `{ a: 1 }` — so the key's own colon
+// must not be doubled onto the `key: value` separator. Rendering it as `:a:`
+// produced text the parser rejects, which defeats the point of `inspect`
+// ("the type as it is written in source"). Returns the bare name for an atom
+// key and nullptr for anything else, which renders as itself.
+static auto atomKeyName(const ValuePtr& key) -> const std::string* {
+    if (const auto* atom = std::get_if<AtomValue>(&key->data)) return &atom->name;
+    return nullptr;
+}
+
 auto Value::toString() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
@@ -292,7 +302,9 @@ auto Value::toString() const -> std::string {
             std::string result = "{ ";
             for (size_t i = 0; i < entries.size(); i++) {
                 if (i > 0) result += ", ";
-                result += entries[i].first->toString() + ": " + entries[i].second->toString();
+                const auto* atomKey = atomKeyName(entries[i].first);
+                result += (atomKey ? *atomKey : entries[i].first->toString()) +
+                          ": " + entries[i].second->toString();
             }
             return result + " }";
         }
@@ -377,7 +389,9 @@ auto Value::toRepr() const -> std::string {
             std::string result = "{ ";
             for (size_t i = 0; i < v.entries.size(); i++) {
                 if (i > 0) result += ", ";
-                result += v.entries[i].first->toRepr() + ": " + v.entries[i].second->toRepr();
+                const auto* atomKey = atomKeyName(v.entries[i].first);
+                result += (atomKey ? *atomKey : v.entries[i].first->toRepr()) +
+                          ": " + v.entries[i].second->toRepr();
             }
             return result + " }";
         }
@@ -679,7 +693,10 @@ auto Value::inspect() const -> std::string {
                 std::string result = "{ ";
                 for (size_t i = 0; i < node.entries.size(); i++) {
                     if (i > 0) result += ", ";
-                    result += rec(*node.entries[i].first) + ": " + rec(*node.entries[i].second);
+                    const auto* atomKey = atomKeyName(node.entries[i].first);
+                    result += (atomKey ? std::string(c(purple)) + *atomKey + c(reset)
+                                       : rec(*node.entries[i].first)) +
+                              ": " + rec(*node.entries[i].second);
                 }
                 return result + " }";
             }

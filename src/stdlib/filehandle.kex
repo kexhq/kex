@@ -213,9 +213,8 @@ make FileHandle<CanRead, W>, implement: Readable do
   # Lines are read on demand, so this is how to look at the start of a very
   # large file, or process one without holding it all in memory.
   #
-  # The stream does not end at the last line: asking for more lines than the
-  # file has yields +None+ past the end. Take only what you need, or drop the
-  # tail with +reject { |line| line == None }+.
+  # The stream ends at the last line, so taking more lines than the file has
+  # answers just the lines there are.
   #
   # NOT part of +Readable+. +docs/streams.md+ describes a one-shot, stateful
   # +Feed<A>+ that does not exist, and a file feed is neither pure nor
@@ -228,7 +227,6 @@ make FileHandle<CanRead, W>, implement: Readable do
   #   handle.feed
   #     .map { |lines| lines.take(10) }
   #     .or([])
-  #     .reject { |line| line == None }
   feed :> Stream<String>?
   foul feed = Kex.Intrinsic.FileHandle.feed(this)
 end

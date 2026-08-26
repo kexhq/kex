@@ -511,7 +511,7 @@ inspect_string('None') -> ?GRAY ++ "None" ++ ?RESET;
 inspect_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
 inspect_string(X) when is_map(X) ->
-    Pairs = [inspect_string(K) ++ ": " ++ inspect_string(V)
+    Pairs = [map_key_string(K) ++ ": " ++ inspect_string(V)
              || {K, V} <- lists:sort(maps:to_list(X))],
     "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
 inspect_string(X) when is_atom(X) ->
@@ -549,6 +549,14 @@ inspect_string(X) when is_tuple(X), tuple_size(X) >= 2,
     end;
 inspect_string(X) when is_tuple(X) -> inspect_tuple_string(X);
 inspect_string(X) -> unicode:characters_to_list(to_string(X)).
+
+%% A map literal writes an atom key bare — `{ a: 1 }` — so the atom's own colon
+%% must not be doubled onto the `key: value` separator. `{ :a: 1 }` is not
+%% syntax the parser accepts, which defeats the point of inspect ("the type as
+%% it is written in source"). Non-atom keys render as themselves.
+map_key_string(K) when is_atom(K), K =/= true, K =/= false, K =/= 'None' ->
+    ?GREEN ++ atom_to_list(K) ++ ?RESET;
+map_key_string(K) -> inspect_string(K).
 
 inspect_tuple_string(X) ->
     Tag = element(1, X),
@@ -688,11 +696,12 @@ to_string(X) when is_atom(X) ->
     end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
-% Kex map syntax (matching the walker's MapValue::toString): `{ :k: v, … }`,
-% and `{  }` when empty. Note key ORDER can still differ from the walker —
-% Erlang maps don't preserve insertion order after put/delete.
+% Kex map syntax (matching the walker's MapValue::toString): `{ k: v, … }`,
+% and `{  }` when empty. An atom key renders bare, the way a map literal
+% writes it. Note key ORDER can still differ from the walker — Erlang maps
+% don't preserve insertion order after put/delete.
 to_string(X) when is_map(X)     ->
-    Pairs = [to_string(K) ++ ": " ++ to_string(V) || {K, V} <- lists:sort(maps:to_list(X))],
+    Pairs = [map_key_to_string(K) ++ ": " ++ to_string(V) || {K, V} <- lists:sort(maps:to_list(X))],
     "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
 % A plain Kex Tuple (structural pairing, e.g. `(Underscore, rest)`) and a
 % prelude ADT variant with a payload (e.g. Just(1)) are BOTH just an
@@ -737,6 +746,11 @@ to_string(X) when is_tuple(X)   ->
     Parts = [to_string(E) || E <- tuple_to_list(X)],
     "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
+
+%% See map_key_string/1 — the same rule for the quote-free `show` rendering.
+map_key_to_string(K) when is_atom(K), K =/= true, K =/= false, K =/= 'None' ->
+    atom_to_list(K);
+map_key_to_string(K) -> to_string(K).
 
 variant_string(X) ->
     [Tag | Args] = tuple_to_list(X),
