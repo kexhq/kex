@@ -46,9 +46,9 @@ describe("List — count and empty?") do
 end
 
 describe("List — at") do
-  it("at returns the element for valid indices") do
-    assert([10, 20, 30].at(0) == 10)
-    assert([10, 20, 30].at(2) == 30)
+  it("at wraps the element for valid indices") do
+    assert([10, 20, 30].at(0) == Just(10))
+    assert([10, 20, 30].at(2) == Just(30))
   end
 
   it("at returns None for out-of-range indices") do

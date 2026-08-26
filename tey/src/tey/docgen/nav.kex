@@ -11,8 +11,6 @@
 module Tey.Docgen.Nav do
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, ModuleEntry, SourcePage, ModuleIndexEntry, MemberEntry, LinkEntry, kindOf, nameOf, anchorOf]
 
-  # ── Module index ──────────────────────────────────────────────────────────
-
   # Every module in the package, in declaration order, pointing at the page
   # it lives on. Nested modules are entries of their own (the sidebar nests
   # them by name).
@@ -41,8 +39,6 @@ module Tey.Docgen.Nav do
   foul firstLine(summary: String) -> String do
     return summary.split("\n").first.or("")
   end
-
-  # ── Link index ────────────────────────────────────────────────────────────
 
   # Linkable names, unique-target-wins: a name links while exactly one
   # (page, anchor) answers it. A qualified name ("FS.Path") is its own name;
@@ -103,8 +99,6 @@ module Tey.Docgen.Nav do
   foul differentTarget?(a: LinkEntry, b: LinkEntry) -> Bool do
     return a.urlPath != b.urlPath || a.anchor != b.anchor
   end
-
-  # ── Resolution ────────────────────────────────────────────────────────────
 
   foul resolve(links: [LinkEntry], name: String) -> LinkEntry? do
     return links.find { |l| l.name == name }

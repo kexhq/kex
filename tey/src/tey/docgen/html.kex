@@ -9,21 +9,124 @@
 module Tey.Docgen.Html do
   using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, LinkEntry, kindOf, nameOf, anchorOf]
 
-  # ── Public API ───────────────────────────────────────────────────────────
-
   foul pageHtml(page: SourcePage, model: PackageModel) -> String do
+    if preludePage?(page, model)
+      return preludePageHtml(page, model)
+    end
     let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n")
-    let body = "<h1>${esc(page.title)}</h1>\n${sections}"
+    let tag = preludeTag(preludePaths(model).contains?(page.urlPath))
+    let body = "<h1>${esc(page.title)}${tag}</h1>\n${sections}"
     return layout(page.title, page.urlPath, body, model)
   end
 
-  # Landing page for <pkg>/<version>/index.html: every module as a card.
+  foul preludePage?(page: SourcePage, model: PackageModel) -> Bool do
+    return !model.preludeSource.empty? && page.source == model.preludeSource
+  end
+
+  # The prelude declares nothing, so the generic page renderer leaves it
+  # blank. What it HAS is a list of imports and a comment explaining them —
+  # which is exactly the page a reader wants: what am I given for free, and
+  # where does each of those live.
+  foul preludePageHtml(page: SourcePage, model: PackageModel) -> String do
+    let doc = Tey.Docgen.Rdoc.parseOrEmpty(model.preludeDoc)
+    let items = model.preludeModules.map { |name| preludeItem(model, page.urlPath, name) }.join("\n")
+    let body = [
+      "<h1>${esc(page.title)}</h1>",
+      docHtml(doc),
+      "<h2 class=\"group\">Modules in the prelude</h2>",
+      "<p class=\"group-note\">${model.preludeModules.count} module(s), visible in every file with no import.</p>",
+      "<ul class=\"prelude-list\">\n${items}\n</ul>"
+    ].join("\n")
+    return layout(page.title, page.urlPath, body, model)
+  end
+
+  foul preludeItem(model: PackageModel, fromPath: String, name: String) -> String do
+    let summary = moduleSummary(model, name)
+    let note = summary.empty? then "" else " <span class=\"prelude-note\">${inlineCode(summary)}</span>"
+    return "<li><code>${preludeLink(model, fromPath, name)}</code>${note}</li>"
+  end
+
+  # A `using X` in prelude.kex names a sibling SOURCE FILE, so the page for
+  # that file is the exact target. Going through the link index instead would
+  # lose half the list: `Map`, `Set` and `Range` are ambiguous as bare names —
+  # a module and a type both claim them — and resolve to nothing.
+  #
+  # The file is what matches, not the title: `using Test` is test.kex, whose
+  # page is titled "Assert", and `using Env` is env.kex, titled "ENV".
+  foul preludeLink(model: PackageModel, fromPath: String, name: String) -> String do
+    match pageNamed(model, name) do
+      Just(page) => do
+        let href = "${Tey.Docgen.Nav.upsToVersionDir(fromPath)}${page.urlPath}.html"
+        return "<a class=\"xref\" href=\"${href}\">${esc(name)}</a>"
+      end
+      None => linkType(model.links, fromPath, name)
+    end
+  end
+
+  foul pageNamed(model: PackageModel, name: String) -> SourcePage? do
+    match model.pages.find { |p| p.title == name } do
+      Just(page) => Just(page)
+      None => model.pages.find { |p| pageStem(p.urlPath) == name.lowerCase }
+    end
+  end
+
+  foul pageStem(urlPath: String) -> String do
+    return (urlPath.split("/").last.or(urlPath)).lowerCase
+  end
+
+  foul moduleSummary(model: PackageModel, name: String) -> String do
+    match model.modules.find { |m| m.qualifiedName == name } do
+      Just(entry) => entry.summary
+      None => ""
+    end
+  end
+
+  # Landing page for <pkg>/<version>/index.html: every module as a card. When
+  # the package has a prelude, the cards are split by how a reader REACHES
+  # them — visible everywhere, or one `using` away — because that is the first
+  # question anyone has about a standard library.
   foul versionIndexHtml(model: PackageModel) -> String do
     let label = labelOf(model)
     let top = firstModulesOfPages(model.pages)
-    let cards = model.modules.map { |m| moduleCard(m, top.contains?(m.qualifiedName)) }.join("\n")
-    let body = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>\n<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>\n<div class=\"cards\">\n${cards}\n</div>"
-    return layout(label, "", body, model)
+    let lede = "<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>"
+    let heading = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>"
+    return layout(label, "", "${heading}\n${lede}\n${indexSections(model, top)}", model)
+  end
+
+  foul indexSections(model: PackageModel, top: [String]) -> String do
+    if model.preludeModules.empty?
+      return cardGrid(model.modules, top)
+    end
+    let paths = preludePaths(model)
+    let (included, optIn) = model.modules.partition { |m| paths.contains?(m.urlPath) }
+    return [
+      "<h2 class=\"group\">In the prelude</h2>",
+      "<p class=\"group-note\">Visible in every file, with no import. ${included.count} module(s).</p>",
+      cardGrid(included, top),
+      "<h2 class=\"group\">Opt-in</h2>",
+      "<p class=\"group-note\">Available after an explicit <code>using</code> — <code>using FS</code> before <code>FS.File.read</code>.</p>",
+      cardGrid(optIn, top)
+    ].join("\n")
+  end
+
+  # The prelude imports FILES, and everything a listed file declares comes
+  # with it: `using Time` is what puts `Date`, `Duration` and `Time.Period` in
+  # scope, none of which prelude.kex names. So the split is by page, not by
+  # module name.
+  foul preludePaths(model: PackageModel) -> [String] do
+    return model.preludeModules.flatMap { |name| preludePath(model, name) }
+  end
+
+  foul preludePath(model: PackageModel, name: String) -> [String] do
+    match pageNamed(model, name) do
+      Just(page) => [page.urlPath]
+      None => []
+    end
+  end
+
+  foul cardGrid(modules: [Tey.Docgen.Model.ModuleIndexEntry], top: [String]) -> String do
+    let cards = modules.map { |m| moduleCard(m, top.contains?(m.qualifiedName)) }.join("\n")
+    return "<div class=\"cards\">\n${cards}\n</div>"
   end
 
   # <pkg>/index.html: the versions of one package, newest first — the page a
@@ -280,8 +383,6 @@ module Tey.Docgen.Html do
     end
   end
 
-  # ── Layout ───────────────────────────────────────────────────────────────
-
   foul layout(title: String, current: String, bodyContent: String, model: PackageModel) -> String do
     let label = labelOf(model)
     let root = rootPrefix(current)
@@ -335,10 +436,14 @@ module Tey.Docgen.Html do
   # file expands to its top-level declarations so a reader can jump straight
   # to one. The label is the page's title (the module it declares), not the
   # raw file name.
+  # The heading is a link: it is the package's name, and the obvious thing to
+  # want from it is the list of what the package contains — which is the
+  # version index, where the prelude split lives.
   foul sidebar(model: PackageModel, current: String) -> String do
     let vpre = versionPrefix(current)
     let entries = model.pages.map { |p| sidebarEntry(p, current, vpre) }.join("\n")
-    return "<aside class=\"side\"><nav aria-label=\"Modules\"><p class=\"side-heading\">${esc(labelOf(model))}</p><ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
+    let heading = "<p class=\"side-heading\"><a href=\"${vpre}index.html\">${esc(labelOf(model))}</a></p>"
+    return "<aside class=\"side\"><nav aria-label=\"Modules\">${heading}<ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
   end
 
   foul sidebarEntry(page: SourcePage, current: String, vpre: String) -> String do
@@ -348,6 +453,12 @@ module Tey.Docgen.Html do
       return "<li><a class=\"active\" href=\"${href}\">${esc(page.title)}</a><ul class=\"side-sub\">\n${entityLinks}\n</ul></li>"
     end
     return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
+  end
+
+  # The page's own heading carries it — the sidebar is a list to scan, and a
+  # chip on 32 of 41 rows is noise rather than an answer.
+  foul preludeTag(inPrelude: Bool) -> String do
+    return inPrelude then "<span class=\"tag-prelude\" title=\"In the prelude: no import needed\">prelude</span>" else ""
   end
 
   # The modules that OPEN a page — their section sits at the very top, so a
@@ -376,8 +487,6 @@ module Tey.Docgen.Html do
     end
     return "<a class=\"card\" href=\"${href}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
-
-  # ── Entity sections ──────────────────────────────────────────────────────
 
   foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
@@ -496,8 +605,6 @@ module Tey.Docgen.Html do
     return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind kind-constant\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
   end
 
-  # ── Functions inside traits, makes, modules ──────────────────────────────
-
   foul functionsHtml(functions: [FunctionEntry], link: (String -> String)) -> String do
     if functions.empty?
       return ""
@@ -517,14 +624,51 @@ module Tey.Docgen.Html do
     return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
   end
 
-  # ── Doc fragments ────────────────────────────────────────────────────────
-
   foul docHtml(doc: Doc) -> String do
     if doc.summary.empty?
       return ""
     end
-    let paras = doc.summary.split("\n\n").map { |p| "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>" }.join("\n")
+    let paras = summaryParagraphs(doc.summary).map { |p| paragraphHtml(p) }.join("\n")
     return paras + "\n"
+  end
+
+  # Paragraphs break on blank lines — except inside a fenced block, where a
+  # blank line is part of the code rather than the end of a paragraph.
+  foul summaryParagraphs(summary: String) -> [String] do
+    return groupParagraphs(summary.split("\n"), [], [], false)
+  end
+
+  foul groupParagraphs(lines: [String], current: [String], accum: [String],
+                       fenced: Bool) -> [String] do
+    if lines.empty?
+      return current.empty? then accum else accum + [current.join("\n")]
+    end
+    let line = lines.first.or("")
+    let rest = lines.drop(1)
+    if line.startsWith?("```")
+      if fenced
+        return groupParagraphs(rest, [], accum + [(current + [line]).join("\n")], false)
+      end
+      let beforeFence = current.empty? then accum else accum + [current.join("\n")]
+      return groupParagraphs(rest, [line], beforeFence, true)
+    end
+    if !fenced && line.trim.empty?
+      let flushed = current.empty? then accum else accum + [current.join("\n")]
+      return groupParagraphs(rest, [], flushed, false)
+    end
+    return groupParagraphs(rest, current + [line], accum, fenced)
+  end
+
+  # A summary paragraph is either prose or a fenced block that Rdoc produced
+  # from an indented (verbatim) block — the latter is highlighted code, not
+  # text to reflow.
+  foul paragraphHtml(p: String) -> String do
+    if p.startsWith?("```")
+      let lines = p.split("\n")
+      let body = lines.drop(1).takeWhile { |l| l != "```" }.join("\n")
+      return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
+    end
+    return "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>"
   end
 
   # Minimal inline Markdown for doc prose: `code` spans. Splitting on the
@@ -588,8 +732,6 @@ module Tey.Docgen.Html do
       None => ""
     end
   end
-
-  # ── Shared helpers ───────────────────────────────────────────────────────
 
   # Escape text for HTML (content and double-quoted attributes).
   foul esc(s: String) -> String do

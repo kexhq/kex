@@ -19,7 +19,7 @@ end
 
 make Parser do
   # The current character, or None at end of input.
-  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
+  let peek = @pos < @input.count then @input.at(@pos) else None
 
   # A new parser advanced one character.
   let advance = Parser { input: @input, pos: @pos + 1 }
@@ -82,7 +82,7 @@ make Parser do
     loop do
       break if i >= alts.count
       trying do
-        let f = alts.at(i)
+        let f = alts.at(i).try
         let result = f(this).try
         return Ok(result)
       rescue

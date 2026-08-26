@@ -320,7 +320,17 @@ module Tey.Docgen.Css do
         padding-block: 2.5rem;
       }
 
-      .side nav { position: sticky; top: 5rem; }
+      /* The module list is longer than the viewport, and it is stuck to it —
+         so it needs its own scrollbar, or everything past the fold is
+         unreachable. The height is what is left below the sticky header. */
+      .side nav {
+        position: sticky;
+        top: 5rem;
+        max-height: calc(100vh - 6.5rem);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 0.35rem;
+      }
 
       .side-heading {
         margin: 0 0 0.6rem;
@@ -448,12 +458,12 @@ module Tey.Docgen.Css do
 
       .prose code:not(pre code) {
         font-family: var(--font-mono);
-        font-size: 0.86em;
+        font-size: 0.82em;
         background: var(--bg-muted);
         border: 1px solid var(--line);
         padding: 0.12rem 0.4rem;
         border-radius: 6px;
-        color: var(--ink);
+        color: var(--muted);
       }
 
       .prose strong { color: var(--ink); font-weight: 600; }
@@ -582,6 +592,62 @@ module Tey.Docgen.Css do
         gap: 0.9rem;
         grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
         margin-top: 1.6rem;
+      }
+
+      /* Section headings on the index and the prelude page: what separates
+         "given to you" from "one using away". */
+      .group {
+        margin: 2.6rem 0 0.2rem;
+        font-family: var(--font-display);
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .group-note { margin: 0; color: var(--muted); font-size: 0.92rem; }
+
+      /* "prelude": this page needs no import. It sits on the page heading,
+         beside the module name it qualifies. */
+      .tag-prelude {
+        margin-left: 0.5rem;
+        padding: 0.05rem 0.4rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+        font-family: var(--font-mono);
+        font-size: 9.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      h1 .tag-prelude { font-size: 11px; vertical-align: 0.45em; }
+
+      .prelude-list {
+        list-style: none;
+        margin: 1.2rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.35rem;
+        grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+      }
+
+      .prelude-list li {
+        display: flex;
+        gap: 0.6rem;
+        align-items: baseline;
+        padding: 0.3rem 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .prelude-note {
+        color: var(--faint);
+        font-size: 0.85rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .card {

@@ -58,7 +58,7 @@ make Input do
   # @example
   #   Input { input: "abc" }.peek           # => Just('a')
   #   Input { input: "abc", pos: 3 }.peek   # => None
-  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
+  let peek = @pos < @input.count then @input.at(@pos) else None
 
   # The character +offset+ positions ahead of the cursor, or +None+ when that
   # is outside the input.
@@ -75,7 +75,7 @@ make Input do
   let peekAt(offset: Integer) -> Char? do
     let index = @pos + offset
     return None if index < 0 || index >= @input.count
-    return Just(@input.at(index))
+    return @input.at(index)
   end
 
   # Returns +true+ when the cursor has consumed the whole input.
@@ -248,7 +248,7 @@ make Input do
     var index = 0
     loop do
       break if index >= wanted.count
-      return Error(Expected(expected, @pos)) if this.peekAt(index) != Just(wanted.at(index))
+      return Error(Expected(expected, @pos)) if this.peekAt(index) != wanted.at(index)
       index = index + 1
     end
     Ok((expected, this.advanceBy(wanted.count)))
@@ -303,7 +303,7 @@ make Input do
     loop do
       break if index >= alts.count
       trying do
-        let f = alts.at(index)
+        let f = alts.at(index).try
         let result = f(this).try
         return Ok(result)
       rescue

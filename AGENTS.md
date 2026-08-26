@@ -52,6 +52,15 @@ make test-wasm    # + runs the interpreter test suite via Node
 - `auto foo() -> ReturnType` trailing return style
 - Namespace: `kex`
 
+### Kex (`.kex` sources)
+
+- One-line conditionals are `<cond> then <true> else <false>` — no `if`, no
+  `end`. Spell out `if <cond>` / `else` / `end` only when the branches are on
+  their own lines.
+- Multi-line blocks are `do |x| ... end`; `{ |x| ... }` is for one-liners only.
+- Prefer `.try` over matching `Ok/Error` or `Just/None` by hand where the
+  function can propagate the failure.
+
 ## Current Status
 
 Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented.

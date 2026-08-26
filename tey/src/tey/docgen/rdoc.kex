@@ -25,7 +25,7 @@ module Tey.Docgen.Rdoc do
       return None
     end
     let lines = rewritePlusPairs(text, "").split("\n")
-    let blocks = splitParagraphs(lines, [], [])
+    let blocks = mergeVerbatim(splitParagraphs(lines, [], []), [])
     return classifyBlocks(blocks, "", [], None, [], None)
   end
 
@@ -73,13 +73,86 @@ module Tey.Docgen.Rdoc do
       if current.empty?
         return splitParagraphs(rest, [], accum)
       end
+      # A blank line inside an `@example`'s code is part of the example — a
+      # `describe` with a `before` block and an `it` block has one. Indented
+      # code on the far side of it means the directive has not ended.
+      if directiveBlock?(current) && indented?(rest.first.or(""))
+        return splitParagraphs(rest, current + [""], accum)
+      end
       return splitParagraphs(rest, [], accum + [current])
     end
     if line.trim.startsWith?("@")
       let flushed = if current.empty? then accum else accum + [current] end
       return splitParagraphs(rest, [line], flushed)
     end
+    # A directive's continuation lines are indented — an `@example`'s code is
+    # what they usually are. An unindented line therefore ends the directive
+    # even without a blank line between them, so an implementation note
+    # written straight under the last example does not become part of it.
+    if directiveBlock?(current) && indentWidth(line) == 0
+      return splitParagraphs(rest, [line], accum + [current])
+    end
     return splitParagraphs(rest, current + [line], accum)
+  end
+
+  foul directiveBlock?(current: [String]) -> Bool do
+    return (current.first.or("")).trim.startsWith?("@")
+  end
+
+  foul indented?(line: String) -> Bool do
+    return !line.trim.empty? && indentWidth(line) >= 2
+  end
+
+  # RDoc's verbatim marker is indentation: a prose block whose every line is
+  # indented is code — or a hand-laid-out table — that the author positioned
+  # deliberately. Reflowing it into a paragraph loses both the line breaks and
+  # the highlighting, so it is carried through the summary as a fenced block
+  # instead, which both renderers turn back into a highlighted `<pre>`.
+
+  # Leading-space count of a line.
+  foul indentWidth(s: String) -> Integer do
+    return s.chars.takeWhile { |c| c == ' ' }.count
+  end
+
+  foul verbatim?(lines: [String]) -> Bool do
+    let content = lines.reject { |l| l.trim.empty? }
+    if content.empty?
+      return false
+    end
+    return content.all? { |l| indentWidth(l) >= 2 }
+  end
+
+  # Strips the common indentation shared by every non-blank line, so a block
+  # written at two spaces (or nested deeper) renders flush left.
+  foul dedent(lines: [String]) -> [String] do
+    let content = lines.reject { |l| l.trim.empty? }
+    if content.empty?
+      return lines
+    end
+    let margin = content.map { |l| indentWidth(l) }.min.or(0)
+    if margin <= 0
+      return lines
+    end
+    return lines.map { |l| l.trim.empty? then "" else l.drop(margin) }
+  end
+
+  foul fenceVerbatim(lines: [String]) -> String do
+    return (["```kex"] + dedent(lines) + ["```"]).join("\n")
+  end
+
+  # A blank line inside a verbatim block ends a paragraph but not the block,
+  # so adjacent verbatim blocks are re-joined with the blank line between them.
+  foul mergeVerbatim(blocks: [[String]], accum: [[String]]) -> [[String]] do
+    if blocks.empty?
+      return accum
+    end
+    let block = blocks.first.or([])
+    let rest = blocks.drop(1)
+    let previous = accum.last.or([])
+    if verbatim?(block) && verbatim?(previous)
+      return mergeVerbatim(rest, accum.take(accum.count - 1) + [previous + [""] + block])
+    end
+    return mergeVerbatim(rest, accum + [block])
   end
 
   foul classifyBlocks(blocks: [[String]], summary: String, params: [Param],
@@ -113,8 +186,8 @@ module Tey.Docgen.Rdoc do
       return classifyBlocks(rest, summary, params, returns, examples, deprecated)
     end
     # Prose block: the first becomes the summary, later ones join it as
-    # further paragraphs.
-    let joined = block.join(" ")
+    # further paragraphs. Verbatim blocks keep their layout.
+    let joined = verbatim?(block) then fenceVerbatim(block) else block.join(" ")
     let nextSummary = if summary.empty?
       joined
     else
@@ -153,7 +226,7 @@ module Tey.Docgen.Rdoc do
 
   foul parseExample(lines: [String]) -> Example do
     let caption = (lines.first.or("")).drop(9).trim
-    let code = lines.drop(1).join("\n")
+    let code = dedent(lines.drop(1)).join("\n")
     return Example { caption: caption, code: code }
   end
 

@@ -1,6 +1,7 @@
 using Tey.Docgen.Model
 using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?]
-using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText]
+using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText, preludePaths]
+using Tey.Docgen.Extract, only: [isConstantBinding]
 using Tey.Docgen.Index, only: [upsertVersion]
 using Tey.Docgen.Rdoc, only: [parseDoc]
 
@@ -173,4 +174,93 @@ describe("Tey.Docgen.Rdoc.parseDoc") do
     end
     assert(code.contains?("Bits.not(0)"))
   end
+
+  it("strips an @example's common indentation") do
+    let doc = parseDoc("Reads.\n\n@example\n  read(\"hosts\")\n    .or([])").or(emptyDoc())
+    let code = exampleCode(doc, 0)
+    assert(code == "read(\"hosts\")\n  .or([])")
+  end
+
+  it("ends an @example at the first unindented line") do
+    # An implementation note written straight under the last example, with no
+    # blank line between them, must not become part of the example.
+    let doc = parseDoc("Reads.\n\n@example\n  read(\"a\")\nNOT `lines`: the name would collide.").or(emptyDoc())
+    let code = exampleCode(doc, 0)
+    assert(code == "read(\"a\")")
+    assert(doc.summary.contains?("would collide"))
+  end
+
+  it("keeps an indented block as a fenced code block in the summary") do
+    let doc = parseDoc("Start with:\n\n  using FS\n\n  main do\n    read(\"x\")\n  end\n\nThat is all.").or(emptyDoc())
+    assert(doc.summary.contains?("```kex\nusing FS\n\nmain do\n  read(\"x\")\nend\n```"))
+    assert(doc.summary.contains?("That is all."))
+  end
+end
+
+foul exampleCode(doc: Doc, index: Integer) -> String do
+  match doc.examples.drop(index).first do
+    Just(ex) => ex.code
+    None => ""
+  end
+end
+
+describe("Tey.Docgen.Html.preludePaths") do
+  it("maps a prelude's using list to pages by file, not by title") do
+    # `using Env` is env.kex, whose page is titled "ENV", and `using Test` is
+    # test.kex, titled "Assert" — matching on the title alone drops both.
+    let model = aModel(["Env", "Test", "List"], [
+      aPage([aModule("ENV", "ENV", [])], "env"),
+      aPage([aModule("Assert", "Assert", [])], "test"),
+      aPage([aModule("List", "List", [])], "list"),
+      aPage([aModule("FS", "FS", [])], "fs")
+    ])
+    assert(preludePaths(model) == ["env", "test", "list"])
+  end
+
+  it("is empty for a package with no prelude") do
+    let model = aModel([], [aPage([aModule("Tey", "Tey", [])], "tey")])
+    assert(preludePaths(model) == [])
+  end
+end
+
+describe("Tey.Docgen.Extract.isConstantBinding") do
+  it("calls a pure no-argument binding a constant") do
+    # `let out = Kex.Intrinsic.IO.stdout` — always the same handle.
+    assert(isConstantBinding(aBinding("out", false)))
+  end
+
+  it("calls a foul one a function") do
+    # `foul getLine = ...` reads a new line every time it is named, so it is
+    # a zero-argument function Kex auto-calls, not a constant.
+    assert(!isConstantBinding(aBinding("getLine", true)))
+  end
+
+  it("calls anything with a parameter list a function") do
+    assert(!isConstantBinding(aClause("printLine", false, true)))
+  end
+end
+
+let aModel(preludeModules: [String], pages: [SourcePage]) -> PackageModel do
+  return PackageModel {
+    package: "prelude", version: "0.4.0", label: "Standard Library",
+    baseUrl: "", generatedAt: "", pages: pages,
+    preludeModules: preludeModules,
+    preludeSource: preludeModules.empty? then "" else "prelude.kex"
+  }
+end
+
+let aBinding(name: String, isFoul: Bool) -> Kex.AST.FunctionInfo = aClause(name, isFoul, false)
+
+let aClause(name: String, isFoul: Bool, hasParamList: Bool) -> Kex.AST.FunctionInfo do
+  let clause = Kex.AST.ClauseInfo {
+    params: [], body: [], returnType: None, rescueInfo: None, hasParamList: hasParamList
+  }
+  return Kex.AST.FunctionInfo {
+    name: name, doc: None, isFoul: isFoul, predicate: false,
+    clauses: [clause], location: noLocation()
+  }
+end
+
+let noLocation() -> Kex.AST.Location do
+  return Kex.AST.Location { file: "io.kex", line: 1, column: 1, startOffset: 0, endOffset: 0 }
 end

@@ -17,8 +17,6 @@ module Tey.Docgen.Highlight do
     return renderTokens(lexAll(source.chars, []))
   end
 
-  # ── Entry loop ───────────────────────────────────────────────────────────
-
   # out accumulates newest-first; the final reverse restores source order.
   foul lexAll(cs: [Char], out: [Tok]) -> [Tok] do
     if cs.empty?
@@ -57,8 +55,6 @@ module Tey.Docgen.Highlight do
     end
     return lexOperator(cs)
   end
-
-  # ── Strings (with ${...} interpolation) ─────────────────────────────────
 
   # cs starts after the opening quote; acc is newest-first tokens so far.
   foul lexString(cs: [Char], acc: [Tok]) -> ([Tok], [Char]) do
@@ -146,8 +142,6 @@ module Tey.Docgen.Highlight do
     return skipStringBody(cs.drop(1), [c] + acc)
   end
 
-  # ── Numbers ──────────────────────────────────────────────────────────────
-
   foul lexNumber(cs: [Char]) -> ([Tok], [Char]) do
     if startsWithChars(cs, "0x") || startsWithChars(cs, "0X")
       let digits = cs.drop(2).takeWhile { |ch| hexDigit?(ch) }
@@ -185,8 +179,6 @@ module Tey.Docgen.Highlight do
   foul hexDigit?(c: Char) -> Bool do
     return c.digit? || c.in?('a'..'f') || c.in?('A'..'F') || c == '_'
   end
-
-  # ── Identifiers and keywords ─────────────────────────────────────────────
 
   foul lexIdentifier(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
     let span = cs.takeWhile { |ch| identChar?(ch) }
@@ -233,8 +225,6 @@ module Tey.Docgen.Highlight do
     return c.letter? || c.digit? || c == '_' || c == '?' || c == '!'
   end
 
-  # ── Operators and punctuation ────────────────────────────────────────────
-
   foul lexOperator(cs: [Char]) -> ([Tok], [Char]) do
     if startsWithChars(cs, "...")
       return ([Tok { cls: "op", text: "..." }], cs.drop(3))
@@ -261,7 +251,6 @@ module Tey.Docgen.Highlight do
     return ""
   end
 
-  # ── Word tables ──────────────────────────────────────────────────────────
   # Functions rather than module constants: on BEAM, method calls on a
   # module-level constant fail to dispatch.
 
@@ -284,8 +273,6 @@ module Tey.Docgen.Highlight do
             "Process", "IO", "Math", "File", "Http", "A", "B", "T", "K", "V"]
   end
 
-  # ── Rendering ────────────────────────────────────────────────────────────
-
   foul renderTokens(toks: [Tok]) -> String do
     return toks.map { |t| renderTok(t) }.join("")
   end
@@ -302,8 +289,6 @@ module Tey.Docgen.Highlight do
   foul esc(s: String) -> String do
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
   end
-
-  # ── Small helpers ────────────────────────────────────────────────────────
 
   foul textOf(cs: [Char]) -> String do
     return cs.map { |c| c.string }.join("")

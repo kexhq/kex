@@ -28,7 +28,7 @@ make Parser do
   private do
     let current({ input, pos }) -> Char? do
       return None if pos >= input.count
-      return Just(input.at(pos))
+      return input.at(pos)
     end
 
     let advance({ input, pos }) -> Parser do
@@ -67,7 +67,7 @@ make Parser do
       var i = 0
       loop do
         return Ok(p) if i >= word.count
-        if p.current == Just(word.at(i))
+        if p.current == word.at(i)
           p = p.advance
           i = i + 1
         else
