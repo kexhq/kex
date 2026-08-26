@@ -575,7 +575,7 @@ int main() {
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("Unwraps the value") != std::string::npos,
+            assertTrue(result.find("Returns the wrapped value") != std::string::npos,
                        "Optional.or hover omitted the selected fallback documentation");
             assertEqual(occurrences(result, "Selected overload"), size_t{2},
                         "interpolated Optional.or lost its selected overload");

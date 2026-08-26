@@ -49,22 +49,64 @@ type TimeError = InvalidDate(Integer, Integer, Integer)
                | InvalidTime(Integer, Integer, Integer)
                | InvalidFormat(String)
 
+# A calendar day: a year, a month and a day, with no time and no zone.
+#
+#   let due = Date.of(2026, 7, 30).try
+#   due.iso              # => "2026-07-30"
+#   due.weekday.name     # => "Thursday"
+#   (due + 10.days).iso  # => "2026-08-09"
+#
+# Build one with +Date.of+, which validates, rather than with the record
+# literal, which does not.
 record Date do
+  # The calendar year.
   year : Integer
+
+  # The month, 1 through 12.
   month : Integer
+
+  # The day of the month, 1 through the length of that month.
   day : Integer
 end
 
+# A time of day, with no date and no zone.
+#
+#   let t = Time.of(14, 3, 0).try
+#   t.iso                  # => "14:03:00"
+#   (t + 2.hours).iso      # => "16:03:00"
+#
+# Arithmetic wraps within the day: there is no date to carry into. Reach for
+# +DateTime+ when the day rolling over matters.
 record Time do
+  # The hour, 0 through 23.
   hour : Integer
+
+  # The minute, 0 through 59.
   minute : Integer
+
+  # The second, 0 through 59. Leap seconds are not modeled.
   second : Integer
+
+  # The sub-second part, 0 through 999999999.
   nanosecond : Integer
 end
 
+# An instant: a calendar date, a time of day, and a fixed offset from UTC.
+#
+#   let m = DateTime.parse("2026-07-30T14:03:00+02:00").try
+#   m.iso        # => "2026-07-30T14:03:00+02:00"
+#   m.utc.iso    # => "2026-07-30T12:03:00Z"
+#
+# Two +DateTime+ values that name the same instant compare equal whatever
+# offsets they are written at — comparison goes through +epochSeconds+.
 record DateTime do
+  # The calendar date, as read at this offset.
   date : Date
+
+  # The time of day, as read at this offset.
   time : Time
+
+  # The fixed offset from UTC this value is rendered at.
   offset : Duration
 end
 
@@ -79,14 +121,39 @@ end
 # Use a Duration for elapsed time (`36.hours` is always 129600 seconds) and a
 # Period for calendar steps (`1.months` is however long that month is).
 record Period do
+  # The number of whole years in the span.
   years : Integer
+
+  # The number of whole months in the span.
   months : Integer
+
+  # The number of whole days in the span.
   days : Integer
 end
 
+# Building times of day, controlling the clock in tests, and the calendar
+# arithmetic the rest of this file is written on.
 module Time do
   # ── Constructing ────────────────────────────────────────────────────────
 
+  # Builds a validated time of day.
+  #
+  # Every field is range-checked, so a +Time+ you hold is always a real time.
+  # Leap seconds are not modeled, so a second of 60 is rejected.
+  #
+  # @param hour [Integer] the hour, 0 through 23
+  # @param minute [Integer] the minute, 0 through 59
+  # @param second [Integer] the second, 0 through 59
+  # @param nanosecond [Integer] the sub-second part, 0 through 999999999; omitted for 0
+  # @return [Result<Time, TimeError>] the time, or why it is not one
+  #
+  # @example
+  #   Time.of(14, 3, 0).map { |t| t.iso }   # => Ok("14:03:00")
+  #   Time.of(25, 0, 0)                     # => Error(InvalidTime(25, 0, 0))
+  #
+  # @example With sub-second precision
+  #   Time.of(14, 3, 0, 123456789).map { |t| t.iso }
+  #   # => Ok("14:03:00.123456789")
   let of(hour: Integer, minute: Integer, second: Integer) -> Result<Time, TimeError> = Time.of(hour, minute, second, 0)
 
   let of(hour: Integer, minute: Integer, second: Integer, nanosecond: Integer) -> Result<Time, TimeError> do
@@ -99,12 +166,32 @@ module Time do
     return Ok(Time { hour: hour, minute: minute, second: second, nanosecond: nanosecond })
   end
 
+  # Midnight, 00:00:00. The start of a day.
+  #
+  # @return [Time] 00:00:00
+  #
+  # @example
+  #   Time.midnight().iso                   # => "00:00:00"
+  #   (Time.midnight() - 1.seconds).iso     # => "23:59:59"
   let midnight() -> Time = Time { hour: 0, minute: 0, second: 0, nanosecond: 0 }
 
-  # Wraps, so 86400 is midnight again and -1 is 23:59:59. Declared before the
-  # two-argument form: the interpreter resolves an overloaded module function
-  # to its LAST definition regardless of arity, so a delegating overload has
-  # to come first or it recurses into itself.
+  # Builds a time of day from a count of seconds since midnight.
+  #
+  # Wraps, so 86400 is midnight again and -1 is 23:59:59 — which is what makes
+  # it total where +Time.of+ is fallible.
+  #
+  # @param count [Integer] seconds since midnight; wraps outside 0..86399
+  # @param nanosecond [Integer] the sub-second part; omitted for 0
+  # @return [Time] the time of day
+  #
+  # @example
+  #   Time.fromSecondsSinceMidnight(50580).iso   # => "14:03:00"
+  #   Time.fromSecondsSinceMidnight(86400).iso   # => "00:00:00"
+  #   Time.fromSecondsSinceMidnight(-1).iso      # => "23:59:59"
+  #
+  # Declared before the two-argument form: the interpreter resolves an
+  # overloaded module function to its LAST definition regardless of arity, so
+  # a delegating overload has to come first or it recurses into itself.
   let fromSecondsSinceMidnight(count: Integer) -> Time = Time.fromSecondsSinceMidnight(count, 0)
 
   let fromSecondsSinceMidnight(count: Integer, nanosecond: Integer) -> Time do
@@ -112,7 +199,17 @@ module Time do
     return Time { hour: total / 3600, minute: total.modulo(3600) / 60, second: total.modulo(60), nanosecond: nanosecond }
   end
 
-  # ISO 8601 time of day: `14:03`, `14:03:00`, or `14:03:00.123456789`.
+  # Parses an ISO 8601 time of day.
+  #
+  # Accepts +14:03+, +14:03:00+, or +14:03:00.123456789+. Anything else is
+  # +InvalidFormat+.
+  #
+  # @param text [String] the text to parse
+  # @return [Result<Time, TimeError>] the time, or why it could not be read
+  #
+  # @example
+  #   Time.parse("14:03").map { |t| t.iso }   # => Ok("14:03:00")
+  #   Time.parse("xx")                        # => Error(InvalidFormat("xx"))
   let parse(text: String) -> Result<Time, TimeError> do
     let parts = text.split(":")
     return Error(InvalidFormat(text)) if parts.count < 2 || parts.count > 3
@@ -125,17 +222,41 @@ module Time do
   end
 
   # The current time of day, in this machine's zone.
+  #
+  # Reads the same clock primitive everything else here does, so it is pinned
+  # by +Time.frozenAt+ in a test.
+  #
+  # @return [Time] the current time of day
+  #
+  # @example
+  #   Time.now().iso   # => "14:03:00"
   foul now() -> Time do
     let moment = DateTime.now()
     return moment.time
   end
 
+  # The current time of day in UTC, whatever this machine's zone is.
+  #
+  # @return [Time] the current UTC time of day
+  #
+  # @example
+  #   Time.utcNow().iso   # => "12:03:00"
   foul utcNow() -> Time do
     let moment = DateTime.utcNow()
     return moment.time
   end
 
-  # An ISO 8601 zone designator: `Z`, `+02:00`, `-05:30`.
+  # Parses an ISO 8601 zone designator into an offset.
+  #
+  # Accepts +Z+, ++02:00+, +-05:30+, or the empty string (all meaning UTC for
+  # the first and last).
+  #
+  # @param text [String] the zone designator
+  # @return [Result<Duration, TimeError>] the offset, or why it could not be read
+  #
+  # @example
+  #   Time.parseOffset("+02:00").map { |d| d.wholeSeconds }   # => Ok(7200)
+  #   Time.parseOffset("Z").map { |d| d.wholeSeconds }        # => Ok(0)
   let parseOffset(text: String) -> Result<Duration, TimeError> do
     return Ok(Duration.zero()) if text.blank? || text == "Z"
     let sign = text.at(0).or('+')
@@ -189,28 +310,56 @@ module Time do
     return nanos >= Time.CLOCK_MIN_NANOS && nanos <= Time.CLOCK_MAX_NANOS
   end
 
-  # Pin the clock. Every reading returns this exact instant until `release`.
-  # Returns the moment it pinned, so `Time.freeze(m).try` both sets the clock
-  # and fails loudly on an instant the clock cannot represent.
+  # Pins the clock: every reading returns this exact instant until +release+.
+  #
+  # This is what makes code that calls +Date.today()+ testable. Returns the
+  # moment it pinned, so +Time.freeze(m).try+ both sets the clock and fails
+  # loudly on an instant the clock cannot represent.
+  #
+  # Prefer +Time.frozenAt+, which releases for you — a test that fails between
+  # a +freeze+ and its +release+ leaves the clock frozen for everything after
+  # it.
+  #
+  # @param moment [DateTime] the instant to pin the clock to
+  # @return [Result<DateTime, TimeError>] the pinned moment, or why it could not be
+  #
+  # @example
+  #   Time.freeze(DateTime.parse("2026-07-30T14:03:00Z").try)
+  #   Date.utcToday().iso   # => "2026-07-30", always
+  #   Time.release()
   foul freeze(moment: DateTime) -> Result<DateTime, TimeError> do
     return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
     Kex.Intrinsic.Time.freezeAt(Time.nanosOf(moment))
     return Ok(moment)
   end
 
-  # Move the clock to an instant and let it run from there: readings advance
-  # normally, they just start somewhere else. Use this over `freeze` when the
-  # code under test measures elapsed time.
+  # Moves the clock to an instant and lets it run from there.
+  #
+  # Readings advance normally, they just start somewhere else. Use this over
+  # +freeze+ when the code under test measures elapsed time — a frozen clock
+  # makes every interval zero.
+  #
+  # @param moment [DateTime] the instant to start the clock from
+  # @return [Result<DateTime, TimeError>] the moment set, or why it could not be
+  #
+  # @example
+  #   Time.travel(DateTime.parse("2026-07-30T14:03:00Z").try)
+  #   Time.release()
   foul travel(moment: DateTime) -> Result<DateTime, TimeError> do
     return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
     Kex.Intrinsic.Time.travelTo(Time.nanosOf(moment))
     return Ok(moment)
   end
 
-  # Freeze the clock for the length of `body`, then release it. This is the
-  # form to reach for: `freeze` and `release` have to be paired by hand, and a
-  # test that returns early — or fails an assertion — between them leaves the
-  # clock frozen for every test that runs after it.
+  # Freezes the clock for the length of +body+, then releases it.
+  #
+  # This is the form to reach for: +freeze+ and +release+ have to be paired by
+  # hand, and a test that returns early — or fails an assertion — between them
+  # leaves the clock frozen for every test that runs after it.
+  #
+  # @param moment [DateTime] the instant to pin the clock to
+  # @param body [Block] what to run with the clock frozen
+  # @return [Result<A, TimeError>] whatever +body+ returned, or why the clock could not be set
   #
   #   Time.frozenAt(DateTime.parse("2026-07-30T14:03:00Z").try) do
   #     Date.utcToday().iso                     # "2026-07-30"
@@ -230,8 +379,19 @@ module Time do
     return Ok(result)
   end
 
-  # The same scoping for `travel`: readings start at `moment` and advance
-  # normally, and the clock is released when `body` ends.
+  # Runs +body+ with the clock started at +moment+, then releases it.
+  #
+  # The same scoping as +frozenAt+, for +travel+: readings start at +moment+
+  # and advance normally, and the clock is released when +body+ ends.
+  #
+  # @param moment [DateTime] the instant to start the clock from
+  # @param body [Block] what to run with the clock moved
+  # @return [Result<A, TimeError>] whatever +body+ returned, or why the clock could not be set
+  #
+  # @example Measuring elapsed time from a known start
+  #   Time.travellingFrom(DateTime.parse("2026-07-30T14:03:00Z").try) do
+  #     runTheThing()
+  #   end.try
   foul travellingFrom(moment: DateTime, body) do
     return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
     Kex.Intrinsic.Time.travelTo(Time.nanosOf(moment))
@@ -240,16 +400,38 @@ module Time do
     return Ok(result)
   end
 
-  # Back to the host clock.
+  # Returns the clock to the host's.
+  #
+  # Not automatic: a test that froze the clock must also release it, or every
+  # later test in the run inherits the frozen clock. +frozenAt+ and
+  # +travellingFrom+ do this for you.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   after do
+  #     Time.release()
+  #   end
   foul release() -> Void do
     return Kex.Intrinsic.Time.release()
   end
 
-  # True while `freeze` or `travel` is in effect.
+  # Returns +true+ while +freeze+ or +travel+ is in effect.
+  #
+  # @return [Bool] +true+ when the clock is under test control
+  #
+  # @example
+  #   Time.controlled?()   # => false on the host clock
   foul controlled?() -> Bool do
     return Kex.Intrinsic.Time.clockMode() != 0
   end
 
+  # Returns +true+ while +freeze+ is in effect — not merely +travel+.
+  #
+  # @return [Bool] +true+ when the clock is frozen
+  #
+  # @example
+  #   Time.frozen?()   # => false on the host clock
   foul frozen?() -> Bool do
     return Kex.Intrinsic.Time.clockMode() == 1
   end
@@ -258,14 +440,35 @@ module Time do
   # Public because the `make` blocks below live at file level and reach them
   # by qualification; they are equally useful on their own.
 
+  # Returns +true+ when +year+ is a leap year in the proleptic Gregorian
+  # calendar.
+  #
+  # @param year [Integer] the calendar year
+  # @return [Bool] +true+ for a leap year
+  #
+  # @example
+  #   Time.leapYear?(2024)   # => true
+  #   Time.leapYear?(1900)   # => false
+  #   Time.leapYear?(2000)   # => true
   let leapYear?(year: Integer) -> Bool do
     return false if year.modulo(4) != 0
     return true if year.modulo(100) != 0
     return year.modulo(400) == 0
   end
 
+  # The number of days in a month.
+  #
   # Year first, matching `Date.of(year, month, day)` and every other
   # date-shaped signature in this file.
+  #
+  # @param year [Integer] the calendar year, which decides February's length
+  # @param month [Integer] the month, 1 through 12
+  # @return [Result<Integer, TimeError>] the day count, or why the month is not one
+  #
+  # @example
+  #   Time.daysInMonth(2024, 2)   # => Ok(29)
+  #   Time.daysInMonth(2023, 2)   # => Ok(28)
+  #   Time.daysInMonth(2026, 13)  # => Error(InvalidDate(2026, 13, 1))
   #
   # A month outside 1..12 has no answer, so this is a Result rather than an
   # Integer: the old version fell through its month tests and returned 28,
@@ -276,8 +479,17 @@ module Time do
     return Ok(Time.daysInValidMonth(year, month))
   end
 
-  # The same question with the range check already done. Every caller inside
-  # this file has a month it built or validated itself.
+  # The number of days in a month, with the range check already done.
+  #
+  # Every caller inside this file has a month it built or validated itself.
+  # Use +daysInMonth+ for a month that came from outside.
+  #
+  # @param year [Integer] the calendar year
+  # @param month [Integer] the month, assumed to be 1 through 12
+  # @return [Integer] the day count
+  #
+  # @example
+  #   Time.daysInValidMonth(2024, 2)   # => 29
   let daysInValidMonth(year: Integer, month: Integer) -> Integer do
     return 31 if month == 1 || month == 3 || month == 5 || month == 7
     return 31 if month == 8 || month == 10 || month == 12
@@ -286,9 +498,20 @@ module Time do
     return 28
   end
 
+  # The number of days from 1970-01-01 to a calendar date, negative before it.
+  #
   # Howard Hinnant's civil-calendar algorithms: exact across the whole
   # proleptic Gregorian range, and they need only truncating integer
   # division — the semantics Kex's `/` already has.
+  #
+  # @param year [Integer] the calendar year
+  # @param month [Integer] the month, 1 through 12
+  # @param day [Integer] the day of the month
+  # @return [Integer] days since the Unix epoch
+  #
+  # @example
+  #   Time.daysFromCivil(1970, 1, 1)   # => 0
+  #   Time.daysFromCivil(2026, 7, 30)  # => 20664
   let daysFromCivil(year: Integer, month: Integer, day: Integer) -> Integer do
     let y = if month <= 2 then year - 1 else year end
     let era = if y < 0 then (y - 399) / 400 else y / 400 end
@@ -299,6 +522,15 @@ module Time do
     return era * 146097 + doe - 719468
   end
 
+  # The calendar date a count of days since 1970-01-01 lands on. The inverse
+  # of +daysFromCivil+.
+  #
+  # @param epochDay [Integer] days since the Unix epoch
+  # @return [Date] the calendar date
+  #
+  # @example
+  #   Time.civilFromDays(0).iso       # => "1970-01-01"
+  #   Time.civilFromDays(20664).iso   # => "2026-07-30"
   let civilFromDays(epochDay: Integer) -> Date do
     let z = epochDay + 719468
     let era = if z < 0 then (z - 146096) / 146097 else z / 146097 end
@@ -313,7 +545,13 @@ module Time do
     return Date { year: year, month: month, day: day }
   end
 
-  # 1970-01-01 was a Thursday.
+  # The weekday a count of days since 1970-01-01 falls on.
+  #
+  # @param epochDay [Integer] days since the Unix epoch
+  # @return [Weekday] the day of the week
+  #
+  # @example
+  #   Time.weekdayFromEpochDay(0)   # => Thursday   (1970-01-01 was a Thursday)
   let weekdayFromEpochDay(epochDay: Integer) -> Weekday do
     let index = (epochDay + 3).modulo(7)
     return Monday if index == 0
@@ -325,6 +563,15 @@ module Time do
     return Sunday
   end
 
+  # The ISO number of a weekday: Monday is 1, Sunday is 7.
+  #
+  # +weekday.number+ is the readable way to ask.
+  #
+  # @param weekday [Weekday] the day of the week
+  # @return [Integer] its ISO number, 1 through 7
+  #
+  # @example
+  #   Time.weekdayNumber(Monday)   # => 1
   let weekdayNumber(@Monday) -> Integer = 1
   let weekdayNumber(@Tuesday) -> Integer = 2
   let weekdayNumber(@Wednesday) -> Integer = 3
@@ -333,6 +580,15 @@ module Time do
   let weekdayNumber(@Saturday) -> Integer = 6
   let weekdayNumber(@Sunday) -> Integer = 7
 
+  # The English name of a weekday.
+  #
+  # +weekday.name+ is the readable way to ask.
+  #
+  # @param weekday [Weekday] the day of the week
+  # @return [String] its English name
+  #
+  # @example
+  #   Time.weekdayName(Sunday)   # => "Sunday"
   let weekdayName(@Monday) -> String = "Monday"
   let weekdayName(@Tuesday) -> String = "Tuesday"
   let weekdayName(@Wednesday) -> String = "Wednesday"
@@ -342,15 +598,54 @@ module Time do
   let weekdayName(@Sunday) -> String = "Sunday"
 
   make Weekday do
-    # ISO numbering: Monday is 1, Sunday is 7.
+    # This weekday's ISO number: Monday is 1, Sunday is 7.
+    #
+    # @return [Integer] the ISO number, 1 through 7
+    #
+    # @example
+    #   Monday.number   # => 1
+    #   Sunday.number   # => 7
     let number -> Integer = Time.weekdayNumber(this)
+
+    # This weekday's English name.
+    #
+    # @return [String] the name
+    #
+    # @example
+    #   Date.of(2026, 7, 30).try.weekday.name   # => "Thursday"
     let name -> String = Time.weekdayName(this)
+
+    # Returns +true+ for Saturday and Sunday.
+    #
+    # @return [Bool] +true+ on a weekend day
+    #
+    # @example
+    #   Saturday.weekend?   # => true
+    #   Monday.weekend?     # => false
+    #
+    # @example Counting working days in a range
+    #   days.count { |d| !d.weekday.weekend? }
     let weekend? -> Bool = Time.weekdayNumber(this) > 5
   end
 
+  # Renders a +TimeError+ as a sentence for the user.
+  #
   # A plain function rather than an `Errorable` implementation: a `message`
   # method here joins the same BEAM dispatcher as ParseError's `message`
   # FIELD and breaks it (spec/record_field_method_collision.kex).
+  #
+  # @param error [TimeError] the failure to describe
+  # @return [String] the message to show
+  #
+  # @example
+  #   Time.errorMessage(InvalidDate(2026, 13, 1))
+  #   # => "not a calendar date: 2026-13-1"
+  #
+  # @example Reporting a rejected date
+  #   match Date.parse(input) do
+  #     Ok(date) => IO.printLine(date.iso)
+  #     Error(e) => IO.printError(Time.errorMessage(e))
+  #   end
   let errorMessage(@InvalidDate(y, m, d)) -> String = "not a calendar date: ${y}-${m}-${d}"
   let errorMessage(@InvalidTime(h, m, s)) -> String = "not a time of day: ${h}:${m}:${s}"
   let errorMessage(@InvalidFormat(text)) -> String = "cannot parse as a date/time: ${text}"
@@ -478,9 +773,27 @@ module Time do
 end
 
 
+# Building calendar dates, and asking what today is.
 module Date do
-  # Validating constructor. The record literal `Date { ... }` bypasses it, so
-  # prefer this for anything derived from input.
+  # Builds a validated calendar date.
+  #
+  # The month and the day are both range-checked, and the day is checked
+  # against that month's actual length — so February 30th is an +Error+, and a
+  # +Date+ you hold is always a real day. The record literal `Date { ... }`
+  # bypasses this, so prefer it for anything derived from input.
+  #
+  # @param year [Integer] the calendar year
+  # @param month [Integer] the month, 1 through 12
+  # @param day [Integer] the day of the month
+  # @return [Result<Date, TimeError>] the date, or why it is not one
+  #
+  # @example
+  #   Date.of(2026, 7, 30).map { |d| d.iso }   # => Ok("2026-07-30")
+  #   Date.of(2026, 13, 1)                     # => Error(InvalidDate(2026, 13, 1))
+  #   Date.of(2023, 2, 29)                     # => Error(InvalidDate(2023, 2, 29))
+  #
+  # @example Taking the date or failing loudly
+  #   let due = Date.of(year, month, day).try
   let of(year: Integer, month: Integer, day: Integer) -> Result<Date, TimeError> do
     return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
     return Error(InvalidDate(year, month, day)) if day < 1
@@ -488,10 +801,29 @@ module Date do
     return Ok(Date { year: year, month: month, day: day })
   end
 
-  # Days since 1970-01-01, negative before it.
+  # The calendar date a count of days since 1970-01-01 lands on, negative
+  # before it.
+  #
+  # @param day [Integer] days since the Unix epoch
+  # @return [Date] the calendar date
+  #
+  # @example
+  #   Date.fromEpochDay(0).iso       # => "1970-01-01"
+  #   Date.fromEpochDay(20664).iso   # => "2026-07-30"
   let fromEpochDay(day: Integer) -> Date = Time.civilFromDays(day)
 
-  # ISO 8601 calendar date: `2026-07-30`.
+  # Parses an ISO 8601 calendar date, +2026-07-30+.
+  #
+  # The result is validated as well as parsed, so a well-formed but impossible
+  # date is +InvalidDate+ rather than +InvalidFormat+.
+  #
+  # @param text [String] the text to parse
+  # @return [Result<Date, TimeError>] the date, or why it could not be read
+  #
+  # @example
+  #   Date.parse("2026-07-30").map { |d| d.iso }   # => Ok("2026-07-30")
+  #   Date.parse("nope")                           # => Error(InvalidFormat("nope"))
+  #   Date.parse("2026-02-30")                     # => Error(InvalidDate(2026, 2, 30))
   let parse(text: String) -> Result<Date, TimeError> do
     let parts = text.split("-")
     # A leading "-" would be a negative year, which this deliberately rejects.
@@ -502,44 +834,119 @@ module Date do
     return Date.of(year, month, day)
   end
 
-  # The current date in this machine's zone. `today` reads better in most
-  # code; `now` exists so every type in this file answers the same question
-  # the same way.
+  # Today's date, in this machine's zone.
+  #
+  # +Date.today()+ reads better in most code; +now+ exists so every type in
+  # this file answers the same question the same way.
+  #
+  # @return [Date] today's date
+  #
+  # @example
+  #   Date.now().iso   # => "2026-07-30"
   foul now() -> Date do
     let moment = DateTime.now()
     return moment.date
   end
 
+  # Today's date, in this machine's zone.
+  #
+  # Pinned by +Time.frozenAt+ in a test, like everything else that reads the
+  # clock.
+  #
+  # @return [Date] today's date
+  #
+  # @example
+  #   Date.today().iso   # => "2026-07-30"
+  #
+  # @example Testing code that depends on today
+  #   Time.frozenAt(DateTime.parse("2026-07-30T00:00:00Z").try) do
+  #     Assert.equal(Date.utcToday().iso, "2026-07-30")
+  #   end.try
   foul today() -> Date do
     let moment = DateTime.now()
     return moment.date
   end
 
+  # The day after today, in this machine's zone.
+  #
+  # @return [Date] tomorrow's date
+  #
+  # @example
+  #   Date.tomorrow().iso   # => "2026-07-31"
   foul tomorrow() -> Date do
     let moment = DateTime.now()
     return moment.date.addDays(1)
   end
 
+  # The day before today, in this machine's zone.
+  #
+  # @return [Date] yesterday's date
+  #
+  # @example
+  #   Date.yesterday().iso   # => "2026-07-29"
   foul yesterday() -> Date do
     let moment = DateTime.now()
     return moment.date.addDays(0 - 1)
   end
 
+  # Today's date in UTC, whatever this machine's zone is.
+  #
+  # @return [Date] today's UTC date
+  #
+  # @example
+  #   Date.utcNow().iso   # => "2026-07-30"
   foul utcNow() -> Date do
     let moment = DateTime.utcNow()
     return moment.date
   end
 
+  # Today's date in UTC. The same as +Date.utcNow()+, under the name that
+  # reads better.
+  #
+  # @return [Date] today's UTC date
+  #
+  # @example
+  #   Date.utcToday().iso   # => "2026-07-30"
   foul utcToday() -> Date do
     let moment = DateTime.utcNow()
     return moment.date
   end
 end
 
+# Building instants, and asking what time it is now.
 module DateTime do
+  # Combines a date, a time of day and a UTC offset into an instant.
+  #
+  # @param date [Date] the calendar date
+  # @param time [Time] the time of day
+  # @param offset [Duration] the offset from UTC
+  # @return [DateTime] the instant
+  #
+  # @example
+  #   DateTime.of(Date.of(2026, 7, 30).try,
+  #               Time.of(9, 0, 0).try,
+  #               Duration.zero()).iso
+  #   # => "2026-07-30T09:00:00Z"
+  #
+  # @example At an offset
+  #   DateTime.of(date, time, Duration.utcOffset(2, 0))
   let of(date: Date, time: Time, offset: Duration) -> DateTime = DateTime { date: date, time: time, offset: offset }
 
-  # UTC. Declared before the two-argument form: the interpreter resolves an
+  # The instant a count of seconds since the Unix epoch names, rendered at UTC
+  # or at the offset you give.
+  #
+  # @param count [Integer] seconds since the Unix epoch
+  # @param offset [Duration] the offset to render at; omitted for UTC
+  # @return [DateTime] the instant
+  #
+  # @example
+  #   DateTime.fromEpochSeconds(0).iso   # => "1970-01-01T00:00:00Z"
+  #
+  # @example Rendered at a local offset
+  #   DateTime.fromEpochSeconds(0, Duration.utcOffset(2, 0)).iso
+  #   # => "1970-01-01T02:00:00+02:00"
+  #
+  # Declared before the two-argument form: the interpreter resolves an
   # overloaded module function to its LAST definition regardless of arity, so
   # a delegating overload has to come first or it recurses into itself.
   let fromEpochSeconds(count: Integer) -> DateTime = DateTime.fromEpochSeconds(count, Duration.zero())
@@ -555,8 +962,21 @@ module DateTime do
     }
   end
 
-  # ISO 8601: `2026-07-30T14:03:00+02:00`, `...Z`, or a bare civil datetime
-  # (read as UTC).
+  # Parses an ISO 8601 instant.
+  #
+  # Accepts +2026-07-30T14:03:00+02:00+, the same with +Z+, or a bare civil
+  # datetime with no zone at all — which is read as UTC.
+  #
+  # @param text [String] the text to parse
+  # @return [Result<DateTime, TimeError>] the instant, or why it could not be read
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").map { |m| m.utc.iso }
+  #   # => Ok("2026-07-30T12:03:00Z")
+  #   DateTime.parse("nope")   # => Error(InvalidFormat("nope"))
+  #
+  # @example Reading a timestamp out of a log line
+  #   DateTime.parse(line.take(20)).map { |m| m.epochSeconds }
   let parse(text: String) -> Result<DateTime, TimeError> do
     let parts = text.split("T")
     return Error(InvalidFormat(text)) if parts.count != 2
@@ -575,7 +995,16 @@ module DateTime do
     return Ok(DateTime { date: date, time: time, offset: offset })
   end
 
-  # Now, in this machine's zone as it stands at this instant.
+  # The current instant, in this machine's zone as it stands right now.
+  #
+  # The offset is the one in effect at this instant, so it is right today —
+  # but named IANA zones are not modeled, so it cannot say what the offset
+  # WILL be for some future local time.
+  #
+  # @return [DateTime] the current instant
+  #
+  # @example
+  #   DateTime.now().iso   # => "2026-07-30T14:03:00+02:00"
   foul now() -> DateTime do
     let nanos = Kex.Intrinsic.Time.nowNanos()
     let epochSeconds = Time.floorDiv(nanos, 1000000000)
@@ -583,13 +1012,32 @@ module DateTime do
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
   end
 
+  # The current instant, at UTC.
+  #
+  # The form to prefer when the value is stored, compared or transmitted —
+  # there is no zone to disagree about.
+  #
+  # @return [DateTime] the current instant, at UTC
+  #
+  # @example
+  #   DateTime.utcNow().iso   # => "2026-07-30T12:03:00Z"
   foul utcNow() -> DateTime do
     let nanos = Kex.Intrinsic.Time.nowNanos()
     let epochSeconds = Time.floorDiv(nanos, 1000000000)
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, Duration.zero()), nanos - epochSeconds * 1000000000)
   end
 
-  # Nanoseconds since the Unix epoch, straight from the host clock.
+  # Nanoseconds since the Unix epoch, straight from the clock.
+  #
+  # The rawest reading available, and the right one for measuring a short
+  # interval — no calendar work happens on the way.
+  #
+  # @return [Integer] nanoseconds since the Unix epoch
+  #
+  # @example Timing a piece of work
+  #   let started = DateTime.epochNanos()
+  #   doTheThing()
+  #   let elapsedMs = (DateTime.epochNanos() - started) / 1000000
   foul epochNanos() -> Integer do
     return Kex.Intrinsic.Time.nowNanos()
   end
@@ -600,73 +1048,384 @@ end
 # build a time Measure. `5.seconds` is an elapsed span, `5.sec` a measurement.
 
 make Integer do
+  # This many milliseconds, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   500.milliseconds.wholeMilliseconds   # => 500
   let milliseconds -> Duration = Duration { seconds: this / 1000.0 }
+
+  # This many seconds, as a +Duration+.
+  #
+  # Note the plural: +5.seconds+ is an elapsed span, while +5.sec+ from
+  # +units.kex+ is a measurement.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   30.seconds.wholeSeconds   # => 30
   let seconds -> Duration = Duration { seconds: this * 1.0 }
+
+  # This many minutes, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   90.minutes.wholeHours   # => 1
   let minutes -> Duration = Duration { seconds: this * 60.0 }
+
+  # This many hours, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   36.hours.wholeDays   # => 1
   let hours -> Duration = Duration { seconds: this * 3600.0 }
+
+  # This many days, as a +Duration+ — a fixed 86400 seconds each.
+  #
+  # Use +Period.days+ when the calendar should get a say.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 10.days).iso   # => "2026-08-09"
   let days -> Duration = Duration { seconds: this * 86400.0 }
+
+  # This many weeks, as a +Duration+ — a fixed 604800 seconds each.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   2.weeks.wholeDays   # => 14
   let weeks -> Duration = Duration { seconds: this * 604800.0 }
 
-  # Calendar spans, not Durations — see the `Period` record above. `4.weeks`
-  # and `1.months` are deliberately different things: the first is exactly 28
-  # days, the second is one calendar month.
+  # This many calendar months, as a +Period+.
+  #
+  # A calendar span, not a Duration — see the +Period+ record above.
+  # +4.weeks+ and +1.months+ are deliberately different things: the first is
+  # exactly 28 days, the second is one calendar month, however long that turns
+  # out to be.
+  #
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 1.months).iso   # => "2026-08-30"
+  #
+  # @example The calendar clamps a day that does not exist
+  #   (Date.of(2026, 1, 31).try + 1.months).iso   # => "2026-02-28"
   let months -> Period = Period { years: 0, months: this, days: 0 }
+
+  # This many calendar years, as a +Period+.
+  #
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   (Date.of(2024, 2, 29).try + 1.years).iso   # => "2025-02-28"
   let years -> Period = Period { years: this, months: 0, days: 0 }
 end
 
+# The same +Duration+ constructors on +Float+, for fractional spans:
+# +1.5.hours+, +0.25.seconds+.
 make Float do
+  # This many milliseconds, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
   let milliseconds -> Duration = Duration { seconds: this / 1000.0 }
+
+  # This many seconds, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   0.25.seconds.wholeMilliseconds   # => 250
   let seconds -> Duration = Duration { seconds: this }
+
+  # This many minutes, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
   let minutes -> Duration = Duration { seconds: this * 60.0 }
+
+  # This many hours, as a +Duration+.
+  #
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   1.5.hours.wholeMinutes   # => 90
   let hours -> Duration = Duration { seconds: this * 3600.0 }
+
+  # This many days, as a +Duration+ — a fixed 86400 seconds each.
+  #
+  # @return [Duration] the elapsed span
   let days -> Duration = Duration { seconds: this * 86400.0 }
+
+  # This many weeks, as a +Duration+ — a fixed 604800 seconds each.
+  #
+  # @return [Duration] the elapsed span
   let weeks -> Duration = Duration { seconds: this * 604800.0 }
 end
 
 make Duration do
+  # Adds two spans.
+  #
+  # @param other [Duration] the span to add
+  # @return [Duration] the total
+  #
+  # @example
+  #   (90.minutes + 30.minutes).wholeHours   # => 2
   let +(other: Duration) -> Duration = Duration { seconds: this.seconds + other.seconds }
+
+  # Subtracts a span. The result may be negative.
+  #
+  # @param other [Duration] the span to subtract
+  # @return [Duration] the difference
+  #
+  # @example
+  #   (1.hours - 90.minutes).negative?   # => true
   let -(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
+
+  # The same span with its sign flipped.
+  #
+  # @return [Duration] the negated span
+  #
+  # @example
+  #   90.minutes.negated.negative?   # => true
   let negated -> Duration = Duration { seconds: 0.0 - this.seconds }
 
-  # Scaling a span by a plain number. `3 * 1.days` is not the same call — the
-  # receiver has to be the Duration — so it is spelled `1.days * 3`.
+  # Multiplies the span by a plain number.
+  #
+  # `3 * 1.days` is not the same call — the receiver has to be the Duration —
+  # so it is spelled `1.days * 3`.
+  #
+  # @param factor [Number] the factor to multiply by
+  # @return [Duration] the scaled span
+  #
+  # @example
+  #   (90.minutes * 2).wholeHours   # => 3
   let *(factor: Number) -> Duration = Duration { seconds: this.seconds * factor }
+
+  # Divides the span by a plain number.
+  #
+  # @param divisor [Number] the number to divide by
+  # @return [Duration] the scaled span
+  #
+  # @example
+  #   (90.minutes / 2).wholeMinutes   # => 45
   let /(divisor: Number) -> Duration = Duration { seconds: this.seconds / divisor }
 
+  # The span's magnitude, discarding its direction.
+  #
+  # @return [Duration] the absolute span
+  #
+  # @example
+  #   (1.hours - 90.minutes).abs.wholeMinutes   # => 30
   let abs -> Duration = Duration { seconds: if this.seconds < 0.0 then 0.0 - this.seconds else this.seconds end }
+
+  # Returns +true+ when the span is exactly zero.
+  #
+  # @return [Bool] +true+ for a zero span
+  #
+  # @example
+  #   Duration.zero().zero?   # => true
   let zero? -> Bool = this.seconds == 0.0
+
+  # Returns +true+ when the span points backwards.
+  #
+  # A negative span is what +until+ gives you when the other moment is
+  # earlier, so this is how to ask which came first.
+  #
+  # @return [Bool] +true+ for a negative span
+  #
+  # @example
+  #   date.until(other).negative?   # => true when `other` is earlier
   let negative? -> Bool = this.seconds < 0.0
+
+  # Returns +true+ when the span points forwards.
+  #
+  # @return [Bool] +true+ for a positive span
+  #
+  # @example
+  #   90.minutes.positive?   # => true
   let positive? -> Bool = this.seconds > 0.0
 
+  # Returns +true+ when this span is shorter than +other+.
+  #
   # Named for length rather than for order: `before?`/`after?` are about when
   # something happened, and a Duration is not a point in time.
+  #
+  # @param other [Duration] the span to compare against
+  # @return [Bool] +true+ when this span is shorter
+  #
+  # @example
+  #   30.minutes.shorterThan?(1.hours)   # => true
+  #
+  # @example Enforcing a timeout
+  #   if started.until(DateTime.utcNow()).longerThan?(30.seconds)
+  #     IO.printError("timed out")
+  #   end
   let shorterThan?(other: Duration) -> Bool = this.seconds < other.seconds
+
+  # Returns +true+ when this span is longer than +other+.
+  #
+  # @param other [Duration] the span to compare against
+  # @return [Bool] +true+ when this span is longer
+  #
+  # @example
+  #   90.minutes.longerThan?(1.hours)   # => true
   let longerThan?(other: Duration) -> Bool = this.seconds > other.seconds
 
-  # Whole units contained in the span, truncated toward zero.
+  # The whole milliseconds in the span, truncated toward zero.
+  #
+  # @return [Integer] the milliseconds
+  #
+  # @example
+  #   500.milliseconds.wholeMilliseconds   # => 500
   let wholeMilliseconds -> Integer = Time.truncatedBy(this.seconds, 0.001)
+
+  # The whole seconds in the span, truncated toward zero.
+  #
+  # @return [Integer] the seconds
+  #
+  # @example
+  #   Duration.hours(2).wholeSeconds   # => 7200
   let wholeSeconds -> Integer = this.seconds.toInteger
+
+  # The whole minutes in the span, truncated toward zero.
+  #
+  # @return [Integer] the minutes
+  #
+  # @example
+  #   90.minutes.wholeMinutes   # => 90
+  #   1.5.hours.wholeMinutes    # => 90
   let wholeMinutes -> Integer = Time.truncatedBy(this.seconds, 60.0)
+
+  # The whole hours in the span, truncated toward zero. A partial hour does
+  # not count.
+  #
+  # @return [Integer] the hours
+  #
+  # @example
+  #   90.minutes.wholeHours   # => 1
   let wholeHours -> Integer = Time.truncatedBy(this.seconds, 3600.0)
+
+  # The whole days in the span, truncated toward zero.
+  #
+  # This is what +date + span+ uses, which is why +date + 36.hours+ advances
+  # exactly one day.
+  #
+  # @return [Integer] the days
+  #
+  # @example
+  #   36.hours.wholeDays   # => 1
+  #   2.weeks.wholeDays    # => 14
   let wholeDays -> Integer = Time.truncatedBy(this.seconds, 86400.0)
+
+  # The whole weeks in the span, truncated toward zero.
+  #
+  # @return [Integer] the weeks
+  #
+  # @example
+  #   14.days.wholeWeeks   # => 2
   let wholeWeeks -> Integer = Time.truncatedBy(this.seconds, 604800.0)
 
-  # Delegates to `Number.compare` (algebra.kex), which orders the two
-  # Float second counts.
+  # Orders this span against another by length.
+  #
+  # Delegates to `Number.compare` (algebra.kex), which orders the two Float
+  # second counts.
+  #
+  # @param other [Duration] the span to compare against
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   90.minutes.compareTo(60.minutes)   # => Greater
+  #
+  # @example Sorting by length
+  #   spans.sort { |a, b| a.compareTo(b) == Less }
   let compareTo(other: Duration) -> Ordering = this.seconds.compare(other.seconds)
 end
 
+# Building elapsed spans, and UTC offsets.
 module Duration do
+  # A span of no time at all. Also the UTC offset.
+  #
+  # @return [Duration] the zero span
+  #
+  # @example
+  #   Duration.zero().zero?   # => true
+  #   date.at(time, Duration.zero()).iso   # => "...T09:00:00Z"
   let zero() -> Duration = Duration { seconds: 0.0 }
+
+  # A span of +count+ milliseconds.
+  #
+  # @param count [Number] how many milliseconds
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.milliseconds(1500).wholeSeconds   # => 1
   let milliseconds(count: Number) -> Duration = Duration { seconds: count / 1000.0 }
+
+  # A span of +count+ seconds.
+  #
+  # @param count [Number] how many seconds
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.seconds(90).wholeMinutes   # => 1
   let seconds(count: Number) -> Duration = Duration { seconds: count * 1.0 }
+
+  # A span of +count+ minutes.
+  #
+  # @param count [Number] how many minutes
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.minutes(90).wholeHours   # => 1
   let minutes(count: Number) -> Duration = Duration { seconds: count * 60.0 }
+
+  # A span of +count+ hours.
+  #
+  # @param count [Number] how many hours
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.hours(2).wholeSeconds   # => 7200
   let hours(count: Number) -> Duration = Duration { seconds: count * 3600.0 }
+
+  # A span of +count+ days, each a fixed 86400 seconds.
+  #
+  # @param count [Number] how many days
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.days(2).wholeHours   # => 48
   let days(count: Number) -> Duration = Duration { seconds: count * 86400.0 }
+
+  # A span of +count+ weeks, each a fixed 604800 seconds.
+  #
+  # @param count [Number] how many weeks
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Duration.weeks(2).wholeDays   # => 14
   let weeks(count: Number) -> Duration = Duration { seconds: count * 604800.0 }
 
-  # A whole-minute UTC offset, the only kind ISO 8601 can spell. A negative
-  # hour or minute puts the whole offset west of UTC.
+  # A whole-minute UTC offset, the only kind ISO 8601 can spell.
+  #
+  # A negative hour or minute puts the whole offset west of UTC, so
+  # +utcOffset(-5, 30)+ is five and a half hours behind UTC, not four and a
+  # half.
+  #
+  # @param hours [Integer] the hour part of the offset
+  # @param minutes [Integer] the minute part of the offset
+  # @return [Duration] the offset
+  #
+  # @example
+  #   Duration.utcOffset(2, 0).wholeSeconds     # => 7200
+  #   Duration.utcOffset(-5, 0).wholeSeconds    # => -18000
+  #
+  # @example Rendering an instant at another offset
+  #   moment.at(Duration.utcOffset(-5, 0)).iso
   let utcOffset(hours: Integer, minutes: Integer) -> Duration do
     let magnitude = hours.abs * 3600 + minutes.abs * 60
     return Duration { seconds: 0.0 - (magnitude * 1.0) } if hours < 0 || minutes < 0
@@ -676,40 +1435,162 @@ end
 
 # ── Periods ───────────────────────────────────────────────────────────────
 
+# Building calendar spans.
 module Period do
+  # A span of nothing.
+  #
+  # @return [Period] the zero span
+  #
+  # @example
+  #   Period.zero().iso     # => "P0D"
+  #   Period.zero().zero?   # => true
   let zero() -> Period = Period { years: 0, months: 0, days: 0 }
+
+  # A span of the given years, months and days together.
+  #
+  # @param years [Integer] whole years
+  # @param months [Integer] whole months
+  # @param days [Integer] whole days
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   Period.of(1, 2, 3).iso   # => "P1Y2M3D"
   let of(years: Integer, months: Integer, days: Integer) -> Period = Period { years: years, months: months, days: days }
+
+  # A span of +count+ calendar years.
+  #
+  # @param count [Integer] how many years
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   (Date.of(2024, 2, 29).try + Period.years(1)).iso   # => "2025-02-28"
   let years(count: Integer) -> Period = Period { years: count, months: 0, days: 0 }
+
+  # A span of +count+ calendar months.
+  #
+  # @param count [Integer] how many months
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   (Date.of(2026, 1, 31).try + Period.months(1)).iso   # => "2026-02-28"
   let months(count: Integer) -> Period = Period { years: 0, months: count, days: 0 }
+
+  # A span of +count+ days, as a calendar step.
+  #
+  # @param count [Integer] how many days
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   Period.days(10).iso   # => "P10D"
   let days(count: Integer) -> Period = Period { years: 0, months: 0, days: count }
+
+  # A span of +count+ weeks, recorded as that many times seven days.
+  #
+  # @param count [Integer] how many weeks
+  # @return [Period] the calendar span
+  #
+  # @example
+  #   Period.weeks(2).iso   # => "P14D"
   let weeks(count: Integer) -> Period = Period { years: 0, months: 0, days: count * 7 }
 end
 
 make Period, implement: Inspectable, Showable do
+  # Renders the period structurally, for debugging output.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered period
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+
+  # Renders the period as its ISO 8601 form, so interpolation and
+  # +IO.printLine+ show +P1Y2M3D+.
+  #
+  # @return [String] the ISO 8601 duration
+  #
+  # @example
+  #   "due in ${Period.of(0, 1, 0)}"   # => "due in P1M"
   let showValue -> String = this.iso
 
+  # Adds two calendar spans, field by field.
+  #
+  # @param other [Period] the span to add
+  # @return [Period] the total
+  #
+  # @example
+  #   (Period.of(1, 2, 3) + 1.years).iso   # => "P2Y2M3D"
   let +(other: Period) -> Period = Period { years: this.years + other.years, months: this.months + other.months, days: this.days + other.days }
+
+  # Subtracts a calendar span, field by field. Fields may go negative.
+  #
+  # @param other [Period] the span to subtract
+  # @return [Period] the difference
+  #
+  # @example
+  #   (Period.of(1, 2, 3) - 1.years).iso   # => "P2M3D"
   let -(other: Period) -> Period = Period { years: this.years - other.years, months: this.months - other.months, days: this.days - other.days }
+
+  # The same span with every field's sign flipped — a step backwards.
+  #
+  # @return [Period] the negated span
+  #
+  # @example
+  #   Period.of(1, 2, 3).negated.iso   # => "P-1Y-2M-3D"
   let negated -> Period = Period { years: 0 - this.years, months: 0 - this.months, days: 0 - this.days }
+
+  # Multiplies every field by +factor+.
+  #
+  # @param factor [Integer] the factor to multiply by
+  # @return [Period] the scaled span
+  #
+  # @example
+  #   (Period.of(1, 2, 3) * 2).iso   # => "P2Y4M6D"
   let *(factor: Integer) -> Period = Period { years: this.years * factor, months: this.months * factor, days: this.days * factor }
 
+  # Returns +true+ when every field is zero.
+  #
+  # @return [Bool] +true+ for a zero span
+  #
+  # @example
+  #   Period.zero().zero?          # => true
+  #   Period.of(0, 1, 0).zero?     # => false
   let zero? -> Bool = this.years == 0 && this.months == 0 && this.days == 0
 
+  # The years and months of the span, as one count of months.
+  #
   # Years and months are one quantity for arithmetic — a month is 1/12 of a
   # year exactly, unlike days, which are not a fixed fraction of a month. This
   # is why `date + span` applies them together rather than one after the other.
+  #
+  # @return [Integer] the total months, ignoring days
+  #
+  # @example
+  #   Period.of(1, 2, 3).totalMonths   # => 14
   let totalMonths -> Integer = this.years * 12 + this.months
 
-  # Carries excess months into years: 14 months becomes 1 year 2 months. Days
-  # are left alone — there is no fixed number of them in a month to carry by.
+  # The same span with excess months carried into years.
+  #
+  # 14 months becomes 1 year 2 months. Days are left alone — there is no fixed
+  # number of them in a month to carry by.
+  #
+  # @return [Period] the normalised span
+  #
+  # @example
+  #   14.months.normalized.iso   # => "P1Y2M"
   let normalized -> Period do
     let total = this.totalMonths
     return Period { years: (total - total.modulo(12)) / 12, months: total.modulo(12), days: this.days }
   end
 
-  # ISO 8601 duration: `P1Y2M3D`. A zero period is `P0D`, the shortest spelling
-  # the grammar allows — `P` alone is not valid.
+  # The span as an ISO 8601 duration, +P1Y2M3D+.
+  #
+  # A zero period is +P0D+, the shortest spelling the grammar allows — +P+
+  # alone is not valid.
+  #
+  # @return [String] the ISO 8601 duration
+  #
+  # @example
+  #   Period.of(1, 2, 3).iso   # => "P1Y2M3D"
+  #   Period.zero().iso        # => "P0D"
+  #   2.months.iso             # => "P2M"
   let iso -> String do
     return "P0D" if this.zero?
     let years = if this.years != 0 then "${this.years}Y" else "" end
@@ -722,35 +1603,138 @@ end
 # ── Date ──────────────────────────────────────────────────────────────────
 
 make Date, implement: Inspectable, Showable do
+  # Renders the date structurally, for debugging output.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered date
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+
+  # Renders the date in ISO form, so interpolation and +IO.printLine+ show
+  # +2026-07-30+.
+  #
+  # @return [String] the ISO 8601 date
+  #
+  # @example
+  #   "due ${Date.of(2026, 7, 30).try}"   # => "due 2026-07-30"
   let showValue -> String = this.iso
+
+  # Days since 1970-01-01, negative before it.
+  #
+  # The date's identity as a number: comparison and day arithmetic go through
+  # it.
+  #
+  # @return [Integer] days since the Unix epoch
+  #
+  # @example
+  #   Date.of(1970, 1, 1).try.epochDay    # => 0
+  #   Date.of(2026, 7, 30).try.epochDay   # => 20664
   let epochDay -> Integer = Time.daysFromCivil(this.year, this.month, this.day)
 
+  # The day of the week this date falls on.
+  #
+  # @return [Weekday] the day of the week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.weekday        # => Thursday
+  #   Date.of(2026, 7, 30).try.weekday.name   # => "Thursday"
   let weekday -> Weekday = Time.weekdayFromEpochDay(this.epochDay)
 
-  # 1 on January 1st.
+  # The day's position in its year, counting from 1 on January 1st.
+  #
+  # @return [Integer] the day of the year
+  #
+  # @example
+  #   Date.of(2026, 1, 1).try.dayOfYear    # => 1
+  #   Date.of(2026, 7, 30).try.dayOfYear   # => 211
   let dayOfYear -> Integer = this.epochDay - Time.daysFromCivil(this.year, 1, 1) + 1
 
+  # Returns +true+ when this date falls in a leap year.
+  #
+  # @return [Bool] +true+ in a leap year
+  #
+  # @example
+  #   Date.of(2024, 1, 1).try.leapYear?   # => true
+  #   Date.of(2026, 1, 1).try.leapYear?   # => false
   let leapYear? -> Bool = Time.leapYear?(this.year)
 
-  # Days in THIS date's month. No Result: a Date's month is in range by
-  # construction, unlike `Time.daysInMonth`'s two loose integers.
+  # The number of days in THIS date's month.
+  #
+  # No Result: a Date's month is in range by construction, unlike
+  # `Time.daysInMonth`'s two loose integers.
+  #
+  # @return [Integer] the length of this month
+  #
+  # @example
+  #   Date.of(2024, 2, 1).try.daysInMonth   # => 29
+  #   Date.of(2026, 7, 1).try.daysInMonth   # => 31
   let daysInMonth -> Integer = Time.daysInValidMonth(this.year, this.month)
 
-  # Whole days only: a Duration with a sub-day remainder truncates toward
-  # zero, so `date + 36.hours` advances exactly one day.
+  # Advances the date by a fixed span, whole days only.
+  #
+  # A Duration with a sub-day remainder truncates toward zero, so
+  # +date + 36.hours+ advances exactly one day. Use a +Period+ when the
+  # calendar should get a say.
+  #
+  # @param span [Duration] the elapsed span to add
+  # @return [Date] the later date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 10.days).iso   # => "2026-08-09"
+  #   (Date.of(2026, 7, 30).try + 36.hours).iso  # => "2026-07-31"
   let +(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
+
+  # Moves the date back by a fixed span, whole days only.
+  #
+  # @param span [Duration] the elapsed span to subtract
+  # @return [Date] the earlier date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try - 10.days).iso   # => "2026-07-20"
   let -(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
 
-  # Calendar steps, so the month length decides the answer: January 31st plus
-  # one month is the last day of February. Months are applied before days, and
-  # years and months together as one count of months — applying years first
-  # would clamp twice and make `2024-02-29 + 1.years + 1.months` land a day
-  # off from `+ 13.months`.
+  # Advances the date by a calendar span, so the month length decides the
+  # answer.
+  #
+  # January 31st plus one month is the last day of February. Months are
+  # applied before days, and years and months together as one count of
+  # months — applying years first would clamp twice and make
+  # `2024-02-29 + 1.years + 1.months` land a day off from `+ 13.months`.
+  #
+  # @param span [Period] the calendar span to add
+  # @return [Date] the later date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 1.months).iso   # => "2026-08-30"
+  #   (Date.of(2026, 1, 31).try + 1.months).iso   # => "2026-02-28"
+  #   (Date.of(2024, 2, 29).try + 1.years).iso    # => "2025-02-28"
   let +(span: Period) -> Date = this.addMonths(span.totalMonths).addDays(span.days)
+
+  # Moves the date back by a calendar span, with the same clamping as +++.
+  #
+  # @param span [Period] the calendar span to subtract
+  # @return [Date] the earlier date
+  #
+  # @example
+  #   (Date.of(2026, 3, 31).try - 1.months).iso   # => "2026-02-28"
   let -(span: Period) -> Date = this.addMonths(0 - span.totalMonths).addDays(0 - span.days)
 
+  # The date +count+ days later. A negative count moves backwards.
+  #
+  # @param count [Integer] how many days to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.addDays(1).iso    # => "2026-07-31"
+  #   Date.of(2026, 7, 30).try.addDays(-1).iso   # => "2026-07-29"
   let addDays(count: Integer) -> Date = Date.fromEpochDay(this.epochDay + count)
+
+  # The date +count+ weeks later. A negative count moves backwards.
+  #
+  # @param count [Integer] how many weeks to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.addWeeks(2).iso   # => "2026-08-13"
   let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
 
   # No `date.tomorrow`/`date.yesterday` methods: on BEAM a make-block method
@@ -759,8 +1743,18 @@ make Date, implement: Inspectable, Showable do
   # functions win — `Date.tomorrow()` is the spelling people reach for, and
   # `date.addDays(1)` already says the rest.
 
-  # Calendar-aware, so the day is clamped into the target month: one month
-  # after January 31st is the last day of February, not March 3rd.
+  # The date +count+ calendar months later, with the day clamped into the
+  # target month.
+  #
+  # One month after January 31st is the last day of February, not March 3rd.
+  # A negative count moves backwards.
+  #
+  # @param count [Integer] how many months to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 1, 31).try.addMonths(1).iso    # => "2026-02-28"
+  #   Date.of(2026, 7, 30).try.addMonths(-1).iso   # => "2026-06-30"
   let addMonths(count: Integer) -> Date do
     let total = this.year * 12 + (this.month - 1) + count
     let month = total.modulo(12) + 1
@@ -770,30 +1764,105 @@ make Date, implement: Inspectable, Showable do
     return Date { year: year, month: month, day: day }
   end
 
+  # The date +count+ calendar years later, with the day clamped — February
+  # 29th plus one year is February 28th.
+  #
+  # @param count [Integer] how many years to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2024, 2, 29).try.addYears(1).iso   # => "2025-02-28"
   let addYears(count: Integer) -> Date = this.addMonths(count * 12)
 
-  # Boundaries of the calendar unit this date falls in. The week runs Monday
-  # to Sunday, matching the ISO weekday numbering `weekday.number` reports.
+  # The first day of this date's month.
+  #
+  # @return [Date] the first of the month
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfMonth.iso   # => "2026-07-01"
   let startOfMonth -> Date = Date { year: this.year, month: this.month, day: 1 }
+
+  # The last day of this date's month, whatever its length.
+  #
+  # @return [Date] the last of the month
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfMonth.iso   # => "2026-07-31"
+  #   Date.of(2024, 2, 1).try.endOfMonth.iso    # => "2024-02-29"
   let endOfMonth -> Date = Date { year: this.year, month: this.month, day: this.daysInMonth }
+
+  # January 1st of this date's year.
+  #
+  # @return [Date] the first of the year
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfYear.iso   # => "2026-01-01"
   let startOfYear -> Date = Date { year: this.year, month: 1, day: 1 }
+
+  # December 31st of this date's year.
+  #
+  # @return [Date] the last of the year
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfYear.iso   # => "2026-12-31"
   let endOfYear -> Date = Date { year: this.year, month: 12, day: 31 }
+
+  # The Monday of this date's week.
+  #
+  # The week runs Monday to Sunday, matching the ISO weekday numbering
+  # +weekday.number+ reports.
+  #
+  # @return [Date] the Monday of this week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfWeek.iso   # => "2026-07-27"
   let startOfWeek -> Date = this.addDays(1 - this.weekday.number)
+
+  # The Sunday of this date's week.
+  #
+  # @return [Date] the Sunday of this week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfWeek.iso   # => "2026-08-02"
   let endOfWeek -> Date = this.addDays(7 - this.weekday.number)
 
-  # Whole days from this date to `other`, negative when `other` is earlier.
+  # Whole days from this date to +other+, negative when +other+ is earlier.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of days
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.daysUntil(Date.of(2026, 8, 9).try)   # => 10
+  #   Date.of(2026, 8, 9).try.daysUntil(Date.of(2026, 7, 30).try)   # => -10
   let daysUntil(other: Date) -> Integer = other.epochDay - this.epochDay
+
+  # The span from this date to +other+, as a +Duration+ of whole days.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.until(Date.of(2026, 8, 9).try).wholeDays   # => 10
   let until(other: Date) -> Duration = Duration.days(this.daysUntil(other))
 
-  # Whole calendar months from this date to `other`, negative when `other` is
-  # earlier. Truncated, not rounded: a partial month does not count, so
-  # January 15th to February 14th is 0 months.
+  # Whole calendar months from this date to +other+, negative when +other+ is
+  # earlier.
+  #
+  # Truncated, not rounded: a partial month does not count, so January 15th to
+  # February 14th is 0 months.
   #
   # The count is the exact inverse of `addMonths`, which is why the correction
   # below asks `addMonths` rather than comparing day-of-month fields: January
   # 31st plus one month IS February 28th, so January 31st to February 28th is
   # one month, even though 28 < 31. Comparing the day fields answers 0 there
   # and contradicts the addition this same file performs.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of whole months
+  #
+  # @example
+  #   Date.of(2026, 1, 15).try.monthsUntil(Date.of(2026, 2, 14).try)   # => 0
+  #   Date.of(2026, 1, 31).try.monthsUntil(Date.of(2026, 2, 28).try)   # => 1
   let monthsUntil(other: Date) -> Integer do
     return 0 - other.monthsUntil(this) if other.before?(this)
     let gross = (other.year * 12 + other.month) - (this.year * 12 + this.month)
@@ -801,60 +1870,207 @@ make Date, implement: Inspectable, Showable do
     return gross
   end
 
+  # Whole calendar years from this date to +other+, negative when +other+ is
+  # earlier. Truncated, like +monthsUntil+.
+  #
+  # This is how to compute an age.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of whole years
+  #
+  # @example
+  #   Date.of(2020, 1, 1).try.yearsUntil(Date.of(2026, 7, 30).try)   # => 6
+  #
+  # @example Someone's age today
+  #   born.yearsUntil(Date.today())
   let yearsUntil(other: Date) -> Integer do
     let months = this.monthsUntil(other)
     return (months - months.modulo(12)) / 12 if months >= 0
     return 0 - ((0 - months) - (0 - months).modulo(12)) / 12
   end
 
+  # Returns +true+ when this date is earlier than +other+.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Bool] +true+ when this date comes first
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.before?(Date.of(2026, 8, 1).try)   # => true
   let before?(other: Date) -> Bool = this.epochDay < other.epochDay
+
+  # Returns +true+ when this date is later than +other+.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Bool] +true+ when this date comes second
+  #
+  # @example
+  #   Date.of(2026, 8, 1).try.after?(Date.of(2026, 7, 30).try)   # => true
   let after?(other: Date) -> Bool = this.epochDay > other.epochDay
+
+  # Orders this date against another.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.compareTo(Date.of(2026, 8, 1).try)   # => Less
+  #
+  # @example Sorting dates
+  #   dates.sort { |a, b| a.compareTo(b) == Less }
   let compareTo(other: Date) -> Ordering do
     return Less if this.epochDay < other.epochDay
     return Greater if this.epochDay > other.epochDay
     return Equal
   end
 
-  # ISO 8601: `2026-07-30`.
+  # The date as ISO 8601 text, +2026-07-30+.
+  #
+  # @return [String] the ISO 8601 date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.iso   # => "2026-07-30"
   let iso -> String = Time.formatDate(this)
 
-  # This date at a given time of day and offset.
+  # This date at a given time of day and offset, as a +DateTime+.
+  #
+  # @param time [Time] the time of day
+  # @param offset [Duration] the offset from UTC
+  # @return [DateTime] the instant
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.at(Time.of(9, 0, 0).try, Duration.zero()).iso
+  #   # => "2026-07-30T09:00:00Z"
   let at(time: Time, offset: Duration) -> DateTime = DateTime { date: this, time: time, offset: offset }
 end
 
 # ── Time ──────────────────────────────────────────────────────────────────
 
 make Time, implement: Inspectable, Showable do
+  # Renders the time structurally, for debugging output.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered time
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+
+  # Renders the time in ISO form, so interpolation and +IO.printLine+ show
+  # +14:03:00+.
+  #
+  # @return [String] the ISO 8601 time
+  #
+  # @example
+  #   "starts at ${Time.of(14, 3, 0).try}"   # => "starts at 14:03:00"
   let showValue -> String = this.iso
+
+  # Seconds from midnight to this time of day, ignoring the nanosecond field.
+  #
+  # @return [Integer] seconds since midnight
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.secondsSinceMidnight   # => 50580
   let secondsSinceMidnight -> Integer = this.hour * 3600 + this.minute * 60 + this.second
 
+  # Returns +true+ when this time of day is earlier than +other+.
+  #
+  # @param other [Time] the time to compare against
+  # @return [Bool] +true+ when this time comes first
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.before?(Time.of(15, 0, 0).try)   # => true
   let before?(other: Time) -> Bool = this.compareTo(other) == Less
+
+  # Returns +true+ when this time of day is later than +other+.
+  #
+  # @param other [Time] the time to compare against
+  # @return [Bool] +true+ when this time comes second
+  #
+  # @example
+  #   Time.of(15, 0, 0).try.after?(Time.of(14, 3, 0).try)   # => true
   let after?(other: Time) -> Bool = this.compareTo(other) == Greater
 
-  # Wall-clock arithmetic wraps within the day: a Time has no date to carry
-  # into, so 23:00 + 2.hours is 01:00 and midnight - 1.seconds is 23:59:59.
-  # Reach for DateTime when the day rolling over is something you need to see.
-  # The nanosecond field rides along untouched — `wholeSeconds` truncates the
+  # Advances the time of day by a span, wrapping within the day.
+  #
+  # A Time has no date to carry into, so 23:00 + 2.hours is 01:00. Reach for
+  # +DateTime+ when the day rolling over is something you need to see.
+  #
+  # The nanosecond field rides along untouched — +wholeSeconds+ truncates the
   # span, so a sub-second Duration shifts nothing.
+  #
+  # @param span [Duration] the elapsed span to add
+  # @return [Time] the later time of day
+  #
+  # @example
+  #   (Time.of(14, 3, 0).try + 2.hours).iso    # => "16:03:00"
+  #   (Time.of(23, 0, 0).try + 2.hours).iso    # => "01:00:00"
   let +(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + span.wholeSeconds, this.nanosecond)
+
+  # Moves the time of day back by a span, wrapping within the day.
+  #
+  # @param span [Duration] the elapsed span to subtract
+  # @return [Time] the earlier time of day
+  #
+  # @example
+  #   (Time.midnight() - 1.seconds).iso   # => "23:59:59"
   let -(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight - span.wholeSeconds, this.nanosecond)
 
+  # The time of day +count+ seconds later, wrapping within the day.
+  #
+  # @param count [Integer] how many seconds to add
+  # @return [Time] the shifted time of day
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.addSeconds(60).iso   # => "14:04:00"
   let addSeconds(count: Integer) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + count, this.nanosecond)
+
+  # The time of day +count+ minutes later, wrapping within the day.
+  #
+  # @param count [Integer] how many minutes to add
+  # @return [Time] the shifted time of day
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.addMinutes(30).iso   # => "14:33:00"
   let addMinutes(count: Integer) -> Time = this.addSeconds(count * 60)
+
+  # The time of day +count+ hours later, wrapping within the day.
+  #
+  # @param count [Integer] how many hours to add
+  # @return [Time] the shifted time of day
+  #
+  # @example
+  #   Time.of(23, 0, 0).try.addHours(2).iso   # => "01:00:00"
   let addHours(count: Integer) -> Time = this.addSeconds(count * 3600)
 
-  # Elapsed time from this time of day to `other`, within the same day.
-  # Negative when `other` is earlier.
+  # Elapsed time from this time of day to +other+, within the same day.
+  #
+  # Negative when +other+ is earlier. Sub-second precision is kept.
+  #
+  # @param other [Time] the time to measure to
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.until(Time.of(15, 3, 0).try).wholeMinutes   # => 60
   let until(other: Time) -> Duration do
     let whole = (other.secondsSinceMidnight - this.secondsSinceMidnight) * 1.0
     let fraction = (other.nanosecond - this.nanosecond) / 1000000000.0
     return Duration { seconds: whole + fraction }
   end
 
-  # ISO 8601: `14:03:00`, with fractional seconds only when non-zero.
+  # The time of day as ISO 8601 text, with fractional seconds only when they
+  # are non-zero.
+  #
+  # @return [String] the ISO 8601 time
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.iso              # => "14:03:00"
+  #   Time.of(14, 3, 0, 123456789).try.iso   # => "14:03:00.123456789"
   let iso -> String = Time.formatTime(this)
 
+  # Orders this time of day against another, nanoseconds included.
+  #
+  # @param other [Time] the time to compare against
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.compareTo(Time.of(15, 0, 0).try)   # => Less
   let compareTo(other: Time) -> Ordering do
     return Less if this.secondsSinceMidnight < other.secondsSinceMidnight
     return Greater if this.secondsSinceMidnight > other.secondsSinceMidnight
@@ -868,53 +2084,225 @@ end
 # ── DateTime ──────────────────────────────────────────────────────────────
 
 make DateTime, implement: Inspectable, Showable do
+  # Renders the instant structurally, for debugging output.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered instant
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+
+  # Renders the instant in ISO form, so interpolation and +IO.printLine+ show
+  # +2026-07-30T14:03:00+02:00+.
+  #
+  # @return [String] the ISO 8601 instant
+  #
+  # @example
+  #   "logged at ${DateTime.utcNow()}"   # => "logged at 2026-07-30T12:03:00Z"
   let showValue -> String = this.iso
-  # Seconds since the Unix epoch. This is the value to compare and subtract:
-  # it identifies the instant, independent of the offset rendering it.
+
+  # Seconds since the Unix epoch.
+  #
+  # This is the value to compare and subtract: it identifies the instant,
+  # independent of the offset rendering it, so 12:00Z and 14:00+02:00 have the
+  # same one.
+  #
+  # @return [Integer] seconds since the Unix epoch
+  #
+  # @example
+  #   DateTime.parse("1970-01-01T00:00:00Z").try.epochSeconds   # => 0
+  #
+  # @example Storing an instant as a number
+  #   FS.File.write("stamp", "${DateTime.utcNow().epochSeconds}")
   let epochSeconds -> Integer = this.date.epochDay * 86400 + this.time.secondsSinceMidnight - this.offset.wholeSeconds
 
-  # No `year`/`hour`/... shorthands here: a method named after a record
-  # field makes `value.year` inside a module function dispatch to it on BEAM
-  # and fail with function_clause. Reach through `.date` and `.time`.
+  # The day of the week this instant falls on, at its own offset.
+  #
+  # No `year`/`hour`/... shorthands here: a method named after a record field
+  # makes `value.year` inside a module function dispatch to it on BEAM and
+  # fail with function_clause. Reach through `.date` and `.time`.
+  #
+  # @return [Weekday] the day of the week
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00Z").try.weekday.name   # => "Thursday"
   let weekday -> Weekday = this.date.weekday
 
   # The same instant, rendered at another offset.
+  #
+  # Nothing moves — the wall clock changes because the offset does, and
+  # +epochSeconds+ is unchanged.
+  #
+  # @param offset [Duration] the offset to render at
+  # @return [DateTime] the same instant, at that offset
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try
+  #     .at(Duration.utcOffset(-5, 0)).iso
+  #   # => "2026-07-30T07:03:00-05:00"
   let at(offset: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
+
+  # The same instant, rendered at UTC.
+  #
+  # The form to store, compare and transmit — there is no offset to disagree
+  # about.
+  #
+  # @return [DateTime] the same instant, at UTC
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try.utc.iso
+  #   # => "2026-07-30T12:03:00Z"
   let utc -> DateTime = this.at(Duration.zero())
 
+  # Advances the instant by a fixed span, keeping its offset.
+  #
+  # @param span [Duration] the elapsed span to add
+  # @return [DateTime] the later instant
+  #
+  # @example
+  #   (DateTime.parse("2026-07-30T14:03:00Z").try + 90.minutes).iso
+  #   # => "2026-07-30T15:33:00Z"
   let +(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
+
+  # Moves the instant back by a fixed span, keeping its offset.
+  #
+  # @param span [Duration] the elapsed span to subtract
+  # @return [DateTime] the earlier instant
+  #
+  # @example
+  #   (DateTime.utcNow() - 24.hours).iso   # yesterday, same wall clock
   let -(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
 
-  # A calendar step moves the DATE and leaves the wall clock where it is:
+  # Advances the instant by a calendar span, moving the DATE and leaving the
+  # wall clock where it is.
+  #
   # 09:00 on January 31st plus one month is 09:00 on February 28th. Going
   # through epoch seconds instead would drift the time of day by whatever the
   # month happened to be worth in seconds.
+  #
+  # @param span [Period] the calendar span to add
+  # @return [DateTime] the later instant
+  #
+  # @example
+  #   (DateTime.parse("2026-07-30T14:03:00+02:00").try + 1.months).iso
+  #   # => "2026-08-30T14:03:00+02:00"
   let +(span: Period) -> DateTime = DateTime { date: this.date + span, time: this.time, offset: this.offset }
+
+  # Moves the instant back by a calendar span, keeping the wall clock.
+  #
+  # @param span [Period] the calendar span to subtract
+  # @return [DateTime] the earlier instant
+  #
+  # @example
+  #   (DateTime.parse("2026-07-30T14:03:00Z").try - 1.years).iso
+  #   # => "2025-07-30T14:03:00Z"
   let -(span: Period) -> DateTime = DateTime { date: this.date - span, time: this.time, offset: this.offset }
 
+  # The instant +count+ days later, keeping the wall clock and the offset.
+  #
+  # @param count [Integer] how many days to add
+  # @return [DateTime] the shifted instant
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00Z").try.addDays(1).iso
+  #   # => "2026-07-31T14:03:00Z"
   let addDays(count: Integer) -> DateTime = DateTime { date: this.date.addDays(count), time: this.time, offset: this.offset }
+
+  # The instant +count+ weeks later, keeping the wall clock and the offset.
+  #
+  # @param count [Integer] how many weeks to add
+  # @return [DateTime] the shifted instant
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00Z").try.addWeeks(1).iso
+  #   # => "2026-08-06T14:03:00Z"
   let addWeeks(count: Integer) -> DateTime = this.addDays(count * 7)
+
+  # The instant +count+ calendar months later, with the day clamped into the
+  # target month.
+  #
+  # @param count [Integer] how many months to add
+  # @return [DateTime] the shifted instant
+  #
+  # @example
+  #   DateTime.parse("2026-01-31T09:00:00Z").try.addMonths(1).iso
+  #   # => "2026-02-28T09:00:00Z"
   let addMonths(count: Integer) -> DateTime = DateTime { date: this.date.addMonths(count), time: this.time, offset: this.offset }
+
+  # The instant +count+ calendar years later, with the day clamped.
+  #
+  # @param count [Integer] how many years to add
+  # @return [DateTime] the shifted instant
+  #
+  # @example
+  #   DateTime.parse("2024-02-29T09:00:00Z").try.addYears(1).iso
+  #   # => "2025-02-28T09:00:00Z"
   let addYears(count: Integer) -> DateTime = this.addMonths(count * 12)
 
-  # Elapsed time from this instant to `other`, negative when `other` is
+  # Elapsed time from this instant to +other+, negative when +other+ is
   # earlier. Sub-second precision is kept.
+  #
+  # @param other [DateTime] the instant to measure to
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   started.until(DateTime.utcNow()).wholeSeconds
+  #
+  # @example Enforcing a deadline
+  #   if started.until(DateTime.utcNow()).longerThan?(30.seconds)
+  #     IO.printError("timed out")
+  #   end
   let until(other: DateTime) -> Duration do
     let whole = (other.epochSeconds - this.epochSeconds) * 1.0
     let fraction = (other.time.nanosecond - this.time.nanosecond) / 1000000000.0
     return Duration { seconds: whole + fraction }
   end
 
+  # Returns +true+ when this instant is earlier than +other+, whatever offsets
+  # they are written at.
+  #
+  # @param other [DateTime] the instant to compare against
+  # @return [Bool] +true+ when this instant comes first
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try
+  #     .before?(DateTime.parse("2026-07-31T00:00:00Z").try)
+  #   # => true
   let before?(other: DateTime) -> Bool = this.epochSeconds < other.epochSeconds
+
+  # Returns +true+ when this instant is later than +other+.
+  #
+  # @param other [DateTime] the instant to compare against
+  # @return [Bool] +true+ when this instant comes second
+  #
+  # @example
+  #   DateTime.utcNow().after?(started)   # => true
   let after?(other: DateTime) -> Bool = this.epochSeconds > other.epochSeconds
 
-  # ISO 8601: `2026-07-30T14:03:00+02:00`.
+  # The instant as ISO 8601 text, +2026-07-30T14:03:00+02:00+.
+  #
+  # @return [String] the ISO 8601 instant
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try.iso
+  #   # => "2026-07-30T14:03:00+02:00"
   let iso -> String = Time.formatDateTime(this)
 
-  # Instant order, so 12:00Z and 14:00+02:00 compare Equal. Named `compareTo`
-  # rather than `compare`: a make-block `compare` is shadowed by the builtin
-  # comparison dispatch and fails at runtime on both backends.
+  # Orders this instant against another, by instant rather than by wall
+  # clock — so 12:00Z and 14:00+02:00 compare +Equal+.
+  #
+  # Named `compareTo` rather than `compare`: a make-block `compare` is
+  # shadowed by the builtin comparison dispatch and fails at runtime on both
+  # backends.
+  #
+  # @param other [DateTime] the instant to compare against
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T12:00:00Z").try
+  #     .compareTo(DateTime.parse("2026-07-30T14:00:00+02:00").try)
+  #   # => Equal
+  #
+  # @example Sorting events by when they happened
+  #   events.sort { |a, b| a.at.compareTo(b.at) == Less }
   let compareTo(other: DateTime) -> Ordering do
     return Less if this.epochSeconds < other.epochSeconds
     return Greater if this.epochSeconds > other.epochSeconds

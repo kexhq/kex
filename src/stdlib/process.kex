@@ -1,10 +1,55 @@
-# Process and concurrency primitives — backed by Kex.Intrinsic.Process and
-# the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
-# spawned process with an awaitable result.
+# Processes, tasks and external commands.
+#
+# Kex's concurrency is the BEAM's: lightweight processes that share nothing
+# and communicate by message. There are three things here, and they answer
+# different questions.
+#
+# +Task+ runs one piece of work somewhere else and gives you the answer back:
+#
+#   let a = Task.start do expensiveThing(1) end
+#   let b = Task.start do expensiveThing(2) end
+#   a.await + b.await
+#
+# +serving+ plus +Process.spawn+ gives a piece of state its own process, with
+# typed calls into it:
+#
+#   record RateLimiter do
+#     remaining : Integer
+#   end
+#
+#   serving RateLimiter do
+#     slot allowed? -> Reply<Bool> do
+#       let allowed = @remaining > 0
+#       new.remaining = allowed then @remaining - 1 else @remaining
+#       return { new, reply: allowed }
+#     end
+#   end
+#
+#   let api = Process.spawn(RateLimiter { remaining: 2 })
+#   api.allowed?()   # => Ok(true)
+#
+# +Process.run+ and +Process.stream+ run an external program.
+#
+#   Process.run("git", ["rev-parse", "HEAD"])
+#
+# Backed by Kex.Intrinsic.Process and the BEAM runtime.
 
+# An opaque BEAM process identifier.
+#
+# Obtained from +Process.self+ or +Process.whereis+. Send it messages, link to
+# it, monitor it, or ask whether it is still alive.
 type Pid
+
+# A handle on work running in another process, with a result you can await.
+#
+# Created by +Task.start+.
 type Task<A>
+
+# A monitor reference, returned by +monitor+ and passed back to +demonitor+.
 type Reference
+
+# A typed process handle: like a +Pid+, but it remembers what kind of message
+# the process accepts.
 type Process<A>
 
 # A process termination reason. This remains open because the BEAM permits any
@@ -12,99 +57,291 @@ type Process<A>
 # and structured application errors.
 type ProcessExitReason = Any
 
-# Describes the transition returned by a synchronous serving slot.
+# What a synchronous +slot+ returns: an answer for the caller, and optionally a
+# new state and a reason to stop.
 #
 # `reply` answers the caller immediately. A slot may omit it only when it sends
 # a deferred response with `from.reply(...)`. `new` installs the next serving
 # state; omitting it preserves the current state. `stop` terminates the server
 # after applying the transition. Within a `serving X` block, the checker narrows
 # `new` from `Any?` to `X?`.
+#
+#   slot allowed? -> Reply<Bool> do
+#     let allowed = @remaining > 0
+#     new.remaining = allowed then @remaining - 1 else @remaining
+#     return { new, reply: allowed }
+#   end
+#
+#   slot stop -> Reply<Integer> = { stop: :normal, reply: @remaining }
 record Reply<A> do
+  # The value sent back to the caller.
   reply : A
+
+  # The state the server continues with. Omitted, the current state is kept.
   new : Any? = None
+
+  # A reason to terminate the server after this transition. Omitted, it keeps
+  # running.
   stop : ProcessExitReason? = None
 end
 
+# The identity of a pending caller, for a slot that answers later rather than
+# immediately. Hand it +reply+ when the answer is ready.
 type From<A>
 
+# Why a call into a server failed: it took too long, the process is gone, or
+# it crashed handling the call.
 type CallError = Timeout | NoProcess | CallFailed
 
+# A running server and the default timeout for calls into it.
+#
+# Returned by +Process.spawn+. Every +slot+ declared in the type's +serving+
+# block becomes a method on it, answering a +Result+.
 record Server<X> do
+  # The underlying typed process handle.
   process : Process<X>
+
+  # How long a call waits for an answer, in milliseconds. Change it for one
+  # view of the server with +within+.
   timeout : Integer = 5000
 end
 
+# Spawning servers, running external commands, and the ambient process
+# operations.
 module Process do
-  # Starts a process-backed server for the serving implementation attached to X.
+  # Starts a process running the +serving+ implementation attached to +state+'s
+  # type, and returns a handle on it.
+  #
+  # The state you pass is the server's initial state. Every +slot+ in the
+  # +serving+ block becomes a method on the returned +Server+, and each answers
+  # a +Result+ — a call can time out or find the process gone.
+  #
+  # @param state [X] the server's initial state
+  # @return [Server<X>] a handle on the running server
+  #
+  # @example
+  #   let api = Process.spawn(RateLimiter { remaining: 2 })
+  #   api.allowed?()   # => Ok(true)
+  #   api.allowed?()   # => Ok(true)
+  #   api.allowed?()   # => Ok(false)
+  #   api.stop()
   spawn : X -> Server<X>
   foul spawn(state) = Kex.Intrinsic.Process.spawn(state)
 
-  # Run an executable directly with an argv vector. No shell is involved.
-  # Output is captured as UTF-8 strings; a non-zero child status is still a
-  # successful ProcessResult, while failure to start the child is Error.
+  # Runs an executable with an argument vector and captures its output.
+  #
+  # No shell is involved, so nothing is glob-expanded or word-split and
+  # arguments containing spaces need no quoting. Output is captured as UTF-8
+  # strings.
+  #
+  # A non-zero exit status is still +Ok+ — the program ran and said something,
+  # which is information, not a failure to run it. +Error+ means the child
+  # could not be started at all.
+  #
+  # @param command [String] the executable to run
+  # @param args [[String]] its arguments, one per element
+  # @return [Result<ProcessResult, String>] the captured result, or why it could not start
+  #
+  # @example
+  #   match Process.run("echo", ["hello"]) do
+  #     Ok(r)    => IO.printLine(r.stdout.trim)   # prints: hello
+  #     Error(e) => IO.printError(e)
+  #   end
+  #
+  # @example A non-zero status is still Ok
+  #   Process.run("false", [])   # => Ok(ProcessResult { exitCode: 1, ... })
+  #
+  # @example A command that does not exist is an Error
+  #   Process.run("no-such-command", [])   # => Error("executable not found")
+  #
+  # @example Reading a command's output as data
+  #   Process.run("git", ["rev-parse", "HEAD"])
+  #     .map { |r| r.stdout.trim }
+  #     .or("unknown")
   run : String -> [String] -> Result<ProcessResult, String>
   foul run(command, args) = Kex.Intrinsic.Process.run(command, args)
 
-  # Run an executable with the CALLER's stdout and stderr, so its output
-  # appears as it is produced rather than in one block when it exits. Answers
-  # the exit code; nothing is captured — that is the trade, and it is what a
-  # long-running child a person is watching needs (kexhq/kex#187).
+  # Runs an executable with the CALLER's stdout and stderr, so its output
+  # appears as it is produced rather than in one block when it exits.
   #
-  # `run` remains the one to use when the output is data to be READ.
+  # Answers the exit code; nothing is captured — that is the trade, and it is
+  # what a long-running child a person is watching needs (kexhq/kex#187).
+  #
+  # +run+ remains the one to use when the output is data to be READ.
+  #
+  # @param command [String] the executable to run
+  # @param args [[String]] its arguments, one per element
+  # @return [Result<Integer, String>] the exit code, or why it could not start
+  #
+  # @example Watching a build as it runs
+  #   match Process.stream("make", ["-j8"]) do
+  #     Ok(0)    => IO.printLine("build succeeded")
+  #     Ok(code) => IO.printError("build failed with ${code}")
+  #     Error(e) => IO.printError(e)
+  #   end
   stream : String -> [String] -> Result<Integer, String>
   foul stream(command, args) = Kex.Intrinsic.Process.stream(command, args)
 
+  # Runs an executable and returns just its exit code, discarding its output.
+  #
+  # A command that could not be started answers +127+, the shell's convention
+  # for "command not found". Use +run+ when you need the output or want to
+  # tell a failed start from a failed run.
+  #
+  # @param command [String] the executable to run
+  # @param args [[String]] its arguments, one per element
+  # @return [Integer] the exit code, or +127+ if it could not start
+  #
+  # @example
+  #   Process.exec("true", [])              # => 0
+  #   Process.exec("false", [])             # => 1
+  #   Process.exec("no-such-command", [])   # => 127
+  #
+  # @example Testing for a tool's presence
+  #   let haveGit = Process.exec("git", ["--version"]) == 0
   exec : String -> [String] -> Integer
   foul exec(command, args) = match Process.run(command, args) do
     Ok(result) => result.exitCode
     Error(_) => 127
   end
 
-  # Returns the calling process's Pid.
+  # Returns the calling process's own +Pid+.
+  #
+  # @return [Pid] this process's identifier
+  #
+  # @example Telling another process where to answer
+  #   worker.send((Process.self, :ping))
   self : Pid
   foul self = Kex.Intrinsic.Process.self
 
-  # Sends an exit signal with +reason+ to +pid+.
+  # Sends an exit signal carrying +reason+ to +pid+.
+  #
+  # +:normal+ is the ordinary shutdown reason; +:kill+ cannot be trapped.
+  #
+  # @param pid [Pid] the process to signal
+  # @param reason [X] the exit reason
+  # @return [Void]
+  #
+  # @example
+  #   Process.exit(worker, :shutdown)
   exit : Pid -> X -> Void
   foul exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
-  # Registers +pid+ under the given atom +name+.
+  # Registers +pid+ under the atom +name+, so it can be found by name rather
+  # than by passing the +Pid+ around.
+  #
+  # @param pid [Pid] the process to register
+  # @param name [Atom] the name to register it under
+  # @return [Void]
+  #
+  # @example
+  #   Process.register(Process.self, :main)
   register : Pid -> Atom -> Void
   foul register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
 
-  # Returns the Pid registered under +name+, or None.
+  # Returns the +Pid+ registered under +name+, or +None+ when nothing is.
+  #
+  # @param name [Atom] the registered name
+  # @return [Pid?] the process, or +None+
+  #
+  # @example
+  #   Process.whereis(:main)        # => Just(pid)
+  #   Process.whereis(:not_there)   # => None
+  #
+  # @example Sending to a named process if it is there
+  #   Process.whereis(:logger).map { |pid| pid.send(message) }
   whereis : Atom -> Pid?
   foul whereis(name) = Kex.Intrinsic.Process.whereis(name)
 end
 
+# What an external command left behind: its exit status and its output.
+#
+# Returned inside +Ok+ by +Process.run+, whatever the exit status.
 record ProcessResult do
+  # The command's exit status. Zero conventionally means success.
   exitCode : Integer
+
+  # Everything the command wrote to standard output.
   stdout : String
+
+  # Everything the command wrote to standard error.
   stderr : String
 end
 
 make Pid do
-  # Sends +msg+ unchanged as a raw BEAM term.
+  # Sends +msg+ to the process, unchanged, as a raw BEAM term.
+  #
+  # Sending never blocks and never fails, even when the process is gone —
+  # that is the BEAM's model, not an oversight. Monitor the process when
+  # delivery matters.
+  #
+  # @param msg [X] the message to send
+  # @return [Void]
+  #
+  # @example
+  #   worker.send(:stop)
+  #   worker.send(("job", 42))
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
 
-  # Sends the conventional Erlang sender-bearing pair {Process.self, msg}.
+  # Sends the conventional Erlang sender-bearing pair +{Process.self, msg}+,
+  # so the receiver knows where to answer.
+  #
+  # @param msg [X] the message to send
+  # @return [Void]
+  #
+  # @example
+  #   server.sendFrom(:status)   # the server receives (senderPid, :status)
   sendFrom :> X -> Void
   let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
-  # Links the calling process to this one (bidirectional exit propagation).
+  # Links the calling process to this one, so that either one exiting
+  # abnormally takes the other down.
+  #
+  # Linking is bidirectional and is how a group of processes is made to fail
+  # together. Use +monitor+ when you want to be told about a death without
+  # sharing it.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   worker.link
   link :> Void
   let link = Kex.Intrinsic.Process.link(this)
 
   # Removes the link between the calling process and this one.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   worker.unlink
   unlink :> Void
   let unlink = Kex.Intrinsic.Process.unlink(this)
 
-  # Starts monitoring this process. Returns a reference for +demonitor+.
+  # Starts monitoring this process, and returns the reference that identifies
+  # the monitor.
+  #
+  # When the monitored process exits, the caller receives a message about it.
+  # Unlike +link+, a monitor is one-directional and does not propagate the
+  # exit. Pass the reference to +demonitor+ to stop.
+  #
+  # @return [Reference] the monitor reference
+  #
+  # @example
+  #   let ref = worker.monitor
+  #   ref.demonitor
   monitor :> Reference
   let monitor = Kex.Intrinsic.Process.monitor(this)
 
-  # Returns +true+ if the process is currently alive.
+  # Returns +true+ when the process is still running.
+  #
+  # Inherently a snapshot: the process may exit immediately after you ask.
+  # Monitor it when the answer has to stay true.
+  #
+  # @return [Bool] +true+ when the process is alive
+  #
+  # @example
+  #   Process.self.alive?   # => true
   alive? :> Bool
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
@@ -113,78 +350,196 @@ end
 # It therefore supports the ordinary pid lifecycle operations without erasing
 # its message type.
 make Process<X> do
+  # Sends +msg+ to the process. Unlike +Pid.send+, the message type is
+  # checked.
+  #
+  # @param msg [X] the message to send
+  # @return [Void]
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
 
+  # Sends the sender-bearing pair +{Process.self, msg}+, with the message type
+  # checked.
+  #
+  # @param msg [X] the message to send
+  # @return [Void]
   sendFrom :> X -> Void
   let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
+  # Links the calling process to this one. See +Pid.link+.
+  #
+  # @return [Void]
   link :> Void
   let link = Kex.Intrinsic.Process.link(this)
 
+  # Removes the link between the calling process and this one.
+  #
+  # @return [Void]
   unlink :> Void
   let unlink = Kex.Intrinsic.Process.unlink(this)
 
+  # Starts monitoring this process. See +Pid.monitor+.
+  #
+  # @return [Reference] the monitor reference
   monitor :> Reference
   let monitor = Kex.Intrinsic.Process.monitor(this)
 
+  # Returns +true+ when the process is still running.
+  #
+  # @return [Bool] +true+ when the process is alive
   alive? :> Bool
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
 
 make Server<X> do
-  # Return an immutable view of the same server with a new default call timeout.
+  # Returns the same server with a different default call timeout, in
+  # milliseconds.
+  #
+  # The server is untouched — this is a new view of it, so one slow call can be
+  # given more room without changing anything for other callers.
+  #
+  # @param timeout [Integer] the call timeout in milliseconds
+  # @return [Server<X>] a view of the server with that timeout
+  #
+  # @example Giving one call longer to answer
+  #   api.within(30000).rebuildIndex()
   within :> Integer -> Server<X>
   let within(timeout) = New { timeout: timeout }
 
+  # Links the calling process to the server. See +Pid.link+.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   api.link
   link :> Void
   let link = @process.link
 
+  # Removes the link between the calling process and the server.
+  #
+  # @return [Void]
   unlink :> Void
   let unlink = @process.unlink
 
+  # Starts monitoring the server. See +Pid.monitor+.
+  #
+  # @return [Reference] the monitor reference
   monitor :> Reference
   let monitor = @process.monitor
 
+  # Returns +true+ when the server is still running.
+  #
+  # @return [Bool] +true+ when the server is alive
+  #
+  # @example
+  #   api.alive?   # => true
   alive? :> Bool
   let alive? = @process.alive?
 end
 
 make From<X> do
-  # Completes the pending call identified by this caller/reference pair.
+  # Answers the pending call this value identifies.
+  #
+  # A slot that cannot answer immediately — because it is waiting on something
+  # else — omits +reply+ from its transition and calls this later instead.
+  #
+  # @param value [X] the answer to send
+  # @return [Void]
+  #
+  # @example Answering after the work is done
+  #   Task.start do
+  #     from.reply(expensiveThing())
+  #   end
   reply :> X -> Void
   foul reply(value) = Kex.Intrinsic.Process.replyFrom(this, value)
 
+  # Returns the waiting caller's +Pid+.
+  #
+  # @return [Pid] the caller
   pid :> Pid
   let pid = Kex.Intrinsic.Process.fromPid(this)
 end
 
+# Running work in another process and collecting the answer.
 module Task do
-  # Spawns a new process that runs +f+ and returns a Task handle.
+  # Runs +f+ in a new process and returns a handle on its result.
+  #
+  # The block starts immediately, so starting several tasks and awaiting them
+  # afterwards is what makes them run at the same time.
+  #
+  # @param f [Block<X>] the work to run
+  # @return [Task] a handle on the result
+  #
+  # @example
+  #   let t = Task.start do 1 + 1 end
+  #   t.await   # => 2
+  #
+  # @example Two pieces of work at once
+  #   let a = Task.start do slowThing("a") end
+  #   let b = Task.start do slowThing("b") end
+  #   (a.await, b.await)
   start : Block<X> -> Task
   foul start(f) = Kex.Intrinsic.Task.start(f)
 
-  # Awaits all tasks in +tasks+, returning their results.
+  # Waits for every task in +tasks+ and returns their results, in the order
+  # the tasks were given.
+  #
+  # Each result comes back wrapped in a +Result+, so one task failing does not
+  # cost you the others' answers. That differs from +Task.await+ on a single
+  # task, which hands back the value itself.
+  #
+  # @param tasks [[Task]] the tasks to wait for
+  # @return [[X]] their results, in order
+  #
+  # @example
+  #   let tasks = [Task.start do 1 end, Task.start do 2 end]
+  #   Task.awaitAll(tasks)   # => [Ok(1), Ok(2)]
+  #
+  # @example Fanning work out over a list
+  #   let results = Task.awaitAll(paths.map { |p| Task.start do process(p) end })
   awaitAll : [Task] -> [X]
   foul awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
 end
 
 make Task do
-  # Waits for the task's result indefinitely.
+  # Waits for the task's result, for as long as it takes.
+  #
+  # @return [X] the task's result
+  #
+  # @example
+  #   Task.start do 1 + 1 end.await   # => 2
   await :> X
   let await = Kex.Intrinsic.Process.await(this, :infinity)
 
-  # Waits for the task's result, with a timeout in milliseconds.
-  # Returns +None+ on timeout.
+  # Waits for the task's result, giving up after +timeout+ milliseconds.
+  #
+  # Answers +None+ if the task has not finished in time. The task itself is
+  # not stopped.
+  #
+  # @param timeout [Integer] how long to wait, in milliseconds
+  # @return [X] the task's result, or +None+ on timeout
+  #
+  # @example
+  #   let t = Task.start do slowThing() end
+  #   t.await(1000)
   await :> Integer -> X
   let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
 
-# Wraps a spawn block into a worker spec for Supervisor.start.
+# Wraps a spawn block into a worker spec for +Supervisor.start+.
+#
+# @param block [Block<Pid>] the block that spawns the worker
+# @return [(Atom, Block<Pid>)] the worker spec
 worker : Block<Pid> -> (Atom, Block<Pid>)
 
 make Reference do
-  # Stops monitoring the process that produced this reference.
+  # Stops the monitor this reference identifies.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   let ref = worker.monitor
+  #   ref.demonitor
   demonitor :> Void
   let demonitor = Kex.Intrinsic.Process.demonitor(this)
 end

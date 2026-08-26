@@ -1,6 +1,34 @@
+# Data sizes: bytes, kilobytes, and their binary counterparts.
+#
+# Opt-in — nothing here is in scope until `using Units.Data`.
+#
+#   using Units.Data
+#
+#   main do
+#     IO.printLine(1500.megabytes.to(String))              # prints: 1500.0 MB
+#     IO.printLine(1500000000.byteSize.to(String, in: Giga)) # prints: 1.5 GB
+#   end
+#
+# Both families are here and they are not the same: +KB+ is 1000 bytes, +KiB+
+# is 1024. Values built from either convert freely, because both are counted
+# in bytes underneath — so +1.gibibytes.convertTo(MiB)+ answers 1024 MiB.
+#
+# Every value is a +Measure+ from the prelude, so its arithmetic, comparison
+# and +to(String)+ apply unchanged.
 module Units.Data
 
+# The data units this module names: decimal (+KB+, +MB+, +GB+, +TB+) and
+# binary (+KiB+, +MiB+, +GiB+, +TiB+), plus the plain byte +B+.
+#
+#   1.KB   # 1000 bytes
+#   1.KiB  # 1024 bytes
 type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
+
+# A decimal prefix to render a size at: +Kilo+ means KB, +Mega+ means MB,
+# +Giga+ means GB.
+#
+# Data prefixes select their standard decimal byte unit, so +Mega+ is MB
+# rather than a prefix applied twice to the measure's existing unit.
 type DataPrefix = Kilo | Mega | Giga
 
 make DataUnit, implement: Unit do
@@ -39,6 +67,19 @@ make Measure do
   let symbol -> String = @unit.symbol
 end
 
+# +value+ of the given data unit, as a +Measure+.
+#
+# The general constructor the named ones below are written on. Reach for
+# +megabytes+, +kibibytes+ and friends when the unit is known at the call
+# site.
+#
+# @param value [Number] the quantity
+# @param unit [DataUnit] the unit it is counted in
+# @return [Measure] the size
+#
+# @example
+#   size(4096, B).to(String)     # => "4096.0 B"
+#   size(1.5, MB).to(String)     # => "1.5 MB"
 let size(value: Number, unit: DataUnit) -> Measure do
   let converted = amount(value)
   return Measure {
@@ -48,6 +89,18 @@ let size(value: Number, unit: DataUnit) -> Measure do
   }
 end
 
+# Converts a size to another data unit.
+#
+# Decimal and binary units convert freely, because both are counted in bytes
+# underneath. A measure of some other dimension is an +Error+.
+#
+# @param measure [Measure] the size to convert
+# @param unit [DataUnit] the unit to convert to
+# @return [Result<Measure, String>] the converted size, or why it could not be
+#
+# @example
+#   1.gibibytes.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
+#   2.gigabytes.convertTo(MB).map { |m| m.to(String) }    # => Ok("2000.0 MB")
 let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   let target = definition(unit)
   match measure.kind == target.dimension do
@@ -60,9 +113,19 @@ let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   end
 end
 
-# Data prefixes select their standard decimal byte unit.  They are targets
-# for formatting, so `Mega` means MB rather than a prefix applied twice to
-# the measure's existing unit.
+# Renders a size at a chosen decimal prefix.
+#
+# Data prefixes select their standard decimal byte unit. They are targets for
+# formatting, so `Mega` means MB rather than a prefix applied twice to the
+# measure's existing unit. A measure that is not a data size answers +None+.
+#
+# @param String [Type] the target type
+# @param in [DataPrefix] the prefix to display at
+# @return [String?] the rendered size, or +None+
+#
+# @example
+#   1500000000.byteSize.to(String, in: Giga)   # => Just("1.5 GB")
+#   1500000.byteSize.to(String, in: Mega)      # => Just("1.5 MB")
 let to(measure: Measure, String, in: DataPrefix) -> String? do
   match measure.kind == :data do
     false => return None
@@ -77,14 +140,83 @@ let to(measure: Measure, String, in: DataPrefix) -> String? do
   end
 end
 
+# +value+ bytes.
+#
+# Named +byteSize+ rather than +bytes+, which +String+ already uses for its
+# UTF-8 encoding.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   4096.byteSize.to(String)   # => "4096.0 B"
+#
+# @example Reporting a file's size
+#   FS.File.size(path).map { |n| n.byteSize.to(String, in: Mega) }
 let byteSize(value: Number) -> Measure = size(value, B)
+# +value+ kilobytes, 1000 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   5.kilobytes.to(String)   # => "5.0 KB"
 let kilobytes(value: Number) -> Measure = size(value, KB)
+# +value+ megabytes, 1000000 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   1500.megabytes.to(String)   # => "1500.0 MB"
 let megabytes(value: Number) -> Measure = size(value, MB)
+# +value+ gigabytes, 10^9 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   2.gigabytes.convertTo(MB).map { |m| m.to(String) }   # => Ok("2000.0 MB")
 let gigabytes(value: Number) -> Measure = size(value, GB)
+# +value+ terabytes, 10^12 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   2.terabytes.to(String)   # => "2.0 TB"
 let terabytes(value: Number) -> Measure = size(value, TB)
+# +value+ kibibytes, 1024 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   1024.kibibytes.to(String)   # => "1024.0 KiB"
 let kibibytes(value: Number) -> Measure = size(value, KiB)
+# +value+ mebibytes, 1024^2 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   3.mebibytes.to(String)   # => "3.0 MiB"
 let mebibytes(value: Number) -> Measure = size(value, MiB)
+# +value+ gibibytes, 1024^3 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   1.gibibytes.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
 let gibibytes(value: Number) -> Measure = size(value, GiB)
+# +value+ tebibytes, 1024^4 bytes each.
+#
+# @param value [Number] the quantity
+# @return [Measure] the size
+#
+# @example
+#   1.tebibytes.to(String)   # => "1.0 TiB"
 let tebibytes(value: Number) -> Measure = size(value, TiB)
 
 private do

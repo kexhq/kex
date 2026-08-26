@@ -1,39 +1,135 @@
-# Blankable — types that can be checked for blankness (Rails semantics).
-# A value is blank when it has no meaningful content: nil-equivalents,
-# empty strings/whitespace, empty collections.
-
+# +Blankable+ — types that can be asked whether they hold anything meaningful.
+#
+# A value is blank when it has no meaningful content: +None+, an empty or
+# all-whitespace string, an empty collection, or +false+. The semantics are
+# Rails's, and the point is the same — one question that works across types,
+# so a validation does not need a different test per field.
+#
+#   "".blank?        # => true
+#   "   ".blank?     # => true   (unlike "   ".empty?)
+#   [].blank?        # => true
+#   None.blank?      # => true
+#   "hi".present?    # => true
+#
+# +present?+ is the negation, and is often what reads better:
+#
+#   fields.all? { |name, value| value.present? }
 trait Blankable do
+  # Returns +true+ when the value holds nothing meaningful.
+  #
+  # What that means is up to each type: whitespace-only for a string, no
+  # elements for a collection, +None+ for an optional, +false+ for a boolean.
+  #
+  # @return [Bool] +true+ when the value is blank
+  #
+  # @example
+  #   "".blank?      # => true
+  #   "  ".blank?    # => true
+  #   "hi".blank?    # => false
   blank? :> Bool
+
+  # Returns +true+ when the value holds something. The negation of +blank?+.
+  #
+  # @return [Bool] +true+ when the value is present
+  #
+  # @example
+  #   "hi".present?   # => true
+  #   "".present?     # => false
+  #
+  # @example Validating that required fields were filled in
+  #   form.all? { |name, value| value.present? }
   let present? = !this.blank?
 end
 
 make Bool, implement: Blankable do
+  # Returns +true+ for +false+ — the only blank boolean.
+  #
+  # @return [Bool] +true+ when the value is +false+
+  #
+  # @example
+  #   false.blank?   # => true
+  #   true.blank?    # => false
   blank? :> Bool
   let blank? = !this
 end
 
 make Integer, implement: Blankable do
+  # Always +false+: every integer is a value, including zero.
+  #
+  # @return [Bool] always +false+
+  #
+  # @example
+  #   0.blank?    # => false
+  #   42.blank?   # => false
   blank? :> Bool
   let blank?(@_) = false
 end
 
 make Float, implement: Blankable do
+  # Always +false+: every float is a value, including zero.
+  #
+  # @return [Bool] always +false+
+  #
+  # @example
+  #   0.0.blank?   # => false
   blank? :> Bool
   let blank?(@_) = false
 end
 
 make String, implement: Blankable do
+  # Returns +true+ when the string is empty or contains only whitespace.
+  #
+  # This is what separates it from +empty?+: a string of spaces is not empty,
+  # but it is blank, and for user input that is usually the question being
+  # asked.
+  #
+  # @return [Bool] +true+ for an empty or whitespace-only string
+  #
+  # @example
+  #   "".blank?        # => true
+  #   "   ".blank?     # => true
+  #   "\n\t".blank?    # => true
+  #   " hi ".blank?    # => false
+  #
+  # @example Rejecting an empty answer
+  #   let name = IO.getLine.or("")
+  #   if name.blank?
+  #     IO.printError("a name is required")
+  #   end
   blank? :> Bool
   let blank? = this.trim.empty?
 end
 
 make Optional<X>, implement: Blankable do
+  # Returns +true+ for +None+ and +false+ for a +Just+ — whatever it wraps.
+  #
+  # Note that +Just("")+ is present, not blank: the optional holds a value,
+  # even though that value is itself blank.
+  #
+  # @return [Bool] +true+ for +None+
+  #
+  # @example
+  #   None.blank?        # => true
+  #   Just(1).blank?     # => false
+  #   Just("").blank?    # => false
   blank? :> Bool
   let blank?(@None) = true
   let blank?(@Just(_)) = false
 end
 
 make [X], implement: Blankable do
+  # Returns +true+ when the list has no elements.
+  #
+  # @return [Bool] +true+ for the empty list
+  #
+  # @example
+  #   [].blank?         # => true
+  #   [1, 2].blank?     # => false
+  #
+  # @example Reporting an empty result set
+  #   if matches.blank?
+  #     IO.printLine("no matches")
+  #   end
   blank? :> Bool
   let blank?(@[]) = true
   let blank?(@[_|_]) = false

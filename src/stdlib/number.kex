@@ -1,17 +1,37 @@
+# Whole numbers, of arbitrary size.
+#
+# +Integer+ has no width limit — factorials and cryptographic moduli are
+# ordinary values, not a special big-number type you have to opt into.
+#
+# +Integer+ and +Float+ are one numeric tower: they compare and order across
+# the boundary, so +0 == 0.0+ is +true+ and +[1, 2.5, 3].sort+ works. What
+# differs is the arithmetic. +/+ on two integers is integer division, and
+# +sqrt+ answers a +Float+ because a square root generally is one.
+#
+#   7 / 2          # => 3      (integer division)
+#   7.0 / 2.0      # => 3.5
+#   16.sqrt        # => 4.0    (a Float, even from an Integer)
+#   (-7).modulo(3) # => 2      (mathematical modulo, not C remainder)
 make Integer do
-  # Returns +true+ if the integer is even.
+  # Returns +true+ when the integer is divisible by two. Zero is even, and
+  # negative numbers follow the same rule.
   #
-  # @return [Bool]
+  # @return [Bool] +true+ for an even integer
   #
   # @example
-  #   4.even?   # => true
-  #   3.even?   # => false
+  #   4.even?      # => true
+  #   3.even?      # => false
+  #   (-2).even?   # => true
+  #
+  # @example Splitting a list into evens and odds
+  #   [1, 2, 3, 4].partition { |n| n.even? }   # => ([2, 4], [1, 3])
   even? :> Bool
   let even? = this.modulo(2) == 0
 
-  # Returns +true+ if the integer is odd.
+  # Returns +true+ when the integer is not divisible by two. The opposite of
+  # +even?+.
   #
-  # @return [Bool]
+  # @return [Bool] +true+ for an odd integer
   #
   # @example
   #   3.odd?   # => true
@@ -19,141 +39,343 @@ make Integer do
   odd? :> Bool
   let odd? = this.modulo(2) != 0
 
-  # Returns the absolute value.
+  # Returns the magnitude of the integer, discarding its sign.
   #
-  # @return [Integer]
+  # @return [Integer] the absolute value
   #
   # @example
   #   (-5).abs   # => 5
   #   5.abs      # => 5
+  #
+  # @example Distance between two positions
+  #   (a - b).abs
   abs :> Integer
   let abs = Kex.Intrinsic.Number.abs(this)
 
-  # Returns the square root as a Float.
+  # Returns the square root as a +Float+.
   #
-  # @return [Float]
+  # The result is a +Float+ even when the root is exact, because in general it
+  # is not. Round or floor it when you need an integer back.
+  #
+  # @return [Float] the square root
   #
   # @example
-  #   16.sqrt   # => 4.0
+  #   16.sqrt          # => 4.0
+  #   2.sqrt           # => 1.4142135623730951
+  #   16.sqrt.round    # => 4
   sqrt :> Float
   let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
-  # Returns +this+ modulo +n+. The result has the same sign as +n+,
-  # consistent with mathematical modulo (not C remainder).
+  # Returns +this+ modulo +n+.
   #
-  # @param n [Integer]
-  # @return [Integer]
+  # The result takes the sign of +n+, which is mathematical modulo rather than
+  # the C-style remainder other languages give. That is what makes it safe for
+  # wrapping an index that may have gone negative.
+  #
+  # @param n [Integer] the modulus
+  # @return [Integer] the remainder, with the sign of +n+
   #
   # @example
-  #   7.modulo(3)     # => 1
-  #   (-7).modulo(3)  # => 2
+  #   7.modulo(3)      # => 1
+  #   (-7).modulo(3)   # => 2
+  #
+  # @example Wrapping an index around a list
+  #   let items = ["a", "b", "c"]
+  #   items.at((-1).modulo(items.count))   # => Just("c")
   modulo :> Integer -> Integer
   let modulo(n) = Kex.Intrinsic.Integer.modulo(this, n)
 
-  # Returns +true+ if the integer falls within +range+ (inclusive).
+  # Returns +true+ when the integer falls inside +range+, endpoints included.
   #
-  # @param range [Range<Integer>]
-  # @return [Bool]
+  # @param range [Range<Integer>] the inclusive range
+  # @return [Bool] +true+ when the integer is in range
   #
   # @example
   #   5.in?(1..10)    # => true
   #   11.in?(1..10)   # => false
+  #
+  # @example Validating a port number
+  #   port.in?(1..65535)
   in? :> Range<Integer> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-  # Calls +f+ exactly +this+ times, passing the current index (0-based).
+  # Calls +f+ exactly +this+ times, passing the 0-based iteration index.
   #
-  # @param f [Integer -> Void]
+  # This is the counting loop. When you want the numbers themselves rather
+  # than a count of repetitions, +(1..n).items.each+ often reads better.
+  #
+  # @param f [Integer -> Void] called once per iteration with the index
   # @return [Void]
   #
   # @example
-  #   3.times { |i| IO.printLine(i) }   # prints 0, 1, 2
+  #   3.times { |i| IO.printLine(i) }   # prints 0, then 1, then 2
+  #
+  # @example Repeating an action
+  #   retries.times { |_| attemptConnection }
   times :> (Integer -> Void) -> Void
   let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
-  # Returns the greatest integer ≤ this. No-op on integers.
+  # Returns the integer unchanged. Present so that code written against
+  # +Number+ works whichever half of the tower it is handed.
+  #
+  # @return [Integer] the same integer
+  #
+  # @example
+  #   7.floor   # => 7
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer ≥ this. No-op on integers.
+  # Returns the integer unchanged. The +Integer+ counterpart of
+  # +Float.ceil+.
+  #
+  # @return [Integer] the same integer
+  #
+  # @example
+  #   7.ceil   # => 7
   ceil :> Integer
   let ceil = Kex.Intrinsic.Number.ceil(this)
 
-  # Rounds to the nearest integer. No-op on integers.
+  # Returns the integer unchanged. The +Integer+ counterpart of
+  # +Float.round+.
+  #
+  # @return [Integer] the same integer
+  #
+  # @example
+  #   7.round   # => 7
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
 end
 
+# Double-precision floating-point numbers.
+#
+# A Kex +Float+ is always finite. An operation that would produce +NaN+ or
+# +Infinity+ raises instead — the same rule the BEAM enforces, where those two
+# values cannot exist at all. So a +Float+ you are holding is always a real
+# number, and there is no +nan?+ to check for.
+#
+# +Float+ and +Integer+ compare and order across the boundary; see
+# +Integer+ for the rest of the numeric tower.
+#
+#   3.7.floor      # => 3
+#   3.7.round      # => 4
+#   (-3.7).toInteger  # => -3   (truncates toward zero)
 make Float do
-  # Returns the absolute value.
+  # Returns the magnitude of the float, discarding its sign.
   #
-  # @return [Float]
+  # @return [Float] the absolute value
   #
   # @example
   #   (-3.14).abs   # => 3.14
+  #   3.14.abs      # => 3.14
+  #
+  # @example An approximate-equality test
+  #   (a - b).abs < 0.0001
   abs :> Float
   let abs = Kex.Intrinsic.Number.abs(this)
 
-  # Returns the square root.
+  # Returns the square root. Raises for a negative receiver, which has no real
+  # root.
   #
-  # @return [Float]
+  # @return [Float] the square root
   #
   # @example
   #   25.0.sqrt   # => 5.0
+  #   2.0.sqrt    # => 1.4142135623730951
   sqrt :> Float
   let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
-  # Returns +true+ if the float falls within +range+ (inclusive).
+  # Returns +true+ when the float falls inside +range+, endpoints included.
   #
-  # @param range [Range<Float>]
-  # @return [Bool]
+  # @param range [Range<Float>] the inclusive range
+  # @return [Bool] +true+ when the float is in range
   #
-  # @example
-  #   1.5.in?(1.0..2.0)   # => true
+  # @example Comparing directly is usually clearer for floats
+  #   let ratio = 0.75
+  #   ratio >= 0.0 && ratio <= 1.0   # => true
   in? :> Range<Float> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-  # Returns the greatest integer ≤ this.
+  # Returns the largest integer that is not greater than the float — it always
+  # rounds toward negative infinity, which is what separates it from
+  # +toInteger+ for negative values.
+  #
+  # @return [Integer] the floor
+  #
+  # @example
+  #   3.7.floor      # => 3
+  #   3.2.floor      # => 3
+  #   (-3.2).floor   # => -4
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer ≥ this.
+  # Returns the smallest integer that is not less than the float — it always
+  # rounds toward positive infinity.
+  #
+  # @return [Integer] the ceiling
+  #
+  # @example
+  #   3.2.ceil       # => 4
+  #   3.0.ceil       # => 3
+  #   (-3.7).ceil    # => -3
+  #
+  # @example How many pages of a fixed size a list needs
+  #   (items.count.to(Float).or(0.0) / 20.0).ceil
   ceil :> Integer
   let ceil = Kex.Intrinsic.Number.ceil(this)
 
-  # Rounds to the nearest integer.
+  # Returns the nearest integer, with halves rounding away from zero.
+  #
+  # @return [Integer] the rounded value
+  #
+  # @example
+  #   3.2.round    # => 3
+  #   3.5.round    # => 4
+  #   3.7.round    # => 4
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
-  # Truncates toward zero, converting to an +Integer+.
+  # Truncates toward zero and returns the result as an +Integer+ — it drops
+  # the fractional part rather than rounding, so it differs from both +floor+
+  # and +round+ for negative values.
+  #
+  # @return [Integer] the truncated value
+  #
+  # @example
+  #   3.7.toInteger      # => 3
+  #   (-3.7).toInteger   # => -3   (floor would give -4)
   toInteger :> Integer
   let toInteger = Kex.Intrinsic.Number.toInteger(this)
 end
 
+# Reading integers out of text.
+#
+# Use +parse+ when a failure needs explaining and +"42".to(Integer)+ when it
+# does not — +to+ answers a plain +Optional+, +parse+ answers a
+# +Result+ carrying a +ParseError+ that says where it stopped and what it had
+# read so far.
 module Integer do
+  # Parses the whole string as a base-10 integer.
+  #
+  # The string must be entirely consumed: leading or trailing characters make
+  # it an +Error+, with a +ParseError+ describing where parsing stopped. Use
+  # +parsePrefix+ when a trailing remainder is expected.
+  #
+  # @param s [String] the text to parse
+  # @return [Result<Integer, ParseError>] the integer, or a described failure
+  #
+  # @example
+  #   Integer.parse("42")     # => Ok(42)
+  #   Integer.parse("-7")     # => Ok(-7)
+  #   Integer.parse("4x")     # => Error(ParseError { ... rest: "x" ... })
+  #
+  # @example Reading a setting with a fallback
+  #   let port = Integer.parse(raw).or(8080)
+  #
+  # @example Reporting why the input was rejected
+  #   match Integer.parse(raw) do
+  #     Ok(n)    => IO.printLine("port ${n}")
+  #     Error(e) => IO.printError("bad port: ${e.message}")
+  #   end
   parse : String -> Result<Integer, ParseError>
   let parse(s) = Kex.Intrinsic.Integer.parse(s)
 
-  # Parses +s+ in base +radix+ (2..36), e.g. +Integer.parse("ff", radix: 16)+.
-  # Digits above 9 are accepted in either case.
+  # Parses the whole string as an integer written in base +radix+, 2 through
+  # 36. Digits above 9 are accepted in either case.
+  #
+  # @param s [String] the text to parse
+  # @param radix [Integer] the base, 2 to 36
+  # @return [Result<Integer, ParseError>] the integer, or a described failure
+  #
+  # @example
+  #   Integer.parse("ff", radix: 16)     # => Ok(255)
+  #   Integer.parse("FF", radix: 16)     # => Ok(255)
+  #   Integer.parse("1010", radix: 2)    # => Ok(10)
+  #
+  # @example Reading a hex colour component
+  #   Integer.parse(hex.take(2), radix: 16).or(0)
   parse : String -> Integer -> Result<Integer, ParseError>
   let parse(s, radix: Integer) = Kex.Intrinsic.Integer.parse(s, radix)
 
+  # Parses an integer from the front of the string and returns it together
+  # with whatever text was left over.
+  #
+  # This is the building block for hand-written scanners: parse a number, keep
+  # going from the remainder. Answers +None+ when the string does not begin
+  # with a number at all.
+  #
+  # @param s [String] the text to parse from
+  # @return [(Integer, String)?] the value and the unconsumed remainder
+  #
+  # @example
+  #   Integer.parsePrefix("42abc")   # => Just((42, "abc"))
+  #   Integer.parsePrefix("abc")     # => None
+  #
+  # @example Reading a leading count off a line
+  #   match Integer.parsePrefix("3 items") do
+  #     Just(pair) => do
+  #       let (count, rest) = pair
+  #       IO.printLine("${count} of${rest}")   # prints: 3 of items
+  #     end
+  #     None => IO.printError("no leading count")
+  #   end
   parsePrefix : String -> (Integer, String)?
   let parsePrefix(s) = Kex.Intrinsic.Integer.parsePrefix(s)
 end
 
+# Reading floating-point numbers out of text.
 module Float do
+  # Parses the whole string as a float.
+  #
+  # The string must be entirely consumed; anything left over makes it an
+  # +Error+ carrying a +ParseError+.
+  #
+  # @param s [String] the text to parse
+  # @return [Result<Float, ParseError>] the float, or a described failure
+  #
+  # @example
+  #   Float.parse("3.5")     # => Ok(3.5)
+  #   Float.parse("-0.25")   # => Ok(-0.25)
+  #   Float.parse("3.5m")    # => Error(ParseError { ... rest: "m" ... })
+  #
+  # @example Averaging a column of text values
+  #   rows.map { |r| Float.parse(r).or(0.0) }.sum / rows.count.to(Float).or(1.0)
   parse : String -> Result<Float, ParseError>
   let parse(s) = Kex.Intrinsic.Float.parse(s)
 
+  # Parses a float from the front of the string and returns it together with
+  # the unconsumed remainder. Answers +None+ when the string does not begin
+  # with a number.
+  #
+  # @param s [String] the text to parse from
+  # @return [(Float, String)?] the value and the remainder
+  #
+  # @example
+  #   Float.parsePrefix("3.5rest")   # => Just((3.5, "rest"))
+  #   Float.parsePrefix("rest")      # => None
+  #
+  # @example Splitting a measurement from its unit
+  #   Float.parsePrefix("12.5kg")   # => Just((12.5, "kg"))
   parsePrefix : String -> (Float, String)?
   let parsePrefix(s) = Kex.Intrinsic.Float.parsePrefix(s)
 end
 
+# Reading a number out of text without deciding in advance which half of the
+# numeric tower it belongs to.
 module Number do
+  # Parses the whole string as an +Integer+ or a +Float+, whichever the text
+  # describes.
+  #
+  # Use it when the input's shape is not known ahead of time — a config value,
+  # a CSV column that may hold either.
+  #
+  # @param s [String] the text to parse
+  # @return [Result<Number, ParseError>] the number, or a described failure
+  #
+  # @example
+  #   Number.parse("42")     # => Ok(42)
+  #   Number.parse("3.5")    # => Ok(3.5)
+  #   Number.parse("x")      # => Error(ParseError { ... })
   parse : String -> Result<Number, ParseError>
   let parse(s) = Kex.Intrinsic.Number.parse(s)
 end
-

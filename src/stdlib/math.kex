@@ -1,224 +1,326 @@
-# The +Math+ module provides standard mathematical constants and functions.
-# All trigonometric functions operate in radians. A Kex +Float+ is always
-# finite, so a domain error (+Math.sqrt(-1.0)+) or an overflow
-# (+Math.exp(1000.0)+) raises rather than producing +NaN+ or +Infinity+ —
-# the same rule BEAM enforces, where those two values cannot exist at all.
+# Mathematical constants and functions.
+#
+# All trigonometric functions work in radians. Every function here accepts a
+# +Number+ — an +Integer+ or a +Float+ — and the transcendental ones answer
+# with a +Float+.
+#
+# A Kex +Float+ is always finite, so a domain error (+Math.sqrt(-1.0)+) or an
+# overflow (+Math.exp(1000.0)+) raises rather than producing +NaN+ or
+# +Infinity+ — the same rule the BEAM enforces, where those two values cannot
+# exist at all. There is no non-finite float to test for afterwards.
+#
+#   Math.sqrt(2.0)              # => 1.4142135623730951
+#   Math.hypot(3.0, 4.0)        # => 5.0
+#   Math.sin(Math.PI / 2.0)     # => 1.0
+#
+# The everyday operations on a single number — +abs+, +floor+, +ceil+,
+# +round+, +sqrt+ — are also methods on +Integer+ and +Float+, which usually
+# reads better in a chain: +x.abs+ over +Math.abs(x)+.
 module Math do
-  # Math.PI : Float
-  # Ratio of a circle's circumference to its diameter.
+  # The ratio of a circle's circumference to its diameter.
+  #
+  # @return [Float] π
   #
   # @example
   #   Math.PI   # => 3.141592653589793
+  #
+  # @example Degrees to radians
+  #   let radians(deg: Float) -> Float = deg * Math.PI / 180.0
   let PI = 3.14159265358979323846
 
-  # Math.E : Float
-  # Base of the natural logarithm.
+  # The base of the natural logarithm.
+  #
+  # @return [Float] e
   #
   # @example
-  #   Math.E   # => 2.718281828459045
+  #   Math.E             # => 2.718281828459045
+  #   Math.log(Math.E)   # => 1.0
   let E = 2.71828182845904523536
 
-  # Square root of +x+. Raises for negative input, which has no real root.
+  # Returns the square root of +x+. Raises for a negative +x+, which has no
+  # real root.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] a non-negative number
+  # @return [Float] the square root
   #
   # @example
   #   Math.sqrt(9.0)    # => 3.0
+  #   Math.sqrt(2.0)    # => 1.4142135623730951
   #   Math.sqrt(-1.0)   # raises: Math.sqrt: undefined result (NaN)
+  #
+  # @example Distance between two points
+  #   Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
   sqrt : Number -> Float
   let sqrt(x) = Kex.Intrinsic.Math.sqrt(x)
 
-  # Cube root of +x+.
+  # Returns the cube root of +x+. Unlike +sqrt+, negative input is fine — a
+  # negative number has a real cube root.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] any number
+  # @return [Float] the cube root
   #
   # @example
-  #   Math.cbrt(27.0)   # => 3.0
+  #   Math.cbrt(27.0)    # => 3.0
+  #   Math.cbrt(-8.0)    # => -2.0
   cbrt : Number -> Float
   let cbrt(x) = Kex.Intrinsic.Math.cbrt(x)
 
-  # Sine of +x+ (radians).
+  # Returns the sine of +x+, given in radians.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] the angle in radians
+  # @return [Float] the sine
   #
   # @example
+  #   Math.sin(0.0)             # => 0.0
   #   Math.sin(Math.PI / 2.0)   # => 1.0
+  #
+  # @example A point on a circle
+  #   let y = centerY + radius * Math.sin(angle)
   sin : Number -> Float
   let sin(x) = Kex.Intrinsic.Math.sin(x)
 
-  # Cosine of +x+ (radians).
+  # Returns the cosine of +x+, given in radians.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] the angle in radians
+  # @return [Float] the cosine
   #
   # @example
-  #   Math.cos(0.0)   # => 1.0
+  #   Math.cos(0.0)        # => 1.0
+  #   Math.cos(Math.PI)    # => -1.0
   cos : Number -> Float
   let cos(x) = Kex.Intrinsic.Math.cos(x)
 
-  # Tangent of +x+ (radians).
+  # Returns the tangent of +x+, given in radians.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] the angle in radians
+  # @return [Float] the tangent
   #
   # @example
+  #   Math.tan(0.0)             # => 0.0
   #   Math.tan(Math.PI / 4.0)   # => 1.0
   tan : Number -> Float
   let tan(x) = Kex.Intrinsic.Math.tan(x)
 
-  # Inverse sine (arc sine) of +x+, result in radians.
+  # Returns the arc sine of +x+ in radians, in the range -π/2 to π/2.
   #
-  # @param x [Number]  must be in [-1, 1]
-  # @return [Float]
+  # @param x [Number] a value in -1..1
+  # @return [Float] the angle in radians
   #
   # @example
+  #   Math.asin(0.0)   # => 0.0
   #   Math.asin(1.0)   # => 1.5707963267948966
   asin : Number -> Float
   let asin(x) = Kex.Intrinsic.Math.asin(x)
 
-  # Inverse cosine (arc cosine) of +x+, result in radians.
+  # Returns the arc cosine of +x+ in radians, in the range 0 to π.
   #
-  # @param x [Number]  must be in [-1, 1]
-  # @return [Float]
+  # @param x [Number] a value in -1..1
+  # @return [Float] the angle in radians
   #
   # @example
-  #   Math.acos(1.0)   # => 0.0
+  #   Math.acos(1.0)    # => 0.0
+  #   Math.acos(0.0)    # => 1.5707963267948966
   acos : Number -> Float
   let acos(x) = Kex.Intrinsic.Math.acos(x)
 
-  # Inverse tangent (arc tangent) of +x+, result in radians in (-π/2, π/2).
+  # Returns the arc tangent of +x+ in radians, in the range -π/2 to π/2.
   #
-  # @param x [Number]
-  # @return [Float]
+  # Use +atan2+ when you have both coordinates of a vector — it can tell the
+  # quadrant apart, and this cannot.
+  #
+  # @param x [Number] any number
+  # @return [Float] the angle in radians
   #
   # @example
+  #   Math.atan(0.0)   # => 0.0
   #   Math.atan(1.0)   # => 0.7853981633974483
   atan : Number -> Float
   let atan(x) = Kex.Intrinsic.Math.atan(x)
 
-  # Two-argument arc tangent. Returns the angle of vector (+x+, +y+) in (-π, π].
-  # Handles the sign of both arguments to place the result in the correct quadrant.
+  # Returns the angle of the vector +(x, y)+ in radians, from -π to π.
   #
-  # @param y [Number]
-  # @param x [Number]
-  # @return [Float]
+  # Both signs are taken into account, so the result lands in the correct
+  # quadrant — which is why this, not +atan+, is what you want for converting
+  # a vector to an angle. Note the argument order: +y+ first.
+  #
+  # @param y [Number] the vertical component
+  # @param x [Number] the horizontal component
+  # @return [Float] the angle in radians
   #
   # @example
-  #   Math.atan2(1.0, 1.0)    # => 0.7853981633974483
-  #   Math.atan2(1.0, -1.0)   # => 2.356194490192345
+  #   Math.atan2(1.0, 1.0)    # => 0.7853981633974483    (45°)
+  #   Math.atan2(1.0, -1.0)   # => 2.356194490192345     (135°)
+  #
+  # @example The bearing from one point to another, in degrees
+  #   Math.atan2(y2 - y1, x2 - x1) * 180.0 / Math.PI
   atan2 : Number -> Number -> Float
   let atan2(y, x) = Kex.Intrinsic.Math.atan2(y, x)
 
-  # Hyperbolic sine.
+  # Returns the hyperbolic sine of +x+.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] any number
+  # @return [Float] the hyperbolic sine
+  #
+  # @example
+  #   Math.sinh(0.0)   # => 0.0
+  #   Math.sinh(1.0)   # => 1.1752011936438014
   sinh : Number -> Float
   let sinh(x) = Kex.Intrinsic.Math.sinh(x)
 
-  # Hyperbolic cosine.
+  # Returns the hyperbolic cosine of +x+.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] any number
+  # @return [Float] the hyperbolic cosine
+  #
+  # @example
+  #   Math.cosh(0.0)   # => 1.0
+  #   Math.cosh(1.0)   # => 1.5430806348152437
   cosh : Number -> Float
   let cosh(x) = Kex.Intrinsic.Math.cosh(x)
 
-  # Hyperbolic tangent.
+  # Returns the hyperbolic tangent of +x+, always between -1 and 1.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] any number
+  # @return [Float] the hyperbolic tangent
+  #
+  # @example
+  #   Math.tanh(0.0)   # => 0.0
+  #   Math.tanh(1.0)   # => 0.7615941559557649
   tanh : Number -> Float
   let tanh(x) = Kex.Intrinsic.Math.tanh(x)
 
-  # Natural logarithm of +x+ (base e).
-  # With two arguments, computes log base +base+.
+  # Returns the natural logarithm of +x+ — its logarithm to base +e+. With a
+  # second argument, returns the logarithm to that base instead.
   #
-  # @param x    [Number]
-  # @param base [Number]  (optional)
-  # @return [Float]
+  # Raises for +x+ of zero or less, which has no real logarithm.
+  #
+  # @param x [Number] a positive number
+  # @param base [Number] the logarithm base; omitted for base +e+
+  # @return [Float] the logarithm
   #
   # @example
   #   Math.log(Math.E)     # => 1.0
   #   Math.log(8.0, 2.0)   # => 3.0
+  #
+  # @example How many digits a number has
+  #   Math.log10(n.to(Float).or(1.0)).floor + 1
   log : Number -> Float
   log : Number -> Number -> Float
   let log(x) = Kex.Intrinsic.Math.log(x)
   let log(x, base) = Kex.Intrinsic.Math.log(x, base)
 
-  # Base-2 logarithm of +x+.
+  # Returns the base-2 logarithm of +x+. The same as +Math.log(x, 2.0)+, and
+  # more direct.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] a positive number
+  # @return [Float] the base-2 logarithm
   #
   # @example
-  #   Math.log2(8.0)   # => 3.0
+  #   Math.log2(8.0)      # => 3.0
+  #   Math.log2(1024.0)   # => 10.0
+  #
+  # @example Bits needed to represent n distinct values
+  #   Math.log2(n.to(Float).or(1.0)).ceil
   log2 : Number -> Float
   let log2(x) = Kex.Intrinsic.Math.log2(x)
 
-  # Base-10 logarithm of +x+.
+  # Returns the base-10 logarithm of +x+.
   #
-  # @param x [Number]
-  # @return [Float]
+  # @param x [Number] a positive number
+  # @return [Float] the base-10 logarithm
   #
   # @example
   #   Math.log10(1000.0)   # => 3.0
+  #   Math.log10(1.0)      # => 0.0
   log10 : Number -> Float
   let log10(x) = Kex.Intrinsic.Math.log10(x)
 
-  # +e+ raised to the power +x+.
+  # Returns +e+ raised to the power +x+ — the inverse of +Math.log+.
   #
-  # @param x [Number]
-  # @return [Float]
+  # Raises on overflow, which for a double happens a little past +x+ of 709.
+  #
+  # @param x [Number] the exponent
+  # @return [Float] e to the power x
   #
   # @example
+  #   Math.exp(0.0)   # => 1.0
   #   Math.exp(1.0)   # => 2.718281828459045
+  #
+  # @example Exponential decay
+  #   let remaining = initial * Math.exp(-rate * elapsed)
   exp : Number -> Float
   let exp(x) = Kex.Intrinsic.Math.exp(x)
 
-  # +x+ raised to the power +y+.
+  # Returns +x+ raised to the power +y+.
   #
-  # @param x [Number]
-  # @param y [Number]
-  # @return [Float]
+  # The result is always a +Float+, even for whole arguments, so round it when
+  # you need an integer back.
+  #
+  # @param x [Number] the base
+  # @param y [Number] the exponent
+  # @return [Float] x to the power y
   #
   # @example
-  #   Math.pow(2.0, 10.0)   # => 1024.0
+  #   Math.pow(2.0, 10.0)        # => 1024.0
+  #   Math.pow(2.0, 0.5)         # => 1.4142135623730951
+  #   Math.pow(2.0, 10.0).round  # => 1024
+  #
+  # @example Compound growth
+  #   principal * Math.pow(1.0 + rate, years)
   pow : Number -> Number -> Float
   let pow(x, y) = Kex.Intrinsic.Math.pow(x, y)
 
-  # Absolute value of +x+.
+  # Returns the magnitude of +x+, discarding its sign. The type is preserved:
+  # an +Integer+ in gives an +Integer+ out.
   #
-  # @param x [Number]
-  # @return [Number]
+  # +x.abs+ is the same thing as a method, and usually reads better.
+  #
+  # @param x [Number] any number
+  # @return [Number] the absolute value
+  #
+  # @example
+  #   Math.abs(-5)      # => 5
+  #   Math.abs(-2.5)    # => 2.5
   abs : Number -> Number
   let abs(x) = Kex.Intrinsic.Math.abs(x)
 
-  # Floor of +x+ — largest integer not greater than +x+.
+  # Returns the largest integer that is not greater than +x+ — rounding
+  # toward negative infinity.
   #
-  # @param x [Number]
-  # @return [Integer]
+  # @param x [Number] any number
+  # @return [Integer] the floor
+  #
+  # @example
+  #   Math.floor(3.7)    # => 3
+  #   Math.floor(-3.2)   # => -4
   floor : Number -> Integer
   let floor(x) = Kex.Intrinsic.Math.floor(x)
 
-  # Ceiling of +x+ — smallest integer not less than +x+.
+  # Returns the smallest integer that is not less than +x+ — rounding toward
+  # positive infinity.
   #
-  # @param x [Number]
-  # @return [Integer]
+  # @param x [Number] any number
+  # @return [Integer] the ceiling
+  #
+  # @example
+  #   Math.ceil(3.2)     # => 4
+  #   Math.ceil(-3.7)    # => -3
   ceil : Number -> Integer
   let ceil(x) = Kex.Intrinsic.Math.ceil(x)
 
-  # Euclidean distance — equivalent to +sqrt(x*x + y*y)+ but avoids
-  # intermediate overflow for large values.
+  # Returns the Euclidean distance +sqrt(x*x + y*y)+, computed so that large
+  # values do not overflow on the way.
   #
-  # @param x [Number]
-  # @param y [Number]
-  # @return [Float]
+  # @param x [Number] the first leg
+  # @param y [Number] the second leg
+  # @return [Float] the hypotenuse
   #
   # @example
-  #   Math.hypot(3.0, 4.0)   # => 5.0
+  #   Math.hypot(3.0, 4.0)     # => 5.0
+  #   Math.hypot(5.0, 12.0)    # => 13.0
+  #
+  # @example The length of a vector
+  #   Math.hypot(velocity.x, velocity.y)
   hypot : Number -> Number -> Float
   let hypot(x, y) = Kex.Intrinsic.Math.hypot(x, y)
 end
