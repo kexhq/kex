@@ -89,7 +89,13 @@ connection_wait() ->
 
 handle_connection(Socket, Router) ->
     case read_request(Socket) of
-        {ok, Request, Method, Path} -> send_response(Socket, dispatch(Request, Method, Path, Router), Method), ok;
+        {ok, Request, Method, Path} ->
+            case send_response(Socket, dispatch(Request, Method, Path, Router), Method) of
+                ok -> handle_connection(Socket, Router);
+                _ -> error
+            end;
+        {error, closed} -> ok;
+        {error, timeout} -> ok;
         {error, too_large} -> send_response(Socket, response(413, <<"Payload Too Large\n">>), <<"GET">>), error;
         {error, _} -> send_response(Socket, response(400, <<"Bad Request\n">>), <<"GET">>), error
     end.
@@ -226,7 +232,7 @@ send_response(Socket, {'Net.HTTP.Response', {'Net.HTTP.Status', Status},
     Head = [<<"HTTP/1.1 ">>, integer_to_binary(Status), <<" ">>, reason(Status), <<"\r\n">>,
             [[K, <<": ">>, V, <<"\r\n">>] || {K, V} <- Headers],
             <<"Content-Length: ">>, integer_to_binary(byte_size(Body)),
-            <<"\r\nConnection: close\r\n\r\n">>],
+            <<"\r\nConnection: keep-alive\r\n\r\n">>],
     gen_tcp:send(Socket, case Method of <<"HEAD">> -> Head; _ -> [Head, Body] end);
 send_response(Socket, _, Method) -> send_response(Socket, response(500, <<"Internal Server Error\n">>), Method).
 

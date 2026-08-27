@@ -546,6 +546,17 @@ auto Evaluator::registerNetBuiltins() -> void {
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPServer","HTTP server is not available on the tree-walking backend"); });
     defineIntrinsic("NetHTTPServer::running?", [](std::vector<ValuePtr>) { return Value::boolean(false); });
     defineIntrinsic("NetHTTPServer::localAddress", [](std::vector<ValuePtr>) { return Value::unit(); });
+    for (const char* name : {"NetHTTPClient::open", "NetHTTPClient::request",
+                             "NetHTTPClient::get", "NetHTTPClient::post"})
+        defineIntrinsic(name, [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
+    defineIntrinsic("NetHTTPClient::statistics", [](std::vector<ValuePtr>) {
+        return Value::record("ClientStatistics", {{"openConnections", Value::integer(0)},
+                                                    {"requests", Value::integer(0)},
+                                                    {"reusedConnections", Value::integer(0)}});
+    });
+    defineIntrinsic("NetHTTPClient::close", [](std::vector<ValuePtr>) {
+        return Value::ok(Value::record("ClientCloseReport", {{"closedConnections", Value::integer(0)}}));
+    });
 
     auto unsupportedSocket = [](const std::string& operation) {
         return [operation](std::vector<ValuePtr>) {

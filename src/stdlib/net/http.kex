@@ -69,6 +69,10 @@ record ClientCloseReport do
   closedConnections : Integer
 end
 
+# The pooled HTTP client. An opaque handle over the connection pool that
+# owns it; `Client.open` makes one and `client.close` releases it.
+type Client
+
 module Headers do
   empty : Headers
   let empty = Headers { entries: [] }
@@ -113,16 +117,18 @@ module Server do
 end
 
 module Client do
-  type Client
-  foul open() -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
+  open : Result<Client, NetError>
+  foul open() = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
   foul open(options: ClientOptions) -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(options)
 end
 
-foul request(client: Client.Client, method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, method, url, headers, body)
-foul get(client: Client.Client, url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, "GET", url, Headers.empty, Binary.empty)
-foul post(client: Client.Client, url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, "POST", url, Headers.empty, body)
-foul statistics(client: Client.Client) -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(client)
-foul close(client: Client.Client) -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(client)
+make Client do
+  foul request(method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body)
+  foul get(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.get(this, url)
+  foul post(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.post(this, url, body)
+  foul statistics -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(this)
+  foul close -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(this)
+end
 
 foul stop(server: Server.Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
 foul join(server: Server.Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)

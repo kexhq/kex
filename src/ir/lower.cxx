@@ -298,6 +298,32 @@ struct Lowering {
         // spelling (a reified value carries the interpreter's `Boxes.Box`)
         // still names the record declared as its last segment.
         if (const auto dot = name.rfind('.'); dot != std::string::npos) {
+            // A PARTIALLY qualified spelling first: `using Net.Socket`
+            // makes `TCP.Endpoint` legal for the record whose identity —
+            // and BEAM tag — is `Net.Socket.TCP.Endpoint`. Without this the
+            // construction was tagged 'TCP.Endpoint', which the runtime's
+            // own pattern never matches: `Net.HTTP.Server.start` answered
+            // "invalid HTTP server configuration" for a perfectly good
+            // endpoint. Same rule as the bare-name case below — a `using`
+            // names the owner outright, and a suffix match settles the rest
+            // only when it is unambiguous.
+            for (const auto& imported : usingModules)
+                if (records.count(imported + "." + name))
+                    return imported + "." + name;
+            {
+                const auto qualifiedSuffix = "." + name;
+                std::string qualified;
+                for (const auto& [candidate, _] : records) {
+                    if (candidate.size() <= qualifiedSuffix.size() ||
+                        candidate.compare(
+                            candidate.size() - qualifiedSuffix.size(),
+                            qualifiedSuffix.size(), qualifiedSuffix) != 0)
+                        continue;
+                    if (!qualified.empty()) { qualified.clear(); break; }
+                    qualified = candidate;
+                }
+                if (!qualified.empty()) return qualified;
+            }
             if (const auto bare = name.substr(dot + 1); records.count(bare))
                 return bare;
             return name;
@@ -396,6 +422,15 @@ struct Lowering {
     // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
     // declares a capability, so a program using none compiles unchanged.
     std::unordered_set<std::string> foulFns;
+    // "name/arity" for every NON-foul definition in this unit. `foulFns` is
+    // keyed by name alone, so a foul function anywhere in the file makes every
+    // same-named call take a context — including calls to a pure function of
+    // that name at a different arity, in a different module of the same file.
+    // Net.HTTP is the case: `make Client do foul request(…)` put "request" in
+    // foulFns, and `module HTTP`'s pure `request/4` was then called as
+    // `request/5`, which erlc rejects. A definition that IS pure at exactly
+    // the arity being called settles it.
+    std::unordered_set<std::string> pureFnArities;
     std::unordered_set<std::string> capabilityModules;
     // Name of the context variable in scope; empty means there is none, and
     // a call from there passes a fresh empty map.
@@ -676,6 +711,8 @@ struct Lowering {
     auto callNeedsContext(const std::string& name, int arity) const -> bool {
         if (!threadsCapabilities() || foulFns.count(name) == 0) return false;
         if (arity == 1 && accessorFields.count(name)) return false;
+        if (pureFnArities.count(name + "/" + std::to_string(arity)))
+            return false;
         return true;
     }
     // Every local call goes through here so the context is appended in one
@@ -2780,6 +2817,37 @@ struct Lowering {
                             return callE(module, function, arity,
                                          std::move(direct));
                         });
+                }
+                // A resolved target with no backend module is a call into THIS
+                // unit, and callE only appends the capability context for
+                // EXTERNAL foul targets — so a foul make-block method
+                // resolved this way went out one argument short of its own
+                // definition. `Net.HTTP`'s `make Client do foul statistics`
+                // is defined as statistics/2 (receiver + context) and was
+                // called as `apply 'statistics'/1`, which erlc rejects.
+                // Routing it through localCall puts it back on the one code
+                // path that decides about the context (kexhq/kex#181).
+                if (resolved->second.backendModule.empty() &&
+                    resolved->second.backendArity ==
+                        static_cast<int>(args.size())) {
+                    // The resolver knows WHICH implementation won, so its
+                    // foulness settles the context where the name-and-arity
+                    // lookup in callNeedsContext cannot: `get` is PURE at
+                    // arity 2 for Net.HTTP's Headers and FOUL at arity 2 for
+                    // its Client, and one answer has to serve both.
+                    if (threadsCapabilities() && resolved->second.isFoul) {
+                        args.push_back(currentContext());
+                        auto call = std::make_unique<Expr>();
+                        call->node = Call{"", backendFunction,
+                                          static_cast<int>(args.size()),
+                                          std::move(args), false};
+                        return wrapLets(binds, std::move(call));
+                    }
+                    if (callNeedsContext(backendFunction,
+                                         static_cast<int>(args.size())))
+                        return wrapLets(
+                            binds,
+                            localCallExpr(backendFunction, std::move(args)));
                 }
                 return wrapLets(
                     binds,
@@ -6442,6 +6510,17 @@ struct Lowering {
                          three(std::move(v), lit(LitKind::Atom, ty),
                                litInt(static_cast<int64_t>(
                                    record->second.fields.size() + 1))));
+        // An OPAQUE type declared inside a module carries its QUALIFIED
+        // name as its tag, the same rule records follow — `type Client` in
+        // Net.HTTP is `{'Net.HTTP.Client', …}`, which is what the runtime
+        // intrinsic builds. Guarding on the written `Client` matched
+        // nothing, so `client.get(url)` fell through its make block's
+        // dispatcher to "Undefined method: get for Tuple".
+        auto tagged = ty;
+        if (!records.count(tagged) && tagged.find('.') == std::string::npos)
+            if (auto declaring = localTypeModules.find(tagged);
+                declaring != localTypeModules.end())
+                tagged = declaring->second + "." + tagged;
         // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
         // fixed arity, so is_record/3 above does not apply and the tag has to
         // be read with element/2.
@@ -6458,7 +6537,7 @@ struct Lowering {
             callE("erlang", "is_tuple", 1, one(vRef.get())),
             intrin(Op::Eq, two(callE("erlang", "element", 2,
                                      two(litInt(1), vRef.get())),
-                               lit(LitKind::Atom, ty))),
+                               lit(LitKind::Atom, tagged))),
             litBool(false));
     }
 
@@ -7013,6 +7092,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (fd.isFoul) L.foulFns.insert(fd.name);
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
+            if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
             definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
@@ -7101,6 +7181,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
+            if (!fd->isFoul)
+                L.pureFnArities.insert(
+                    fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->clauses.empty()) {
                 // A make-block method reaches its receiver one of two ways:
                 // implicitly through `this` (params exclude it), or as its
@@ -7176,6 +7259,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             definedFns.insert(emitted);
             // A capability's own members stay at their declared arity.
             if (fd->isFoul) L.foulFns.insert(emitted);
+            if (!fd->isFoul && !fd->clauses.empty())
+                L.pureFnArities.insert(
+                    fd->name + "/" +
+                    std::to_string(fd->clauses[0].params.size()));
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;

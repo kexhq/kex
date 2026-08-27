@@ -26,6 +26,18 @@
 type Binary
 
 module Binary do
+  # The binary holding no bytes.
+  #
+  # The same value +Binary.fromBytes([])+ builds, under the name the rest of
+  # the library uses for a neutral starting value (+Headers.empty+).
+  #
+  # @return [Binary] the zero-length binary
+  #
+  # @example
+  #   Binary.empty.length   # => 0
+  empty : Binary
+  let empty = Kex.Intrinsic.Binary.fromBytes([])
+
   # Builds a binary from a list of bytes.
   #
   # Total: every +Byte+ is in +0..255+ by construction, so there is no

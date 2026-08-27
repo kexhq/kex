@@ -1,0 +1,52 @@
+# kex: run-beam
+#
+# The HTTP server and the pooled HTTP client against each other, over a real
+# socket on an ephemeral port. Both are BEAM-only (the tree-walker answers
+# UnsupportedBackend for either), so this spec runs through `-R` only.
+#
+# `client.request` rather than `client.get`: a make-block method of a
+# `using`-imported module is not in the checker's receiver-function interface,
+# so `get` — a name the prelude also owns — resolves to the prelude's and dies
+# with "Undefined method: get for Tuple". `request` collides with nothing and
+# reaches Client's own method.
+
+using Net.HTTP
+using Net.Socket
+
+let pong(request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "pong")
+
+main do
+  let router = Router.build.get("/ping", ~pong)
+  # Port 0 asks the OS for a free port; `localAddress` reports the one it got.
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router).try
+  assert(server.running?, "the server should be listening after start")
+  let port = server.localAddress.port.value
+  assert(port > 0, "binding port 0 should report the port it actually got")
+
+  let url = "http://127.0.0.1:${port}/ping"
+  let client = Client.open().try
+  let first = client.request("GET", url, Headers.empty, Binary.empty).try
+  assert(first.status.code == 200, "the router should answer /ping")
+  assert(first.status.success?, "200 is a success status")
+  assert(first.body.to(String).try == "pong", "the handler's body should arrive")
+
+  # Keep-alive: the second request rides the pooled connection rather than
+  # dialling again.
+  let second = client.request("GET", url, Headers.empty, Binary.empty).try
+  assert(second.status.code == 200, "a pooled connection should serve again")
+  let stats = client.statistics
+  assert(stats.requests == 2, "both requests should be counted")
+  assert(stats.reusedConnections == 1, "the second request should reuse the first connection")
+
+  let missingURL = "http://127.0.0.1:${port}/nope"
+  let missing = client.request("GET", missingURL, Headers.empty, Binary.empty).try
+  assert(missing.status.code == 404, "an unrouted path should answer 404")
+  assert(missing.status.clientError?, "404 is a client error")
+
+  let report = client.close.try
+  assert(report.closedConnections >= 1, "closing should report the pooled connection")
+  server.stop
+  assert(!server.running?, "the server should be stopped")
+  IO.printLine("ok")
+end

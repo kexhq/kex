@@ -24,6 +24,17 @@ module TCP do
   listen : Endpoint -> Result<TCPListener, NetError>
   foul listen(endpoint) = Kex.Intrinsic.NetTCP.listen(endpoint)
 
+  foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
+  foul receiveChunk(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunk(connection, limit)
+  foul receiveExactly(connection: TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
+  foul receiveLine(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
+  foul shutdownWrite(connection: TCPConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetTCP.shutdownWrite(connection)
+  foul accept(listener: TCPListener) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.accept(listener)
+  foul close(connection: TCPConnection) -> Void = Kex.Intrinsic.NetTCP.close(connection)
+  foul close(listener: TCPListener) -> Void = Kex.Intrinsic.NetTCP.close(listener)
+  foul closed?(connection: TCPConnection) -> Bool = Kex.Intrinsic.NetTCP.closed?(connection)
+  foul closed?(listener: TCPListener) -> Bool = Kex.Intrinsic.NetTCP.closed?(listener)
+
 end
 
 module UDP do
@@ -47,6 +58,11 @@ module UDP do
   bind : Endpoint -> Result<Socket, NetError>
   foul bind(endpoint) = Kex.Intrinsic.NetUDP.bind(endpoint)
 
+  foul sendTo(socket: Socket, endpoint: Endpoint, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUDP.sendTo(socket, endpoint, data)
+  foul receiveFrom(socket: Socket, limit: Integer) -> Result<Datagram, NetError> = Kex.Intrinsic.NetUDP.receiveFrom(socket, limit)
+  foul close(socket: Socket) -> Void = Kex.Intrinsic.NetUDP.close(socket)
+  foul closed?(socket: Socket) -> Bool = Kex.Intrinsic.NetUDP.closed?(socket)
+
 end
 
 module Unix do
@@ -64,6 +80,12 @@ module Unix do
   listen : Address -> Result<UnixListener, NetError>
   foul listen(address) = Kex.Intrinsic.NetUnix.listen(address)
 
+  foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)
+  foul receiveChunk(connection: UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveChunk(connection, limit)
+  foul accept(listener: UnixListener) -> Result<UnixConnection, NetError> = Kex.Intrinsic.NetUnix.accept(listener)
+  foul close(connection: UnixConnection) -> Void = Kex.Intrinsic.NetUnix.close(connection)
+  foul close(listener: UnixListener) -> Void = Kex.Intrinsic.NetUnix.close(listener)
+
 end
 
 module TLS do
@@ -76,29 +98,8 @@ module TLS do
   connect : TCP.Endpoint -> ClientConfig -> Result<TLSConnection, NetError>
   foul connect(endpoint, config) = Kex.Intrinsic.NetTLS.connect(endpoint, config)
 
-end
+  foul sendAll(connection: TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTLS.sendAll(connection, data)
+  foul receiveChunk(connection: TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTLS.receiveChunk(connection, limit)
+  foul close(connection: TLSConnection) -> Void = Kex.Intrinsic.NetTLS.close(connection)
 
-# Receiver operations are exported by Net.Socket itself so one `using
-# Net.Socket` enables UFCS across all protocol handle types.
-foul sendAll(connection: TCP.TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
-foul sendAll(connection: Unix.UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
-foul sendAll(connection: TLS.TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
-foul receiveChunk(connection: TCP.TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
-foul receiveChunk(connection: Unix.UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
-foul receiveChunk(connection: TLS.TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
-foul receiveExactly(connection: TCP.TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
-foul receiveLine(connection: TCP.TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
-foul shutdownWrite(connection: TCP.TCPConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetTCP.shutdownWrite(connection)
-foul accept(listener: TCP.TCPListener) -> Result<TCP.TCPConnection, NetError> = Kex.Intrinsic.NetSocket.accept(listener)
-foul accept(listener: Unix.UnixListener) -> Result<Unix.UnixConnection, NetError> = Kex.Intrinsic.NetSocket.accept(listener)
-foul sendTo(socket: UDP.Socket, endpoint: UDP.Endpoint, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUDP.sendTo(socket, endpoint, data)
-foul receiveFrom(socket: UDP.Socket, limit: Integer) -> Result<UDP.Datagram, NetError> = Kex.Intrinsic.NetUDP.receiveFrom(socket, limit)
-foul close(connection: TCP.TCPConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
-foul close(listener: TCP.TCPListener) -> Void = Kex.Intrinsic.NetSocket.close(listener)
-foul close(socket: UDP.Socket) -> Void = Kex.Intrinsic.NetSocket.close(socket)
-foul close(connection: Unix.UnixConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
-foul close(listener: Unix.UnixListener) -> Void = Kex.Intrinsic.NetSocket.close(listener)
-foul close(connection: TLS.TLSConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
-foul closed?(connection: TCP.TCPConnection) -> Bool = Kex.Intrinsic.NetSocket.closed?(connection)
-foul closed?(listener: TCP.TCPListener) -> Bool = Kex.Intrinsic.NetSocket.closed?(listener)
-foul closed?(socket: UDP.Socket) -> Bool = Kex.Intrinsic.NetSocket.closed?(socket)
+end
