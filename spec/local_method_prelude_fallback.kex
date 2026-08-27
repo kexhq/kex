@@ -1,0 +1,24 @@
+# A make-block method must not capture receivers of OTHER types.
+#
+# A method written with an implicit `this` lowers to an unguarded `fun (This)`,
+# which matches anything. With a single local owner no dispatcher was built, so
+# the bare name bound directly and swallowed every receiver: BEAM printed
+# `box-box` here where the walker printed `a-b` — silently wrong output. An
+# IMPORTED make block reached the same bind through `using` and died
+# `function_clause` instead.
+#
+# The owner's own values must still get the local implementation.
+type Box = | Boxed
+
+make Box, implement: Showable do
+  let showValue -> String = "box"
+end
+
+main do
+  let joined = ["a", "b"].reduce("") do |acc, part|
+    acc.empty? then part else "${acc}-${part}"
+  end
+  IO.printLine(joined)
+  IO.printLine("${Boxed}")
+  IO.printLine("${"str"}-${42}")
+end

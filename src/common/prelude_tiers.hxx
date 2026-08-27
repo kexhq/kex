@@ -11,8 +11,8 @@
 
 namespace kex {
 
-inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
-    "algebra.kex", "bits.kex", "console.kex", "digest.kex", "errorable.kex", "io.kex",
+inline constexpr std::array<std::string_view, 13> kPreludeTier0 = {
+    "algebra.kex", "console.kex", "errorable.kex", "io.kex",
     "kex.kex", "math.kex", "optional.kex", "process.kex",
     "range.kex", "stream.kex", "system.kex", "test.kex",
     "taggedvalidation.kex",
@@ -21,16 +21,15 @@ inline constexpr std::array<std::string_view, 8> kPreludeTier1 = {
     "binary.kex", "blankable.kex", "env.kex", "http.kex", "number.kex",
     "string.kex", "truthyable.kex", "webserver.kex",
 };
-inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
-    "enumerable.kex", "evaluator.kex", "filehandle.kex",
+inline constexpr std::array<std::string_view, 2> kPreludeTier2 = {
+    "enumerable.kex", "filehandle.kex",
 };
 // time.kex comes after units.kex: Date/Time/DateTime are built on the
 // Duration record the unit system declares.
 // set.kex comes after list.kex and map.kex: both set flavours are built on a
 // list and a map rather than on any set primitive of their own.
-inline constexpr std::array<std::string_view, 7> kPreludeTier3 = {
-    "list.kex", "map.kex", "set.kex", "units.kex", "time.kex", "type.kex",
-    "optionparser.kex",
+inline constexpr std::array<std::string_view, 5> kPreludeTier3 = {
+    "list.kex", "map.kex", "units.kex", "time.kex", "type.kex",
 };
 
 inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)

@@ -5,6 +5,8 @@
 # BEAM, so both backends agree here with no special casing — which is the main
 # thing these cases are pinning down.
 
+using Bits
+
 describe("Bits — logical operations") do
   it("computes and/or/xor") do
     assert(Bits.and(0b1100, 0b1010) == 0b1000)

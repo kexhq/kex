@@ -16,8 +16,9 @@
 # `--grep` searches the DECODED text, which is the whole point: the same search
 # against the raw file finds nothing.
 
-using Regex
 using FS
+using OptionParser
+using Regex
 
 # One byte of a Core Erlang binary literal. The tag form is validated at
 # compile time and yields a bare Regex — the call form returns a Result, which

@@ -7,6 +7,8 @@
 # handling whatever its subcommands do not.
 
 # `foul` because the handlers print — a command does something.
+using OptionParser
+
 foul cli -> OptionConfig do
   return OptionParser.define("demo", "A tool with commands")
     .flag("help", Just('h'), "Show this help")

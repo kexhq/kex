@@ -1,3 +1,5 @@
+using Digest
+
 describe "Binary" do
   it "stores arbitrary bytes without exposing text" do
     let all: [Byte] = (0..255).items

@@ -3,8 +3,4 @@ spec/error_annotation_arity_mismatch.kex:4:1: error: `add` declared to return In
 spec/error_annotation_arity_mismatch.kex:7:16: error: `add` expects argument 1 to be (Integer, Integer), but got Integer
 
 add : (Integer, Integer) -> A -> Integer
-
-add : Set<A> -> A -> Set<A>
-
-add : UnorderedSet<A> -> A -> UnorderedSet<A>
 Aborted: 2 type errors — fix before running (use --no-check to skip).
