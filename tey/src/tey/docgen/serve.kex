@@ -55,14 +55,14 @@ module Tey.Docgen.Serve do
 
   foul serveFile(req: Web.Request, filePath: String) -> Web.Response do
     match FS.File.read(filePath) do
-      Just(content) => do
+      Ok(content) => do
         let contentType = contentTypeFor(filePath)
         # The site regenerates in place, so nothing here is immutable: send
         # no-cache so a rebuild (or an accumulated versions.json) is never
         # shadowed by a browser's cached copy.
         return Web.Response { status: 200, headers: { "Content-Type": contentType, "Cache-Control": "no-cache" }, body: content }
       end
-      None => return Web.Response.notFound()
+      Error(_) => return Web.Response.notFound()
     end
   end
 

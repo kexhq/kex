@@ -8,8 +8,8 @@ using Tey.Toolchain, only: [kex]
 
 foul manifest -> ManifestPackage or! String do
   match FS.File.read("package.kex") do
-    Just(text) => Tey.Manifest.read(text)
-    None => Error("package.kex not found")
+    Ok(text) => Tey.Manifest.read(text)
+    Error(_) => Error("package.kex not found")
   end
 end
 
@@ -32,8 +32,8 @@ foul add(name: String, options: ParsedOptions) -> Integer do
   let selector = selected.first.or("ref")
   let requested = options.value(selector, "HEAD")
   let text = match FS.File.read("package.kex") do
-    Just(value) => value.trim
-    None => return Tey.Commands.fail("package.kex not found")
+    Ok(value) => value.trim
+    Error(_) => return Tey.Commands.fail("package.kex not found")
   end
   return Tey.Commands.fail("package.kex must end with 'end'") if !text.endsWith?("end")
   let body = text.chars.take(text.count - 3).join("")
@@ -51,18 +51,18 @@ end
 # the flag off later needs no re-resolve.
 foul install(without: String) -> Integer do
   let state = match FS.File.read("tey.lock") do
-    None => do
+    Error(_) => do
       let status = Tey.Commands.lock
       return status if status != 0
       match FS.File.read("tey.lock") do
-        Just(text) => match Tey.Lockfile.decode(text) do
+        Ok(text) => match Tey.Lockfile.decode(text) do
           Ok(value) => value
           Error(error) => return Tey.Commands.fail(error)
         end
-        None => return Tey.Commands.fail("could not read generated tey.lock")
+        Error(_) => return Tey.Commands.fail("could not read generated tey.lock")
       end
     end
-    Just(text) => match Tey.Lockfile.decode(text) do
+    Ok(text) => match Tey.Lockfile.decode(text) do
       Ok(value) => value
       Error(error) => return Tey.Commands.fail(error)
     end
@@ -638,11 +638,11 @@ private do
   # a starting point, and the one on disk is somebody's work.
   foul writeCreated(directory: String, path: String, contents: String) -> Bool do
     match FS.File.read(path) do
-      Just(existing) => do
+      Ok(existing) => do
         Tey.Commands.report(existing == contents then "exist" else "skip", directory, path)
         return true
       end
-      None => ()
+      Error(_) => ()
     end
     return false if !FS.File.write(path, contents)
     Tey.Commands.report("create", directory, path)
@@ -760,8 +760,8 @@ private do
 
   foul readLock -> LockState or! String do
     match FS.File.read("tey.lock") do
-      None => Error("tey.lock not found; run `tey lock`")
-      Just(text) => Tey.Lockfile.decode(text)
+      Error(_) => Error("tey.lock not found; run `tey lock`")
+      Ok(text) => Tey.Lockfile.decode(text)
     end
   end
 

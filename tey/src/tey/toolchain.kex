@@ -28,8 +28,8 @@ end
 # The version `tey kex use` last selected, if any.
 foul selected -> String? do
   match FS.File.read("${Tey.Toolchain.home}/current") do
-    None => return None
-    Just(text) => do
+    Error(_) => return None
+    Ok(text) => do
       let name = text.trim
       return name.empty? then None else Just(name)
     end
@@ -102,8 +102,8 @@ foul installedKex -> String? do
     Just(path) => Just(path)
     None => do
       match FS.File.read("${Tey.Toolchain.home}/current") do
-        Just(version) => Just(Tey.Toolchain.binaryOf(version.trim))
-        None => None
+        Ok(version) => Just(Tey.Toolchain.binaryOf(version.trim))
+        Error(_) => None
       end
     end
   end
@@ -531,8 +531,8 @@ private do
     let checksums = "${archive}.sha256"
     Tey.Toolchain.download(checksumUrl, checksums).try
     let expected = match FS.File.read(checksums) do
-      None => return Error("could not read ${checksums}")
-      Just(text) => text.trim.split(" ").first.or("")
+      Error(_) => return Error("could not read ${checksums}")
+      Ok(text) => text.trim.split(" ").first.or("")
     end
     return Error("${checksumUrl} does not contain a checksum") if expected.empty?
     let actual = Tey.Toolchain.checksumOf(archive).try
