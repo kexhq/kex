@@ -78,7 +78,7 @@ module Kex do
 
   # An optional capability a build may or may not include. Ask about one with
   # +Kex.Feature.has?+ before relying on it.
-  type Feature = Http | FS | Process | WebServer
+  type Feature = FS | Process
 
   # Which backend is executing this program.
   #
@@ -214,8 +214,8 @@ module Kex do
 
   # Which optional capabilities this build includes.
   #
-  # A slim build may leave out the network or the web server; asking first is
-  # how a program degrades gracefully instead of failing at the call.
+  # Optional non-network capabilities in this build. Networking has its own
+  # granular opt-in `Net.Support` report.
   module Feature do
     # Returns +true+ when this build includes +f+.
     #
@@ -225,10 +225,6 @@ module Kex do
     # @example
     #   Kex.Feature.has?(Kex.FS)     # => true
     #
-    # @example Degrading when a capability is missing
-    #   if !Kex.Feature.has?(Kex.Http)
-    #     IO.printError("this build has no network support")
-    #   end
     has? : Feature -> Bool
     let has?(f) = Kex.Intrinsic.Kex.featureHas?(f)
 

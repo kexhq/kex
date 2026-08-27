@@ -905,7 +905,7 @@ int main() {
         it("does not resolve private intrinsic calls as public overloads", []() {
             assertTrue(noErrors(
                 "module Routes do\n"
-                "  let delete(server: Server, path: String, handler: Handler) -> Server = server\n"
+                "  let delete(server: Any, path: String, handler: Any) -> Any = server\n"
                 "end\n"
                 "make Map<K, V> do\n"
                 "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"

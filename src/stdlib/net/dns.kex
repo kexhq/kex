@@ -1,0 +1,16 @@
+module Net.DNS
+
+record Name do
+  display : String
+  ascii : String
+end
+
+module Name do
+  parse : String -> Result<Name, NetError>
+  let parse(text) = Kex.Intrinsic.NetDNS.name(text)
+end
+
+module DNS do
+  addresses : Name -> Result<[Net.IP.Address], NetError>
+  foul addresses(name) = Kex.Intrinsic.NetDNS.addresses(name)
+end

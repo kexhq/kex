@@ -1,0 +1,36 @@
+module Net.IP
+
+record Address do
+  source : String
+end
+
+record Network do
+  source : String
+end
+
+module Address do
+  parse : String -> Result<Address, NetError>
+  let parse(text) = Kex.Intrinsic.NetIP.address(text)
+end
+
+module Network do
+  parse : String -> Result<Network, NetError>
+  let parse(text) = Kex.Intrinsic.NetIP.network(text)
+end
+
+make Address do
+  let string -> String = Kex.Intrinsic.NetIP.addressString(this)
+  let version -> Integer = Kex.Intrinsic.NetIP.version(this)
+  let loopback? -> Bool = Kex.Intrinsic.NetIP.loopback?(this)
+  let private? -> Bool = Kex.Intrinsic.NetIP.private?(this)
+  let unspecified? -> Bool = Kex.Intrinsic.NetIP.unspecified?(this)
+  let multicast? -> Bool = Kex.Intrinsic.NetIP.multicast?(this)
+end
+
+make Network do
+  let string -> String = Kex.Intrinsic.NetIP.networkString(this)
+  let contains(address: Address) -> Bool = Kex.Intrinsic.NetIP.contains?(this, address)
+  let prefix -> Integer = Kex.Intrinsic.NetIP.prefix(this)
+  let first -> Address = Kex.Intrinsic.NetIP.first(this)
+  let last -> Address = Kex.Intrinsic.NetIP.last(this)
+end

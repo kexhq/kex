@@ -1,0 +1,91 @@
+module URI
+
+# A parsed RFC 3986 URI reference. Construction is strict; use `parse` rather
+# than building this representation directly. `string` preserves the spelling
+# supplied by the caller, while `normalize` is explicit.
+record URI do
+  source : String
+end
+
+record URL do
+  source : String
+end
+
+record Host do
+  display : String
+  ascii : String
+end
+
+record Query do
+  entries : [(String, String?)]
+end
+
+record Form do
+  entries : [(String, String?)]
+end
+
+record URIError do
+  kind : URIErrorKind
+  message : String
+  position : Integer?
+end
+
+type URIErrorKind = InvalidSyntax | InvalidEscape | InvalidAuthority | InvalidPort | NonASCII | NotAbsolute | NotHierarchical | MissingAuthority | UnsupportedScheme
+
+parse : String -> Result<URI, URIError>
+let parse(text) = Kex.Intrinsic.URI.parse(text)
+
+fromIRI : String -> Result<URI, URIError>
+let fromIRI(text) = Kex.Intrinsic.URI.fromIRI(text)
+
+module URL do
+  parse : String -> Result<URL, URIError>
+  let parse(text) = Kex.Intrinsic.URL.parse(text)
+
+  build : String -> String -> [String] -> Query -> Result<URL, URIError>
+  let build(scheme, host, path, query) = Kex.Intrinsic.URL.build(scheme, host, path, query)
+end
+
+module Query do
+  from : [(String, String?)] -> Query
+  let from(entries) = Query { entries: entries }
+
+  parse : String -> Result<Query, URIError>
+  let parse(text) = Kex.Intrinsic.URI.queryParse(text)
+end
+
+module Form do
+  from : [(String, String)] -> Form
+  let from(entries) = Kex.Intrinsic.URI.formFrom(entries)
+
+  parse : String -> Result<Form, URIError>
+  let parse(text) = Kex.Intrinsic.URI.formParse(text)
+end
+
+make URI do
+  let string -> String = @source
+  let normalize -> URI = Kex.Intrinsic.URI.normalize(this)
+  let equivalent?(other: URI) -> Bool = this.normalize.string == other.normalize.string
+  let resolve(reference: URI) -> Result<URI, URIError> = Kex.Intrinsic.URI.resolve(this, reference)
+  let scheme -> String? = Kex.Intrinsic.URI.scheme(this)
+  let host -> Host? = Kex.Intrinsic.URI.host(this)
+  let query -> Query? = Kex.Intrinsic.URI.query(this)
+end
+
+make URL do
+  let string -> String = @source
+  let normalize -> URL = Kex.Intrinsic.URL.normalize(this)
+  let equivalent?(other: URL) -> Bool = this.normalize.string == other.normalize.string
+  let resolve(reference: URI) -> Result<URL, URIError> = Kex.Intrinsic.URL.resolve(this, reference)
+  let scheme -> String = Kex.Intrinsic.URL.scheme(this)
+  let host -> Host = Kex.Intrinsic.URL.host(this)
+  let query -> Query? = Kex.Intrinsic.URL.query(this)
+end
+
+make Query do
+  let encode -> String = Kex.Intrinsic.URI.queryEncode(this)
+end
+
+make Form do
+  let encode -> String = Kex.Intrinsic.URI.formEncode(this)
+end

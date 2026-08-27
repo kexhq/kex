@@ -183,15 +183,13 @@ public:
         bool io = false;
         std::string ioOutput;
         std::deque<std::string> ioInput;
-        bool http = false;
-        std::deque<ValuePtr> httpResponses;
         std::unordered_map<std::string, std::string> env;
         std::unordered_set<std::string> envUnset;
     };
     auto captureMocks() const -> MockState {
         return MockState{m_mockFiles, m_mockDirs, m_mockFileReader, m_mockIO,
-                         m_mockIOOutput, m_mockIOInputLines, m_mockHttp,
-                         m_mockHttpResponses, m_mockEnv, m_mockEnvUnset};
+                         m_mockIOOutput, m_mockIOInputLines,
+                         m_mockEnv, m_mockEnvUnset};
     }
     auto restoreMocks(MockState saved) -> void {
         m_mockFiles = std::move(saved.files);
@@ -200,8 +198,6 @@ public:
         m_mockIO = saved.io;
         m_mockIOOutput = std::move(saved.ioOutput);
         m_mockIOInputLines = std::move(saved.ioInput);
-        m_mockHttp = saved.http;
-        m_mockHttpResponses = std::move(saved.httpResponses);
         m_mockEnv = std::move(saved.env);
         m_mockEnvUnset = std::move(saved.envUnset);
         rebuildEnvMap();
@@ -393,8 +389,7 @@ private:
     auto registerDigestBuiltins() -> void;
     auto registerParserBuiltins() -> void;
     auto registerEvalBuiltins() -> void;
-    auto registerHttpBuiltins() -> void;
-    auto registerWebBuiltins() -> void;
+    auto registerNetBuiltins() -> void;
     auto registerKexBuiltins() -> void;
 
     // Environment
@@ -498,9 +493,6 @@ private:
     bool m_mockIO = false;
     std::string m_mockIOOutput;
     std::deque<std::string> m_mockIOInputLines;
-
-    bool m_mockHttp = false;
-    std::deque<ValuePtr> m_mockHttpResponses;
 
     // Mock.ENV — an overlay on the real environment, so a test can say what
     // `ENV` holds without the process actually having it. `unset` is separate

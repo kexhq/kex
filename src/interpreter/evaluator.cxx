@@ -4056,8 +4056,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerDigestBuiltins();
     registerParserBuiltins();
     registerEvalBuiltins();
-    registerHttpBuiltins();
-    registerWebBuiltins();
+    registerNetBuiltins();
     registerKexBuiltins();
 
     // Kex.Intrinsic.Fun.applyItem(f, item) — auto-splat a pair into a

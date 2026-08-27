@@ -9,6 +9,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <thread>
 
 namespace {
 
@@ -80,6 +82,20 @@ namespace kex::interpreter {
 // SpawnExpr/ReceiveExpr branches). This file only covers the ordinary
 // builtins: Process.self and pid.send(msg).
 auto Evaluator::registerProcessBuiltins() -> void {
+
+    defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::unit();
+        auto* duration = std::get_if<RecordValue>(&args[0]->data);
+        if (!duration || duration->typeName != "Duration") return Value::unit();
+        auto found = duration->fields.find("seconds");
+        if (found == duration->fields.end()) return Value::unit();
+        double seconds = 0.0;
+        if (auto* value = std::get_if<FloatValue>(&found->second->data)) seconds = value->value;
+        else if (auto* value = std::get_if<IntValue>(&found->second->data)) seconds = value->value;
+        if (seconds > 0.0)
+            std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+        return Value::unit();
+    });
 
     // Pre-register the namespace placeholder so `Process.self` resolves via
     // the ModuleValue namespace-dispatch branch in eval() (ast::MethodCall),

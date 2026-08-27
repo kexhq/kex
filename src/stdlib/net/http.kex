@@ -1,0 +1,172 @@
+module Net.HTTP
+
+record Headers do
+  entries : [(String, String)]
+end
+
+record Status do
+  code : Integer
+end
+
+record Response<B> do
+  status : Status
+  headers : Headers
+  body : B
+end
+
+record Request<B> do
+  method : String
+  target : URI
+  headers : Headers
+  body : B
+end
+
+record RouteContext do
+  parameters : Map<String, String> = {}
+end
+
+record Context do
+  route : RouteContext
+end
+
+type Handler = Request<Binary> -> Context -> Response<Binary>
+
+record Route do
+  method : String
+  path : String
+  handler : Handler
+end
+
+record Router do
+  routes : [Route] = []
+end
+
+record ShutdownReport do
+  completed : Integer
+  failed : Integer
+  forced : Integer
+  elapsedMilliseconds : Integer
+end
+
+record PoolOptions do
+  perOrigin : Integer = 8
+  total : Integer = 128
+  queuedRequests : Integer = 256
+  idleExpiryMilliseconds : Integer = 30000
+end
+
+record ClientOptions do
+  pool : PoolOptions = PoolOptions {}
+end
+
+record ClientStatistics do
+  openConnections : Integer
+  requests : Integer
+  reusedConnections : Integer
+end
+
+record ClientCloseReport do
+  closedConnections : Integer
+end
+
+module Headers do
+  empty : Headers
+  let empty = Headers { entries: [] }
+
+  from : [(String, String)] -> Result<Headers, NetError>
+  let from(entries) = Kex.Intrinsic.NetHTTP.headers(entries)
+
+  parse : String -> Result<Headers, NetError>
+  let parse(text) = Kex.Intrinsic.NetHTTP.parseHeaders(text)
+end
+
+module Status do
+  from : Integer -> Result<Status, NetError>
+  let from(code) = Kex.Intrinsic.NetHTTP.status(code)
+end
+
+module Response do
+  foul binary(status: Integer, body: Binary, headers: Headers) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseBinary(status, body, headers)
+  foul text(status: Integer, body: String) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseText(status, body)
+  foul empty(status: Integer) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseEmpty(status)
+end
+
+module Router do
+  let build = Router { routes: [] }
+end
+
+make Router do
+  let route(method: String, path: String, handler: Handler) -> Router = Router {
+    routes: @routes + [Route { method: method, path: path, handler: handler }]
+  }
+  let get(path: String, handler: Handler) -> Router = this.route("GET", path, handler)
+  let post(path: String, handler: Handler) -> Router = this.route("POST", path, handler)
+  let put(path: String, handler: Handler) -> Router = this.route("PUT", path, handler)
+  let patch(path: String, handler: Handler) -> Router = this.route("PATCH", path, handler)
+  let delete(path: String, handler: Handler) -> Router = this.route("DELETE", path, handler)
+end
+
+module Server do
+  type Running
+  foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router)
+  foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router)
+end
+
+module Client do
+  type Client
+  foul open() -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
+  foul open(options: ClientOptions) -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(options)
+end
+
+foul request(client: Client.Client, method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, method, url, headers, body)
+foul get(client: Client.Client, url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, "GET", url, Headers.empty, Binary.empty)
+foul post(client: Client.Client, url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(client, "POST", url, Headers.empty, body)
+foul statistics(client: Client.Client) -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(client)
+foul close(client: Client.Client) -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(client)
+
+foul stop(server: Server.Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
+foul join(server: Server.Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)
+foul running?(server: Server.Running) -> Bool = Kex.Intrinsic.NetHTTPServer.running?(server)
+foul localAddress(server: Server.Running) -> Net.Socket.TCP.Endpoint = Kex.Intrinsic.NetHTTPServer.localAddress(server)
+
+make Headers do
+  let add(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
+  let set(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.setHeader(this, name, value)
+  let remove(name: String) -> Headers = Kex.Intrinsic.NetHTTP.removeHeader(this, name)
+  let get(name: String) -> String? = Kex.Intrinsic.NetHTTP.getHeader(this, name)
+  let getAll(name: String) -> [String] = Kex.Intrinsic.NetHTTP.getAllHeaders(this, name)
+end
+
+make Status do
+  let informational? -> Bool = @code >= 100 && @code < 200
+  let success? -> Bool = @code >= 200 && @code < 300
+  let redirect? -> Bool = @code >= 300 && @code < 400
+  let clientError? -> Bool = @code >= 400 && @code < 500
+  let serverError? -> Bool = @code >= 500 && @code < 600
+end
+
+make RouteContext do
+  let parameter(name: String) -> Result<String, NetError> = match @parameters.get(name) do
+    Just(value) => Ok(value)
+    None => Error(NetError { kind: Parse, operation: HTTPServer, message: "missing route parameter: ${name}" })
+  end
+end
+
+module HTTP do
+  request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
+  let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
+  get : String -> Result<Response<Binary>, NetError>
+  let get(url) = Kex.Intrinsic.NetHTTP.get(url)
+  delete : String -> Result<Response<Binary>, NetError>
+  let delete(url) = request("DELETE", url, Headers.empty, Binary.empty)
+  head : String -> Result<Response<Binary>, NetError>
+  let head(url) = request("HEAD", url, Headers.empty, Binary.empty)
+  options : String -> Result<Response<Binary>, NetError>
+  let options(url) = request("OPTIONS", url, Headers.empty, Binary.empty)
+  post : String -> Binary -> Result<Response<Binary>, NetError>
+  let post(url, body) = request("POST", url, Headers.empty, body)
+  put : String -> Binary -> Result<Response<Binary>, NetError>
+  let put(url, body) = request("PUT", url, Headers.empty, body)
+  patch : String -> Binary -> Result<Response<Binary>, NetError>
+  let patch(url, body) = request("PATCH", url, Headers.empty, body)
+end

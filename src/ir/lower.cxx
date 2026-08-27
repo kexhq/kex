@@ -1480,6 +1480,27 @@ struct Lowering {
                 auto savedUsing = usingModules;
                 usingModules.insert(srcMod);
                 if (n.alias) moduleAliases[*n.alias] = srcMod;
+                // Import immediate nested modules under their leaf name too.
+                // The semantic resolver already makes `URL.parse` available
+                // after `using URI`; BEAM lowering must map that leaf back to
+                // its owning companion (`URI.URL`) just as the tree walker
+                // does. Explicit aliases still win below by assignment.
+                for (const auto& [key, _] : moduleFunctions) {
+                    const auto prefix = srcMod + ".";
+                    if (key.rfind(prefix, 0) != 0) continue;
+                    const auto rest = key.substr(prefix.size());
+                    const auto dot = rest.find('.');
+                    if (dot == std::string::npos) continue;
+                    const auto nested = rest.substr(0, dot);
+                    if (!n.onlyNames.empty() &&
+                        std::find(n.onlyNames.begin(), n.onlyNames.end(), nested) ==
+                            n.onlyNames.end())
+                        continue;
+                    if (std::find(n.exceptNames.begin(), n.exceptNames.end(), nested) !=
+                        n.exceptNames.end())
+                        continue;
+                    moduleAliases[nested] = srcMod + "." + nested;
+                }
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
                         auto key = srcMod + "." + name;
@@ -7569,6 +7590,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     srcMod += (*ub)->module.parts[i];
                                 }
                                 if ((*ub)->alias) L.moduleAliases[*(*ub)->alias] = srcMod;
+                                for (const auto& [key, _] : L.moduleFunctions) {
+                                    const auto prefix = srcMod + ".";
+                                    if (key.rfind(prefix, 0) != 0) continue;
+                                    const auto rest = key.substr(prefix.size());
+                                    const auto dot = rest.find('.');
+                                    if (dot == std::string::npos) continue;
+                                    const auto nested = rest.substr(0, dot);
+                                    if (!(*ub)->onlyNames.empty() &&
+                                        std::find((*ub)->onlyNames.begin(), (*ub)->onlyNames.end(), nested) == (*ub)->onlyNames.end())
+                                        continue;
+                                    if (std::find((*ub)->exceptNames.begin(), (*ub)->exceptNames.end(), nested) != (*ub)->exceptNames.end())
+                                        continue;
+                                    L.moduleAliases[nested] = srcMod + "." + nested;
+                                }
                                 auto importName = [&](const std::string& name) {
                                     auto key = srcMod + "." + name;
                                     if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
@@ -7644,6 +7679,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 L.usingModules.insert(srcMod);
                 if (node->alias) L.moduleAliases[*node->alias] = srcMod;
+                for (const auto& [key, _] : L.moduleFunctions) {
+                    const auto prefix = srcMod + ".";
+                    if (key.rfind(prefix, 0) != 0) continue;
+                    const auto rest = key.substr(prefix.size());
+                    const auto dot = rest.find('.');
+                    if (dot == std::string::npos) continue;
+                    const auto nested = rest.substr(0, dot);
+                    if (!node->onlyNames.empty() &&
+                        std::find(node->onlyNames.begin(), node->onlyNames.end(), nested) == node->onlyNames.end())
+                        continue;
+                    if (std::find(node->exceptNames.begin(), node->exceptNames.end(), nested) != node->exceptNames.end())
+                        continue;
+                    L.moduleAliases[nested] = srcMod + "." + nested;
+                }
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {
                         auto key = srcMod + "." + name;

@@ -1,0 +1,42 @@
+using URI
+using Net.IP, only: [Address, Network]
+using Net.HTTP, only: [Headers, Status, add, set, get, getAll, success?]
+
+describe("network value APIs") do
+  it("resolves and normalizes URLs explicitly") do
+    let base = URL.parse("https://Example.COM:443/api/v1/").try
+    let relative = URI.parse("../people/Ada%20Lovelace?tag=kex&tag=net&flag").try
+    let resolved = base.resolve(relative).try
+    assert(resolved.normalize.string == "https://example.com/api/people/Ada%20Lovelace?tag=kex&tag=net&flag")
+    assert(resolved.query.try.entries.length == 3)
+  end
+
+  it("keeps generic and form encoding distinct") do
+    assert(Query.from([("q", Just("kex language"))]).encode == "q=kex%20language")
+    assert(Form.from([("q", "kex language")]).encode == "q=kex+language")
+  end
+
+  it("canonicalizes addresses and checks CIDR containment") do
+    let address = Address.parse("2001:0db8::42").try
+    let network = Network.parse("2001:db8::/32").try
+    assert(address.string == "2001:db8::42")
+    assert(network.contains(address))
+    assert(!network.contains(Address.parse("2001:dead::1").try))
+  end
+
+  it("preserves header order and duplicates with insensitive lookup") do
+    let headers = Headers.empty
+      .add("Set-Cookie", "theme=dark")
+      .add("set-cookie", "session=redacted")
+      .set("Content-Type", "application/json")
+    assert(headers.getAll("SET-COOKIE").length == 2)
+    assert(headers.getAll("content-type") == ["application/json"])
+  end
+
+  it("validates status and port ranges") do
+    assert(Status.from(204).try.success?)
+    assert(Status.from(99).error?)
+    assert(Net.Port.from(65535).try.value == 65535)
+    assert(Net.Port.from(65536).error?)
+  end
+end

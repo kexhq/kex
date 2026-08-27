@@ -1,0 +1,104 @@
+module Net.Socket
+
+module TCP do
+  type Plain
+  type TCPConnection
+  type TCPListener
+
+  record Endpoint do
+    host : String
+    port : Net.Port
+  end
+
+  module Endpoint do
+    host : String -> Net.Port -> Endpoint
+    let host(name, port) = Endpoint { host: name, port: port }
+    any : Net.Port -> Endpoint
+    let any(port) = Endpoint { host: "0.0.0.0", port: port }
+    loopback : Net.Port -> Endpoint
+    let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
+  end
+
+  connect : Endpoint -> Result<TCPConnection, NetError>
+  foul connect(endpoint) = Kex.Intrinsic.NetTCP.connect(endpoint)
+  listen : Endpoint -> Result<TCPListener, NetError>
+  foul listen(endpoint) = Kex.Intrinsic.NetTCP.listen(endpoint)
+
+end
+
+module UDP do
+  type Socket
+  record Endpoint do
+    host : String
+    port : Net.Port
+  end
+  record Datagram do
+    source : Endpoint
+    data : Binary
+  end
+  module Endpoint do
+    host : String -> Net.Port -> Endpoint
+    let host(name, port) = Endpoint { host: name, port: port }
+    any : Net.Port -> Endpoint
+    let any(port) = Endpoint { host: "0.0.0.0", port: port }
+    loopback : Net.Port -> Endpoint
+    let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
+  end
+  bind : Endpoint -> Result<Socket, NetError>
+  foul bind(endpoint) = Kex.Intrinsic.NetUDP.bind(endpoint)
+
+end
+
+module Unix do
+  type UnixConnection
+  type UnixListener
+  record Address do
+    path : String
+  end
+  module Address do
+    path : String -> Result<Address, NetError>
+    let path(value) = Kex.Intrinsic.NetUnix.address(value)
+  end
+  connect : Address -> Result<UnixConnection, NetError>
+  foul connect(address) = Kex.Intrinsic.NetUnix.connect(address)
+  listen : Address -> Result<UnixListener, NetError>
+  foul listen(address) = Kex.Intrinsic.NetUnix.listen(address)
+
+end
+
+module TLS do
+  type TLSConnection
+  record ClientConfig do
+    serverName : String
+    verify? : Bool = true
+    alpn : [String] = []
+  end
+  connect : TCP.Endpoint -> ClientConfig -> Result<TLSConnection, NetError>
+  foul connect(endpoint, config) = Kex.Intrinsic.NetTLS.connect(endpoint, config)
+
+end
+
+# Receiver operations are exported by Net.Socket itself so one `using
+# Net.Socket` enables UFCS across all protocol handle types.
+foul sendAll(connection: TCP.TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
+foul sendAll(connection: Unix.UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
+foul sendAll(connection: TLS.TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetSocket.sendAll(connection, data)
+foul receiveChunk(connection: TCP.TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
+foul receiveChunk(connection: Unix.UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
+foul receiveChunk(connection: TLS.TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetSocket.receiveChunk(connection, limit)
+foul receiveExactly(connection: TCP.TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
+foul receiveLine(connection: TCP.TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
+foul shutdownWrite(connection: TCP.TCPConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetTCP.shutdownWrite(connection)
+foul accept(listener: TCP.TCPListener) -> Result<TCP.TCPConnection, NetError> = Kex.Intrinsic.NetSocket.accept(listener)
+foul accept(listener: Unix.UnixListener) -> Result<Unix.UnixConnection, NetError> = Kex.Intrinsic.NetSocket.accept(listener)
+foul sendTo(socket: UDP.Socket, endpoint: UDP.Endpoint, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUDP.sendTo(socket, endpoint, data)
+foul receiveFrom(socket: UDP.Socket, limit: Integer) -> Result<UDP.Datagram, NetError> = Kex.Intrinsic.NetUDP.receiveFrom(socket, limit)
+foul close(connection: TCP.TCPConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
+foul close(listener: TCP.TCPListener) -> Void = Kex.Intrinsic.NetSocket.close(listener)
+foul close(socket: UDP.Socket) -> Void = Kex.Intrinsic.NetSocket.close(socket)
+foul close(connection: Unix.UnixConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
+foul close(listener: Unix.UnixListener) -> Void = Kex.Intrinsic.NetSocket.close(listener)
+foul close(connection: TLS.TLSConnection) -> Void = Kex.Intrinsic.NetSocket.close(connection)
+foul closed?(connection: TCP.TCPConnection) -> Bool = Kex.Intrinsic.NetSocket.closed?(connection)
+foul closed?(listener: TCP.TCPListener) -> Bool = Kex.Intrinsic.NetSocket.closed?(listener)
+foul closed?(socket: UDP.Socket) -> Bool = Kex.Intrinsic.NetSocket.closed?(socket)

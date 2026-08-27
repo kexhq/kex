@@ -1,0 +1,47 @@
+module Net
+
+record Port do
+  value : Integer
+end
+
+record SupportValue do
+  compiled? : Bool
+  usable? : Bool
+end
+
+record SupportReport do
+  dns : SupportValue
+  tcp : SupportValue
+  udp : SupportValue
+  unix : SupportValue
+  tls : SupportValue
+  httpClient : SupportValue
+  httpServer : SupportValue
+  webSocketClient : SupportValue
+  webSocketServer : SupportValue
+end
+
+module Port do
+  from : Integer -> Result<Port, NetError>
+  let from(value) = Kex.Intrinsic.Net.port(value)
+end
+
+module Support do
+  current : SupportReport
+  let current = Kex.Intrinsic.Net.support()
+end
+
+type NetOperation = DNS | TCP | UDP | Unix | TLS | HTTPClient | HTTPServer | WebSocketClient | WebSocketServer
+type NetErrorKind = Parse | Resolve | Connect | Protocol | Timeout | Cancelled | Limit | Closed | ReadInProgress | UnsupportedBackend | UnsupportedOption | BrowserRestricted | OpaqueRedirect | MockEmpty | Backend
+
+record NetError do
+  kind : NetErrorKind
+  operation : NetOperation
+  message : String
+  phase : String?
+  progress : Integer?
+end
+
+make Port do
+  let string -> String = @value.to(String).or("")
+end
