@@ -1,0 +1,4 @@
+main do
+  let integer: Integer = 42
+  let byte = integer.as(Byte)
+end

@@ -1,0 +1,193 @@
+# An opaque, immutable sequence of bytes. Binary never implicitly becomes text.
+#
+# +[Byte]+ is the materialized list of bytes; +Binary+ is the storage form.
+# A file, an HTTP body, or a digest is a +Binary+ — on the BEAM it is a native
+# binary, so slicing it shares storage instead of copying, and none of the
+# operations here ever walks a character list.
+#
+#   let data = Binary.fromHex("00686900").try
+#   data.length            # => 4
+#   data.at(1)             # => Just(104)
+#   data.take(2).hex       # => "0068"
+#   data.showValue         # => "#Binary<4 bytes>"
+#
+# The type is opaque on purpose: there is no field to reach through, so text
+# operations cannot be run on bytes by accident. Crossing the boundary is
+# always explicit, in both directions, and both directions can fail — text is
+# only some of the byte sequences there are:
+#
+#   "héllo".to(Binary)               # => Just(#Binary<6 bytes>)
+#   Binary.fromBytes([255]).to(String)   # => None
+#
+# +Showable+ and +Inspectable+ deliberately render the length alone. Neither
+# ever decodes or interpolates the payload, so printing a binary cannot leak
+# its contents or fail on bytes that are not text. Use +hex+, +base64+, or
+# +to(String)+ when you actually want to see it.
+type Binary
+
+module Binary do
+  # Builds a binary from a list of bytes.
+  #
+  # Total: every +Byte+ is in +0..255+ by construction, so there is no
+  # rejection case. +Binary.fromBytes([])+ is the empty binary.
+  #
+  # @param values [[Byte]] the bytes to store
+  # @return [Binary] the bytes, in binary storage
+  #
+  # @example
+  #   Binary.fromBytes([104, 105])   # => #Binary<2 bytes>
+  #   Binary.fromBytes([])           # => #Binary<0 bytes>
+  fromBytes : [Byte] -> Binary
+  let fromBytes(values) = Kex.Intrinsic.Binary.fromBytes(values)
+
+  # Decodes lowercase hexadecimal text.
+  #
+  # Strict, so that decoding is the exact inverse of +hex+: uppercase digits,
+  # an odd length, whitespace, a +0x+ prefix, and any non-hex character all
+  # answer +None+ rather than being repaired.
+  #
+  # @param text [String] the hexadecimal text
+  # @return [Binary?] the bytes, or +None+ when the text is not canonical hex
+  #
+  # @example
+  #   Binary.fromHex("0068")   # => Just(#Binary<2 bytes>)
+  #   Binary.fromHex("0x68")   # => None
+  #   Binary.fromHex("AB")     # => None
+  #   Binary.fromHex("a")      # => None
+  fromHex : String -> Binary?
+  let fromHex(text) = Kex.Intrinsic.Binary.fromHex(text)
+
+  # Decodes standard base64 text (RFC 4648).
+  #
+  # Strict, so that decoding is the exact inverse of +base64+: the URL-safe
+  # alphabet, missing or malformed padding, whitespace, and any other
+  # noncanonical encoding all answer +None+.
+  #
+  # @param text [String] the base64 text
+  # @return [Binary?] the bytes, or +None+ when the text is not canonical
+  #   base64
+  #
+  # @example
+  #   Binary.fromBase64("AGhp/w==")   # => Just(#Binary<4 bytes>)
+  #   Binary.fromBase64("AGhp_w==")   # => None
+  #   Binary.fromBase64("AGhp/w")     # => None
+  fromBase64 : String -> Binary?
+  let fromBase64(text) = Kex.Intrinsic.Binary.fromBase64(text)
+end
+
+make Binary, implement: Showable, Inspectable do
+  # The bytes, as a list.
+  #
+  # The explicit, allocating conversion out of binary storage — reach for
+  # +length+, +at+, +take+, and +drop+ when you do not need the whole list.
+  #
+  # @return [[Byte]] every byte, in order
+  #
+  # @example
+  #   Binary.fromHex("0068").try.bytes   # => [0, 104]
+  let bytes -> [Byte] = Kex.Intrinsic.Binary.bytes(this)
+
+  # How many bytes it holds.
+  #
+  # @return [Integer] the byte count
+  #
+  # @example
+  #   "héllo".to(Binary).try.length   # => 6
+  let length -> Integer = Kex.Intrinsic.Binary.length(this)
+
+  # Whether it holds no bytes at all.
+  #
+  # @return [Bool] +true+ when the binary is empty
+  #
+  # @example
+  #   Binary.fromBytes([]).empty?   # => true
+  let empty? -> Bool = this.length == 0
+
+  # The byte at +index+, counting from zero.
+  #
+  # Answers +None+ for a negative or out-of-range index, so an index you did
+  # not check is something you handle rather than something that stops the
+  # program.
+  #
+  # @param index [Integer] the position to read
+  # @return [Byte?] the byte, or +None+ when the index is outside the binary
+  #
+  # @example
+  #   let data = Binary.fromBytes([104, 105])
+  #   data.at(0)    # => Just(104)
+  #   data.at(2)    # => None
+  #   data.at(-1)   # => None
+  let at(index: Integer) -> Byte? = Kex.Intrinsic.Binary.at(this, index)
+
+  # The first +count+ bytes.
+  #
+  # Clamped at both ends, like the list operations: a +count+ of zero or less
+  # answers the empty binary, and an oversized one answers the whole binary.
+  #
+  # @param count [Integer] how many bytes to keep
+  # @return [Binary] the leading bytes
+  #
+  # @example
+  #   let data = Binary.fromBytes([104, 105])
+  #   data.take(1).bytes     # => [104]
+  #   data.take(0).bytes     # => []
+  #   data.take(999) == data # => true
+  let take(count: Integer) -> Binary = Kex.Intrinsic.Binary.take(this, count)
+
+  # Everything after the first +count+ bytes.
+  #
+  # Clamped at both ends: a +count+ of zero or less answers the whole binary,
+  # and an oversized one answers the empty binary. +take(n)+ and +drop(n)+
+  # therefore always concatenate back to the original.
+  #
+  # @param count [Integer] how many bytes to skip
+  # @return [Binary] the remaining bytes
+  #
+  # @example
+  #   let data = Binary.fromBytes([104, 105])
+  #   data.drop(1).bytes                    # => [105]
+  #   (data.take(1) + data.drop(1)) == data # => true
+  let drop(count: Integer) -> Binary = Kex.Intrinsic.Binary.drop(this, count)
+
+  # Joins two binaries end to end.
+  #
+  # @param other [Binary] the bytes to append
+  # @return [Binary] the two payloads, in order
+  #
+  # @example
+  #   Binary.fromBytes([104]) + Binary.fromBytes([105])   # => #Binary<2 bytes>
+  let +(other: Binary) -> Binary = Kex.Intrinsic.Binary.concat(this, other)
+
+  # The bytes as lowercase hexadecimal text, two digits per byte.
+  #
+  # @return [String] the hexadecimal encoding
+  #
+  # @example
+  #   Binary.fromBytes([0, 104, 255]).hex   # => "0068ff"
+  let hex -> String = Kex.Intrinsic.Binary.hex(this)
+
+  # The bytes as standard base64 text (RFC 4648), with canonical padding.
+  #
+  # @return [String] the base64 encoding
+  #
+  # @example
+  #   Binary.fromBytes([0, 104, 105, 255]).base64   # => "AGhp/w=="
+  let base64 -> String = Kex.Intrinsic.Binary.base64(this)
+
+  # The length-only rendering — never the payload.
+  #
+  # @return [String] +#Binary<N bytes>+
+  #
+  # @example
+  #   Binary.fromBytes([104, 105]).showValue   # => "#Binary<2 bytes>"
+  let showValue -> String = Kex.Intrinsic.Binary.render(this)
+
+  # The length-only rendering — never the payload. The same as +showValue+.
+  #
+  # @return [String] +#Binary<N bytes>+
+  let inspectValue(_: Bool) -> String = Kex.Intrinsic.Binary.render(this)
+
+  # Binary's String conversion decodes its payload; it must not inherit the
+  # Showable fallback, which would convert the safe length-only rendering.
+  let to(String) = Kex.Intrinsic.Fun.convertTo(this, String)
+end

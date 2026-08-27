@@ -142,8 +142,8 @@ module Tey.Docgen.Index do
   # one. Both defaults read it; one read, one parse.
   foul manifestVersion() -> (String?, String?)? do
     match FS.File.read("package.kex") do
-      None => None
-      Just(text) => match Tey.Manifest.read(text) do
+      Error(_) => None
+      Ok(text) => match Tey.Manifest.read(text) do
         Ok(package) => Just((package.name, package.version))
         Error(_) => None
       end
@@ -273,8 +273,8 @@ module Tey.Docgen.Index do
 
   foul readVersionEntries(out: String) -> [VersionEntry] do
     match FS.File.read(FS.Path.join(out, "versions.json")) do
-      None => []
-      Just(text) => do
+      Error(_) => []
+      Ok(text) => do
         match JSON.parse(text) do
           Error(_) => []
           Ok(root) => do

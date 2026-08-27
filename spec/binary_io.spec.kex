@@ -1,0 +1,59 @@
+using FS
+
+describe("binary I/O") do
+  it("round trips invalid text losslessly through whole-file helpers") do
+    Mock.FS.File("blob.bin", "")
+    let payload = Binary.fromBytes([0, 255, 195, 40, 10])
+    assert(FS.File.writeBytes("blob.bin", payload))
+    assert(FS.File.readBytes("blob.bin") == Ok(payload))
+    assert(FS.File.read("blob.bin") == Error(InvalidUtf8("blob.bin", 1)))
+  end
+
+  it("reads and writes bytes through handles") do
+    Mock.FS.File("handle.bin", "")
+    let payload = Binary.fromBytes([0, 1, 2, 255])
+    let writer = FS.File.open("handle.bin", FS.Write).try
+    writer.writeBytes(payload)
+    writer.close
+    let reader = FS.File.open("handle.bin", FS.Read).try
+    assert(reader.readBytes == Ok(payload))
+    assert(reader.readBytes == Ok(Binary.fromBytes([])))
+    reader.close
+  end
+
+  it("uses raw standard-stream writes without showing the value") do
+    Mock.IO.start()
+    IO.out.writeBytes(Binary.fromBytes([0, 65]))
+    assert(Mock.IO.output().bytes == [0, 65])
+    Mock.IO.stop()
+  end
+
+  it("round trips a real binary file") do
+    let path = FS.Path.join(FS.Directory.temporary, "kex_binary_scratch.bin")
+    let payload = Binary.fromBytes([0, 255, 1, 254])
+    FS.File.delete(path)
+    assert(FS.File.writeBytes(path, payload))
+    assert(FS.File.readBytes(path) == Ok(payload))
+    assert(FS.File.delete(path))
+  end
+
+  it("reads one complete Unicode scalar and reports malformed UTF-8") do
+    Mock.FS.File("unicode.txt", "éx")
+    let reader = FS.File.open("unicode.txt", FS.Read).try
+    assert(reader.get == Ok(Just("é")), "complete scalar")
+    assert(reader.get == Ok(Just("x")), "second scalar")
+    assert(reader.get == Ok(None), "character EOF")
+    reader.close
+
+    Mock.FS.File("bad.txt", "")
+    FS.File.writeBytes("bad.txt", Binary.fromBytes([97, 255, 98]))
+    let bad = FS.File.open("bad.txt", FS.Read).try
+    let failure = bad.read
+    match failure do
+      Error(InvalidUtf8(offset)) => assert(offset == 1, "UTF-8 offset")
+      _ => assert(false, "expected InvalidUtf8")
+    end
+    assert(bad.readBytes == Ok(Binary.fromBytes([])), "failed read consumed input")
+    bad.close
+  end
+end

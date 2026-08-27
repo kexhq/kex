@@ -1,3 +1,5 @@
+using OptionParser
+
 let OPTION_PARSER = OptionParser.define("testapp", "A test CLI")
   .string("name", Just('n'), "Your name", None, true)
   .integer("port", Just('p'), "Port number", Just("3000"), false)

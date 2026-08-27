@@ -46,8 +46,14 @@ module FS do
   # writing to a read-only handle is a compile error.
   type WritePermission = CanWrite | CannotWrite
 
-  # A file that could not be opened, carrying the path that failed.
+  # A file operation that failed, carrying the path it failed on.
+  #
+  # +OpenFailed+ and +ReadFailed+ mean the filesystem refused the operation.
+  # +InvalidUtf8+ means the bytes were read but are not valid UTF-8, and
+  # carries the byte offset of the first malformed sequence.
   type FileError = OpenFailed(FilePath)
+    | ReadFailed(FilePath)
+    | InvalidUtf8(FilePath, Integer)
 
   # Reading and writing files.
   #
@@ -144,26 +150,63 @@ module FS do
       end
     end
 
-    # Reads the whole file and returns its contents as a +String+.
+    # Reads the whole file and decodes it as UTF-8 text.
     #
-    # Answers +None+ when the file does not exist or cannot be read, so a
-    # missing file is something you handle rather than something that stops
-    # the program.
+    # Answers +Error(ReadFailed(path))+ when the file does not exist or cannot
+    # be read, and +Error(InvalidUtf8(path, offset))+ when the bytes are not
+    # valid UTF-8 — so a missing or non-text file is something you handle
+    # rather than something that stops the program. Reach for
+    # +FS.File.readBytes+ when the contents are not text.
     #
     # @param path [FilePath] the file to read
-    # @return [String?] the contents, or +None+
+    # @return [Result<String, FileError>] the contents, or the failure
     #
     # @example
-    #   FS.File.read("hello.txt")     # => Just("hello\n")
-    #   FS.File.read("nowhere.txt")   # => None
+    #   FS.File.read("hello.txt")     # => Ok("hello\n")
+    #   FS.File.read("nowhere.txt")   # => Error(ReadFailed("nowhere.txt"))
     #
     # @example Reading with a default
     #   let config = FS.File.read("app.conf").or("")
     #
     # @example Counting words in a file
     #   FS.File.read("essay.txt").or("").split(" ").reject(~empty?).count
-    read : FilePath -> String?
+    read : FilePath -> Result<String, FileError>
     foul read(path) = Kex.Intrinsic.File.read(path)
+
+    # Reads the whole file as raw bytes, without decoding it as text.
+    #
+    # The byte counterpart of +FS.File.read+: it never validates UTF-8, so it
+    # round trips images, archives, and any other non-text payload losslessly.
+    # Answers +Error(ReadFailed(path))+ when the file cannot be read.
+    #
+    # @param path [FilePath] the file to read
+    # @return [Result<Binary, FileError>] the contents, or the failure
+    #
+    # @example
+    #   FS.File.readBytes("logo.png")   # => Ok(#Binary<2048 bytes>)
+    #
+    # @example Hashing a file
+    #   FS.File.readBytes(path).map { |data| Digest.sha256(data).hex }
+    readBytes : FilePath -> Result<Binary, FileError>
+    foul readBytes(path) = Kex.Intrinsic.File.readBytes(path)
+
+    # Writes +content+ to +path+ as raw bytes, replacing whatever was there.
+    #
+    # The byte counterpart of +FS.File.write+: the payload lands on disk
+    # exactly as given, with no encoding step. Answers +false+ when the write
+    # fails.
+    #
+    # @param path [FilePath] the file to write
+    # @param content [Binary] the bytes to write
+    # @return [Bool] +true+ when the write succeeded
+    #
+    # @example
+    #   FS.File.writeBytes("out.bin", Binary.fromBytes([0, 255]))   # => true
+    #
+    # @example Copying a file without decoding it
+    #   FS.File.readBytes(source).map { |data| FS.File.writeBytes(target, data) }
+    writeBytes : FilePath -> Binary -> Bool
+    foul writeBytes(path, content) = Kex.Intrinsic.File.writeBytes(path, content)
 
     # Writes +content+ to +path+, replacing whatever was there.
     #
@@ -890,6 +933,28 @@ module FS do
     #   FS.Path.join(FS.Directory.home.or("."), ".apprc")
     home : String?
     foul home = Kex.Intrinsic.Directory.home
+
+    # Returns the directory this system puts temporary files in.
+    #
+    # Total, unlike +home+: it answers +TMPDIR+ when the environment sets one
+    # (+TEMP+ or +TMP+ on Windows) and falls back to +/tmp+, so there is always
+    # somewhere to write. The path never ends in a separator, so it composes
+    # with +FS.Path.join+ directly.
+    #
+    # The directory is shared with every other process on the machine, so pick
+    # a name unlikely to collide and delete it when you are done.
+    #
+    # @return [String] the temporary directory
+    #
+    # @example
+    #   FS.Directory.temporary   # => "/tmp"
+    #
+    # @example A scratch file that cleans up after itself
+    #   let scratch = FS.Path.join(FS.Directory.temporary, "report.bin")
+    #   FS.File.writeBytes(scratch, payload)
+    #   FS.File.delete(scratch)
+    temporary : String
+    foul temporary = Kex.Intrinsic.Directory.temporary
   end
 end
 

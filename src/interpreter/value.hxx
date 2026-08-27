@@ -44,6 +44,7 @@ struct IntValue { int64_t value; };
 struct BigIntValue { mpz_class value; };
 struct FloatValue { double value; };
 struct StringValue { std::string value; };
+struct BinaryValue { std::vector<uint8_t> bytes; };
 // A Unicode codepoint, not a byte: `"école".chars` yields five of these.
 struct CharValue { char32_t value; };
 struct BoolValue { bool value; };
@@ -176,6 +177,7 @@ struct Value {
         BigIntValue,
         FloatValue,
         StringValue,
+        BinaryValue,
         CharValue,
         BoolValue,
         AtomValue,
@@ -202,6 +204,7 @@ struct Value {
     static auto bigInteger(mpz_class v) -> ValuePtr;
     static auto floating(double v) -> ValuePtr;
     static auto string(std::string v) -> ValuePtr;
+    static auto binary(std::vector<uint8_t> v) -> ValuePtr;
     static auto character(char32_t v) -> ValuePtr;
     static auto boolean(bool v) -> ValuePtr;
     static auto atom(std::string name) -> ValuePtr;

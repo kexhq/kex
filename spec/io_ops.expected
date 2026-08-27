@@ -8,4 +8,4 @@ abcd
 [abcd]
 [abcd]
 true
-
+Error(ReadFailed(spec/io_scratch.txt))

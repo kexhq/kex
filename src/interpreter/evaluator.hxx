@@ -331,6 +331,7 @@ private:
     auto registerMockBuiltins() -> void;
     auto registerListBuiltins() -> void;
     auto registerStringBuiltins() -> void;
+    auto registerBinaryBuiltins() -> void;
     auto registerNumberBuiltins() -> void;
     auto registerRegexBuiltins() -> void;
     auto registerStreamBuiltins() -> void;

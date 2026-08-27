@@ -174,6 +174,7 @@ add_library(kex_lib
     src/interpreter/stdlib/file.cxx
     src/interpreter/stdlib/list.cxx
     src/interpreter/stdlib/string.cxx
+    src/interpreter/stdlib/binary.cxx
     src/interpreter/stdlib/number.cxx
     src/interpreter/stdlib/regex.cxx
     src/interpreter/stdlib/stream.cxx

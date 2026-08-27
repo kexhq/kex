@@ -3781,6 +3781,40 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // the initializer only has to be compatible with it. Binding the
             // inferred type instead would defeat the reason for writing one.
             auto declared = declaredBindingType(node.type, valueType, expr.location);
+            if (declared && node.value) {
+                auto byteType = [](const TypePtr& type) {
+                    auto* sized = type ? std::get_if<SizedIntType>(&type->kind) : nullptr;
+                    return sized && sized->bits == 8 && !sized->isSigned;
+                };
+                auto invalidByteLiteral = [](const std::string& text) {
+                    if (text.empty() || text.front() == '-') return true;
+                    try {
+                        size_t parsed = 0;
+                        const auto value = std::stoull(text, &parsed, 0);
+                        return parsed != text.size() || value > 255;
+                    } catch (...) { return true; }
+                };
+                auto expected = resolve(declared);
+                if (byteType(expected)) {
+                    if (auto* literal = std::get_if<ast::IntLiteral>(&node.value->kind)) {
+                        if (invalidByteLiteral(literal->value))
+                            error(node.value->location, "Byte literal must be in 0..255");
+                    }
+                    if (auto* unary = std::get_if<ast::UnaryOp>(&node.value->kind);
+                        unary && unary->op == TokenType::Minus && unary->operand &&
+                        std::holds_alternative<ast::IntLiteral>(unary->operand->kind))
+                        error(node.value->location, "Byte literal must be in 0..255");
+                } else if (auto* listType = std::get_if<ListType>(&expected->kind);
+                           listType && byteType(listType->element)) {
+                    if (auto* list = std::get_if<ast::ListExpr>(&node.value->kind))
+                        for (const auto& element : list->elements)
+                            if (element)
+                                if (auto* literal = std::get_if<ast::IntLiteral>(&element->kind)) {
+                                    if (invalidByteLiteral(literal->value))
+                                        error(element->location, "Byte literal must be in 0..255");
+                                }
+                }
+            }
             if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
                 // `x : Type.of(y)` on the line above `let x = 34`: a top-level
                 // binding is a synthetic-main LetExpr, not a 0-arg function, so
@@ -4251,6 +4285,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           "Cannot convert " + typeToString(source) + " to " +
                               typeToString(target) + " with `.as`");
                 }
+                if (auto* sized = std::get_if<SizedIntType>(&target->kind);
+                    sized && sized->bits == 8 && !sized->isSigned &&
+                    !typesEqual(resolve(source), target)) {
+                    error(expr.location,
+                          "Unchecked narrowing to Byte is not allowed; use `.to(Byte)`");
+                }
                 return target;
             }
             // `x.to(T)` answers `T?`. The clauses implementing the protocol
@@ -4466,6 +4506,26 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
                 return msgType;
+            }
+            if ((callName == "Binary::fromBytes" || callName == "String::fromBytes") &&
+                node.args.size() == 1 && node.args[0]) {
+                if (auto* list = std::get_if<ast::ListExpr>(&node.args[0]->kind))
+                    for (const auto& element : list->elements) if (element) {
+                        bool invalid = false;
+                        if (auto* literal = std::get_if<ast::IntLiteral>(&element->kind)) {
+                            try {
+                                size_t parsed = 0;
+                                const auto value = std::stoull(literal->value, &parsed, 0);
+                                invalid = parsed != literal->value.size() || value > 255;
+                            } catch (...) { invalid = true; }
+                        } else if (auto* unary = std::get_if<ast::UnaryOp>(&element->kind);
+                                   unary && unary->op == TokenType::Minus && unary->operand &&
+                                   std::holds_alternative<ast::IntLiteral>(unary->operand->kind)) {
+                            invalid = true;
+                        }
+                        if (invalid)
+                            error(element->location, "Byte literal must be in 0..255");
+                    }
             }
             return checkCall(callName, argTypes, expr.location,
                              /*isMethodCall=*/true, &node, &expr);

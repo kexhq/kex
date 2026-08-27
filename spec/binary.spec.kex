@@ -1,0 +1,57 @@
+using Digest
+
+describe "Binary" do
+  it "stores arbitrary bytes without exposing text" do
+    let all: [Byte] = (0..255).items
+    let data = Binary.fromBytes(all)
+    assert(data.length == 256)
+    assert(data.bytes == all)
+    assert(data.at(-1) == None)
+    assert(data.at(255) == Just(255))
+    assert(data.at(256) == None)
+    assert(data.take(-1) == Binary.fromBytes([]))
+    assert(data.take(999) == data)
+    assert(data.drop(-1) == data)
+    assert(data.drop(999) == Binary.fromBytes([]))
+    assert((data.take(128) + data.drop(128)) == data)
+    assert(data.showValue == "#Binary<256 bytes>")
+    assert(data.inspectValue(false) == "#Binary<256 bytes>")
+  end
+
+  it "uses strict canonical hex and base64" do
+    let nul = Binary.fromBytes([0, 104, 105, 255])
+    assert(nul.hex == "006869ff")
+    assert(Binary.fromHex(nul.hex) == Just(nul))
+    assert(Binary.fromHex("AB") == None)
+    assert(Binary.fromHex("a") == None)
+    assert(Binary.fromHex("0x00") == None)
+    assert(Binary.fromHex("00 01") == None)
+    assert(nul.base64 == "AGhp/w==")
+    assert(Binary.fromBase64(nul.base64) == Just(nul))
+    assert(Binary.fromBase64("AGhp_w==") == None)
+    assert(Binary.fromBase64("AGhp/w") == None)
+    assert(Binary.fromBase64("AGhp/w==\n") == None)
+  end
+
+  it "converts explicitly between binary and text" do
+    let text = "héllo"
+    let data = text.to(Binary).try
+    assert(data.to(String) == Just(text))
+    assert(Binary.fromBytes([255]).to(String) == None)
+  end
+
+  it "hashes binary to raw binary" do
+    let data = "abc".to(Binary).try
+    assert(Digest.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    assert(Digest.sha256(data).hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  end
+
+
+  it "keeps large payloads in binary storage" do
+    let bytes: [Byte] = (0..65535).items.map { |n| n % 256 }
+    let data = Binary.fromBytes(bytes)
+    assert(data.length == 65536)
+    assert(data.take(32768).length == 32768)
+    assert(data.drop(32768).length == 32768)
+  end
+end

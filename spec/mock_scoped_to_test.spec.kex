@@ -18,7 +18,7 @@ describe("mock state is scoped to the test") do
   end
 
   it("does not see the previous test's file mock") do
-    assert(FS.File.read("leaked.txt") == None, "FS mock leaked between tests")
+    assert(FS.File.read("leaked.txt") == Error(ReadFailed("leaked.txt")), "FS mock leaked between tests")
   end
 
   it("sets an ENV mock and never clears it") do

@@ -4,10 +4,17 @@
 # that make ordinary syntax work on your own types (`Enumerable` behind
 # `.map`, `Truthyable` behind `if`, `Errorable` behind `.try`).
 #
-# What is NOT here is deliberate. A library that reaches outside the program —
-# the filesystem (`FS`), regular expressions (`Regex`), JSON (`JSON`), the
-# parser combinators (`Parsing`) — stays one `using` away, so a file's imports
-# say what it touches:
+# What is NOT here is deliberate, for either of two reasons.
+#
+# A library that reaches outside the program — the filesystem (`FS`), regular
+# expressions (`Regex`), JSON (`JSON`), the parser combinators (`Parsing`) —
+# stays one `using` away, so a file's imports say what it touches.
+#
+# So does a library most files simply do not need, however pure it is:
+# bit twiddling (`Bits`), sets (`Set`), hashing (`Digest`), command lines
+# (`OptionParser`), the sandboxed evaluator (`Evaluator`). The prelude is a
+# global scope, and every name in it is a name every program has to route
+# around — so the bar is "nearly every file wants this", not "this is useful".
 #
 #   using FS
 #
@@ -20,14 +27,12 @@
 # prelude.
 
 using Algebra
-using Bits
+using Binary
 using Blankable
 using Console
-using Digest
 using Enumerable
 using Env
 using Errorable
-using Evaluator
 using FileHandle
 using HTTP
 using IO
@@ -37,10 +42,8 @@ using Map
 using Math
 using Number
 using Optional
-using OptionParser
 using Process
 using Range
-using Set
 using Stream
 using String
 using System

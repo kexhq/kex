@@ -1,0 +1,10 @@
+type TextReader
+
+make TextReader, implement: Readable do
+  let get = Ok(None)
+  let getLine = Ok(None)
+  let readLine = Ok(None)
+  let read = Ok("")
+  let eof? = true
+  let atEnd? = true
+end

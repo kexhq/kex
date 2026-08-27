@@ -1,0 +1,4 @@
+Byte invariant
+  ✓ accepts boundaries, widens, and narrows dynamically
+
+1 passed, 0 failed

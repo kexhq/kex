@@ -1,0 +1,4 @@
+FS.Directory.temporary
+  ✓ names a usable, separator-free directory
+
+1 passed, 0 failed

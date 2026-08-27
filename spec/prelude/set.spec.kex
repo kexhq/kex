@@ -1,3 +1,5 @@
+using Set
+
 describe("Set — construction") do
   it("from discards duplicates") do
     assert(Set.from([3, 1, 2, 3, 1]).count == 3)

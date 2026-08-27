@@ -164,6 +164,10 @@ auto Value::string(std::string v) -> ValuePtr {
     return std::make_shared<Value>(Value{StringValue{std::move(v)}});
 }
 
+auto Value::binary(std::vector<uint8_t> v) -> ValuePtr {
+    return std::make_shared<Value>(Value{BinaryValue{std::move(v)}});
+}
+
 auto Value::character(char32_t v) -> ValuePtr {
     return std::make_shared<Value>(Value{CharValue{v}});
 }
@@ -260,6 +264,8 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
         else if constexpr (std::is_same_v<T, StringValue>) return v.value;
+        else if constexpr (std::is_same_v<T, BinaryValue>)
+            return "#Binary<" + std::to_string(v.bytes.size()) + " bytes>";
         else if constexpr (std::is_same_v<T, CharValue>) return utf8::encode(v.value);
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
         else if constexpr (std::is_same_v<T, AtomValue>) return ":" + v.name;
@@ -452,6 +458,7 @@ auto Value::typeName() const -> std::string {
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
         else if constexpr (std::is_same_v<T, StringValue>) return "String";
+        else if constexpr (std::is_same_v<T, BinaryValue>) return "Binary";
         else if constexpr (std::is_same_v<T, CharValue>) return "Char";
         else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
         else if constexpr (std::is_same_v<T, AtomValue>) return "Atom";
@@ -583,6 +590,9 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
             }
             return true;
         }
+        else if constexpr (std::is_same_v<AT, BinaryValue>) {
+            return av.bytes == bv->bytes;
+        }
         else if constexpr (std::is_same_v<AT, RangeValue>) {
             return av.start == bv->start && av.end == bv->end;
         }
@@ -649,6 +659,9 @@ auto Value::inspect() const -> std::string {
                 return std::string(c(yellow)) + formatFloat(node.value) + c(reset);
             else if constexpr (std::is_same_v<T, StringValue>)
                 return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
+            else if constexpr (std::is_same_v<T, BinaryValue>)
+                return std::string(c(gray)) + "#Binary<" +
+                       std::to_string(node.bytes.size()) + " bytes>" + c(reset);
             else if constexpr (std::is_same_v<T, CharValue>)
                 return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
             else if constexpr (std::is_same_v<T, BoolValue>)
@@ -763,6 +776,7 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
         else if constexpr (std::is_same_v<T, CharValue>) return "Char";
         else if constexpr (std::is_same_v<T, StringValue>) return "String";
+        else if constexpr (std::is_same_v<T, BinaryValue>) return "Binary";
         else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
         else return "";
@@ -783,6 +797,7 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
     return std::visit([&name](const auto& d) -> bool {
         using T = std::decay_t<decltype(d)>;
         if constexpr (std::is_same_v<T, StringValue>) return name == "String";
+        else if constexpr (std::is_same_v<T, BinaryValue>) return name == "Binary";
         else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>)
             return name == "Int" || name == "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return name == "Float";

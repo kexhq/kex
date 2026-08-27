@@ -1,0 +1,2 @@
+spec/error_byte_unchecked_narrow.kex:3:24: error: Unchecked narrowing to Byte is not allowed; use `.to(Byte)`
+Aborted: 1 type error — fix before running (use --no-check to skip).

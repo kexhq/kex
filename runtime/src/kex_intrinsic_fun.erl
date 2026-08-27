@@ -15,9 +15,18 @@
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
 %% binary, so it routes back through the atom-keyed clauses below.
 convertTo(V, {'Type', Name, _Args, _Pure}) -> convertTo(V, binary_to_atom(Name, utf8));
+convertTo({'Binary', V}, 'String') ->
+    case unicode:characters_to_binary(V, utf8, utf8) of
+        Valid when is_binary(Valid) -> {'Just', Valid};
+        _ -> 'None'
+    end;
 convertTo(V, 'String') -> kex_io:to_string_optional(V);
 convertTo(V, 'Integer') -> kex_intrinsic_number:to_integer(V);
 convertTo(V, 'Float') -> kex_intrinsic_number:to_float(V);
+convertTo(V, 'Byte') when is_integer(V), V >= 0, V =< 255 -> {'Just', V};
+convertTo(_, 'Byte') -> 'None';
+convertTo(V, 'Binary') when is_binary(V) -> {'Just', {'Binary', V}};
+convertTo({'Binary', V}, 'Binary') -> {'Just', {'Binary', V}};
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
 convertTo(_, _) -> 'None'.
 

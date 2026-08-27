@@ -1,5 +1,7 @@
 # kex: no-check
 
+using Evaluator
+
 describe("Evaluator.run") do
   it("evaluates a simple program") do
     match Evaluator.run("main do\n1 + 2\nend") do

@@ -529,7 +529,7 @@ int main() {
             assertTrue(out.find("error:") != std::string::npos, out);
         });
 
-        it("renders filesystem Optional values with Just and None", []() {
+        it("renders filesystem read Results and EOF Optionals", []() {
             auto out = runRepl(
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
@@ -538,10 +538,11 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Option<String>`.
-            assertTrue(out.find("Just(\"contents\") : String?") !=
+            assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
                            std::string::npos,
                        out);
-            assertTrue(out.find("None : String?") != std::string::npos, out);
+            assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
+            assertTrue(out.find("Ok(None) : Result<String?, ReadError>") != std::string::npos, out);
         });
 
         it("acknowledges native definitions", []() {
@@ -709,7 +710,7 @@ int main() {
             assertTrue(out.find(":MockFileHandle") == std::string::npos, out);
         });
 
-        it("renders filesystem Optional values with Just and None", []() {
+        it("renders filesystem read Results and EOF Optionals", []() {
             auto out = runBeamRepl(
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
@@ -718,10 +719,11 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Option<String>`.
-            assertTrue(out.find("Just(\"contents\") : String?") !=
+            assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
                            std::string::npos,
                        out);
-            assertTrue(out.find("None : String?") != std::string::npos, out);
+            assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
+            assertTrue(out.find("Ok(None) : Result<String?, ReadError>") != std::string::npos, out);
         });
 
         it("does not execute readable methods on a write-only handle", []() {

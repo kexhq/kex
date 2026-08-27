@@ -4040,6 +4040,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerMockBuiltins();
     registerListBuiltins();
     registerStringBuiltins();
+    registerBinaryBuiltins();
     registerNumberBuiltins();
     registerRegexBuiltins();
     registerStreamBuiltins();
@@ -4119,6 +4120,12 @@ auto Evaluator::registerBuiltins() -> void {
                 }
                 return Value::none();
             }
+            if (targetName == "Byte") {
+                auto integer = asInteger(val);
+                if (integer && *integer >= 0 && *integer <= 255)
+                    return Value::just(integerResult(*integer));
+                return Value::none();
+            }
             if (targetName == "Float") {
                 if (auto* f = std::get_if<FloatValue>(&val->data))
                     return Value::just(val);
@@ -4136,8 +4143,43 @@ auto Evaluator::registerBuiltins() -> void {
                 }
                 return Value::none();
             }
-            if (targetName == "String")
+            if (targetName == "String") {
+                if (auto* binary = std::get_if<BinaryValue>(&val->data)) {
+                    std::string text(binary->bytes.begin(), binary->bytes.end());
+                    for (std::size_t i = 0; i < text.size();) {
+                        const auto lead = static_cast<uint8_t>(text[i]);
+                        const size_t width = lead < 0x80 ? 1
+                            : lead >= 0xc2 && lead <= 0xdf ? 2
+                            : lead >= 0xe0 && lead <= 0xef ? 3
+                            : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+                        if (!width || i + width > text.size()) return Value::none();
+                        for (size_t j = 1; j < width; ++j)
+                            if ((static_cast<uint8_t>(text[i + j]) & 0xc0) != 0x80)
+                                return Value::none();
+                        if (width == 3) {
+                            const auto next = static_cast<uint8_t>(text[i + 1]);
+                            if ((lead == 0xe0 && next < 0xa0) ||
+                                (lead == 0xed && next >= 0xa0)) return Value::none();
+                        }
+                        if (width == 4) {
+                            const auto next = static_cast<uint8_t>(text[i + 1]);
+                            if ((lead == 0xf0 && next < 0x90) ||
+                                (lead == 0xf4 && next >= 0x90)) return Value::none();
+                        }
+                        i += width;
+                    }
+                    return Value::just(Value::string(std::move(text)));
+                }
                 return Value::just(Value::string(val->toString()));
+            }
+            if (targetName == "Binary") {
+                if (auto* text = std::get_if<StringValue>(&val->data))
+                    return Value::just(Value::binary(
+                        std::vector<uint8_t>(text->value.begin(), text->value.end())));
+                if (std::holds_alternative<BinaryValue>(val->data))
+                    return Value::just(val);
+                return Value::none();
+            }
             if (targetName == "List") {
                 if (auto* range = std::get_if<RangeValue>(&val->data)) {
                     std::vector<ValuePtr> elems;

@@ -1,3 +1,12 @@
+# Why a read failed.
+#
+# +ReadFailed+ means the source refused the read. +InvalidUtf8+ means bytes
+# were read but are not valid UTF-8, and carries the byte offset of the first
+# malformed sequence, relative to that one operation. A failed read consumes
+# the bytes it attempted to read and never substitutes U+FFFD — use
+# +readBytes+ to recover the payload verbatim.
+type ReadError = ReadFailed | InvalidUtf8(Integer)
+
 # +Readable+ — a source that yields text.
 #
 # Named so that anything can be one, not just a file: the vocabulary
@@ -15,23 +24,39 @@
 trait Readable do
   # Reads the next line, without its newline.
   #
-  # @return [String?] the next line, or +None+ at end of input
-  getLine :> String?
+  # @return [Result<String?, ReadError>] the next line, +Ok(None)+ at end of
+  #   input, or the failure
+  getLine :> Result<String?, ReadError>
 
   # Reads a single character, as a one-character +String+.
   #
-  # @return [String?] the next character, or +None+ at end of input
-  get :> String?
+  # Reads one complete Unicode scalar, not one byte.
+  #
+  # @return [Result<String?, ReadError>] the next character, +Ok(None)+ at end
+  #   of input, or the failure
+  get :> Result<String?, ReadError>
 
   # Reads the next line, without its newline. The same as +getLine+.
   #
-  # @return [String?] the next line, or +None+ at end of input
-  readLine :> String?
+  # @return [Result<String?, ReadError>] the next line, +Ok(None)+ at end of
+  #   input, or the failure
+  readLine :> Result<String?, ReadError>
 
   # Reads everything remaining, as one +String+.
   #
-  # @return [String?] the remaining contents, or +None+
-  read :> String?
+  # Draining an exhausted source answers +Ok("")+.
+  #
+  # @return [Result<String, ReadError>] the remaining contents, or the failure
+  read :> Result<String, ReadError>
+
+  # Reads everything remaining as raw bytes, without decoding it as text.
+  #
+  # The byte counterpart of +read+: it never validates UTF-8, so it recovers
+  # the payload of a source that is not text — or one +read+ has just rejected.
+  # Draining an exhausted source answers +Ok(Binary.fromBytes([]))+.
+  #
+  # @return [Result<Binary, ReadError>] the remaining bytes, or the failure
+  readBytes :> Result<Binary, ReadError>
 
   # Returns +true+ when the source has reached its end.
   #
@@ -93,6 +118,16 @@ trait Writable do
   # @param content [Showable] the value to write
   # @return [Void]
   write :> Showable -> Void
+
+  # Writes +content+ as raw bytes, with no trailing newline.
+  #
+  # The byte counterpart of +write+: the payload goes to the sink exactly as
+  # given. It never renders the value, so a +Binary+ reaches the sink as its
+  # bytes rather than as the +#Binary<N bytes>+ that +Showable+ would print.
+  #
+  # @param content [Binary] the bytes to write
+  # @return [Void]
+  writeBytes :> Binary -> Void
 end
 
 # An open file, obtained from +FS.File.open+.
@@ -144,7 +179,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #       None => ()
   #     end
   #   end
-  getLine :> String?
+  getLine :> Result<String?, ReadError>
   foul getLine = Kex.Intrinsic.FileHandle.getLine(this)
 
   # Reads a single character from the handle, as a one-character +String+.
@@ -155,7 +190,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #
   # @example
   #   let firstChar = handle.get.or("")
-  get :> String?
+  get :> Result<String?, ReadError>
   foul get = Kex.Intrinsic.FileHandle.get(this)
 
   # Reads the next line from the handle, without its newline. The same as
@@ -168,7 +203,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #
   # @example Reading the first three lines
   #   let head = (1..3).items.map { |_| handle.readLine.or("") }
-  readLine :> String?
+  readLine :> Result<String?, ReadError>
   foul readLine = Kex.Intrinsic.FileHandle.readLine(this)
 
   # Reads everything remaining in the file and returns it as one +String+.
@@ -184,8 +219,11 @@ make FileHandle<CanRead, W>, implement: Readable do
   # @example Skipping a header line, then taking the rest
   #   handle.readLine
   #   let body = handle.read.or("")
-  read :> String?
+  read :> Result<String, ReadError>
   foul read = Kex.Intrinsic.FileHandle.read(this)
+
+  readBytes :> Result<Binary, ReadError>
+  foul readBytes = Kex.Intrinsic.FileHandle.readBytes(this)
 
   # Returns +true+ when the handle has reached the end of the file.
   #
@@ -232,6 +270,8 @@ make FileHandle<CanRead, W>, implement: Readable do
 end
 
 make FileHandle<R, CanWrite>, implement: Writable do
+  writeBytes :> Binary -> Void
+  foul writeBytes(content) = Kex.Intrinsic.FileHandle.writeBytes(this, content)
   # Writes +content+ followed by a newline.
   #
   # @param content [Showable] the value to write

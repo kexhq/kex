@@ -1,0 +1,8 @@
+binary I/O
+  ✓ round trips invalid text losslessly through whole-file helpers
+  ✓ reads and writes bytes through handles
+  ✓ uses raw standard-stream writes without showing the value
+  ✓ round trips a real binary file
+  ✓ reads one complete Unicode scalar and reports malformed UTF-8
+
+5 passed, 0 failed

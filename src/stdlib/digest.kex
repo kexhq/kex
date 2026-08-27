@@ -31,6 +31,9 @@ module Digest do
   sha256 : String -> String
   let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
 
+  sha256 : Binary -> Binary
+  let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
+
   # Returns the SHA-256 digest of the file at +path+, or +None+ when the file
   # cannot be read.
   #

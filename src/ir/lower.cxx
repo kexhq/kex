@@ -7271,8 +7271,33 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (*module) preModule(**module);
         }
     }
+    // A method name the PRELUDE also answers for is a collision too, even
+    // when this module defines exactly one owner. Without this, a single
+    // local owner bound the bare name directly and captured every receiver:
+    // `make Box do let showValue` made `"${a}-${b}"` on two Strings emit
+    // `apply 'showValue'/1`, so BEAM printed `box-box` where the walker
+    // printed `a-b` — silently wrong output, not a crash. `using Binary`
+    // (or `using List`) reached the same local bind through an IMPORTED
+    // make block and died `function_clause` instead.
+    //
+    // Treating the name as colliding routes it through the receiver
+    // dispatcher built below, which already falls back to `kex_prelude:name`
+    // for any receiver that is not one of the local owners.
+    auto preludeAlsoOwns = [&](const std::string& name) {
+        if (!L.externalModules || mod.name == "kex_prelude") return false;
+        auto providers = L.externalModules->receiverFunctions.find(name);
+        if (providers == L.externalModules->receiverFunctions.end())
+            return false;
+        return std::any_of(providers->second.begin(), providers->second.end(),
+                           [](const ExternalModules::ReceiverFunction& fn) {
+                               return fn.moduleAtom == "kex_prelude";
+                           });
+    };
+    if (getenv("KEX_DBG")) { for (const auto& kv : L.externalModules->exportToBeamFn) if (kv.first.find("showValue") != std::string::npos || kv.first.find("empty?") != std::string::npos) fprintf(stderr, "[dbg] key=%s -> %s\n", kv.first.c_str(), kv.second.c_str()); }
     for (const auto& [name, owners] : L.methodOwners)
-        if (owners.size() > 1 || L.fieldAccessors.count(name))
+        if (owners.size() > 1 || L.fieldAccessors.count(name) ||
+            (owners.size() == 1 && preludeAlsoOwns(name) &&
+             !L.knownTypes.count(owners.front())))
             L.collidingMethods.insert(name);  // order-free: a set membership
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
@@ -7776,7 +7801,46 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // be read: `tagged.name` returned the METHOD's answer on BEAM
             // while the walker read the field. Those go through the guarded
             // dispatcher below, which appends the field clauses.
-            bool allAdt = !owners.empty() && !L.fieldAccessors.count(name);
+            // A name the PRELUDE also answers for keeps the guarded
+            // dispatcher: merging ADT clauses drops the receiver guards, and
+            // a make-block method's implicit `this` is an unguarded catch-all,
+            // so the merged function swallows every receiver — Strings
+            // included — with no way left to reach `kex_prelude:name`.
+            const bool preludeOwnsName = [&] {
+                if (!L.externalModules || mod.name == "kex_prelude") return false;
+                auto providers = L.externalModules->receiverFunctions.find(name);
+                if (providers == L.externalModules->receiverFunctions.end())
+                    return false;
+                return std::any_of(
+                    providers->second.begin(), providers->second.end(),
+                    [](const ExternalModules::ReceiverFunction& fn) {
+                        return fn.moduleAtom == "kex_prelude";
+                    });
+            }();
+            // Merging is only wrong when one of the clauses is an UNGUARDED
+            // CATCH-ALL. A method written with an implicit `this` and no
+            // pattern (`make Box do let showValue = "box"`) lowers to
+            // `fun (This) -> ...`, which matches a String just as happily as a
+            // Box — so the merged function swallows every receiver and the
+            // prelude never sees it. Clauses that are distinct variant
+            // patterns have no such problem, and merging them is what lets
+            // ADT dispatch happen natively.
+            bool hasCatchAllClause = false;
+            for (const auto& fn : mod.functions) {
+                if (fn.arity != arity ||
+                    fn.name.rfind(prefix, 0) != 0) continue;
+                for (const auto& clause : fn.clauses) {
+                    if (clause.guard) continue;
+                    if (std::all_of(clause.params.begin(), clause.params.end(),
+                                    [](const PatternPtr& pat) {
+                                        return pat->kind == PatKind::Var ||
+                                               pat->kind == PatKind::Wild;
+                                    }))
+                        hasCatchAllClause = true;
+                }
+            }
+            bool allAdt = !owners.empty() && !L.fieldAccessors.count(name) &&
+                          !(preludeOwnsName && hasCatchAllClause);
             for (const auto& o : owners) {
                 if (!L.typeVariantTags.count(o)) { allAdt = false; break; }
             }
@@ -7897,6 +7961,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     }
                     if (genericFallback.empty() && name == "to" &&
                         mod.name != "kex_prelude") {
+                        genericFallbackModule = "kex_prelude";
+                        genericFallback = name;
+                    }
+                    // `to` was special-cased by name because the lookup above
+                    // only finds MODULE exports: a receiver method like
+                    // `showValue` or `empty?` is not in `exportToBeamFn`, so
+                    // every one of them silently lost its fallback. Give them
+                    // the same escape, keyed off the receiver-function table
+                    // that does know about them.
+                    if (genericFallback.empty() && preludeOwnsName) {
                         genericFallbackModule = "kex_prelude";
                         genericFallback = name;
                     }

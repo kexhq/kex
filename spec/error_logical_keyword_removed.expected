@@ -1,3 +1,2 @@
-spec/error_logical_keyword_removed.kex:6:16: error: Undefined name: `and` — did you mean `x`?
 spec/error_logical_keyword_removed.kex:6:16: error: Undefined identifier: and
-Aborted: 2 type errors — fix before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

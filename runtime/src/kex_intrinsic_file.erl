@@ -1,13 +1,15 @@
 %% Kex.Intrinsic.File — BEAM primitive backend for File.* namespace functions.
 -module(kex_intrinsic_file).
--export([open/2, read/1, write/2, append/2,
+-export([open/2, read/1, readBytes/1, write/2, writeBytes/2, append/2,
          'exists?'/1, 'file?'/1, 'directory?'/1,
          delete/1, copy/2, rename/2, lines/1, feed/1, size/1,
          basename/1, dirname/1, extension/1, join/2, absolute/1]).
 
 open(Path, Mode) -> kex_file:open(Path, Mode).
 read(Path) -> kex_file:read(Path).
+readBytes(Path) -> kex_file:read_bytes(Path).
 write(Path, Content) -> kex_file:write(Path, Content).
+writeBytes(Path, Content) -> kex_file:write_bytes(Path, Content).
 append(Path, Content) -> kex_file:append(Path, Content).
 'exists?'(Path) -> kex_file:exists(Path).
 'file?'(Path) -> kex_file:'file?'(Path).

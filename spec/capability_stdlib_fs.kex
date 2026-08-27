@@ -20,9 +20,11 @@ end
 # A stand-in must provide everything the capability declares — the capability's
 # members ARE the interface, so a fake cannot quietly omit one.
 make FakeFiles, implement: FS.File do
-  foul read(path) = Just(@canned)
+  foul read(path) = Ok(@canned)
+  foul readBytes(path) = Ok(@canned.to(Binary).try)
   foul open(path, mode) = Error(OpenFailed(path))
   foul write(path, content) = false
+  foul writeBytes(path, content) = false
   foul append(path, content) = false
   foul exists?(path) = true
   foul file?(path) = true

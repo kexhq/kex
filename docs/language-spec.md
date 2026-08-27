@@ -415,6 +415,8 @@ let config = { "host": "localhost", "port": 80 }  # string keys
 
 ### Sets
 
+Not part of the prelude, include via `using Set` first.
+
 Collections of distinct elements, in two flavours. Both are built from a list
 and compare their elements structurally, the way map keys do.
 
@@ -1907,8 +1909,10 @@ modules. Paths use the `FilePath` type.
 
 | Function | Description |
 |---|---|
-| `FS.File.read(path)` | `String?` — whole file or `None` |
+| `FS.File.read(path)` | `Result<String, FileError>` — whole file, decoded as UTF-8 |
+| `FS.File.readBytes(path)` | `Result<Binary, FileError>` — whole file, undecoded |
 | `FS.File.write(path, content)` | `Bool` — overwrite |
+| `FS.File.writeBytes(path, binary)` | `Bool` — overwrite with raw bytes |
 | `FS.File.append(path, content)` | `Bool` — append |
 | `FS.File.readLines(path)` | `[String]?` — lines |
 | `FS.File.feed(path)` | `Stream<String>?` — lazy lines |
@@ -2041,6 +2045,8 @@ The returned `Program`, declaration records, `TypeRef`, `PatternRef`, and
 `src/stdlib/kex/ast.kex` for the public types.
 
 ### 23.19 Evaluator (Sandboxed)
+
+Not part of the prelude — `using Evaluator` first.
 
 Run Kex source in an isolated evaluator. The options record has fields:
 

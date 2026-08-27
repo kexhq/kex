@@ -41,7 +41,7 @@ end
 
 describe("before and after hooks") do
   before do
-    Assert.none(FS.File.read("body-artifact"))
+    Assert.error(FS.File.read("body-artifact"))
     Mock.FS.File("outer-hook", "outer")
   end
   after(:each) { Mock.FS.clear() }
@@ -58,7 +58,7 @@ describe("before and after hooks") do
     end
 
     it("runs teardown before the next test") do
-      Assert.none(FS.File.read("body-artifact"))
+      Assert.error(FS.File.read("body-artifact"))
     end
   end
 end
@@ -82,7 +82,7 @@ describe("all hooks") do
 end
 
 describe("teardown after failure") do
-  before { Assert.none(FS.File.read("all-hook")) }
+  before { Assert.error(FS.File.read("all-hook")) }
   after { Mock.FS.clear() }
 
   it("fails intentionally") do
@@ -91,7 +91,7 @@ describe("teardown after failure") do
   end
 
   it("still ran teardown") do
-    Assert.none(FS.File.read("failed-test-artifact"))
+    Assert.error(FS.File.read("failed-test-artifact"))
   end
 end
 

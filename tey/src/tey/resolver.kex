@@ -171,8 +171,8 @@ private do
   foul dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
     let path = "${Tey.Cache.packagePath(entry)}/package.kex"
     match FS.File.read(path) do
-      None => return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
-      Just(text) => match Tey.Manifest.read(text) do
+      Error(_) => return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
+      Ok(text) => match Tey.Manifest.read(text) do
         Error(error) => return Error("`${entry.name}` has an unreadable package.kex: ${error}")
         Ok(manifest) => return Ok(manifest.manifestDependencies)
       end

@@ -1,4 +1,7 @@
-# Declarative command-line parsing through the shared prelude OptionParser.
+# Declarative command-line parsing through the OptionParser module, which is
+# not part of the prelude — hence the `using` below.
+
+using OptionParser
 
 let OPTIONS = OptionParser.define("myapp", "A sample CLI application")
   .string("name", Just('n'), "Your name", None, true)

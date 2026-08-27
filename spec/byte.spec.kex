@@ -1,0 +1,14 @@
+describe("Byte invariant") do
+  it("accepts boundaries, widens, and narrows dynamically") do
+    let low: Byte = 0
+    let high: Byte = 255
+    let values: [Byte] = [low, high]
+    let widened: Integer = high
+    assert(values == [0, 255])
+    assert(widened == 255)
+    assert(0.to(Byte) == Just(0))
+    assert(255.to(Byte) == Just(255))
+    assert((-1).to(Byte) == None)
+    assert(256.to(Byte) == None)
+  end
+end

@@ -6,15 +6,16 @@
 %% read-side ops before touching the real filesystem — same layering as the
 %% walker's m_mockFiles/m_mockDirs.
 -module(kex_file).
--export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1, feed/1,
+-export([exists/1, lines/1, read/1, read_bytes/1, write/2, write_bytes/2, append/2, size/1, delete/1, feed/1,
          open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
-         handle_read/1, handle_write/2,
+         handle_read/1, handle_read_bytes/1, handle_write/2, handle_write_bytes/2,
          'handle_atEnd?'/1, handle_close/1,
-         dir_current/0, dir_home/0, dir_create/1, dir_delete/1, dir_delete_all/1,
+         dir_current/0, dir_home/0, dir_temporary/0, dir_create/1,
+         dir_delete/1, dir_delete_all/1,
          dir_list/1, dir_files/1, dir_directories/1, 'dir_exists?'/1, 'dir_file?'/1,
          mock_file/2, mock_dir/1, mock_clear/0, mock_files/1, mock_on_read/1]).
 
@@ -104,15 +105,36 @@ split_lines(Bin) ->
         _           -> Lines
     end.
 
-%% File.read(path) → Just(String) | None
+%% File.read(path) → Result<String, FileError>
 read(Path) ->
     case mock_content(Path) of
         undefined ->
             case file:read_file(pth(Path)) of
-                {ok, Bin} -> {'Just', Bin};
-                _         -> 'None'
+                {ok, Bin} -> file_text_result(Path, Bin);
+                _         -> {'Error', {'ReadFailed', pth(Path)}}
             end;
-        C -> {'Just', C}
+        C -> file_text_result(Path, C)
+    end.
+
+file_text_result(Path, Bin) ->
+    case unicode:characters_to_binary(Bin, utf8, utf8) of
+        Valid when is_binary(Valid) -> {'Ok', Valid};
+        {_, _, Rest} -> {'Error', {'InvalidUtf8', pth(Path), byte_size(Bin) - byte_size(Rest)}}
+    end.
+
+read_bytes(Path) ->
+    case mock_content(Path) of
+        undefined -> case file:read_file(pth(Path)) of
+            {ok, Bin} -> {'Ok', {'Binary', Bin}};
+            _ -> {'Error', {'ReadFailed', pth(Path)}}
+        end;
+        Bin -> {'Ok', {'Binary', Bin}}
+    end.
+
+write_bytes(Path, {'Binary', Bin}) ->
+    case mock_content(Path) of
+        undefined -> file:write_file(pth(Path), Bin) =:= ok;
+        _ -> put({kex_mock_file, pth(Path)}, Bin), true
     end.
 
 %% File.write(path, content) → true | false
@@ -235,26 +257,43 @@ mode_flags(_)           -> [read, binary].
 %% file clauses below and hand an atom to file:write/2.
 
 %% getLine → String? (newline stripped, None at EOF).
-handle_getLine({'FileHandle', stdin, _}) -> kex_io:read_line();
-handle_getLine({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
+handle_getLine({'FileHandle', stdin, _}) -> optional_text_result(kex_io:read_line());
+handle_getLine({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> {'Ok', 'None'};
 handle_getLine({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read_line(Dev) of
-        {ok, Line} -> {'Just', string:trim(Line, trailing, "\n")};
-        _          -> 'None'
+        {ok, Line} -> optional_text_result({'Just', string:trim(Line, trailing, "\n")});
+        eof        -> {'Ok', 'None'};
+        _          -> {'Error', 'ReadFailed'}
     end;
-handle_getLine({'FileHandle', mock, Path}) -> mock_read_line(Path);
-handle_getLine(_) -> 'None'.
+handle_getLine({'FileHandle', mock, Path}) -> optional_text_result(mock_read_line(Path));
+handle_getLine(_) -> {'Error', 'ReadFailed'}.
 
 %% get → String? (single character, 'None' at EOF).
-handle_get({'FileHandle', stdin, _}) -> kex_io:read_char();
-handle_get({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
-handle_get({'FileHandle', Dev, _}) when Dev =/= mock ->
+handle_get({'FileHandle', stdin, _}) -> optional_text_result(kex_io:read_char());
+handle_get({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> {'Ok', 'None'};
+handle_get({'FileHandle', Dev, _}) when Dev =/= mock -> read_scalar(Dev);
+handle_get({'FileHandle', mock, Path}) -> optional_text_result(mock_read_char(Path));
+handle_get(_) -> {'Error', 'ReadFailed'}.
+
+optional_text_result('None') -> {'Ok', 'None'};
+optional_text_result({'Just', Bin}) ->
+    case text_result(Bin) of {'Ok', Text} -> {'Ok', {'Just', Text}}; Error -> Error end.
+text_result(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8, utf8) of
+        Valid when is_binary(Valid) -> {'Ok', Valid};
+        {_, _, Rest} -> {'Error', {'InvalidUtf8', byte_size(Bin) - byte_size(Rest)}}
+    end.
+read_scalar(Dev) ->
     case file:read(Dev, 1) of
-        {ok, <<C>>} -> {'Just', <<C>>};
-        _           -> 'None'
-    end;
-handle_get({'FileHandle', mock, Path}) -> mock_read_char(Path);
-handle_get(_) -> 'None'.
+        eof -> {'Ok', 'None'};
+        {error, _} -> {'Error', 'ReadFailed'};
+        {ok, <<Lead>>} ->
+            Width = if Lead < 16#80 -> 1; Lead >= 16#c2, Lead =< 16#df -> 2;
+                       Lead >= 16#e0, Lead =< 16#ef -> 3; Lead >= 16#f0, Lead =< 16#f4 -> 4;
+                       true -> 1 end,
+            Tail = case Width of 1 -> <<>>; _ -> case file:read(Dev, Width - 1) of {ok, B} -> B; _ -> <<>> end end,
+            optional_text_result({'Just', <<Lead, Tail/binary>>})
+    end.
 
 %% printLine(content) → Void (write + newline). The Bool these three used to
 %% answer was never an error channel — nothing checked it — so kexhq/kex#139
@@ -286,12 +325,17 @@ handle_print(_, _) -> 'Kex.Unit'.
 
 %% read → String? (remaining content).
 %% `read` is "the rest of it", so on stdin it drains to end of input.
-handle_read({'FileHandle', stdin, _}) -> {'Just', drain_stdin(<<>>)};
-handle_read({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> 'None';
-handle_read({'FileHandle', Dev, _}) when Dev =/= mock ->
-    {'Just', read_rest(Dev, <<>>)};
-handle_read({'FileHandle', mock, Path}) -> {'Just', mock_read_rest(Path)};
-handle_read(_) -> 'None'.
+handle_read({'FileHandle', stdin, _}) -> text_result(drain_stdin(<<>>));
+handle_read({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> {'Error', 'ReadFailed'};
+handle_read({'FileHandle', Dev, _}) when Dev =/= mock -> text_result(read_rest(Dev, <<>>));
+handle_read({'FileHandle', mock, Path}) -> text_result(mock_read_rest(Path));
+handle_read(_) -> {'Error', 'ReadFailed'}.
+
+handle_read_bytes({'FileHandle', stdin, _}) -> {'Ok', {'Binary', drain_stdin(<<>>)}};
+handle_read_bytes({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> {'Error', 'ReadFailed'};
+handle_read_bytes({'FileHandle', Dev, _}) when Dev =/= mock -> {'Ok', {'Binary', read_rest(Dev, <<>>)}};
+handle_read_bytes({'FileHandle', mock, Path}) -> {'Ok', {'Binary', mock_read_rest(Path)}};
+handle_read_bytes(_) -> {'Error', 'ReadFailed'}.
 
 %% Reads through kex_io:read_line/0 so a Mock.IO input queue drains too.
 drain_stdin(Acc) ->
@@ -318,6 +362,15 @@ handle_write({'FileHandle', mock, Path}, Content) ->
     mock_append(Path, kex_io:to_string_bin(Content)),
     'Kex.Unit';
 handle_write(_, _) -> 'Kex.Unit'.
+
+handle_write_bytes({'FileHandle', stdout, _}, {'Binary', Bin}) -> kex_io:print_binary(Bin);
+handle_write_bytes({'FileHandle', stderr, _}, {'Binary', Bin}) -> kex_io:print_error_binary(Bin);
+handle_write_bytes({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
+handle_write_bytes({'FileHandle', Dev, _}, {'Binary', Bin}) when Dev =/= mock ->
+    file:write(Dev, Bin), 'Kex.Unit';
+handle_write_bytes({'FileHandle', mock, Path}, {'Binary', Bin}) ->
+    mock_append(Path, Bin), 'Kex.Unit';
+handle_write_bytes(_, _) -> 'Kex.Unit'.
 
 mock_append(Path, Content) ->
     P = pth(Path),
@@ -378,8 +431,13 @@ mock_read_char(Path) ->
     case Pos >= byte_size(Content) of
         true -> 'None';
         false ->
-            set_mock_pos(Path, Pos + 1),
-            {'Just', binary:part(Content, Pos, 1)}
+            Lead = binary:at(Content, Pos),
+            Width = if Lead < 16#80 -> 1; Lead >= 16#c2, Lead =< 16#df -> 2;
+                       Lead >= 16#e0, Lead =< 16#ef -> 3; Lead >= 16#f0, Lead =< 16#f4 -> 4;
+                       true -> 1 end,
+            Count = min(Width, byte_size(Content) - Pos),
+            set_mock_pos(Path, Pos + Count),
+            {'Just', binary:part(Content, Pos, Count)}
     end.
 
 mock_read_rest(Path) ->
@@ -410,6 +468,30 @@ dir_home() ->
     case os:getenv("HOME") of
         false -> 'None';
         Home  -> {'Just', to_bin(Home)}
+    end.
+
+%% Total, so no 'None' branch: the environment's temporary directory when it
+%% names one, and /tmp when it does not. The interpreter side
+%% (Directory::temporary in file.cxx) reads the same variables in the same
+%% order, because the two backends have to agree on the answer.
+dir_temporary() ->
+    to_bin(strip_sep(first_env(["TMPDIR", "TEMP", "TMP"]))).
+
+first_env([]) -> "/tmp";
+first_env([Var | Rest]) ->
+    case os:getenv(Var) of
+        false -> first_env(Rest);
+        ""    -> first_env(Rest);
+        Value -> Value
+    end.
+
+%% Trailing separators are common in TMPDIR (macOS sets one) and would double
+%% up under FS.Path.join. "/" itself keeps its slash.
+strip_sep([C]) when C =:= $/; C =:= $\\ -> [C];
+strip_sep(Path) ->
+    case lists:last(Path) of
+        C when C =:= $/; C =:= $\\ -> strip_sep(lists:droplast(Path));
+        _ -> Path
     end.
 
 'dir_exists?'(P) -> mocked_dir(P) orelse filelib:is_dir(pth(P)).

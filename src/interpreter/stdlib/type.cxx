@@ -36,6 +36,7 @@ auto typeOfValue(const ValuePtr& value) -> ValuePtr {
             return namedType("Integer");
         else if constexpr (std::is_same_v<T, FloatValue>) return namedType("Float");
         else if constexpr (std::is_same_v<T, StringValue>) return namedType("String");
+        else if constexpr (std::is_same_v<T, BinaryValue>) return namedType("Binary");
         else if constexpr (std::is_same_v<T, CharValue>) return namedType("Char");
         else if constexpr (std::is_same_v<T, BoolValue>) return namedType("Bool");
         else if constexpr (std::is_same_v<T, ListValue>)
