@@ -855,6 +855,13 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     for (auto import = m_declarationImports.rbegin();
          import != m_declarationImports.rend(); ++import)
         if (auto found = importedRecord(*import)) return *found;
+    // A record declared in this file under the bare name owns that name. The
+    // last-ditch suffix scan below guesses at a module nobody imported, and a
+    // guess must never outrank a declaration sitting in front of the user:
+    // stdlib records live in m_importedInterfaces whether or not they were
+    // imported, so `record Request` in a plain script resolved to
+    // `Net.HTTP.Request` and reported its fields instead.
+    if (m_recordFields.count(name)) return name;
     if (m_importedInterfaces) {
         std::optional<std::string> unique;
         const auto suffix = "." + name;
@@ -871,6 +878,7 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     }
     return name;
 }
+
 
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     if (!def.variants) return;
@@ -6149,6 +6157,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 for (const auto& function : functions->second)
                     if (importedFunctionVisible(function))
                         importedFunctions.push_back(&function);
+
         } else {
             for (const auto& [_, module] : m_importedInterfaces->modules) {
                 if (!module.automaticImport) continue;

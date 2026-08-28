@@ -343,7 +343,21 @@ run_all_hooks([Hook | Rest], Result) ->
     run_all_hooks(Rest, Next).
 
 capture(Fun) ->
-    try Fun(), ok
+    %% An unrescued `.try` failure inside a block does not unwind — a lambda IS
+    %% a function, so it RETURNS `{'Error', E}` (the same rule HOFs such as
+    %% `map` depend on). A test body is a block, so `assert(f().try == x)` on a
+    %% failing `f()` left the assert unevaluated and the case reported green.
+    %% Every spec assertion whose expression propagated was silently passing.
+    %% Mirrors Evaluator's `it` builtin in src/interpreter/stdlib/test.cxx.
+    try
+        case Fun() of
+            {'Error', Propagated} ->
+                {failed, iolist_to_binary(
+                    [<<".try propagated out of the test body: ">>,
+                     kex_io:to_string_bin(
+                         kex_intrinsic_kex:show(Propagated))])};
+            _ -> ok
+        end
     catch
         error:Reason when is_binary(Reason) -> {failed, Reason};
         error:Reason when is_list(Reason) -> {failed, Reason};

@@ -1,0 +1,145 @@
+module URI
+
+# Strict RFC 3986 URI values, hierarchical URLs, query strings, and HTML form
+# encoding. Parsing preserves caller spelling; normalization is always explicit.
+#
+#   using URI
+#
+#   let base = URL.parse("https://example.test/a/").try
+#   let reference = URI.parse("../items?limit=10").try
+#   base.resolve(reference).try.string
+
+# A parsed RFC 3986 URI reference. Construction is strict; use `parse` rather
+# than building this representation directly. `string` preserves the spelling
+# supplied by the caller, while `normalize` is explicit.
+record URI do
+  source : String
+end
+
+# An absolute hierarchical URI with an authority component.
+record URL do
+  source : String
+end
+
+# A host's display spelling and normalized ASCII/IDNA spelling.
+record Host do
+  display : String
+  ascii : String
+end
+
+# Ordered URI query entries. +None+ distinguishes a bare key from +key=+.
+record Query do
+  entries : [(String, String?)]
+end
+
+# Ordered +application/x-www-form-urlencoded+ entries.
+record Form do
+  entries : [(String, String?)]
+end
+
+# A typed URI parsing, conversion, or resolution failure.
+record URIError do
+  kind : URIErrorKind
+  message : String
+  position : Integer?
+end
+
+# Stable URI failure categories.
+type URIErrorKind = InvalidSyntax | InvalidEscape | InvalidAuthority | InvalidPort | NonASCII | NotAbsolute | NotHierarchical | MissingAuthority | UnsupportedScheme
+
+# Strictly parses an ASCII RFC 3986 URI reference.
+# @return [Result<URI, URIError>] the reference or a precise syntax error
+# @example +URI.parse("../images/logo.svg").try+
+parse : String -> Result<URI, URIError>
+let parse(text) = Kex.Intrinsic.URI.parse(text)
+
+# Converts a Unicode IRI to an ASCII URI using IDNA and UTF-8 percent encoding.
+# @return [Result<URI, URIError>] the converted URI or a conversion error
+# @example +URI.fromIRI("https://münich.example/straße").try+
+fromIRI : String -> Result<URI, URIError>
+let fromIRI(text) = Kex.Intrinsic.URI.fromIRI(text)
+
+module URL do
+  # Parses an absolute hierarchical URL with an authority.
+  # @example +URL.parse("https://example.test/path?q=1").try+
+  parse : String -> Result<URL, URIError>
+  let parse(text) = Kex.Intrinsic.URL.parse(text)
+
+  # Builds and validates a URL from decoded path segments and a query value.
+  build : String -> String -> [String] -> Query -> Result<URL, URIError>
+  let build(scheme, host, path, query) = Kex.Intrinsic.URL.build(scheme, host, path, query)
+end
+
+module Query do
+  # Builds a query while preserving order, duplicates, and bare keys.
+  from : [(String, String?)] -> Query
+  let from(entries) = Query { entries: entries }
+
+  # Parses generic URI query encoding; ++ remains a literal plus.
+  # @example +Query.parse("tag=kex&tag=beam&flag").try+
+  parse : String -> Result<Query, URIError>
+  let parse(text) = Kex.Intrinsic.URI.queryParse(text)
+end
+
+module Form do
+  # Builds a form value while preserving order and duplicates.
+  from : [(String, String)] -> Form
+  let from(entries) = Kex.Intrinsic.URI.formFrom(entries)
+
+  # Parses form encoding where ++ represents a space.
+  # @example +Form.parse("query=hello+world").try+
+  parse : String -> Result<Form, URIError>
+  let parse(text) = Kex.Intrinsic.URI.formParse(text)
+end
+
+make URI, implement: Showable, Inspectable do
+  # @return [String] the caller-supplied URI spelling
+  let string -> String = @source
+  # @return [URI] an explicitly normalized RFC 3986 representation
+  let normalize -> URI = Kex.Intrinsic.URI.normalize(this)
+  # @return [Bool] whether normalized representations are equal
+  let equivalent?(other: URI) -> Bool = this.normalize.string == other.normalize.string
+  # Resolves a URI reference against this absolute base.
+  let resolve(reference: URI) -> Result<URI, URIError> = Kex.Intrinsic.URI.resolve(this, reference)
+  # @return [String?] the normalized scheme when present
+  let scheme -> String? = Kex.Intrinsic.URI.scheme(this)
+  # @return [Host?] the parsed authority host when present
+  let host -> Host? = Kex.Intrinsic.URI.host(this)
+  # @return [Query?] the parsed query when present, including an empty query
+  let query -> Query? = Kex.Intrinsic.URI.query(this)
+  # Renders with any authority password replaced by +***+.
+  let showValue -> String = Kex.Intrinsic.URI.redacted(this)
+  # Structural inspection is also credential-safe.
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.URI.redacted(this)
+end
+
+make URL, implement: Showable, Inspectable do
+  # @return [String] the caller-supplied URL spelling
+  let string -> String = @source
+  # @return [URL] an explicitly normalized URL
+  let normalize -> URL = Kex.Intrinsic.URL.normalize(this)
+  # @return [Bool] whether normalized representations are equal
+  let equivalent?(other: URL) -> Bool = this.normalize.string == other.normalize.string
+  # Resolves a URI reference while preserving the URL invariant.
+  let resolve(reference: URI) -> Result<URL, URIError> = Kex.Intrinsic.URL.resolve(this, reference)
+  # @return [String] the normalized scheme
+  let scheme -> String = Kex.Intrinsic.URL.scheme(this)
+  # @return [Host] the authority host
+  let host -> Host = Kex.Intrinsic.URL.host(this)
+  # @return [Query?] the parsed query when present
+  let query -> Query? = Kex.Intrinsic.URL.query(this)
+  # Renders with any authority password replaced by +***+.
+  let showValue -> String = Kex.Intrinsic.URI.redacted(this)
+  # Structural inspection is also credential-safe.
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.URI.redacted(this)
+end
+
+make Query do
+  # Encodes according to generic RFC 3986 query rules.
+  let encode -> String = Kex.Intrinsic.URI.queryEncode(this)
+end
+
+make Form do
+  # Encodes according to HTML form rules, including space as ++.
+  let encode -> String = Kex.Intrinsic.URI.formEncode(this)
+end

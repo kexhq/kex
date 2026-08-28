@@ -1,0 +1,72 @@
+using URI
+using Net.IP, only: [Address, Network]
+using Net.DNS, only: [Name]
+using Net.HTTP, only: [Headers, Status, add, set, get, getAll, success?]
+
+describe("network value APIs") do
+  it("resolves and normalizes URLs explicitly") do
+    let base = URL.parse("https://Example.COM:443/api/v1/").try
+    let relative = URI.parse("../people/Ada%20Lovelace?tag=kex&tag=net&flag").try
+    let resolved = base.resolve(relative).try
+    assert(resolved.normalize.string == "https://example.com/api/people/Ada%20Lovelace?tag=kex&tag=net&flag")
+    assert(resolved.query.try.entries.length == 3)
+    let credential = URL.parse("https://ada:secret@example.com/private").try
+    assert(credential.string.contains?("secret"), "the explicit raw accessor preserves source spelling")
+    assert(!credential.showValue.contains?("secret"), "ordinary rendering must redact URI passwords")
+    assert(!credential.inspected.contains?("secret"), "structural inspection must redact URI passwords")
+  end
+
+  it("keeps generic and form encoding distinct") do
+    assert(Query.from([("q", Just("kex language"))]).encode == "q=kex%20language")
+    assert(Form.from([("q", "kex language")]).encode == "q=kex+language")
+  end
+
+  it("converts Unicode IRIs with IDNA and UTF-8 percent encoding") do
+    let iri = URI.fromIRI("https://münich.example/straße").try
+    assert(iri.string == "https://xn--mnich-kva.example/stra%C3%9Fe")
+    assert(iri.host.try.ascii == "xn--mnich-kva.example")
+    assert(Name.parse("münich.example").try.ascii == "xn--mnich-kva.example")
+  end
+
+  it("canonicalizes addresses and checks CIDR containment") do
+    let address = Address.parse("2001:0db8::42").try
+    let network = Network.parse("2001:db8::/32").try
+    assert(address.string == "2001:db8::42")
+    assert(network.contains(address))
+    assert(!network.contains(Address.parse("2001:dead::1").try))
+  end
+
+  it("preserves header order and duplicates with insensitive lookup") do
+    let headers = Headers.empty
+      .add("Set-Cookie", "theme=dark")
+      .add("set-cookie", "session=redacted")
+      .set("Content-Type", "application/json")
+    assert(headers.getAll("SET-COOKIE").length == 2)
+    assert(headers.getAll("content-type") == ["application/json"])
+    let sensitive = Headers.from([("Authorization", "Bearer secret"), ("X-Safe", "visible")]).try
+    let (_, rawAuthorization) = sensitive.entries.first.try
+    assert(rawAuthorization.contains?("secret"), "explicit entries retain the raw value")
+    assert(!sensitive.inspected.contains?("secret"), "header inspection must redact credentials")
+    assert(sensitive.inspected.contains?("visible"), "non-sensitive fields remain useful in inspection")
+    assert(Headers.from([("Bad Name", "value")]).error?)
+    assert(Headers.from([("Good-Name", "bad\nvalue")]).error?)
+  end
+
+  it("validates status and port ranges") do
+    assert(Status.from(204).try.success?)
+    assert(Status.from(99).error?)
+    assert(Net.Port.from(65535).try.value == 65535)
+    assert(Net.Port.from(65536).error?)
+  end
+
+  it("reports only capabilities the active backend can actually use") do
+    let support = Net.Support.current
+    if Kex.interpreted?
+      assert(!support.httpClient.compiled?)
+      assert(!support.webSocketClient.usable?)
+    else
+      assert(support.httpClient.usable?)
+      assert(support.webSocketClient.usable?)
+    end
+  end
+end

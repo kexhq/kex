@@ -280,11 +280,14 @@ describe("Kex.AST") do
 
   it("preserves nullary syntax, declaration rescue blocks, and generated declarations") do
     let program = Kex.AST.parse(`
-      let value = 1
+      let value do
+        1
+      end
       let compute() do
         work().try
       rescue do |error|
         error
+      end
       end
       main do
         compute()

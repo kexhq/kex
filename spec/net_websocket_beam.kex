@@ -1,0 +1,16 @@
+# kex: run-beam
+#
+# The deterministic protocol round-trip is exercised by the runtime fixture;
+# this spec keeps the public WebSocket module and typed failure path covered by
+# the normal BEAM suite without depending on an external network service.
+
+using Net.HTTP.WebSocket
+
+main do
+  let malformed = WebSocket.connect("http://localhost/not-websocket")
+  assert(malformed.error?, "non-WebSocket schemes must be rejected")
+  assert(WebSocket.connect("ws://localhost/socket#fragment").error?, "WebSocket URLs must reject fragments")
+  assert(WebSocket.connect("ws://user@localhost/socket").error?, "WebSocket URLs must reject user information")
+  assert(WebSocket.connect("ws://localhost/socket", ClientOptions { subprotocols: ["bad protocol"] }).error?, "subprotocols must be HTTP tokens")
+  IO.printLine("ok")
+end

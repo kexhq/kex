@@ -78,8 +78,7 @@ int main() {
         it("real_world.kex", []() { assertTrue(parseFile("examples/real_world.kex")); });
         it("serving_shared_document.kex", []() { assertTrue(parseFile("examples/serving_shared_document.kex")); });
         it("serving_rate_limiter.kex", []() { assertTrue(parseFile("examples/serving_rate_limiter.kex")); });
-        // BEAM-only: Web.Server is backed by Erlang/OTP sockets.
-        it("web_server.kex", []() { assertTrue(parseFile("examples/web_server.kex")); });
+        it("net_values.kex", []() { assertTrue(parseFile("examples/net_values.kex")); });
         it("records.kex", []() { assertTrue(parseFile("examples/records.kex")); });
         it("streams.kex", []() { assertTrue(parseFile("examples/streams.kex")); });
         it("testing.kex", []() { assertTrue(parseFile("examples/testing.kex")); });

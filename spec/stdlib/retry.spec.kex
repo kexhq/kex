@@ -1,0 +1,29 @@
+using Control.Retry
+
+describe("Control.Retry") do
+  it("stops immediately when the predicate rejects an error") do
+    let result = Retry.run(
+      Retry.fixed(5, Duration.seconds(0)),
+      { |error| assert(error == "permanent"); false },
+      do Error("permanent") end
+    )
+
+    Assert.equal(result, Error("permanent"))
+  end
+
+  it("does not sleep when the next delay exceeds the elapsed bound") do
+    let policy = Retry.fixed(
+      5,
+      Duration.seconds(1)
+    ).withMaximumElapsed(Duration.seconds(0))
+
+    let result = Retry.runWith(
+      policy,
+      { |error| true },
+      { |delay| assert(false, "elapsed bound must prevent sleeping") },
+      do Error("temporary") end
+    )
+
+    Assert.equal(result, Error("temporary"))
+  end
+end

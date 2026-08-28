@@ -235,6 +235,14 @@ On BEAM these are OTP `gen_server` processes using ordinary tuple requests,
 including direct Erlang/Elixir interoperability. See
 [`docs/serving.md`](docs/serving.md).
 
+### Networking
+
+Networking is opt-in and backend-aware: strict URI/IP/DNS values, process-owned
+TCP/UDP/Unix/TLS handles, buffered HTTP/1.1, and WebSocket clients live outside
+the prelude. See the current API, examples, limits, and backend behavior in
+[`docs/networking.md`](docs/networking.md); [`docs/net-plan.md`](docs/net-plan.md)
+tracks the remaining redesign work.
+
 ### Records, Sum Types, Optional, Result
 
 Data modeling is direct: records for product types, `type` for unions, `?` for optional values, and `Result` for fallible flows.

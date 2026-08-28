@@ -1,0 +1,2 @@
+spec/error_no_foul_for_old_man.kex:1:30: error: Cannot call foul function 'IO.printLine' from pure context
+Aborted: 1 type error — fix before running (use --no-check to skip).

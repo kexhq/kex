@@ -1,0 +1,100 @@
+module Net.DNS
+
+# Typed DNS lookup with explicit resolver ownership and bounded caching.
+#
+#   using Net.DNS
+#
+#   let resolver = Resolver.system.try
+#   let name = Name.parse("example.test").try
+#   let addresses = resolver.addresses(name).try
+#   resolver.close
+
+# A validated DNS name with caller-facing and IDNA ASCII spellings.
+record Name do
+  display : String
+  ascii : String
+end
+
+# Record families supported by +Resolver.lookup+.
+type RecordType = A | AAAA | CNAME | MX | TXT | SRV | PTR
+
+# DNSSEC state reported by the underlying resolver. Kex does not independently
+# validate DNSSEC and therefore commonly reports +Indeterminate+.
+type DNSSECStatus = Secure | Insecure | Bogus | Indeterminate
+
+# Typed DNS resource records, preserving MX/SRV priorities and TXT chunks.
+type DNSRecord = AddressRecord(Net.IP.Address) | CanonicalName(Name) | MailExchange(Integer, Name) | TextRecord([String]) | ServiceRecord(Integer, Integer, Net.Port, Name) | PointerRecord(Name)
+
+# Records and the reported DNSSEC state from one lookup.
+record LookupResponse do
+  records : [DNSRecord]
+  dnssec : DNSSECStatus
+end
+
+# Bounds for a resolver-owned positive and negative cache.
+record CacheOptions do
+  entries : Integer = 1024
+  maximumTtl : Duration = Duration.hours(1)
+  negativeTtl : Duration = Duration.seconds(30)
+end
+
+# Lifetime cache counters. +clear+ empties entries but keeps these counters.
+record CacheStatistics do
+  entries : Integer
+  hits : Integer
+  misses : Integer
+  negativeHits : Integer
+  evictions : Integer
+end
+
+# An opaque, process-safe resolver that owns its cache.
+type Resolver
+
+module Name do
+  # Validates a name and converts Unicode labels to IDNA ASCII.
+  # @param text [String] a dotted hostname, optionally with a trailing dot
+  # @return [Result<Name, NetError>] the name, or +Parse+
+  # @example +Name.parse("münich.example").try.ascii+.
+  parse : String -> Result<Name, NetError>
+  let parse(text) = Kex.Intrinsic.NetDNS.name(text)
+end
+
+module Resolver do
+  # Opens a resolver using system configuration and default cache bounds.
+  # @return [Result<Resolver, NetError>] a resolver handle
+  # @example +Resolver.system.try+
+  foul system() -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolverDefault()
+  # Opens a system resolver with explicit cache bounds.
+  # @param cache [CacheOptions] entry and TTL limits
+  # @return [Result<Resolver, NetError>] a resolver, or +Parse+
+  foul system(cache: CacheOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolver(cache)
+end
+
+make Resolver do
+  # Resolves AAAA and A records, returning IPv6 addresses first.
+  # @param name [Name] the validated hostname
+  # @return [Result<[Net.IP.Address], NetError>] addresses or +Resolve+
+  # @example +resolver.addresses(Name.parse("example.test").try).try+
+  foul addresses(name: Name) -> Result<[Net.IP.Address], NetError> = Kex.Intrinsic.NetDNS.resolverAddresses(this, name)
+  # Looks up one supported resource-record family.
+  # @param kind [RecordType] the requested family
+  # @param name [Name] the validated owner name
+  # @return [Result<LookupResponse, NetError>] typed records or +Resolve+
+  foul lookup(kind: RecordType, name: Name) -> Result<LookupResponse, NetError> = Kex.Intrinsic.NetDNS.lookup(this, kind, name)
+  # Empties cached entries without resetting lifetime counters.
+  # @return [Void]
+  foul clear() -> Void = Kex.Intrinsic.NetDNS.clear(this)
+  # @return [CacheStatistics] current entries and lifetime counters
+  foul statistics() -> CacheStatistics = Kex.Intrinsic.NetDNS.statistics(this)
+  # Idempotently closes the resolver.
+  # @return [Void]
+  foul close() -> Void = Kex.Intrinsic.NetDNS.close(this)
+end
+
+module DNS do
+  # Resolves a name once with a short-lived system resolver.
+  # @param name [Name] the validated hostname
+  # @return [Result<[Net.IP.Address], NetError>] addresses or +Resolve+
+  addresses : Name -> Result<[Net.IP.Address], NetError>
+  foul addresses(name) = Kex.Intrinsic.NetDNS.addresses(name)
+end

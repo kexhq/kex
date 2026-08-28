@@ -298,6 +298,32 @@ struct Lowering {
         // spelling (a reified value carries the interpreter's `Boxes.Box`)
         // still names the record declared as its last segment.
         if (const auto dot = name.rfind('.'); dot != std::string::npos) {
+            // A PARTIALLY qualified spelling first: `using Net.Socket`
+            // makes `TCP.Endpoint` legal for the record whose identity —
+            // and BEAM tag — is `Net.Socket.TCP.Endpoint`. Without this the
+            // construction was tagged 'TCP.Endpoint', which the runtime's
+            // own pattern never matches: `Net.HTTP.Server.start` answered
+            // "invalid HTTP server configuration" for a perfectly good
+            // endpoint. Same rule as the bare-name case below — a `using`
+            // names the owner outright, and a suffix match settles the rest
+            // only when it is unambiguous.
+            for (const auto& imported : usingModules)
+                if (records.count(imported + "." + name))
+                    return imported + "." + name;
+            {
+                const auto qualifiedSuffix = "." + name;
+                std::string qualified;
+                for (const auto& [candidate, _] : records) {
+                    if (candidate.size() <= qualifiedSuffix.size() ||
+                        candidate.compare(
+                            candidate.size() - qualifiedSuffix.size(),
+                            qualifiedSuffix.size(), qualifiedSuffix) != 0)
+                        continue;
+                    if (!qualified.empty()) { qualified.clear(); break; }
+                    qualified = candidate;
+                }
+                if (!qualified.empty()) return qualified;
+            }
             if (const auto bare = name.substr(dot + 1); records.count(bare))
                 return bare;
             return name;
@@ -396,6 +422,15 @@ struct Lowering {
     // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
     // declares a capability, so a program using none compiles unchanged.
     std::unordered_set<std::string> foulFns;
+    // "name/arity" for every NON-foul definition in this unit. `foulFns` is
+    // keyed by name alone, so a foul function anywhere in the file makes every
+    // same-named call take a context — including calls to a pure function of
+    // that name at a different arity, in a different module of the same file.
+    // Net.HTTP is the case: `make Client do foul request(…)` put "request" in
+    // foulFns, and `module HTTP`'s pure `request/4` was then called as
+    // `request/5`, which erlc rejects. A definition that IS pure at exactly
+    // the arity being called settles it.
+    std::unordered_set<std::string> pureFnArities;
     std::unordered_set<std::string> capabilityModules;
     // Name of the context variable in scope; empty means there is none, and
     // a call from there passes a fresh empty map.
@@ -430,6 +465,16 @@ struct Lowering {
     // Receiver type -> source module path for make blocks compiled into a
     // companion module in this same unit.
     std::unordered_map<std::string, std::string> localTypeModules;
+    // Type name -> the module that DECLARES it, for every type written inside
+    // a module, `make` target or not. An opaque `type TCPListener` declared in
+    // Net.Socket.TCP carries its QUALIFIED name as its runtime tag, the same
+    // rule records follow, so a guard built from the written `TCPListener`
+    // matched nothing. Separate from `localTypeModules`, which is keyed by
+    // make target and drives call routing rather than tag identity.
+    std::unordered_map<std::string, std::string> moduleDeclaredTypes;
+    // Bare names of module-scoped free functions acting as receiver methods
+    // for a type their own module declares (see preModuleFn).
+    std::unordered_set<std::string> moduleReceiverNames;
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
@@ -675,7 +720,11 @@ struct Lowering {
     // is foul the call still takes its context.
     auto callNeedsContext(const std::string& name, int arity) const -> bool {
         if (!threadsCapabilities() || foulFns.count(name) == 0) return false;
-        if (arity == 1 && accessorFields.count(name)) return false;
+        if (arity == 1 && accessorFields.count(name) &&
+            !moduleReceiverNames.count(name))
+            return false;
+        if (pureFnArities.count(name + "/" + std::to_string(arity)))
+            return false;
         return true;
     }
     // Every local call goes through here so the context is appended in one
@@ -1480,6 +1529,27 @@ struct Lowering {
                 auto savedUsing = usingModules;
                 usingModules.insert(srcMod);
                 if (n.alias) moduleAliases[*n.alias] = srcMod;
+                // Import immediate nested modules under their leaf name too.
+                // The semantic resolver already makes `URL.parse` available
+                // after `using URI`; BEAM lowering must map that leaf back to
+                // its owning companion (`URI.URL`) just as the tree walker
+                // does. Explicit aliases still win below by assignment.
+                for (const auto& [key, _] : moduleFunctions) {
+                    const auto prefix = srcMod + ".";
+                    if (key.rfind(prefix, 0) != 0) continue;
+                    const auto rest = key.substr(prefix.size());
+                    const auto dot = rest.find('.');
+                    if (dot == std::string::npos) continue;
+                    const auto nested = rest.substr(0, dot);
+                    if (!n.onlyNames.empty() &&
+                        std::find(n.onlyNames.begin(), n.onlyNames.end(), nested) ==
+                            n.onlyNames.end())
+                        continue;
+                    if (std::find(n.exceptNames.begin(), n.exceptNames.end(), nested) !=
+                        n.exceptNames.end())
+                        continue;
+                    moduleAliases[nested] = srcMod + "." + nested;
+                }
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
                         auto key = srcMod + "." + name;
@@ -2759,6 +2829,37 @@ struct Lowering {
                             return callE(module, function, arity,
                                          std::move(direct));
                         });
+                }
+                // A resolved target with no backend module is a call into THIS
+                // unit, and callE only appends the capability context for
+                // EXTERNAL foul targets — so a foul make-block method
+                // resolved this way went out one argument short of its own
+                // definition. `Net.HTTP`'s `make Client do foul statistics`
+                // is defined as statistics/2 (receiver + context) and was
+                // called as `apply 'statistics'/1`, which erlc rejects.
+                // Routing it through localCall puts it back on the one code
+                // path that decides about the context (kexhq/kex#181).
+                if (resolved->second.backendModule.empty() &&
+                    resolved->second.backendArity ==
+                        static_cast<int>(args.size())) {
+                    // The resolver knows WHICH implementation won, so its
+                    // foulness settles the context where the name-and-arity
+                    // lookup in callNeedsContext cannot: `get` is PURE at
+                    // arity 2 for Net.HTTP's Headers and FOUL at arity 2 for
+                    // its Client, and one answer has to serve both.
+                    if (threadsCapabilities() && resolved->second.isFoul) {
+                        args.push_back(currentContext());
+                        auto call = std::make_unique<Expr>();
+                        call->node = Call{"", backendFunction,
+                                          static_cast<int>(args.size()),
+                                          std::move(args), false};
+                        return wrapLets(binds, std::move(call));
+                    }
+                    if (callNeedsContext(backendFunction,
+                                         static_cast<int>(args.size())))
+                        return wrapLets(
+                            binds,
+                            localCallExpr(backendFunction, std::move(args)));
                 }
                 return wrapLets(
                     binds,
@@ -5505,6 +5606,33 @@ struct Lowering {
     // functions as separate `let` declarations) into one multi-clause FunDef.
     // implicitThisName: when non-empty, a receiver param of that name is
     // prepended to every clause (make-block methods: `this`).
+    // Can `typeGuard` actually tell this written type apart at runtime? A
+    // record tag, an ADT, a primitive with a guard BIF, or a structural
+    // spelling can; a type variable or an unconstrained name cannot, and
+    // guarding on one would emit a tag comparison nothing satisfies.
+    auto discriminatingType(const std::string& written) const -> bool {
+        if (written.empty() || written == "Any") return false;
+        if (traitMethods.count(written)) return false;
+        if (written.find("->") != std::string::npos) return true;
+        const char first = written.front(), last = written.back();
+        if ((first == '[' && last == ']') || (first == '{' && last == '}') ||
+            (first == '(' && last == ')'))
+            return true;
+        auto base = written;
+        if (auto angle = base.find('<');
+            angle != std::string::npos && base.back() == '>')
+            base.resize(angle);
+        if (base.size() == 1) return false;  // a type PARAMETER, not a type
+        if (primGuardBifs().count(base) || base == "Char") return true;
+        // NOT an ADT: a nullary variant is a bare atom (`'Equal'`), and
+        // typeGuard's tagged fallback tests `element(1, V)`, which no atom
+        // satisfies. Guarding on one rejected every call.
+        if (typeVariantTags.count(base)) return false;
+        if (records.count(canonicalRecordName(base))) return true;
+        return localTypeModules.count(base) > 0 ||
+               moduleDeclaredTypes.count(base) > 0;
+    }
+
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
                             const std::string& implicitThisName = "",
                             const std::string& nameOverride = "") -> FunDef {
@@ -5555,8 +5683,39 @@ struct Lowering {
         def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
+        // Do the clauses in this group differ in their declared parameter
+        // types? Only then is a guard wanted — a plain multi-clause function
+        // discriminates with patterns and must be left alone.
+        const bool overloadedByParamType = [&] {
+            if (group.size() < 2) return false;
+            std::vector<std::string> signature;
+            bool differs = false;
+            for (const auto* fn : group)
+                for (const auto& clause : fn->clauses) {
+                    std::vector<std::string> current;
+                    for (const auto& p : clause.params) {
+                        // A group that already discriminates with PATTERNS
+                        // needs no guard, and adding one breaks it: Ordering's
+                        // `combine(@Equal, other: Ordering)` / `combine(@Less,
+                        // _)` differ in their declared types only because the
+                        // later clauses spell their second parameter `_`.
+                        // Guarding the first then rejected `Equal.combine(Less)`
+                        // and the whole clause set fell through to
+                        // function_clause.
+                        if (!p.name || !p.type || !*p.type) return false;
+                        current.push_back(renderDispatchType(**p.type));
+                    }
+                    if (signature.empty()) signature = current;
+                    else if (signature != current) differs = true;
+                }
+            return differs;
+        }();
+        std::size_t clauseCount = 0;
+        for (const auto* fn : group) clauseCount += fn->clauses.size();
+        std::size_t clauseIndex = 0;
         for (const auto* fn : group) {
             for (const auto& clause : fn->clauses) {
+                const bool isLastInGroup = ++clauseIndex == clauseCount;
                 subst.clear(); // fresh scope per clause
                 traitDictionaries = savedTraitDictionaries;
                 FunClause fc;
@@ -5648,6 +5807,31 @@ struct Lowering {
                     currentContextVar = contextName;
                 } else {
                     currentContextVar.clear();
+                }
+                // Overloads discriminated by PARAMETER TYPE need a runtime
+                // guard: a declared type is not a Core Erlang pattern, so two
+                // clauses whose params are plain variables are identical to
+                // the emitter and the FIRST one swallowed every call.
+                // `let describe(v: Alpha)` / `let describe(v: Beta)` answered
+                // "Alpha" for both on BEAM while the walker dispatched
+                // correctly, and moving Net.Socket's `close`/`closed?`
+                // overloads inside `module TCP` made a listener reach the
+                // connection clause (kexhq/kex#230). The LAST clause of a
+                // group stays unguarded so it remains the fallback, which is
+                // the behaviour every existing single-clause group already
+                // has.
+                if (overloadedByParamType && !isLastInGroup) {
+                    ExprPtr guard;
+                    for (const auto& p : clause.params) {
+                        if (!p.name || !p.type || !*p.type) continue;
+                        const auto written = renderDispatchType(**p.type);
+                        if (!discriminatingType(written)) continue;
+                        auto test = typeGuard(written, var(*p.name));
+                        guard = guard ? intrin(Op::And, two(std::move(guard),
+                                                            std::move(test)))
+                                      : std::move(test);
+                    }
+                    if (guard) fc.guard = std::move(guard);
                 }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 if (fn->isSlot) subst["from"] = "from";
@@ -6421,6 +6605,21 @@ struct Lowering {
                          three(std::move(v), lit(LitKind::Atom, ty),
                                litInt(static_cast<int64_t>(
                                    record->second.fields.size() + 1))));
+        // An OPAQUE type declared inside a module carries its QUALIFIED
+        // name as its tag, the same rule records follow — `type Client` in
+        // Net.HTTP is `{'Net.HTTP.Client', …}`, which is what the runtime
+        // intrinsic builds. Guarding on the written `Client` matched
+        // nothing, so `client.get(url)` fell through its make block's
+        // dispatcher to "Undefined method: get for Tuple".
+        auto tagged = ty;
+        if (!records.count(tagged) && tagged.find('.') == std::string::npos) {
+            if (auto declaring = localTypeModules.find(tagged);
+                declaring != localTypeModules.end())
+                tagged = declaring->second + "." + tagged;
+            else if (auto declared = moduleDeclaredTypes.find(tagged);
+                     declared != moduleDeclaredTypes.end())
+                tagged = declared->second + "." + tagged;
+        }
         // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
         // fixed arity, so is_record/3 above does not apply and the tag has to
         // be read with element/2.
@@ -6437,7 +6636,7 @@ struct Lowering {
             callE("erlang", "is_tuple", 1, one(vRef.get())),
             intrin(Op::Eq, two(callE("erlang", "element", 2,
                                      two(litInt(1), vRef.get())),
-                               lit(LitKind::Atom, ty))),
+                               lit(LitKind::Atom, tagged))),
             litBool(false));
     }
 
@@ -6964,6 +7163,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Factored into per-kind lambdas so the flattened module items go
     // through the exact same collection as top-level items.
     std::unordered_set<std::string> definedFns;
+    // Bare names of module-scoped free functions that act as receiver methods
+    // for a type their own module declares (see preModuleFn).
+    std::unordered_set<std::string> moduleReceiverMethods;
     // The same names keyed by the arity they are actually EMITTED with. A
     // field accessor is arity 1, so only an arity-1 function of that name
     // can own the symbol (see makeAccessors).
@@ -6992,6 +7194,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (fd.isFoul) L.foulFns.insert(fd.name);
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
+            if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
             definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
@@ -7080,6 +7283,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
+            if (!fd->isFoul)
+                L.pureFnArities.insert(
+                    fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->clauses.empty()) {
                 // A make-block method reaches its receiver one of two ways:
                 // implicitly through `this` (params exclude it), or as its
@@ -7153,8 +7359,47 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
+            // A module-scoped free function whose FIRST parameter is a type
+            // this module declares is that type's receiver method: `using
+            // Net.Socket` has to make `listener.closed?` reach
+            // `Net.Socket.TCP.closed?`. Only local names reach the UFCS path,
+            // and a module member is registered under its mangled name — so
+            // moving the socket operations from Net.Socket's top level into
+            // the protocol modules left every `connection.sendAll` and
+            // `listener.closed?` as "Undefined method" (kexhq/kex#230).
+            // Restricted to the module's OWN types so an ordinary module
+            // export never becomes a receiver method by accident.
+            if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
+                const auto& receiver = fd->clauses[0].params.front();
+                if (receiver.type && *receiver.type) {
+                    auto written = renderDispatchType(**receiver.type);
+                    if (auto angle = written.find('<');
+                        angle != std::string::npos && written.back() == '>')
+                        written.resize(angle);
+                    const auto dot = written.rfind('.');
+                    const auto bare =
+                        dot == std::string::npos ? written
+                                                 : written.substr(dot + 1);
+                    const auto owner = declaredTypes.count(bare) > 0;
+                    if (owner) {
+                        moduleReceiverMethods.insert(fd->name);
+                        L.moduleReceiverNames.insert(fd->name);
+                        // Reached under its BARE name now, so its foulness has
+                        // to be recorded under that name too or the call goes
+                        // out one argument short of the definition.
+                        if (fd->isFoul) L.foulFns.insert(fd->name);
+                        L.localMethodArities.insert(
+                            fd->name + "/" +
+                            std::to_string(fd->clauses[0].params.size()));
+                    }
+                }
+            }
             // A capability's own members stay at their declared arity.
             if (fd->isFoul) L.foulFns.insert(emitted);
+            if (!fd->isFoul && !fd->clauses.empty())
+                L.pureFnArities.insert(
+                    fd->name + "/" +
+                    std::to_string(fd->clauses[0].params.size()));
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;
@@ -7166,6 +7411,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto preModuleType = [&](const ast::TypeDef* td) {
             if (!td) return;
             preType(*td);
+            L.moduleDeclaredTypes.emplace(td->name, path);
             if (auto constructors = kex::typeConstructors(*td))
                 for (const auto& constructor : *constructors) {
                     const auto emitted =
@@ -7303,6 +7549,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
+    // Assigned, not merged, so the module-owned receiver methods collected in
+    // preModuleFn are folded in here rather than being overwritten.
+    L.localMethods.insert(moduleReceiverMethods.begin(),
+                          moduleReceiverMethods.end());
     // Record field accessors participate in localMethods only when an
     // accessor is actually emitted for them — a field whose name collides
     // with an imported package-declared receiver function is skipped (see
@@ -7569,6 +7819,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     srcMod += (*ub)->module.parts[i];
                                 }
                                 if ((*ub)->alias) L.moduleAliases[*(*ub)->alias] = srcMod;
+                                for (const auto& [key, _] : L.moduleFunctions) {
+                                    const auto prefix = srcMod + ".";
+                                    if (key.rfind(prefix, 0) != 0) continue;
+                                    const auto rest = key.substr(prefix.size());
+                                    const auto dot = rest.find('.');
+                                    if (dot == std::string::npos) continue;
+                                    const auto nested = rest.substr(0, dot);
+                                    if (!(*ub)->onlyNames.empty() &&
+                                        std::find((*ub)->onlyNames.begin(), (*ub)->onlyNames.end(), nested) == (*ub)->onlyNames.end())
+                                        continue;
+                                    if (std::find((*ub)->exceptNames.begin(), (*ub)->exceptNames.end(), nested) != (*ub)->exceptNames.end())
+                                        continue;
+                                    L.moduleAliases[nested] = srcMod + "." + nested;
+                                }
                                 auto importName = [&](const std::string& name) {
                                     auto key = srcMod + "." + name;
                                     if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
@@ -7644,6 +7908,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 L.usingModules.insert(srcMod);
                 if (node->alias) L.moduleAliases[*node->alias] = srcMod;
+                for (const auto& [key, _] : L.moduleFunctions) {
+                    const auto prefix = srcMod + ".";
+                    if (key.rfind(prefix, 0) != 0) continue;
+                    const auto rest = key.substr(prefix.size());
+                    const auto dot = rest.find('.');
+                    if (dot == std::string::npos) continue;
+                    const auto nested = rest.substr(0, dot);
+                    if (!node->onlyNames.empty() &&
+                        std::find(node->onlyNames.begin(), node->onlyNames.end(), nested) == node->onlyNames.end())
+                        continue;
+                    if (std::find(node->exceptNames.begin(), node->exceptNames.end(), nested) != node->exceptNames.end())
+                        continue;
+                    L.moduleAliases[nested] = srcMod + "." + nested;
+                }
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {
                         auto key = srcMod + "." + name;
@@ -8393,10 +8671,33 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         const auto& path = module.name;
         if (seenModulePaths.insert(path).second)
             modulePaths.push_back(path);
+        std::set<std::string> ownTypes;
+        kex::collectDeclaredTypeNames(module.body, ownTypes);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
-            if (fn)
-                definitions[mangleModuleMember(path, fn->name)] =
-                    {path, fn->name, exported};
+            if (!fn) return;
+            definitions[mangleModuleMember(path, fn->name)] =
+                {path, fn->name, exported};
+            // A module-scoped free function over one of the module's OWN types
+            // is that type's receiver method, and a UFCS call reaches it under
+            // its bare name — so the bare name has to redirect here too, the
+            // way a make-block method's does just below. Without it
+            // `listener.closed?` compiled to a local `closed?/2` that no
+            // module defines (kexhq/kex#230).
+            if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
+            const auto& receiver = fn->clauses[0].params.front();
+            if (!receiver.type || !*receiver.type) return;
+            auto written = renderDispatchType(**receiver.type);
+            if (auto angle = written.find('<');
+                angle != std::string::npos && written.back() == '>')
+                written.resize(angle);
+            const auto dot = written.rfind('.');
+            const auto bare =
+                dot == std::string::npos ? written : written.substr(dot + 1);
+            if (!ownTypes.count(bare)) return;
+            const int arity = static_cast<int>(fn->clauses[0].params.size()) +
+                              (fn->isFoul ? 1 : 0);
+            if (!definitions.count(fn->name))
+                definitions[fn->name] = {path, fn->name, true, "", arity};
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;

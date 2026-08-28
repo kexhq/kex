@@ -1,0 +1,306 @@
+module Net.HTTP
+
+# Buffered HTTP clients, responses, and a small declaration-ordered server
+# router. Requests never follow redirects or perform generic retries implicitly.
+#
+#   using Net.HTTP
+#
+#   let response = HTTP.get("https://example.test/").try
+#   response.status.success?   # => true
+#
+# For connection reuse and statistics, own a client explicitly:
+#
+#   let client = Client.open.try
+#   let response = client.get("https://example.test/").try
+#   client.close.try
+
+# An insertion-ordered HTTP field collection. Names compare case-insensitively
+# and duplicate fields are preserved.
+record Headers do
+  entries : [(String, String)]
+end
+
+# A validated HTTP status code in +100..599+.
+record Status do
+  code : Integer
+end
+
+# A typed HTTP response envelope whose body representation is explicit.
+record Response<B> do
+  status : Status
+  headers : Headers
+  body : B
+end
+
+# A typed HTTP request envelope whose body representation is explicit.
+record Request<B> do
+  method : String
+  target : URI
+  headers : Headers
+  body : B
+end
+
+# Route captures decoded after path segmentation.
+record RouteContext do
+  parameters : Map<String, String> = {}
+end
+
+# Per-request server context.
+record Context do
+  route : RouteContext
+end
+
+# A buffered HTTP route handler.
+type Handler = Request<Binary> -> Context -> Response<Binary>
+
+# One declared route; routers preserve declaration order.
+record Route do
+  method : String
+  path : String
+  handler : Handler
+end
+
+# An immutable, declaration-ordered HTTP router.
+record Router do
+  routes : [Route] = []
+end
+
+# Counts and elapsed time from graceful server shutdown.
+record ShutdownReport do
+  completed : Integer
+  failed : Integer
+  forced : Integer
+  elapsedMilliseconds : Integer
+end
+
+# Bounded HTTP server resources and default graceful-shutdown duration.
+record ServerOptions do
+  maximumHandlers : Integer = 1024
+  backlog : Integer = 128
+  gracefulShutdown : Duration = Duration.seconds(10)
+end
+
+# HTTP connection-pool bounds and idle lifetime.
+record PoolOptions do
+  perOrigin : Integer = 8
+  total : Integer = 128
+  queuedRequests : Integer = 256
+  idleExpiryMilliseconds : Integer = 30000
+end
+
+# Options owned by an explicit HTTP client.
+record ClientOptions do
+  pool : PoolOptions = PoolOptions {}
+end
+
+# Lifetime request/reuse counters plus current pooled connections.
+record ClientStatistics do
+  openConnections : Integer
+  requests : Integer
+  reusedConnections : Integer
+end
+
+# Resources released by +Client.close+.
+record ClientCloseReport do
+  closedConnections : Integer
+end
+
+# The pooled HTTP client. An opaque handle over the connection pool that
+# owns it; `Client.open` makes one and `client.close` releases it.
+type Client
+
+module Headers do
+  # @return [Headers] an empty field collection
+  # @example +Headers.empty.add("Accept", "application/json")+
+  empty : Headers
+  let empty = Headers { entries: [] }
+
+  # Validates header names and values without folding duplicates.
+  # @return [Result<Headers, NetError>] validated fields, or +Parse+
+  # @example +Headers.from([("Accept", "application/json")]).try+
+  from : [(String, String)] -> Result<Headers, NetError>
+  let from(entries) = Kex.Intrinsic.NetHTTP.headers(entries)
+
+  # Parses CRLF- or LF-separated header fields.
+  # @return [Result<Headers, NetError>] fields in source order, or +Parse+
+  parse : String -> Result<Headers, NetError>
+  let parse(text) = Kex.Intrinsic.NetHTTP.parseHeaders(text)
+end
+
+module Status do
+  # @return [Result<Status, NetError>] a status in +100..599+, or +Parse+
+  from : Integer -> Result<Status, NetError>
+  let from(code) = Kex.Intrinsic.NetHTTP.status(code)
+end
+
+module Response do
+  # Builds a buffered binary response with validated headers.
+  # @example +Response.binary(200, Binary.empty, Headers.empty)+
+  foul binary(status: Integer, body: Binary, headers: Headers) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseBinary(status, body, headers)
+  # Builds a UTF-8 text response with an explicit text/plain content type.
+  # @example +Response.text(200, "hello")+
+  foul text(status: Integer, body: String) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseText(status, body)
+  # Builds a response with an empty body.
+  foul empty(status: Integer) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseEmpty(status)
+end
+
+module Router do
+  # @return [Router] a router with no routes
+  # @example +Router.build.get("/health", { |request, context| Response.text(200, "ok") })+
+  let build = Router { routes: [] }
+end
+
+make Router do
+  # Appends a route; earlier matching declarations win.
+  let route(method: String, path: String, handler: Handler) -> Router = Router {
+    routes: @routes + [Route { method: method, path: path, handler: handler }]
+  }
+  # Appends a GET route. GET also supplies automatic HEAD fallback.
+  let get(path: String, handler: Handler) -> Router = this.route("GET", path, handler)
+  # Appends an explicit HEAD route, overriding automatic GET fallback.
+  let head(path: String, handler: Handler) -> Router = this.route("HEAD", path, handler)
+  # Appends an explicit OPTIONS route, overriding generated OPTIONS.
+  let options(path: String, handler: Handler) -> Router = this.route("OPTIONS", path, handler)
+  # Appends a POST route.
+  let post(path: String, handler: Handler) -> Router = this.route("POST", path, handler)
+  # Appends a PUT route.
+  let put(path: String, handler: Handler) -> Router = this.route("PUT", path, handler)
+  # Appends a PATCH route.
+  let patch(path: String, handler: Handler) -> Router = this.route("PATCH", path, handler)
+  # Appends a DELETE route.
+  let delete(path: String, handler: Handler) -> Router = this.route("DELETE", path, handler)
+end
+
+module Server do
+  # An opaque asynchronous HTTP server handle.
+  type Running
+  # Starts a server with conservative defaults and returns immediately.
+  #
+  # @example
+  #   let router = Router.build.get("/health", do |request, context|
+  #     Response.text(200, "ok")
+  #   end)
+  #   let endpoint = Net.Socket.TCP.Endpoint.loopback(Net.Port.from(0).try)
+  #   let server = Server.start(endpoint, router).try
+  #   Server.stop(server).try
+  foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router)
+  # Starts a server with explicit concurrency, backlog, and shutdown bounds.
+  foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router, options)
+  # Starts with defaults and blocks until the server stops.
+  foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router)
+  # Starts with options and blocks until the server stops.
+  foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router, options)
+
+  # Gracefully stops using the duration captured at start.
+  foul stop(server: Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
+  # Gracefully stops with an operation-specific grace duration.
+  foul stop(server: Running, grace: Duration) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server, grace)
+  # Waits until the server owner exits.
+  foul join(server: Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)
+  # @return [Bool] whether the server owner is alive
+  foul running?(server: Running) -> Bool = Kex.Intrinsic.NetHTTPServer.running?(server)
+  # @return [Net.Socket.TCP.Endpoint] the bound address, including ephemeral port
+  foul localAddress(server: Running) -> Net.Socket.TCP.Endpoint = Kex.Intrinsic.NetHTTPServer.localAddress(server)
+end
+
+module Client do
+  # Opens an explicit pooled client with conservative defaults.
+  # @example +Client.open.try+
+  open : Result<Client, NetError>
+  foul open() = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
+  # Opens an explicit client owning the supplied pool policy.
+  foul open(options: ClientOptions) -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(options)
+end
+
+make Client do
+  # Sends a buffered request. Redirects and generic retries are not implicit.
+  foul request(method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body)
+  # Sends a buffered GET request.
+  foul get(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.get(this, url)
+  # Sends a buffered binary POST request.
+  foul post(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.post(this, url, body)
+  # Sends a buffered binary PUT request.
+  foul put(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "PUT", url, Headers.empty, body)
+  # Sends a buffered binary PATCH request.
+  foul patch(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "PATCH", url, Headers.empty, body)
+  # Sends a DELETE request with an empty body.
+  foul delete(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "DELETE", url, Headers.empty, Binary.empty)
+  # Sends a HEAD request; the returned body is empty.
+  foul head(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "HEAD", url, Headers.empty, Binary.empty)
+  # Sends an OPTIONS request.
+  foul options(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "OPTIONS", url, Headers.empty, Binary.empty)
+  # @return [ClientStatistics] current pool and lifetime request counters
+  foul statistics -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(this)
+  # Idempotently closes the client and every idle pooled connection.
+  foul close -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(this)
+end
+
+make Headers, implement: Showable, Inspectable do
+  # Appends a field without replacing existing fields of the same name.
+  # @example +Headers.empty.add("Accept", "text/plain")+
+  let add(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
+  # Replaces all fields of +name+ with one value.
+  # @example +headers.set("Content-Type", "application/json")+
+  let set(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.setHeader(this, name, value)
+  # Removes every field matching +name+ case-insensitively.
+  let remove(name: String) -> Headers = Kex.Intrinsic.NetHTTP.removeHeader(this, name)
+  # Returns the first matching field value.
+  let get(name: String) -> String? = Kex.Intrinsic.NetHTTP.getHeader(this, name)
+  # Returns every matching value in insertion order.
+  let getAll(name: String) -> [String] = Kex.Intrinsic.NetHTTP.getAllHeaders(this, name)
+  # Renders fields while replacing authorization and cookie values with +***+.
+  let showValue -> String = Kex.Intrinsic.NetHTTP.redactedHeaders(this)
+  # Structural inspection uses the same credential-safe rendering.
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.NetHTTP.redactedHeaders(this)
+end
+
+make Status do
+  # @return [Bool] whether the status is in +100..199+
+  let informational? -> Bool = @code >= 100 && @code < 200
+  # @return [Bool] whether the status is in +200..299+
+  let success? -> Bool = @code >= 200 && @code < 300
+  # @return [Bool] whether the status is in +300..399+
+  let redirect? -> Bool = @code >= 300 && @code < 400
+  # @return [Bool] whether the status is in +400..499+
+  let clientError? -> Bool = @code >= 400 && @code < 500
+  # @return [Bool] whether the status is in +500..599+
+  let serverError? -> Bool = @code >= 500 && @code < 600
+end
+
+make RouteContext do
+  # Returns one decoded named or wildcard route capture.
+  # @return [Result<String, NetError>] the capture, or +Parse+ when absent
+  let parameter(name: String) -> Result<String, NetError> = match @parameters.get(name) do
+    Just(value) => Ok(value)
+    None => Error(NetError { kind: Parse, operation: HTTPServer, message: "missing route parameter: ${name}" })
+  end
+end
+
+module HTTP do
+  # Sends one stateless buffered request with no redirect or hidden retry.
+  # @example +HTTP.request("GET", "https://example.test/").try+
+  request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
+  let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
+  # Sends one stateless buffered GET.
+  # @example +HTTP.get("https://example.test/").try+
+  get : String -> Result<Response<Binary>, NetError>
+  let get(url) = Kex.Intrinsic.NetHTTP.get(url)
+  # Sends one stateless DELETE with an empty body.
+  delete : String -> Result<Response<Binary>, NetError>
+  let delete(url) = request("DELETE", url, Headers.empty, Binary.empty)
+  # Sends one stateless HEAD and returns an empty response body.
+  head : String -> Result<Response<Binary>, NetError>
+  let head(url) = request("HEAD", url, Headers.empty, Binary.empty)
+  # Sends one stateless OPTIONS request.
+  options : String -> Result<Response<Binary>, NetError>
+  let options(url) = request("OPTIONS", url, Headers.empty, Binary.empty)
+  # Sends one stateless buffered binary POST.
+  post : String -> Binary -> Result<Response<Binary>, NetError>
+  let post(url, body) = request("POST", url, Headers.empty, body)
+  # Sends one stateless buffered binary PUT.
+  put : String -> Binary -> Result<Response<Binary>, NetError>
+  let put(url, body) = request("PUT", url, Headers.empty, body)
+  # Sends one stateless buffered binary PATCH.
+  patch : String -> Binary -> Result<Response<Binary>, NetError>
+  let patch(url, body) = request("PATCH", url, Headers.empty, body)
+end

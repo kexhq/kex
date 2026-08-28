@@ -46,7 +46,7 @@ describe("File — read and write (mocked)") do
 
   it("read returns None for an unmocked path") do
     let result = FS.File.read("/no/such/path/kex_test_xyz.txt")
-    assert(result == None)
+    assert(result.error?)
   end
 
   it("write updates mocked content") do
@@ -156,7 +156,7 @@ describe("FS.File.open — typed Result (mocked)") do
     let f = FS.File.open("lines.txt", FS.Read).try
     let line = f.readLine
     f.close()
-    assert(line.or("") == "first")
+    assert(line.try.or("") == "first")
   end
 
   it("returns OpenFailed when the path does not exist") do

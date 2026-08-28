@@ -34,7 +34,6 @@ using Enumerable
 using Env
 using Errorable
 using FileHandle
-using HTTP
 using IO
 using Kex
 using List
@@ -53,4 +52,3 @@ using TaggedValidation
 using Truthyable
 using Type
 using Units
-using WebServer

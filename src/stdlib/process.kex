@@ -462,6 +462,10 @@ end
 
 # Running work in another process and collecting the answer.
 module Task do
+  # Suspends for an elapsed duration. Negative durations are treated as zero.
+  sleep : Duration -> Void
+  foul sleep(duration) = Kex.Intrinsic.Task.sleep(duration)
+
   # Runs +f+ in a new process and returns a handle on its result.
   #
   # The block starts immediately, so starting several tasks and awaiting them

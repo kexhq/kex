@@ -1,0 +1,17 @@
+using URI
+using Net.IP, only: [Address, Network]
+using Net.HTTP, only: [Headers]
+
+main do
+  let url = URL.parse("https://Example.COM:443/api/../status?verbose").try
+  IO.printLine(url.normalize.string)
+
+  let network = Network.parse("10.0.0.0/8").try
+  let address = Address.parse("10.20.30.40").try
+  IO.printLine("${address.string} private=${address.private?} in-network=${network.contains(address)}")
+
+  let headers = Headers.empty
+    .add("Accept", "application/json")
+    .add("X-Trace", "example")
+  IO.printLine("headers=${headers.entries.length}")
+end

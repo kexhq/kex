@@ -40,7 +40,7 @@ backend() -> 'Beam'.
     lists:member(Feature, 'featureList'()).
 
 'featureList'() ->
-    ['Http', 'FS', 'Process', 'WebServer'].
+    ['FS', 'Process'].
 
 %% inspect(Value) -> String — pretty-printed representation.
 %%

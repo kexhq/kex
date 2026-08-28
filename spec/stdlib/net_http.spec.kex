@@ -1,0 +1,19 @@
+using Net.HTTP
+using Net.Socket
+
+describe "Net.HTTP values" do
+  it "constructs binary responses without exposing backend values" do
+    let response = Response.text(201, "created")
+    Assert.equal(response.status.code, 201)
+    Assert.equal(response.headers.get("content-type"), Just("text/plain; charset=utf-8"))
+    Assert.equal(response.body.to(String).try, "created")
+  end
+
+  it "builds deterministic routers" do
+    let handler(request: Request<Binary>, context: Context) -> Response<Binary> = Response.empty(204)
+    let router = Router.build.get("/health", ~handler).post("/items", ~handler)
+    Assert.equal(router.routes.length, 2)
+    Assert.equal(router.routes.first.try.method, "GET")
+    Assert.equal(router.routes.last.try.path, "/items")
+  end
+end

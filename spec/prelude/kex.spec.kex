@@ -19,17 +19,10 @@ describe("Kex.Feature.has?") do
     assert(Kex.Feature.has?(Kex.FS))
   end
 
-  it("returns false for Http on interpreter") do
-    assert(Kex.Feature.has?(Kex.Http) == false)
-  end
-
   it("returns false for Process on interpreter") do
     assert(Kex.Feature.has?(Kex.Process) == false)
   end
 
-  it("returns false for WebServer on interpreter") do
-    assert(Kex.Feature.has?(Kex.WebServer) == false)
-  end
 end
 
 describe("Kex.Feature.list") do
@@ -42,7 +35,4 @@ describe("Kex.Feature.list") do
     assert(Kex.Feature.list().contains?(Kex.FS))
   end
 
-  it("does not include Http on interpreter") do
-    assert(Kex.Feature.list().contains?(Kex.Http) == false)
-  end
 end

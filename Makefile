@@ -1,4 +1,4 @@
-.PHONY: build-tey spec-tey build test spec spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -118,10 +118,32 @@ web-demo: build-wasm
 
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
-test-all: test spec spec-prelude spec-stdlib \
+test-all: test spec-orphans spec spec-prelude spec-stdlib \
           spec-beam spec-prelude-beam spec-stdlib-beam spec-test-json
 
 SHELL := /bin/bash
+
+# A spec that no target runs looks exactly like a passing one. `spec` and
+# `spec-beam` both skip any spec/*.kex with no .expected sibling, and the
+# describe/it suites live in spec/stdlib/ — so a suite dropped into spec/
+# with neither was silently never executed. Nine of them had accumulated,
+# one of which did not compile on BEAM at all (kexhq/kex#231).
+spec-orphans:
+	@orphans=""; \
+	for f in spec/*.kex; do \
+		[ -e "$$f" ] || continue; \
+		if [ -f "$${f%.kex}.expected" ]; then continue; fi; \
+		orphans="$$orphans $$f"; \
+	done; \
+	if [ -n "$$orphans" ]; then \
+		echo "error: spec files that no target runs:"; \
+		for f in $$orphans; do echo "  $$f"; done; \
+		echo ""; \
+		echo "Give each one a .expected golden file, or move a describe/it"; \
+		echo "suite to spec/stdlib/ where spec-stdlib runs it."; \
+		exit 1; \
+	fi; \
+	echo "No orphaned specs."
 
 spec: build
 	@echo "Running spec programs..."
@@ -133,7 +155,10 @@ spec: build
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then kex_flags="-C -t --no-colors"; fi; \
-		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then kex_flags="-R --no-colors"; fi; \
+		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then \
+			kex_flags="-R --no-colors"; \
+			if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
+		fi; \
 		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
 			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
 			$(KEX) -c --no-colors -o "$$tmpdir" "$$f" > /dev/null 2>&1; \
@@ -332,7 +357,9 @@ spec-stdlib: build
 	@echo "Running opt-in stdlib spec suite..."
 	@failed=0; passed=0; \
 	for f in spec/stdlib/*.kex; do \
-		output=$$($(KEX) --no-colors "$$f" 2>&1); \
+		kex_flags="--no-colors"; \
+		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
+		output=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -351,7 +378,11 @@ spec-stdlib-beam: build
 	@echo "Running opt-in stdlib spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \
 	for f in spec/stdlib/*.kex; do \
-		output=$$($(KEX) -R --no-colors "$$f" 2>&1); \
+		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
+		if grep -q "# kex: skip-beam" "$$f" 2>/dev/null; then continue; fi; \
+		kex_flags="-R --no-colors"; \
+		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
+		output=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \

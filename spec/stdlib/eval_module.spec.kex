@@ -1,4 +1,5 @@
 # kex: no-check
+# kex: interpreter-only
 
 using Evaluator
 

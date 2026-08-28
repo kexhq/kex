@@ -5,6 +5,13 @@
 -export([parse/1, parse/2, 'parseFile'/1, 'parseType'/1,
          'parseExpression'/1]).
 
+%% parseType/parseExpression reach INTO the tree these functions return, so
+%% they are coupled to the record layouts in src/stdlib/kex/ast.kex. They read
+%% fields by position after checking the tag rather than matching a whole
+%% tuple: pinning the arity meant that adding `implicitThis` to AnnotationInfo
+%% and `rescueInfo` to MainInfo silently turned every call into
+%% "failed to parse type expression" on BEAM, with the walker still correct.
+
 parse(Source) -> parse(Source, <<"<string>">>).
 
 parse(Source, Filename) when is_binary(Source), is_binary(Filename) ->
@@ -20,29 +27,49 @@ parse(Source, Filename) when is_binary(Source), is_binary(Filename) ->
     end;
 parse(_, _) -> parse_error(<<"parse requires a source string">>).
 
-'parseFile'(Path) when is_binary(Path) -> run_kex(binary_to_list(Path), none);
-'parseFile'(Path) when is_list(Path) -> run_kex(Path, none);
+'parseFile'(Path) when is_binary(Path) -> 'parseFile'(binary_to_list(Path));
+'parseFile'(Path) when is_list(Path) ->
+    %% Checked here so a missing file reports what the walker reports. Left to
+    %% run_kex it surfaced as "AST parser command failed (1, …)" with the
+    %% compiler's own wording inside — a different message on each backend for
+    %% the same mistake.
+    case filelib:is_regular(Path) of
+        true -> run_kex(Path, none);
+        false -> parse_error(iolist_to_binary(
+            [<<"File not found: ">>, unicode:characters_to_binary(Path)]))
+    end;
 'parseFile'(_) -> parse_error(<<"parseFile requires a file path">>).
 
 'parseType'(Source) when is_binary(Source) ->
     Wrapped = <<"module T do\nvalue : ", Source/binary, "\nend">>,
     case parse(Wrapped, <<"<type>">>) of
         {'Ok', {'Kex.AST.Program', _, [
-            {'ModuleDef', {'Kex.AST.ModuleInfo', _, _, [
-                {'TypeAnnotation', {'Kex.AST.AnnotationInfo', _, Type, _, _}}
-            ], _}}
-        ]}} ->
-            {'Ok', Type};
+            {'ModuleDef', ModuleInfo}
+        ]}} when element(1, ModuleInfo) =:= 'Kex.AST.ModuleInfo' ->
+            case element(4, ModuleInfo) of
+                [{'TypeAnnotation', Annotation}]
+                  when element(1, Annotation) =:= 'Kex.AST.AnnotationInfo' ->
+                    {'Ok', element(3, Annotation)};
+                _ -> parse_error(<<"failed to parse type expression">>)
+            end;
         {'Error', _} = Error -> Error;
         _ -> parse_error(<<"failed to parse type expression">>)
     end;
 'parseType'(_) -> parse_error(<<"parseType requires a type string">>).
 
 'parseExpression'(Source) when is_binary(Source) ->
-    case parse(Source, <<"<expression>">>) of
-        {'Ok', {'Kex.AST.Program', _,
-            [{'MainDef', {'Kex.AST.MainInfo', _, _, [Expression | _], _}}]}} ->
-            {'Ok', Expression};
+    %% Wrapped in an explicit `main`, the way parseType wraps in a module. A
+    %% bare expression is not always a legal top level: `~handler` and `:atom`
+    %% were rejected as "Unexpected token at top level", where the walker
+    %% parses an expression directly with parseExpr.
+    Wrapped = <<"main do\n", Source/binary, "\nend">>,
+    case parse(Wrapped, <<"<expression>">>) of
+        {'Ok', {'Kex.AST.Program', _, [{'MainDef', MainInfo}]}}
+          when element(1, MainInfo) =:= 'Kex.AST.MainInfo' ->
+            case element(4, MainInfo) of
+                [Expression | _] -> {'Ok', Expression};
+                _ -> parse_error(<<"failed to parse expression">>)
+            end;
         {'Error', _} = Error -> Error;
         _ -> parse_error(<<"failed to parse expression">>)
     end;

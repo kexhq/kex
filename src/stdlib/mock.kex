@@ -1,5 +1,5 @@
 # Mock — deterministic stand-ins for the world outside the program: the
-# filesystem, the network, the environment, the console.
+# filesystem, environment, and console. Networking mocks live under Mock.Net.
 #
 # These are STATEFUL: `Mock.FS.File(path, content)` writes into a store the
 # real `FS.File` then reads back, so a test can write and read again, and
@@ -14,7 +14,7 @@
 # for the shape of a stand-in (kexhq/kex#143).
 #
 # Opt-in on purpose (issue #144): this module used to ride along inside
-# http.kex, so `using HTTP` in the prelude made every Mock.* reachable from
+# a prelude networking file, so importing the prelude made every Mock.* reachable from
 # every program without anyone asking for it. Reachable is still not
 # callable — the runtime denies the mock intrinsics outside spec files, the
 # REPL, and --allow-mocks — but it should also not be in scope by accident.
@@ -78,25 +78,6 @@ module Mock do
 
     # Where a write goes. Without it, writes go quietly nowhere.
     onSet : Writer? = None
-  end
-
-  # A stand-in for the `Http` capability: one canned response for every
-  # request, whatever the verb, URL or body. That is what a client test needs,
-  # being about what the program does WITH a response.
-  #
-  # NOT named `Http`: a record of that name is indistinguishable from the
-  # capability itself at a call site, and the `make` block binds to the
-  # capability rather than the record — every request then reaches the real
-  # network while the test looks like it is faking one.
-  record Response do
-    # The status code every request answers with.
-    status  : Integer
-
-    # The body every request answers with.
-    body    : String
-
-    # The headers every request answers with.
-    headers : Map<String, String> = {}
   end
 
   # A stateful stand-in for the filesystem: files a test declares, that the
@@ -200,72 +181,6 @@ module Mock do
 
     foul clear() -> Void do
       return Kex.Intrinsic.FS.clear()
-    end
-  end
-
-  # A stateful stand-in for the network: responses a test queues, that the real
-  # +Http+ then hands back.
-  #
-  # Responses are consumed in FIFO order — the first +respond+ answers the
-  # first request. When the queue runs out, the next request answers
-  # +Error(HttpError)+ with kind +MockEmpty+, so a test that made more calls
-  # than it expected fails rather than reaching the network.
-  #
-  #   Mock.Http.start()
-  #   Mock.Http.respond(200, "{\"ok\": true}")
-  #   assert(fetchStatus() == "ok")
-  #   Mock.Http.stop()
-  module Http do
-    # Starts intercepting HTTP requests. Call it before queueing responses.
-    #
-    # @return [Void]
-    #
-    # @example
-    #   before do
-    #     Mock.Http.start()
-    #   end
-    start   : Void
-
-    # Queues one response, to be handed to the next request.
-    #
-    # @param status [Integer] the status code to answer with
-    # @param body [String] the body to answer with
-    # @param headers [Map<String, String>] the headers; omitted for none
-    # @return [Void]
-    #
-    # @example Two requests, two queued answers
-    #   Mock.Http.respond(200, "first")
-    #   Mock.Http.respond(404, "not found")
-    #
-    # @example With headers
-    #   Mock.Http.respond(200, "{}", { "Content-Type": "application/json" })
-    respond : Integer -> String -> Void
-    respond : Integer -> String -> Map<String, String> -> Void
-
-    # Stops intercepting, and discards anything still queued.
-    #
-    # @return [Void]
-    #
-    # @example
-    #   after do
-    #     Mock.Http.stop()
-    #   end
-    stop    : Void
-
-    foul start() -> Void do
-      return Kex.Intrinsic.Http.mockStart()
-    end
-
-    foul respond(status: Integer, body: String) -> Void do
-      return Kex.Intrinsic.Http.mockRespond(status, body)
-    end
-
-    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Void do
-      return Kex.Intrinsic.Http.mockRespond(status, body, headers)
-    end
-
-    foul stop() -> Void do
-      return Kex.Intrinsic.Http.mockStop()
     end
   end
 
@@ -508,27 +423,32 @@ module Mock do
     end
   end
 
-  make Response, implement: Http do
-    # The one canned response, built once and returned for every request.
-    let canned = Ok(HttpResponse {
-      status:  @status,
-      body:    @body,
-      headers: @headers
-    })
+  # Scriptable networking values are namespaced so importing Mock does not
+  # recreate any of the removed global HTTP types.
+  module Net do
+    module HTTP do
+      record Transport do
+        responses : [Any]
+      end
+    end
 
-    foul get(url) = this.canned
-    foul get(url, opts) = this.canned
-    foul post(url, body) = this.canned
-    foul post(url, body, opts) = this.canned
-    foul put(url, body) = this.canned
-    foul put(url, body, opts) = this.canned
-    foul patch(url, body) = this.canned
-    foul patch(url, body, opts) = this.canned
-    foul delete(url) = this.canned
-    foul delete(url, opts) = this.canned
-    foul head(url) = this.canned
-    foul head(url, opts) = this.canned
-    foul options(url) = this.canned
-    foul options(url, opts) = this.canned
+    module DNS do
+      record ResolverScript do
+        answers : {String: [String]}
+      end
+    end
+
+    module Socket do
+      record Script do
+        incoming : [Binary]
+      end
+    end
+
+    module WebSocket do
+      record Script do
+        incoming : [Any]
+      end
+    end
   end
+
 end

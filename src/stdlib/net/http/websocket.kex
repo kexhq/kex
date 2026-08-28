@@ -1,0 +1,64 @@
+module Net.HTTP.WebSocket
+
+# High-level RFC 6455 client messages. The runtime handles fragmentation and
+# ping/pong frames; reconnect and heartbeat policies remain application-owned.
+#
+#   using Net.HTTP.WebSocket
+#
+#   let socket = WebSocket.connect("wss://example.test/events").try
+#   socket.send(Text("hello")).try
+#   let message = socket.receiveMessage.try
+#   socket.close
+
+# A complete high-level WebSocket message. Fragmentation and ping/pong control
+# frames are handled by the connection runtime.
+type Message = Text(String) | BinaryMessage(Binary) | CloseMessage(Integer, String)
+
+# Client handshake policy and the maximum reassembled message size.
+record ClientOptions do
+  subprotocols : [String] = []
+  maximumMessageBytes : Integer = 16777216
+end
+
+# Negotiated handshake information. The subprotocol is +None+ when the server
+# selected none.
+record Session do
+  subprotocol : String?
+end
+
+# An opaque RFC 6455 client connection. It does not reconnect automatically.
+type Connection
+
+module WebSocket do
+  # Opens a +ws:+ or verified +wss:+ connection with default options.
+  #
+  # @param url [String] an absolute WebSocket URL
+  # @return [Result<Connection, NetError>] a connection or typed handshake error
+  # @example +WebSocket.connect("wss://example.test/events").try+.
+  foul connect(url: String) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, ClientOptions {})
+  # Opens a connection with ordered subprotocols and an explicit message limit.
+  #
+  # Extensions are not negotiated. Invalid subprotocol tokens, unrequested
+  # server selections, TLS failures, and malformed handshakes are errors.
+  foul connect(url: String, options: ClientOptions) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, options)
+end
+
+make Connection do
+  # Sends one masked text, binary, or close message.
+  # @return [Result<Void, NetError>] success or +Protocol+/+Limit+/+Closed+
+  # @example +connection.send(Text("hello")).try+
+  foul send(message: Message) -> Result<Void, NetError> = Kex.Intrinsic.NetWebSocket.send(this, message)
+  # `receive` is a Kex process keyword, so the public method spells out the
+  # operation while preserving the plan's high-level message semantics.
+  # Reassembles fragments, validates UTF-8, and automatically answers pings.
+  # @return [Result<Message, NetError>] the next data or close message
+  # @example +connection.receiveMessage.try+
+  foul receiveMessage() -> Result<Message, NetError> = Kex.Intrinsic.NetWebSocket.receiveMessage(this)
+  # @return [Session] the selected subprotocol, if any
+  foul session() -> Session = Kex.Intrinsic.NetWebSocket.session(this)
+  # Sends a normal close frame and idempotently releases the transport.
+  # @return [Void]
+  foul close() -> Void = Kex.Intrinsic.NetWebSocket.close(this)
+  # @return [Bool] whether the connection owner has stopped
+  foul closed?() -> Bool = Kex.Intrinsic.NetWebSocket.closed?(this)
+end
