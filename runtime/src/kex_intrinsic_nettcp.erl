@@ -1,6 +1,7 @@
 -module(kex_intrinsic_nettcp).
 -export([connect/1, listen/1, accept/1, sendAll/2, receiveChunk/2,
-         receiveExactly/2, receiveLine/2, shutdownWrite/1, close/1, 'closed?'/1]).
+         receiveExactly/2, receiveLine/2, shutdownWrite/1, close/1, 'closed?'/1,
+         localAddress/1, peerAddress/1]).
 
 connect({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}}) ->
     start_owner(fun() ->
@@ -27,12 +28,15 @@ close({_, Owner}) when is_pid(Owner) ->
     case is_process_alive(Owner) of true -> Owner ! close; false -> ok end,
     ok.
 'closed?'({_, Owner}) when is_pid(Owner) -> not is_process_alive(Owner).
+localAddress({_, Owner}) when is_pid(Owner) -> call(Owner, local_address).
+peerAddress({'Net.Socket.TCP.TCPConnection', Owner}) -> call(Owner, peer_address);
+peerAddress(_) -> net_error('Parse', 'TCP', <<"peer address requires a connection">>).
 
 start_owner(Open, Tag, Operation) ->
     Parent = self(), Ref = make_ref(),
     Pid = spawn(fun() ->
         case Open() of
-            {ok, Socket} -> Parent ! {Ref, ok, self()}, owner(Socket, Tag);
+            {ok, Socket} -> Parent ! {Ref, ok, self()}, owner(Socket, Tag, <<>>);
             {error, Reason} -> Parent ! {Ref, error, Reason}
         end
     end),
@@ -41,59 +45,83 @@ start_owner(Open, Tag, Operation) ->
         {Ref, error, Reason} -> net_error(classify(Reason), Operation, diagnostic(Reason))
     after 11000 -> exit(Pid, kill), net_error('Timeout', Operation, <<"socket initialization timed out">>) end.
 
-owner(Socket, Tag) ->
+owner(Socket, Tag, Buffer) ->
     receive
         {call, From, Ref, accept} when Tag == 'Net.Socket.TCP.TCPListener' ->
             Reply = case gen_tcp:accept(Socket, 30000) of
                 {ok, Accepted} -> handoff(Accepted);
                 {error, R} -> net_error(classify(R), 'Connect', diagnostic(R))
             end,
-            From ! {Ref, Reply}, owner(Socket, Tag);
+            From ! {Ref, Reply}, owner(Socket, Tag, Buffer);
         {call, From, Ref, {send, Data}} ->
             Reply = case gen_tcp:send(Socket, Data) of
                 ok -> {'Ok', byte_size(Data)};
                 {error, R} -> net_error(classify(R), 'TCP', diagnostic(R))
             end,
-            From ! {Ref, Reply}, owner(Socket, Tag);
+            From ! {Ref, Reply}, owner(Socket, Tag, Buffer);
         {call, From, Ref, {recv_chunk, Limit}} ->
-            Reply = recv_chunk(Socket, Limit), From ! {Ref, Reply}, owner(Socket, Tag);
+            {Reply, Next} = recv_chunk(Socket, Limit, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, {recv_exact, Count}} ->
-            Reply = recv_exact(Socket, Count), From ! {Ref, Reply}, owner(Socket, Tag);
+            {Reply, Next} = recv_exact(Socket, Count, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, {recv_line, Limit}} ->
-            Reply = recv_line(Socket, Limit, <<>>), From ! {Ref, Reply}, owner(Socket, Tag);
+            {Reply, Next} = recv_line(Socket, Limit, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, shutdown_write} ->
             Reply = case gen_tcp:shutdown(Socket, write) of ok -> {'Ok', ok}; {error,R} -> net_error(classify(R),'TCP',diagnostic(R)) end,
-            From ! {Ref, Reply}, owner(Socket, Tag);
+            From ! {Ref, Reply}, owner(Socket, Tag, Buffer);
+        {call, From, Ref, local_address} ->
+            From ! {Ref, endpoint_result(inet:sockname(Socket))}, owner(Socket, Tag, Buffer);
+        {call, From, Ref, peer_address} ->
+            From ! {Ref, endpoint_result(inet:peername(Socket))}, owner(Socket, Tag, Buffer);
         close -> gen_tcp:close(Socket), ok;
-        _ -> owner(Socket, Tag)
+        _ -> owner(Socket, Tag, Buffer)
     end.
 
 handoff(Socket) ->
     Ref = make_ref(),
-    Pid = spawn(fun() -> receive {Ref, Socket} -> owner(Socket, 'Net.Socket.TCP.TCPConnection') end end),
+    Pid = spawn(fun() -> receive {Ref, Socket} -> owner(Socket, 'Net.Socket.TCP.TCPConnection', <<>>) end end),
     case gen_tcp:controlling_process(Socket, Pid) of
         ok -> Pid ! {Ref, Socket}, {'Ok', {'Net.Socket.TCP.TCPConnection', Pid}};
         {error, R} -> exit(Pid, kill), gen_tcp:close(Socket), net_error(classify(R), 'Connect', diagnostic(R))
     end.
 
-recv_chunk(_, Limit) when not is_integer(Limit); Limit =< 0 -> net_error('Limit', 'TCP', <<"receive limit must be positive">>);
-recv_chunk(Socket, Limit) -> case gen_tcp:recv(Socket, 0, 30000) of
-    {ok, Data} when byte_size(Data) =< Limit -> {'Ok', {'Binary', Data}};
-    {ok, Data} -> {'Error', {'Net.NetError', 'Limit', 'TCP', <<"received chunk exceeds limit">>, 'None', {'Just', byte_size(Data)}}};
-    {error, R} -> net_error(classify(R), 'TCP', diagnostic(R))
+recv_chunk(_, Limit, Buffer) when not is_integer(Limit); Limit =< 0 ->
+    {net_error('Limit', 'TCP', <<"receive limit must be positive">>), Buffer};
+recv_chunk(_, Limit, Buffer) when byte_size(Buffer) > 0 ->
+    Count = min(Limit, byte_size(Buffer)),
+    {{'Ok', {'Binary', binary:part(Buffer, 0, Count)}},
+     binary:part(Buffer, Count, byte_size(Buffer) - Count)};
+recv_chunk(Socket, Limit, <<>>) -> case gen_tcp:recv(Socket, 0, 30000) of
+    {ok, Data} -> recv_chunk(Socket, Limit, Data);
+    {error, R} -> {net_error(classify(R), 'TCP', diagnostic(R)), <<>>}
 end.
 
-recv_exact(_, Count) when not is_integer(Count); Count < 0 -> net_error('Limit', 'TCP', <<"receive count must be non-negative">>);
-recv_exact(_, 0) -> {'Ok', {'Binary', <<>>}};
-recv_exact(Socket, Count) -> case gen_tcp:recv(Socket, Count, 30000) of
-    {ok, Data} -> {'Ok', {'Binary', Data}}; {error, R} -> net_error(classify(R), 'TCP', diagnostic(R)) end.
+endpoint_result({ok, {Address, Port}}) ->
+    {'Ok', {'Net.Socket.TCP.Endpoint', iolist_to_binary(inet:ntoa(Address)), {'Net.Port', Port}}};
+endpoint_result({error, Reason}) -> net_error(classify(Reason), 'TCP', diagnostic(Reason)).
 
-recv_line(_, Limit, Acc) when byte_size(Acc) >= Limit ->
-    {'Error', {'Net.NetError', 'Limit', 'TCP', <<"line exceeds limit">>, 'None', {'Just', byte_size(Acc)}}};
-recv_line(Socket, Limit, Acc) ->
-    case gen_tcp:recv(Socket, 1, 30000) of
-        {ok, <<C>>} -> New = <<Acc/binary, C>>, case C of $\n -> {'Ok', {'Binary', New}}; _ -> recv_line(Socket, Limit, New) end;
-        {error, R} -> net_error(classify(R), 'TCP', diagnostic(R))
+recv_exact(_, Count, Buffer) when not is_integer(Count); Count < 0 -> {net_error('Limit', 'TCP', <<"receive count must be non-negative">>), Buffer};
+recv_exact(_, 0, Buffer) -> {{'Ok', {'Binary', <<>>}}, Buffer};
+recv_exact(_, Count, Buffer) when byte_size(Buffer) >= Count ->
+    {{'Ok', {'Binary', binary:part(Buffer, 0, Count)}}, binary:part(Buffer, Count, byte_size(Buffer)-Count)};
+recv_exact(Socket, Count, Buffer) -> case gen_tcp:recv(Socket, Count-byte_size(Buffer), 30000) of
+    {ok, Data} -> {{'Ok', {'Binary', <<Buffer/binary,Data/binary>>}}, <<>>};
+    {error, R} -> {net_error(classify(R), 'TCP', diagnostic(R)), Buffer}
+end.
+
+recv_line(_, Limit, Buffer) when not is_integer(Limit); Limit =< 0 ->
+    {net_error('Limit', 'TCP', <<"line limit must be positive">>), Buffer};
+recv_line(Socket, Limit, Buffer) ->
+    case binary:match(Buffer, <<"\n">>) of
+        {Position, 1} when Position + 1 =< Limit ->
+            Count = Position + 1,
+            {{'Ok', {'Binary', binary:part(Buffer, 0, Count)}},
+             binary:part(Buffer, Count, byte_size(Buffer)-Count)};
+        _ when byte_size(Buffer) >= Limit ->
+            {{'Error', {'Net.NetError', 'Limit', 'TCP', <<"line exceeds limit">>, 'None', {'Just', Limit}}}, Buffer};
+        nomatch -> case gen_tcp:recv(Socket, 0, 30000) of
+            {ok, Data} -> recv_line(Socket, Limit, <<Buffer/binary,Data/binary>>);
+            {error, R} -> {net_error(classify(R), 'TCP', diagnostic(R)), Buffer}
+        end
     end.
 
 call(Owner, Request) when is_pid(Owner) ->

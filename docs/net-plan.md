@@ -1,9 +1,25 @@
 # Kex Networking Plan
 
-> **Status: implementation in progress on `net-redesign`.** Foundational URI,
-> URL, IP, header, retry, TCP, UDP, Unix, TLS, DNS, and buffered HTTP client
-> work is present. APIs still marked **proposed** below remain design targets;
-> do not treat those sections as an API reference yet.
+> **Status: implementation in progress on `net-redesign`.** The source-level
+> APIs, rather than examples in this document, are authoritative. APIs marked
+> **proposed** remain design targets and must not be treated as shipped.
+
+Current checkpoint evidence:
+
+| Checkpoint | Status | Implemented now | Still required by this plan |
+|---|---|---|---|
+| Foundations | Partial | Strict URI/URL values, explicit IRI conversion, query/form separation, IP/CIDR, ports, headers, statuses, typed errors, basic fixed/exponential retry | Complete UTS #46 processing, redacted inspection, retry predicates/elapsed bounds/jitter/injected time and randomness |
+| Raw transports | Partial | Process-owned TCP, UDP, Unix stream, and direct TLS client primitives with typed unsupported tree fallbacks | Curated options/timeouts, framed reads, bounded servers/events, multicast/broadcast, stale-path policy options, TLS upgrade/server/identity/session surface, scripted mocks |
+| DNS | Partial | System resolver, A/AAAA/CNAME/MX/TXT/SRV/PTR values, bounded positive/negative cache and statistics | Typed custom nameservers/search/retry/timeout configuration, stronger DNSSEC reporting, scripted capability mock |
+| HTTP client | Partial | Stateless helpers, explicit buffered client, strict response framing, bounded bodies, origin reuse, idle expiry/statistics/close | Concurrent bounded pool/wait queues, streaming/trailers API, redirects, cookies, compression, proxies/CONNECT, cancellation, replaceable transport mock |
+| HTTP server | Partial | Ordered exact/named/wildcard routes, HEAD fallback, OPTIONS/405, buffered bodies, sequential keep-alive, bounded handlers, graceful stop | Body streaming/trailers, middleware/groups/error renderers, full context/events, deadlines, Expect/continue, forms/multipart, response validation, TLS serving |
+| WebSocket | Partial | Verified `ws`/`wss` client handshake, subprotocols, masked sends, fragmented high-level receive, UTF-8/close/limit checks, automatic pong | Server upgrades, raw frames, heartbeat, reconnecting client, scripted mock, browser implementation |
+| Browser wasm, examples, guides | Partial | Granular support values and typed unsupported paths for non-networking backends, source API examples, and the current networking guide | Fetch/WebSocket browser runtimes and Chromium CI, complete example inventory, and conformance vectors |
+
+The executable coverage currently concentrates on foundational values, DNS
+cache behavior, buffered HTTP client/server loopback behavior, and WebSocket
+client protocol fixtures. The verification inventory near the end of this
+document remains the completion gate.
 
 ## Syntax and API status
 

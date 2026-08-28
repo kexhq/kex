@@ -59,7 +59,11 @@ loop(Transport, Buffer, Fragment, Maximum, Selected) ->
     receive
         {call, From, Ref, {send, Message}} ->
             Reply = send_message(Transport, Message, Maximum),
-            From ! {Ref, Reply}, loop(Transport, Buffer, Fragment, Maximum, Selected);
+            From ! {Ref, Reply},
+            case Reply of
+                {'Error', _} -> transport_close(Transport);
+                _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
+            end;
         {call, From, Ref, receive_message} ->
             case receive_message(Transport, Buffer, Fragment, Maximum) of
                 {Reply, NextBuffer, NextFragment, continue} ->
@@ -149,7 +153,9 @@ handle_frame(_, _, _, _, Rest, _, _) ->
 read_frame(Transport, Buffer0, Maximum) ->
     case take(Transport, Buffer0, 2) of
         {ok, <<FinBit:1, Rsv:3, Opcode:4, Mask:1, LengthCode:7>>, Buffer1}
-          when Rsv =:= 0, Mask =:= 0 ->
+          when Rsv =:= 0, Mask =:= 0,
+               (Opcode =:= 0 orelse Opcode =:= 1 orelse Opcode =:= 2 orelse
+                Opcode =:= 8 orelse Opcode =:= 9 orelse Opcode =:= 10) ->
             case frame_length(Transport, Buffer1, LengthCode) of
                 {ok, Length, Buffer2} when Length =< Maximum,
                                            not (Opcode >= 8 andalso (FinBit =:= 0 orelse Length > 125)) ->
@@ -166,10 +172,14 @@ read_frame(Transport, Buffer0, Maximum) ->
 
 frame_length(_, Buffer, Code) when Code < 126 -> {ok, Code, Buffer};
 frame_length(Transport, Buffer, 126) ->
-    case take(Transport, Buffer, 2) of {ok, <<Length:16/big>>, Rest} -> {ok, Length, Rest}; Error -> Error end;
+    case take(Transport, Buffer, 2) of
+        {ok, <<Length:16/big>>, Rest} when Length >= 126 -> {ok, Length, Rest};
+        {ok, _, _} -> {error, invalid_length};
+        Error -> Error
+    end;
 frame_length(Transport, Buffer, 127) ->
     case take(Transport, Buffer, 8) of
-        {ok, <<0:1, Length:63/big>>, Rest} -> {ok, Length, Rest};
+        {ok, <<0:1, Length:63/big>>, Rest} when Length >= 65536 -> {ok, Length, Rest};
         {ok, _, _} -> {error, invalid_length};
         Error -> Error
     end.
@@ -210,17 +220,27 @@ handshake(Transport, Target, Host, Protocols) ->
     end.
 
 validate_handshake(Block, Key, Protocols, Buffered) ->
-    [Status | Lines] = binary:split(Block, <<"\r\n">>, [global]),
-    Headers = parse_headers(Lines, []),
+    case binary:split(Block, <<"\r\n">>, [global]) of
+        [Status | Lines] ->
+            case parse_headers(Lines, []) of
+                {ok, Headers} -> validate_handshake_values(Status, Headers, Key, Protocols, Buffered);
+                error -> {error, error_value('Protocol', <<"invalid WebSocket handshake headers">>)}
+            end;
+        _ -> {error, error_value('Protocol', <<"invalid WebSocket handshake response">>)}
+    end.
+
+validate_handshake_values(Status, Headers, Key, Protocols, Buffered) ->
     Expected = base64:encode(crypto:hash(sha, <<Key/binary, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11">>)),
-    Accept = first_header(<<"sec-websocket-accept">>, Headers),
-    Upgrade = lower(first_header(<<"upgrade">>, Headers)),
-    Connection = lower(first_header(<<"connection">>, Headers)),
-    Selected = first_header(<<"sec-websocket-protocol">>, Headers),
-    case binary:match(Status, <<"HTTP/1.1 101 ">>) =:= {0, 13} andalso
-         Accept =:= Expected andalso Upgrade =:= <<"websocket">> andalso
-         header_has_token(Connection, <<"upgrade">>) andalso
-         (Selected =:= <<>> orelse lists:member(Selected, Protocols)) of
+    Accepts = header_values(<<"sec-websocket-accept">>, Headers),
+    SelectedValues = header_values(<<"sec-websocket-protocol">>, Headers),
+    Selected = case SelectedValues of [Value] -> Value; [] -> <<>>; _ -> invalid end,
+    Valid = binary:match(Status, <<"HTTP/1.1 101 ">>) =:= {0, 13} andalso
+            Accepts =:= [Expected] andalso
+            headers_have_token(<<"upgrade">>, Headers, <<"websocket">>) andalso
+            headers_have_token(<<"connection">>, Headers, <<"upgrade">>) andalso
+            header_values(<<"sec-websocket-extensions">>, Headers) =:= [] andalso
+            (Selected =:= <<>> orelse lists:member(Selected, Protocols)),
+    case Valid of
         true -> {ok, case Selected of <<>> -> undefined; _ -> Selected end, Buffered};
         false -> {error, error_value('Protocol', <<"invalid WebSocket handshake response">>)}
     end.
@@ -230,9 +250,12 @@ parse_url(URL) ->
         Parts = uri_string:parse(URL), Scheme = maps:get(scheme, Parts),
         Host = maps:get(host, Parts), Port = maps:get(port, Parts, default_port(Scheme)),
         true = (Scheme =:= <<"ws">> orelse Scheme =:= <<"wss">>),
+        false = maps:is_key(fragment, Parts),
+        false = maps:is_key(userinfo, Parts),
         Path = case maps:get(path, Parts, <<>>) of <<>> -> <<"/">>; Value -> Value end,
         Target = case maps:find(query, Parts) of {ok, Query} -> <<Path/binary, "?", Query/binary>>; error -> Path end,
-        HostHeader = case Port =:= default_port(Scheme) of true -> Host; false -> <<Host/binary, ":", (integer_to_binary(Port))/binary>> end,
+        AuthorityHost = authority_host(Host),
+        HostHeader = case Port =:= default_port(Scheme) of true -> AuthorityHost; false -> <<AuthorityHost/binary, ":", (integer_to_binary(Port))/binary>> end,
         {ok, {Scheme, Host, Port}, Target, HostHeader}
     catch _:_ -> {error, error_value('Parse', <<"WebSocket requires an absolute ws or wss URL">>)} end.
 default_port(<<"ws">>) -> 80; default_port(<<"wss">>) -> 443.
@@ -260,23 +283,39 @@ take(Transport, Buffer, Count) ->
         {ok, Data} -> take(Transport, <<Buffer/binary, Data/binary>>, Count);
         Error -> Error
     end.
-recv_until(_, Acc, _, Limit) when byte_size(Acc) > Limit -> {error, header_limit};
 recv_until(Transport, Acc, Marker, Limit) ->
     case binary:match(Acc, Marker) of
-        {Position, Size} -> {ok, binary:part(Acc, 0, Position), binary:part(Acc, Position + Size, byte_size(Acc) - Position - Size)};
+        {Position, Size} when Position =< Limit -> {ok, binary:part(Acc, 0, Position), binary:part(Acc, Position + Size, byte_size(Acc) - Position - Size)};
+        {_, _} -> {error, header_limit};
+        nomatch when byte_size(Acc) > Limit -> {error, header_limit};
         nomatch -> case transport_recv(Transport, 0) of {ok, Data} -> recv_until(Transport, <<Acc/binary, Data/binary>>, Marker, Limit); Error -> Error end
     end.
-parse_headers([], Acc) -> lists:reverse(Acc);
+parse_headers([], Acc) -> {ok, lists:reverse(Acc)};
+parse_headers(_, Acc) when length(Acc) >= 100 -> error;
 parse_headers([Line | Rest], Acc) ->
-    case binary:split(Line, <<":">>) of [Name, Value] -> parse_headers(Rest, [{lower(Name), string:trim(Value)} | Acc]); _ -> throw(invalid_header) end.
-first_header(Name, Headers) -> case [V || {K,V} <- Headers, K =:= Name] of [Value | _] -> Value; [] -> <<>> end.
+    case binary:split(Line, <<":">>) of
+        [Name, Value] when Name =/= <<>> ->
+            Trimmed = string:trim(Value),
+            case valid_header(Name, Trimmed) of
+                true -> parse_headers(Rest, [{lower(Name), Trimmed} | Acc]);
+                false -> error
+            end;
+        _ -> error
+    end.
+header_values(Name, Headers) -> [V || {K,V} <- Headers, K =:= Name].
 valid_protocol(Value) when is_binary(Value), byte_size(Value) > 0 ->
     lists:all(fun(C) -> C > 32 andalso C < 127 andalso not lists:member(C, "()<>@,;:\\\"/[]?={} ") end, binary:bin_to_list(Value));
 valid_protocol(_) -> false.
+valid_header(Name, Value) -> valid_protocol(Name) andalso
+    lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
+              binary:bin_to_list(Value)).
 valid_utf8(Text) -> case unicode:characters_to_list(Text) of Value when is_list(Value) -> true; _ -> false end.
 valid_close_code(Code) -> Code >= 1000 andalso Code < 5000 andalso not lists:member(Code, [1004,1005,1006,1015]).
-header_has_token(Value, Token) ->
-    lists:member(Token, [string:trim(Part) || Part <- binary:split(Value, <<",">>, [global])]).
+headers_have_token(Name, Headers, Token) ->
+    lists:member(Token, [string:trim(Part) || Value <- header_values(Name, Headers),
+                                             Part <- binary:split(lower(Value), <<",">>, [global])]).
+authority_host(Host) ->
+    case binary:match(Host, <<":">>) of nomatch -> Host; _ -> <<"[", Host/binary, "]">> end.
 close_payload(<<>>) -> {ok, 1005, <<>>};
 close_payload(<<Code:16/big, Reason/binary>>) ->
     case valid_close_code(Code) andalso valid_utf8(Reason) of

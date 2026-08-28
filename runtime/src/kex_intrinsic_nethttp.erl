@@ -1,7 +1,7 @@
 -module(kex_intrinsic_nethttp).
 -export([headers/1, parseHeaders/1, addHeader/3, setHeader/3, removeHeader/2,
          getHeader/2, getAllHeaders/2, status/1, get/1, request/4,
-         responseBinary/3, responseText/2, responseEmpty/1]).
+         responseBinary/3, responseText/2, responseEmpty/1, redactedHeaders/1]).
 
 headers(Entries) -> case lists:all(fun valid/1, Entries) of true -> {'Ok', {'Net.HTTP.Headers', Entries}}; false -> net_error(<<"invalid HTTP header">>) end.
 parseHeaders(Text) ->
@@ -22,6 +22,15 @@ responseText(Code, Text) ->
      {'Binary', Text}}.
 responseEmpty(Code) ->
     {'Net.HTTP.Response', {'Net.HTTP.Status', Code}, {'Net.HTTP.Headers', []}, {'Binary', <<>>}}.
+redactedHeaders({'Net.HTTP.Headers', Entries}) ->
+    Rendered = [[Name, <<": ">>, redact_header(Name, Value)] || {Name, Value} <- Entries],
+    iolist_to_binary([<<"Headers { ">>, lists:join(<<", ">>, Rendered), <<" }">>]).
+redact_header(Name, Value) ->
+    case lists:member(lower(Name), [<<"authorization">>, <<"proxy-authorization">>,
+                                    <<"cookie">>, <<"set-cookie">>]) of
+        true -> <<"***">>;
+        false -> Value
+    end.
 get(URL) -> request(<<"GET">>, URL, {'Net.HTTP.Headers', []}, {'Binary', <<>>}).
 
 request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', RequestBody})
@@ -67,7 +76,13 @@ parse_line(Line0) ->
     Line = binary:replace(Line0, <<"\r">>, <<>>),
     [N,V0] = binary:split(Line, <<":">>),
     {N, string:trim(V0)}.
-valid({N,V}) -> byte_size(N) > 0 andalso binary:match(N, <<"\r">>) == nomatch andalso binary:match(N, <<"\n">>) == nomatch andalso binary:match(V, <<"\r">>) == nomatch andalso binary:match(V, <<"\n">>) == nomatch.
+valid({N,V}) when is_binary(N), is_binary(V), byte_size(N) > 0 ->
+    lists:all(fun token_char/1, binary:bin_to_list(N)) andalso
+    lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
+              binary:bin_to_list(V));
+valid(_) -> false.
+token_char(C) -> C > 32 andalso C < 127 andalso
+                 not lists:member(C, "()<>@,;:\\\"/[]?={} ").
 lower(B) -> string:lowercase(B).
 net_error(M) -> {'Error', {'Net.NetError', 'Parse', 'HTTPClient', M, 'None', 'None'}}.
 diagnostic(Value) -> unicode:characters_to_binary(io_lib:format("~p", [Value])).

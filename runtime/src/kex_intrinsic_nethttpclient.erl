@@ -40,7 +40,9 @@ loop(Pool0, Total, Idle, Requests, Reused) ->
 
 perform(Method, URL, {'Net.HTTP.Headers', Headers}, {'Binary', Body}, Pool, Total)
   when is_binary(Method), is_binary(URL), is_list(Headers), is_binary(Body) ->
-    case parse_url(URL) of
+    case valid_method(Method) andalso lists:all(fun valid_header/1, Headers) of
+      false -> {error_value('Parse', <<"invalid HTTP method or headers">>), Pool, false};
+      true -> case parse_url(URL) of
         {ok, Origin, Target, HostHeader} ->
             case maps:take(Origin, Pool) of
                 {{Transport, _}, Rest} ->
@@ -61,7 +63,7 @@ perform(Method, URL, {'Net.HTTP.Headers', Headers}, {'Binary', Body}, Pool, Tota
                     end
             end;
         {error, Error} -> {Error, Pool, false}
-    end;
+    end end;
 perform(_, _, _, _, Pool, _) -> {error_value('Parse', <<"invalid HTTP request values">>), Pool, false}.
 
 parse_url(URL) ->
@@ -72,9 +74,10 @@ parse_url(URL) ->
         true = (Scheme =:= <<"http">> orelse Scheme =:= <<"https">>),
         Path = case maps:get(path, Parts, <<>>) of <<>> -> <<"/">>; P -> P end,
         Target = case maps:find(query, Parts) of {ok, Q} -> <<Path/binary, "?", Q/binary>>; error -> Path end,
+        AuthorityHost = authority_host(Host),
         HostHeader = case Port =:= default_port(Scheme) of
-                         true -> Host;
-                         false -> <<Host/binary, ":", (integer_to_binary(Port))/binary>>
+                         true -> AuthorityHost;
+                         false -> <<AuthorityHost/binary, ":", (integer_to_binary(Port))/binary>>
                      end,
         {ok, {Scheme, Host, Port}, Target, HostHeader}
     catch _:_ -> {error, error_value('Parse', <<"HTTP requires an absolute http or https URL">>)} end.
@@ -106,16 +109,23 @@ exchange(Transport, Method, Target, Host, Headers0, Body) ->
         {error, Reason} -> {error, native_error('Connect', Reason)}
     end.
 
-read_response(Transport, Method) ->
-    case recv_until(Transport, <<>>, <<"\r\n\r\n">>, ?HEADER_LIMIT) of
+read_response(Transport, Method) -> read_response(Transport, Method, <<>>, 0).
+read_response(_, _, _, Interim) when Interim >= 8 ->
+    {error, error_value('Protocol', <<"too many informational HTTP responses">>)};
+read_response(Transport, Method, Initial, Interim) ->
+    case recv_until(Transport, Initial, <<"\r\n\r\n">>, ?HEADER_LIMIT) of
         {ok, Block, Buffered} ->
             case parse_response_head(Block) of
+                {ok, _, Code, _} when Code >= 100, Code < 200, Code =/= 101 ->
+                    read_response(Transport, Method, Buffered, Interim + 1);
+                {ok, _, 101, _} ->
+                    {error, error_value('Protocol', <<"HTTP protocol upgrades are unsupported by this client">>)};
                 {ok, Version, Code, Headers} ->
                     case response_body(Transport, Method, Code, Headers, Buffered) of
-                        {ok, Body, Framing} ->
-                            ConnectionClose = lists:any(fun(V) -> lower(V) =:= <<"close">> end,
-                                                        values(<<"connection">>, Headers)),
-                            Reuse = case Version =:= <<"HTTP/1.1">> andalso not ConnectionClose andalso Framing =/= eof of true -> reusable; false -> close end,
+                        {ok, Body, Framing, Extra} ->
+                            ConnectionClose = header_has_token(<<"connection">>, Headers, <<"close">>),
+                            Reuse = case Version =:= <<"HTTP/1.1">> andalso not ConnectionClose andalso
+                                         Framing =/= eof andalso Extra =:= <<>> of true -> reusable; false -> close end,
                             {ok, {'Ok', {'Net.HTTP.Response', {'Net.HTTP.Status', Code},
                                         {'Net.HTTP.Headers', Headers}, {'Binary', Body}}}, Reuse};
                         {error, Error} -> {error, Error}
@@ -129,9 +139,13 @@ parse_response_head(Block) ->
     case binary:split(Block, <<"\r\n">>, [global]) of
         [StatusLine | Lines] ->
             case binary:split(StatusLine, <<" ">>, [global, trim_all]) of
-                [Version, CodeText | _] ->
-                    try {ok, Version, binary_to_integer(CodeText), parse_headers(Lines, [])}
-                    catch _:_ -> {error, error_value('Protocol', <<"invalid HTTP status line">>)} end;
+                [Version, CodeText | _] when Version =:= <<"HTTP/1.1">>; Version =:= <<"HTTP/1.0">> ->
+                    try
+                        Code = binary_to_integer(CodeText),
+                        true = Code >= 100 andalso Code =< 599,
+                        true = length(Lines) =< 100,
+                        {ok, Version, Code, parse_headers(Lines, [])}
+                    catch _:_ -> {error, error_value('Protocol', <<"invalid HTTP status line or headers">>)} end;
                 _ -> {error, error_value('Protocol', <<"invalid HTTP status line">>)}
             end;
         _ -> {error, error_value('Protocol', <<"missing HTTP status line">>)}
@@ -139,12 +153,17 @@ parse_response_head(Block) ->
 parse_headers([], Acc) -> lists:reverse(Acc);
 parse_headers([Line | Rest], Acc) ->
     case binary:split(Line, <<":">>) of
-        [Name, Value] when Name =/= <<>> -> parse_headers(Rest, [{Name, string:trim(Value)} | Acc]);
+        [Name, Value] when Name =/= <<>> ->
+            Trimmed = string:trim(Value),
+            case valid_header({Name, Trimmed}) of
+                true -> parse_headers(Rest, [{Name, Trimmed} | Acc]);
+                false -> throw(invalid_header)
+            end;
         _ -> throw(invalid_header)
     end.
 
-response_body(_, <<"HEAD">>, _, _, _) -> {ok, <<>>, fixed};
-response_body(_, _, Code, _, _) when Code =:= 204; Code =:= 304 -> {ok, <<>>, fixed};
+response_body(_, <<"HEAD">>, _, _, Buffered) -> {ok, <<>>, fixed, Buffered};
+response_body(_, _, Code, _, Buffered) when Code =:= 204; Code =:= 304 -> {ok, <<>>, fixed, Buffered};
 response_body(Transport, _, _, Headers, Buffered) ->
     case {values(<<"transfer-encoding">>, Headers), lists:usort(values(<<"content-length">>, Headers))} of
         {[Transfer], []} ->
@@ -153,7 +172,7 @@ response_body(Transport, _, _, Headers, Buffered) ->
             try
                 Length = binary_to_integer(LengthText),
                 case Length >= 0 andalso Length =< ?BODY_LIMIT of
-                    true -> case ensure(Transport, Buffered, Length) of {ok, Data, _} -> {ok, Data, fixed}; {error, R} -> {error, native_error('Protocol', R)} end;
+                    true -> case ensure(Transport, Buffered, Length) of {ok, Data, Rest} -> {ok, Data, fixed, Rest}; {error, R} -> {error, native_error('Protocol', R)} end;
                     false -> {error, error_value('Limit', <<"HTTP response body exceeds limit">>)}
                 end
             catch _:_ -> {error, error_value('Protocol', <<"invalid Content-Length">>)} end;
@@ -180,7 +199,7 @@ read_chunks(Transport, Buffer, Acc) when byte_size(Acc) =< ?BODY_LIMIT ->
     end;
 read_chunks(_, _, _) -> {error, error_value('Limit', <<"HTTP response body exceeds limit">>)}.
 
-consume_trailers(_, <<"\r\n">>, Acc) -> {ok, Acc, chunked};
+consume_trailers(_, <<"\r\n">>, Acc) -> {ok, Acc, chunked, <<>>};
 consume_trailers(_, <<"\r\n", _/binary>>, _) ->
     {error, error_value('Protocol', <<"unexpected bytes after chunked response">>)};
 consume_trailers(Transport, Buffer, Acc) ->
@@ -190,7 +209,7 @@ consume_trailers(Transport, Buffer, Acc) ->
                 Trailers ->
                     case values(<<"content-length">>, Trailers) ++
                          values(<<"transfer-encoding">>, Trailers) of
-                        [] -> {ok, Acc, chunked};
+                        [] -> {ok, Acc, chunked, <<>>};
                         _ -> {error, error_value('Protocol', <<"framing fields are forbidden in trailers">>)}
                     end
             catch _:_ -> {error, error_value('Protocol', <<"invalid HTTP trailers">>)} end;
@@ -198,15 +217,17 @@ consume_trailers(Transport, Buffer, Acc) ->
         {error, Reason} -> {error, native_error('Protocol', Reason)}
     end.
 
+read_line(_, Buffer) when byte_size(Buffer) > ?HEADER_LIMIT -> {error, header_limit};
 read_line(Transport, Buffer) ->
     case binary:match(Buffer, <<"\r\n">>) of
         {Position, 2} -> {ok, binary:part(Buffer, 0, Position), binary:part(Buffer, Position + 2, byte_size(Buffer) - Position - 2)};
         nomatch -> case transport_recv(Transport, 0) of {ok, Data} -> read_line(Transport, <<Buffer/binary, Data/binary>>); Error -> Error end
     end.
-recv_until(_, Acc, _, Limit) when byte_size(Acc) > Limit -> {error, header_limit};
 recv_until(Transport, Acc, Marker, Limit) ->
     case binary:match(Acc, Marker) of
-        {Position, Size} -> {ok, binary:part(Acc, 0, Position), binary:part(Acc, Position + Size, byte_size(Acc) - Position - Size)};
+        {Position, Size} when Position =< Limit -> {ok, binary:part(Acc, 0, Position), binary:part(Acc, Position + Size, byte_size(Acc) - Position - Size)};
+        {_, _} -> {error, header_limit};
+        nomatch when byte_size(Acc) > Limit -> {error, header_limit};
         nomatch -> case transport_recv(Transport, 0) of {ok, Data} -> recv_until(Transport, <<Acc/binary, Data/binary>>, Marker, Limit); Error -> Error end
     end.
 ensure(_, Buffer, Count) when byte_size(Buffer) >= Count ->
@@ -214,13 +235,28 @@ ensure(_, Buffer, Count) when byte_size(Buffer) >= Count ->
 ensure(Transport, Buffer, Count) ->
     case transport_recv(Transport, Count - byte_size(Buffer)) of {ok, Data} -> ensure(Transport, <<Buffer/binary, Data/binary>>, Count); Error -> Error end.
 read_eof(Transport, Acc) when byte_size(Acc) =< ?BODY_LIMIT ->
-    case transport_recv(Transport, 0) of {ok, Data} -> read_eof(Transport, <<Acc/binary, Data/binary>>); {error, closed} -> {ok, Acc, eof}; {error, R} -> {error, native_error('Protocol', R)} end;
+    case transport_recv(Transport, 0) of {ok, Data} -> read_eof(Transport, <<Acc/binary, Data/binary>>); {error, closed} -> {ok, Acc, eof, <<>>}; {error, R} -> {error, native_error('Protocol', R)} end;
 read_eof(_, _) -> {error, error_value('Limit', <<"HTTP response body exceeds limit">>)}.
 
 remove_managed(Headers) -> [Pair || Pair = {Name, _} <- Headers,
                                     not lists:member(lower(Name), [<<"host">>, <<"connection">>, <<"content-length">>, <<"transfer-encoding">>])].
 values(Name, Headers) -> [Value || {Key, Value} <- Headers, lower(Key) =:= Name].
 lower(Value) -> string:lowercase(Value).
+header_has_token(Name, Headers, Token) ->
+    lists:member(Token, [string:trim(Part) || Value <- values(Name, Headers),
+                                             Part <- binary:split(lower(Value), <<",">>, [global])]).
+valid_method(Method) when byte_size(Method) > 0 ->
+    lists:all(fun token_char/1, binary:bin_to_list(Method));
+valid_method(_) -> false.
+valid_header({Name, Value}) when is_binary(Name), is_binary(Value), byte_size(Name) > 0 ->
+    lists:all(fun token_char/1, binary:bin_to_list(Name)) andalso
+    lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
+              binary:bin_to_list(Value));
+valid_header(_) -> false.
+token_char(C) -> C > 32 andalso C < 127 andalso
+                 not lists:member(C, "()<>@,;:\\\"/[]?={} ").
+authority_host(Host) ->
+    case binary:match(Host, <<":">>) of nomatch -> Host; _ -> <<"[", Host/binary, "]">> end.
 put_pool(Origin, Transport, Pool, Total) ->
     Trimmed = case maps:size(Pool) >= Total of true -> close_one(Pool); false -> Pool end,
     maps:put(Origin, {Transport, erlang:monotonic_time(millisecond)}, Trimmed).

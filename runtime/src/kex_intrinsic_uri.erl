@@ -1,7 +1,7 @@
 -module(kex_intrinsic_uri).
 -export([parse/1, fromIRI/1, normalize/1, resolve/2, scheme/1, host/1, query/1,
          queryParse/1, queryEncode/1, formFrom/1, formParse/1, formEncode/1,
-         idnaHost/1]).
+         idnaHost/1, redacted/1]).
 
 parse(Text) when is_binary(Text) ->
     case ascii(Text) andalso valid_percent(Text) of
@@ -89,6 +89,21 @@ normalized(Text) ->
     try unicode:characters_to_binary(uri_string:normalize(Text)) catch _:_ -> Text end.
 safe_parse(Text) -> try {ok, uri_string:parse(Text)} catch _:_ -> error end.
 source({'URI.URI', Text}) -> Text; source({'URI.URL', Text}) -> Text.
+redacted(Value) ->
+    Text = source(Value),
+    try
+        Map = uri_string:parse(Text),
+        case maps:find(userinfo, Map) of
+            {ok, UserInfo} -> unicode:characters_to_binary(
+                uri_string:recompose(Map#{userinfo => redact_userinfo(UserInfo)}));
+            error -> Text
+        end
+    catch _:_ -> <<"<invalid URI>">> end.
+redact_userinfo(UserInfo) ->
+    case binary:split(UserInfo, <<":">>) of
+        [User, _] -> <<User/binary, ":***">>;
+        [_] -> UserInfo
+    end.
 option(undefined) -> 'None'; option(V) -> {'Just', V}.
 lower(B) -> string:lowercase(B).
 ascii(B) -> lists:all(fun(C) -> C < 128 end, binary:bin_to_list(B)).

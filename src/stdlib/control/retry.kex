@@ -1,6 +1,7 @@
 module Control.Retry
 
 # A bounded retry schedule. Attempts includes the initial call.
+# Delays are immutable +Duration+ values and never exceed +maximumDelay+.
 record Policy do
   maximumAttempts : Integer
   initialDelay : Duration
@@ -8,6 +9,12 @@ record Policy do
   maximumDelay : Duration
 end
 
+# Builds a constant-delay retry policy.
+#
+# @param maximumAttempts [Integer] total calls including the first
+# @param delay [Duration] delay before each subsequent call
+# @return [Policy] the retry schedule
+# @example +Retry.fixed(3, Duration.milliseconds(100))+.
 fixed : Integer -> Duration -> Policy
 let fixed(maximumAttempts, delay) = Policy {
   maximumAttempts: maximumAttempts,
@@ -16,6 +23,12 @@ let fixed(maximumAttempts, delay) = Policy {
   maximumDelay: delay
 }
 
+# Builds a doubling backoff capped at +maximumDelay+.
+#
+# @param maximumAttempts [Integer] total calls including the first
+# @param initialDelay [Duration] delay after the first failure
+# @param maximumDelay [Duration] upper bound for each delay
+# @return [Policy] the retry schedule
 exponential : Integer -> Duration -> Duration -> Policy
 let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
   maximumAttempts: maximumAttempts,
@@ -24,6 +37,14 @@ let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
   maximumDelay: maximumDelay
 }
 
+# Runs +operation+ until it succeeds or exhausts the policy.
+#
+# The last application error is returned unchanged. This helper performs no
+# network-specific classification: callers decide what operation to wrap.
+#
+# @param policy [Policy] the bounded schedule
+# @param operation [Block<Result<X,E>>] a fresh attempt
+# @return [Result<X,E>] the first success or final failure
 run : Policy -> Block<Result<X, E>> -> Result<X, E>
 foul run(policy, operation) = attempt(policy, operation, 1, policy.initialDelay)
 
@@ -45,12 +66,15 @@ end
 
 # The imported public namespace: `using Control.Retry` then `Retry.run(...)`.
 module Retry do
+  # Public imported alias of +Control.Retry.fixed+.
   fixed : Integer -> Duration -> Policy
   let fixed(maximumAttempts, delay) = Control.Retry.fixed(maximumAttempts, delay)
 
+  # Public imported alias of +Control.Retry.exponential+.
   exponential : Integer -> Duration -> Duration -> Policy
   let exponential(maximumAttempts, initialDelay, maximumDelay) = Control.Retry.exponential(maximumAttempts, initialDelay, maximumDelay)
 
+  # Public imported alias of +Control.Retry.run+.
   run : Policy -> Block<Result<X, E>> -> Result<X, E>
   foul run(policy, operation) = Control.Retry.run(policy, operation)
 end

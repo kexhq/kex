@@ -538,6 +538,14 @@ inspect_string({'Binary', Bin}) when is_binary(Bin) ->
     "#Binary<" ++ integer_to_list(byte_size(Bin)) ++ " bytes>";
 inspect_string({'MockFileHandle', Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
+%% Credential-bearing networking values stay redacted even when a selective
+%% import leaves their optional Inspectable implementation out of scope.
+inspect_string(Headers = {'Net.HTTP.Headers', _}) ->
+    unicode:characters_to_list(kex_intrinsic_nethttp:redactedHeaders(Headers));
+inspect_string(URI = {'URI.URI', _}) ->
+    unicode:characters_to_list(kex_intrinsic_uri:redacted(URI));
+inspect_string(URL = {'URI.URL', _}) ->
+    unicode:characters_to_list(kex_intrinsic_uri:redacted(URL));
 inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
                        (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                         element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->

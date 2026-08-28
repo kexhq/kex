@@ -1,14 +1,27 @@
 module Net
 
+# Shared networking values, capability discovery, and typed failures.
+#
+#   using Net
+#
+#   let https = Port.from(443).try
+#   if Support.current.tls.usable? then https.string else "TLS unavailable" end
+
+# A validated TCP or UDP port number in +0..65535+.
+#
+# Use +Port.from+ at input boundaries. Port zero requests an ephemeral port
+# where a listening API permits it.
 record Port do
   value : Integer
 end
 
+# Whether a feature was compiled into this backend and is usable now.
 record SupportValue do
   compiled? : Bool
   usable? : Bool
 end
 
+# Granular networking capabilities for the current backend and environment.
 record SupportReport do
   dns : SupportValue
   tcp : SupportValue
@@ -22,18 +35,32 @@ record SupportReport do
 end
 
 module Port do
+  # Validates a port number.
+  #
+  # @param value [Integer] a number in +0..65535+
+  # @return [Result<Port, NetError>] the validated port, or +Parse+
+  # @example +Port.from(443).try+.
   from : Integer -> Result<Port, NetError>
   let from(value) = Kex.Intrinsic.Net.port(value)
 end
 
 module Support do
+  # Reports compiled and currently usable networking features.
+  #
+  # @return [SupportReport] granular capability flags
+  # @example +Support.current.httpClient.usable?+.
   current : SupportReport
   let current = Kex.Intrinsic.Net.support()
 end
 
+# The subsystem or operation that produced a networking error.
 type NetOperation = DNS | TCP | UDP | Unix | TLS | HTTPClient | HTTPServer | WebSocketClient | WebSocketServer
+
+# Stable, backend-independent networking failure categories.
 type NetErrorKind = Parse | Resolve | Connect | Protocol | Timeout | Cancelled | Limit | Closed | ReadInProgress | UnsupportedBackend | UnsupportedOption | BrowserRestricted | OpaqueRedirect | MockEmpty | Backend
 
+# A typed networking failure. +phase+ adds optional protocol context and
+# +progress+ records bytes transferred before a partial-operation failure.
 record NetError do
   kind : NetErrorKind
   operation : NetOperation
@@ -43,5 +70,8 @@ record NetError do
 end
 
 make Port do
+  # Renders the decimal port without a host or scheme.
+  #
+  # @return [String] decimal port text
   let string -> String = @value.to(String).or("")
 end

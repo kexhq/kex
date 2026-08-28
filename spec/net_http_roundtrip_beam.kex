@@ -14,9 +14,17 @@ using Net.HTTP
 using Net.Socket
 
 let pong(request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "pong")
+let headPong(request: Request<Binary>, context: Context) -> Response<Binary> = Response.binary(200, "ignored".to(Binary).try, Headers.from([("X-Route", "head")]).try)
+
+let drainHeaders(connection: TCP.TCPConnection) -> Void do
+  let line = connection.receiveLine(8192).try.to(String).try
+  if line != "\r\n"
+    drainHeaders(connection)
+  end
+end
 
 main do
-  let router = Router.build.get("/ping", ~pong)
+  let router = Router.build.get("/ping", ~pong).route("HEAD", "/ping", ~headPong)
   # Port 0 asks the OS for a free port; `localAddress` reports the one it got.
   let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
   let server = Server.start(endpoint, router, ServerOptions {
@@ -30,6 +38,8 @@ main do
 
   let url = "http://127.0.0.1:${port}/ping"
   let client = Client.open().try
+  let injected = client.request("GET\r\nInjected:", url, Headers.empty, Binary.empty)
+  assert(injected.error?, "request methods must be valid HTTP tokens")
   let first = client.request("GET", url, Headers.empty, Binary.empty).try
   assert(first.status.code == 200, "the router should answer /ping")
   assert(first.status.success?, "200 is a success status")
@@ -40,13 +50,48 @@ main do
   let second = client.request("GET", url, Headers.empty, Binary.empty).try
   assert(second.status.code == 200, "a pooled connection should serve again")
   let stats = client.statistics
-  assert(stats.requests == 2, "both requests should be counted")
+  assert(stats.requests == 3, "rejected and completed request attempts should be counted")
   assert(stats.reusedConnections == 1, "the second request should reuse the first connection")
+
+  let head = client.request("HEAD", url, Headers.empty, Binary.empty).try
+  assert(head.headers.get("X-Route") == Just("head"), "an explicit HEAD route must beat GET fallback")
+  assert(head.body.empty?, "HEAD responses never expose a body")
+  let options = client.request("OPTIONS", url, Headers.empty, Binary.empty).try
+  assert(options.headers.get("Allow").try.contains?("HEAD"), "Allow must advertise generated HEAD support")
 
   let missingURL = "http://127.0.0.1:${port}/nope"
   let missing = client.request("GET", missingURL, Headers.empty, Binary.empty).try
   assert(missing.status.code == 404, "an unrouted path should answer 404")
   assert(missing.status.clientError?, "404 is a client error")
+
+  # Both requests are sent in one write. The server must carry bytes read past
+  # the first request into the next parse instead of dropping them.
+  let raw = TCP.connect(TCP.Endpoint.loopback(Net.Port.from(port).try)).try
+  let pipelined = "GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\nGET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+  raw.sendAll(pipelined.to(Binary).try).try
+  let keepAliveResponse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 4\r\nConnection: keep-alive\r\n\r\npong"
+  let closeResponse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong"
+  let firstRaw = raw.receiveExactly(keepAliveResponse.to(Binary).try.length).try
+  let secondRaw = raw.receiveExactly(closeResponse.to(Binary).try.length).try
+  assert(firstRaw.to(String).try == keepAliveResponse, "the first buffered request should remain reusable")
+  assert(secondRaw.to(String).try == closeResponse, "the second buffered request should close when requested")
+  raw.close
+
+  # A raw fixture sends an informational response and the final response in a
+  # single write. The client must skip 100 Continue while retaining buffered
+  # bytes for the final response parser.
+  let interimListener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let interimPort = TCP.localAddress(interimListener).try.port
+  let interimServer = Task.start do
+    let peer = interimListener.accept.try
+    drainHeaders(peer)
+    peer.sendAll("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nfinal".to(Binary).try).try
+    peer.close
+  end
+  let finalResponse = client.request("GET", "http://127.0.0.1:${interimPort.value}/", Headers.empty, Binary.empty).try
+  assert(finalResponse.body.to(String).try == "final", "informational responses must precede the final response")
+  interimServer.await
+  interimListener.close
 
   let report = client.close.try
   assert(report.closedConnections >= 1, "closing should report the pooled connection")

@@ -1,0 +1,31 @@
+# kex: run-beam
+#
+# Offline loopback coverage for bounded stream reads and datagram limits.
+
+using Net.Socket
+
+main do
+  let listener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let tcpPort = listener.localAddress.try.port
+  let tcpServer = Task.start do
+    let peer = listener.accept.try
+    peer.sendAll("abcdef".to(Binary).try).try
+    peer.close
+  end
+  let connection = TCP.connect(TCP.Endpoint.loopback(tcpPort)).try
+  assert(connection.receiveChunk(2).try.to(String).try == "ab")
+  assert(connection.receiveChunk(2).try.to(String).try == "cd")
+  assert(connection.receiveChunk(2).try.to(String).try == "ef")
+  connection.close
+  tcpServer.await
+  listener.close
+
+  let receiver = UDP.bind(UDP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let udpPort = receiver.localAddress.try.port
+  let sender = UDP.bind(UDP.Endpoint.loopback(Net.Port.from(0).try)).try
+  sender.sendTo(UDP.Endpoint.loopback(udpPort), "four".to(Binary).try).try
+  assert(receiver.receiveFrom(2).error?, "oversized datagrams must not be truncated")
+  sender.close
+  receiver.close
+  IO.printLine("ok")
+end

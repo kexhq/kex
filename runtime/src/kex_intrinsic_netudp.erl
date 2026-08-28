@@ -1,5 +1,5 @@
 -module(kex_intrinsic_netudp).
--export([bind/1, sendTo/3, receiveFrom/2, close/1, 'closed?'/1]).
+-export([bind/1, sendTo/3, receiveFrom/2, close/1, 'closed?'/1, localAddress/1]).
 
 bind({'Net.Socket.UDP.Endpoint', Host, {'Net.Port', Port}}) ->
     case inet:parse_address(binary_to_list(Host)) of
@@ -11,6 +11,7 @@ sendTo({'Net.Socket.UDP.Socket', Owner}, {'Net.Socket.UDP.Endpoint', Host, {'Net
 receiveFrom({'Net.Socket.UDP.Socket', Owner}, Limit) -> call(Owner, {'receive', Limit}).
 close({'Net.Socket.UDP.Socket', Owner}) -> case is_process_alive(Owner) of true -> Owner ! close; false -> ok end, ok.
 'closed?'({'Net.Socket.UDP.Socket', Owner}) -> not is_process_alive(Owner).
+localAddress({'Net.Socket.UDP.Socket', Owner}) -> call(Owner, local_address).
 
 start(Open) -> Parent=self(), Ref=make_ref(), Pid=spawn(fun()->case Open() of {ok,S}->Parent!{Ref,ok,self()},loop(S);{error,R}->Parent!{Ref,error,R} end end),
     receive {Ref,ok,Pid}->{'Ok',{'Net.Socket.UDP.Socket',Pid}}; {Ref,error,R}->net_error('Backend',diag(R)) after 10000->exit(Pid,kill),net_error('Timeout',<<"UDP bind timed out">>) end.
@@ -21,9 +22,16 @@ loop(Socket) -> receive
     {call,From,Ref,{'receive',Limit}} ->
         Reply=case is_integer(Limit) andalso Limit>0 andalso Limit=<65535 of
             false->net_error('Limit',<<"invalid UDP receive limit">>);
-            true->case gen_udp:recv(Socket,Limit,30000) of
+            true->case gen_udp:recv(Socket,65535,30000) of
+                {ok,{_,_,Data}} when byte_size(Data)>Limit->{'Error',{'Net.NetError','Limit','UDP',<<"datagram exceeds receive limit">>,'None',{'Just',byte_size(Data)}}};
                 {ok,{IP,Port,Data}}->{'Ok',{'Net.Socket.UDP.Datagram',{'Net.Socket.UDP.Endpoint',iolist_to_binary(inet:ntoa(IP)),{'Net.Port',Port}},{'Binary',Data}}};
                 {error,R}->net_error(case R of timeout->'Timeout';closed->'Closed';_->'Backend' end,diag(R)) end end,
+        From!{Ref,Reply},loop(Socket);
+    {call,From,Ref,local_address} ->
+        Reply=case inet:sockname(Socket) of
+            {ok,{IP,Port}}->{'Ok',{'Net.Socket.UDP.Endpoint',iolist_to_binary(inet:ntoa(IP)),{'Net.Port',Port}}};
+            {error,R}->net_error('Backend',diag(R))
+        end,
         From!{Ref,Reply},loop(Socket);
     close -> gen_udp:close(Socket),ok;
     _ -> loop(Socket)
