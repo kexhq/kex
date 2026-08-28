@@ -415,7 +415,8 @@ let config = { "host": "localhost", "port": 80 }  # string keys
 
 ### Sets
 
-Not part of the prelude, include via `using Set` first.
+Not part of the prelude, include via `using Data.Set` first — that one import
+brings in both flavours below.
 
 Collections of distinct elements, in two flavours. Both are built from a list
 and compare their elements structurally, the way map keys do.
@@ -437,6 +438,30 @@ seen.items.sort                        # [1, 2, 3]
 unspecified, so sort `items` before comparing them. Both implement `Enumerable`,
 `Foldable` and `Monoid`, and offer `union`/`intersect`/`difference`/
 `symmetricDifference`, `subset?`/`superset?`/`disjoint?`, and `add`/`delete`.
+
+### Stack and Queue
+
+Also under `Data`, and also opt-in: `using Data.Stack` and `using Data.Queue`.
+`Stack` is last-in-first-out (`push`/`pop`/`peek`); `Queue` is
+first-in-first-out (`enqueue`/`dequeue`/`peek`), implemented as a banker's
+queue so both operations stay amortized O(1). Both are real lists underneath
+— `items` is never opaque — and both implement `Enumerable`, `Foldable`,
+`Monoid`, `Showable` and `Blankable`, the same trait set `Data.Set` does.
+
+```kex
+let s = Stack.from([1, 2, 3])
+s.peek             # Just(3)
+s.push(4).items    # [1, 2, 3, 4]
+s.pop              # Just((3, Stack(1, 2)))
+
+let q = Queue.from([1, 2, 3])
+q.enqueue(4).items # [1, 2, 3, 4]
+q.dequeue          # Just((1, Queue(2, 3)))
+```
+
+Unlike `Set`, a `Queue`'s `front`/`back` split is not canonical — two queues
+holding the same elements can be structurally unequal — so `Queue` overloads
+`==` to compare `items` instead.
 
 ### Spread (`...`)
 
