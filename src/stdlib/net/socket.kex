@@ -57,6 +57,13 @@ module TCP do
   foul receiveChunk(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunk(connection, limit)
   # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
   foul receiveExactly(connection: TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
+  # Receives through the first +delimiter+ without exceeding +limit+ bytes.
+  #
+  # The delimiter is included in the returned bytes. An empty delimiter is a
+  # +Parse+ error; reaching the bound first is a +Limit+ error.
+  #
+  # @example +connection.receiveUntil("\r\n\r\n".to(Binary).try, 65536).try+
+  foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntil(connection, delimiter, limit)
   # Receives through a newline without exceeding +limit+ bytes.
   foul receiveLine(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
   # Half-closes the write side while leaving reads available.
@@ -164,6 +171,15 @@ module Unix do
   foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)
   # Receives one bounded chunk; EOF is +Closed+.
   foul receiveChunk(connection: UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveChunk(connection, limit)
+  # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
+  foul receiveExactly(connection: UnixConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveExactly(connection, count)
+  # Receives through +delimiter+, including it, within an explicit bound.
+  # @example +connection.receiveUntil("\n".to(Binary).try, 4096).try+
+  foul receiveUntil(connection: UnixConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveUntil(connection, delimiter, limit)
+  # Receives through a newline without exceeding +limit+ bytes.
+  foul receiveLine(connection: UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveLine(connection, limit)
+  # Half-closes the write side while leaving reads available.
+  foul shutdownWrite(connection: UnixConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetUnix.shutdownWrite(connection)
   # Waits for and returns the next stream connection.
   foul accept(listener: UnixListener) -> Result<UnixConnection, NetError> = Kex.Intrinsic.NetUnix.accept(listener)
   # Idempotently closes a stream.

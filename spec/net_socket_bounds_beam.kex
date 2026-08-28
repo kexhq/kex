@@ -9,13 +9,16 @@ main do
   let tcpPort = listener.localAddress.try.port
   let tcpServer = Task.start do
     let peer = listener.accept.try
-    peer.sendAll("abcdef".to(Binary).try).try
+    peer.sendAll("abcdef--tail\nrest".to(Binary).try).try
     peer.close
   end
   let connection = TCP.connect(TCP.Endpoint.loopback(tcpPort)).try
   assert(connection.receiveChunk(2).try.to(String).try == "ab")
   assert(connection.receiveChunk(2).try.to(String).try == "cd")
   assert(connection.receiveChunk(2).try.to(String).try == "ef")
+  assert(connection.receiveUntil("--".to(Binary).try, 8).try.to(String).try == "--")
+  assert(connection.receiveLine(16).try.to(String).try == "tail\n")
+  assert(connection.receiveExactly(4).try.to(String).try == "rest")
   connection.close
   tcpServer.await
   listener.close

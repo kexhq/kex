@@ -1,6 +1,6 @@
 -module(kex_intrinsic_nettcp).
 -export([connect/1, listen/1, accept/1, sendAll/2, receiveChunk/2,
-         receiveExactly/2, receiveLine/2, shutdownWrite/1, close/1, 'closed?'/1,
+         receiveExactly/2, receiveUntil/3, receiveLine/2, shutdownWrite/1, close/1, 'closed?'/1,
          localAddress/1, peerAddress/1]).
 
 connect({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}}) ->
@@ -22,6 +22,8 @@ accept({'Net.Socket.TCP.TCPListener', Owner}) -> call(Owner, accept).
 sendAll({'Net.Socket.TCP.TCPConnection', Owner}, {'Binary', Data}) -> call(Owner, {send, Data}).
 receiveChunk({'Net.Socket.TCP.TCPConnection', Owner}, Limit) -> call(Owner, {recv_chunk, Limit}).
 receiveExactly({'Net.Socket.TCP.TCPConnection', Owner}, Count) -> call(Owner, {recv_exact, Count}).
+receiveUntil({'Net.Socket.TCP.TCPConnection', Owner}, {'Binary', Delimiter}, Limit) ->
+    call(Owner, {recv_until, Delimiter, Limit}).
 receiveLine({'Net.Socket.TCP.TCPConnection', Owner}, Limit) -> call(Owner, {recv_line, Limit}).
 shutdownWrite({'Net.Socket.TCP.TCPConnection', Owner}) -> call(Owner, shutdown_write).
 close({_, Owner}) when is_pid(Owner) ->
@@ -63,6 +65,8 @@ owner(Socket, Tag, Buffer) ->
             {Reply, Next} = recv_chunk(Socket, Limit, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, {recv_exact, Count}} ->
             {Reply, Next} = recv_exact(Socket, Count, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
+        {call, From, Ref, {recv_until, Delimiter, Limit}} ->
+            {Reply, Next} = recv_until(Socket, Delimiter, Limit, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, {recv_line, Limit}} ->
             {Reply, Next} = recv_line(Socket, Limit, Buffer), From ! {Ref, Reply}, owner(Socket, Tag, Next);
         {call, From, Ref, shutdown_write} ->
@@ -122,6 +126,25 @@ recv_line(Socket, Limit, Buffer) ->
             {ok, Data} -> recv_line(Socket, Limit, <<Buffer/binary,Data/binary>>);
             {error, R} -> {net_error(classify(R), 'TCP', diagnostic(R)), Buffer}
         end
+    end.
+
+recv_until(_, Delimiter, _, Buffer) when not is_binary(Delimiter); byte_size(Delimiter) =:= 0 ->
+    {net_error('Parse', 'TCP', <<"receive delimiter must not be empty">>), Buffer};
+recv_until(_, _, Limit, Buffer) when not is_integer(Limit); Limit =< 0 ->
+    {net_error('Limit', 'TCP', <<"receive limit must be positive">>), Buffer};
+recv_until(Socket, Delimiter, Limit, Buffer) ->
+    case binary:match(Buffer, Delimiter) of
+        {Position, Length} when Position + Length =< Limit ->
+            Count = Position + Length,
+            {{'Ok', {'Binary', binary:part(Buffer, 0, Count)}},
+             binary:part(Buffer, Count, byte_size(Buffer) - Count)};
+        _ when byte_size(Buffer) >= Limit ->
+            {{'Error', {'Net.NetError', 'Limit', 'TCP', <<"delimiter not found within limit">>, 'None', {'Just', Limit}}}, Buffer};
+        nomatch ->
+            case gen_tcp:recv(Socket, 0, 30000) of
+                {ok, Data} -> recv_until(Socket, Delimiter, Limit, <<Buffer/binary, Data/binary>>);
+                {error, R} -> {net_error(classify(R), 'TCP', diagnostic(R)), Buffer}
+            end
     end.
 
 call(Owner, Request) when is_pid(Owner) ->

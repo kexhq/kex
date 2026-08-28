@@ -616,7 +616,7 @@ auto Evaluator::registerNetBuiltins() -> void {
     };
     for (const char* name : {"NetTCP::connect", "NetTCP::listen", "NetTCP::accept",
                              "NetTCP::sendAll", "NetTCP::receiveChunk",
-                             "NetTCP::receiveExactly", "NetTCP::receiveLine",
+                             "NetTCP::receiveExactly", "NetTCP::receiveUntil", "NetTCP::receiveLine",
                              "NetTCP::shutdownWrite", "NetTCP::localAddress",
                              "NetTCP::peerAddress"})
         defineIntrinsic(name, unsupportedSocket("TCP"));
@@ -624,7 +624,8 @@ auto Evaluator::registerNetBuiltins() -> void {
                              "NetUDP::localAddress"})
         defineIntrinsic(name, unsupportedSocket("UDP"));
     for (const char* name : {"NetUnix::connect", "NetUnix::listen", "NetUnix::accept",
-                             "NetUnix::sendAll", "NetUnix::receiveChunk"})
+                             "NetUnix::sendAll", "NetUnix::receiveChunk", "NetUnix::receiveExactly",
+                             "NetUnix::receiveUntil", "NetUnix::receiveLine", "NetUnix::shutdownWrite"})
         defineIntrinsic(name, unsupportedSocket("Unix"));
     for (const char* name : {"NetTLS::connect", "NetTLS::sendAll", "NetTLS::receiveChunk"})
         defineIntrinsic(name, unsupportedSocket("TLS"));

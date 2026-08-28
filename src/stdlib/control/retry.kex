@@ -7,7 +7,15 @@ record Policy do
   initialDelay : Duration
   multiplier : Float
   maximumDelay : Duration
+  maximumElapsed : Duration? = None
 end
+
+# Decides whether an application error is eligible for another attempt.
+type Predicate<E> = E -> Bool
+
+# Performs one scheduled delay. Supplying this callback makes retry tests
+# deterministic without sleeping.
+type Sleeper = Duration -> Void
 
 # Builds a constant-delay retry policy.
 #
@@ -20,7 +28,8 @@ let fixed(maximumAttempts, delay) = Policy {
   maximumAttempts: maximumAttempts,
   initialDelay: delay,
   multiplier: 1.0,
-  maximumDelay: delay
+  maximumDelay: delay,
+  maximumElapsed: None
 }
 
 # Builds a doubling backoff capped at +maximumDelay+.
@@ -34,8 +43,28 @@ let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
   maximumAttempts: maximumAttempts,
   initialDelay: initialDelay,
   multiplier: 2.0,
-  maximumDelay: maximumDelay
+  maximumDelay: maximumDelay,
+  maximumElapsed: None
 }
+
+make Policy do
+  # Returns the same schedule with a bound on total scheduled sleep time.
+  #
+  # The operation's own execution time is not counted; use operation-specific
+  # deadlines for that. A retry whose next delay would exceed this bound is
+  # not started.
+  #
+  # @param maximumElapsed [Duration] maximum cumulative scheduled delay
+  # @return [Policy] a copied policy with the elapsed bound
+  # @example +Retry.fixed(5, Duration.seconds(1)).withMaximumElapsed(Duration.seconds(2))+.
+  let withMaximumElapsed(maximumElapsed: Duration) -> Policy = Policy {
+    maximumAttempts: @maximumAttempts,
+    initialDelay: @initialDelay,
+    multiplier: @multiplier,
+    maximumDelay: @maximumDelay,
+    maximumElapsed: Just(maximumElapsed)
+  }
+end
 
 # Runs +operation+ until it succeeds or exhausts the policy.
 #
@@ -46,20 +75,54 @@ let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
 # @param operation [Block<Result<X,E>>] a fresh attempt
 # @return [Result<X,E>] the first success or final failure
 run : Policy -> Block<Result<X, E>> -> Result<X, E>
-foul run(policy, operation) = attempt(policy, operation, 1, policy.initialDelay)
+foul run(policy, operation) = runWith(policy, { |error| true }, { |delay| Task.sleep(delay) }, operation)
 
-foul attempt(policy: Policy, operation: Block<Result<X, E>>, number: Integer, delay: Duration) -> Result<X, E> do
+# Runs with an application-specific error predicate.
+#
+# A false predicate returns that error immediately. The predicate is evaluated
+# only when another attempt would otherwise be possible.
+#
+# @param policy [Policy] the bounded schedule
+# @param predicate [Predicate<E>] whether an error may be retried
+# @param operation [Block<Result<X,E>>] a fresh attempt
+# @return [Result<X,E>] the first success or final/non-retryable failure
+# @example +Retry.run(policy, { |error| error.retryable? }, do request() end)+
+run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
+foul run(policy, predicate, operation) = runWith(policy, predicate, { |delay| Task.sleep(delay) }, operation)
+
+# Runs with injected error classification and sleeping.
+#
+# This is the deterministic testing seam: a fake sleeper can record durations
+# or advance a virtual clock. Production callers normally use +Retry.run+.
+#
+# @param policy [Policy] the bounded schedule
+# @param predicate [Predicate<E>] whether an error may be retried
+# @param sleeper [Sleeper] performs or records each scheduled delay
+# @param operation [Block<Result<X,E>>] a fresh attempt
+# @return [Result<X,E>] the first success or final failure
+runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
+foul runWith(policy, predicate, sleeper, operation) = attempt(policy, predicate, sleeper, operation, 1, policy.initialDelay, Duration.seconds(0))
+
+foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, operation: Block<Result<X, E>>, number: Integer, delay: Duration, elapsed: Duration) -> Result<X, E> do
   let result = operation()
   return match result do
     Ok(value) => Ok(value)
     Error(error) => do
-      if number >= policy.maximumAttempts
+      if number >= policy.maximumAttempts || !predicate(error)
         return Error(error)
       end
-      Task.sleep(delay)
+      let nextElapsed = Duration { seconds: elapsed.seconds + delay.seconds }
+      let withinElapsed = match policy.maximumElapsed do
+        None => true
+        Just(maximum) => nextElapsed.seconds <= maximum.seconds
+      end
+      if !withinElapsed
+        return Error(error)
+      end
+      sleeper(delay)
       let nextSeconds = delay.seconds * policy.multiplier
       let bounded = if nextSeconds > policy.maximumDelay.seconds then policy.maximumDelay else Duration { seconds: nextSeconds } end
-      return attempt(policy, operation, number + 1, bounded)
+      return attempt(policy, predicate, sleeper, operation, number + 1, bounded, nextElapsed)
     end
   end
 end
@@ -77,4 +140,12 @@ module Retry do
   # Public imported alias of +Control.Retry.run+.
   run : Policy -> Block<Result<X, E>> -> Result<X, E>
   foul run(policy, operation) = Control.Retry.run(policy, operation)
+
+  # Retries only errors accepted by +predicate+.
+  run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
+  foul run(policy, predicate, operation) = Control.Retry.run(policy, predicate, operation)
+
+  # Deterministic seam with an injected sleeper, primarily for specifications.
+  runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
+  foul runWith(policy, predicate, sleeper, operation) = Control.Retry.runWith(policy, predicate, sleeper, operation)
 end
