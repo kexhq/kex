@@ -1,0 +1,27 @@
+# `Units.Data` (data sizes: KB, MB, GiB, ...) and `Data.Set` both end in the
+# segment `Data`. Importing both at once is the case the alias mechanism
+# behind kexhq/kex#229 has to get right: a bare `Data` would be ambiguous
+# between them, but nothing here ever writes bare `Data` — every reference is
+# either `Data.Set` (a literal, fully-qualified path, which must always win
+# over any alias) or the members `using Data.Set` brings into scope (`Set`,
+# `UnorderedSet`). Proving the literal path resolves correctly here, with
+# `Units.Data` in scope, is what pins the precedence.
+using Units.Data
+using Data.Set
+
+describe("Data.Set and Units.Data share a last segment") do
+  it("resolves the literal Data.Set path to the container module, not Units.Data") do
+    let s = Data.Set.from([1, 2, 3])
+    assert(s.count == 3)
+    assert(s.items == [1, 2, 3])
+  end
+
+  it("resolves the bare Set alias brought in by using Data.Set") do
+    assert(Set.from([1, 2]).items == [1, 2])
+  end
+
+  it("still resolves Units.Data's own members normally") do
+    let size = 5.size(MB)
+    assert(size.canonical == 5000000.0)
+  end
+end

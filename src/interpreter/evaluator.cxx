@@ -3018,12 +3018,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
     if (!opSymbol.empty()) {
         std::vector<ValuePtr> operatorArgs{left, right};
         auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
-        fprintf(stderr, "[DEBUG-OP] opSymbol=%s methodName=%s left=%s right=%s\n",
-                opSymbol.c_str(), methodName.c_str(), left->typeName().c_str(), right->typeName().c_str());
         if (methodName != opSymbol) {
-            auto r = callFunction(methodName, {left, right}, {}, loc);
-            fprintf(stderr, "[DEBUG-OP] result=%s\n", r->typeName().c_str());
-            return r;
+            return callFunction(methodName, {left, right}, {}, loc);
         }
     }
 
@@ -3513,6 +3509,22 @@ auto Evaluator::registerRuntimeSignature(
 
 auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                                    const ast::TypeExpr& type) const -> bool {
+    // A `make X<A> do ... end` sitting directly in a file-header module
+    // (`module Data`) writes its own param-type annotations against the
+    // record's BARE name (`other: Set<A>`), but the record's runtime
+    // dispatch tag is qualified (`Data.Set`) — so a same-type overload
+    // that needs `dispatchByParamType` to pick between clauses (`+`'s
+    // `Set<A>` vs `[A]`) never matched either one and silently fell
+    // through to `None` (kexhq/kex#229). Accept a match on the tag's own
+    // last segment too, the same short-name fallback `resolveMethodName`
+    // already takes for dispatch.
+    auto matchesName = [](const std::string& actual,
+                          const std::string& expected) {
+        if (actual == expected) return true;
+        const auto dot = actual.rfind('.');
+        return dot != std::string::npos &&
+            actual.compare(dot + 1, std::string::npos, expected) == 0;
+    };
     return std::visit([&](const auto& node) -> bool {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>) {
@@ -3523,7 +3535,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                  std::isupper(static_cast<unsigned char>(expected[0]))))
                 return true;
             auto actual = dispatchTypeName(value);
-            if (actual == expected) return true;
+            if (matchesName(actual, expected)) return true;
             if (auto parent = m_variantParent.find(actual);
                 parent != m_variantParent.end() && parent->second == expected)
                 return true;
@@ -3541,7 +3553,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return actual == "None" || actual == "Just" ||
                        (m_variantParent.contains(actual) &&
                         m_variantParent.at(actual) == "Optional");
-            return actual == expected ||
+            return matchesName(actual, expected) ||
                 (m_variantParent.contains(actual) &&
                  m_variantParent.at(actual) == expected);
         } else if constexpr (std::is_same_v<T, ast::FunctionType> ||

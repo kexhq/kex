@@ -38,29 +38,40 @@ end
 
 make Address do
   # @return [String] canonical address text
+  string :> String
   let string -> String = Kex.Intrinsic.NetIP.addressString(this)
   # @return [Integer] +4+ for IPv4 or +6+ for IPv6
+  version :> Integer
   let version -> Integer = Kex.Intrinsic.NetIP.version(this)
   # @return [Bool] whether this is a loopback address
+  loopback? :> Bool
   let loopback? -> Bool = Kex.Intrinsic.NetIP.loopback?(this)
   # @return [Bool] whether this is a private-use address
+  private? :> Bool
   let private? -> Bool = Kex.Intrinsic.NetIP.private?(this)
   # @return [Bool] whether every address bit is zero
+  unspecified? :> Bool
   let unspecified? -> Bool = Kex.Intrinsic.NetIP.unspecified?(this)
   # @return [Bool] whether this is a multicast address
+  multicast? :> Bool
   let multicast? -> Bool = Kex.Intrinsic.NetIP.multicast?(this)
 end
 
 make Network do
   # @return [String] canonical CIDR text
+  string :> String
   let string -> String = Kex.Intrinsic.NetIP.networkString(this)
   # @param address [Address] an address of the same family
   # @return [Bool] whether +address+ belongs to this network
+  contains :> Address -> Bool
   let contains(address: Address) -> Bool = Kex.Intrinsic.NetIP.contains?(this, address)
   # @return [Integer] the number of fixed leading bits
+  prefix :> Integer
   let prefix -> Integer = Kex.Intrinsic.NetIP.prefix(this)
   # @return [Address] the first address in the range
+  first :> Address
   let first -> Address = Kex.Intrinsic.NetIP.first(this)
   # @return [Address] the last address in the range
+  last :> Address
   let last -> Address = Kex.Intrinsic.NetIP.last(this)
 end
