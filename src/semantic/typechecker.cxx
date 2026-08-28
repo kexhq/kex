@@ -879,6 +879,81 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     return name;
 }
 
+// Resolves a bare module segment against the modules `using` brought into
+// scope, when `name` is not itself a registered module — `Set.from([…])`
+// after `using Data.Set` writes the receiver as `Set`, but the module is
+// registered as `Data.Set` (a file-level `module Data` header qualifies the
+// nested `module Set do … end` constructor block that provides it).
+//
+// Precedence, most to least specific:
+//   1. `name` is already a real key — never touched (this is what keeps
+//      `Units.Data` and `Data.Set` unambiguous when a file imports both:
+//      a literal `Data.Set.from(…)` matches this tier before any alias is
+//      considered, so the `Data` → `Units.Data` alias below never gets a
+//      chance to capture it).
+//   2. An active `using M` whose last segment is `name` (`using Data.Set`
+//      aliases bare `Set`), or whose immediate child `M.name` is a real
+//      module (`using Net.HTTP` aliases bare `Status` to `Net.HTTP.Status`).
+//      Two imports aliasing the same bare segment is an ambiguity — leave
+//      `name` unresolved rather than guessing.
+//   3. A globally unique module whose last segment is `name`, the same
+//      last-resort `resolveRecordName` takes for record names — this is what
+//      lets `UnorderedSet.from(…)` work from the same `using Data.Set` that
+//      only aliases `Set` under rule 2, since `Data.Set` and `Data.UnorderedSet`
+//      share a file but not a parent/child relationship.
+auto TypeChecker::resolveModulePath(const std::string& name,
+                                    const std::string& member) const
+    -> std::string {
+    if (!m_importedInterfaces) return name;
+    // A `make X<A> do ... end` block unconditionally creates a placeholder
+    // `ifaces.modules[typeName]` entry while scanning its own methods
+    // (`prelude_interfaces.hxx`'s `collectMakeMember`), keyed by the type's
+    // BARE written name regardless of the file's enclosing `module` header —
+    // so `ifaces.modules["Set"]` exists even though `Set`'s static
+    // constructors (`from`, `empty`) were published under the qualified
+    // `Data.Set`. A mere key match is therefore not enough to trust `name`
+    // literally; the literal module must actually export `member`.
+    auto exportsMember = [&](const std::string& module) {
+        auto found = m_importedInterfaces->modules.find(module);
+        if (found == m_importedInterfaces->modules.end()) return false;
+        auto exported = found->second.exports.find(member);
+        return exported != found->second.exports.end() && !exported->second.empty();
+    };
+    if (exportsMember(name)) return name;
+    auto lastSegmentOf = [](const std::string& module) {
+        const auto dot = module.rfind('.');
+        return dot == std::string::npos ? module : module.substr(dot + 1);
+    };
+    auto consider = [&](const std::string& module,
+                        std::vector<std::string>& candidates) {
+        if (lastSegmentOf(module) == name && exportsMember(module))
+            candidates.push_back(module);
+        const auto child = module + "." + name;
+        if (exportsMember(child)) candidates.push_back(child);
+    };
+    std::vector<std::string> candidates;
+    for (const auto& import : m_declarationImports) consider(import.module, candidates);
+    for (const auto& scope : m_importScopeStack)
+        for (const auto& import : scope) consider(import.module, candidates);
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                     candidates.end());
+    if (candidates.size() == 1) return candidates.front();
+    if (!candidates.empty()) return name;
+
+    std::optional<std::string> unique;
+    const auto suffix = "." + name;
+    for (const auto& [candidate, _] : m_importedInterfaces->modules) {
+        if (candidate.size() <= suffix.size() ||
+            candidate.compare(candidate.size() - suffix.size(), suffix.size(),
+                              suffix) != 0 ||
+            !exportsMember(candidate))
+            continue;
+        if (unique && *unique != candidate) return name;
+        unique = candidate;
+    }
+    return unique.value_or(name);
+}
 
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     if (!def.variants) return;
@@ -3266,11 +3341,28 @@ auto TypeChecker::importedFunctionVisible(
 auto TypeChecker::moduleMemberImported(const std::string& module,
                                        const std::string& member) const -> bool {
     auto selected = [&](const ImportSelection& import) {
-        if (module != import.module &&
-            module.rfind(import.module + ".", 0) != 0)
-            return false;
+        const bool prefixMatch = module == import.module ||
+            module.rfind(import.module + ".", 0) == 0;
+        if (!prefixMatch) {
+            // A `make X<A> do ... end` sitting directly in a file-header
+            // module (`module Data`) attributes its receivers to the
+            // record's own qualified name (`Data.UnorderedSet`) — a SIBLING
+            // of another type declared in the same file (`Data.Set`), not
+            // its ancestor or descendant. `using Data.Set` is meant to bring
+            // every flavour the file declares along with it (the header
+            // comment says so), so a shared immediate parent is visibility
+            // too, not just a literal prefix match (kexhq/kex#229).
+            const auto parentOf = [](const std::string& qualified) {
+                const auto dot = qualified.rfind('.');
+                return dot == std::string::npos ? std::string()
+                                                 : qualified.substr(0, dot);
+            };
+            const auto importParent = parentOf(import.module);
+            if (importParent.empty() || importParent != parentOf(module))
+                return false;
+        }
         auto selectedMember = member;
-        if (module.size() > import.module.size()) {
+        if (prefixMatch && module.size() > import.module.size()) {
             const auto rest = module.substr(import.module.size() + 1);
             const auto dot = rest.find('.');
             selectedMember = rest.substr(0, dot);
@@ -4170,6 +4262,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             };
             auto importedPath = node.receiver
                 ? importedModulePath(*node.receiver) : std::nullopt;
+            // A bare receiver segment (`Set.from(…)`) may name a module only
+            // under its qualified identity (`Data.Set`) once a `using`
+            // brought it into scope unqualified — expand it before the
+            // dependency/namespace checks below, which key everything off
+            // `*importedPath` (kexhq/kex#229).
+            if (importedPath)
+                importedPath = resolveModulePath(*importedPath, node.method);
             // Keep the syntactic qualified module path even when it is not in
             // the prebuilt interface registry. Source modules are discovered
             // from these references before their interfaces exist (for

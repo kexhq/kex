@@ -441,6 +441,55 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     return canonicalName;
 }
 
+// See TypeChecker::resolveModulePath (kexhq/kex#229) for the precedence this
+// mirrors: an active `using M` aliases bare `name` when it is `M`'s last
+// segment or an immediate child `M.name`; failing that, a globally unique
+// loaded module ending in `.name` is a last resort — which is what lets
+// `UnorderedSet.from(…)` work from the same `using Data.Set` that only
+// aliases `Set` under the first rule, since `Data.Set` and `Data.UnorderedSet`
+// share a file but not a parent/child relationship.
+auto Evaluator::resolveNamespaceAlias(const std::string& name, SourceLocation loc)
+    -> std::optional<std::string> {
+    if (m_moduleRegistry.contains(name)) return name;
+    auto lastSegmentOf = [](const std::string& module) {
+        const auto dot = module.rfind('.');
+        return dot == std::string::npos ? module : module.substr(dot + 1);
+    };
+    std::vector<std::string> candidates;
+    for (const auto& scope : m_usingModules) {
+        for (const auto& imported : scope) {
+            if (lastSegmentOf(imported) == name) candidates.push_back(imported);
+            if (auto it = m_moduleRegistry.find(imported);
+                it != m_moduleRegistry.end()) {
+                if (auto sub = it->second.submodules.find(name);
+                    sub != it->second.submodules.end())
+                    candidates.push_back(sub->second);
+            }
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    if (candidates.size() == 1) {
+        try {
+            return ensureModuleLoaded(candidates.front(), loc, m_currentModule);
+        } catch (const RuntimeError&) {
+            return std::nullopt;
+        }
+    }
+    if (!candidates.empty()) return std::nullopt;
+
+    std::optional<std::string> unique;
+    const auto suffix = "." + name;
+    for (const auto& [candidate, _] : m_moduleRegistry) {
+        if (candidate.size() <= suffix.size() ||
+            candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        if (unique && *unique != candidate) return std::nullopt;
+        unique = candidate;
+    }
+    return unique;
+}
+
 auto Evaluator::defineImported(const std::string& bindingName, const std::string& logicalName,
                                const std::string& sourceModule, bool explicitImport,
                                const std::string& moduleScope, ValuePtr value,
@@ -1899,6 +1948,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
                         if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
                             namespaceName = std::get<ModuleValue>(resolved->data).name;
+                        } else if (auto aliased =
+                                       resolveNamespaceAlias(upperIdent->name, expr.location)) {
+                            namespaceName = *aliased;
                         } else {
                             namespaceName = upperIdent->name;
                         }
@@ -2966,8 +3018,12 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
     if (!opSymbol.empty()) {
         std::vector<ValuePtr> operatorArgs{left, right};
         auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
+        fprintf(stderr, "[DEBUG-OP] opSymbol=%s methodName=%s left=%s right=%s\n",
+                opSymbol.c_str(), methodName.c_str(), left->typeName().c_str(), right->typeName().c_str());
         if (methodName != opSymbol) {
-            return callFunction(methodName, {left, right}, {}, loc);
+            auto r = callFunction(methodName, {left, right}, {}, loc);
+            fprintf(stderr, "[DEBUG-OP] result=%s\n", r->typeName().c_str());
+            return r;
         }
     }
 

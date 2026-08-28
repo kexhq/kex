@@ -1,4 +1,4 @@
-using Set
+using Data.Set
 
 describe("Set — construction") do
   it("from discards duplicates") do

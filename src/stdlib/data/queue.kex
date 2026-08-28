@@ -1,0 +1,215 @@
+# A first-in-first-out queue.
+#
+# Opt-in — nothing here is in scope until `using Data.Queue`.
+#
+#   using Data.Queue
+#
+# A banker's queue: +front+ holds the elements ready to leave, +back+ holds
+# what was most recently added, reversed. +enqueue+ conses onto +back+;
+# +dequeue+ takes +front+'s head, and only rotates +back+ (reversing it into
+# +front+) when +front+ runs out. Both operations are amortized O(1), versus
+# the O(n) +enqueue+ a single-list queue would pay for.
+#
+#   let q = Queue.from([1, 2, 3])
+#   q.enqueue(4).items    # => [1, 2, 3, 4]
+#   q.dequeue             # => Just((1, Queue(2, 3)))
+#   q.peek                # => Just(1)
+#
+# +items+ is +@front + @back.reverse+, so the queue is not opaque — it is
+# always a real list you can hand to anything, the same promise +Data.Set+
+# makes.
+#
+# Unlike a set, a queue's representation is NOT canonical: `Queue.from([1,2])`
+# and `Queue.from([1]).enqueue(2)` hold the same elements in different
+# +front+/+back+ splits, so they are structurally unequal even though they
+# answer the same to every method. `==` is therefore overloaded to compare
+# +items+ rather than the record fields directly — but that overload only
+# reaches ordinary `==` calls. Two such queues used as map keys, or matched
+# against each other as record patterns, still compare structurally on both
+# backends, and can disagree with `==`.
+#
+# Every method answers with a new queue rather than changing the receiver.
+# +enqueue!+ and +dequeue!+ come free from the +!+ rebinding form.
+module Data
+
+# A queue of elements, split into a ready-to-leave +front+ and a
+# most-recently-added, reversed +back+.
+#
+# Build one with +Queue.from+ rather than by hand.
+record Queue<A> do
+  front : [A] = []
+  back  : [A] = []
+end
+
+# Constructors for +Queue+.
+module Queue do
+  # Builds a queue from a list, front to back.
+  #
+  # @param items [[A]] the elements, front first
+  # @return [Queue<A>] the queue, ready to +dequeue+ in the same order
+  #
+  # @example
+  #   Queue.from([1, 2, 3]).peek   # => Just(1)
+  let from(items: [A]) -> Queue<A> = Queue { front: items, back: [] }
+
+  # The queue with no elements. Also the +Monoid+ identity.
+  #
+  # @return [Queue<A>] the empty queue
+  #
+  # @example
+  #   Queue.empty.empty?   # => true
+  let empty -> Queue<A> = Queue { front: [], back: [] }
+end
+
+make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
+  # Folds from front to back.
+  #
+  # This is +Queue+'s +Enumerable+/+Foldable+ primitive.
+  #
+  # @param acc [B] the initial accumulator
+  # @param f [B -> A -> B] combines the accumulator with each element
+  # @return [B] the final accumulator
+  #
+  # @example
+  #   Queue.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
+  reduce :> B -> (B -> A -> B) -> B
+  let reduce(acc, f) = this.items.reduce(acc, f)
+
+  # The empty queue — the +Monoid+ identity.
+  #
+  # @return [Queue<A>] the empty queue
+  identity :> Queue<A>
+  let identity = Queue { front: [], back: [] }
+
+  # Combines two queues, this one's elements followed by the argument's.
+  #
+  # @param other [Queue<A>] the queue to append
+  # @return [Queue<A>] this queue's elements, then +other+'s
+  #
+  # @example
+  #   Queue.from([1, 2]).combine(Queue.from([3, 4])).items   # => [1, 2, 3, 4]
+  combine :> Queue<A> -> Queue<A>
+  let combine(other) = Queue.from(this.items + other.items)
+
+  # Returns the elements front to back. Never opaque — this is a real list.
+  #
+  # @return [[A]] the elements, front first
+  #
+  # @example
+  #   Queue.from([1, 2]).enqueue(3).items   # => [1, 2, 3]
+  items :> [A]
+  let items = @front + @back.reverse
+
+  # Returns a new queue with +value+ added at the back.
+  #
+  # Use +enqueue!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to add
+  # @return [Queue<A>] a queue with +value+ at the back
+  #
+  # @example
+  #   Queue.from([1, 2]).enqueue(3).items   # => [1, 2, 3]
+  enqueue :> A -> Queue<A>
+  let enqueue(value) = Queue { front: @front, back: [value | @back] }
+
+  # Returns the front element and the queue without it, wrapped in +Just+,
+  # or +None+ for an empty queue.
+  #
+  # Rotates +back+ into +front+ (reversing it) when +front+ has run out —
+  # the one case that is not O(1), and only amortized so because each
+  # element is reversed at most once over the queue's lifetime.
+  #
+  # Use +dequeue!+ to rebind the receiver variable.
+  #
+  # @return [(A, Queue<A>)?] the front element and the rest, or +None+
+  #
+  # @example
+  #   Queue.from([1, 2, 3]).dequeue   # => Just((1, Queue(2, 3)))
+  #   Queue.empty.dequeue             # => None
+  dequeue :> (A, Queue<A>)?
+  let dequeue(@Queue { front: [head | rest], back: back }) = Just((head, Queue { front: rest, back: back }))
+  let dequeue(@Queue { front: [], back: [] }) = None
+  let dequeue(@Queue { front: [], back: back }) do
+    return match back.reverse do
+      [head | rest] => Just((head, Queue { front: rest, back: [] }))
+    end
+  end
+
+  # Returns the front element wrapped in +Just+, or +None+ for an empty
+  # queue.
+  #
+  # @return [A?] the front element, or +None+
+  #
+  # @example
+  #   Queue.from([1, 2]).peek   # => Just(1)
+  #   Queue.empty.peek          # => None
+  peek :> A?
+  let peek(@Queue { front: [head | _], back: _ }) = Just(head)
+  let peek(@Queue { front: [], back: [] }) = None
+  let peek(@Queue { front: [], back: back }) = back.last
+
+  # Returns the number of elements.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   Queue.from([1, 2, 3]).count   # => 3
+  count :> Integer
+  let count = @front.count + @back.count
+
+  # Returns +true+ when the queue has no elements.
+  #
+  # @return [Bool] +true+ for the empty queue
+  #
+  # @example
+  #   Queue.empty.empty?         # => true
+  #   Queue.from([1]).empty?     # => false
+  empty? :> Bool
+  let empty? = @front.empty? && @back.empty?
+
+  # Compares two queues by their elements, front to back — NOT by their
+  # +front+/+back+ split, which is not canonical. See the file header.
+  #
+  # @param other [Queue<A>] the queue to compare against
+  # @return [Bool] +true+ when both hold the same elements in the same order
+  #
+  # @example
+  #   Queue.from([1, 2]) == Queue.from([1]).enqueue(2)   # => true
+  == :> Queue<A> -> Bool
+  let ==(other) = this.items == other.items
+
+  # Appends another queue's elements, or a plain list's.
+  #
+  # @param other [Queue<A> | [A]] the elements to append
+  # @return [Queue<A>] this queue's elements, then +other+'s
+  #
+  # @example
+  #   Queue.from([1, 2]) + [3, 4]            # => Queue(1, 2, 3, 4)
+  #   Queue.from([1, 2]) + Queue.from([3])   # => Queue(1, 2, 3)
+  + :> Queue<A> -> Queue<A>
+  let +(other: Queue<A>) -> Queue<A> = this.combine(other)
+  + :> [A] -> Queue<A>
+  let +(other: [A]) -> Queue<A> = this.combine(Queue.from(other))
+
+  # Renders the queue as +Queue(...)+, front to back.
+  #
+  # @return [String] the rendered queue
+  #
+  # @example
+  #   Queue.from([1, 2, 3]).showValue   # => "Queue(1, 2, 3)"
+  showValue :> String
+  let showValue = "Queue(${this.items.map { |x| x.showValue }.join(", ")})"
+end
+
+make Queue<A>, implement: Blankable do
+  # Returns +true+ when the queue has no elements. The +Blankable+ view of
+  # +empty?+.
+  #
+  # @return [Bool] +true+ for the empty queue
+  #
+  # @example
+  #   Queue.empty.blank?         # => true
+  #   Queue.from([1]).blank?     # => false
+  blank? :> Bool
+  let blank? = @front.empty? && @back.empty?
+end

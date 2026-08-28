@@ -375,6 +375,12 @@ private:
     auto registerRecordFields(const ast::Program& program,
                               bool namesOnly = false) -> void;
     auto resolveRecordName(const std::string& name) const -> std::string;
+    // Resolves a bare module segment written at a call site (`Set.from(…)`)
+    // against the modules `using` brought into scope, when the literal name
+    // is not itself a registered module. See the .cxx for the precedence
+    // rules (kexhq/kex#229).
+    auto resolveModulePath(const std::string& name,
+                          const std::string& member) const -> std::string;
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;
