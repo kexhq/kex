@@ -5,9 +5,47 @@ record Name do
   ascii : String
 end
 
+type RecordType = A | AAAA | CNAME | MX | TXT | SRV | PTR
+type DNSSECStatus = Secure | Insecure | Bogus | Indeterminate
+type DNSRecord = AddressRecord(Net.IP.Address) | CanonicalName(Name) | MailExchange(Integer, Name) | TextRecord([String]) | ServiceRecord(Integer, Integer, Net.Port, Name) | PointerRecord(Name)
+
+record LookupResponse do
+  records : [DNSRecord]
+  dnssec : DNSSECStatus
+end
+
+record CacheOptions do
+  entries : Integer = 1024
+  maximumTtl : Duration = Duration.hours(1)
+  negativeTtl : Duration = Duration.seconds(30)
+end
+
+record CacheStatistics do
+  entries : Integer
+  hits : Integer
+  misses : Integer
+  negativeHits : Integer
+  evictions : Integer
+end
+
+type Resolver
+
 module Name do
   parse : String -> Result<Name, NetError>
   let parse(text) = Kex.Intrinsic.NetDNS.name(text)
+end
+
+module Resolver do
+  foul system() -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolverDefault()
+  foul system(cache: CacheOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolver(cache)
+end
+
+make Resolver do
+  foul addresses(name: Name) -> Result<[Net.IP.Address], NetError> = Kex.Intrinsic.NetDNS.resolverAddresses(this, name)
+  foul lookup(kind: RecordType, name: Name) -> Result<LookupResponse, NetError> = Kex.Intrinsic.NetDNS.lookup(this, kind, name)
+  foul clear() -> Void = Kex.Intrinsic.NetDNS.clear(this)
+  foul statistics() -> CacheStatistics = Kex.Intrinsic.NetDNS.statistics(this)
+  foul close() -> Void = Kex.Intrinsic.NetDNS.close(this)
 end
 
 module DNS do

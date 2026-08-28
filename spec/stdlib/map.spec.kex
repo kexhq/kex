@@ -221,7 +221,7 @@ describe("Map — does not break list operations") do
   end
 
   it("list find still works") do
-    assert([1, 2, 3].find { |x| x > 1 } == 2)
+    assert([1, 2, 3].find { |x| x > 1 } == Just(2))
     assert([1, 2, 3].find { |x| x > 9 } == None)
   end
 end

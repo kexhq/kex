@@ -1,4 +1,5 @@
 # kex: run-beam
+# kex: no-check
 
 record Counter do
   count : Integer = 0

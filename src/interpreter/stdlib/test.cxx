@@ -304,7 +304,25 @@ auto Evaluator::registerTestBuiltins() -> void {
             try {
                 for (const auto& scope : m_testHookScopes)
                     for (const auto& hook : scope.before) run(hook);
-                fn->native({});
+                auto outcome = fn->native({});
+                // An unrescued `.try` failure inside a block does not unwind
+                // — a lambda IS a function, so it RETURNS `Error(e)` (see the
+                // LambdaExpr TryException handler, which HOFs depend on). A
+                // test body is a block, so `assert(f().try == x)` on a failing
+                // `f()` left the assert unevaluated and the case reported
+                // green. Every spec assertion whose expression propagated was
+                // silently passing on both backends.
+                if (outcome) {
+                    if (const auto* variant =
+                            std::get_if<VariantValue>(&outcome->data);
+                        variant && variant->tag == "Error" &&
+                        variant->parentType == "Result")
+                        throw std::runtime_error(
+                            ".try propagated out of the test body: " +
+                            (variant->args.empty()
+                                 ? std::string("Error")
+                                 : variant->args[0]->toString()));
+                }
             } catch (...) {
                 failure = std::current_exception();
             }

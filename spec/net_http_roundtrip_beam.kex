@@ -19,7 +19,11 @@ main do
   let router = Router.build.get("/ping", ~pong)
   # Port 0 asks the OS for a free port; `localAddress` reports the one it got.
   let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
-  let server = Server.start(endpoint, router).try
+  let server = Server.start(endpoint, router, ServerOptions {
+    maximumHandlers: 2,
+    backlog: 16,
+    gracefulShutdown: Duration.milliseconds(100)
+  }).try
   assert(server.running?, "the server should be listening after start")
   let port = server.localAddress.port.value
   assert(port > 0, "binding port 0 should report the port it actually got")
@@ -46,7 +50,8 @@ main do
 
   let report = client.close.try
   assert(report.closedConnections >= 1, "closing should report the pooled connection")
-  server.stop
+  let shutdown = server.stop.try
+  assert(shutdown.forced == 0, "a closed pooled client should need no forced handlers")
   assert(!server.running?, "the server should be stopped")
   IO.printLine("ok")
 end

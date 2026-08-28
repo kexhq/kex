@@ -95,7 +95,7 @@ module TLS do
     verify? : Bool = true
     alpn : [String] = []
   end
-  connect : TCP.Endpoint -> ClientConfig -> Result<TLSConnection, NetError>
+  connect : Net.Socket.TCP.Endpoint -> ClientConfig -> Result<TLSConnection, NetError>
   foul connect(endpoint, config) = Kex.Intrinsic.NetTLS.connect(endpoint, config)
 
   foul sendAll(connection: TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTLS.sendAll(connection, data)

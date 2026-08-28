@@ -25,9 +25,9 @@ let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
 }
 
 run : Policy -> Block<Result<X, E>> -> Result<X, E>
-let run(policy, operation) = attempt(policy, operation, 1, policy.initialDelay)
+foul run(policy, operation) = attempt(policy, operation, 1, policy.initialDelay)
 
-let attempt(policy: Policy, operation: Block<Result<X, E>>, number: Integer, delay: Duration) -> Result<X, E> do
+foul attempt(policy: Policy, operation: Block<Result<X, E>>, number: Integer, delay: Duration) -> Result<X, E> do
   let result = operation()
   return match result do
     Ok(value) => Ok(value)
@@ -52,5 +52,5 @@ module Retry do
   let exponential(maximumAttempts, initialDelay, maximumDelay) = Control.Retry.exponential(maximumAttempts, initialDelay, maximumDelay)
 
   run : Policy -> Block<Result<X, E>> -> Result<X, E>
-  let run(policy, operation) = Control.Retry.run(policy, operation)
+  foul run(policy, operation) = Control.Retry.run(policy, operation)
 end

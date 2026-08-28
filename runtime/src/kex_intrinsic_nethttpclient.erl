@@ -166,7 +166,7 @@ read_chunks(Transport, Buffer, Acc) when byte_size(Acc) =< ?BODY_LIMIT ->
         {ok, Line, Rest} ->
             SizeText = hd(binary:split(Line, <<";">>)),
             try list_to_integer(binary_to_list(SizeText), 16) of
-                0 -> {ok, Acc, chunked};
+                0 -> consume_trailers(Transport, Rest, Acc);
                 Size when byte_size(Acc) + Size =< ?BODY_LIMIT ->
                     case ensure(Transport, Rest, Size + 2) of
                         {ok, DataAndCRLF, Tail} ->
@@ -179,6 +179,24 @@ read_chunks(Transport, Buffer, Acc) when byte_size(Acc) =< ?BODY_LIMIT ->
         {error, R} -> {error, native_error('Protocol', R)}
     end;
 read_chunks(_, _, _) -> {error, error_value('Limit', <<"HTTP response body exceeds limit">>)}.
+
+consume_trailers(_, <<"\r\n">>, Acc) -> {ok, Acc, chunked};
+consume_trailers(_, <<"\r\n", _/binary>>, _) ->
+    {error, error_value('Protocol', <<"unexpected bytes after chunked response">>)};
+consume_trailers(Transport, Buffer, Acc) ->
+    case recv_until(Transport, Buffer, <<"\r\n\r\n">>, ?HEADER_LIMIT) of
+        {ok, TrailerBlock, <<>>} ->
+            try parse_headers(binary:split(TrailerBlock, <<"\r\n">>, [global]), []) of
+                Trailers ->
+                    case values(<<"content-length">>, Trailers) ++
+                         values(<<"transfer-encoding">>, Trailers) of
+                        [] -> {ok, Acc, chunked};
+                        _ -> {error, error_value('Protocol', <<"framing fields are forbidden in trailers">>)}
+                    end
+            catch _:_ -> {error, error_value('Protocol', <<"invalid HTTP trailers">>)} end;
+        {ok, _, _} -> {error, error_value('Protocol', <<"unexpected bytes after chunked response">>)};
+        {error, Reason} -> {error, native_error('Protocol', Reason)}
+    end.
 
 read_line(Transport, Buffer) ->
     case binary:match(Buffer, <<"\r\n">>) of

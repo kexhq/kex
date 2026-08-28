@@ -1,5 +1,6 @@
 using URI
 using Net.IP, only: [Address, Network]
+using Net.DNS, only: [Name]
 using Net.HTTP, only: [Headers, Status, add, set, get, getAll, success?]
 
 describe("network value APIs") do
@@ -14,6 +15,13 @@ describe("network value APIs") do
   it("keeps generic and form encoding distinct") do
     assert(Query.from([("q", Just("kex language"))]).encode == "q=kex%20language")
     assert(Form.from([("q", "kex language")]).encode == "q=kex+language")
+  end
+
+  it("converts Unicode IRIs with IDNA and UTF-8 percent encoding") do
+    let iri = URI.fromIRI("https://münich.example/straße").try
+    assert(iri.string == "https://xn--mnich-kva.example/stra%C3%9Fe")
+    assert(iri.host.try.ascii == "xn--mnich-kva.example")
+    assert(Name.parse("münich.example").try.ascii == "xn--mnich-kva.example")
   end
 
   it("canonicalizes addresses and checks CIDR containment") do

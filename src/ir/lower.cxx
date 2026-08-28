@@ -465,6 +465,16 @@ struct Lowering {
     // Receiver type -> source module path for make blocks compiled into a
     // companion module in this same unit.
     std::unordered_map<std::string, std::string> localTypeModules;
+    // Type name -> the module that DECLARES it, for every type written inside
+    // a module, `make` target or not. An opaque `type TCPListener` declared in
+    // Net.Socket.TCP carries its QUALIFIED name as its runtime tag, the same
+    // rule records follow, so a guard built from the written `TCPListener`
+    // matched nothing. Separate from `localTypeModules`, which is keyed by
+    // make target and drives call routing rather than tag identity.
+    std::unordered_map<std::string, std::string> moduleDeclaredTypes;
+    // Bare names of module-scoped free functions acting as receiver methods
+    // for a type their own module declares (see preModuleFn).
+    std::unordered_set<std::string> moduleReceiverNames;
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
@@ -710,7 +720,9 @@ struct Lowering {
     // is foul the call still takes its context.
     auto callNeedsContext(const std::string& name, int arity) const -> bool {
         if (!threadsCapabilities() || foulFns.count(name) == 0) return false;
-        if (arity == 1 && accessorFields.count(name)) return false;
+        if (arity == 1 && accessorFields.count(name) &&
+            !moduleReceiverNames.count(name))
+            return false;
         if (pureFnArities.count(name + "/" + std::to_string(arity)))
             return false;
         return true;
@@ -5594,6 +5606,33 @@ struct Lowering {
     // functions as separate `let` declarations) into one multi-clause FunDef.
     // implicitThisName: when non-empty, a receiver param of that name is
     // prepended to every clause (make-block methods: `this`).
+    // Can `typeGuard` actually tell this written type apart at runtime? A
+    // record tag, an ADT, a primitive with a guard BIF, or a structural
+    // spelling can; a type variable or an unconstrained name cannot, and
+    // guarding on one would emit a tag comparison nothing satisfies.
+    auto discriminatingType(const std::string& written) const -> bool {
+        if (written.empty() || written == "Any") return false;
+        if (traitMethods.count(written)) return false;
+        if (written.find("->") != std::string::npos) return true;
+        const char first = written.front(), last = written.back();
+        if ((first == '[' && last == ']') || (first == '{' && last == '}') ||
+            (first == '(' && last == ')'))
+            return true;
+        auto base = written;
+        if (auto angle = base.find('<');
+            angle != std::string::npos && base.back() == '>')
+            base.resize(angle);
+        if (base.size() == 1) return false;  // a type PARAMETER, not a type
+        if (primGuardBifs().count(base) || base == "Char") return true;
+        // NOT an ADT: a nullary variant is a bare atom (`'Equal'`), and
+        // typeGuard's tagged fallback tests `element(1, V)`, which no atom
+        // satisfies. Guarding on one rejected every call.
+        if (typeVariantTags.count(base)) return false;
+        if (records.count(canonicalRecordName(base))) return true;
+        return localTypeModules.count(base) > 0 ||
+               moduleDeclaredTypes.count(base) > 0;
+    }
+
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
                             const std::string& implicitThisName = "",
                             const std::string& nameOverride = "") -> FunDef {
@@ -5644,8 +5683,39 @@ struct Lowering {
         def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
+        // Do the clauses in this group differ in their declared parameter
+        // types? Only then is a guard wanted — a plain multi-clause function
+        // discriminates with patterns and must be left alone.
+        const bool overloadedByParamType = [&] {
+            if (group.size() < 2) return false;
+            std::vector<std::string> signature;
+            bool differs = false;
+            for (const auto* fn : group)
+                for (const auto& clause : fn->clauses) {
+                    std::vector<std::string> current;
+                    for (const auto& p : clause.params) {
+                        // A group that already discriminates with PATTERNS
+                        // needs no guard, and adding one breaks it: Ordering's
+                        // `combine(@Equal, other: Ordering)` / `combine(@Less,
+                        // _)` differ in their declared types only because the
+                        // later clauses spell their second parameter `_`.
+                        // Guarding the first then rejected `Equal.combine(Less)`
+                        // and the whole clause set fell through to
+                        // function_clause.
+                        if (!p.name || !p.type || !*p.type) return false;
+                        current.push_back(renderDispatchType(**p.type));
+                    }
+                    if (signature.empty()) signature = current;
+                    else if (signature != current) differs = true;
+                }
+            return differs;
+        }();
+        std::size_t clauseCount = 0;
+        for (const auto* fn : group) clauseCount += fn->clauses.size();
+        std::size_t clauseIndex = 0;
         for (const auto* fn : group) {
             for (const auto& clause : fn->clauses) {
+                const bool isLastInGroup = ++clauseIndex == clauseCount;
                 subst.clear(); // fresh scope per clause
                 traitDictionaries = savedTraitDictionaries;
                 FunClause fc;
@@ -5737,6 +5807,31 @@ struct Lowering {
                     currentContextVar = contextName;
                 } else {
                     currentContextVar.clear();
+                }
+                // Overloads discriminated by PARAMETER TYPE need a runtime
+                // guard: a declared type is not a Core Erlang pattern, so two
+                // clauses whose params are plain variables are identical to
+                // the emitter and the FIRST one swallowed every call.
+                // `let describe(v: Alpha)` / `let describe(v: Beta)` answered
+                // "Alpha" for both on BEAM while the walker dispatched
+                // correctly, and moving Net.Socket's `close`/`closed?`
+                // overloads inside `module TCP` made a listener reach the
+                // connection clause (kexhq/kex#230). The LAST clause of a
+                // group stays unguarded so it remains the fallback, which is
+                // the behaviour every existing single-clause group already
+                // has.
+                if (overloadedByParamType && !isLastInGroup) {
+                    ExprPtr guard;
+                    for (const auto& p : clause.params) {
+                        if (!p.name || !p.type || !*p.type) continue;
+                        const auto written = renderDispatchType(**p.type);
+                        if (!discriminatingType(written)) continue;
+                        auto test = typeGuard(written, var(*p.name));
+                        guard = guard ? intrin(Op::And, two(std::move(guard),
+                                                            std::move(test)))
+                                      : std::move(test);
+                    }
+                    if (guard) fc.guard = std::move(guard);
                 }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 if (fn->isSlot) subst["from"] = "from";
@@ -6517,10 +6612,14 @@ struct Lowering {
         // nothing, so `client.get(url)` fell through its make block's
         // dispatcher to "Undefined method: get for Tuple".
         auto tagged = ty;
-        if (!records.count(tagged) && tagged.find('.') == std::string::npos)
+        if (!records.count(tagged) && tagged.find('.') == std::string::npos) {
             if (auto declaring = localTypeModules.find(tagged);
                 declaring != localTypeModules.end())
                 tagged = declaring->second + "." + tagged;
+            else if (auto declared = moduleDeclaredTypes.find(tagged);
+                     declared != moduleDeclaredTypes.end())
+                tagged = declared->second + "." + tagged;
+        }
         // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
         // fixed arity, so is_record/3 above does not apply and the tag has to
         // be read with element/2.
@@ -7064,6 +7163,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Factored into per-kind lambdas so the flattened module items go
     // through the exact same collection as top-level items.
     std::unordered_set<std::string> definedFns;
+    // Bare names of module-scoped free functions that act as receiver methods
+    // for a type their own module declares (see preModuleFn).
+    std::unordered_set<std::string> moduleReceiverMethods;
     // The same names keyed by the arity they are actually EMITTED with. A
     // field accessor is arity 1, so only an arity-1 function of that name
     // can own the symbol (see makeAccessors).
@@ -7257,6 +7359,41 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
+            // A module-scoped free function whose FIRST parameter is a type
+            // this module declares is that type's receiver method: `using
+            // Net.Socket` has to make `listener.closed?` reach
+            // `Net.Socket.TCP.closed?`. Only local names reach the UFCS path,
+            // and a module member is registered under its mangled name — so
+            // moving the socket operations from Net.Socket's top level into
+            // the protocol modules left every `connection.sendAll` and
+            // `listener.closed?` as "Undefined method" (kexhq/kex#230).
+            // Restricted to the module's OWN types so an ordinary module
+            // export never becomes a receiver method by accident.
+            if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
+                const auto& receiver = fd->clauses[0].params.front();
+                if (receiver.type && *receiver.type) {
+                    auto written = renderDispatchType(**receiver.type);
+                    if (auto angle = written.find('<');
+                        angle != std::string::npos && written.back() == '>')
+                        written.resize(angle);
+                    const auto dot = written.rfind('.');
+                    const auto bare =
+                        dot == std::string::npos ? written
+                                                 : written.substr(dot + 1);
+                    const auto owner = declaredTypes.count(bare) > 0;
+                    if (owner) {
+                        moduleReceiverMethods.insert(fd->name);
+                        L.moduleReceiverNames.insert(fd->name);
+                        // Reached under its BARE name now, so its foulness has
+                        // to be recorded under that name too or the call goes
+                        // out one argument short of the definition.
+                        if (fd->isFoul) L.foulFns.insert(fd->name);
+                        L.localMethodArities.insert(
+                            fd->name + "/" +
+                            std::to_string(fd->clauses[0].params.size()));
+                    }
+                }
+            }
             // A capability's own members stay at their declared arity.
             if (fd->isFoul) L.foulFns.insert(emitted);
             if (!fd->isFoul && !fd->clauses.empty())
@@ -7274,6 +7411,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto preModuleType = [&](const ast::TypeDef* td) {
             if (!td) return;
             preType(*td);
+            L.moduleDeclaredTypes.emplace(td->name, path);
             if (auto constructors = kex::typeConstructors(*td))
                 for (const auto& constructor : *constructors) {
                     const auto emitted =
@@ -7411,6 +7549,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
+    // Assigned, not merged, so the module-owned receiver methods collected in
+    // preModuleFn are folded in here rather than being overwritten.
+    L.localMethods.insert(moduleReceiverMethods.begin(),
+                          moduleReceiverMethods.end());
     // Record field accessors participate in localMethods only when an
     // accessor is actually emitted for them — a field whose name collides
     // with an imported package-declared receiver function is skipped (see
@@ -8529,10 +8671,33 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         const auto& path = module.name;
         if (seenModulePaths.insert(path).second)
             modulePaths.push_back(path);
+        std::set<std::string> ownTypes;
+        kex::collectDeclaredTypeNames(module.body, ownTypes);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
-            if (fn)
-                definitions[mangleModuleMember(path, fn->name)] =
-                    {path, fn->name, exported};
+            if (!fn) return;
+            definitions[mangleModuleMember(path, fn->name)] =
+                {path, fn->name, exported};
+            // A module-scoped free function over one of the module's OWN types
+            // is that type's receiver method, and a UFCS call reaches it under
+            // its bare name — so the bare name has to redirect here too, the
+            // way a make-block method's does just below. Without it
+            // `listener.closed?` compiled to a local `closed?/2` that no
+            // module defines (kexhq/kex#230).
+            if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
+            const auto& receiver = fn->clauses[0].params.front();
+            if (!receiver.type || !*receiver.type) return;
+            auto written = renderDispatchType(**receiver.type);
+            if (auto angle = written.find('<');
+                angle != std::string::npos && written.back() == '>')
+                written.resize(angle);
+            const auto dot = written.rfind('.');
+            const auto bare =
+                dot == std::string::npos ? written : written.substr(dot + 1);
+            if (!ownTypes.count(bare)) return;
+            const int arity = static_cast<int>(fn->clauses[0].params.size()) +
+                              (fn->isFoul ? 1 : 0);
+            if (!definitions.count(fn->name))
+                definitions[fn->name] = {path, fn->name, true, "", arity};
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;

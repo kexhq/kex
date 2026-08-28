@@ -1,12 +1,148 @@
 -module(kex_intrinsic_netdns).
--export([name/1, addresses/1]).
-name(Text) when is_binary(Text), byte_size(Text) > 0 -> {'Ok', {'Net.DNS.Name', Text, string:lowercase(Text)}};
-name(_) -> {'Error', {'Net.NetError', 'Parse', 'DNS', <<"invalid DNS name">>, 'None', 'None'}}.
+-export([name/1, addresses/1, resolverDefault/0, resolver/1,
+         resolverAddresses/2, lookup/3, clear/1, statistics/1, close/1]).
 
-addresses({'Net.DNS.Name', _Display, ASCII}) ->
-    V4 = case inet:getaddrs(binary_to_list(ASCII), inet) of {ok, A4} -> A4; _ -> [] end,
-    V6 = case inet:getaddrs(binary_to_list(ASCII), inet6) of {ok, A6} -> A6; _ -> [] end,
-    case V6 ++ V4 of
-        [] -> {'Error', {'Net.NetError', 'Resolve', 'DNS', <<"DNS name did not resolve">>, 'None', 'None'}};
-        Values -> {'Ok', [{'Net.IP.Address', iolist_to_binary(inet:ntoa(IP))} || IP <- Values]}
+name(Text) when is_binary(Text), byte_size(Text) > 0, byte_size(Text) =< 253 ->
+    Display = strip_dot(Text),
+    case kex_intrinsic_uri:idnaHost(Display) of
+        {ok, ASCII} -> case valid_name(ASCII) of
+            true -> {'Ok', {'Net.DNS.Name', Display, ASCII}};
+            false -> error_value('Parse', <<"invalid DNS name">>)
+        end;
+        error -> error_value('Parse', <<"invalid DNS name">>)
+    end;
+name(_) -> error_value('Parse', <<"invalid DNS name">>).
+
+addresses(Name = {'Net.DNS.Name', _, _}) ->
+    case resolverDefault() of
+        {'Ok', Resolver} ->
+            Result = resolverAddresses(Resolver, Name), close(Resolver), Result;
+        Error -> Error
     end.
+
+resolverDefault() ->
+    resolver({'Net.DNS.CacheOptions', 1024, {'Duration', 3600.0},
+              {'Duration', 30.0}}).
+
+resolver({'Net.DNS.CacheOptions', Entries, {'Duration', MaximumTtl},
+          {'Duration', NegativeTtl}})
+  when is_integer(Entries), Entries > 0, is_number(MaximumTtl), MaximumTtl >= 0,
+       is_number(NegativeTtl), NegativeTtl >= 0 ->
+    Pid = spawn(fun() -> loop(#{}, Entries, seconds_ms(MaximumTtl),
+                              seconds_ms(NegativeTtl), 0, 0, 0, 0) end),
+    {'Ok', {'Net.DNS.Resolver', Pid}};
+resolver(_) -> error_value('Parse', <<"invalid DNS cache options">>).
+
+resolverAddresses({'Net.DNS.Resolver', Pid}, Name) -> call(Pid, {addresses, Name});
+resolverAddresses(_, _) -> error_value('Parse', <<"invalid DNS resolver">>).
+lookup({'Net.DNS.Resolver', Pid}, Kind, Name) -> call(Pid, {lookup, Kind, Name});
+lookup(_, _, _) -> error_value('Parse', <<"invalid DNS lookup">>).
+clear({'Net.DNS.Resolver', Pid}) ->
+    case is_process_alive(Pid) of true -> Pid ! clear; false -> ok end, 'Kex.Unit'.
+statistics({'Net.DNS.Resolver', Pid}) ->
+    case call(Pid, statistics) of
+        {'Error', _} -> {'Net.DNS.CacheStatistics', 0, 0, 0, 0, 0};
+        Value -> Value
+    end.
+close({'Net.DNS.Resolver', Pid}) ->
+    case is_process_alive(Pid) of true -> Pid ! close; false -> ok end, 'Kex.Unit'.
+
+loop(Cache, Limit, MaxTtl, NegativeTtl, Hits, Misses, NegativeHits, Evictions) ->
+    receive
+        {call, From, Ref, {lookup, Kind, Name}} ->
+            {Result, NextCache, Hit, NegativeHit, Evicted} =
+                cached_lookup(Kind, Name, Cache, Limit, MaxTtl, NegativeTtl),
+            From ! {Ref, Result},
+            loop(NextCache, Limit, MaxTtl, NegativeTtl,
+                 Hits + bool(Hit), Misses + bool(not Hit),
+                 NegativeHits + bool(NegativeHit), Evictions + Evicted);
+        {call, From, Ref, {addresses, Name}} ->
+            {V6, Cache1, Hit6, Negative6, Evicted6} =
+                cached_lookup('AAAA', Name, Cache, Limit, MaxTtl, NegativeTtl),
+            {V4, Cache2, Hit4, Negative4, Evicted4} =
+                cached_lookup('A', Name, Cache1, Limit, MaxTtl, NegativeTtl),
+            Addresses = address_values(V6) ++ address_values(V4),
+            Reply = case Addresses of [] -> error_value('Resolve', <<"DNS name did not resolve">>); _ -> {'Ok', Addresses} end,
+            From ! {Ref, Reply},
+            loop(Cache2, Limit, MaxTtl, NegativeTtl,
+                 Hits + bool(Hit6) + bool(Hit4), Misses + bool(not Hit6) + bool(not Hit4),
+                 NegativeHits + bool(Negative6) + bool(Negative4), Evictions + Evicted6 + Evicted4);
+        {call, From, Ref, statistics} ->
+            From ! {Ref, {'Net.DNS.CacheStatistics', maps:size(Cache), Hits, Misses, NegativeHits, Evictions}},
+            loop(Cache, Limit, MaxTtl, NegativeTtl, Hits, Misses, NegativeHits, Evictions);
+        clear -> loop(#{}, Limit, MaxTtl, NegativeTtl, Hits, Misses, NegativeHits, Evictions);
+        close -> ok;
+        _ -> loop(Cache, Limit, MaxTtl, NegativeTtl, Hits, Misses, NegativeHits, Evictions)
+    end.
+
+cached_lookup(Kind, Name = {'Net.DNS.Name', _, ASCII}, Cache0, Limit, MaxTtl, NegativeTtl) ->
+    Now = erlang:monotonic_time(millisecond), Key = {Kind, ASCII}, Cache = expire(Cache0, Now),
+    case maps:find(Key, Cache) of
+        {ok, {_, Result, Negative, _}} -> {Result, Cache, true, Negative, 0};
+        error ->
+            Result = resolve(Kind, Name), Negative = is_error(Result),
+            Ttl = case Negative of true -> NegativeTtl; false -> MaxTtl end,
+            {Trimmed, Evicted} = make_room(Cache, Limit),
+            {Result, maps:put(Key, {Now + Ttl, Result, Negative, Now}, Trimmed), false, false, Evicted}
+    end.
+
+resolve(Kind, {'Net.DNS.Name', _, ASCII}) ->
+    case kind_atom(Kind) of
+        invalid -> error_value('Parse', <<"invalid DNS record type">>);
+        a -> resolve_addresses(Kind, ASCII, inet);
+        aaaa -> resolve_addresses(Kind, ASCII, inet6);
+        Type ->
+            try inet_res:lookup(binary_to_list(ASCII), in, Type) of
+                [] -> error_value('Resolve', <<"DNS record did not resolve">>);
+                Values -> {'Ok', {'Net.DNS.LookupResponse', [record_value(Kind, Value) || Value <- Values], 'Indeterminate'}}
+            catch _:_ -> error_value('Resolve', <<"DNS lookup failed">>) end
+    end.
+
+resolve_addresses(Kind, ASCII, Family) ->
+    case inet:getaddrs(binary_to_list(ASCII), Family) of
+        {ok, Values} when Values =/= [] ->
+            {'Ok', {'Net.DNS.LookupResponse',
+                    [record_value(Kind, Value) || Value <- Values],
+                    'Indeterminate'}};
+        _ -> error_value('Resolve', <<"DNS record did not resolve">>)
+    end.
+
+kind_atom('A') -> a; kind_atom('AAAA') -> aaaa; kind_atom('CNAME') -> cname;
+kind_atom('MX') -> mx; kind_atom('TXT') -> txt; kind_atom('SRV') -> srv;
+kind_atom('PTR') -> ptr; kind_atom(_) -> invalid.
+record_value('A', IP) -> {'AddressRecord', ip_value(IP)};
+record_value('AAAA', IP) -> {'AddressRecord', ip_value(IP)};
+record_value('CNAME', Domain) -> {'CanonicalName', name_value(Domain)};
+record_value('MX', {Preference, Exchange}) -> {'MailExchange', Preference, name_value(Exchange)};
+record_value('TXT', Chunks) -> {'TextRecord', [unicode:characters_to_binary(Chunk) || Chunk <- Chunks]};
+record_value('SRV', {Priority, Weight, Port, Target}) -> {'ServiceRecord', Priority, Weight, {'Net.Port', Port}, name_value(Target)};
+record_value('PTR', Domain) -> {'PointerRecord', name_value(Domain)}.
+
+ip_value(IP) -> {'Net.IP.Address', iolist_to_binary(inet:ntoa(IP))}.
+name_value(Domain) -> Value = strip_dot(unicode:characters_to_binary(Domain)), {'Net.DNS.Name', Value, string:lowercase(Value)}.
+address_values({'Ok', {'Net.DNS.LookupResponse', Records, _}}) -> [Address || {'AddressRecord', Address} <- Records];
+address_values(_) -> [].
+
+valid_name(Name) -> Labels = binary:split(Name, <<".">>, [global]), Labels =/= [] andalso lists:all(fun valid_label/1, Labels).
+valid_label(Label) when byte_size(Label) > 0, byte_size(Label) =< 63 ->
+    First = binary:first(Label), Last = binary:last(Label),
+    First =/= $- andalso Last =/= $- andalso
+    lists:all(fun(C) -> (C >= $a andalso C =< $z) orelse (C >= $0 andalso C =< $9) orelse C =:= $- end, binary:bin_to_list(Label));
+valid_label(_) -> false.
+expire(Cache, Now) -> maps:filter(fun(_, {Expiry, _, _, _}) -> Expiry >= Now end, Cache).
+make_room(Cache, Limit) when map_size(Cache) < Limit -> {Cache, 0};
+make_room(Cache, _) ->
+    [{Key, _} | _] = lists:sort(fun({_, {_, _, _, A}}, {_, {_, _, _, B}}) -> A =< B end, maps:to_list(Cache)),
+    {maps:remove(Key, Cache), 1}.
+strip_dot(<<>>) -> <<>>;
+strip_dot(Text) -> case binary:last(Text) of $. -> binary:part(Text, 0, byte_size(Text)-1); _ -> Text end.
+seconds_ms(Value) -> trunc(Value * 1000).
+bool(true) -> 1; bool(false) -> 0.
+is_error({'Error', _}) -> true; is_error(_) -> false.
+call(Pid, Message) ->
+    case is_process_alive(Pid) of
+        false -> error_value('Closed', <<"DNS resolver is closed">>);
+        true -> Ref = make_ref(), Pid ! {call, self(), Ref, Message},
+                receive {Ref, Value} -> Value after 31000 -> error_value('Timeout', <<"DNS lookup timed out">>) end
+    end.
+error_value(Kind, Message) -> {'Error', {'Net.NetError', Kind, 'DNS', Message, 'None', 'None'}}.

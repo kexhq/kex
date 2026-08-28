@@ -490,6 +490,32 @@ auto Evaluator::registerNetBuiltins() -> void {
     defineIntrinsic("NetDNS::addresses", [](std::vector<ValuePtr>) -> ValuePtr {
         return netError("UnsupportedBackend", "DNS", "DNS is available only through a mock on the tree-walking backend");
     });
+    for (const char* name : {"NetDNS::resolverDefault", "NetDNS::resolver",
+                             "NetDNS::resolverAddresses", "NetDNS::lookup"})
+        defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
+            return netError("UnsupportedBackend", "DNS",
+                            "DNS is available only through a mock on the tree-walking backend");
+        });
+    defineIntrinsic("NetDNS::clear", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetDNS::close", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetDNS::statistics", [](std::vector<ValuePtr>) {
+        return Value::record("CacheStatistics", {{"entries", Value::integer(0)},
+                                                   {"hits", Value::integer(0)},
+                                                   {"misses", Value::integer(0)},
+                                                   {"negativeHits", Value::integer(0)},
+                                                   {"evictions", Value::integer(0)}});
+    });
+    for (const char* name : {"NetWebSocket::connect", "NetWebSocket::send",
+                             "NetWebSocket::receiveMessage"})
+        defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
+            return netError("UnsupportedBackend", "WebSocketClient",
+                            "WebSocket clients are unavailable on the tree-walking backend");
+        });
+    defineIntrinsic("NetWebSocket::session", [](std::vector<ValuePtr>) {
+        return Value::record("Session", {{"subprotocol", Value::none()}});
+    });
+    defineIntrinsic("NetWebSocket::close", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetWebSocket::closed?", [](std::vector<ValuePtr>) { return Value::boolean(true); });
 
 #ifndef _WIN32
     defineIntrinsic("NetIP::address", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -576,14 +602,10 @@ auto Evaluator::registerNetBuiltins() -> void {
         defineIntrinsic(name, unsupportedSocket("Unix"));
     for (const char* name : {"NetTLS::connect", "NetTLS::sendAll", "NetTLS::receiveChunk"})
         defineIntrinsic(name, unsupportedSocket("TLS"));
-    for (const char* name : {"NetSocket::sendAll", "NetSocket::receiveChunk", "NetSocket::accept"})
-        defineIntrinsic(name, unsupportedSocket("Socket"));
     for (const char* name : {"NetTCP::close", "NetUDP::close", "NetUnix::close", "NetTLS::close"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return Value::unit(); });
     for (const char* name : {"NetTCP::closed?", "NetUDP::closed?"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return Value::boolean(true); });
-    defineIntrinsic("NetSocket::close", [](std::vector<ValuePtr>) { return Value::unit(); });
-    defineIntrinsic("NetSocket::closed?", [](std::vector<ValuePtr>) { return Value::boolean(true); });
     defineIntrinsic("NetUnix::address", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0]) || textOf(args[0])->empty() || textOf(args[0])->front() != '/')
             return netError("Parse", "Unix", "Unix socket path must be absolute");

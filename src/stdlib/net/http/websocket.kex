@@ -1,0 +1,29 @@
+module Net.HTTP.WebSocket
+
+type Message = Text(String) | BinaryMessage(Binary) | CloseMessage(Integer, String)
+
+record ClientOptions do
+  subprotocols : [String] = []
+  maximumMessageBytes : Integer = 16777216
+end
+
+record Session do
+  subprotocol : String?
+end
+
+type Connection
+
+module WebSocket do
+  foul connect(url: String) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, ClientOptions {})
+  foul connect(url: String, options: ClientOptions) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, options)
+end
+
+make Connection do
+  foul send(message: Message) -> Result<Void, NetError> = Kex.Intrinsic.NetWebSocket.send(this, message)
+  # `receive` is a Kex process keyword, so the public method spells out the
+  # operation while preserving the plan's high-level message semantics.
+  foul receiveMessage() -> Result<Message, NetError> = Kex.Intrinsic.NetWebSocket.receiveMessage(this)
+  foul session() -> Session = Kex.Intrinsic.NetWebSocket.session(this)
+  foul close() -> Void = Kex.Intrinsic.NetWebSocket.close(this)
+  foul closed?() -> Bool = Kex.Intrinsic.NetWebSocket.closed?(this)
+end

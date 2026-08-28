@@ -1,0 +1,22 @@
+# kex: run-beam
+# Uses the operating system's deterministic localhost entry rather than the
+# public DNS, while still exercising the real resolver owner and TTL cache.
+
+using Net.DNS
+
+main do
+  let resolver = Resolver.system().try
+  let localhost = Name.parse("localhost").try
+  assert(resolver.addresses(localhost).try.length > 0)
+  assert(resolver.addresses(localhost).try.length > 0)
+  let statistics = resolver.statistics
+  assert(statistics.misses == 2, "the first A and AAAA lookups should miss")
+  assert(statistics.hits == 2, "the second address lookup should hit both cache entries")
+  resolver.clear
+  assert(resolver.statistics.entries == 0)
+  let records = resolver.lookup(A, localhost).try
+  assert(records.records.length > 0)
+  assert(records.dnssec == Indeterminate)
+  resolver.close
+  IO.printLine("ok")
+end

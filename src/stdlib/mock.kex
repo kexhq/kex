@@ -433,7 +433,7 @@ module Mock do
     end
 
     module DNS do
-      record Resolver do
+      record ResolverScript do
         answers : {String: [String]}
       end
     end

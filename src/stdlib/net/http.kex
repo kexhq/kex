@@ -48,6 +48,12 @@ record ShutdownReport do
   elapsedMilliseconds : Integer
 end
 
+record ServerOptions do
+  maximumHandlers : Integer = 1024
+  backlog : Integer = 128
+  gracefulShutdown : Duration = Duration.seconds(10)
+end
+
 record PoolOptions do
   perOrigin : Integer = 8
   total : Integer = 128
@@ -113,7 +119,15 @@ end
 module Server do
   type Running
   foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router)
+  foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router, options)
   foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router)
+  foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router, options)
+
+  foul stop(server: Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
+  foul stop(server: Running, grace: Duration) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server, grace)
+  foul join(server: Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)
+  foul running?(server: Running) -> Bool = Kex.Intrinsic.NetHTTPServer.running?(server)
+  foul localAddress(server: Running) -> Net.Socket.TCP.Endpoint = Kex.Intrinsic.NetHTTPServer.localAddress(server)
 end
 
 module Client do
@@ -129,11 +143,6 @@ make Client do
   foul statistics -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(this)
   foul close -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(this)
 end
-
-foul stop(server: Server.Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
-foul join(server: Server.Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)
-foul running?(server: Server.Running) -> Bool = Kex.Intrinsic.NetHTTPServer.running?(server)
-foul localAddress(server: Server.Running) -> Net.Socket.TCP.Endpoint = Kex.Intrinsic.NetHTTPServer.localAddress(server)
 
 make Headers do
   let add(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
