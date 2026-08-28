@@ -786,6 +786,13 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
     } else if (check(TokenType::LowerIdent) &&
                !(allowDrivers && isMakeDriverAhead())) {
       def->body.push_back(parseTypeAnnotation());
+    } else if (isOverloadableOperator(peek().type) &&
+               (peekNext().type == TokenType::Colon ||
+                peekNext().type == TokenType::TypeAnnotation)) {
+      // `+ :> Set<A> -> Set<A>` — an operator overload's contract, written
+      // the same way an ordinary method's is. The `:`/`:>` lookahead keeps
+      // this from swallowing a driver body's own use of a leading operator.
+      def->body.push_back(parseTypeAnnotation());
     } else if (allowDrivers) {
       // A driver loop inside a GENERATED make:
       // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
@@ -1029,12 +1036,38 @@ auto Parser::parseParam() -> ast::Param {
   error("Expected parameter");
 }
 
+// The operator set `let`/`foul` function definitions accept as a name
+// (see parseFunctionDef) — kept in sync so an operator overload's contract
+// can be declared the same way an ordinary method's is (grammar.ebnf's
+// `binary_op TYPE_ANNOTATION type_expr` / `binary_op COLON type_expr`).
+auto Parser::isOverloadableOperator(TokenType type) -> bool {
+  switch (type) {
+    case TokenType::Plus:
+    case TokenType::Minus:
+    case TokenType::Star:
+    case TokenType::Slash:
+    case TokenType::Percent:
+    case TokenType::Caret:
+    case TokenType::EqEq:
+    case TokenType::NotEq:
+    case TokenType::LessThan:
+    case TokenType::GreaterThan:
+    case TokenType::LessEq:
+    case TokenType::GreaterEq:
+      return true;
+    default:
+      return false;
+  }
+}
+
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   auto ann = std::make_unique<ast::TypeAnnotation>();
   ann->location = currentLocation();
   if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
       check(TokenType::After) || check(TokenType::Spawn))
     ann->name = advance().value;
+  else if (isOverloadableOperator(peek().type))
+    ann->name = std::string(tokenTypeName(advance().type));
   else
     error("Expected name");
 

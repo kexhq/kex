@@ -85,6 +85,7 @@ private:
     auto parseParams() -> std::vector<ast::Param>;
     auto parseParam() -> ast::Param;
     auto parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation>;
+    static auto isOverloadableOperator(TokenType type) -> bool;
 
     // Type expressions
     auto parseTypeExpr() -> ast::TypeExprPtr;

@@ -1,5 +1,10 @@
 # Immutable collections of distinct elements.
 #
+# Opt-in — nothing here is in scope until `using Data.Set`, which brings both
+# flavours below into scope at once.
+#
+#   using Data.Set
+#
 # Membership is decided by structural equality — the same equality +==+ and
 # map keys use — so records and tuples are compared by value, not identity.
 # Every method answers with a new set; the +!+ forms (+add!+, +delete!+) build
@@ -36,6 +41,7 @@
 # `gb_sets` instead is the other backend: a tree-walk interpreter cannot
 # produce an opaque BEAM term, and a set that only one backend can build is
 # not a set the prelude can offer.
+module Data
 
 # A set whose elements are kept sorted and duplicate free.
 #
@@ -135,12 +141,14 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #
   # @example
   #   Set.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
+  reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @items.reduce(acc, f)
 
   # The empty set — the +Monoid+ identity, since union with nothing changes
   # nothing.
   #
   # @return [Set<A>] the empty set
+  identity :> Set<A>
   let identity = Set { items: [] }
 
   # Combines two sets by union. The +Monoid+ operation.
@@ -152,6 +160,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #   [Set.from([1]), Set.from([2]), Set.from([1, 3])]
   #     .reduce(Set.empty) { |acc, s| acc.combine(s) }
   #   # => Set(1, 2, 3)
+  combine :> Set<A> -> Set<A>
   let combine(other) = this.union(other)
 
   # Returns +true+ when +value+ is a member.
@@ -346,7 +355,9 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @example
   #   Set.from([1, 2]) + [3]           # => Set(1, 2, 3)
   #   Set.from([1]) + Set.from([2])    # => Set(1, 2)
+  + :> Set<A> -> Set<A>
   let +(other: Set<A>) -> Set<A> = this.union(other)
+  + :> [A] -> Set<A>
   let +(other: [A]) -> Set<A> = Set.from(@items + other)
 
   # Removes another set's elements, or a plain list's.
@@ -357,7 +368,9 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @example
   #   Set.from([1, 2, 3]) - [2]                # => Set(1, 3)
   #   Set.from([1, 2, 3]) - Set.from([2, 3])   # => Set(1)
+  - :> Set<A> -> Set<A>
   let -(other: Set<A>) -> Set<A> = this.difference(other)
+  - :> [A] -> Set<A>
   let -(other: [A]) -> Set<A> = this.difference(Set.from(other))
 
   # Applies +f+ to every element and returns a set of the results.
@@ -435,17 +448,20 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #
   # @example
   #   UnorderedSet.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
+  reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @slots.keys.reduce(acc, f)
 
   # The empty unordered set — the +Monoid+ identity.
   #
   # @return [UnorderedSet<A>] the empty set
+  identity :> UnorderedSet<A>
   let identity = UnorderedSet { slots: {} }
 
   # Combines two sets by union. The +Monoid+ operation.
   #
   # @param other [UnorderedSet<A>] the set to combine with
   # @return [UnorderedSet<A>] every element of either set
+  combine :> UnorderedSet<A> -> UnorderedSet<A>
   let combine(other) = this.union(other)
 
   # Returns +true+ when +value+ is a member.
@@ -598,7 +614,9 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #
   # @example
   #   (UnorderedSet.from([1, 2]) + [3]).count   # => 3
+  + :> UnorderedSet<A> -> UnorderedSet<A>
   let +(other: UnorderedSet<A>) -> UnorderedSet<A> = this.union(other)
+  + :> [A] -> UnorderedSet<A>
   let +(other: [A]) -> UnorderedSet<A> = this.union(UnorderedSet.from(other))
 
   # Removes another unordered set's elements, or a plain list's.
@@ -608,7 +626,9 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #
   # @example
   #   (UnorderedSet.from([1, 2, 3]) - [2]).count   # => 2
+  - :> UnorderedSet<A> -> UnorderedSet<A>
   let -(other: UnorderedSet<A>) -> UnorderedSet<A> = this.difference(other)
+  - :> [A] -> UnorderedSet<A>
   let -(other: [A]) -> UnorderedSet<A> = this.difference(UnorderedSet.from(other))
 
   # Applies +f+ to every element and returns an unordered set of the results.

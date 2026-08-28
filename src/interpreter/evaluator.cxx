@@ -441,6 +441,55 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     return canonicalName;
 }
 
+// See TypeChecker::resolveModulePath (kexhq/kex#229) for the precedence this
+// mirrors: an active `using M` aliases bare `name` when it is `M`'s last
+// segment or an immediate child `M.name`; failing that, a globally unique
+// loaded module ending in `.name` is a last resort — which is what lets
+// `UnorderedSet.from(…)` work from the same `using Data.Set` that only
+// aliases `Set` under the first rule, since `Data.Set` and `Data.UnorderedSet`
+// share a file but not a parent/child relationship.
+auto Evaluator::resolveNamespaceAlias(const std::string& name, SourceLocation loc)
+    -> std::optional<std::string> {
+    if (m_moduleRegistry.contains(name)) return name;
+    auto lastSegmentOf = [](const std::string& module) {
+        const auto dot = module.rfind('.');
+        return dot == std::string::npos ? module : module.substr(dot + 1);
+    };
+    std::vector<std::string> candidates;
+    for (const auto& scope : m_usingModules) {
+        for (const auto& imported : scope) {
+            if (lastSegmentOf(imported) == name) candidates.push_back(imported);
+            if (auto it = m_moduleRegistry.find(imported);
+                it != m_moduleRegistry.end()) {
+                if (auto sub = it->second.submodules.find(name);
+                    sub != it->second.submodules.end())
+                    candidates.push_back(sub->second);
+            }
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    if (candidates.size() == 1) {
+        try {
+            return ensureModuleLoaded(candidates.front(), loc, m_currentModule);
+        } catch (const RuntimeError&) {
+            return std::nullopt;
+        }
+    }
+    if (!candidates.empty()) return std::nullopt;
+
+    std::optional<std::string> unique;
+    const auto suffix = "." + name;
+    for (const auto& [candidate, _] : m_moduleRegistry) {
+        if (candidate.size() <= suffix.size() ||
+            candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        if (unique && *unique != candidate) return std::nullopt;
+        unique = candidate;
+    }
+    return unique;
+}
+
 auto Evaluator::defineImported(const std::string& bindingName, const std::string& logicalName,
                                const std::string& sourceModule, bool explicitImport,
                                const std::string& moduleScope, ValuePtr value,
@@ -1899,6 +1948,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
                         if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
                             namespaceName = std::get<ModuleValue>(resolved->data).name;
+                        } else if (auto aliased =
+                                       resolveNamespaceAlias(upperIdent->name, expr.location)) {
+                            namespaceName = *aliased;
                         } else {
                             namespaceName = upperIdent->name;
                         }
@@ -3457,6 +3509,22 @@ auto Evaluator::registerRuntimeSignature(
 
 auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                                    const ast::TypeExpr& type) const -> bool {
+    // A `make X<A> do ... end` sitting directly in a file-header module
+    // (`module Data`) writes its own param-type annotations against the
+    // record's BARE name (`other: Set<A>`), but the record's runtime
+    // dispatch tag is qualified (`Data.Set`) — so a same-type overload
+    // that needs `dispatchByParamType` to pick between clauses (`+`'s
+    // `Set<A>` vs `[A]`) never matched either one and silently fell
+    // through to `None` (kexhq/kex#229). Accept a match on the tag's own
+    // last segment too, the same short-name fallback `resolveMethodName`
+    // already takes for dispatch.
+    auto matchesName = [](const std::string& actual,
+                          const std::string& expected) {
+        if (actual == expected) return true;
+        const auto dot = actual.rfind('.');
+        return dot != std::string::npos &&
+            actual.compare(dot + 1, std::string::npos, expected) == 0;
+    };
     return std::visit([&](const auto& node) -> bool {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>) {
@@ -3467,7 +3535,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                  std::isupper(static_cast<unsigned char>(expected[0]))))
                 return true;
             auto actual = dispatchTypeName(value);
-            if (actual == expected) return true;
+            if (matchesName(actual, expected)) return true;
             if (auto parent = m_variantParent.find(actual);
                 parent != m_variantParent.end() && parent->second == expected)
                 return true;
@@ -3485,7 +3553,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return actual == "None" || actual == "Just" ||
                        (m_variantParent.contains(actual) &&
                         m_variantParent.at(actual) == "Optional");
-            return actual == expected ||
+            return matchesName(actual, expected) ||
                 (m_variantParent.contains(actual) &&
                  m_variantParent.at(actual) == expected);
         } else if constexpr (std::is_same_v<T, ast::FunctionType> ||

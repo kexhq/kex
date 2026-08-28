@@ -1,0 +1,190 @@
+# A last-in-first-out stack.
+#
+# Opt-in — nothing here is in scope until `using Data.Stack`.
+#
+#   using Data.Stack
+#
+# Elements are stored top first, so +push+, +pop+ and +peek+ are all
+# list-head operations — none of them pay for the size of the stack. +items+
+# reverses that internal order, so it reads bottom-to-top, the order you would
+# have pushed them in:
+#
+#   let s = Stack.from([1, 2, 3])
+#   s.peek                # => Just(3)
+#   s.push(4).items       # => [1, 2, 3, 4]
+#   s.pop                 # => Just((3, Stack(1, 2)))
+#   Stack.empty.pop       # => None
+#
+# Every method answers with a new stack rather than changing the receiver.
+# +push!+ and +pop!+ come free from the +!+ rebinding form, the same as
+# +add!+/+delete!+ do for +Data.Set+: they build a new stack and rebind the
+# receiver variable rather than modifying anything in place.
+module Data
+
+# A stack of elements, held top first.
+#
+# Build one with +Stack.from+ rather than by hand — the record literal takes
+# elements in storage order (top first), which reads backwards from the
+# +items+ a caller normally thinks in.
+#
+#   Stack.from([1, 2, 3]).items   # => [1, 2, 3]
+record Stack<A> do
+  elements : [A] = []
+end
+
+# Constructors for +Stack+.
+module Stack do
+  # Builds a stack from a list, read bottom-to-top: the last element is on
+  # top.
+  #
+  # @param items [[A]] the elements, bottom first
+  # @return [Stack<A>] the stack, with +items+'s last element on top
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).peek   # => Just(3)
+  let from(items: [A]) -> Stack<A> = Stack { elements: items.reverse }
+
+  # The stack with no elements. Also the +Monoid+ identity.
+  #
+  # @return [Stack<A>] the empty stack
+  #
+  # @example
+  #   Stack.empty.empty?   # => true
+  let empty -> Stack<A> = Stack { elements: [] }
+end
+
+make Stack<A>, implement: Enumerable, Foldable, Monoid, Showable do
+  # Folds from the top down to the bottom.
+  #
+  # This is +Stack+'s +Enumerable+/+Foldable+ primitive.
+  #
+  # @param acc [B] the initial accumulator
+  # @param f [B -> A -> B] combines the accumulator with each element
+  # @return [B] the final accumulator
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).reduce(0) { |sum, x| sum + x }   # => 6
+  reduce :> B -> (B -> A -> B) -> B
+  let reduce(acc, f) = @elements.reduce(acc, f)
+
+  # The empty stack — the +Monoid+ identity.
+  #
+  # @return [Stack<A>] the empty stack
+  identity :> Stack<A>
+  let identity = Stack { elements: [] }
+
+  # Combines two stacks by pushing the argument's elements on top of this
+  # one, top element last.
+  #
+  # @param other [Stack<A>] the stack to push on top
+  # @return [Stack<A>] this stack with +other+ stacked above it
+  #
+  # @example
+  #   Stack.from([1, 2]).combine(Stack.from([3, 4])).items   # => [1, 2, 3, 4]
+  combine :> Stack<A> -> Stack<A>
+  let combine(other) = Stack { elements: other.elements + @elements }
+
+  # Returns the elements bottom-to-top — the order you would have pushed
+  # them in.
+  #
+  # @return [[A]] the elements, bottom first
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).items   # => [1, 2, 3]
+  items :> [A]
+  let items = @elements.reverse
+
+  # Returns a new stack with +value+ pushed on top.
+  #
+  # Use +push!+ to rebind the receiver variable.
+  #
+  # @param value [A] the element to push
+  # @return [Stack<A>] a stack with +value+ on top
+  #
+  # @example
+  #   Stack.from([1, 2]).push(3).items   # => [1, 2, 3]
+  push :> A -> Stack<A>
+  let push(value) = Stack { elements: [value | @elements] }
+
+  # Returns the top element and the stack without it, wrapped in +Just+, or
+  # +None+ for an empty stack.
+  #
+  # Use +pop!+ to rebind the receiver variable.
+  #
+  # @return [(A, Stack<A>)?] the top element and the rest, or +None+
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).pop   # => Just((3, Stack(1, 2)))
+  #   Stack.empty.pop             # => None
+  pop :> (A, Stack<A>)?
+  let pop(@Stack { elements: [] }) = None
+  let pop(@Stack { elements: [top | rest] }) = Just((top, Stack { elements: rest }))
+
+  # Returns the top element wrapped in +Just+, or +None+ for an empty stack.
+  #
+  # @return [A?] the top element, or +None+
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).peek   # => Just(3)
+  #   Stack.empty.peek             # => None
+  peek :> A?
+  let peek(@Stack { elements: [] }) = None
+  let peek(@Stack { elements: [top | _] }) = Just(top)
+
+  # Returns the number of elements.
+  #
+  # @return [Integer] the number of elements
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).count   # => 3
+  count :> Integer
+  let count = @elements.count
+
+  # Returns +true+ when the stack has no elements.
+  #
+  # @return [Bool] +true+ for the empty stack
+  #
+  # @example
+  #   Stack.empty.empty?         # => true
+  #   Stack.from([1]).empty?     # => false
+  empty? :> Bool
+  let empty? = @elements.empty?
+
+  # Pushes another stack's elements, or a plain list's, on top.
+  #
+  # The list form reads bottom-to-top, the same as +Stack.from+: the last
+  # element of the list ends up on top.
+  #
+  # @param other [Stack<A> | [A]] the elements to push
+  # @return [Stack<A>] this stack with +other+ pushed above it
+  #
+  # @example
+  #   Stack.from([1, 2]) + [3, 4]             # => Stack(1, 2, 3, 4)
+  #   Stack.from([1, 2]) + Stack.from([3])    # => Stack(1, 2, 3)
+  + :> Stack<A> -> Stack<A>
+  let +(other: Stack<A>) -> Stack<A> = this.combine(other)
+  + :> [A] -> Stack<A>
+  let +(other: [A]) -> Stack<A> = this.combine(Stack.from(other))
+
+  # Renders the stack as +Stack(...)+, bottom-to-top.
+  #
+  # @return [String] the rendered stack
+  #
+  # @example
+  #   Stack.from([1, 2, 3]).showValue   # => "Stack(1, 2, 3)"
+  showValue :> String
+  let showValue = "Stack(${this.items.map { |x| x.showValue }.join(", ")})"
+end
+
+make Stack<A>, implement: Blankable do
+  # Returns +true+ when the stack has no elements. The +Blankable+ view of
+  # +empty?+.
+  #
+  # @return [Bool] +true+ for the empty stack
+  #
+  # @example
+  #   Stack.empty.blank?         # => true
+  #   Stack.from([1]).blank?     # => false
+  blank? :> Bool
+  let blank? = @elements.empty?
+end

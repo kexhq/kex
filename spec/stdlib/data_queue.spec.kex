@@ -1,0 +1,133 @@
+using Data.Queue
+
+describe("Queue — construction") do
+  it("from stores items front-to-back") do
+    assert(Queue.from([1, 2, 3]).items == [1, 2, 3])
+  end
+
+  it("from accepts an empty list") do
+    assert(Queue.from([]).empty?)
+  end
+
+  it("empty is the empty queue") do
+    assert(Queue.empty.empty?)
+    assert(Queue.empty.count == 0)
+  end
+end
+
+describe("Queue — enqueue, dequeue, peek") do
+  it("enqueue adds at the back") do
+    assert(Queue.from([1, 2]).enqueue(3).items == [1, 2, 3])
+  end
+
+  it("enqueue leaves the receiver alone") do
+    let q = Queue.from([1])
+    let bigger = q.enqueue(2)
+    assert(q.items == [1])
+    assert(bigger.items == [1, 2])
+  end
+
+  it("peek answers the front element") do
+    assert(Queue.from([1, 2, 3]).peek == Just(1))
+  end
+
+  it("peek on the empty queue is None") do
+    assert(Queue.empty.peek == None)
+  end
+
+  it("dequeue answers the front element and the rest") do
+    match Queue.from([1, 2, 3]).dequeue do
+      Just((front, rest)) => do
+        assert(front == 1)
+        assert(rest.items == [2, 3])
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+
+  it("dequeue on the empty queue is None") do
+    assert(Queue.empty.dequeue == None)
+  end
+
+  it("dequeue rotates back into front once front runs out") do
+    let q = Queue.empty.enqueue(1).enqueue(2).enqueue(3)
+    match q.dequeue do
+      Just((front, rest)) => do
+        assert(front == 1)
+        assert(rest.items == [2, 3])
+        match rest.dequeue do
+          Just((second, rest2)) => do
+            assert(second == 2)
+            assert(rest2.items == [3])
+          end
+          None => assert(false, "expected Just")
+        end
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+end
+
+describe("Queue — size and emptiness") do
+  it("count answers the number of elements") do
+    assert(Queue.from([1, 2, 3]).count == 3)
+  end
+
+  it("empty? is true only for the empty queue") do
+    assert(Queue.empty.empty?)
+    assert(!Queue.from([1]).empty?)
+  end
+
+  it("blank? follows empty?") do
+    assert(Queue.empty.blank?)
+    assert(!Queue.from([1]).blank?)
+  end
+end
+
+describe("Queue — equality is by elements, not by front/back split") do
+  it("two queues with the same elements in different splits are ==") do
+    assert(Queue.from([1, 2]) == Queue.from([1]).enqueue(2))
+  end
+
+  it("== disagrees with different elements") do
+    assert(!(Queue.from([1, 2]) == Queue.from([1, 3])))
+  end
+end
+
+describe("Queue — operators") do
+  it("+ appends a plain list") do
+    assert((Queue.from([1, 2]) + [3, 4]).items == [1, 2, 3, 4])
+  end
+
+  it("+ appends another queue") do
+    assert((Queue.from([1, 2]) + Queue.from([3, 4])).items == [1, 2, 3, 4])
+  end
+end
+
+describe("Queue — higher-order operations") do
+  it("reduce folds front to back") do
+    assert(Queue.from([1, 2, 3]).reduce("") { |acc, x| "${acc}${x}" } == "123")
+  end
+
+  it("Foldable queries come for free") do
+    let q = Queue.from([1, 2, 3])
+    assert(q.any? { |x| x > 2 })
+    assert(q.all? { |x| x > 0 })
+  end
+
+  it("combine appends, and identity is the empty queue") do
+    let q = Queue.from([1, 2])
+    assert(q.combine(Queue.from([3, 4])).items == [1, 2, 3, 4])
+    assert(q.combine(Queue.empty) == q)
+  end
+end
+
+describe("Queue — display") do
+  it("shows as Queue(...) front-to-back") do
+    assert("${Queue.from([1, 2, 3])}" == "Queue(1, 2, 3)")
+  end
+
+  it("shows the empty queue with no elements") do
+    assert("${Queue.empty}" == "Queue()")
+  end
+end

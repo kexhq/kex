@@ -1,0 +1,105 @@
+using Data.Stack
+
+describe("Stack — construction") do
+  it("from stores items bottom-to-top, last on top") do
+    assert(Stack.from([1, 2, 3]).items == [1, 2, 3])
+  end
+
+  it("from accepts an empty list") do
+    assert(Stack.from([]).empty?)
+  end
+
+  it("empty is the empty stack") do
+    assert(Stack.empty.empty?)
+    assert(Stack.empty.count == 0)
+  end
+end
+
+describe("Stack — push, pop, peek") do
+  it("push adds to the top") do
+    assert(Stack.from([1, 2]).push(3).items == [1, 2, 3])
+  end
+
+  it("push leaves the receiver alone") do
+    let s = Stack.from([1])
+    let bigger = s.push(2)
+    assert(s.items == [1])
+    assert(bigger.items == [1, 2])
+  end
+
+  it("peek answers the top element") do
+    assert(Stack.from([1, 2, 3]).peek == Just(3))
+  end
+
+  it("peek on the empty stack is None") do
+    assert(Stack.empty.peek == None)
+  end
+
+  it("pop answers the top element and the rest") do
+    match Stack.from([1, 2, 3]).pop do
+      Just((top, rest)) => do
+        assert(top == 3)
+        assert(rest.items == [1, 2])
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+
+  it("pop on the empty stack is None") do
+    assert(Stack.empty.pop == None)
+  end
+end
+
+describe("Stack — size and emptiness") do
+  it("count answers the number of elements") do
+    assert(Stack.from([1, 2, 3]).count == 3)
+  end
+
+  it("empty? is true only for the empty stack") do
+    assert(Stack.empty.empty?)
+    assert(!Stack.from([1]).empty?)
+  end
+
+  it("blank? follows empty?") do
+    assert(Stack.empty.blank?)
+    assert(!Stack.from([1]).blank?)
+  end
+end
+
+describe("Stack — operators") do
+  it("+ pushes a plain list, bottom-to-top") do
+    assert((Stack.from([1, 2]) + [3, 4]).items == [1, 2, 3, 4])
+  end
+
+  it("+ pushes another stack on top") do
+    assert((Stack.from([1, 2]) + Stack.from([3, 4])).items == [1, 2, 3, 4])
+  end
+end
+
+describe("Stack — higher-order operations") do
+  it("reduce folds top to bottom") do
+    assert(Stack.from([1, 2, 3]).reduce("") { |acc, x| "${acc}${x}" } == "321")
+  end
+
+  it("Foldable queries come for free") do
+    let s = Stack.from([1, 2, 3])
+    assert(s.any? { |x| x > 2 })
+    assert(s.all? { |x| x > 0 })
+  end
+
+  it("combine stacks the argument's elements on top, and identity is the empty stack") do
+    let s = Stack.from([1, 2])
+    assert(s.combine(Stack.from([3, 4])).items == [1, 2, 3, 4])
+    assert(s.combine(Stack.empty) == s)
+  end
+end
+
+describe("Stack — display") do
+  it("shows as Stack(...) bottom-to-top") do
+    assert("${Stack.from([1, 2, 3])}" == "Stack(1, 2, 3)")
+  end
+
+  it("shows the empty stack with no elements") do
+    assert("${Stack.empty}" == "Stack()")
+  end
+end

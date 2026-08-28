@@ -237,6 +237,12 @@ private:
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
                             const std::string& currentModule = "") -> std::string;
+    // Resolves a bare namespace segment (`Set` in `Set.from(…)`) to its
+    // qualified module (`Data.Set`) when a `using` brought it into scope
+    // unqualified. Mirrors TypeChecker::resolveModulePath (kexhq/kex#229) —
+    // see that function's comment for the precedence rules.
+    auto resolveNamespaceAlias(const std::string& name,
+                               SourceLocation loc) -> std::optional<std::string>;
     auto resolvePendingExports() -> void;
     auto runCompileTime(const ast::Program& program,
                         std::chrono::milliseconds timeout,

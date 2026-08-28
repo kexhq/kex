@@ -440,7 +440,24 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             if (!typeName.empty())
                 for (const auto& trait : make.implements)
                     traitClaims.push_back({typeName, trait});
-            const auto sourceModule = owner.empty() ? typeName : owner;
+            // `make Set<A> do ... end` sits directly in a file-header
+            // module's body (`module Data`), not inside the nested
+            // `module Set do ... end` that provides the qualified static
+            // namespace — so a bare `owner` ("Data") would attribute EVERY
+            // record's receiver methods under one shared file-level module,
+            // colliding `Set`'s and `UnorderedSet`'s `count`/`map`/etc. and
+            // making both invisible to a `using Data.Set` that names neither
+            // "Data" nor the record's own bare name. When the record itself
+            // was collected under `owner` (already qualified: `Data.Set`),
+            // route the make block's receiver signatures there instead.
+            const auto qualifiedTarget = owner.empty() || typeName.empty()
+                ? std::string()
+                : owner + "." + typeName;
+            const bool targetIsOwnedRecord =
+                !qualifiedTarget.empty() &&
+                ifaces.recordArities.count(qualifiedTarget) > 0;
+            const auto sourceModule = targetIsOwnedRecord ? qualifiedTarget
+                : owner.empty() ? typeName : owner;
             auto& module = ifaces.modules[sourceModule];
             module.sourceModule = sourceModule;
             module.backendModule = backendModuleFor(sourceModule);

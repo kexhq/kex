@@ -1,0 +1,29 @@
+# Three files (set.kex, stack.kex, queue.kex) all declare `module Data`.
+# Importing two of them at once proves that shared header merges cleanly —
+# each file's own nested constructor module (`Data.Set`, `Data.Stack`) stays
+# distinct, so `Set.from`/`Stack.from` resolve to the right one.
+#
+# `Data.Stack` and `Data.Set` both declare bare `from`/`empty` in their own
+# constructor modules, so importing both unqualified would collide on those
+# two names — `except:` on the second import keeps this file to the
+# qualified spellings (`Set.from`, `Stack.from`) it actually uses.
+using Data.Set
+using Data.Stack, except: [from, empty]
+
+describe("Data — two files sharing the header module") do
+  it("resolves Set and Stack independently after both are imported") do
+    let s = Set.from([1, 2, 3])
+    let stack = Stack.from([1, 2, 3])
+    assert(s.items == [1, 2, 3])
+    assert(stack.items == [1, 2, 3])
+  end
+
+  it("keeps each type's own receiver methods distinct") do
+    let s = Set.from([1, 1, 2])
+    let stack = Stack.from([1, 2])
+    assert(s.count == 2)
+    assert(stack.count == 2)
+    assert("${s}" == "Set(1, 2)")
+    assert("${stack}" == "Stack(1, 2)")
+  end
+end
