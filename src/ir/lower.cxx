@@ -1293,6 +1293,40 @@ struct Lowering {
                                 return wrapLets(binds, std::move(userCall));
                         }
                     }
+                    // `==`/`!=` have a sensible structural fallback for any
+                    // tuple THIS operator's local override does not own —
+                    // `kex_intrinsic_number:eq` already answers correctly for
+                    // an unrelated record, ADT payload, or opt-in type
+                    // (`Just(1) == Just(1)`). Blindly routing every tuple to
+                    // the user's override once ANY local type overloads `==`
+                    // (`make Queue do let ==(other: Queue<A>)`) left every
+                    // OTHER tuple with no owner to fall back to — the
+                    // dispatcher only knows Queue, so `Option<Int>`'s `==`
+                    // died `Undefined method: == for Option<Int>` for a
+                    // comparison the language answers fine on its own
+                    // (kexhq/kex#235). Other operators keep the old path: they
+                    // have no such structural default, so the wider tuple
+                    // guard plus the callee's own external-provider fallback
+                    // is still the right way to reach an unrelated owner.
+                    const Op opKind = opOf(n.op);
+                    if (opKind == Op::Eq || opKind == Op::Neq) {
+                        ExprPtr ownerGuard;
+                        if (auto owners = methodOwners.find(sym);
+                            owners != methodOwners.end())
+                            for (const auto& owner : owners->second) {
+                                auto next = typeGuard(owner, lRef.get());
+                                ownerGuard = ownerGuard
+                                    ? callE("erlang", "or", 2,
+                                            two(std::move(ownerGuard),
+                                                std::move(next)))
+                                    : std::move(next);
+                            }
+                        auto dispatch = ownerGuard
+                            ? matchBool(std::move(ownerGuard),
+                                        std::move(userCall), std::move(builtin))
+                            : std::move(builtin);
+                        return wrapLets(binds, std::move(dispatch));
+                    }
                     // A Char is `{'Char', N}` — a TUPLE, so the test above
                     // sent every `Char` operand to the user operator, whose
                     // dispatcher only knows the types that actually define one
@@ -1529,27 +1563,14 @@ struct Lowering {
                 auto savedUsing = usingModules;
                 usingModules.insert(srcMod);
                 if (n.alias) moduleAliases[*n.alias] = srcMod;
-                // Import immediate nested modules under their leaf name too.
-                // The semantic resolver already makes `URL.parse` available
-                // after `using URI`; BEAM lowering must map that leaf back to
-                // its owning companion (`URI.URL`) just as the tree walker
-                // does. Explicit aliases still win below by assignment.
-                for (const auto& [key, _] : moduleFunctions) {
-                    const auto prefix = srcMod + ".";
-                    if (key.rfind(prefix, 0) != 0) continue;
-                    const auto rest = key.substr(prefix.size());
-                    const auto dot = rest.find('.');
-                    if (dot == std::string::npos) continue;
-                    const auto nested = rest.substr(0, dot);
-                    if (!n.onlyNames.empty() &&
-                        std::find(n.onlyNames.begin(), n.onlyNames.end(), nested) ==
-                            n.onlyNames.end())
-                        continue;
-                    if (std::find(n.exceptNames.begin(), n.exceptNames.end(), nested) !=
-                        n.exceptNames.end())
-                        continue;
-                    moduleAliases[nested] = srcMod + "." + nested;
-                }
+                // Import immediate nested modules — and M's own last segment
+                // and sibling modules — under their leaf name too. The
+                // semantic resolver already makes `URL.parse` available after
+                // `using URI`; BEAM lowering must map that leaf back to its
+                // owning companion (`URI.URL`) just as the tree walker does.
+                // Explicit aliases still win: registerModuleAliases only
+                // fills a name in when nothing has claimed it yet.
+                registerModuleAliases(srcMod, n.onlyNames, n.exceptNames);
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
                         auto key = srcMod + "." + name;
@@ -2494,6 +2515,18 @@ struct Lowering {
                     found != expressionTypes->end() && found->second) {
                     std::string receiverType =
                         semantic::typeToString(found->second);
+                    // Type arguments are erased at runtime and absent from
+                    // `methodOwners`/`knownTypes`, which are keyed by the bare
+                    // record name (see `typeGuard`'s identical stripping) — an
+                    // unresolved generic receiver such as a trait default's
+                    // `this` (typed `Stack<T11>` before its type parameter is
+                    // solved) never matched the bare `"Stack"` entry, so the
+                    // shadow check silently lost every inherited default
+                    // method for a LOCAL generic record to the checker's
+                    // resolved (prelude) target instead (kexhq/kex#235).
+                    if (auto angle = receiverType.find('<');
+                        angle != std::string::npos)
+                        receiverType.resize(angle);
                     if (auto owner = variantOwner.find(receiverType);
                         owner != variantOwner.end())
                         receiverType = owner->second;
@@ -2943,15 +2976,25 @@ struct Lowering {
                 };
                 std::vector<std::string> candidates;
                 auto explicitPath = pathToString(path);
+                // The literal path always wins over an alias expansion — see
+                // registerModuleAliases. Try it FIRST (the loop below returns
+                // on the first candidate that resolves), and only fall back
+                // to the aliased form after: `Data.Set.from(…)` must stay
+                // `Data.Set.from`, not become `Units.Data.Set.from`, in a
+                // file that also `using`s `Units.Data` (kexhq/kex#229,
+                // kexhq/kex#233) — without this order, a literal two-segment
+                // path whose first segment happens to also be some OTHER
+                // import's aliased bare name got silently rewritten.
+                candidates.push_back(explicitPath);
                 if (!path.empty()) {
                     if (auto alias = moduleAliases.find(path.front());
                         alias != moduleAliases.end()) {
-                        explicitPath = alias->second;
+                        auto aliased = alias->second;
                         for (size_t i = 1; i < path.size(); ++i)
-                            explicitPath += "." + path[i];
+                            aliased += "." + path[i];
+                        candidates.push_back(std::move(aliased));
                     }
                 }
-                candidates.push_back(explicitPath);
                 if (!currentModulePath.empty() && path.size() == 1) {
                     std::string relative = currentModulePath;
                     relative += "." + pathToString(path);
@@ -6115,6 +6158,26 @@ struct Lowering {
         arm(typeGuard(receiverType,
                       clone(fallbackArgs[0], "dualProviderDispatch guard")),
             callE(moduleAtom, function, arity, std::move(args)));
+        // A THIRD record with a FIELD of this same name (not a method) needs
+        // its own arm here too: the generic fallback below only knows about
+        // whichever OTHER method-provider exists, and has no idea a field of
+        // this name exists on some unrelated sibling record — `Data.Set`'s
+        // `items` field vs `Data.UnorderedSet`'s `items` method both being
+        // reachable from the same compilation unit (kexhq/kex#234). Sound
+        // only at arity 1: a field read takes no arguments past the receiver.
+        if (arity == 1) {
+            if (auto fieldSlots = fieldAccessors.find(method);
+                fieldSlots != fieldAccessors.end())
+                for (const auto& slot : fieldSlots->second) {
+                    if (slot.record == canonicalReceiver) continue;
+                    arm(recordGuard(slot, clone(fallbackArgs[0],
+                                                "dualProviderDispatch field guard")),
+                        callE("erlang", "element", 2,
+                              two(litInt(slot.position),
+                                  clone(fallbackArgs[0],
+                                       "dualProviderDispatch field"))));
+                }
+        }
         if (fallbackModule.empty()) {
             auto receiver = clone(fallbackArgs[0], "dualProviderDispatch miss");
             arm(nullptr, undefinedMethod(method, std::move(receiver)));
@@ -6638,6 +6701,81 @@ struct Lowering {
                                      two(litInt(1), vRef.get())),
                                lit(LitKind::Atom, tagged))),
             litBool(false));
+    }
+
+    // Registers `moduleAliases` entries for a `using M`, so a later
+    // `Name.method(…)` call site (see the `moduleAliases.find(path.front())`
+    // lookup above) can resolve a bare module segment against it. Mirrors
+    // `TypeChecker::resolveModulePath` (kexhq/kex#229, kexhq/kex#233):
+    //
+    //   1. `M`'s own last segment aliases to `M` — `using Data.Set` aliases
+    //      bare `Set`, since the nested `module Set do … end` constructor
+    //      block that provides `Data.Set` is what the bare receiver means.
+    //   2. An immediate child `M.C` aliases to itself under the bare name
+    //      `C` — `using Net.HTTP` aliases bare `Status` to `Net.HTTP.Status`.
+    //   3. A SIBLING of `M` (same immediate parent, found by scanning every
+    //      known module for one) aliases to itself too — `Data.UnorderedSet`
+    //      shares a file, and a `module Data` header, with `Data.Set`, but is
+    //      its sibling, not its child, so `using Data.Set` alone would
+    //      otherwise leave `UnorderedSet.from(…)` unresolved.
+    //
+    // `moduleFunctions` already holds every module this compilation unit has
+    // seen (populated by the pre-pass before any body is lowered), so this
+    // scan sees `Data.UnorderedSet` even though only `Data.Set` was named.
+    auto registerModuleAliases(const std::string& srcMod,
+                               const std::vector<std::string>& onlyNames,
+                               const std::vector<std::string>& exceptNames)
+        -> void {
+        auto allowed = [&](const std::string& name) {
+            if (!onlyNames.empty() &&
+                std::find(onlyNames.begin(), onlyNames.end(), name) ==
+                    onlyNames.end())
+                return false;
+            return std::find(exceptNames.begin(), exceptNames.end(), name) ==
+                exceptNames.end();
+        };
+        std::unordered_set<std::string> moduleNames;
+        for (const auto& [key, _] : moduleFunctions) {
+            const auto lastDot = key.rfind('.');
+            if (lastDot != std::string::npos)
+                moduleNames.insert(key.substr(0, lastDot));
+        }
+        // A module whose own last segment names a SAME-NAMED nested
+        // constructor block (`Net.HTTP.WebSocket`'s `module WebSocket do
+        // ... end`, giving `Net.HTTP.WebSocket.WebSocket`) has no direct
+        // members of its own in that shape — bare `WebSocket.connect(…)`
+        // means the child, not the header. Prefer that child wherever it
+        // exists, for both `M` itself and any sibling this function aliases.
+        auto resolveTarget = [&](const std::string& candidate) {
+            const auto childDot = candidate.rfind('.');
+            const auto candidateLeaf = childDot == std::string::npos
+                ? candidate : candidate.substr(childDot + 1);
+            const auto sameNamedChild = candidate + "." + candidateLeaf;
+            return moduleNames.count(sameNamedChild) ? sameNamedChild : candidate;
+        };
+        const auto dot = srcMod.rfind('.');
+        const auto leaf = dot == std::string::npos ? srcMod : srcMod.substr(dot + 1);
+        const auto parent = dot == std::string::npos ? std::string() : srcMod.substr(0, dot);
+        if (allowed(leaf)) moduleAliases.try_emplace(leaf, resolveTarget(srcMod));
+        const auto childPrefix = srcMod + ".";
+        for (const auto& modulePath : moduleNames) {
+            if (modulePath.rfind(childPrefix, 0) == 0) {
+                // Immediate child of M only — a grandchild still needs its
+                // own qualification.
+                const auto rest = modulePath.substr(childPrefix.size());
+                if (rest.find('.') == std::string::npos && allowed(rest))
+                    moduleAliases.try_emplace(rest, modulePath);
+            } else if (!parent.empty() && modulePath != srcMod) {
+                const auto modDot = modulePath.rfind('.');
+                if (modDot != std::string::npos &&
+                    modulePath.compare(0, modDot, parent) == 0 &&
+                    modDot == parent.size()) {
+                    const auto siblingLeaf = modulePath.substr(modDot + 1);
+                    if (allowed(siblingLeaf))
+                        moduleAliases.try_emplace(siblingLeaf, resolveTarget(modulePath));
+                }
+            }
+        }
     }
 
     auto makeArgumentDispatcher(
@@ -7752,8 +7890,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         };
                         auto pushMethod = [&](const ast::FunctionDef* fd) {
                             if (!fd) return;
+                            // Mirrors the top-level make-group splitting a few
+                            // hundred lines up: a receiver type overloaded by
+                            // a NON-receiver parameter's type (`let +(other:
+                            // Set<A>)` vs `let +(other: [A])`, both on `Set`)
+                            // must become two separate BEAM functions, one per
+                            // signature — lowerMakeGroup names each using its
+                            // OWN first clause's dispatch types, so merging
+                            // them here silently drops every clause but the
+                            // first's under one mangled name (kexhq/kex#233).
+                            // A module-nested `make` (any file-header module,
+                            // not just an explicit `module X do ... end`)
+                            // reaches this path instead of the top-level one.
+                            bool differentOverload = false;
+                            if (!methods.empty() &&
+                                L.argumentOverloadedMethods.count(localOverloadKey(
+                                    fd->name, typeName, beamArity(fd))))
+                                differentOverload =
+                                    methodDispatchTypes(*methods.front(), typeName) !=
+                                    methodDispatchTypes(*fd, typeName);
                             if (!methods.empty() && (methods.front()->name != fd->name ||
-                                beamArity(methods.front()) != beamArity(fd))) flushMethods();
+                                beamArity(methods.front()) != beamArity(fd) ||
+                                differentOverload)) flushMethods();
                             methods.push_back(fd);
                         };
                         for (const auto& mi : mk->body) {
@@ -7908,20 +8066,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 L.usingModules.insert(srcMod);
                 if (node->alias) L.moduleAliases[*node->alias] = srcMod;
-                for (const auto& [key, _] : L.moduleFunctions) {
-                    const auto prefix = srcMod + ".";
-                    if (key.rfind(prefix, 0) != 0) continue;
-                    const auto rest = key.substr(prefix.size());
-                    const auto dot = rest.find('.');
-                    if (dot == std::string::npos) continue;
-                    const auto nested = rest.substr(0, dot);
-                    if (!node->onlyNames.empty() &&
-                        std::find(node->onlyNames.begin(), node->onlyNames.end(), nested) == node->onlyNames.end())
-                        continue;
-                    if (std::find(node->exceptNames.begin(), node->exceptNames.end(), nested) != node->exceptNames.end())
-                        continue;
-                    L.moduleAliases[nested] = srcMod + "." + nested;
-                }
+                // M's own last segment, immediate children, and siblings —
+                // see registerModuleAliases. Explicit aliases still win:
+                // it only fills a name in when nothing has claimed it yet.
+                L.registerModuleAliases(srcMod, node->onlyNames, node->exceptNames);
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {
                         auto key = srcMod + "." + name;
@@ -8048,7 +8196,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         mod.functions.push_back(L.makeArgumentDispatcher(
             name, arity, overloads, fallbackModule));
     }
-
     // Cross-type collision dispatchers (bare name → runtime-type dispatch).
     // Generated PER ARITY, including only the owner types that actually have a
     // `name/Type` variant at that BEAM arity — a method can be overloaded by arity across
@@ -8062,11 +8209,38 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     for (const auto& name : collidingNames) {
         std::map<int, std::vector<std::string>> ownersByArity;
         std::string prefix = receiverImplementationPrefix(name);
-        for (const auto& fn : mod.functions)
-            if (fn.name.rfind(prefix, 0) == 0)
-                ownersByArity[fn.arity].push_back(fn.name.substr(prefix.size()));
+        // A mangled implementation's suffix is either a bare receiver type
+        // (`+/Set`) or, for a receiver argument-overloaded within its own
+        // type (`make Set do + :> Set<A> -> ...; + :> [A] -> ...`), a
+        // receiver-then-argument-types signature (`+/Set,Set<A>`) — see
+        // `mangleReceiverSignature`. Taking the whole suffix as the owner
+        // name for the second case fabricated non-existent owners like
+        // "Set,Set<A>" (no such type, no such record tag) whose guard could
+        // never match anything, so `Data.Set` silently lost its `+` on BEAM
+        // while `Data.UnorderedSet`'s legitimate single-signature-looking
+        // suffix happened to survive (kexhq/kex#233 follow-up, no ticket).
+        //
+        // Such a receiver is not missing here, though: `argumentOverloadSignatures`
+        // (built above, before this loop runs) already emits a bare `name`/arity
+        // function per overloaded owner, each guarding on receiver AND argument
+        // type, and the final duplicate-function merge pass concatenates every
+        // one of those into a single dispatcher. Re-adding the same owner here
+        // — under a fabricated name calling a function that does not exist —
+        // only reintroduces the bug, so an argument-overloaded owner is
+        // excluded from this dispatcher entirely and left to that mechanism.
+        for (const auto& fn : mod.functions) {
+            if (fn.name.rfind(prefix, 0) != 0) continue;
+            const auto suffix = fn.name.substr(prefix.size());
+            const auto owner = suffix.substr(0, suffix.find(','));
+            if (L.argumentOverloadedMethods.count(
+                    localOverloadKey(name, owner, fn.arity)))
+                continue;
+            auto& owners = ownersByArity[fn.arity];
+            if (std::find(owners.begin(), owners.end(), owner) == owners.end())
+                owners.push_back(owner);
+        }
         for (const auto& [arity, owners] : ownersByArity) {
-            if (arity < 1) continue;
+            if (arity < 1 || owners.empty()) continue;
             // If every owner is an ADT type (has known variant tags), the
             // clauses from the mangled functions have distinct top-level
             // patterns — merge them into one function and skip the guard-

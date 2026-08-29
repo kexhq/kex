@@ -257,6 +257,75 @@ inline auto collectTraitNames(const Item& item,
     }
 }
 
+// Trait names CLAIMED (`make T, implement: Trait`) anywhere in a parsed
+// program, modules included. Mirrors `collectTraitNames` above.
+template <typename Item>
+inline auto collectImplementedTraitNames(const Item& item,
+                                         std::unordered_set<std::string>& out)
+    -> void {
+    if (const auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+        if (*mk)
+            for (const auto& name : (*mk)->implements) out.insert(name);
+    } else if (const auto* mod =
+                   std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+        if (*mod)
+            for (const auto& nested : (*mod)->body)
+                collectImplementedTraitNames(nested, out);
+    }
+}
+
+// BEAM lowering splices a trait's default methods into any type that claims
+// it (`make T, implement: Trait`) by finding the trait's `trait ... do ...
+// end` AST locally in the program being compiled (lower.cxx's
+// `inheritedDefaults`). A prelude-tier type gets this for free: the claim and
+// the trait declaration live in the same compiled prelude program. An
+// OPT-IN, SOURCE-LOADED module (`using Data.Set`) is compiled as its own
+// unit against the prelude's precompiled SIGNATURES only (`ExternalModules`
+// carries name/arity, never a default method's body) — so a type claiming a
+// prelude trait purely through inherited defaults, with no local override,
+// had no source to splice `any?`/`all?`/etc. from, and died `Undefined
+// method` on BEAM only (the tree-walk interpreter re-parses the prelude
+// wholesale and never hits this gap) (kexhq/kex#235).
+//
+// Fixed generically, not by special-casing Enumerable/Foldable: whenever the
+// assembled program claims a trait it does not itself declare, search the
+// prelude's own source files for that trait's declaration and merge just the
+// trait node in — the same node a prelude-tier type would already have found
+// in its own file.
+inline auto backfillExternalTraitDefaults(ast::Program& program) -> void {
+    std::unordered_set<std::string> implemented, declared;
+    for (const auto& item : program.items) {
+        collectImplementedTraitNames(item, implemented);
+        collectTraitNames(item, declared);
+    }
+    std::vector<std::string> missing;
+    for (const auto& name : implemented)
+        if (!declared.count(name)) missing.push_back(name);
+    if (missing.empty()) return;
+    std::sort(missing.begin(), missing.end());
+
+    for (const auto& filePath : preludeSourceFiles()) {
+        if (missing.empty()) break;
+        std::ifstream input(filePath);
+        if (!input) continue;
+        std::string src((std::istreambuf_iterator<char>(input)),
+                        std::istreambuf_iterator<char>());
+        Lexer lexer(std::move(src), filePath);
+        Parser parser(lexer.tokenizeAll(), filePath);
+        auto fileProgram = parser.parseProgram();
+        if (!parser.diagnostics().empty()) continue;
+        for (auto& item : fileProgram.items) {
+            auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+            if (!trait || !*trait) continue;
+            auto found = std::find(missing.begin(), missing.end(),
+                                   (*trait)->name);
+            if (found == missing.end()) continue;
+            program.items.push_back(std::move(item));
+            missing.erase(found);
+        }
+    }
+}
+
 // A trait as the checker needs it: the signatures it REQUIRES, and the names
 // of the methods it supplies a default body for. Without the latter, a type
 // that claims the trait (`make Range, implement: Foldable`) looks like it has
