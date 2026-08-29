@@ -751,6 +751,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Lets npm exchange this job's GitHub Actions OIDC token for a
+      # short-lived publish token on npmjs.org (Trusted Publishing) — see the
+      # npm publish step below.
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -764,9 +768,22 @@ jobs:
       # registry already has the version — so a re-run after a partial
       # failure (say, npmjs succeeded but GitHub Packages didn't) only does
       # the one that's still missing.
+      #
+      # npmjs.org uses Trusted Publishing (OIDC): this workflow file is
+      # registered as a trusted publisher for @kexhq/kex on npmjs.com, so npm
+      # exchanges this job's GitHub Actions OIDC token (id-token: write,
+      # above) for a short-lived publish token by itself — no stored secret
+      # to leak or rotate, and npm requires this over a 2FA-bypass token for
+      # anything automated. `npm install -g npm@latest` guarantees a CLI new
+      # enough to speak it (Trusted Publishing needs npm 11.5.1+).
+      #
+      # GitHub Packages has no such mechanism, so it still uses a real token,
+      # keyed by host in .npmrc.
+      - name: Ensure npm supports Trusted Publishing
+        run: npm install -g npm@latest
+
       - name: Publish @kexhq/kex
         env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -779,27 +796,20 @@ jobs:
             tag=latest
           fi
 
-          # Auth is keyed by registry host, not by scope, so each publish
-          # below targets its registry explicitly via --registry rather than
-          # relying on a `@kexhq:registry` mapping (which could only point at
-          # one of the two).
-          {
-            echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}"
-            echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}"
-          } > ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}" > ~/.npmrc
 
           publish_to() {
-            local registry="$1"
+            local registry="$1"; shift
             # npm versions are immutable, so a re-run skips rather than fails.
             if npm view "@kexhq/kex@${version}" version --registry "$registry" >/dev/null 2>&1; then
               echo "@kexhq/kex@${version} is already published on ${registry}; skipping."
               return 0
             fi
-            npm publish "kexhq-kex-${version}.tgz" --tag "$tag" --registry "$registry"
+            npm publish "kexhq-kex-${version}.tgz" --tag "$tag" --registry "$registry" "$@"
             npm view "@kexhq/kex@${tag}" version --registry "$registry"
           }
 
-          publish_to "https://registry.npmjs.org"
+          publish_to "https://registry.npmjs.org" --provenance
           publish_to "https://npm.pkg.github.com"
 
   # Homebrew is the stable line only. A pre-release must never become what
