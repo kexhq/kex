@@ -348,6 +348,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Lets npm exchange this job's GitHub Actions OIDC token for a
+      # short-lived publish token on npmjs.org (Trusted Publishing) — see the
+      # npm publish step below.
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -495,14 +499,30 @@ jobs:
       # and GitHub Packages (a mirror kept for existing internal consumers
       # already wired to it, e.g. kexhq/site's install and its
       # update-kex.yml, which reads the GitHub Packages API directly).
+      #
+      # npmjs.org uses Trusted Publishing (OIDC): this workflow file is
+      # registered as a trusted publisher for @kexhq/kex on npmjs.com, so npm
+      # exchanges this job's GitHub Actions OIDC token (id-token: write,
+      # above) for a short-lived publish token by itself — no stored secret
+      # to leak or rotate, and npm requires this over a 2FA-bypass token for
+      # anything automated. `npm install -g npm@latest` guarantees a CLI new
+      # enough to speak it (Trusted Publishing needs npm 11.5.1+; the
+      # runner's bundled npm isn't pinned to any particular version).
+      #
+      # GitHub Packages has no such mechanism, so it still uses a real token,
+      # keyed by host in .npmrc.
+      #
       # A dev build carries the version it is working toward, exactly like a
       # native `kex --version` built from the same tree: <VERSION>-dev.<short-sha>
       # (0.3.0-beta -> 0.3.0-beta.dev.a1b2c3d, 0.3.0 -> 0.3.0-dev.a1b2c3d).
       # The `next` dist-tag floats over these; real versions — the plain
       # VERSION as the npm number, `latest` or a channel tag — are published
       # by the Release workflow. Skipped on pull_request builds so PRs from
-      # forks (which don't get repository secrets) don't fail here. See
-      # packages/kex/README.md.
+      # forks (which don't get repository secrets or OIDC tokens) don't fail
+      # here. See packages/kex/README.md.
+      - name: Ensure npm supports Trusted Publishing
+        run: npm install -g npm@latest
+
       - name: Publish @kexhq/kex to npm
         if: github.event_name == 'push'
         working-directory: packages/kex
@@ -511,17 +531,9 @@ jobs:
           version=$(tr -d "[:space:]" < "${GITHUB_WORKSPACE}/VERSION")
           npm version "${version}-dev.${GITHUB_SHA::7}" --no-git-tag-version
 
-          # Auth is keyed by registry host, not by scope, so each publish
-          # below targets its registry explicitly via --registry rather than
-          # relying on a `@kexhq:registry` mapping (which could only point at
-          # one of the two).
-          {
-            echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}"
-            echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}"
-          } > ~/.npmrc
+          npm publish --registry https://registry.npmjs.org --tag next --provenance
 
-          npm publish --registry https://registry.npmjs.org --tag next
+          echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}" > ~/.npmrc
           npm publish --registry https://npm.pkg.github.com --tag next
         env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
