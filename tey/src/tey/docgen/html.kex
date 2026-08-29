@@ -15,8 +15,27 @@ module Tey.Docgen.Html do
     end
     let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n")
     let tag = preludeTag(preludePaths(model).contains?(page.urlPath))
-    let body = "<h1>${esc(page.title)}${tag}</h1>\n${sections}"
+    let body = "<h1>${esc(page.title)}${tag}</h1>\n${sections}\n${submodulesHtml(page, model)}"
     return layout(page.title, page.urlPath, body, model)
+  end
+
+  # A module family spread over several files ("Net" + net/dns.kex,
+  # net/http.kex, ...) gets one page per file, and the parent page says
+  # nothing about the rest — a reader on "Net" has no reason to believe
+  # Net.DNS or Net.Socket are documented at all. This section is the
+  # signpost: every descendant page, with the summary its module declares.
+  foul submodulesHtml(page: SourcePage, model: PackageModel) -> String do
+    let children = Tey.Docgen.Nav.descendantPages(model.pages, page)
+    return "" if children.empty?
+    let items = children.map { |c| submoduleItem(c, page, model) }.join("\n")
+    return "<h2 class=\"group\">Submodules</h2>\n<ul class=\"prelude-list\">\n${items}\n</ul>\n"
+  end
+
+  foul submoduleItem(child: SourcePage, page: SourcePage, model: PackageModel) -> String do
+    let href = "${Tey.Docgen.Nav.upsToVersionDir(page.urlPath)}${child.urlPath}.html"
+    let summary = moduleSummary(model, child.title)
+    let note = summary.empty? then "" else " <span class=\"prelude-note\">${inlineCode(summary)}</span>"
+    return "<li><code><a class=\"xref\" href=\"${href}\">${esc(child.title)}</a></code>${note}</li>"
   end
 
   foul preludePage?(page: SourcePage, model: PackageModel) -> Bool do
@@ -432,27 +451,40 @@ module Tey.Docgen.Html do
     `
   end
 
-  # The sidebar lists one entry per source FILE, in scan order. The active
-  # file expands to its top-level declarations so a reader can jump straight
-  # to one. The label is the page's title (the module it declares), not the
-  # raw file name.
+  # The sidebar lists one entry per source FILE, nested by module family:
+  # a page whose title is a dotted child of another page's title nests
+  # under it ("Net.DNS" under "Net", "Net.HTTP.WebSocket" under
+  # "Net.HTTP"), so a multi-file module reads as one branch instead of
+  # trailing the list in directory-walk order. The active file expands to
+  # its top-level declarations so a reader can jump straight to one. The
+  # label is the page's title (the module it declares), not the raw file
+  # name.
   # The heading is a link: it is the package's name, and the obvious thing to
   # want from it is the list of what the package contains — which is the
   # version index, where the prelude split lives.
   foul sidebar(model: PackageModel, current: String) -> String do
     let vpre = versionPrefix(current)
-    let entries = model.pages.map { |p| sidebarEntry(p, current, vpre) }.join("\n")
+    let entries = Tey.Docgen.Nav.topLevelPages(model.pages).map { |p|
+      sidebarEntry(p, current, vpre, model.pages)
+    }.join("\n")
     let heading = "<p class=\"side-heading\"><a href=\"${vpre}index.html\">${esc(labelOf(model))}</a></p>"
     return "<aside class=\"side\"><nav aria-label=\"Modules\">${heading}<ul class=\"side-list\">\n${entries}\n</ul></nav></aside>"
   end
 
-  foul sidebarEntry(page: SourcePage, current: String, vpre: String) -> String do
+  foul sidebarEntry(page: SourcePage, current: String, vpre: String, pages: [SourcePage]) -> String do
     let href = "${vpre}${page.urlPath}.html"
-    if page.urlPath == current
-      let entityLinks = page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n")
-      return "<li><a class=\"active\" href=\"${href}\">${esc(page.title)}</a><ul class=\"side-sub\">\n${entityLinks}\n</ul></li>"
+    let active = page.urlPath == current
+    let klass = active then " class=\"active\"" else ""
+    let entityLinks = if active
+      "<ul class=\"side-sub\">\n" + page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n") + "\n</ul>"
+    else
+      ""
     end
-    return "<li><a href=\"${href}\">${esc(page.title)}</a></li>"
+    let children = Tey.Docgen.Nav.childPages(pages, page.title).map { |c|
+      sidebarEntry(c, current, vpre, pages)
+    }.join("\n")
+    let nest = children.empty? then "" else "<ul class=\"side-nest\">\n${children}\n</ul>"
+    return "<li><a${klass} href=\"${href}\">${esc(page.title)}</a>${entityLinks}${nest}</li>"
   end
 
   # The page's own heading carries it — the sidebar is a list to scan, and a

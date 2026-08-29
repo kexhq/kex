@@ -1,11 +1,10 @@
-module Net
-
 # Shared networking values, capability discovery, and typed failures.
 #
 #   using Net
 #
 #   let https = Port.from(443).try
 #   if Support.current.tls.usable? then https.string else "TLS unavailable" end
+module Net
 
 # A validated TCP or UDP port number in +0..65535+.
 #

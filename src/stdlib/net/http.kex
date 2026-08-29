@@ -1,5 +1,3 @@
-module Net.HTTP
-
 # Buffered HTTP clients, responses, and a small declaration-ordered server
 # router. Requests never follow redirects or perform generic retries implicitly.
 #
@@ -13,6 +11,7 @@ module Net.HTTP
 #   let client = Client.open.try
 #   let response = client.get("https://example.test/").try
 #   client.close.try
+module Net.HTTP
 
 # An insertion-ordered HTTP field collection. Names compare case-insensitively
 # and duplicate fields are preserved.

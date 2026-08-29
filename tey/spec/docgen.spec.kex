@@ -1,7 +1,7 @@
 using Tey.Docgen.Model
-using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?]
+using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?, parentTitleOf, topLevelPages, childPages, descendantPages]
 using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText, preludePaths]
-using Tey.Docgen.Extract, only: [isConstantBinding]
+using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle]
 using Tey.Docgen.Index, only: [upsertVersion]
 using Tey.Docgen.Rdoc, only: [parseDoc]
 
@@ -30,6 +30,10 @@ end
 
 let versionEntry(pkg: String, id: String) -> VersionEntry do
   return VersionEntry { id: id, label: pkg, generatedAt: "", package: pkg }
+end
+
+let aTitled(title: String, path: String) -> SourcePage do
+  return SourcePage { source: "${path}.kex", urlPath: path, title: title, entities: [] }
 end
 
 describe("Tey.Docgen.Nav.buildModules") do
@@ -115,6 +119,68 @@ describe("Tey.Docgen.Nav.hrefFrom") do
 
   it("climbs out of nested pages to the version directory") do
     assert(hrefFrom("kex/ast", "fs", "module-FS") == "../fs.html#module-FS")
+  end
+end
+
+describe("Tey.Docgen.Nav.parentTitleOf") do
+  it("parents a dotted page at the longest existing prefix page") do
+    # Net.HTTP.WebSocket belongs to Net.HTTP, not to Net, when both exist.
+    let pages = [aTitled("Net", "net"), aTitled("Net.DNS", "net/dns"),
+                 aTitled("Net.HTTP", "net/http"), aTitled("Net.HTTP.WebSocket", "net/http/websocket")]
+    match pages.drop(3).first do
+      Just(ws) => assert(parentTitleOf(pages, ws) == Just("Net.HTTP"))
+      None => assert(false)
+    end
+  end
+
+  it("leaves a prefixed page at the top when no parent page exists") do
+    # "Control" is nobody's page title, so Control.Retry parents nowhere.
+    let pages = [aTitled("Control.Retry", "control/retry")]
+    match pages.first do
+      Just(retry) => assert(parentTitleOf(pages, retry) == None)
+      None => assert(false)
+    end
+  end
+end
+
+describe("Tey.Docgen.Nav.topLevelPages") do
+  it("keeps family pages out of the top level, which stays alphabetical") do
+    let pages = [aTitled("Net.DNS", "net/dns"), aTitled("Control.Retry", "control/retry"),
+                 aTitled("Net", "net")]
+    assert(topLevelPages(pages).map { |p| p.title } == ["Control.Retry", "Net"])
+    assert(childPages(pages, "Net").map { |p| p.title } == ["Net.DNS"])
+  end
+
+  it("nests two levels deep by the longest prefix") do
+    let pages = [aTitled("Net", "net"), aTitled("Net.HTTP", "net/http"),
+                 aTitled("Net.HTTP.WebSocket", "net/http/websocket"), aTitled("Net.IP", "net/ip")]
+    assert(childPages(pages, "Net").map { |p| p.title } == ["Net.HTTP", "Net.IP"])
+    assert(childPages(pages, "Net.HTTP").map { |p| p.title } == ["Net.HTTP.WebSocket"])
+  end
+end
+
+describe("Tey.Docgen.Nav.descendantPages") do
+  it("lists a family's pages at any depth, alphabetically, minus itself") do
+    let net = aTitled("Net", "net")
+    let pages = [net, aTitled("Net.Socket", "net/socket"), aTitled("Net.DNS", "net/dns"),
+                 aTitled("Net.HTTP", "net/http"), aTitled("Net.HTTP.WebSocket", "net/http/websocket"),
+                 aTitled("Net.IP", "net/ip")]
+    let titles = descendantPages(pages, net).map { |p| p.title }
+    assert(titles == ["Net.DNS", "Net.HTTP", "Net.HTTP.WebSocket", "Net.IP", "Net.Socket"])
+  end
+end
+
+describe("Tey.Docgen.Extract.pageTitle") do
+  it("titles a shared-module file by its nested module") do
+    # data/queue.kex declares `module Data` around `module Queue` — and so
+    # do set.kex and stack.kex; the stem says which page this is.
+    let data = aModule("Data", "Data", [aModule("Queue", "Data.Queue", [])])
+    assert(pageTitle("data/queue.kex", [data]) == "Data.Queue")
+  end
+
+  it("keeps the top module when it matches the file stem") do
+    let dns = aModule("Net.DNS", "Net.DNS", [])
+    assert(pageTitle("net/dns.kex", [dns]) == "Net.DNS")
   end
 end
 

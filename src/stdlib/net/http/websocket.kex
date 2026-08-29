@@ -1,5 +1,3 @@
-module Net.HTTP.WebSocket
-
 # High-level RFC 6455 client messages. The runtime handles fragmentation and
 # ping/pong frames; reconnect and heartbeat policies remain application-owned.
 #
@@ -9,6 +7,7 @@ module Net.HTTP.WebSocket
 #   socket.send(Text("hello")).try
 #   let message = socket.receiveMessage.try
 #   socket.close
+module Net.HTTP.WebSocket
 
 # A complete high-level WebSocket message. Fragmentation and ping/pong control
 # frames are handled by the connection runtime.
