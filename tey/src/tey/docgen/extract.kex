@@ -8,7 +8,7 @@
 # both sides.
 
 module Tey.Docgen.Extract do
-  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf]
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf, qualifiedNameOf]
 
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
     return entitiesIn(items, "")
@@ -31,12 +31,15 @@ module Tey.Docgen.Extract do
   foul pageTitle(source: String, entities: [Entity]) -> String do
     let tops = entities.flatMap { |e|
       match e do
-        ModuleDecl(entry) => [entry.qualifiedName]
+        ModuleDecl(entry) => [entry]
         _ => []
       end
     }
     if tops.count == 1
-      return tops.first.or("")
+      match tops.first do
+        Just(entry) => return moduleTitle(entry, fileStem(stripExt(source)))
+        None => return ""
+      end
     end
     let primaries = entities.flatMap { |e|
       match e do
@@ -63,6 +66,33 @@ module Tey.Docgen.Extract do
   # file could plausibly be named after.
   foul baseSpelling(name: String) -> String do
     return (name.split("<").first.or("")).split(".").last.or("")
+  end
+
+  # The title of a file with one top-level module. The file's stem has a
+  # say when the module is shared across several files: data/queue.kex
+  # declares `module Data` around `module Queue`, and so do set.kex and
+  # stack.kex — without the stem, every one of those pages is titled
+  # "Data" and the sidebar shows indistinguishable entries. A module whose
+  # last segment matches the stem is the page ("dns.kex" -> Net.DNS); else
+  # a nested module matching it is ("queue.kex" -> Data.Queue); else the
+  # top module stands ("mock.kex" -> Mock, a file about the family).
+  foul moduleTitle(entry: ModuleEntry, stem: String) -> String do
+    return entry.qualifiedName if lastSegmentMatches?(entry.qualifiedName, stem)
+    match nestedModuleNamed(entry.children, stem) do
+      Just(qualified) => return qualified
+      None => return entry.qualifiedName
+    end
+  end
+
+  foul lastSegmentMatches?(qualifiedName: String, stem: String) -> Bool do
+    return (qualifiedName.split(".").last.or("")).lowerCase == stem.lowerCase
+  end
+
+  foul nestedModuleNamed(children: [Entity], stem: String) -> String? do
+    match children.find { |c| nameOf(c).lowerCase == stem.lowerCase } do
+      Just(child) => Just(qualifiedNameOf(child))
+      None => None
+    end
   end
 
   # "kex/ast" -> "ast".

@@ -1,5 +1,3 @@
-module Net.Socket
-
 # Process-owned TCP byte streams and listeners. All blocking operations return
 # typed +NetError+ values; close operations are idempotent.
 #
@@ -11,6 +9,7 @@ module Net.Socket
 #   let client = TCP.connect(address).try
 #   client.sendAll("ping".to(Binary).try).try
 #   listener.close
+module Net.Socket
 module TCP do
   # Marker for an unencrypted stream.
   type Plain

@@ -1,5 +1,3 @@
-module Net.IP
-
 # Validated, canonical IP addresses and CIDR networks.
 #
 #   using Net.IP
@@ -7,6 +5,7 @@ module Net.IP
 #   let address = Address.parse("192.0.2.42").try
 #   let network = Network.parse("192.0.2.0/24").try
 #   network.contains(address)   # => true
+module Net.IP
 
 # A canonical IPv4 or IPv6 address. Zone identifiers belong to endpoints.
 record Address do

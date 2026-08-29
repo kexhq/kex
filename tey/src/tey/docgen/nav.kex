@@ -40,6 +40,53 @@ module Tey.Docgen.Nav do
     return summary.split("\n").first.or("")
   end
 
+  # The file tree a module family grows into, rebuilt from titles: a page
+  # nests under the page whose title is its dotted prefix, so "Net.DNS"
+  # (net/dns.kex) is a child of "Net" (net.kex), and "Net.HTTP.WebSocket"
+  # of "Net.HTTP". The longest existing prefix wins; a prefix with no page
+  # of its own ("Control" for "Control.Retry") leaves the page at the top
+  # level. Titles, not paths, carry the relation — the module names are
+  # what a reader scans for.
+  foul parentTitleOf(pages: [SourcePage], page: SourcePage) -> String? do
+    return parentLoop(page.title.split("."), pages, page)
+  end
+
+  foul parentLoop(parts: [String], pages: [SourcePage], page: SourcePage) -> String? do
+    return None if parts.count <= 1
+    let candidate = parts.take(parts.count - 1).join(".")
+    if claimedByAnother?(pages, page, candidate)
+      return Just(candidate)
+    end
+    return parentLoop(parts.take(parts.count - 1), pages, page)
+  end
+
+  foul claimedByAnother?(pages: [SourcePage], page: SourcePage, title: String) -> Bool do
+    return pages.any? { |p| p.title == title && p.urlPath != page.urlPath }
+  end
+
+  # The sidebar's top level: pages nothing parents, alphabetically by
+  # title — a reader scans by name, not by directory-walk order.
+  foul topLevelPages(pages: [SourcePage]) -> [SourcePage] do
+    return sortedByTitle(pages.filter { |p| parentTitleOf(pages, p) == None })
+  end
+
+  # The pages nested directly under `title`, alphabetically.
+  foul childPages(pages: [SourcePage], title: String) -> [SourcePage] do
+    return sortedByTitle(pages.filter { |p| parentTitleOf(pages, p) == Just(title) })
+  end
+
+  # Every page in `page`'s family at any depth, alphabetically — what a
+  # module page lists as its submodules.
+  foul descendantPages(pages: [SourcePage], page: SourcePage) -> [SourcePage] do
+    return sortedByTitle(pages.filter { |p|
+      p.urlPath != page.urlPath && p.title.startsWith?(page.title + ".")
+    })
+  end
+
+  foul sortedByTitle(pages: [SourcePage]) -> [SourcePage] do
+    return pages.sort { |a, b| a.title.lowerCase < b.title.lowerCase }
+  end
+
   # Linkable names, unique-target-wins: a name links while exactly one
   # (page, anchor) answers it. A qualified name ("FS.Path") is its own name;
   # a simple one ("Path") survives only while nothing else claims it — once

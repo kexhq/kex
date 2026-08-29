@@ -1,5 +1,3 @@
-module Net.DNS
-
 # Typed DNS lookup with explicit resolver ownership and bounded caching.
 #
 #   using Net.DNS
@@ -8,6 +6,7 @@ module Net.DNS
 #   let name = Name.parse("example.test").try
 #   let addresses = resolver.addresses(name).try
 #   resolver.close
+module Net.DNS
 
 # A validated DNS name with caller-facing and IDNA ASCII spellings.
 record Name do
