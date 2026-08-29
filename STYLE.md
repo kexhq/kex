@@ -6,7 +6,7 @@ that `kex fmt` (the formatter) and `kex lint` (the standard lint) implement:
 - **[F]** — **Formatter.** Mechanical; the formatter rewrites the code. Never
   a lint diagnostic, because it cannot survive a format.
 - **[L]** — **Lint.** Not mechanically fixable in general; reported as a
-  diagnostic with the rule ID from §19.
+  diagnostic with the rule ID from §21.
 - **[A]** — **Advisory.** House style for the stdlib and examples. Not
   enforced by default; available under `--pedantic`.
 
@@ -404,6 +404,21 @@ names — or a DSL scope.
 **after** the public API of that module or `make` block (`private-placement`).
 Do not scatter multiple `private` blocks.
 
+**[L]** **Do not qualify a name with the module you are already in.** Inside
+`module Tey.Manifest`, its own `argument` is `argument`, not
+`Tey.Manifest.argument` (`self-qualified-call`). The prefix says "this comes
+from somewhere else", which is exactly wrong, and it turns every call site into
+a line that has to be read past:
+
+```kex
+let value = argument(arguments).or("")               # yes
+let value = Tey.Manifest.argument(arguments).or("")  # no — you are in Tey.Manifest
+```
+
+A name that needs the prefix to resolve is a name that collides with something
+in scope, which is worth fixing at the declaration rather than papering over at
+29 call sites.
+
 **[A]** Narrower still is no import at all: a qualified call
 (`Math.Constants.pi`) beats any `using` for a module referenced two or three
 times. The ladder, narrowest first: a qualified call, then `as:` for a long
@@ -593,7 +608,7 @@ end
 (§3), the whole run falls back to a single space on every line. The decision is
 per run and all-or-nothing, so the result stays idempotent.
 
-Nothing inside a comment or a string literal is ever aligned — see §20.4.
+Nothing inside a comment or a string literal is ever aligned — see §22.4.
 
 **[F]** Collection and call literals fit on one line, or break one element per
 line with the closing bracket at the opening line's indent. No trailing comma
@@ -619,7 +634,7 @@ type Id = Integer or String                         # yes
 Together these make the shape of a result read as part of the signature rather
 than as a container wrapped around it. Routine formatting never rewrites a
 type, so these stay diagnostics; each carries an autofix that runs only when
-asked for (§21).
+asked for (§23).
 
 `or` and `or!` bind tighter than `->`, so `String -> Int or! ParseError` is
 `String -> (Int or! ParseError)` — a function returning a result, which is
@@ -777,6 +792,33 @@ expressions, an early `return … if` guard when one side is a bail-out, and
 the scrutinee's arms, so it also catches a `match` on a predicate call
 (`match name.empty? do`).
 
+**[L]** **An `elif` chain testing one value against literals is a `match`.**
+When every branch asks `x == <literal>` about the same `x`, the chain is a
+dispatch table wearing an `if` (`equality-elif-chain`):
+
+```kex
+match declaration do                          # yes
+  "version"     => version = argument(arguments).or(version)
+  "description" => description = argument(arguments).or(description)
+  "license"     => license = argument(arguments).or(license)
+  _             => failures.push!("unknown declaration `${declaration}`")
+end
+
+if declaration == "version"                   # no
+  version = argument(arguments).or(version)
+elif declaration == "description"
+  description = argument(arguments).or(description)
+elif declaration == "license"
+  license = argument(arguments).or(license)
+else
+  failures.push!("unknown declaration `${declaration}`")
+end
+```
+
+The `match` is shorter, but that is not the point: it lines the cases up in one
+column so a missing or duplicated case is visible, and it puts the fallback
+where a reader looks for it. A chain of twelve `elif`s hides both.
+
 **[L]** **One interesting arm means `if let`.** A `match` that acts on a single
 pattern and discards the rest — the other arm being `_`, `None`, `false`, or an
 empty body — is an `if let` (`prefer-if-let`):
@@ -880,6 +922,36 @@ owner must be `foul` (`escaping-var`).
 
 **[A]** Prefer `xs.filter!(&.even?)` to `xs = xs.filter(&.even?)` when the
 binding is already a `var` — it is the same thing and says so.
+
+**[L]** **A run of `var`s at the top of a function is a record that has not
+been declared.** Ten `var`s initialised to defaults, mutated down the body, and
+assembled into a record at the end is a record built the long way — the
+compiler cannot check that every field was considered, and the reader cannot
+see the shape until the last line (`var-accumulator`):
+
+```kex
+var name = ""                      # no — a ManifestPackage, spelled out
+var version = "0.1.0"
+var license = ""
+var dependencies: [Dependency] = []
+# ...forty lines of mutation...
+Ok(ManifestPackage { name: name, version: version, license: license, ... })
+```
+
+Build the value instead. Declare the record with its defaults, then fold the
+input over it, letting each step answer a new record:
+
+```kex
+let empty = ManifestPackage { }                     # defaults from the record
+declarations.reduce(empty) { |package, entry| package.apply(entry) }
+```
+
+Now the defaults live on the record where they are documented once, `apply` is
+a function you can test on one entry, and adding a field does not mean finding
+every `var` that has to learn about it.
+
+Two or three `var`s that genuinely accumulate — a counter, a buffer, a
+running best — are fine, and §20's `var-count` is where the line sits.
 
 ---
 
@@ -1053,7 +1125,7 @@ find :> (X -> Bool) -> X?
   `@example`, `@deprecated`. `@example` may carry a title on its own line.
 - Example lines are indented three spaces after the `#` and show results as
   `# => value`. Align them by hand if you like — the formatter does not touch
-  the inside of a comment (§20.4).
+  the inside of a comment (§22.4).
 
 **[L]** Tag/parameter agreement: an `@param` must name a real parameter and
 every parameter should have one (`doc-param-mismatch`).
@@ -1105,7 +1177,155 @@ facts is a spec that reports one failure for a dozen bugs.
 
 ---
 
-## 19. Lint rule index
+## 19. Correctness
+
+The rules above are about how code reads. These are about code that is wrong —
+they describe programs that compile and typecheck but do not mean what they
+appear to mean. A finding here is a probable bug, not a preference, which is
+why several default to `error`.
+
+None of them duplicate the type checker. Where the compiler already refuses a
+program — a pure function calling a foul one, `!` on a `let`, a missing trait
+method — there is no lint rule and none is needed.
+
+### Dead code
+
+**[L]** A binding that is never read is either a mistake or a leftover
+(`unused-binding`). The same for a parameter (`unused-parameter`), which is
+spelled `_` or `_name` when it exists only to satisfy a shape:
+
+```kex
+let or(@Just(x), _) = x            # deliberate: the default is unread here
+```
+
+**[L]** An import whose names are never used in its scope is noise, and it
+misleads the next reader about what this code depends on (`unused-using`).
+
+**[L]** A `private` helper that nothing in its module calls is dead
+(`unused-private`). Public functions are exempt — their callers are elsewhere.
+
+**[L]** Statements after an unconditional `return` never run
+(`unreachable-code`). This includes a clause after one whose head matches
+everything, and an arm after a bare `_` (§11's `wildcard-not-last` covers the
+ordering; this one covers the arm that can never be reached at all).
+
+**[L]** A `do ... end` with an empty body, or an `else` with nothing in it, is
+either unfinished or a leftover (`empty-body`). Say `Void` if a branch
+deliberately does nothing.
+
+### Duplication
+
+**[L]** Two `match` arms with the same pattern: the second can never run
+(`duplicate-match-arm`). Two function clauses with identical heads: same
+(`duplicate-clause`).
+
+**[L]** A repeated key in a map literal, or a repeated field in a record
+construction, silently keeps one of them (`duplicate-key`).
+
+**[L]** Both branches of a conditional with the same body means the condition
+does not matter (`identical-branches`) — either the condition is wrong or one
+branch is.
+
+### Suspicious expressions
+
+**[L]** A comparison whose operands are the same expression — `x == x`,
+`n < n` — is always true or always false (`self-comparison`). The intended
+operand is usually a different variable.
+
+**[L]** A condition that cannot vary — `if true`, a guard on a literal, a
+`while` on a constant — is a branch that always goes one way
+(`constant-condition`). Debug scaffolding left behind is the usual cause.
+
+**[L]** A `var` assigned a value that is overwritten before any read did
+nothing (`useless-assignment`).
+
+**[L]** A bare expression in the middle of a body — computed, not bound, not
+returned — is a value thrown away (`discarded-value`). §6 permits exactly one
+implicit exit, the last expression; anything earlier is dead.
+
+**[L]** A bare `()` written to make two branches agree, or to end a branch that
+already ended, is filler (`redundant-unit`). If the branches of a conditional
+disagree about type because one produces a value and one does not, that is the
+bug — `()` only hides it.
+
+**[L]** A call whose result is an `X?` or an `X or! E`, used as a statement
+with the result dropped, discards a failure the signature went out of its way
+to report (`ignored-failure`). Bind it, `.try` it, or say `.or(default)` — but
+do not let it fall on the floor. **Default: error.**
+
+```kex
+FS.File.write(path, rendered)                  # no — the failure vanishes
+FS.File.write(path, rendered).try              # yes — propagate it
+if !FS.File.write(path, rendered).ok?          # yes — handle it
+  IO.printError("could not write ${path}")
+end
+```
+
+### Effects and processes
+
+**[L]** A `receive` with no `after timeout:` clause waits forever if the
+message never comes (`receive-without-timeout`). A server loop that is meant to
+block indefinitely says so with `after timeout: :infinity`, which reads as a
+decision rather than an omission.
+
+**[L]** A spawned process whose handle is discarded cannot be called, awaited,
+or stopped (`orphan-spawn`). If the process is genuinely fire-and-forget, bind
+it to `_` so the next reader knows that was deliberate.
+
+**[L]** A `foul` call in a loop whose result is ignored every iteration is
+usually a missing accumulation (`ignored-loop-effect`).
+
+### Shadowing
+
+**[L]** An inner binding that reuses the name of one already in scope in the
+same function hides it (`shadowed-binding`). Rebinding across a lambda boundary
+is the common accident: `list.map { |item| ... }` inside a function that
+already has an `item`.
+
+**[L]** Inside a `make`, a local with the same name as a field of the receiver
+makes `@name` and `name` two different values on adjacent lines
+(`shadowed-field`). **Default: error.**
+
+---
+
+## 20. Size and shape
+
+Every rule here is a threshold with a default, and every threshold is arguable.
+They exist because the failure they describe is not a bad line — it is a
+function that grew one branch at a time until nobody could hold it in their
+head, and no single edit along the way looked wrong.
+
+**[L]** A function body over **40 lines** is doing more than one thing
+(`function-length`). Count the body, not the doc comment. The fix is almost
+never "split it in half" — it is to notice that one branch of it is a
+transformation with a name.
+
+**[L]** More than **three levels** of nesting inside a body
+(`nesting-depth`). A `match` arm holding an `if` chain holding a `push!` is
+already three; the fourth is where the code stops being readable top to bottom.
+Early `return`s (§11) and extracted helpers are the two ways out.
+
+**[L]** More than **three `var` bindings** in one body (`var-count`). See
+§13: a run of `var`s is usually a record that has not been declared.
+
+**[L]** A `match` arm whose body runs past **five lines** should be a call to a
+named function (`match-arm-body`). An arm that opens `=> do` and continues for
+fifty lines is a function with the pattern as its name, written in the wrong
+place — and it hides the shape of the `match`, which is the one thing a reader
+came to the `match` to see.
+
+**[L]** More than **five parameters** (`parameter-count`). Past that, the
+caller cannot tell the arguments apart at the call site; group them into a
+record whose field names do the telling.
+
+**[A]** Thresholds are defaults, not truths. A parser's dispatch table or a
+generated table may legitimately exceed one; suppress it there with a reason
+(§21) rather than raising the limit for the whole project. What is not
+legitimate is suppressing it everywhere because one function is over.
+
+---
+
+## 21. Lint rule index
 
 | ID | § | Default |
 |----|---|---------|
@@ -1121,6 +1341,7 @@ facts is a spec that reports one failure for a dozen bugs.
 | `using-only-list` | 7 | warn |
 | `redundant-using-block` | 7 | warn |
 | `private-placement` | 7 | warn |
+| `self-qualified-call` | 7 | warn |
 | `prefer-at-field` | 8 | warn |
 | `prefer-new-copy` | 8 | warn |
 | `prefer-trait-param` | 9 | warn |
@@ -1135,11 +1356,13 @@ facts is a spec that reports one failure for a dozen bugs.
 | `wildcard-not-last` | 11 | error |
 | `lazy-wildcard` | 11 | warn |
 | `bool-match` | 11 | warn |
+| `equality-elif-chain` | 11 | warn |
 | `prefer-if-let` | 11 | warn |
 | `prefer-receiver-shorthand` | 12 | warn |
 | `prefer-capture` | 12 | warn |
 | `gratuitous-foul` | 13 | warn |
 | `escaping-var` | 13 | error |
+| `var-accumulator` | 13 | warn |
 | `slot-protocol` | 14 | warn |
 | `slot-annotation` | 14 | warn |
 | `sentinel-failure` | 15 | warn |
@@ -1150,13 +1373,39 @@ facts is a spec that reports one failure for a dozen bugs.
 | `missing-doc` | 16 | warn (error in stdlib) |
 | `doc-param-mismatch` | 16 | warn |
 | `gratuitous-compiled` | 17 | warn |
+| `unused-binding` | 19 | warn |
+| `unused-parameter` | 19 | warn |
+| `unused-using` | 19 | warn |
+| `unused-private` | 19 | warn |
+| `unreachable-code` | 19 | error |
+| `empty-body` | 19 | warn |
+| `duplicate-match-arm` | 19 | error |
+| `duplicate-clause` | 19 | error |
+| `duplicate-key` | 19 | error |
+| `identical-branches` | 19 | warn |
+| `self-comparison` | 19 | error |
+| `constant-condition` | 19 | warn |
+| `useless-assignment` | 19 | warn |
+| `discarded-value` | 19 | warn |
+| `redundant-unit` | 19 | warn |
+| `ignored-failure` | 19 | error |
+| `receive-without-timeout` | 19 | warn |
+| `orphan-spawn` | 19 | warn |
+| `ignored-loop-effect` | 19 | warn |
+| `shadowed-binding` | 19 | warn |
+| `shadowed-field` | 19 | error |
+| `function-length` | 20 | warn |
+| `nesting-depth` | 20 | warn |
+| `var-count` | 20 | warn |
+| `match-arm-body` | 20 | warn |
+| `parameter-count` | 20 | warn |
 
 A rule is suppressed for the next declaration with `# lint:allow <id> — reason`.
 The reason is required; a bare suppression is itself a diagnostic.
 
 ---
 
-## 20. Formatter guarantees
+## 22. Formatter guarantees
 
 The formatter is expected to hold to these, and its test suite should pin them:
 
@@ -1177,7 +1426,7 @@ The formatter is expected to hold to these, and its test suite should pin them:
 
 ---
 
-## 21. Adoption
+## 23. Adoption
 
 The rules above describe the target state, not the current corpus. Four rules
 have a backlog in it:
