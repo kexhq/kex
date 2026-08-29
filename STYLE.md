@@ -64,7 +64,9 @@ A `type` with many variants that exceeds 100 is wrapped one variant per line
 ## 4. Expression spacing
 
 **[F]** One space either side of every binary operator, including `=` in a
-binding, `..` excepted:
+binding. Two exceptions: `..` takes none, and a token being aligned to a column
+(§10) takes the padding that alignment computes — one space is the minimum
+there, not the rule:
 
 ```kex
 let total = subtotal + tax * rate
@@ -76,9 +78,13 @@ let window = 1..10                   # no spaces around `..`
 `~parse`, `&.even?`, `@radius`, `...rest`. `-` is unary only where a binary
 reading is impossible; `a - b` keeps its spaces.
 
-**[F]** No space inside brackets of any kind, and none before a call's opening
-paren: `f(x)`, `[1, 2, 3]`, `xs[0]`, `Just(x)`, `(a + b) * c`. A space after
-every comma, none before it.
+**[F]** No space inside parentheses or square brackets, and none before a
+call's opening paren: `f(x)`, `[1, 2, 3]`, `xs[0]`, `Just(x)`, `(a + b) * c`. A
+space after every comma, none before it.
+
+**[F]** Braces are the opposite: one space inside each, on both the map literal
+and the block — `{ "name": "Kex" }`, `{ |n| n > 3 }` (§12). A brace that
+follows a call is preceded by one space: `scores.filter { |n| n > 3 }`.
 
 **[F]** Argument labels and map keys bind tight on the left, loose on the
 right: `parse(text, options: opts)`, `{ "name": "Kex" }`. This is the same
@@ -178,31 +184,33 @@ end
 The collapse happens **only** when the result fits the soft limit and the body
 holds no comment; otherwise the block stays and the `return` with it.
 
-**[L]** **A multi-exit function spells out every `return`.** If a `do ... end`
-body leaves through more than one point, every one of them — the guards and the
-final value alike — is written with an explicit `return`. Mixing an explicit
-guard with an implicit trailing expression is the diagnostic
-(`implicit-multi-return`):
+**[A]** **Every early exit is an explicit `return`; the last one may be
+implicit.** The trailing expression of a body is the one exit that can go
+unspoken, and leaving it bare is fine even when guards above it return
+explicitly — a guard is visibly an exit because it is a `return` on its own
+line, so nothing is hidden by the final expression not repeating the word.
 
 ```kex
-let basename(path: String, suffix: String) -> String do    # yes
-  let name = path.split(FS.Path.separator).last.or("")
-  return "" if name.startsWith?(".")
-  return name if suffix.empty?
-  return name.dropSuffix(suffix)
-end
-
-let basename(path: String, suffix: String) -> String do    # no — implicit last exit
+let basename(path: String, suffix: String) -> String do    # both fine
   let name = path.split(FS.Path.separator).last.or("")
   return "" if name.startsWith?(".")
   name.dropSuffix(suffix)
 end
+
+let basename(path: String, suffix: String) -> String do
+  let name = path.split(FS.Path.separator).last.or("")
+  return "" if name.startsWith?(".")
+  return name.dropSuffix(suffix)
+end
 ```
 
-A **single**-exit body may end with a bare expression, and normally should.
 Exits are counted at the statement level of the body: a body that is one
 `match`, `if`/`else`, or `then`/`else` expression has one exit no matter how
 many arms or branches it has, and needs no `return` at all.
+
+What stays out is a bare expression in the *middle* of a body — a value
+computed, not bound, and not returned. That is dead code wherever the language
+does not treat it as an exit.
 
 **[L]** Multi-clause functions are contiguous — every clause of `first` is
 adjacent, most specific first, with no unrelated declaration in between
@@ -315,9 +323,7 @@ for a module the file leans on throughout.
 ```kex
 module App do
   using Http do                                  # yes — only these handlers need it
-    let handleHome(req: Request) -> Response do
-      return Response.ok("Welcome!")
-    end
+    let handleHome(req: Request) -> Response = Response.ok("Welcome!")
   end
 
   let unrelated(n: Integer) -> Integer = n * 2   # unaffected by the import
@@ -356,34 +362,43 @@ call sites qualified while shortening a long path, and imports nothing.
 Bare `using M` stays right for a DSL, whose whole point is that its vocabulary
 is in scope unqualified.
 
-**[L]** **The block form must scope less than the body it sits in.** In a file
-that is one module — the file-scope `module Name` form — imports are standalone
-`using M` statements below the module declaration. Do not wrap the file's whole
-body in `using M do ... end`; a block that ends where its scope would have
-ended anyway buys nothing and costs every declaration in the file a level of
-indentation (`redundant-using-block`):
+**[L]** **A `using` block that contains everything should be a `using`
+statement.** The block form exists to limit which declarations can see `M`'s
+names. When the block holds every declaration in its enclosing body, it limits
+nothing — the names are in scope for the whole body either way — and all it has
+added is a level of indentation. Write the statement form instead
+(`redundant-using-block`).
+
+The usual place this shows up is a file that is one module:
 
 ```kex
-module URI                          # yes
-using Parsing
-using Text
+module JSON
+using Parsing                       # yes — statement form, scopes to the file
 
-record URI do
-  source : String
+record Document do
+  root : Value
 end
+
+let parse(text: String) -> Document or! ParseError = ...
 ```
 
 ```kex
-module URI                          # no — the block spans the entire file
-using Parsing do
-  record URI do
-    source : String
+module JSON
+using Parsing do                    # no — this block holds the whole file
+  record Document do
+    root : Value
   end
+
+  let parse(text: String) -> Document or! ParseError = ...
 end
 ```
 
-Reach for the block form only where it genuinely narrows: a run of declarations
-inside a larger module, or a DSL scope.
+Both put `Parsing`'s names in scope for every declaration in the file. The
+second only indents them to say so.
+
+The block earns its keep when something is left outside it — the `App` / `Http`
+example above, where `unrelated` sits outside the block and cannot see Http's
+names — or a DSL scope.
 
 **[L]** Internal helpers go in a single `private do ... end` block, placed
 **after** the public API of that module or `make` block (`private-placement`).
@@ -488,11 +503,11 @@ belongs in the signature rather than in a comment.
 
 **[L]** Constrain by asking for the trait, not by taking a concrete type and
 hoping: a parameter typed `Shape` accepts anything that `implement: Shape`, and
-the checker holds the caller to it (`unconstrained-generic`):
+the checker holds the caller to it (`prefer-trait-param`):
 
 ```kex
-foul printShape(s: Shape)                  # yes — any Shape
-foul printShape(s: Circle)                 # no — needlessly narrow
+foul printShape(s: Shape) = ...            # yes — any Shape
+foul printShape(s: Circle) = ...           # no — needlessly narrow
 ```
 
 **[A]** Two capabilities at once is an intersection: `A & B` means a value
@@ -898,7 +913,7 @@ which is convenient — a `Reply` nobody reads makes every caller wait for
 nothing, and a `Void` that should have been a `Reply` loses the failure
 (`slot-protocol`).
 
-**[F]** Slot results are the map forms, and they mean distinct things:
+**[A]** Slot results are the map forms, and they mean distinct things:
 `{ reply: v }` answers without changing state, `{ new, reply: v }` installs the
 updated record and answers, `{ new }` installs without answering, and adding
 `stop: reason` terminates after the transition.
@@ -925,7 +940,7 @@ to avoid declaring the protocol you actually have.
 
 **[A]** A call can fail: the server may be gone, or the call may time out. That
 is why a slot call answers a result — `groceries.add("coffee")` is
-`Result<Integer, CallError>` — and `.try` propagates it like any other failure
+`Integer or! CallError` — and `.try` propagates it like any other failure
 (§15). Give a bounded wait an explicit `Process.within(timeout)` rather
 than relying on the default.
 
@@ -994,7 +1009,7 @@ when it is short enough to be useful:
 
 ```kex
 die("repeat count cannot be negative")               # yes
-die("cannot serialise a ${Type.of(value).toString}") # yes — names the thing
+die("cannot serialise a ${Type.of(value)}")          # yes — names the thing
 die("Invalid input.")                                # no — capitalized, vague
 die("You must pass a positive count!")               # no — scolds, no value
 ```
@@ -1102,14 +1117,13 @@ facts is a spec that reports one failure for a dozen bugs.
 | `clause-signature` | 6 | warn |
 | `param-match` | 6 | warn |
 | `empty-parens` | 6 | warn |
-| `implicit-multi-return` | 6 | warn |
 | `overbroad-using` | 7 | warn |
 | `using-only-list` | 7 | warn |
 | `redundant-using-block` | 7 | warn |
 | `private-placement` | 7 | warn |
 | `prefer-at-field` | 8 | warn |
 | `prefer-new-copy` | 8 | warn |
-| `unconstrained-generic` | 9 | warn |
+| `prefer-trait-param` | 9 | warn |
 | `single-variant-pipe` | 10 | error |
 | `prefer-optional-shorthand` | 10 | warn |
 | `prefer-result-shorthand` | 10 | warn |
