@@ -740,6 +740,33 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                 iface.exports.push_back(std::move(overload));
             }
         }
+        // Module functions participate in UFCS just like top-level
+        // functions. Preserve the typed first parameter in the compiled
+        // interface so equally named functions owned by sibling modules can
+        // be selected by receiver type instead of declaration order.
+        if (!fd.clauses.empty() && !fd.clauses[0].params.empty()) {
+            const auto& first = fd.clauses[0].params.front();
+            auto receiver = first.type && *first.type
+                ? convertTypeExpr(*first.type) : kexiUnknown();
+            addReceiverFunction(fd, std::move(receiver), iface, meta,
+                                analysis, true);
+            if (it != standaloneSigs.end()) {
+                auto method = std::move(iface.methods.back());
+                iface.methods.pop_back();
+                bool added = false;
+                for (const auto& sig : it->second) {
+                    if (!sig || sig->kind != KexiType::Func ||
+                        sig->typeArgs.size() !=
+                            fd.clauses[0].params.size())
+                        continue;
+                    auto overload = method;
+                    patchMethodWithSig(overload, sig);
+                    iface.methods.push_back(std::move(overload));
+                    added = true;
+                }
+                if (!added) iface.methods.push_back(std::move(method));
+            }
+        }
     };
 
     for (const auto& item : body) {

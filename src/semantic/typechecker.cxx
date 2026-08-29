@@ -1562,7 +1562,8 @@ auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> voi
 auto TypeChecker::registerDeclaredSignaturesInModule(
     const ast::ModuleDef& mod, const std::string& parentPath) -> void {
     const auto modulePath =
-        parentPath.empty() ? mod.name : parentPath + "." + mod.name;
+        parentPath.empty() || mod.name.starts_with(parentPath + ".")
+            ? mod.name : parentPath + "." + mod.name;
     const auto previousModule = m_currentModulePath;
     m_currentModulePath = modulePath;
     auto importsFor = [&](const std::string& name)
@@ -1827,7 +1828,9 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
 auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,
                                                 const std::string& parentPath)
     -> void {
-    const auto path = parentPath.empty() ? mod.name : parentPath + "." + mod.name;
+    const auto path = parentPath.empty() ||
+            mod.name.starts_with(parentPath + ".")
+        ? mod.name : parentPath + "." + mod.name;
     for (const auto& item : mod.body) {
         std::visit([this, &path](const auto& node) {
             using T = std::decay_t<decltype(node)>;

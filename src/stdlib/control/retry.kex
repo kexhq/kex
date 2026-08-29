@@ -8,6 +8,7 @@ record Policy do
   multiplier : Float
   maximumDelay : Duration
   maximumElapsed : Duration? = None
+  jitterFraction : Float = 0.0
 end
 
 # Decides whether an application error is eligible for another attempt.
@@ -22,14 +23,15 @@ type Sleeper = Duration -> Void
 # @param maximumAttempts [Integer] total calls including the first
 # @param delay [Duration] delay before each subsequent call
 # @return [Policy] the retry schedule
-# @example +Retry.fixed(3, Duration.milliseconds(100))+.
+# @example +Retry.fixed(3, 100.milliseconds)+.
 fixed : Integer -> Duration -> Policy
 let fixed(maximumAttempts, delay) = Policy {
   maximumAttempts: maximumAttempts,
   initialDelay: delay,
   multiplier: 1.0,
   maximumDelay: delay,
-  maximumElapsed: None
+  maximumElapsed: None,
+  jitterFraction: 0.0
 }
 
 # Builds a doubling backoff capped at +maximumDelay+.
@@ -44,7 +46,8 @@ let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
   initialDelay: initialDelay,
   multiplier: 2.0,
   maximumDelay: maximumDelay,
-  maximumElapsed: None
+  maximumElapsed: None,
+  jitterFraction: 0.0
 }
 
 make Policy do
@@ -56,13 +59,26 @@ make Policy do
   #
   # @param maximumElapsed [Duration] maximum cumulative scheduled delay
   # @return [Policy] a copied policy with the elapsed bound
-  # @example +Retry.fixed(5, Duration.seconds(1)).withMaximumElapsed(Duration.seconds(2))+.
+  # @example +Retry.fixed(5, 1.seconds).withMaximumElapsed(2.seconds)+.
   let withMaximumElapsed(maximumElapsed: Duration) -> Policy = Policy {
     maximumAttempts: @maximumAttempts,
     initialDelay: @initialDelay,
     multiplier: @multiplier,
     maximumDelay: @maximumDelay,
-    maximumElapsed: Just(maximumElapsed)
+    maximumElapsed: Just(maximumElapsed),
+    jitterFraction: @jitterFraction
+  }
+
+  # Returns the same schedule with symmetric bounded jitter. A fraction of
+  # +0.25+ selects each actual delay from 75% through 125% of its scheduled
+  # value. Fractions are clamped to +0.0..1.0+.
+  let withJitter(fraction: Float) -> Policy = Policy {
+    maximumAttempts: @maximumAttempts,
+    initialDelay: @initialDelay,
+    multiplier: @multiplier,
+    maximumDelay: @maximumDelay,
+    maximumElapsed: @maximumElapsed,
+    jitterFraction: if fraction < 0.0 then 0.0 else if fraction > 1.0 then 1.0 else fraction end end
   }
 end
 
@@ -75,7 +91,7 @@ end
 # @param operation [Block<Result<X,E>>] a fresh attempt
 # @return [Result<X,E>] the first success or final failure
 run : Policy -> Block<Result<X, E>> -> Result<X, E>
-foul run(policy, operation) = runWith(policy, { |error| true }, { |delay| Task.sleep(delay) }, operation)
+foul run(policy, operation) = runWithRandom(policy, { |error| true }, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
 
 # Runs with an application-specific error predicate.
 #
@@ -88,7 +104,7 @@ foul run(policy, operation) = runWith(policy, { |error| true }, { |delay| Task.s
 # @return [Result<X,E>] the first success or final/non-retryable failure
 # @example +Retry.run(policy, { |error| error.retryable? }, do request() end)+
 run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
-foul run(policy, predicate, operation) = runWith(policy, predicate, { |delay| Task.sleep(delay) }, operation)
+foul run(policy, predicate, operation) = runWithRandom(policy, predicate, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
 
 # Runs with injected error classification and sleeping.
 #
@@ -101,9 +117,16 @@ foul run(policy, predicate, operation) = runWith(policy, predicate, { |delay| Ta
 # @param operation [Block<Result<X,E>>] a fresh attempt
 # @return [Result<X,E>] the first success or final failure
 runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
-foul runWith(policy, predicate, sleeper, operation) = attempt(policy, predicate, sleeper, operation, 1, policy.initialDelay, Duration.seconds(0))
+foul runWith(policy, predicate, sleeper, operation) = runWithRandom(policy, predicate, sleeper, { 0.5 }, operation)
 
-foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, operation: Block<Result<X, E>>, number: Integer, delay: Duration, elapsed: Duration) -> Result<X, E> do
+# Runs with injected sleeping and a random source returning a value in
+# +0.0..1.0+. Out-of-range test values are clamped. Production +run+ uses a
+# cryptographically secure backend source; this overload makes jitter specs
+# deterministic.
+runWithRandom : Policy -> Predicate<E> -> Sleeper -> Block<Float> -> Block<Result<X, E>> -> Result<X, E>
+foul runWithRandom(policy, predicate, sleeper, random, operation) = attempt(policy, predicate, sleeper, random, operation, 1, policy.initialDelay, Duration.seconds(0))
+
+foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, random: Block<Float>, operation: Block<Result<X, E>>, number: Integer, delay: Duration, elapsed: Duration) -> Result<X, E> do
   let result = operation()
   return match result do
     Ok(value) => Ok(value)
@@ -111,7 +134,10 @@ foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, operatio
       if number >= policy.maximumAttempts || !predicate(error)
         return Error(error)
       end
-      let nextElapsed = Duration { seconds: elapsed.seconds + delay.seconds }
+      let sample = random()
+      let boundedSample = if sample < 0.0 then 0.0 else if sample > 1.0 then 1.0 else sample end end
+      let jittered = Duration { seconds: delay.seconds * (1.0 + ((boundedSample * 2.0 - 1.0) * policy.jitterFraction)) }
+      let nextElapsed = Duration { seconds: elapsed.seconds + jittered.seconds }
       let withinElapsed = match policy.maximumElapsed do
         None => true
         Just(maximum) => nextElapsed.seconds <= maximum.seconds
@@ -119,10 +145,10 @@ foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, operatio
       if !withinElapsed
         return Error(error)
       end
-      sleeper(delay)
+      sleeper(jittered)
       let nextSeconds = delay.seconds * policy.multiplier
       let bounded = if nextSeconds > policy.maximumDelay.seconds then policy.maximumDelay else Duration { seconds: nextSeconds } end
-      return attempt(policy, predicate, sleeper, operation, number + 1, bounded, nextElapsed)
+      return attempt(policy, predicate, sleeper, random, operation, number + 1, bounded, nextElapsed)
     end
   end
 end
@@ -148,4 +174,8 @@ module Retry do
   # Deterministic seam with an injected sleeper, primarily for specifications.
   runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
   foul runWith(policy, predicate, sleeper, operation) = Control.Retry.runWith(policy, predicate, sleeper, operation)
+
+  # Deterministic seam with injected sleeping and random sampling.
+  runWithRandom : Policy -> Predicate<E> -> Sleeper -> Block<Float> -> Block<Result<X, E>> -> Result<X, E>
+  foul runWithRandom(policy, predicate, sleeper, random, operation) = Control.Retry.runWithRandom(policy, predicate, sleeper, random, operation)
 end

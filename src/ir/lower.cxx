@@ -2894,6 +2894,22 @@ struct Lowering {
                             binds,
                             localCallExpr(backendFunction, std::move(args)));
                 }
+                // Source-derived interfaces know a foul target's hidden
+                // capability arity even when the prebuilt external-module
+                // registry does not contain that opt-in module. Honor the
+                // resolved target directly; otherwise callE cannot discover
+                // the context parameter and emits an arity-short call.
+                if (threadsCapabilities() && resolved->second.isFoul &&
+                    resolved->second.backendArity ==
+                        static_cast<int>(args.size()) + 1) {
+                    args.push_back(currentContext());
+                    auto call = std::make_unique<Expr>();
+                    call->node = Call{resolved->second.backendModule,
+                                      backendFunction,
+                                      resolved->second.backendArity,
+                                      std::move(args), false};
+                    return wrapLets(binds, std::move(call));
+                }
                 return wrapLets(
                     binds,
                     callE(resolved->second.backendModule,

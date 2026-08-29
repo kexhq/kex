@@ -26,4 +26,32 @@ describe("Control.Retry") do
 
     Assert.equal(result, Error("temporary"))
   end
+
+  it("applies bounded jitter from an injected random source") do
+    let result = Retry.runWithRandom(
+      Retry.fixed(2, Duration.seconds(4)).withJitter(0.25),
+      { |error| error == "temporary" },
+      { |delay| Assert.equal(delay, Duration.seconds(3)) },
+      { 0.0 },
+      { Error("temporary") }
+    )
+
+    Assert.equal(result, Error("temporary"))
+  end
+
+  it("counts jittered sleep against maximum elapsed time") do
+    let policy = Retry.fixed(2, Duration.seconds(4))
+      .withJitter(0.5)
+      .withMaximumElapsed(Duration.seconds(5))
+
+    let result = Retry.runWithRandom(
+      policy,
+      { |error| true },
+      { |delay| assert(false, "six-second jittered delay must exceed the bound") },
+      { 1.0 },
+      { Error("temporary") }
+    )
+
+    Assert.equal(result, Error("temporary"))
+  end
 end

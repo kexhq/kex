@@ -1,0 +1,51 @@
+# kex: run-beam
+# Offline filesystem-domain coverage for explicit stale-path and timeout policy.
+
+using Net.Socket
+
+main do
+  let protectedPath = "/tmp/kex-net-unix-protected.txt"
+  FS.File.write(protectedPath, "keep me")
+  let protected = Unix.listen(
+    Unix.Address.path(protectedPath).try,
+    Unix.ListenOptions { removeStale?: true }
+  )
+  match protected do
+    Error(error) => assert(error.kind == UnsupportedOption)
+    Ok(_) => assert(false, "removeStale must refuse a regular file")
+  end
+  assert(FS.File.read(protectedPath).try == "keep me")
+  FS.File.delete(protectedPath)
+
+  let socketPath = "/tmp/kex-net-unix-policy.sock"
+  let address = Unix.Address.path(socketPath).try
+  let listener = Unix.listen(address, Unix.ListenOptions {
+    backlog: 8,
+    removeStale?: true,
+    acceptTimeout: 0.seconds,
+    receiveTimeout: 0.seconds
+  }).try
+  let accepted = listener.accept
+  match accepted do
+    Error(error) => assert(error.kind == Timeout)
+    Ok(_) => assert(false, "zero-timeout Unix accept must not block")
+  end
+
+  let server = Task.start do
+    let peer = listener.accept.try
+    Task.sleep(100.milliseconds)
+    peer.close
+  end
+  let client = Unix.connect(address, Unix.ConnectOptions {
+    connectTimeout: 2.seconds,
+    receiveTimeout: 0.seconds
+  }).try
+  match client.receiveChunk(1) do
+    Error(error) => assert(error.kind == Timeout)
+    Ok(_) => assert(false, "zero-timeout Unix receive must not block")
+  end
+  client.close
+  server.await
+  listener.close
+  IO.printLine("ok")
+end

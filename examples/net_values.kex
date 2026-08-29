@@ -14,4 +14,11 @@ main do
     .add("Accept", "application/json")
     .add("X-Trace", "example")
   IO.printLine("headers=${headers.entries.length}")
+
+  # Generic queries preserve bare keys and encode spaces as %20. HTML form
+  # encoding is deliberately separate and uses + for spaces.
+  let query = URI.Query.from([("q", Just("kex language")), ("flag", None)])
+  let form = URI.Form.from([("name", "Ada Lovelace"), ("role", "author")])
+  IO.printLine("query=${query.encode}")
+  IO.printLine("form=${form.encode}")
 end
