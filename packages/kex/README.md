@@ -5,8 +5,9 @@ WebAssembly, packaged for embedding a Kex REPL in a web page or a Node
 script. This is the same wasm binary built and tested in the main repo
 (`src/wasm_repl.cxx`, `web/index.html`).
 
-Published to GitHub Packages, not the public npm registry — see
-"Installing" below.
+Published to the public npm registry as [`@kexhq/kex`](https://www.npmjs.com/package/@kexhq/kex),
+and mirrored to GitHub Packages for internal consumers already wired to that
+path (e.g. kex.run's site repo).
 
 ## Status
 
@@ -30,24 +31,9 @@ used to cause duplicated output and lost state for `receive`,
 
 ## Installing
 
-This package is published to **GitHub Packages**, so `npm install` needs to
-be told to fetch `@kexhq` packages from there instead of the public
-registry. Add to your project's `.npmrc`:
-
-```
-@kexhq:registry=https://npm.pkg.github.com
-```
-
-Then:
-
 ```
 npm install @kexhq/kex@next
 ```
-
-(GitHub Packages requires *reading* an npm package to be authenticated too,
-even for public repos — set up an `NODE_AUTH_TOKEN`/`.npmrc` `_authToken`
-with a GitHub personal access token that has `read:packages` scope. See
-[GitHub's docs on installing packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry).)
 
 ## Usage
 
