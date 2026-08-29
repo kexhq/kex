@@ -5,7 +5,9 @@ WebAssembly, packaged for embedding a Kex REPL in a web page or a Node
 script. This is the same wasm binary built and tested in the main repo
 (`src/wasm_repl.cxx`, `web/index.html`).
 
-Published to the public npm registry as [`@kexhq/kex`](https://www.npmjs.com/package/@kexhq/kex).
+Published to the public npm registry as [`@kexhq/kex`](https://www.npmjs.com/package/@kexhq/kex),
+and mirrored to GitHub Packages for internal consumers already wired to that
+path (e.g. kex.run's site repo).
 
 ## Status
 

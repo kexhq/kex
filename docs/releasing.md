@@ -203,13 +203,16 @@ Without it, only the `formula` job fails, and only on a stable release.
    Kex" — the endpoint kex.run reads, and what `tey kex install` resolves to
    when given no version.
 7. **`npm`** — publishes the wasm package the `wasm` job built as
-   `@kexhq/kex@<version>` on the public npm registry, with the same dist-tag
-   rule as the images: `latest` for a stable release, the channel name for a
-   pre-release. Authenticates with `NPM_TOKEN` (an npm automation token with
-   publish access to `@kexhq`), not `GITHUB_TOKEN` — nothing about a repo
-   token gives it standing on npmjs.org. The one job that cannot replace on a
-   re-run — npm versions are immutable, so a re-run of an already-published
-   version skips instead.
+   `@kexhq/kex@<version>`, with the same dist-tag rule as the images:
+   `latest` for a stable release, the channel name for a pre-release.
+   Published to **both** the public npm registry (authenticated with
+   `NPM_TOKEN`, an npm automation token with publish access to `@kexhq` —
+   `GITHUB_TOKEN` has no standing on npmjs.org) and GitHub Packages (a
+   mirror for existing internal consumers, e.g. kexhq/site, authenticated
+   with the job's own `GITHUB_TOKEN`). The two publishes are independent and
+   each skips on its own if that registry already has the version — the one
+   part of a release that cannot replace on a re-run, since npm versions are
+   immutable.
 8. **`formula`** — **stable only**. Points `kexhq/homebrew-tey`'s
    `Formula/tey.rb` at the new release and opens a pull request on the tap. It
    fills two marked regions and nothing else: `# <<STABLE-TEY` with the Tey

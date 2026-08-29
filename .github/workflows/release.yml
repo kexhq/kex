@@ -750,14 +750,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: wasm-package
 
+      # Published to BOTH the public npm registry (the primary, public path)
+      # and GitHub Packages (a mirror kept for existing internal consumers
+      # already wired to it, e.g. kexhq/site's install and its
+      # update-kex.yml, which reads the GitHub Packages API directly). The
+      # two publishes are independent and each skips on its own if that
+      # registry already has the version — so a re-run after a partial
+      # failure (say, npmjs succeeded but GitHub Packages didn't) only does
+      # the one that's still missing.
       - name: Publish @kexhq/kex
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="${{ needs.version.outputs.version }}"
@@ -769,16 +779,28 @@ jobs:
             tag=latest
           fi
 
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          # Auth is keyed by registry host, not by scope, so each publish
+          # below targets its registry explicitly via --registry rather than
+          # relying on a `@kexhq:registry` mapping (which could only point at
+          # one of the two).
+          {
+            echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}"
+            echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}"
+          } > ~/.npmrc
 
-          # npm versions are immutable, so a re-run skips rather than fails.
-          if npm view "@kexhq/kex@${version}" version >/dev/null 2>&1; then
-            echo "@kexhq/kex@${version} is already published; npm versions cannot be replaced."
-            exit 0
-          fi
+          publish_to() {
+            local registry="$1"
+            # npm versions are immutable, so a re-run skips rather than fails.
+            if npm view "@kexhq/kex@${version}" version --registry "$registry" >/dev/null 2>&1; then
+              echo "@kexhq/kex@${version} is already published on ${registry}; skipping."
+              return 0
+            fi
+            npm publish "kexhq-kex-${version}.tgz" --tag "$tag" --registry "$registry"
+            npm view "@kexhq/kex@${tag}" version --registry "$registry"
+          }
 
-          npm publish "kexhq-kex-${version}.tgz" --tag "$tag"
-          npm view "@kexhq/kex@${tag}" version
+          publish_to "https://registry.npmjs.org"
+          publish_to "https://npm.pkg.github.com"
 
   # Homebrew is the stable line only. A pre-release must never become what
   # `brew install tey` hands someone, so this job simply does not run for one;

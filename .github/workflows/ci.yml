@@ -347,6 +347,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -490,11 +491,12 @@ jobs:
       - name: Spec suite via wasm (Node)
         run: make spec-wasm
 
-      # Published to the public npm registry, so this needs a real npm
-      # automation token (NPM_TOKEN) with publish access to @kexhq — the
-      # repo's own GITHUB_TOKEN has no standing there. A dev build carries
-      # the version it is working toward, exactly like a native
-      # `kex --version` built from the same tree: <VERSION>-dev.<short-sha>
+      # Published to BOTH the public npm registry (the primary, public path)
+      # and GitHub Packages (a mirror kept for existing internal consumers
+      # already wired to it, e.g. kexhq/site's install and its
+      # update-kex.yml, which reads the GitHub Packages API directly).
+      # A dev build carries the version it is working toward, exactly like a
+      # native `kex --version` built from the same tree: <VERSION>-dev.<short-sha>
       # (0.3.0-beta -> 0.3.0-beta.dev.a1b2c3d, 0.3.0 -> 0.3.0-dev.a1b2c3d).
       # The `next` dist-tag floats over these; real versions — the plain
       # VERSION as the npm number, `latest` or a channel tag — are published
@@ -505,9 +507,21 @@ jobs:
         if: github.event_name == 'push'
         working-directory: packages/kex
         run: |
+          set -euo pipefail
           version=$(tr -d "[:space:]" < "${GITHUB_WORKSPACE}/VERSION")
           npm version "${version}-dev.${GITHUB_SHA::7}" --no-git-tag-version
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --tag next
+
+          # Auth is keyed by registry host, not by scope, so each publish
+          # below targets its registry explicitly via --registry rather than
+          # relying on a `@kexhq:registry` mapping (which could only point at
+          # one of the two).
+          {
+            echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}"
+            echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}"
+          } > ~/.npmrc
+
+          npm publish --registry https://registry.npmjs.org --tag next
+          npm publish --registry https://npm.pkg.github.com --tag next
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
