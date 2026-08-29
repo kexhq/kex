@@ -6112,6 +6112,26 @@ struct Lowering {
         arm(typeGuard(receiverType,
                       clone(fallbackArgs[0], "dualProviderDispatch guard")),
             callE(moduleAtom, function, arity, std::move(args)));
+        // A THIRD record with a FIELD of this same name (not a method) needs
+        // its own arm here too: the generic fallback below only knows about
+        // whichever OTHER method-provider exists, and has no idea a field of
+        // this name exists on some unrelated sibling record — `Data.Set`'s
+        // `items` field vs `Data.UnorderedSet`'s `items` method both being
+        // reachable from the same compilation unit (kexhq/kex#234). Sound
+        // only at arity 1: a field read takes no arguments past the receiver.
+        if (arity == 1) {
+            if (auto fieldSlots = fieldAccessors.find(method);
+                fieldSlots != fieldAccessors.end())
+                for (const auto& slot : fieldSlots->second) {
+                    if (slot.record == canonicalReceiver) continue;
+                    arm(recordGuard(slot, clone(fallbackArgs[0],
+                                                "dualProviderDispatch field guard")),
+                        callE("erlang", "element", 2,
+                              two(litInt(slot.position),
+                                  clone(fallbackArgs[0],
+                                       "dualProviderDispatch field"))));
+                }
+        }
         if (fallbackModule.empty()) {
             auto receiver = clone(fallbackArgs[0], "dualProviderDispatch miss");
             arm(nullptr, undefinedMethod(method, std::move(receiver)));
@@ -8130,7 +8150,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         mod.functions.push_back(L.makeArgumentDispatcher(
             name, arity, overloads, fallbackModule));
     }
-
     // Cross-type collision dispatchers (bare name → runtime-type dispatch).
     // Generated PER ARITY, including only the owner types that actually have a
     // `name/Type` variant at that BEAM arity — a method can be overloaded by arity across
@@ -8144,11 +8163,38 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     for (const auto& name : collidingNames) {
         std::map<int, std::vector<std::string>> ownersByArity;
         std::string prefix = receiverImplementationPrefix(name);
-        for (const auto& fn : mod.functions)
-            if (fn.name.rfind(prefix, 0) == 0)
-                ownersByArity[fn.arity].push_back(fn.name.substr(prefix.size()));
+        // A mangled implementation's suffix is either a bare receiver type
+        // (`+/Set`) or, for a receiver argument-overloaded within its own
+        // type (`make Set do + :> Set<A> -> ...; + :> [A] -> ...`), a
+        // receiver-then-argument-types signature (`+/Set,Set<A>`) — see
+        // `mangleReceiverSignature`. Taking the whole suffix as the owner
+        // name for the second case fabricated non-existent owners like
+        // "Set,Set<A>" (no such type, no such record tag) whose guard could
+        // never match anything, so `Data.Set` silently lost its `+` on BEAM
+        // while `Data.UnorderedSet`'s legitimate single-signature-looking
+        // suffix happened to survive (kexhq/kex#233 follow-up, no ticket).
+        //
+        // Such a receiver is not missing here, though: `argumentOverloadSignatures`
+        // (built above, before this loop runs) already emits a bare `name`/arity
+        // function per overloaded owner, each guarding on receiver AND argument
+        // type, and the final duplicate-function merge pass concatenates every
+        // one of those into a single dispatcher. Re-adding the same owner here
+        // — under a fabricated name calling a function that does not exist —
+        // only reintroduces the bug, so an argument-overloaded owner is
+        // excluded from this dispatcher entirely and left to that mechanism.
+        for (const auto& fn : mod.functions) {
+            if (fn.name.rfind(prefix, 0) != 0) continue;
+            const auto suffix = fn.name.substr(prefix.size());
+            const auto owner = suffix.substr(0, suffix.find(','));
+            if (L.argumentOverloadedMethods.count(
+                    localOverloadKey(name, owner, fn.arity)))
+                continue;
+            auto& owners = ownersByArity[fn.arity];
+            if (std::find(owners.begin(), owners.end(), owner) == owners.end())
+                owners.push_back(owner);
+        }
         for (const auto& [arity, owners] : ownersByArity) {
-            if (arity < 1) continue;
+            if (arity < 1 || owners.empty()) continue;
             // If every owner is an ADT type (has known variant tags), the
             // clauses from the mangled functions have distinct top-level
             // patterns — merge them into one function and skip the guard-
