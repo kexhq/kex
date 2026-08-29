@@ -6,7 +6,7 @@ that `kex fmt` (the formatter) and `kex lint` (the standard lint) implement:
 - **[F]** — **Formatter.** Mechanical; the formatter rewrites the code. Never
   a lint diagnostic, because it cannot survive a format.
 - **[L]** — **Lint.** Not mechanically fixable in general; reported as a
-  diagnostic with the rule ID from §15.
+  diagnostic with the rule ID from §19.
 - **[A]** — **Advisory.** House style for the stdlib and examples. Not
   enforced by default; available under `--pedantic`.
 
@@ -57,11 +57,52 @@ lists, collection literals, chains) to fit.
 **[L]** Hard limit 100 columns (`line-too-long`). Exempt: a line that cannot be
 split — a long string literal, a URL in a comment, a wide `type` alternation.
 A `type` with many variants that exceeds 100 is wrapped one variant per line
-(§8).
+(§10).
 
 ---
 
-## 4. Naming
+## 4. Expression spacing
+
+**[F]** One space either side of every binary operator, including `=` in a
+binding, `..` excepted:
+
+```kex
+let total = subtotal + tax * rate
+let inRange = n >= low && n <= high
+let window = 1..10                   # no spaces around `..`
+```
+
+**[F]** No space between a unary operator and its operand: `-count`, `!found?`,
+`~parse`, `&.even?`, `@radius`, `...rest`. `-` is unary only where a binary
+reading is impossible; `a - b` keeps its spaces.
+
+**[F]** No space inside brackets of any kind, and none before a call's opening
+paren: `f(x)`, `[1, 2, 3]`, `xs[0]`, `Just(x)`, `(a + b) * c`. A space after
+every comma, none before it.
+
+**[F]** Argument labels and map keys bind tight on the left, loose on the
+right: `parse(text, options: opts)`, `{ "name": "Kex" }`. This is the same
+shape as a parameter annotation (§6), and the opposite of a record
+field's declaration colon.
+
+**[F]** Interpolation holes carry no inner padding: `"${name}"`, never
+`"${ name }"`. The expression inside a hole is spaced by these same rules:
+`"${a + b}"`.
+
+**[F]** A trailing comment is separated from code by at least two spaces, and
+`#` is followed by one:
+
+```kex
+let margin = 4        # points, not pixels
+```
+
+**[A]** Spacing is not an emphasis mechanism. Extra spaces around an operator to
+suggest precedence — `a*b + c*d` — are removed by the formatter; use
+parentheses when precedence needs saying out loud.
+
+---
+
+## 5. Naming
 
 **[L]**
 
@@ -80,7 +121,7 @@ A `type` with many variants that exceeds 100 is wrapped one variant per line
 with `is` or `has` — `isEmpty` is wrong, `empty?` is right (`predicate-naming`).
 
 **[L]** `!` is not part of a name. It is the mutating-call operator on a `var`
-(§11) and may only be written at a call site.
+(§13) and may only be written at a call site.
 
 **[A]** Prefer the noun for the thing produced over a `get`/`compute` verb:
 `parse`, `count`, `parent`, not `getParent`. Reserve verbs for actions with
@@ -92,7 +133,7 @@ lambdas, and mathematical arguments.
 
 ---
 
-## 5. Declarations and signatures
+## 6. Declarations and signatures
 
 **[F]** Signature separators and their spacing:
 
@@ -113,7 +154,7 @@ Private helpers and local `let` bindings do not need one
 
 **[F]** Parameter annotations bind tight: `x: Integer`, no space before the
 colon. Record fields are the opposite: `input : String`, one space before the
-colon (§8). This asymmetry is deliberate and the formatter enforces both.
+colon (§10). This asymmetry is deliberate and the formatter enforces both.
 
 **[F]** Return annotation is ` -> Type` before the `do` or `=`:
 
@@ -209,7 +250,7 @@ them.
 The rule is about **declared** no-parameter functions. It does not touch a
 call through a function-valued binding, where the parens are what distinguishes
 invoking the function from naming it — and it never rewrites a capture, which
-is spelled `~name` (§10). This is why the rule is a lint rather than a
+is spelled `~name` (§12). This is why the rule is a lint rather than a
 reformat: telling those apart needs resolved names, not just a parse tree.
 
 **[L]** **Match in the head, not the body.** A function whose body is a `match`
@@ -250,12 +291,12 @@ ordinary pattern syntax applies (`let render({ children: [first | _] }) = ...`).
 The rule fires when the scrutinee is exactly a parameter or the receiver and
 the `match` is the entire body. A `match` on a computed value, on a tuple of
 two parameters, or one that is a step among others in the body is untouched —
-as is a `match` on a `Bool`, which §9 sends to a conditional rather than to
+as is a `match` on a `Bool`, which §11 sends to a conditional rather than to
 clauses.
 
 ---
 
-## 6. Visibility and modules
+## 7. Visibility and modules
 
 **[L]** One top-level module per file. `module Name` with no `do ... end` opens
 file-scope module form and must be the first declaration in the file; nested
@@ -354,9 +395,32 @@ times. The ladder, narrowest first: a qualified call, then `as:` for a long
 path, then `using M, only: [...]` in the tightest scope that needs it, and only
 then a bare `using M`.
 
+### Re-exporting
+
+`export` republishes another module's names as this module's own, with the same
+`only:` / `except:` options `using` takes:
+
+```kex
+module Prelude do
+  export Geometry                      # everything Geometry exports
+  export Math, only: [add, mul]        # two names, republished here
+  export Text, except: [internalTrim]  # all but one
+end
+```
+
+**[L]** An `export` list is subject to the same discipline as an import: name
+what you re-export (`using-only-list`). A facade module that fronts several
+implementation modules is the case `export` exists for; anything else is a
+module boundary that has not been decided yet.
+
+**[A]** `export` and `private do` are the two halves of a module's surface —
+what it adds and what it withholds. A module that needs neither is exporting
+exactly its own public declarations, which is the common case and wants no
+ceremony.
+
 ---
 
-## 7. Traits and `make`
+## 8. Traits and `make`
 
 **[F]** `make Type, implement: Trait do` — comma before `implement:`, one space
 after each colon. Multiple traits are comma-separated on one line:
@@ -415,7 +479,44 @@ a default — make it required.
 
 ---
 
-## 8. Types, records, and literals
+## 9. Generics and constraints
+
+**[A]** Reach for a type parameter when the function genuinely does not care
+what it holds: `first : [X] -> X?` works for every element type because it
+never inspects one. If the body needs any capability of `X`, that capability
+belongs in the signature rather than in a comment.
+
+**[L]** Constrain by asking for the trait, not by taking a concrete type and
+hoping: a parameter typed `Shape` accepts anything that `implement: Shape`, and
+the checker holds the caller to it (`unconstrained-generic`):
+
+```kex
+foul printShape(s: Shape)                  # yes — any Shape
+foul printShape(s: Circle)                 # no — needlessly narrow
+```
+
+**[A]** Two capabilities at once is an intersection: `A & B` means a value
+satisfying both, and it means the same thing in a parameter, a return, a field,
+or an alias. An open record type — `{ label: String }` — asks only for the
+field the code touches, which is the lightest constraint available and the one
+to prefer when a whole trait would be overkill.
+
+**[A]** `This` is the receiver's own type inside a `make` or `trait` block. A
+method returning a new receiver returns `This`, so the type follows the
+implementing type rather than being restated per implementation.
+
+**[A]** The marker traits — `Optionable`, `Resultable`, `Eitherable` — exist to
+constrain a parameter to "some optional", "some result", "some either" without
+naming its payload. Use them for that and nothing else; they carry no methods.
+
+**[A]** Single uppercase letters are the convention for type parameters (§5),
+and their meaning should be recoverable from position: `X` the element, `E` the
+error, `L`/`R` the two sides. A parameter that needs a longer name is usually a
+sign the abstraction is doing too much.
+
+---
+
+## 10. Types, records, and literals
 
 **[F]** `type` alternation on one line while it fits; one variant per line
 otherwise, with `|` leading and aligned under the `=`:
@@ -477,7 +578,7 @@ end
 (§3), the whole run falls back to a single space on every line. The decision is
 per run and all-or-nothing, so the result stays idempotent.
 
-Nothing inside a comment or a string literal is ever aligned — see §16.4.
+Nothing inside a comment or a string literal is ever aligned — see §20.4.
 
 **[F]** Collection and call literals fit on one line, or break one element per
 line with the closing bracket at the opening line's indent. No trailing comma
@@ -503,7 +604,7 @@ type Id = Integer or String                         # yes
 Together these make the shape of a result read as part of the signature rather
 than as a container wrapped around it. Routine formatting never rewrites a
 type, so these stay diagnostics; each carries an autofix that runs only when
-asked for (§17).
+asked for (§21).
 
 `or` and `or!` bind tighter than `->`, so `String -> Int or! ParseError` is
 `String -> (Int or! ParseError)` — a function returning a result, which is
@@ -520,6 +621,22 @@ trait bound (`Resultable`, `Eitherable`), the type's own declaration, or prose.
 
 **[A]** A single-line string is double-quoted; `'c'` is a `Char`, not a
 one-character string. Prefer `"${a}, ${b}"` interpolation over chained `+`.
+
+**[A]** **Integer and Float are one numeric tower.** `0 == 0.0` is true,
+ordering compares across them, and a literal pattern matches either side:
+`match x do 0 => ... end` catches `0.0`. Do not convert to compare, and do not
+write two clauses where one literal pattern covers both.
+
+**[L]** Equality on floats is still equality on floats: `total == 0.1 + 0.2` is
+false for the usual reason, tower or no tower. Compare a computed float against
+a tolerance, and keep `==` for values you can name exactly — a literal, a
+constant, a parse result you control (`float-equality`).
+
+**[A]** An atom is a name with no payload and no declared set: `:macos`,
+`:infinity`, a map key, a slot label. The moment the set is closed and you want
+the checker to know it, declare a variant type — `type Level = Debug | Info |
+Warn` beats `:debug | :info | :warn` because a misspelling then fails to
+compile rather than silently never matching.
 
 **[L]** **Multiline text is a backtick string.** A double-quoted literal that
 spans lines, or that builds them with `\n` escapes, becomes a backtick literal
@@ -570,7 +687,7 @@ rather than falling back to a quoted string with escapes.
 
 ---
 
-## 9. Control flow
+## 11. Control flow
 
 **[F]** A conditional whose branches are single expressions is written
 `<cond> then <a> else <b>` — no `if`, no `end`:
@@ -681,7 +798,7 @@ Two levels of nesting inside a function body is the practical ceiling.
 
 ---
 
-## 10. Blocks, lambdas, and chains
+## 12. Blocks, lambdas, and chains
 
 **[F]** A block body that fits on one line uses braces; anything multi-line
 uses `do ... end`. This is not a preference — `{ |x| ... }` spanning lines is a
@@ -728,7 +845,7 @@ meaning is the conventional one (`+` on `Vector`, `==` structurally).
 
 ---
 
-## 11. Purity and mutability
+## 13. Purity and mutability
 
 **[A]** `foul` marks a function with side effects, and only ever a function —
 there is no foul block and no foul module. A pure function cannot call a foul
@@ -751,7 +868,74 @@ binding is already a `var` — it is the same thing and says so.
 
 ---
 
-## 12. Errors
+## 14. Processes and `serving`
+
+**[A]** State that outlives a call belongs to a process, and a process is
+declared by giving a record a `serving` block. `Process.spawn(state)` hands that
+record its own process and returns a `Server<State>`; every `slot` becomes a
+checked method on the handle.
+
+```kex
+record ShoppingList do
+  items : [String] = []
+end
+
+serving ShoppingList do
+  slot items -> Reply<[String]> = { reply: @items }
+
+  slot add(item: String) -> Reply<Integer> do
+    new.items = [item | @items]
+    return { new, reply: new.items.count }
+  end
+
+  slot clear -> Void = New { items: [] }
+end
+```
+
+**[L]** A slot's return type is its protocol: `Reply<T>` is a synchronous call,
+`Void` an asynchronous cast. Pick by whether the caller needs an answer, not by
+which is convenient — a `Reply` nobody reads makes every caller wait for
+nothing, and a `Void` that should have been a `Reply` loses the failure
+(`slot-protocol`).
+
+**[F]** Slot results are the map forms, and they mean distinct things:
+`{ reply: v }` answers without changing state, `{ new, reply: v }` installs the
+updated record and answers, `{ new }` installs without answering, and adding
+`stop: reason` terminates after the transition.
+
+**[L]** Do not annotate a single-clause slot separately — the inline
+declaration carries the type. A multi-clause slot may take a standalone
+annotation, and then it uses `::>` for a call (the handler has `from`) or `:>`
+for a cast (`slot-annotation`):
+
+```kex
+apply ::> Command -> Reply<Integer>
+slot apply(Increment(by)) = { reply: @count + by }
+slot apply(Current)       = { reply: @count }
+```
+
+**[A]** Everything that sends is `foul` — calls because they send and wait,
+casts because they send. A pure function may compute what to send; it may not
+send it.
+
+**[A]** Prefer the typed `Server<X>` surface to hand-rolled `send`/`receive`.
+Raw message passing is right for a protocol that is not a request/response over
+one record — a supervisor, a fan-out, a bridge to Erlang — and wrong as a way
+to avoid declaring the protocol you actually have.
+
+**[A]** A call can fail: the server may be gone, or the call may time out. That
+is why a slot call answers a result — `groceries.add("coffee")` is
+`Result<Integer, CallError>` — and `.try` propagates it like any other failure
+(§15). Give a bounded wait an explicit `Process.within(timeout)` rather
+than relying on the default.
+
+**[A]** Long-lived mutable state lives in the process and nowhere else. A `var`
+carried across `receive` cycles is that state and makes its owner `foul`
+(§13); a `var` inside one slot body is an ordinary local.
+
+---
+
+## 15. Errors
 
 **[L]** No exceptions. A function that can fail returns `X or! E` when the
 reason matters to the caller, and `X?` when it does not. Do not encode failure
@@ -799,9 +983,25 @@ never in library code that a caller could reasonably recover from
 plus a human `message`, plus optional position/context — see `URIError` and
 `NetError`. Do not return a bare `String` as an error.
 
+**[A]** **Message wording.** A `die` string or an error record's `message` is
+lowercase, has no trailing period, and names the offending thing — the corpus
+shape is `"repeat count cannot be negative"`, `"divide by zero"`,
+`"unsupported platform"`. It reads as a fragment because it is one: something
+will print it after a prefix.
+
+Say what is wrong, not what the caller should have done, and include the value
+when it is short enough to be useful:
+
+```kex
+die("repeat count cannot be negative")               # yes
+die("cannot serialise a ${Type.of(value).toString}") # yes — names the thing
+die("Invalid input.")                                # no — capitalized, vague
+die("You must pass a positive count!")               # no — scolds, no value
+```
+
 ---
 
-## 13. Comments and doc comments
+## 16. Comments and doc comments
 
 **[F]** `#` followed by one space. Comments are indented to the code they
 describe. No comment banners of repeated punctuation except a section divider
@@ -838,7 +1038,7 @@ find :> (X -> Bool) -> X?
   `@example`, `@deprecated`. `@example` may carry a title on its own line.
 - Example lines are indented three spaces after the `#` and show results as
   `# => value`. Align them by hand if you like — the formatter does not touch
-  the inside of a comment (§16.4).
+  the inside of a comment (§20.4).
 
 **[L]** Tag/parameter agreement: an `@param` must name a real parameter and
 every parameter should have one (`doc-param-mismatch`).
@@ -848,7 +1048,36 @@ over the alternative. It does not restate the signature.
 
 ---
 
-## 14. Tests
+## 17. Compile-time blocks
+
+**[A]** `compiled do ... end` runs at compile time and reifies the result into
+the program: constants are inlined at their use sites, `let %name` / `type
+%name` / `make %name` generate declarations, and a fully-determined builder
+chain collapses to the value it would have produced.
+
+**[L]** A `compiled` block is for work whose inputs are known when the compiler
+runs — a table, a schema, a generated set of accessors, a validated literal. It
+is not a performance annotation to sprinkle on ordinary code
+(`gratuitous-compiled`). If the block reads a runtime value, it cannot collapse
+and the block bought nothing.
+
+**[A]** `ENV.get` is the one effect permitted at compile time, and it makes the
+build depend on the environment that ran it. Reach for it when the value is
+genuinely a build input — a version, a target — and never for configuration a
+deployment should be able to change.
+
+**[A]** Check what actually collapsed with `--collapse-report` rather than
+assuming. A chain that quietly stayed at runtime is the common failure, and the
+report names the reason. Generated declarations are ordinary declarations
+afterwards: they take signatures and doc comments like anything else.
+
+**[A]** Keep generated names predictable. A reader who greps for a function
+must be able to find where it comes from, so a generator that invents names
+from data should be documented at the block, with an example of what it emits.
+
+---
+
+## 18. Tests
 
 **[L]** Specs use `describe` / `it` with `assert`; `before` / `after` are
 available. One `describe` per file, named for the unit under test.
@@ -861,54 +1090,59 @@ facts is a spec that reports one failure for a dozen bugs.
 
 ---
 
-## 15. Lint rule index
+## 19. Lint rule index
 
 | ID | § | Default |
 |----|---|---------|
 | `line-too-long` | 3 | warn |
-| `predicate-naming` | 4 | warn |
-| `signature-adjacent` | 5 | error |
-| `missing-public-signature` | 5 | warn |
-| `split-clauses` | 5 | error |
-| `clause-signature` | 5 | warn |
-| `param-match` | 5 | warn |
-| `empty-parens` | 5 | warn |
-| `implicit-multi-return` | 5 | warn |
-| `overbroad-using` | 6 | warn |
-| `using-only-list` | 6 | warn |
-| `redundant-using-block` | 6 | warn |
-| `private-placement` | 6 | warn |
-| `prefer-at-field` | 7 | warn |
-| `prefer-new-copy` | 7 | warn |
-| `single-variant-pipe` | 8 | error |
-| `prefer-optional-shorthand` | 8 | warn |
-| `prefer-result-shorthand` | 8 | warn |
-| `prefer-either-shorthand` | 8 | warn |
-| `multiline-string` | 8 | warn |
-| `one-line-if-end` | 9 | warn |
-| `prefer-guard-modifier` | 9 | warn |
-| `wildcard-not-last` | 9 | error |
-| `lazy-wildcard` | 9 | warn |
-| `bool-match` | 9 | warn |
-| `prefer-if-let` | 9 | warn |
-| `prefer-receiver-shorthand` | 10 | warn |
-| `prefer-capture` | 10 | warn |
-| `gratuitous-foul` | 11 | warn |
-| `escaping-var` | 11 | error |
-| `sentinel-failure` | 12 | warn |
-| `prefer-try` | 12 | warn |
-| `early-unwrap` | 12 | warn |
-| `or-optional-default` | 12 | warn |
-| `die-in-library` | 12 | error |
-| `missing-doc` | 13 | warn (error in stdlib) |
-| `doc-param-mismatch` | 13 | warn |
+| `predicate-naming` | 5 | warn |
+| `signature-adjacent` | 6 | error |
+| `missing-public-signature` | 6 | warn |
+| `split-clauses` | 6 | error |
+| `clause-signature` | 6 | warn |
+| `param-match` | 6 | warn |
+| `empty-parens` | 6 | warn |
+| `implicit-multi-return` | 6 | warn |
+| `overbroad-using` | 7 | warn |
+| `using-only-list` | 7 | warn |
+| `redundant-using-block` | 7 | warn |
+| `private-placement` | 7 | warn |
+| `prefer-at-field` | 8 | warn |
+| `prefer-new-copy` | 8 | warn |
+| `unconstrained-generic` | 9 | warn |
+| `single-variant-pipe` | 10 | error |
+| `prefer-optional-shorthand` | 10 | warn |
+| `prefer-result-shorthand` | 10 | warn |
+| `prefer-either-shorthand` | 10 | warn |
+| `multiline-string` | 10 | warn |
+| `float-equality` | 10 | warn |
+| `one-line-if-end` | 11 | warn |
+| `prefer-guard-modifier` | 11 | warn |
+| `wildcard-not-last` | 11 | error |
+| `lazy-wildcard` | 11 | warn |
+| `bool-match` | 11 | warn |
+| `prefer-if-let` | 11 | warn |
+| `prefer-receiver-shorthand` | 12 | warn |
+| `prefer-capture` | 12 | warn |
+| `gratuitous-foul` | 13 | warn |
+| `escaping-var` | 13 | error |
+| `slot-protocol` | 14 | warn |
+| `slot-annotation` | 14 | warn |
+| `sentinel-failure` | 15 | warn |
+| `prefer-try` | 15 | warn |
+| `early-unwrap` | 15 | warn |
+| `or-optional-default` | 15 | warn |
+| `die-in-library` | 15 | error |
+| `missing-doc` | 16 | warn (error in stdlib) |
+| `doc-param-mismatch` | 16 | warn |
+| `gratuitous-compiled` | 17 | warn |
 
 A rule is suppressed for the next declaration with `# lint:allow <id> — reason`.
 The reason is required; a bare suppression is itself a diagnostic.
 
 ---
 
-## 16. Formatter guarantees
+## 20. Formatter guarantees
 
 The formatter is expected to hold to these, and its test suite should pin them:
 
@@ -919,9 +1153,9 @@ The formatter is expected to hold to these, and its test suite should pin them:
    declaration or expression.
 4. **Never reflows prose.** Text inside comments and string literals is not
    rewrapped or re-spaced. The one exception is the block-shaped backtick
-   literal of §8, whose body it re-indents — legal precisely because the shared
+   literal of §10, whose body it re-indents — legal precisely because the shared
    margin is stripped from the value, so the string it holds does not change.
-5. **Aligns deterministically** as described in §8 — the aligned column is a
+5. **Aligns deterministically** as described in §10 — the aligned column is a
    function of the run alone, so it never depends on the author's spacing.
 6. **Never changes a `do ... end` body to `= expr`** when a comment lives
    inside it, and never the reverse when the result would exceed 80 columns.
@@ -929,7 +1163,7 @@ The formatter is expected to hold to these, and its test suite should pin them:
 
 ---
 
-## 17. Adoption
+## 21. Adoption
 
 The rules above describe the target state, not the current corpus. Four rules
 have a backlog in it:
@@ -951,7 +1185,7 @@ Type rewriting is a migration, not a formatting concern: it belongs to
 `kex lint --fix`, invoked deliberately, and never to a routine `kex fmt` that
 someone's editor runs on save.
 
-**`New` and `new` are different things, by design.** §7's rule is about `New
+**`New` and `new` are different things, by design.** §8's rule is about `New
 { ... }`, the constructor. Lowercase `new` is not a second spelling of it: it is
 an ordinary `var` bound to the clone, which you assign fields on
 (`new.age = @age + 1`) and return. `new { ... }` is an error, and deliberately
