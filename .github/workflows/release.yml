@@ -1010,6 +1010,12 @@ jobs:
 
           branch="bump/v${next}"
           echo "$next" > VERSION
+          # packages/kex/package.json's version is committed for humans
+          # browsing the repo, not for the publish itself — CI always
+          # restamps it from VERSION in a throwaway checkout right before
+          # packing (see ci.yml and release.yml's `wasm` job). Kept in sync
+          # here so it doesn't read as a stale, wrong number in between.
+          (cd packages/kex && npm version "$next" --no-git-tag-version --allow-same-version)
           git config user.name "kex release"
           git config user.email "noreply@kex.run"
           git checkout -b "$branch"
