@@ -1529,27 +1529,14 @@ struct Lowering {
                 auto savedUsing = usingModules;
                 usingModules.insert(srcMod);
                 if (n.alias) moduleAliases[*n.alias] = srcMod;
-                // Import immediate nested modules under their leaf name too.
-                // The semantic resolver already makes `URL.parse` available
-                // after `using URI`; BEAM lowering must map that leaf back to
-                // its owning companion (`URI.URL`) just as the tree walker
-                // does. Explicit aliases still win below by assignment.
-                for (const auto& [key, _] : moduleFunctions) {
-                    const auto prefix = srcMod + ".";
-                    if (key.rfind(prefix, 0) != 0) continue;
-                    const auto rest = key.substr(prefix.size());
-                    const auto dot = rest.find('.');
-                    if (dot == std::string::npos) continue;
-                    const auto nested = rest.substr(0, dot);
-                    if (!n.onlyNames.empty() &&
-                        std::find(n.onlyNames.begin(), n.onlyNames.end(), nested) ==
-                            n.onlyNames.end())
-                        continue;
-                    if (std::find(n.exceptNames.begin(), n.exceptNames.end(), nested) !=
-                        n.exceptNames.end())
-                        continue;
-                    moduleAliases[nested] = srcMod + "." + nested;
-                }
+                // Import immediate nested modules — and M's own last segment
+                // and sibling modules — under their leaf name too. The
+                // semantic resolver already makes `URL.parse` available after
+                // `using URI`; BEAM lowering must map that leaf back to its
+                // owning companion (`URI.URL`) just as the tree walker does.
+                // Explicit aliases still win: registerModuleAliases only
+                // fills a name in when nothing has claimed it yet.
+                registerModuleAliases(srcMod, n.onlyNames, n.exceptNames);
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
                         auto key = srcMod + "." + name;
@@ -2943,15 +2930,25 @@ struct Lowering {
                 };
                 std::vector<std::string> candidates;
                 auto explicitPath = pathToString(path);
+                // The literal path always wins over an alias expansion — see
+                // registerModuleAliases. Try it FIRST (the loop below returns
+                // on the first candidate that resolves), and only fall back
+                // to the aliased form after: `Data.Set.from(…)` must stay
+                // `Data.Set.from`, not become `Units.Data.Set.from`, in a
+                // file that also `using`s `Units.Data` (kexhq/kex#229,
+                // kexhq/kex#233) — without this order, a literal two-segment
+                // path whose first segment happens to also be some OTHER
+                // import's aliased bare name got silently rewritten.
+                candidates.push_back(explicitPath);
                 if (!path.empty()) {
                     if (auto alias = moduleAliases.find(path.front());
                         alias != moduleAliases.end()) {
-                        explicitPath = alias->second;
+                        auto aliased = alias->second;
                         for (size_t i = 1; i < path.size(); ++i)
-                            explicitPath += "." + path[i];
+                            aliased += "." + path[i];
+                        candidates.push_back(std::move(aliased));
                     }
                 }
-                candidates.push_back(explicitPath);
                 if (!currentModulePath.empty() && path.size() == 1) {
                     std::string relative = currentModulePath;
                     relative += "." + pathToString(path);
@@ -6640,6 +6637,81 @@ struct Lowering {
             litBool(false));
     }
 
+    // Registers `moduleAliases` entries for a `using M`, so a later
+    // `Name.method(…)` call site (see the `moduleAliases.find(path.front())`
+    // lookup above) can resolve a bare module segment against it. Mirrors
+    // `TypeChecker::resolveModulePath` (kexhq/kex#229, kexhq/kex#233):
+    //
+    //   1. `M`'s own last segment aliases to `M` — `using Data.Set` aliases
+    //      bare `Set`, since the nested `module Set do … end` constructor
+    //      block that provides `Data.Set` is what the bare receiver means.
+    //   2. An immediate child `M.C` aliases to itself under the bare name
+    //      `C` — `using Net.HTTP` aliases bare `Status` to `Net.HTTP.Status`.
+    //   3. A SIBLING of `M` (same immediate parent, found by scanning every
+    //      known module for one) aliases to itself too — `Data.UnorderedSet`
+    //      shares a file, and a `module Data` header, with `Data.Set`, but is
+    //      its sibling, not its child, so `using Data.Set` alone would
+    //      otherwise leave `UnorderedSet.from(…)` unresolved.
+    //
+    // `moduleFunctions` already holds every module this compilation unit has
+    // seen (populated by the pre-pass before any body is lowered), so this
+    // scan sees `Data.UnorderedSet` even though only `Data.Set` was named.
+    auto registerModuleAliases(const std::string& srcMod,
+                               const std::vector<std::string>& onlyNames,
+                               const std::vector<std::string>& exceptNames)
+        -> void {
+        auto allowed = [&](const std::string& name) {
+            if (!onlyNames.empty() &&
+                std::find(onlyNames.begin(), onlyNames.end(), name) ==
+                    onlyNames.end())
+                return false;
+            return std::find(exceptNames.begin(), exceptNames.end(), name) ==
+                exceptNames.end();
+        };
+        std::unordered_set<std::string> moduleNames;
+        for (const auto& [key, _] : moduleFunctions) {
+            const auto lastDot = key.rfind('.');
+            if (lastDot != std::string::npos)
+                moduleNames.insert(key.substr(0, lastDot));
+        }
+        // A module whose own last segment names a SAME-NAMED nested
+        // constructor block (`Net.HTTP.WebSocket`'s `module WebSocket do
+        // ... end`, giving `Net.HTTP.WebSocket.WebSocket`) has no direct
+        // members of its own in that shape — bare `WebSocket.connect(…)`
+        // means the child, not the header. Prefer that child wherever it
+        // exists, for both `M` itself and any sibling this function aliases.
+        auto resolveTarget = [&](const std::string& candidate) {
+            const auto childDot = candidate.rfind('.');
+            const auto candidateLeaf = childDot == std::string::npos
+                ? candidate : candidate.substr(childDot + 1);
+            const auto sameNamedChild = candidate + "." + candidateLeaf;
+            return moduleNames.count(sameNamedChild) ? sameNamedChild : candidate;
+        };
+        const auto dot = srcMod.rfind('.');
+        const auto leaf = dot == std::string::npos ? srcMod : srcMod.substr(dot + 1);
+        const auto parent = dot == std::string::npos ? std::string() : srcMod.substr(0, dot);
+        if (allowed(leaf)) moduleAliases.try_emplace(leaf, resolveTarget(srcMod));
+        const auto childPrefix = srcMod + ".";
+        for (const auto& modulePath : moduleNames) {
+            if (modulePath.rfind(childPrefix, 0) == 0) {
+                // Immediate child of M only — a grandchild still needs its
+                // own qualification.
+                const auto rest = modulePath.substr(childPrefix.size());
+                if (rest.find('.') == std::string::npos && allowed(rest))
+                    moduleAliases.try_emplace(rest, modulePath);
+            } else if (!parent.empty() && modulePath != srcMod) {
+                const auto modDot = modulePath.rfind('.');
+                if (modDot != std::string::npos &&
+                    modulePath.compare(0, modDot, parent) == 0 &&
+                    modDot == parent.size()) {
+                    const auto siblingLeaf = modulePath.substr(modDot + 1);
+                    if (allowed(siblingLeaf))
+                        moduleAliases.try_emplace(siblingLeaf, resolveTarget(modulePath));
+                }
+            }
+        }
+    }
+
     auto makeArgumentDispatcher(
         const std::string& name, int arity,
         const std::vector<std::pair<std::string, std::vector<std::string>>>&
@@ -7752,8 +7824,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         };
                         auto pushMethod = [&](const ast::FunctionDef* fd) {
                             if (!fd) return;
+                            // Mirrors the top-level make-group splitting a few
+                            // hundred lines up: a receiver type overloaded by
+                            // a NON-receiver parameter's type (`let +(other:
+                            // Set<A>)` vs `let +(other: [A])`, both on `Set`)
+                            // must become two separate BEAM functions, one per
+                            // signature — lowerMakeGroup names each using its
+                            // OWN first clause's dispatch types, so merging
+                            // them here silently drops every clause but the
+                            // first's under one mangled name (kexhq/kex#233).
+                            // A module-nested `make` (any file-header module,
+                            // not just an explicit `module X do ... end`)
+                            // reaches this path instead of the top-level one.
+                            bool differentOverload = false;
+                            if (!methods.empty() &&
+                                L.argumentOverloadedMethods.count(localOverloadKey(
+                                    fd->name, typeName, beamArity(fd))))
+                                differentOverload =
+                                    methodDispatchTypes(*methods.front(), typeName) !=
+                                    methodDispatchTypes(*fd, typeName);
                             if (!methods.empty() && (methods.front()->name != fd->name ||
-                                beamArity(methods.front()) != beamArity(fd))) flushMethods();
+                                beamArity(methods.front()) != beamArity(fd) ||
+                                differentOverload)) flushMethods();
                             methods.push_back(fd);
                         };
                         for (const auto& mi : mk->body) {
@@ -7908,20 +8000,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 L.usingModules.insert(srcMod);
                 if (node->alias) L.moduleAliases[*node->alias] = srcMod;
-                for (const auto& [key, _] : L.moduleFunctions) {
-                    const auto prefix = srcMod + ".";
-                    if (key.rfind(prefix, 0) != 0) continue;
-                    const auto rest = key.substr(prefix.size());
-                    const auto dot = rest.find('.');
-                    if (dot == std::string::npos) continue;
-                    const auto nested = rest.substr(0, dot);
-                    if (!node->onlyNames.empty() &&
-                        std::find(node->onlyNames.begin(), node->onlyNames.end(), nested) == node->onlyNames.end())
-                        continue;
-                    if (std::find(node->exceptNames.begin(), node->exceptNames.end(), nested) != node->exceptNames.end())
-                        continue;
-                    L.moduleAliases[nested] = srcMod + "." + nested;
-                }
+                // M's own last segment, immediate children, and siblings —
+                // see registerModuleAliases. Explicit aliases still win:
+                // it only fills a name in when nothing has claimed it yet.
+                L.registerModuleAliases(srcMod, node->onlyNames, node->exceptNames);
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {
                         auto key = srcMod + "." + name;
