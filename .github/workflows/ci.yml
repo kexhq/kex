@@ -347,7 +347,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -491,22 +490,24 @@ jobs:
       - name: Spec suite via wasm (Node)
         run: make spec-wasm
 
-      # No NPM_TOKEN needed, GITHUB_TOKEN can publish to GitHub Packages
-      # directly. A dev build carries the version it is working toward,
-      # exactly like a native `kex --version` built from the same tree:
-      # <VERSION>-dev.<short-sha> (0.3.0-beta -> 0.3.0-beta.dev.a1b2c3d,
-      # 0.3.0 -> 0.3.0-dev.a1b2c3d). The `next` dist-tag floats over these;
-      # real versions — the plain VERSION as the npm number, `latest` or a
-      # channel tag — are published by the Release workflow. Skipped on
-      # pull_request builds so PRs from forks (which don't get GITHUB_TOKEN
-      # write access) don't fail here. See packages/kex/README.md.
-      - name: Publish @kexhq/kex to GitHub Packages
+      # Published to the public npm registry, so this needs a real npm
+      # automation token (NPM_TOKEN) with publish access to @kexhq — the
+      # repo's own GITHUB_TOKEN has no standing there. A dev build carries
+      # the version it is working toward, exactly like a native
+      # `kex --version` built from the same tree: <VERSION>-dev.<short-sha>
+      # (0.3.0-beta -> 0.3.0-beta.dev.a1b2c3d, 0.3.0 -> 0.3.0-dev.a1b2c3d).
+      # The `next` dist-tag floats over these; real versions — the plain
+      # VERSION as the npm number, `latest` or a channel tag — are published
+      # by the Release workflow. Skipped on pull_request builds so PRs from
+      # forks (which don't get repository secrets) don't fail here. See
+      # packages/kex/README.md.
+      - name: Publish @kexhq/kex to npm
         if: github.event_name == 'push'
         working-directory: packages/kex
         run: |
           version=$(tr -d "[:space:]" < "${GITHUB_WORKSPACE}/VERSION")
           npm version "${version}-dev.${GITHUB_SHA::7}" --no-git-tag-version
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           npm publish --tag next
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
