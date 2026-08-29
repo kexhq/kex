@@ -4037,6 +4037,13 @@ int main(int argc, char *argv[]) {
             qualifiedModules);
       }
 
+      // An opt-in module merged in above may claim a prelude trait
+      // (`implement: Enumerable`) purely through inherited defaults, with no
+      // local override — lowering needs that trait's default-method bodies,
+      // which live in the prelude's own source, not in anything just merged
+      // in (kexhq/kex#235). See backfillExternalTraitDefaults's doc comment.
+      kex::backfillExternalTraitDefaults(program);
+
       // Base files and dependency modules are parsed after the initial source
       // expansion. Expand the fully assembled compilation unit as well; the
       // pass is idempotent because an expanded block is removed.

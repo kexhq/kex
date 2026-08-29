@@ -1293,6 +1293,40 @@ struct Lowering {
                                 return wrapLets(binds, std::move(userCall));
                         }
                     }
+                    // `==`/`!=` have a sensible structural fallback for any
+                    // tuple THIS operator's local override does not own —
+                    // `kex_intrinsic_number:eq` already answers correctly for
+                    // an unrelated record, ADT payload, or opt-in type
+                    // (`Just(1) == Just(1)`). Blindly routing every tuple to
+                    // the user's override once ANY local type overloads `==`
+                    // (`make Queue do let ==(other: Queue<A>)`) left every
+                    // OTHER tuple with no owner to fall back to — the
+                    // dispatcher only knows Queue, so `Option<Int>`'s `==`
+                    // died `Undefined method: == for Option<Int>` for a
+                    // comparison the language answers fine on its own
+                    // (kexhq/kex#235). Other operators keep the old path: they
+                    // have no such structural default, so the wider tuple
+                    // guard plus the callee's own external-provider fallback
+                    // is still the right way to reach an unrelated owner.
+                    const Op opKind = opOf(n.op);
+                    if (opKind == Op::Eq || opKind == Op::Neq) {
+                        ExprPtr ownerGuard;
+                        if (auto owners = methodOwners.find(sym);
+                            owners != methodOwners.end())
+                            for (const auto& owner : owners->second) {
+                                auto next = typeGuard(owner, lRef.get());
+                                ownerGuard = ownerGuard
+                                    ? callE("erlang", "or", 2,
+                                            two(std::move(ownerGuard),
+                                                std::move(next)))
+                                    : std::move(next);
+                            }
+                        auto dispatch = ownerGuard
+                            ? matchBool(std::move(ownerGuard),
+                                        std::move(userCall), std::move(builtin))
+                            : std::move(builtin);
+                        return wrapLets(binds, std::move(dispatch));
+                    }
                     // A Char is `{'Char', N}` — a TUPLE, so the test above
                     // sent every `Char` operand to the user operator, whose
                     // dispatcher only knows the types that actually define one
@@ -2481,6 +2515,18 @@ struct Lowering {
                     found != expressionTypes->end() && found->second) {
                     std::string receiverType =
                         semantic::typeToString(found->second);
+                    // Type arguments are erased at runtime and absent from
+                    // `methodOwners`/`knownTypes`, which are keyed by the bare
+                    // record name (see `typeGuard`'s identical stripping) — an
+                    // unresolved generic receiver such as a trait default's
+                    // `this` (typed `Stack<T11>` before its type parameter is
+                    // solved) never matched the bare `"Stack"` entry, so the
+                    // shadow check silently lost every inherited default
+                    // method for a LOCAL generic record to the checker's
+                    // resolved (prelude) target instead (kexhq/kex#235).
+                    if (auto angle = receiverType.find('<');
+                        angle != std::string::npos)
+                        receiverType.resize(angle);
                     if (auto owner = variantOwner.find(receiverType);
                         owner != variantOwner.end())
                         receiverType = owner->second;
