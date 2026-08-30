@@ -53,13 +53,7 @@ make test-wasm    # + runs the interpreter test suite via Node
 - Namespace: `kex`
 
 ### Kex (`.kex` sources)
-
-- One-line conditionals are `<cond> then <true> else <false>` — no `if`, no
-  `end`. Spell out `if <cond>` / `else` / `end` only when the branches are on
-  their own lines.
-- Multi-line blocks are `do |x| ... end`; `{ |x| ... }` is for one-liners only.
-- Prefer `.try` over matching `Ok/Error` or `Just/None` by hand where the
-  function can propagate the failure.
+Use the `STYLE.md` file for concrete rules and examples for Kex code (`.kex` files).
 
 ## Current Status
 
