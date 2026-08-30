@@ -11,10 +11,11 @@
 #
 #   using Template
 #
-#   let source = "---\nlayout: page\nparams: [name, library]\n---\nHi <%= name %>!"
+#   let source = "---\nlayout: page\nparams: [name, library: Bool]\n---\nHi <%= name %>!"
 #   let parsed = Template.scan(source).try
 #   parsed.frontmatter.get("layout")   # => Just(Scalar("page"))
-#   parsed.frontmatter.get("params")   # => Just(Tags(["name", "library"]))
+#   parsed.parameters                  # => [Param { name: "name", type: "" },
+#                                       #     Param { name: "library", type: "Bool" }]
 #   parsed.nodes                       # => [Text("Hi "), Interpolate("name"), Text("!")]
 #
 # ## Syntax
@@ -44,16 +45,21 @@
 #
 # A template's parameters, when a later stage needs them declared rather than
 # inferred, are just another frontmatter key — conventionally `params`, a
-# plain list of names:
+# list of names each with an optional `: Type`:
 #
 #   ---
-#   params: [name, library, dependencies]
+#   params: [name, library: Bool, dependencies: [Dependency]]
 #   ---
 #   # <%= name %>
 #
-# This module does not read or validate that key specially; it is metadata
-# like any other, retrieved with `parsed.frontmatter.get("params")` the same
-# way `layout` or `tags` would be.
+# Nothing in the scanner treats `params` specially while scanning — it is
+# metadata like any other key, a `[a, b, c]` list same as `tags` above.
+# `Parsed#parameters` is a convenience reader for it: it splits each entry on
+# its first colon into a `Param { name, type }` (`type` is `""` for a bare
+# name), so a caller does not need to know the key name, match on `Tag`
+# itself, or split each entry by hand. `type` is raw text, same as
+# everywhere else in this module — turning `[Dependency]` into a real,
+# resolved Kex type is later work, not this module's.
 module Template
 using Parsing
 
@@ -78,10 +84,38 @@ type TemplateError = UnterminatedTag(Integer)
                     | UnterminatedFrontmatter
                     | MalformedFrontmatterLine(String)
 
+# One entry from a `params: [...]` frontmatter list: a name, and its
+# optional `: Type` annotation. `type` is raw text — `""` for a bare name,
+# never a resolved Kex type — the same way a frontmatter `Tag` is text and
+# not a parsed value.
+record Param do
+  name : String
+  type : String
+end
+
 # A scanned template: its frontmatter tags, and its body as a node list.
 record Parsed do
   frontmatter : {String: Tag}
   nodes       : [Node]
+end
+
+make Parsed do
+  # The template's declared parameters, out of a `params: [...]` frontmatter
+  # key — `[]` when the template declares none, or when `params` holds a
+  # bare scalar rather than a list.
+  #
+  # @return [[Param]] the declared parameters, in the order written
+  #
+  # @example
+  #   parsed.parameters
+  #   # => [Param { name: "name", type: "" }, Param { name: "library", type: "Bool" }]
+  let parameters -> [Param] do
+    let none: [Param] = []
+    match @frontmatter.get("params") do
+      Just(Tags(names)) => parseParams(names)
+      _ => none
+    end
+  end
 end
 
 # Scans template source into a `Parsed` template, or says where it broke.
@@ -155,10 +189,31 @@ private do
   end
 
   # A frontmatter value's text, parsed as a `[a, b, c]` list or a scalar.
+  # Splits `text` on commas that are not nested inside `[]`, `()`, `<>`, or
+  # `{}` — so a `params` entry's type, `Map<String, Integer>` or
+  # `[Dependency, Other]`, stays one list item rather than splitting on its
+  # own internal comma.
+  let splitTopLevelCommas(text: String) -> [String] do
+    let empty: ([String], String, Integer) = ([], "", 0)
+    let (parts, last, _) = text.reduce(empty) do |acc, ch|
+      let (parts, current, depth) = acc
+      if ch == '[' || ch == '(' || ch == '<' || ch == '{'
+        (parts, "${current}${ch}", depth + 1)
+      elif ch == ']' || ch == ')' || ch == '>' || ch == '}'
+        (parts, "${current}${ch}", depth - 1)
+      elif ch == ',' && depth == 0
+        ([...parts, current], "", depth)
+      else
+        (parts, "${current}${ch}", depth)
+      end
+    end
+    last.empty? then parts else [...parts, last]
+  end
+
   let parseFrontmatterValue(raw: String) -> Tag do
     if raw.startsWith?("[") && raw.endsWith?("]")
       let inner = raw.drop(1).take(raw.count - 2).trim
-      let items = inner.empty? then [] else inner.split(",").map { |item| unquote(item.trim) }
+      let items = inner.empty? then [] else splitTopLevelCommas(inner).map { |item| unquote(item.trim) }
       Tags(items)
     else
       Scalar(unquote(raw))
@@ -180,6 +235,38 @@ private do
     return Error(MalformedFrontmatterLine(line)) if key.empty?
     let value = parseFrontmatterValue(line.drop(index + 1).trim)
     Ok((key, value))
+  end
+
+  # One `params` list entry, split into a name and its optional `: Type`.
+  # `type` is `""` when `raw` is a bare name.
+  let parseParam(raw: String) -> Param do
+    let colon = raw.findIndex { |ch| ch == ':' }
+    if colon == None
+      Param { name: raw.trim, type: "" }
+    else
+      # `.or(0)` rather than destructuring — see `parseFrontmatterLine`'s
+      # comment on why.
+      let index = colon.or(0)
+      Param { name: raw.take(index).trim, type: raw.drop(index + 1).trim }
+    end
+  end
+
+  # `names.map(~parseParam)`, spelled as an indexed loop rather than a
+  # generic `map`/`reduce` call: `[String]`'s element type is itself a type
+  # that implements `Enumerable`, and going through the shared HOF name here
+  # sends the prelude-interface build's overload resolution to `String`'s own
+  # `reduce` (iterating characters) instead of `List`'s — the bound block
+  # parameter then type-checks as `Char`, not `String`. Same collision class
+  # as `Input#takeWhile`/`atEnd?`/`string` elsewhere in this file.
+  let parseParams(names: [String]) -> [Param] do
+    var params: [Param] = []
+    var i = 0
+    loop do
+      break if i >= names.count
+      params.push!(parseParam(names.at(i).or("")))
+      i = i + 1
+    end
+    params
   end
 
   # Reads a leading `---` ... `---` frontmatter block, if the input opens with

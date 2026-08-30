@@ -184,6 +184,9 @@ int main() {
             auto output = runFile("examples/template_stdlib.kex");
             assertTrue(output.find("tags: Tags([changelog, public])") != std::string::npos, output);
             assertTrue(output.find("title: Scalar(Release notes)") != std::string::npos, output);
+            assertTrue(output.find("Param { name: title, type: String }") != std::string::npos, output);
+            assertTrue(output.find("Param { name: draft, type: Bool }") != std::string::npos, output);
+            assertTrue(output.find("Param { name: tags, type: [String] }") != std::string::npos, output);
             assertTrue(output.find("Interpolate(title)") != std::string::npos, output);
             assertTrue(output.find("Control(if draft)") != std::string::npos, output);
             assertTrue(output.find("Comment(internal note, never rendered)") != std::string::npos, output);

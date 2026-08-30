@@ -24,6 +24,14 @@ describe("Template") do
     })
   end
 
+  it("reads declared parameters off a `params` frontmatter key") do
+    let source = "---\nparams: [title: String, draft: Bool]\n---\n<%= title %>"
+    assert(Template.scan(source).try.parameters == [
+      Param { name: "title", type: "String" },
+      Param { name: "draft", type: "Bool" }
+    ])
+  end
+
   it("reports where an unclosed tag gave up") do
     assert(!Template.scan("<%= name").ok?)
   end

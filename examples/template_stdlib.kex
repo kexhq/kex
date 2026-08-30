@@ -6,6 +6,7 @@ main do
     ---
     title: Release notes
     tags: [changelog, public]
+    params: [title: String, draft: Bool, tags: [String]]
     ---
     # <%= title %>
 
@@ -17,6 +18,7 @@ main do
   match Template.scan(source) do
     Ok(parsed) => do
       IO.printLine("frontmatter: ${parsed.frontmatter}")
+      IO.printLine("parameters: ${parsed.parameters}")
       parsed.nodes.each { |node| IO.printLine(node) }
     end
     Error(error) => IO.printError("template error: ${error}")
