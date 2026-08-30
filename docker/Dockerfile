@@ -13,10 +13,14 @@
 
 FROM debian:bookworm-slim AS build
 
+# erlang-crypto: Debian splits the crypto NIF out of erlang-base (Alpine's
+# `erlang` meta-package does not), and --no-install-recommends means it is
+# never pulled in as a side effect. Without it, `Digest.sha256` compiles fine
+# but is `undef` at BEAM runtime — spec-beam caught this the hard way.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git \
         libgmp-dev libpcre2-dev libreadline-dev libboost-context-dev libssl-dev \
-        erlang-base erlang-dev erlang-odbc \
+        erlang-base erlang-dev erlang-odbc erlang-crypto \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -60,10 +64,12 @@ RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
 FROM debian:bookworm-slim
 
 # Runtime only: the shared libraries the binary links, plus Erlang for `-R`,
-# `--compile` and the REPL's BEAM mode.
+# `--compile` and the REPL's BEAM mode. erlang-crypto here too — see the
+# build stage's comment — since `Digest.sha256` runs in programs users
+# execute in this image, not just in the spec suite that built it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgmp10 libpcre2-8-0 libreadline8 libboost-context1.74.0 libssl3 \
-        erlang-base erlang-odbc \
+        erlang-base erlang-odbc erlang-crypto \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/kex /opt/kex
