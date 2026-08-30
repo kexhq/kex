@@ -27,8 +27,8 @@ describe("Template") do
   it("reads declared parameters off a `params` frontmatter key") do
     let source = "---\nparams: [title: String, draft: Bool]\n---\n<%= title %>"
     assert(Template.scan(source).try.parameters == [
-      Param { name: "title", type: "String" },
-      Param { name: "draft", type: "Bool" }
+      TemplateParam { name: "title", type: "String" },
+      TemplateParam { name: "draft", type: "Bool" }
     ])
   end
 

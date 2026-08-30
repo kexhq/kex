@@ -123,25 +123,25 @@ describe("Template.scan: frontmatter") do
   it("`parameters` reads bare names as untyped entries") do
     let source = "---\nparams: [name, library, dependencies]\n---\n<%= name %>"
     assert(Template.scan(source).try.parameters == [
-      Param { name: "name", type: "" },
-      Param { name: "library", type: "" },
-      Param { name: "dependencies", type: "" }
+      TemplateParam { name: "name", type: "" },
+      TemplateParam { name: "library", type: "" },
+      TemplateParam { name: "dependencies", type: "" }
     ])
   end
 
   it("`parameters` splits a `name: Type` entry into its name and type") do
     let source = "---\nparams: [name: String, library: Bool]\n---\n<%= name %>"
     assert(Template.scan(source).try.parameters == [
-      Param { name: "name", type: "String" },
-      Param { name: "library", type: "Bool" }
+      TemplateParam { name: "name", type: "String" },
+      TemplateParam { name: "library", type: "Bool" }
     ])
   end
 
   it("`parameters` keeps a bracketed type's own comma out of the split") do
     let source = "---\nparams: [dependencies: Map<String, Integer>, name]\n---\nbody"
     assert(Template.scan(source).try.parameters == [
-      Param { name: "dependencies", type: "Map<String, Integer>" },
-      Param { name: "name", type: "" }
+      TemplateParam { name: "dependencies", type: "Map<String, Integer>" },
+      TemplateParam { name: "name", type: "" }
     ])
   end
 
