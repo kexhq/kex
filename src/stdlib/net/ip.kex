@@ -7,16 +7,25 @@
 #   network.contains(address)   # => true
 module Net.IP
 
-# A canonical IPv4 or IPv6 address. Zone identifiers belong to endpoints.
+# A canonical IPv4 or IPv6 address.
+#
+# The stored spelling is normalized, so addresses that arrived in different
+# forms compare and print consistently. Zone identifiers such as +%en0+ are
+# properties of socket endpoints and do not belong here.
 record Address do
   source : String
 end
 
 # A canonical CIDR network with host bits cleared.
+#
+# Parsing +192.0.2.9/24+ therefore produces +192.0.2.0/24+. This makes a
+# +Network+ suitable for access-control rules and routing tables: its identity
+# is the range, not whichever host address happened to describe it.
 record Network do
   source : String
 end
 
+# Strict parsing and canonicalization of individual IP addresses.
 module Address do
   # Parses IPv4 or IPv6 text and canonicalizes its spelling.
   # @param text [String] an IPv4 dotted quad or IPv6 address
@@ -26,6 +35,7 @@ module Address do
   let parse(text) = Kex.Intrinsic.NetIP.address(text)
 end
 
+# Strict parsing and canonicalization of CIDR networks.
 module Network do
   # Parses a CIDR and clears host bits.
   # @param text [String] an address followed by a prefix length
@@ -36,41 +46,122 @@ module Network do
 end
 
 make Address do
+  # Returns the canonical text form of the address.
+  #
   # @return [String] canonical address text
+  #
+  # @example Normalizing an IPv6 address for a log or cache key
+  #   Address.parse("2001:0db8:0:0::42").try.string   # => "2001:db8::42"
   string :> String
   let string -> String = Kex.Intrinsic.NetIP.addressString(this)
+
+  # Returns the address family as +4+ or +6+.
+  #
   # @return [Integer] +4+ for IPv4 or +6+ for IPv6
+  #
+  # @example Selecting a family-specific socket policy
+  #   let family = address.version == 6 then :ipv6 else :ipv4
   version :> Integer
   let version -> Integer = Kex.Intrinsic.NetIP.version(this)
+
+  # Returns +true+ for an address that routes back to this host.
+  #
+  # This covers the IPv4 +127.0.0.0/8+ block as well as IPv6 +::1+; it is not
+  # limited to the familiar +127.0.0.1+ spelling.
+  #
   # @return [Bool] whether this is a loopback address
+  #
+  # @example Refusing to expose a development service beyond this machine
+  #   die("development server must use loopback") if !address.loopback?
   loopback? :> Bool
   let loopback? -> Bool = Kex.Intrinsic.NetIP.loopback?(this)
+
+  # Returns +true+ for an address reserved for private networks.
+  #
+  # Use this as one signal in a network policy, not as proof that a peer is
+  # trusted: private addresses can still belong to another machine.
+  #
   # @return [Bool] whether this is a private-use address
+  #
+  # @example Rejecting a public target in an internal-only configuration
+  #   Error("target must be private") if !target.private?
   private? :> Bool
   let private? -> Bool = Kex.Intrinsic.NetIP.private?(this)
+
+  # Returns +true+ for the all-zero address: +0.0.0.0+ or +::+.
+  #
+  # On a listening endpoint this usually means "all local interfaces". It is
+  # not a usable remote destination.
+  #
   # @return [Bool] whether every address bit is zero
+  #
+  # @example Warning before binding a service on every interface
+  #   IO.warn("service will be publicly reachable") if bind.unspecified?
   unspecified? :> Bool
   let unspecified? -> Bool = Kex.Intrinsic.NetIP.unspecified?(this)
+
+  # Returns +true+ when the address names a multicast group.
+  #
   # @return [Bool] whether this is a multicast address
+  #
+  # @example Choosing multicast-specific socket setup
+  #   let mode = destination.multicast? then :group else :unicast
   multicast? :> Bool
   let multicast? -> Bool = Kex.Intrinsic.NetIP.multicast?(this)
 end
 
 make Network do
+  # Returns canonical CIDR text, including the prefix length.
+  #
   # @return [String] canonical CIDR text
+  #
+  # @example
+  #   Network.parse("192.0.2.99/24").try.string   # => "192.0.2.0/24"
   string :> String
   let string -> String = Kex.Intrinsic.NetIP.networkString(this)
-  # @param address [Address] an address of the same family
+
+  # Returns +true+ when +address+ falls within this network.
+  #
+  # An address from the other family is simply outside the network; callers do
+  # not need to compare +version+ first.
+  #
+  # @param address [Address] the address to test
   # @return [Bool] whether +address+ belongs to this network
+  #
+  # @example Checking an application allowlist
+  #   let office = Network.parse("198.51.100.0/24").try
+  #   let allowed? = office.contains(requestAddress)
   contains :> Address -> Bool
   let contains(address: Address) -> Bool = Kex.Intrinsic.NetIP.contains?(this, address)
-  # @return [Integer] the number of fixed leading bits
+
+  # Returns the number of fixed leading address bits.
+  #
+  # @return [Integer] the prefix length
+  #
+  # @example
+  #   Network.parse("10.0.0.0/8").try.prefix   # => 8
   prefix :> Integer
   let prefix -> Integer = Kex.Intrinsic.NetIP.prefix(this)
+
+  # Returns the first address in the range: the address with all host bits
+  # cleared.
+  #
   # @return [Address] the first address in the range
+  #
+  # @example
+  #   Network.parse("192.0.2.9/24").try.first.string   # => "192.0.2.0"
   first :> Address
   let first -> Address = Kex.Intrinsic.NetIP.first(this)
+
+  # Returns the last address in the range: the address with all host bits set.
+  #
+  # This is the IPv4 broadcast-shaped endpoint of the mathematical range; the
+  # API does not decide whether a protocol permits assigning it to a host.
+  #
   # @return [Address] the last address in the range
+  #
+  # @example
+  #   Network.parse("192.0.2.9/24").try.last.string   # => "192.0.2.255"
   last :> Address
   let last -> Address = Kex.Intrinsic.NetIP.last(this)
 end

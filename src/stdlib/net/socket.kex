@@ -23,6 +23,12 @@ module TCP do
     host : String
     port : Net.Port
   end
+
+  # Connection deadlines and operating-system socket policy.
+  #
+  # Buffer values of zero leave sizing to the operating system. +noDelay?+
+  # disables Nagle's algorithm, which is usually right for request/response
+  # traffic; bulk-transfer protocols may prefer fewer, larger packets.
   record ConnectOptions do
     connectTimeout : Duration = 10.seconds
     noDelay? : Bool = true
@@ -30,6 +36,11 @@ module TCP do
     sendBuffer : Integer = 0
     receiveBuffer : Integer = 0
   end
+
+  # Listener queue and policy inherited by accepted connections.
+  #
+  # +backlog+ bounds connections waiting for +accept+. Buffer values of zero
+  # keep the platform defaults rather than requesting a particular byte size.
   record ListenOptions do
     backlog : Integer = 128
     reuseAddress? : Bool = true
@@ -40,41 +51,89 @@ module TCP do
   end
 
   module Endpoint do
-    # @return [Endpoint] an endpoint using +name+ exactly as supplied
-    # @example +TCP.Endpoint.host("example.test", Port.from(443).try)+
+    # Pairs a hostname or numeric address with a port.
+    #
+    # Resolution happens when connecting, so this preserves +name+ exactly as
+    # supplied rather than validating it as an +IP.Address+.
+    #
+    # @return [Endpoint] the remote or listening endpoint
+    #
+    # @example Connecting by hostname
+    #   TCP.Endpoint.host("cache.internal", Port.from(6379).try)
     host : String -> Net.Port -> Endpoint
     let host(name, port) = Endpoint { host: name, port: port }
+    # Builds an IPv4 wildcard endpoint for listening on every local interface.
+    #
+    # Be deliberate with this in development: unlike +loopback+, it may expose
+    # the service to other machines on the network.
+    #
     # @return [Endpoint] an IPv4 wildcard listening endpoint
-    # @example +TCP.Endpoint.any(Port.from(8080).try)+
+    #
+    # @example Exposing a production service on port 8080
+    #   TCP.Endpoint.any(Port.from(8080).try)
     any : Net.Port -> Endpoint
     let any(port) = Endpoint { host: "0.0.0.0", port: port }
+    # Builds an IPv4 loopback endpoint reachable only from this machine.
+    #
+    # Port zero lets the operating system choose a free port, which is useful
+    # for tests; ask +localAddress+ which port was assigned after listening.
+    #
     # @return [Endpoint] an IPv4 loopback endpoint
-    # @example +TCP.Endpoint.loopback(Port.from(0).try)+
+    #
+    # @example Starting an isolated test listener
+    #   TCP.Endpoint.loopback(Port.from(0).try)
     loopback : Net.Port -> Endpoint
     let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
   end
 
   # Connects to a TCP endpoint with the backend's bounded connect deadline.
+  #
   # @return [Result<TCPConnection, NetError>] a stream or +Connect+/+Timeout+
-  # @example +TCP.connect(TCP.Endpoint.host("example.test", Port.from(80).try))+.
+  #
+  # @example Connecting to a line-oriented local service
+  #   let endpoint = TCP.Endpoint.host("127.0.0.1", Port.from(9000).try)
+  #   let connection = TCP.connect(endpoint).try
   connect : Endpoint -> Result<TCPConnection, NetError>
   foul connect(endpoint) = Kex.Intrinsic.NetTCP.connect(endpoint)
   connect : Endpoint -> ConnectOptions -> Result<TCPConnection, NetError>
   foul connect(endpoint, options) = Kex.Intrinsic.NetTCP.connectWith(endpoint, options)
   # Binds and starts listening. Port zero selects an ephemeral local port.
+  #
   # @return [Result<TCPListener, NetError>] a listener or +Connect+
-  # @example +TCP.listen(TCP.Endpoint.loopback(Port.from(0).try))+.
+  #
+  # @example Giving each integration test its own free port
+  #   let listener = TCP.listen(TCP.Endpoint.loopback(Port.from(0).try)).try
+  #   let port = listener.localAddress.try.port
   listen : Endpoint -> Result<TCPListener, NetError>
   foul listen(endpoint) = Kex.Intrinsic.NetTCP.listen(endpoint)
   listen : Endpoint -> ListenOptions -> Result<TCPListener, NetError>
   foul listen(endpoint, options) = Kex.Intrinsic.NetTCP.listenWith(endpoint, options)
 
-  # Sends every byte or reports the failure and transfer progress.
+  # Sends every byte, retrying partial operating-system writes internally.
+  #
+  # On failure, +NetError.progress+ records how many bytes were accepted before
+  # the error. Do not blindly retry the whole payload when progress is present.
+  #
+  # @example Sending one newline-delimited request
+  #   connection.sendAll("status\n".to(Binary).try).try
   foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
-  # Receives one bounded chunk; EOF is reported as +Closed+.
+
+  # Receives up to +limit+ bytes; EOF is reported as +Closed+.
+  #
+  # A successful result is one available chunk, not necessarily a complete
+  # application message. Use +receiveExactly+, +receiveUntil+, or +receiveLine+
+  # when the protocol supplies a boundary.
+  #
+  # @example Reading up to 16 KiB from a streaming response
+  #   let chunk = connection.receiveChunk(16 * 1024).try
   foul receiveChunk(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunk(connection, limit)
   foul receiveChunk(connection: TCPConnection, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunkWithin(connection, limit, timeout)
   # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
+  #
+  # Useful after a protocol header has declared the payload length.
+  #
+  # @example Reading a four-byte frame header
+  #   let header = connection.receiveExactly(4).try
   foul receiveExactly(connection: TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
   foul receiveExactly(connection: TCPConnection, count: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactlyWithin(connection, count, timeout)
   # Receives through the first +delimiter+ without exceeding +limit+ bytes.
@@ -86,11 +145,23 @@ module TCP do
   foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntil(connection, delimiter, limit)
   foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntilWithin(connection, delimiter, limit, timeout)
   # Receives through a newline without exceeding +limit+ bytes.
+  #
+  # The newline remains in the returned binary. Decode and trim only after a
+  # complete bounded line has been received.
+  #
+  # @example Reading a response line with a defensive 8 KiB limit
+  #   let line = connection.receiveLine(8192).try.to(String).try.trim
   foul receiveLine(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
   foul receiveLine(connection: TCPConnection, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLineWithin(connection, limit, timeout)
   # Half-closes the write side while leaving reads available.
   foul shutdownWrite(connection: TCPConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetTCP.shutdownWrite(connection)
-  # Waits for and returns the next connection.
+  # Waits for and returns the next connection accepted by the listener.
+  #
+  # A timeout applies to this wait only; it does not become a read timeout on
+  # the returned connection.
+  #
+  # @example Accepting one client in a small test server
+  #   let client = listener.accept(5.seconds).try
   foul accept(listener: TCPListener) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.accept(listener)
   foul accept(listener: TCPListener, timeout: Duration) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.acceptWithin(listener, timeout)
   # Idempotently closes a connected stream.
@@ -106,6 +177,10 @@ module TCP do
   # Returns the bound local endpoint, including an ephemeral assigned port.
   foul localAddress(listener: TCPListener) -> Result<Endpoint, NetError> = Kex.Intrinsic.NetTCP.localAddress(listener)
   # Returns the remote endpoint of a connected stream.
+  #
+  # @example Recording the peer in an access log
+  #   let peer = connection.peerAddress.try
+  #   IO.printLine("accepted ${peer.host}:${peer.port.string}")
   foul peerAddress(connection: TCPConnection) -> Result<Endpoint, NetError> = Kex.Intrinsic.NetTCP.peerAddress(connection)
 
 end
@@ -128,6 +203,9 @@ module UDP do
     port : Net.Port
   end
   # A received datagram and its source endpoint.
+  #
+  # Reply to +source+ rather than the socket's local address: UDP has no
+  # connection that remembers which peer sent the packet.
   record Datagram do
     source : Endpoint
     data : Binary
@@ -141,17 +219,36 @@ module UDP do
     receiveTimeout : Duration = 30.seconds
   end
   module Endpoint do
+    # Pairs a hostname or numeric address with a UDP port.
+    #
     # @return [Endpoint] an endpoint using +name+ exactly as supplied
+    #
+    # @example Addressing a local metrics collector
+    #   UDP.Endpoint.host("metrics.internal", Port.from(8125).try)
     host : String -> Net.Port -> Endpoint
     let host(name, port) = Endpoint { host: name, port: port }
+    # Builds an IPv4 wildcard endpoint for receiving on every local interface.
+    #
     # @return [Endpoint] an IPv4 wildcard endpoint
+    #
+    # @example Receiving discovery packets on port 9999
+    #   UDP.Endpoint.any(Port.from(9999).try)
     any : Net.Port -> Endpoint
     let any(port) = Endpoint { host: "0.0.0.0", port: port }
+    # Builds an IPv4 loopback endpoint reachable only from this machine.
+    #
     # @return [Endpoint] an IPv4 loopback endpoint
+    #
+    # @example Allocating a free UDP port for a test
+    #   UDP.Endpoint.loopback(Port.from(0).try)
     loopback : Net.Port -> Endpoint
     let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
   end
   # Binds a datagram socket. Port zero selects an ephemeral local port.
+  #
+  # @example A local UDP echo test
+  #   let socket = UDP.bind(UDP.Endpoint.loopback(Port.from(0).try)).try
+  #   let endpoint = socket.localAddress.try
   bind : Endpoint -> Result<Socket, NetError>
   foul bind(endpoint) = Kex.Intrinsic.NetUDP.bind(endpoint)
   # Binds with explicit broadcast, multicast, and receive-timeout policy.
@@ -159,8 +256,21 @@ module UDP do
   foul bind(endpoint, options) = Kex.Intrinsic.NetUDP.bindWith(endpoint, options)
 
   # Sends one complete datagram and returns its byte count.
+  #
+  # Datagram boundaries are preserved: one +sendTo+ corresponds to one
+  # +receiveFrom+, unless the packet is lost by the network.
+  #
+  # @example Sending a StatsD-style counter
+  #   socket.sendTo(collector, "orders:1|c".to(Binary).try).try
   foul sendTo(socket: Socket, endpoint: Endpoint, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUDP.sendTo(socket, endpoint, data)
   # Receives one datagram no larger than +limit+ bytes.
+  #
+  # Oversized packets fail with +Limit+ instead of being silently truncated,
+  # so a caller never mistakes a prefix for a complete message.
+  #
+  # @example Receiving and replying to one packet
+  #   let packet = socket.receiveFrom(4096).try
+  #   socket.sendTo(packet.source, packet.data).try
   foul receiveFrom(socket: Socket, limit: Integer) -> Result<Datagram, NetError> = Kex.Intrinsic.NetUDP.receiveFrom(socket, limit)
   # Idempotently closes the socket.
   foul close(socket: Socket) -> Void = Kex.Intrinsic.NetUDP.close(socket)
@@ -193,10 +303,17 @@ module Unix do
   record Address do
     path : String
   end
+
+  # Connection and read deadlines for a local IPC client.
   record ConnectOptions do
     connectTimeout : Duration = 10.seconds
     receiveTimeout : Duration = 30.seconds
   end
+
+  # Listener queue, stale-socket policy, and per-operation deadlines.
+  #
+  # +removeStale?+ removes only a filesystem socket, never a regular file or
+  # directory that happens to occupy the requested path.
   record ListenOptions do
     backlog : Integer = 128
     removeStale? : Bool = false
@@ -205,16 +322,32 @@ module Unix do
   end
   module Address do
     # Validates a nonempty absolute Unix-domain socket path.
+    #
+    # Relative paths are rejected so ownership and cleanup always refer to one
+    # unambiguous filesystem entry.
+    #
     # @return [Result<Address, NetError>] the address, or +Parse+
+    #
+    # @example Addressing a per-user background service
+    #   Unix.Address.path("/tmp/my-app.sock").try
     path : String -> Result<Address, NetError>
     let path(value) = Kex.Intrinsic.NetUnix.address(value)
   end
   # Connects to a filesystem-domain listener.
+  #
+  # Unix sockets avoid opening a network port and are a good fit for two
+  # processes on the same machine, such as a CLI and its background daemon.
+  #
+  # @example
+  #   let daemon = Unix.connect(Unix.Address.path("/tmp/my-app.sock").try).try
   connect : Address -> Result<UnixConnection, NetError>
   foul connect(address) = Kex.Intrinsic.NetUnix.connect(address)
   connect : Address -> ConnectOptions -> Result<UnixConnection, NetError>
   foul connect(address, options) = Kex.Intrinsic.NetUnix.connectWith(address, options)
   # Binds a new path; an existing filesystem entry is never removed implicitly.
+  #
+  # This conservative default protects regular files and also avoids taking
+  # over a socket that may still belong to a running service.
   listen : Address -> Result<UnixListener, NetError>
   foul listen(address) = Kex.Intrinsic.NetUnix.listen(address)
   # With +removeStale?+, only an existing filesystem socket is removed;
@@ -267,7 +400,18 @@ module TLS do
     alpn : [String] = []
   end
   # Opens a direct TLS connection with a bounded handshake deadline.
+  #
+  # +serverName+ drives both certificate hostname verification and SNI. Pass
+  # the DNS name from the URL, not an address it happened to resolve to.
+  #
   # @return [Result<TLSConnection, NetError>] a TLS stream or typed failure
+  #
+  # @example Opening a verified connection to an HTTPS origin
+  #   let endpoint = TCP.Endpoint.host("example.com", Port.from(443).try)
+  #   let connection = TLS.connect(endpoint, TLS.ClientConfig {
+  #     serverName: "example.com",
+  #     alpn: ["http/1.1"]
+  #   }).try
   connect : Net.Socket.TCP.Endpoint -> ClientConfig -> Result<TLSConnection, NetError>
   foul connect(endpoint, config) = Kex.Intrinsic.NetTLS.connect(endpoint, config)
 

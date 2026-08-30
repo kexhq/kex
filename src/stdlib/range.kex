@@ -86,7 +86,7 @@ make Range, implement: Enumerable, Foldable do
   #   (3..7).first   # => Just(3)
   # The list operations, over the materialized items. A range is an ordered
   # collection, so `(1..5).first` and `(1..5).length` are questions it can
-  # answer — and on the BEAM backend, where a range IS its item list, they
+  # answer, and on the BEAM backend, where a range IS its item list, they
   # already worked. Only the walker rejected them ("Undefined method: first
   # for Range"), so every one of these was a backend divergence rather than a
   # deliberate restriction.
@@ -188,7 +188,7 @@ make Range, implement: Enumerable, Foldable do
   let reverse = this.items.reverse
 
   # Returns the elements as a sorted list. A range is already ascending, so
-  # this is the identity — it exists so that generic code can call it.
+  # this is the identity: it exists so that generic code can call it.
   #
   # @return [[A]] the elements, sorted
   #
@@ -208,7 +208,7 @@ make Range, implement: Enumerable, Foldable do
   let sort(comparator) = this.items.sort(comparator)
 
   # Returns the elements as a list with duplicates removed. A range has none,
-  # so this is the identity — it exists so that generic code can call it.
+  # so this is the identity: it exists so that generic code can call it.
   #
   # @return [[A]] the distinct elements
   #
@@ -260,7 +260,7 @@ make Range, implement: Enumerable, Foldable do
   # Returns the element at index +index+, or +fallback+ when out of range.
   #
   # This is the total form: it always answers a value, never an +Optional+.
-  # +at+ and +get+ with one argument are the partial forms — the split matches
+  # +at+ and +get+ with one argument are the partial forms: the split matches
   # +List+, +String+ and +Map+, where +at+ is always optional and only +get+
   # takes a fallback.
   #

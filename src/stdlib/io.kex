@@ -13,7 +13,7 @@
 capability IO do
   # Writes +msg+ to stdout followed by a newline.
   #
-  # Any +Showable+ value is accepted, not just strings — numbers, lists, maps
+  # Any +Showable+ value is accepted, not just strings: numbers, lists, maps
   # and records print through their own +show+ implementation. Called with no
   # argument it prints an empty line.
   #
@@ -125,14 +125,14 @@ capability IO do
   # Writes +msg+ to stderr followed by a newline.
   #
   # Diagnostics belong on stderr so that a program's real output can be piped
-  # or redirected on its own. Unlike a raised error, this only prints — it
+  # or redirected on its own. Unlike a raised error, this only prints: it
   # does not stop the program.
   #
   # @param msg [Showable] the message to write
   # @return [Void]
   #
   # @example Reporting a problem without exiting
-  #   IO.printError("config file not found — using defaults")
+  #   IO.printError("config file not found: using defaults")
   #
   # @example Keeping stdout clean for the real result
   #   IO.printError("scanning ${dir}...")   # progress, on stderr
@@ -166,7 +166,7 @@ capability IO do
   #
   # +IO.printLine(x)+ and +IO.out.printLine(x)+ are the same call: the
   # convenience spelling stays, and the handle behind it is now something a
-  # program can name, pass and substitute. That is what +Mock.IO+ cannot do —
+  # program can name, pass and substitute. That is what +Mock.IO+ cannot do:
   # it is one global switch, so output from one library cannot go to a buffer
   # while another's goes to the terminal, and a library cannot ACCEPT a sink
   # (kexhq/kex#139).
@@ -175,7 +175,7 @@ capability IO do
   # +IO.out+, is a compile error, exactly as it is for a file opened +Read+.
   #
   # These three are PURE, so they are not part of the capability interface a
-  # stand-in must implement — naming a device performs no effect, writing
+  # stand-in must implement: naming a device performs no effect, writing
   # THROUGH it does, and the handle methods are the +foul+ ones. That also
   # draws the seam between the two ways to redirect output: +with IO = ...+
   # replaces the CALLS, so it does not touch a handle obtained here, while

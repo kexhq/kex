@@ -1,5 +1,5 @@
 # Text. A +String+ is a sequence of Unicode characters, immutable like every
-# other Kex value — every method here answers with a new string rather than
+# other Kex value: every method here answers with a new string rather than
 # changing the receiver.
 #
 # A +String+ is its own type, not a list of characters. It is +Enumerable+, so
@@ -85,7 +85,7 @@ make String, implement: Enumerable, Foldable do
   uniq :> String
   let uniq = Kex.Intrinsic.List.uniq(this)
 
-  # A String is its OWN type, not a [Char] — `chars` converts between them.
+  # A String is its OWN type, not a [Char]: `chars` converts between them.
   # So the sequence operations below are declared here rather than inherited
   # from List, and they answer in String's terms: `take`/`drop`/`sort` hand
   # back a String, while `first`/`last` hand back a Char. The List intrinsics
@@ -175,7 +175,7 @@ make String, implement: Enumerable, Foldable do
   drop :> Integer -> String
   let drop(n) = Kex.Intrinsic.List.drop(this, n)
 
-  # Returns the characters that do NOT satisfy +pred+ — the complement of
+  # Returns the characters that do NOT satisfy +pred+: the complement of
   # +filter+.
   #
   # @param pred [Char -> Bool] dropped when it answers +true+
@@ -266,7 +266,7 @@ make String, implement: Enumerable, Foldable do
   partition :> (Char -> Bool) -> (String, String)
   let partition(pred) = Kex.Intrinsic.List.partition(this, pred)
 
-  # Returns the number of characters — characters, not bytes. See +bytes+ for
+  # Returns the number of characters: characters, not bytes. See +bytes+ for
   # the storage-level length.
   #
   # @return [Integer] the character count
@@ -288,14 +288,14 @@ make String, implement: Enumerable, Foldable do
   length :> Integer
   let length = Kex.Intrinsic.List.length(this)
 
-  # Returns the number of user-perceived characters — extended grapheme
-  # clusters (Unicode UAX #29) — which is not always +count+.
+  # Returns the number of user-perceived characters: extended grapheme
+  # clusters (Unicode UAX #29), which is not always +count+.
   #
   # +count+ answers the codepoint count, and most text is one codepoint per
   # grapheme cluster, so the two usually agree. They part ways for a base
   # character combined with a following mark, an emoji built from more than
   # one codepoint, and `"\r\n"`, which is one grapheme cluster over two
-  # codepoints — reach for +graphemeCount+ over +count+ wherever "how many
+  # codepoints: reach for +graphemeCount+ over +count+ wherever "how many
   # characters does a person see" is the question, such as sizing text for
   # display or truncating it at a boundary a reader would recognize.
   #
@@ -303,7 +303,7 @@ make String, implement: Enumerable, Foldable do
   #
   # @example
   #   "hello".graphemeCount   # => 5, same as count
-  #   "\r\n".graphemeCount    # => 1 ("\r\n".count is 2 -- a CR codepoint and an LF codepoint)
+  #   "\r\n".graphemeCount    # => 1 ("\r\n".count is 2: a CR codepoint and an LF codepoint)
   #
   # @example A base character plus a combining mark
   #   let acute = String.fromCodepoint(0x301).or("")     # combining acute accent
@@ -315,7 +315,7 @@ make String, implement: Enumerable, Foldable do
 
   # Returns +true+ when the string has no characters.
   #
-  # Note that a string of spaces is not empty — use +blank?+ from the
+  # Note that a string of spaces is not empty: use +blank?+ from the
   # +Blankable+ trait when whitespace should not count.
   #
   # @return [Bool] +true+ for the empty string
@@ -420,7 +420,7 @@ make String, implement: Enumerable, Foldable do
   #
   # +chars+ is the TEXT view of a string and +bytes+ is the STORAGE view, so
   # they differ for anything outside ASCII: +"é"+ is one +Char+ and two
-  # +Byte+s. Use +bytes+ when the length that matters is the encoded one — a
+  # +Byte+s. Use +bytes+ when the length that matters is the encoded one: a
   # network frame, a file offset, a size limit.
   #
   # +String.fromBytes+ is the inverse.
@@ -479,7 +479,7 @@ make String, implement: Enumerable, Foldable do
   # Splits the string into lines on +\n+.
   #
   # A single trailing newline is dropped, so a file that ends in one does not
-  # produce a final empty line. Windows line endings are not stripped — split
+  # produce a final empty line. Windows line endings are not stripped: split
   # on +\r\n+ explicitly, or +trim+ each line, when that matters.
   #
   # @return [[String]] the lines, without their newlines
@@ -507,7 +507,7 @@ make String, implement: Enumerable, Foldable do
   #
   # This is what splicing a multi-line value into an indented +${...}+ hole
   # needs: the hole's own indentation already covers line one, and the rest
-  # have to catch up. Blank lines stay blank, and — through +lines+ — a single
+  # have to catch up. Blank lines stay blank, and (through +lines+) a single
   # trailing newline is dropped, so a block does not push a stray empty line
   # into its slot.
   #
@@ -555,8 +555,8 @@ make String, implement: Enumerable, Foldable do
   # Replaces every key of +replacements+ with its value, in one pass over the
   # map.
   #
-  # The keys are the placeholders exactly as written — no syntax is imposed and
-  # nothing is reserved — so +$NAME$+, +__NAME__+, +{{name}}+ and +%name%+ are
+  # The keys are the placeholders exactly as written: no syntax is imposed and
+  # nothing is reserved, so +$NAME$+, +__NAME__+, +{{name}}+ and +%name%+ are
   # all equally valid, and a template needs no escaping to be a template.
   # +$NAME$+ is the convention to reach for when there is no reason to prefer
   # another.
@@ -656,7 +656,7 @@ make String, implement: Enumerable, Foldable do
   # Destructures the characters rather than using `"${at(0).upperCase}${rest}"`:
   # `rest` returns an empty LIST instead of an empty String when nothing
   # remains, so that spelling gave "A[]" for "a".capitalize on the BEAM
-  # backend. See the note on `rest` — the bug is there, not here.
+  # backend. See the note on `rest`: the bug is there, not here.
   # The natural spelling is a RECEIVER pattern, matching on `this` directly:
   #
   #     let capitalize(@[])       = ""
@@ -740,7 +740,7 @@ end
 
 # A single Unicode character.
 #
-# Character literals are written with single quotes — +'a'+ — and are a
+# Character literals are written with single quotes (+'a'+) and are a
 # different type from the one-character string +"a"+. The classification
 # methods (+digit?+, +alpha?+, +space?+ and the rest) are what most character
 # code needs; +codepoint+ and +String.fromCodepoint+ are the escape hatch to
@@ -770,7 +770,7 @@ make Char do
 
   # Returns the upper-case form of this character, still as a +Char+.
   #
-  # Characters with no upper-case form — digits, punctuation — are returned
+  # Characters with no upper-case form (digits, punctuation) are returned
   # unchanged.
   #
   # @return [Char] the upper-case character
@@ -833,7 +833,7 @@ make Char do
 
   # Returns +true+ when the character is upper case.
   #
-  # Characters without case — digits, punctuation — answer +false+.
+  # Characters without case (digits, punctuation) answer +false+.
   #
   # @return [Bool] +true+ for an upper-case letter
   #
@@ -857,7 +857,7 @@ make Char do
   lower? :> Bool
   let lower? = Kex.Intrinsic.Char.is_lower(this)
 
-  # Returns +true+ when the character is whitespace — a space, tab, newline or
+  # Returns +true+ when the character is whitespace: a space, tab, newline or
   # carriage return.
   #
   # @return [Bool] +true+ for whitespace
@@ -904,7 +904,7 @@ make Char do
 end
 
 # Constructors for +String+ values that are built from something other than
-# text — a Unicode codepoint, or raw UTF-8 bytes.
+# text: a Unicode codepoint, or raw UTF-8 bytes.
 module String do
   # Builds a one-character string from a Unicode codepoint.
   #
@@ -926,7 +926,7 @@ module String do
   fromCodepoint : Integer -> String?
   let fromCodepoint(value) = Kex.Intrinsic.String.fromCodepoint(value)
 
-  # Rebuilds a string from its UTF-8 bytes — the inverse of +bytes+.
+  # Rebuilds a string from its UTF-8 bytes: the inverse of +bytes+.
   #
   # A +String+ is TEXT, so bytes outside 0..255 or a malformed encoding answer
   # +None+ rather than a string that would decode to replacement characters.
@@ -948,7 +948,7 @@ end
 
 # A fixed-size group of values, written +(a, b)+. Unlike a list, a tuple's
 # size and the type of each position are part of its type, so the +List+
-# methods do not apply to it — destructure it, match on it, or convert it with
+# methods do not apply to it: destructure it, match on it, or convert it with
 # +items+.
 #
 #   let (name, age) = ("Ada", 36)
@@ -956,7 +956,7 @@ end
 make Tuple do
   # Returns the tuple's elements as a list.
   #
-  # A tuple is not a list — its arity is part of its type — so the +List+
+  # A tuple is not a list (its arity is part of its type) so the +List+
   # methods do not apply to it. This is the explicit conversion, and it loses
   # the per-position typing in exchange.
   #

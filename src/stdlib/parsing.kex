@@ -1,6 +1,6 @@
 # Parser combinators, for reading a text format you define yourself.
 #
-# Opt-in — nothing here is in scope until `using Parsing`.
+# Opt-in: nothing here is in scope until `using Parsing`.
 #
 # An +Input+ is an immutable cursor over a string. A parser takes one and
 # answers either the value it read together with an advanced cursor, or a
@@ -25,7 +25,7 @@ module Parsing
 
 # Why a parser gave up, and at which position.
 #
-# `Expected` carries what the grammar WANTED rather than what it found — the
+# `Expected` carries what the grammar WANTED rather than what it found: the
 # difference between "unexpected `d`" and "expected `version(`". It is what
 # `label` and `string` report.
 #
@@ -121,7 +121,7 @@ make Input do
   # Reads one character, if it satisfies +pred+.
   #
   # Answers the character and the advanced cursor, or an +Unexpected+ error
-  # naming what was there instead — +"EOF"+ at the end of the input.
+  # naming what was there instead: +"EOF"+ at the end of the input.
   #
   # @param pred [Char -> Bool] the test the character must pass
   # @return [Result<(Char, Input), ParseError>] the character and cursor, or why not
@@ -229,8 +229,8 @@ make Input do
 
   # Reads an exact literal.
   #
-  # A keyword grammar is mostly literals — `version(` is one token to a reader
-  # and eight calls to `char` — and matching it here reports the failure at the
+  # A keyword grammar is mostly literals: `version(` is one token to a reader
+  # and eight calls to `char`, and matching it here reports the failure at the
   # START of the literal, which is where a person looking at the error expects
   # the caret.
   #

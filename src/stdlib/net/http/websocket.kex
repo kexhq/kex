@@ -1,6 +1,11 @@
 # High-level RFC 6455 client messages. The runtime handles fragmentation and
 # ping/pong frames; reconnect and heartbeat policies remain application-owned.
 #
+# A +Connection+ delivers complete messages rather than wire frames. Your code
+# never has to assemble fragments or answer a protocol ping, but it does decide
+# what a dropped connection means: reconnecting may require resubscribing or
+# replaying an application cursor, so the library cannot do that safely for you.
+#
 #   using Net.HTTP.WebSocket
 #
 #   let socket = WebSocket.connect("wss://example.test/events").try
@@ -11,9 +16,16 @@ module Net.HTTP.WebSocket
 
 # A complete high-level WebSocket message. Fragmentation and ping/pong control
 # frames are handled by the connection runtime.
+#
+# +CloseMessage+ carries the peer's status code and reason. Treat it as the end
+# of the message stream even when the code describes a normal shutdown.
 type Message = Text(String) | BinaryMessage(Binary) | CloseMessage(Integer, String)
 
 # Client handshake policy and the maximum reassembled message size.
+#
+# Subprotocols are offered in preference order. The byte limit applies after
+# fragments are reassembled, preventing a peer from bypassing the bound with
+# many individually small frames.
 record ClientOptions do
   subprotocols : [String] = []
   maximumMessageBytes : Integer = 16777216
@@ -28,34 +40,71 @@ end
 # An opaque RFC 6455 client connection. It does not reconnect automatically.
 type Connection
 
+# Constructors for high-level WebSocket client connections.
 module WebSocket do
   # Opens a +ws:+ or verified +wss:+ connection with default options.
   #
   # @param url [String] an absolute WebSocket URL
   # @return [Result<Connection, NetError>] a connection or typed handshake error
-  # @example +WebSocket.connect("wss://example.test/events").try+.
+  #
+  # @example Following a live event feed
+  #   let socket = WebSocket.connect("wss://events.example.com/orders").try
+  #   match socket.receiveMessage.try do
+  #     Text(json) => IO.printLine(json)
+  #     _          => IO.warn("unexpected non-text event")
+  #   end
   foul connect(url: String) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, ClientOptions {})
   # Opens a connection with ordered subprotocols and an explicit message limit.
   #
   # Extensions are not negotiated. Invalid subprotocol tokens, unrequested
   # server selections, TLS failures, and malformed handshakes are errors.
+  #
+  # @example Requesting a versioned application protocol with a 1 MiB limit
+  #   WebSocket.connect(url, ClientOptions {
+  #     subprotocols: ["events.v2", "events.v1"],
+  #     maximumMessageBytes: 1024 * 1024
+  #   }).try
   foul connect(url: String, options: ClientOptions) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, options)
 end
 
 make Connection do
   # Sends one masked text, binary, or close message.
+  #
   # @return [Result<Void, NetError>] success or +Protocol+/+Limit+/+Closed+
-  # @example +connection.send(Text("hello")).try+
+  #
+  # @example Subscribing after connecting
+  #   connection.send(Text(JSON.stringify({ action: "subscribe", topic: topic }))).try
   foul send(message: Message) -> Result<Void, NetError> = Kex.Intrinsic.NetWebSocket.send(this, message)
   # `receive` is a Kex process keyword, so the public method spells out the
   # operation while preserving the plan's high-level message semantics.
   # Reassembles fragments, validates UTF-8, and automatically answers pings.
+  #
+  # A +CloseMessage+ is returned once so the application can inspect the peer's
+  # reason. Subsequent reads fail with +Closed+.
+  #
   # @return [Result<Message, NetError>] the next data or close message
-  # @example +connection.receiveMessage.try+
+  #
+  # @example Processing messages until the server closes the session
+  #   loop do
+  #     match connection.receiveMessage.try do
+  #       Text(text)                  => handleEvent(text)
+  #       BinaryMessage(data)         => saveSnapshot(data)
+  #       CloseMessage(code, reason)  => break
+  #     end
+  #   end
   foul receiveMessage() -> Result<Message, NetError> = Kex.Intrinsic.NetWebSocket.receiveMessage(this)
+  # Returns handshake details negotiated with the server.
+  #
   # @return [Session] the selected subprotocol, if any
+  #
+  # @example Verifying which compatible event format was selected
+  #   let protocol = connection.session.subprotocol.or("default")
   foul session() -> Session = Kex.Intrinsic.NetWebSocket.session(this)
   # Sends a normal close frame and idempotently releases the transport.
+  #
+  # Use an explicit +CloseMessage+ with +send+ first when the peer needs an
+  # application-specific code or reason.
+  #
   # @return [Void]
   foul close() -> Void = Kex.Intrinsic.NetWebSocket.close(this)
   # @return [Bool] whether the connection owner has stopped

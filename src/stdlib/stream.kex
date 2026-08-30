@@ -12,8 +12,10 @@
 # +map+, +filter+ and +drop+ all answer with another stream, so a pipeline
 # stays lazy end to end; +take+ is what turns it into a list.
 #
-# +FS.File.feed+ hands back a stream of a file's lines, which is how to walk a
-# file too large to hold in memory.
+# Streams are best for generated sequences you may revisit. A file or socket
+# is different: it can only be consumed once, so those APIs return a +Feed+.
+# Convert a small feed with +toStream+ only when replaying it is worth keeping
+# every value already read.
 type Stream<A>
 
 # Constructors for +Stream+.
@@ -21,7 +23,7 @@ module Stream do
   # Builds an infinite stream from a first element and a step function.
   #
   # The stream is +from+, then +step(from)+, then +step(step(from))+, and so
-  # on — nothing is computed until you take from it.
+  # on: nothing is computed until you take from it.
   #
   # @param from [A] the first element
   # @param step [A -> A] produces the next element from the current one
@@ -41,7 +43,7 @@ module Stream do
   let Sequence(from, step) = Kex.Intrinsic.Stream.generate(from, step)
 
   # Builds an infinite stream from a seed and a step function. The same thing
-  # as +Sequence+ — use whichever reads better where you are.
+  # as +Sequence+: use whichever reads better where you are.
   #
   # @param seed [A] the first element
   # @param step [A -> A] produces the next element from the current one
@@ -77,12 +79,16 @@ make Stream<A> do
   #   Stream.Sequence(from: 1) { |n| n + 1 }
   #     .map { |n| n * n }
   #     .take(10)
+  #
+  # @example Generating retry delays without building an unbounded list
+  #   let delays = Stream.Sequence(from: 1.seconds) { |d| d * 2 }
+  #   delays.take(4)   # => [1 second, 2 seconds, 4 seconds, 8 seconds]
   take :> Integer -> [A]
   let take(n) = Kex.Intrinsic.Stream.take(this, n)
 
   # Returns a new stream that skips the first +n+ elements.
   #
-  # Still a stream, so the result stays lazy — pair it with +take+ to get a
+  # Still a stream, so the result stays lazy: pair it with +take+ to get a
   # window out of the middle.
   #
   # @param n [Integer] how many elements to skip
@@ -120,7 +126,7 @@ make Stream<A> do
   #
   # Producing +n+ filtered elements may require walking many more upstream
   # ones, so a predicate that almost never holds makes +take+ run for a long
-  # time — and one that never holds makes it run forever.
+  # time, and one that never holds makes it run forever.
   #
   # @param pred [A -> Bool] the test applied to each element
   # @return [Stream<A>] the filtered stream
@@ -140,7 +146,7 @@ make Stream<A> do
 
   # Applies +f+ to every element.
   #
-  # Only ever finishes on a stream that ends — a file's lines converted with
+  # Only ever finishes on a stream that ends: a file's lines converted with
   # +Feed.toStream+, or anything +take+ has bounded. On +Stream.Sequence+ this
   # runs forever, exactly as writing the same loop by hand would.
   #
@@ -160,7 +166,7 @@ make Stream<A> do
   #
   # A stream remembers every element forced through it, so walking a long one
   # holds all of it for as long as the stream is in scope. A feed drawn from
-  # it walks without holding the start, letting each element go as it passes —
+  # it walks without holding the start, letting each element go as it passes:
   # the way to consume a long stream in constant space.
   #
   # @return [Feed<A>] a one-shot cursor over the stream

@@ -1,31 +1,33 @@
-# The prelude is the part of the standard library every Kex file can see
-# without asking for it. The modules listed below need no import — `List`,
-# `Map`, `String`, `IO` and the rest are simply there, and so are the traits
-# that make ordinary syntax work on your own types (`Enumerable` behind
-# `.map`, `Truthyable` behind `if`, `Errorable` behind `.try`).
+# The standard-library surface automatically visible to every Kex source file.
 #
-# What is NOT here is deliberate, for either of two reasons.
+# Prelude names require no `using` at the call site. This includes everyday
+# values and operations (`List`, `Map`, `String`, `Math`, `IO`), language-level
+# protocols (`Enumerable`, `Truthyable`, `Errorable`), and core runtime services
+# such as processes and time. For example, `.map`, conditions, and `.try` work
+# without importing the traits that define them.
 #
-# A library that reaches outside the program — the filesystem (`FS`), regular
-# expressions (`Regex`), JSON (`JSON`), the parser combinators (`Parsing`) —
-# stays one `using` away, so a file's imports say what it touches.
+# Being useful is not enough for inclusion. Every prelude name occupies global
+# scope in every program, so a module belongs here only when ordinary Kex code
+# needs it pervasively or the language model depends on it.
 #
-# So does a library most files simply do not need, however pure it is:
-# bit twiddling (`Bits`), sets and other containers (`Data.Set`), hashing
-# (`Digest`), command lines (`OptionParser`), the sandboxed evaluator
-# (`Evaluator`). The prelude is a global scope, and every name in it is a name
-# every program has to route around — so the bar is "nearly every file wants
-# this", not "this is useful".
+# Modules stay opt-in when they expose a capability that should be visible in a
+# file's dependencies, or when most programs do not need their vocabulary.
+# Examples include the filesystem (`FS`), regular expressions (`Regex`), JSON,
+# parser combinators (`Parsing`), bit operations (`Bits`), data structures such
+# as `Data.Set`, hashing (`Digest`), command-line parsing (`OptionParser`), and
+# the sandboxed evaluator (`Evaluator`).
 #
 #   using FS
 #
 #   main do
-#     IO.printLine(FS.File.read("config.txt").or(""))   # IO is free, FS is asked for
+#     let config = FS.File.read("config.txt").or("")
+#     IO.printLine(config)
 #   end
 #
-# Keep this file declarative: each bare `using` names a sibling stdlib source
-# file, and the toolchain expands them in order when it builds or loads the
-# prelude.
+# Keep this file declarative. Each bare `using` names a sibling stdlib source;
+# the toolchain expands those sources in order when it builds or loads the
+# prelude. Put documentation for an individual type or operation beside its
+# declaration in that source file, not here.
 
 using Algebra
 using Binary

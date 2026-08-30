@@ -1,7 +1,7 @@
 # Traversal operations that every foldable collection gets for free.
 #
-# A type becomes +Foldable+ by implementing one method, +reduce+; the rest —
-# +each+, +all?+, +any?+, +find+, +count+ — are derived from it. +List+,
+# A type becomes +Foldable+ by implementing one method, +reduce+; the rest:
+# +each+, +all?+, +any?+, +find+, +count+: are derived from it. +List+,
 # +String+, +Map+, +Range+ and both flavours of +Set+ all implement it, so
 # these methods read the same whatever you point them at.
 #
@@ -26,7 +26,7 @@ trait Foldable do
 
   # Calls +f+ with each item, for its side effects.
   #
-  # The loop of last resort: when what you want is a new collection rather
+  # The loop of last resort, when what you want is a new collection rather
   # than an effect, +map+ or +filter+ says so more clearly.
   #
   # @param f [T -> Void] called once per item
@@ -141,7 +141,7 @@ end
 #
 # Like +Foldable+, a type joins by implementing +reduce+ alone. The defaults
 # here answer with a list, because the block may return anything at all; a
-# type that can do better overrides them — +Map.filter+ gives back a map,
+# type that can do better overrides them: +Map.filter+ gives back a map,
 # +Set.map+ gives back a set, +String.filter+ gives back a string.
 #
 #   [1, 2, 3].map { |n| n * 2 }              # => [2, 4, 6]
@@ -183,7 +183,7 @@ trait Enumerable do
   # Applies +f+ to each item and its 0-based position, and collects the
   # results into a list.
   #
-  # The index is the LAST block parameter — see +eachIndexed+.
+  # The index is the LAST block parameter: see +eachIndexed+.
   #
   # @param f [T -> Integer -> B] applied to each item and its index
   # @return [[B]] the results, in order
@@ -224,7 +224,7 @@ trait Enumerable do
   # Applies +f+ to each item, expecting a list back, and concatenates the
   # results into one flat list.
   #
-  # Use it when each item expands into zero or more results — +map+ would give
+  # Use it when each item expands into zero or more results: +map+ would give
   # you a list of lists.
   #
   # @param f [T -> [B]] applied to each item, returning a list
@@ -241,7 +241,7 @@ trait Enumerable do
   end
 
   # Applies +f+ to each item, expecting an +Optional+ back, and returns the
-  # values that were present — unwrapped.
+  # values that were present: unwrapped.
   #
   # This is filter and map fused into one pass, which is what you want
   # whenever the test and the transformation are the same operation. Parsing

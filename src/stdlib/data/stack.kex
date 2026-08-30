@@ -1,11 +1,11 @@
 # A last-in-first-out stack.
 #
-# Opt-in — nothing here is in scope until `using Data.Stack`.
+# Opt-in: nothing here is in scope until `using Data.Stack`.
 #
 #   using Data.Stack
 #
 # Elements are stored top first, so +push+, +pop+ and +peek+ are all
-# list-head operations — none of them pay for the size of the stack. +items+
+# list-head operations: none of them pay for the size of the stack. +items+
 # reverses that internal order, so it reads bottom-to-top, the order you would
 # have pushed them in:
 #
@@ -23,7 +23,7 @@ module Data
 
 # A stack of elements, held top first.
 #
-# Build one with +Stack.from+ rather than by hand — the record literal takes
+# Build one with +Stack.from+ rather than by hand: the record literal takes
 # elements in storage order (top first), which reads backwards from the
 # +items+ a caller normally thinks in.
 #
@@ -67,7 +67,7 @@ make Stack<A>, implement: Enumerable, Foldable, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @elements.reduce(acc, f)
 
-  # The empty stack — the +Monoid+ identity.
+  # The empty stack: the +Monoid+ identity.
   #
   # @return [Stack<A>] the empty stack
   identity :> Stack<A>
@@ -84,7 +84,7 @@ make Stack<A>, implement: Enumerable, Foldable, Monoid, Showable do
   combine :> Stack<A> -> Stack<A>
   let combine(other) = Stack { elements: other.elements + @elements }
 
-  # Returns the elements bottom-to-top — the order you would have pushed
+  # Returns the elements bottom-to-top: the order you would have pushed
   # them in.
   #
   # @return [[A]] the elements, bottom first

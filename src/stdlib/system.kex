@@ -7,7 +7,7 @@
 #
 # Deliberately NOT a capability, and `OS`/`BITWIDTH` stay pure. Faking the
 # reported OS only exercises a program's branching, not the platform behaviour
-# behind it — the file semantics, path rules and process handling that
+# behind it: the file semantics, path rules and process handling that
 # actually differ are unaffected by the atom. Testing those means running on
 # the platform, which CI does across macOS, Ubuntu and Alpine. `Mock.System`
 # existed for this and had exactly one caller: the spec that tested it
@@ -16,7 +16,7 @@ module System do
   # The operating system families a program may be running on.
   #
   # A union of atoms rather than an ADT: these are plain tags, and a +match+
-  # over them is still exhaustive. Anything unmodelled is +:unknown+ — the
+  # over them is still exhaustive. Anything unmodelled is +:unknown+: the
   # union is closed, so callers can cover it.
   #
   # @example Branching on the platform
@@ -34,7 +34,7 @@ module System do
   # reports success or failure to whatever ran it: 0 means success, anything
   # else means failure.
   #
-  # Nothing after the call runs, and no cleanup happens — close what needs
+  # Nothing after the call runs, and no cleanup happens: close what needs
   # closing first.
   #
   # @param code [Integer] the exit status
@@ -70,7 +70,7 @@ module System do
   OS : OperatingSystem
   let OS = Kex.Intrinsic.System.os()
 
-  # The machine's pointer width in bits — 64 on anything current, 32 on a
+  # The machine's pointer width in bits: 64 on anything current, 32 on a
   # small target.
   #
   # Reported by the emulator on BEAM and by the pointer size in the tree
@@ -136,8 +136,8 @@ end
 # Ends the program with a fatal error message.
 #
 # +message+ goes to stderr behind a +"fatal: "+ prefix and the exit status is
-# 1. This is an abort, not an exception — +trying+ / +rescue+ cannot catch it —
-# so use it only where there is no recoverable answer. The prelude uses it for
+# 1. This is an abort, not an exception, so +trying+ / +rescue+ cannot catch it.
+# Use it only where there is no recoverable answer. The prelude uses it for
 # a negative +repeat+ count, for instance.
 #
 # Its result type is +Never+, the bottom type: +die+ does not return, so a

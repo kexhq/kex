@@ -1,12 +1,12 @@
 # Immutable collections of distinct elements.
 #
-# Opt-in — nothing here is in scope until `using Data.Set`, which brings both
+# Opt-in: nothing here is in scope until `using Data.Set`, which brings both
 # flavours below into scope at once.
 #
 #   using Data.Set
 #
-# Membership is decided by structural equality — the same equality +==+ and
-# map keys use — so records and tuples are compared by value, not identity.
+# Membership is decided by structural equality: the same equality +==+ and
+# map keys use, so records and tuples are compared by value, not identity.
 # Every method answers with a new set; the +!+ forms (+add!+, +delete!+) build
 # a new set and rebind the receiver variable rather than modifying anything in
 # place.
@@ -22,21 +22,21 @@
 #                 elements must be Orderable.
 #   UnorderedSet  hash-backed, so membership does not pay for ordering and
 #                 the elements need only be comparable. Iteration order is
-#                 unspecified — never write a test against it.
+#                 unspecified: never write a test against it.
 #
 # Reach for +Set+ when you will read the elements back out, and for
 # +UnorderedSet+ when the set exists to answer +contains?+ quickly.
 #
 # +==+ between two sets needs no overload of its own: each flavour keeps its
-# backing canonical — sorted and duplicate free, or a map — so comparing the
+# backing canonical (sorted and duplicate free, or a map) so comparing the
 # records structurally already IS set equality.
 #
 # Both wrap structures the runtime already has (a list and a map), so no set
 # is opaque: `.items` is always a real list you can hand to anything.
 #
-# Those two backings are also the ones the BEAM's own set libraries use — a
+# Those two backings are also the ones the BEAM's own set libraries use: a
 # `Set` is laid out exactly like an `ordsets` term and an `UnorderedSet`
-# exactly like a `sets` v2 term — so the operations here can be routed to the
+# exactly like a `sets` v2 term, so the operations here can be routed to the
 # native BIFs later without changing what a set IS. What rules out adopting
 # `gb_sets` instead is the other backend: a tree-walk interpreter cannot
 # produce an opaque BEAM term, and a set that only one backend can build is
@@ -45,7 +45,7 @@ module Data
 
 # A set whose elements are kept sorted and duplicate free.
 #
-# Build one with +Set.from+ rather than by hand — the record literal does no
+# Build one with +Set.from+ rather than by hand: the record literal does no
 # deduplication and no sorting, and every method here relies on both. Reading
 # +items+ back is the field itself, so handing a set's elements to list code
 # costs nothing.
@@ -144,7 +144,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @items.reduce(acc, f)
 
-  # The empty set — the +Monoid+ identity, since union with nothing changes
+  # The empty set: the +Monoid+ identity, since union with nothing changes
   # nothing.
   #
   # @return [Set<A>] the empty set
@@ -203,7 +203,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   let empty? = @items.empty?
 
   # Returns a new set with +value+ added. Adding an element that is already a
-  # member changes nothing — that is what makes a set a set.
+  # member changes nothing: that is what makes a set a set.
   #
   # Use +add!+ to rebind the receiver variable.
   #
@@ -283,7 +283,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
     return Set { items: @items.reject { |x| lookup.contains?(x) } }
   end
 
-  # Returns the elements in exactly one of the two sets — everything they do
+  # Returns the elements in exactly one of the two sets: everything they do
   # not agree on.
   #
   # @param other [Set<A>] the other set
@@ -377,7 +377,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #
   # Mapping a set may collapse elements: if +f+ sends two members to the same
   # value, the result has one. That is not a loss of information so much as
-  # the point of a set — +Set.from([1, -1]).map(~abs)+ has one member.
+  # the point of a set: +Set.from([1, -1]).map(~abs)+ has one member.
   #
   # @param f [A -> B] applied to each element
   # @return [Set<B>] the distinct results
@@ -439,7 +439,7 @@ end
 make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # Folds over the elements.
   #
-  # The order is whatever the underlying map hands back — unspecified, and not
+  # The order is whatever the underlying map hands back: unspecified, and not
   # to be relied on. Use a +Set+ when the order of the fold matters.
   #
   # @param acc [B] the initial accumulator
@@ -451,7 +451,7 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @slots.keys.reduce(acc, f)
 
-  # The empty unordered set — the +Monoid+ identity.
+  # The empty unordered set: the +Monoid+ identity.
   #
   # @return [UnorderedSet<A>] the empty set
   identity :> UnorderedSet<A>
@@ -498,7 +498,7 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
 
   # Returns the elements as a list, in unspecified order.
   #
-  # Sort the result when the order has to be stable — a test, a rendering, a
+  # Sort the result when the order has to be stable: a test, a rendering, a
   # comparison.
   #
   # @return [[A]] the elements

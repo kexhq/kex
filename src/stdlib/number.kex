@@ -1,6 +1,6 @@
 # Whole numbers, of arbitrary size.
 #
-# +Integer+ has no width limit — factorials and cryptographic moduli are
+# +Integer+ has no width limit: factorials and cryptographic moduli are
 # ordinary values, not a special big-number type you have to opt into.
 #
 # +Integer+ and +Float+ are one numeric tower: they compare and order across
@@ -150,7 +150,7 @@ end
 # Double-precision floating-point numbers.
 #
 # A Kex +Float+ is always finite. An operation that would produce +NaN+ or
-# +Infinity+ raises instead — the same rule the BEAM enforces, where those two
+# +Infinity+ raises instead: the same rule the BEAM enforces, where those two
 # values cannot exist at all. So a +Float+ you are holding is always a real
 # number, and there is no +nan?+ to check for.
 #
@@ -196,7 +196,7 @@ make Float do
   in? :> Range<Float> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-  # Returns the largest integer that is not greater than the float — it always
+  # Returns the largest integer that is not greater than the float: it always
   # rounds toward negative infinity, which is what separates it from
   # +toInteger+ for negative values.
   #
@@ -209,7 +209,7 @@ make Float do
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer that is not less than the float — it always
+  # Returns the smallest integer that is not less than the float: it always
   # rounds toward positive infinity.
   #
   # @return [Integer] the ceiling
@@ -235,7 +235,7 @@ make Float do
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
-  # Truncates toward zero and returns the result as an +Integer+ — it drops
+  # Truncates toward zero and returns the result as an +Integer+: it drops
   # the fractional part rather than rounding, so it differs from both +floor+
   # and +round+ for negative values.
   #
@@ -251,7 +251,7 @@ end
 # Reading integers out of text.
 #
 # Use +parse+ when a failure needs explaining and +"42".to(Integer)+ when it
-# does not — +to+ answers a plain +Optional+, +parse+ answers a
+# does not: +to+ answers a plain +Optional+, +parse+ answers a
 # +Result+ carrying a +ParseError+ that says where it stopped and what it had
 # read so far.
 module Integer do
@@ -366,7 +366,7 @@ module Number do
   # Parses the whole string as an +Integer+ or a +Float+, whichever the text
   # describes.
   #
-  # Use it when the input's shape is not known ahead of time — a config value,
+  # Use it when the input's shape is not known ahead of time: a config value,
   # a CSV column that may hold either.
   #
   # @param s [String] the text to parse

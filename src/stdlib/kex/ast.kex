@@ -1,11 +1,11 @@
 # Parses Kex source code into a structured AST, at run time.
 #
-# Opt-in — nothing here is in scope until `using Kex.AST`.
+# Opt-in: nothing here is in scope until `using Kex.AST`.
 #
 # This is the entry point for tools that read Kex source: linters, formatters,
 # documentation generators, code search. The AST includes module definitions,
 # function signatures, type/record definitions, traits, make blocks, and the
-# doc-comments extracted from +#+ lines — which is how the standard library's
+# doc-comments extracted from +#+ lines, which is how the standard library's
 # own documentation is generated.
 #
 #   using Kex.AST
@@ -63,7 +63,7 @@ module Kex.AST do
 
   # Parses Kex source text into a structured AST.
   #
-  # Pass +filename+ when you have one — it is what appears in every +Location+
+  # Pass +filename+ when you have one: it is what appears in every +Location+
   # and in the error message, so diagnostics can point at a real file.
   #
   # @param source [String] the Kex source text
@@ -105,7 +105,7 @@ module Kex.AST do
 
   # Parses a type expression on its own, without a surrounding program.
   #
-  # Use it to read a type written in data — a signature in a config file, a
+  # Use it to read a type written in data: a signature in a config file, a
   # type named on a command line. +typeRefText+ renders the result back.
   #
   # @param source [String] the type expression
@@ -156,7 +156,7 @@ module Kex.AST do
   # Renders a +TypeRef+ back to the way it is written in source.
   #
   # A list reads as +[Integer]+, a map as +{String: Integer}+, an optional as
-  # +String?+ — the spelling a reader would recognise, not the constructor
+  # +String?+: the spelling a reader would recognise, not the constructor
   # tree behind it.
   #
   # @param typeRef [TypeRef] the parsed type
@@ -185,6 +185,13 @@ module Kex.AST do
   let typeRefText(NoneType) -> String = "None"
 
   # Structured representation of patterns.
+  #
+  # Pattern nodes describe what a declaration or match arm accepts; they do
+  # not contain runtime values. A linter can distinguish a wildcard from a
+  # binding, for example, without reparsing source text.
+  #
+  # @example Finding catch-all match arms
+  #   let catchAll? = Kex.AST.patternRefText(pattern) == "_"
   type PatternRef
     = BindPattern(String)
     | LiteralPattern(String)
@@ -196,6 +203,10 @@ module Kex.AST do
     | ThisPattern(PatternRef)
     | WildcardPattern
 
+  # One field inside a record or map-shaped pattern.
+  #
+  # +pattern+ is +None+ for shorthand such as +{ name }+. +stringKey+ keeps
+  # +{"name": value}+ distinct from the atom-key spelling +{ name: value }+.
   record PatternField do
     name : String
     pattern : PatternRef?
@@ -231,7 +242,7 @@ module Kex.AST do
 
   # Renders either a type or a pattern back to source.
   #
-  # The one call to reach for when a node may carry either — it dispatches to
+  # The one call to reach for when a node may carry either: it dispatches to
   # +typeRefText+ or +patternRefText+ as appropriate.
   #
   # @param reference [TypeRef | PatternRef] the parsed node
@@ -264,6 +275,12 @@ module Kex.AST do
   let referenceText(WildcardPattern) -> String = "_"
 
   # Structured representation of expression AST nodes.
+  #
+  # Expressions retain syntax-level distinctions that matter to tools: a
+  # method call is not flattened into a generic call, +var+ is distinct from
+  # +let+, and a trailing +if+ remains recognizable. Walk these constructors
+  # when writing a linter or code search; use +Evaluator+ when the goal is to
+  # execute an expression rather than inspect it.
   type Expression
     = LitInt(Int)
     | LitFloat(Float)
@@ -312,22 +329,33 @@ module Kex.AST do
     | Loop([String], [Expression])
     | RangeLit(Expression, Expression)
 
+  # One +name: value+ argument at a call site.
   record NamedArgument do
     name : String
     value : Expression
   end
 
+  # One arm of +match+, +receive+, or +rescue+.
+  #
+  # Multiple +patterns+ are the comma-separated alternatives on the left of
+  # the arrow. +guard+ is absent when the arm has no +when+ condition.
   record MatchArm do
     patterns : [PatternRef]
     guard : Expression?
     body : Expression
   end
 
+  # One lambda parameter and its optional source annotation.
   record LambdaParam do
     name : String
     type : TypeRef?
   end
 
+  # The structured recovery clauses attached to a function or expression.
+  #
+  # Named rescue arms live in +arms+; a catch-all rescue keeps its optional
+  # binding and body separately. +inlineReturn+ represents the compact rescue
+  # form rather than inventing a synthetic block.
   record RescueInfo do
     arms : [MatchArm]
     catchAllName : String?
@@ -335,15 +363,18 @@ module Kex.AST do
     inlineReturn : Expression?
   end
 
+  # One +elif+ branch, in source order.
   record ElseIf do
     condition : Expression
     body : [Expression]
   end
 
+  # One entry in a map literal: either a key/value pair or +...spread+.
   type MapItem
     = MapEntry(Expression, Expression)
     | MapSpread(Expression)
 
+  # One explicitly initialized field in a record literal.
   record RecordField do
     name : String
     value : Expression
@@ -351,10 +382,14 @@ module Kex.AST do
 
   # A declaration template whose name (and, for a make block, target) is
   # computed by a `compiled do` expression.
+  #
+  # Tools normally encounter this only while inspecting metaprogramming code.
+  # After expansion, generated declarations appear as ordinary +Node+s.
   type GeneratedTemplate
     = GeneratedNode(Node)
     | GeneratedMake(GeneratedMakeInfo)
 
+  # The fixed portion of a generated +make+ declaration.
   record GeneratedMakeInfo do
     isFinal : Bool
     implements : [TypeRef]
@@ -362,6 +397,7 @@ module Kex.AST do
     location : Location
   end
 
+  # The program entry point, including documentation and recovery clauses.
   record MainInfo do
     doc : String?
     params : [ParamInfo]
@@ -370,6 +406,10 @@ module Kex.AST do
     location : Location
   end
 
+  # One declared function parameter.
+  #
+  # +name+ is absent for a destructuring parameter; +pattern+ preserves that
+  # destructuring shape. +hasDefault+ records whether an initializer appeared.
   record ParamInfo do
     name : String?
     pattern : PatternRef?
@@ -377,6 +417,10 @@ module Kex.AST do
     hasDefault : Bool
   end
 
+  # One clause of a function, including its patterns and body.
+  #
+  # Multi-clause functions place all clauses in one +FunctionInfo+, preserving
+  # source order so tooling can reason about which pattern is tried first.
   record ClauseInfo do
     params : [ParamInfo]
     body : [Expression]
@@ -385,6 +429,11 @@ module Kex.AST do
     hasParamList : Bool
   end
 
+  # A named function and all of its pattern-matching clauses.
+  #
+  # +doc+ contains the normalized +#+ comment immediately attached to the
+  # declaration. Documentation generators can therefore share the same parsed
+  # structure as linters instead of scanning comments independently.
   record FunctionInfo do
     name : String
     doc : String?
@@ -394,6 +443,10 @@ module Kex.AST do
     location : Location
   end
 
+  # A standalone function or method type signature.
+  #
+  # +implicitThis+ distinguishes +:>+ methods from module-level +:+ functions
+  # without making a tool inspect punctuation in the original source.
   record AnnotationInfo do
     name : String
     type : TypeRef
@@ -402,11 +455,16 @@ module Kex.AST do
     location : Location
   end
 
+  # One constructor of an algebraic data type.
   record VariantInfo do
     name : String
     fields : [TypeRef]
   end
 
+  # A type alias or algebraic data type declaration.
+  #
+  # +variants+ is present for an ADT and absent for an alias or abstract type.
+  # +parents+ preserves declared bounds and inherited type relationships.
   record TypeInfo do
     name : String
     doc : String?
@@ -416,12 +474,14 @@ module Kex.AST do
     location : Location
   end
 
+  # One field declared by a record type.
   record FieldInfo do
     name : String
     type : TypeRef
     hasDefault : Bool
   end
 
+  # A record declaration with fields in source order.
   record RecordInfo do
     name : String
     doc : String?
@@ -430,6 +490,7 @@ module Kex.AST do
     location : Location
   end
 
+  # A trait declaration and the signatures or default methods in its body.
   record TraitInfo do
     name : String
     doc : String?
@@ -438,6 +499,10 @@ module Kex.AST do
     location : Location
   end
 
+  # A +make+ implementation block.
+  #
+  # +target+ is the receiver type, +implements+ lists explicit traits, and
+  # +body+ retains methods and visibility sections in declaration order.
   record MakeInfo do
     target : TypeRef
     doc : String?
@@ -447,12 +512,14 @@ module Kex.AST do
     location : Location
   end
 
+  # A compiler pragma and its optional value.
   record PragmaInfo do
     name : String
     value : String?
     location : Location
   end
 
+  # A module and its declarations in source order.
   record ModuleInfo do
     name : String
     doc : String?
@@ -460,6 +527,7 @@ module Kex.AST do
     location : Location
   end
 
+  # A named constant declaration. The AST reader never evaluates its value.
   record ConstantInfo do
     name : String
     doc : String?
@@ -467,12 +535,14 @@ module Kex.AST do
     location : Location
   end
 
+  # A +public+ or +private+ section and the declarations it contains.
   record VisibilityInfo do
     isPublic : Bool
     items : [Node]
     location : Location
   end
 
+  # A +using+ import, including aliasing, filters, and an optional scoped body.
   record UsingInfo do
     moduleName : String
     alias : String?
@@ -482,6 +552,7 @@ module Kex.AST do
     location : Location
   end
 
+  # An +export+ declaration and its public-name filters.
   record ExportInfo do
     moduleName : String
     alias : String?
@@ -490,15 +561,30 @@ module Kex.AST do
     location : Location
   end
 
+  # One item inside a +compiled do+ block before expansion.
   type CompiledItem
     = CompiledNode(Node)
     | CompiledExpression(Expression)
 
+  # A compile-time block and its declarations or expressions in source order.
   record CompiledInfo do
     items : [CompiledItem]
     location : Location
   end
 
+  # Any top-level or declaration-level AST node.
+  #
+  # A source tool can match only the declarations it understands and leave the
+  # rest alone. The program's +schemaVersion+ lets persisted consumers reject
+  # a tree whose possible node shapes have changed.
+  #
+  # @example Listing documented functions in a parsed file
+  #   program.items.each do |node|
+  #     match node do
+  #       FunctionDef(info) if info.doc.present? => IO.printLine(info.name)
+  #       _ => ()
+  #     end
+  #   end
   type Node
     = ModuleDef(ModuleInfo)
     | FunctionDef(FunctionInfo)
@@ -515,7 +601,14 @@ module Kex.AST do
     | ExportDef(ExportInfo)
     | Compiled(CompiledInfo)
 
-  # Source-like conversion through the standard `.to(String)` spelling.
+  # Source-like conversion through the standard +to(String)+ spelling.
+  #
+  # Useful in diagnostics: a tool can interpolate the type or pattern it found
+  # without manually dispatching between the two reference families.
+  #
+  # @example Building a lint message from a parsed annotation
+  #   let written = reference.to(String).or("unknown")
+  #   IO.warn("avoid the broad ${written} annotation")
   make TypeRef | PatternRef do
     let to(String) -> String? = Just(Kex.AST.referenceText(this))
   end

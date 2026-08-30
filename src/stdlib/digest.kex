@@ -1,7 +1,7 @@
 # Cryptographic content digests.
 #
 # Digests are returned as lowercase hex strings, so a Kex program never has to
-# handle backend-specific binary values — they compare with +==+, print
+# handle backend-specific binary values: they compare with +==+, print
 # directly, and go into a map key unchanged.
 #
 #   Digest.sha256("hello")
@@ -9,7 +9,7 @@
 #
 # SHA-256 is a content fingerprint: use it to tell whether two things are the
 # same, to key a cache, or to check that a download arrived intact. It is not
-# a password hash — a purpose-built password KDF is what that needs.
+# a password hash: a purpose-built password KDF is what that needs.
 module Digest do
   # Returns the SHA-256 digest of +content+, as a 64-character lowercase hex
   # string.

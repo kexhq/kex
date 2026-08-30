@@ -2,7 +2,7 @@
 #
 # A feed is what +Stream+ is not: reading it CONSUMES it. Where a stream
 # remembers its elements so it can be walked again, a feed keeps nothing, and
-# that is the point — it is how to walk a file, a socket or a device larger
+# that is the point: it is how to walk a file, a socket or a device larger
 # than memory, which a stream cannot do while anything still holds its start.
 #
 #   foul lines = FS.File.feed("huge.log").or(Feed.empty)
@@ -15,7 +15,7 @@
 #     .filter { |line| line.contains?("ERROR") }
 #     .take(10)
 #
-# Taking twice answers two different windows — the first ten, then the ten
+# Taking twice answers two different windows: the first ten, then the ten
 # after them. That is the whole difference from +Stream+, where taking twice
 # answers the same ten. When you want the stream behaviour on a small source,
 # +toStream+ asks for it explicitly, at the cost of holding what it reads.
@@ -37,7 +37,7 @@ module Feed do
 
   # A feed over a list that is already in hand.
   #
-  # The elements are there, so nothing is saved by feeding them — this is for
+  # The elements are there, so nothing is saved by feeding them: this is for
   # standing in for a real source, in a test, with something that consumes the
   # way the real one does.
   #
@@ -47,7 +47,7 @@ module Feed do
   # @example
   #   let feed = Feed.Elements(["one", "two"])
   #   feed.take(1)   # => ["one"]
-  #   feed.take(1)   # => ["two"]  — the first one is gone
+  #   feed.take(1)   # => ["two"] : the first one is gone
   Elements : [A] -> Feed<A>
   let Elements(xs) = Kex.Intrinsic.Feed.elements(xs)
 end
@@ -62,8 +62,8 @@ end
 #
 # And a foul method takes the hidden capability context, which puts it one BEAM
 # arity above the pure `take`/`map`/`filter` every other receiver has. A feed
-# usually arrives with no static type — `FS.File.feed(p).or(Feed.empty)`, or a
-# `Just(f) =>` binding — and such a call has to go through the runtime
+# usually arrives with no static type: `FS.File.feed(p).or(Feed.empty)`, or a
+# `Just(f) =>` binding, and such a call has to go through the runtime
 # dispatcher, which is built per arity and so could never reach a method one
 # arity up. Marking these foul made every dynamically-typed feed call fail with
 # "Undefined method: take for Tuple".
@@ -87,10 +87,16 @@ make Feed<A> do
 
   # Whether the source has run out.
   #
-  # +false+ does not promise another element — only that the feed has not been
+  # +false+ does not promise another element: only that the feed has not been
   # told otherwise yet. The source is asked, and may end, on the next read.
   #
   # @return [Bool] +true+ once the feed is spent
+  #
+  # @example Draining a feed a piece at a time
+  #   let jobs = Feed.Elements(["resize", "index"])
+  #   jobs.spent?   # => false
+  #   jobs.take(2)
+  #   jobs.spent?   # => true
   spent? :> Bool
   let spent? = Kex.Intrinsic.Feed.spent?(this)
 
@@ -168,12 +174,19 @@ make Feed<A> do
   #
   # @example
   #   FS.File.feed("short.txt").or(Feed.empty).collect
+  #
+  # @example Loading a small configuration file for repeated passes
+  #   let rules = FS.File.feed("rules.txt")
+  #     .or(Feed.empty)
+  #     .map(~trim)
+  #     .filter(~present?)
+  #     .collect
   collect :> [A]
   let collect = Kex.Intrinsic.Feed.collect(this)
 
   # Returns a +Stream+ drawn from the feed.
   #
-  # The stream remembers what it reads, so it can be walked again — at the
+  # The stream remembers what it reads, so it can be walked again: at the
   # cost of holding every element forced through it. Worth it for a source
   # small enough to replay; the opposite of what a feed is for otherwise.
   #
@@ -182,7 +195,7 @@ make Feed<A> do
   # @example
   #   let lines = FS.File.feed("small.txt").or(Feed.empty).toStream
   #   lines.take(2)   # => ["one", "two"]
-  #   lines.take(2)   # => ["one", "two"]  — a stream, so the same two
+  #   lines.take(2)   # => ["one", "two"] : a stream, so the same two
   toStream :> Stream<A>
   let toStream = Kex.Intrinsic.Feed.toStream(this)
 end

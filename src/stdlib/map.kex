@@ -2,7 +2,7 @@
 #
 # Keys are compared by structural equality and may be of any type; atom keys
 # get the shorthand +{name: "Ada"}+, string keys are written out in full as
-# +{"name": "Ada"}+. Every method answers with a new map — the +!+ forms
+# +{"name": "Ada"}+. Every method answers with a new map: the +!+ forms
 # (+put!+, +delete!+) build a new map and rebind the receiver variable, they
 # do not modify anything in place.
 #
@@ -48,7 +48,7 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
   #   { a: 1, b: 2 }.entries.map { |k, v| "${k}=${v}" }.join("&")
   let reduce(acc, g) = this.entries.reduce(acc, g)
 
-  # The empty map — the identity element of the +Monoid+ instance, so
+  # The empty map: the identity element of the +Monoid+ instance, so
   # +m.combine({})+ is +m+.
   #
   # @return [Map<K, V>] the empty map
@@ -131,7 +131,7 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
   let put(k, v) = Kex.Intrinsic.Map.put(this, k, v)
 
   # Returns a new map without +key+. A key that is not present is not an
-  # error — the map comes back unchanged.
+  # error: the map comes back unchanged.
   #
   # Use +delete!+ to rebind the receiver variable.
   #
@@ -281,7 +281,7 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
   # Returns a new map with every key replaced by +f(key)+. The values are left
   # alone.
   #
-  # If +f+ maps two keys onto the same result, one entry wins — the map cannot
+  # If +f+ maps two keys onto the same result, one entry wins: the map cannot
   # hold both.
   #
   # @param f [K -> J] applied to each key

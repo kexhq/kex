@@ -1,11 +1,10 @@
 # ANSI terminal styling: colors, text attributes, and cursor control.
 #
 # Every constant here becomes an empty string when Kex is started with
-# +--no-colors+, or when output is not going to a terminal. That is the point
-# of the design — you can splice them into a string unconditionally and the
-# result is plain text where color is unwanted, with no branching at the call
-# site.
+# +--no-colors+, or when output is not going to a terminal. You can splice
+# them into a string unconditionally.
 #
+# @example
 #   IO.printLine("${Console.GREEN}ok${Console.RESET}")
 #   IO.printLine(Console.colorize("failed", Console.RED))
 #
@@ -40,6 +39,9 @@ module Console do
   # Renders following text in italics, where the terminal supports it.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example Setting apart a book or command name
+  #   IO.printLine("run ${Console.colorize("kex check", Console.ITALIC)} next")
   let ITALIC = Kex.Intrinsic.Console.Italic
 
   # Underlines following text.
@@ -54,6 +56,9 @@ module Console do
   # and most users would rather they did not.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example A deliberately attention-grabbing emergency indicator
+  #   IO.printError(Console.colorize("DATABASE OFFLINE", Console.BLINK))
   let BLINK = Kex.Intrinsic.Console.Blink
 
   # Swaps the foreground and background colors of following text.
@@ -64,9 +69,12 @@ module Console do
   #   Console.colorize(row, Console.REVERSE)
   let REVERSE = Kex.Intrinsic.Console.Reverse
 
-  # Hides following text — it occupies space but is not drawn.
+  # Hides following text: it occupies space but is not drawn.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example Reserving space so changing status text does not shift a table
+  #   let padding = Console.colorize("..........", Console.HIDDEN)
   let HIDDEN = Kex.Intrinsic.Console.Hidden
 
   # Strikes through following text.
@@ -101,24 +109,36 @@ module Console do
   #   IO.warn(Console.colorize("deprecated option", Console.YELLOW))
   let YELLOW = Kex.Intrinsic.Console.Yellow
 
-  # Blue.
+  # Blue. Useful for informational labels and links.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example
+  #   IO.printLine(Console.colorize("info:", Console.BLUE) + " cache refreshed")
   let BLUE = Kex.Intrinsic.Console.Blue
 
-  # Magenta.
+  # Magenta. Useful for highlighting a category distinct from status colors.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example
+  #   IO.printLine(Console.colorize("migration", Console.MAGENTA) + " 20260830")
   let MAGENTA = Kex.Intrinsic.Console.Magenta
 
-  # Cyan.
+  # Cyan. Useful for identifiers, paths, and other values inside prose.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example
+  #   IO.printLine("wrote ${Console.colorize(path, Console.CYAN)}")
   let CYAN = Kex.Intrinsic.Console.Cyan
 
-  # White.
+  # White. Useful for primary text on a dark terminal.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example
+  #   IO.printLine(Console.colorize("Build summary", Console.WHITE))
   let WHITE = Kex.Intrinsic.Console.White
 
   # Gray. Conventionally: de-emphasised detail, like +DIM+ but as a color.
@@ -129,24 +149,23 @@ module Console do
   #   IO.printLine(Console.colorize(timestamp, Console.GRAY))
   let GRAY = Kex.Intrinsic.Console.Gray
 
-  # Purple.
+  # Purple. An alternative accent when magenta is already in use.
   #
   # @return [String] the escape sequence, or +""+ when color is off
+  #
+  # @example
+  #   IO.printLine(Console.colorize("plugin", Console.PURPLE) + ": formatter")
   let PURPLE = Kex.Intrinsic.Console.Purple
 
   # Erases the screen and moves the cursor to the top-left corner.
   #
   # Use it to start a fresh frame. When you are redrawing repeatedly, +HOME+
-  # gives a smoother result — see below.
+  # gives a smoother result: see below.
   #
   # @return [String] the escape sequence, or +""+ when color is off
   #
   # @example
   #   IO.print(Console.CLEAR)
-  # Cursor and screen control, empty under --no-colors like the styles above.
-  # CLEAR erases the screen and homes the cursor; HOME only moves the cursor,
-  # so a redraw paints over the previous frame without a blank flash between
-  # them; CLEARLINE erases the current line and returns to its start.
   let CLEAR = Kex.Intrinsic.Console.Clear
 
   # Moves the cursor to the top-left corner without erasing anything.
@@ -199,7 +218,7 @@ module Console do
   # Returns +true+ when terminal styling is on for this process.
   #
   # It is +false+ under +--no-colors+ and when output is redirected. You
-  # rarely need to check it — the constants already collapse to +""+ — but it
+  # rarely need to check it (the constants already collapse to +""+) but it
   # is the right test when the alternative is a different layout rather than a
   # different color.
   #

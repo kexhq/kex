@@ -1,7 +1,7 @@
 module Regex
 
 # Regular expressions, backed by PCRE2 in the interpreter and Erlang's `re`
-# on BEAM — the same PCRE pattern language on both.
+# on BEAM: the same PCRE pattern language on both.
 #
 # Opt-in, not prelude: nothing here is in scope until `using Regex`.
 #
@@ -41,7 +41,7 @@ end
 
 # A pattern that failed to compile.
 #
-# Mirrors +ParseError+ — the +position+ is a *character* offset into the
+# Mirrors +ParseError+: the +position+ is a *character* offset into the
 # pattern, not a byte offset, so it agrees across backends on patterns
 # containing non-ASCII.
 #
@@ -62,14 +62,14 @@ end
 # NOTE: deliberately does NOT `implement: Errorable`, even though the trait
 # exists for exactly this shape. Declaring a `message` method alongside the
 # `message` field makes `e.message` dispatch to the method instead of reading
-# the field, which fails with `undef` on the BEAM backend. `ParseError` — the
-# prelude's equivalent error record — carries a bare `message` field for the
+# the field, which fails with `undef` on the BEAM backend. `ParseError`: the
+# prelude's equivalent error record: carries a bare `message` field for the
 # same reason; nothing in the tree implements Errorable today.
 
 # Compiles +source+ into a +Regex+.
 #
 # Answers a +Result+ because an arbitrary string may not be a valid pattern.
-# Use this form when the pattern is built at run time — from a config file,
+# Use this form when the pattern is built at run time: from a config file,
 # from user input. For a pattern you write yourself, the tag form
 # `` regex`\d+` `` is checked at compile time and hands back a bare +Regex+.
 #
@@ -91,7 +91,7 @@ end
 regex : String -> Result<Regex, RegexError>
 let regex(source) = Kex.Intrinsic.Regex.compile(source)
 
-# The tagged-literal form — `` regex`\d+` `` — which the parser lowers to the
+# The tagged-literal form (`` regex`\d+` ``) which the parser lowers to the
 # two-argument tag ABI regex(parts, values).
 #
 # Returns a BARE Regex, not a Result: the pattern is known at compile time and
@@ -136,7 +136,7 @@ end
 # A short alias for +regex+, in both its forms.
 #
 # A second name bound to the same two functions, not a lexer synonym, so every
-# property of +regex+ — escaping, backend mapping, error shape — applies to it
+# property of +regex+ (escaping, backend mapping, error shape) applies to it
 # unchanged. Most code uses the tag form, where the shorter name reads better.
 #
 # @param source [String] the pattern text (call form)
@@ -161,7 +161,7 @@ end
 # Escapes every regex metacharacter in +s+, so the result matches +s+
 # literally.
 #
-# This is how to search for text that may itself contain pattern syntax — a
+# This is how to search for text that may itself contain pattern syntax: a
 # search term typed by a user, a filename, a version string. It escapes per
 # character rather than wrapping in `\Q...\E`, which a value containing `\E`
 # would break out of.
@@ -186,8 +186,8 @@ let quote(s) = Kex.Intrinsic.Regex.quote(s)
 # group name (+:year+), but is a named type so it can grow spans and
 # surrounding context later without breaking existing +get+ call sites.
 #
-# A group that did not participate is an absent key, so +get+ answers +None+ —
-# which is different from a group that matched the empty string, and answers
+# A group that did not participate is an absent key, so +get+ answers +None+.
+# This differs from a group that matched the empty string, which answers
 # +Just("")+.
 record Match do
   # The captured text, keyed by group number and by group name.
@@ -196,7 +196,7 @@ end
 
 # NOTE: the accessor is +get+, not +get+. A `make` block on a user type that
 # defines a method name the prelude also uses breaks that name's dispatch for
-# every OTHER type on the BEAM backend — with `get` here, merely saying
+# every OTHER type on the BEAM backend: with `get` here, merely saying
 # `using Regex` made a plain `someMap.get(k)` fail with function_clause.
 # `get` also matches Python's `m.get(1)` and Java's `matcher.get(1)`.
 # A plain Map's `get` is unaffected: resolution picks a local method by
@@ -227,7 +227,7 @@ make Match do
   # Returns the text captured by a group, or +default+ when the group is
   # absent.
   #
-  # The total form of +get+, which is what most +scan+ pipelines want — the
+  # The total form of +get+, which is what most +scan+ pipelines want: the
   # value comes back unwrapped.
   #
   # @param key [Atom | Integer] the group number or name
@@ -280,7 +280,7 @@ let matches?(s, re) = Kex.Intrinsic.Regex.matches?(s, re)
 
 # Returns every match of +re+ in +s+, left to right.
 #
-# Always answers +[Match]+, whether or not the pattern has capture groups —
+# Always answers +[Match]+, whether or not the pattern has capture groups:
 # adding a group to a pattern must not change the type flowing out of +scan+.
 # An empty list means nothing matched.
 #
@@ -299,7 +299,7 @@ let matches?(s, re) = Kex.Intrinsic.Regex.matches?(s, re)
 scan : String -> Regex -> [Match]
 let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 
-# Replaces EVERY match of +re+ in +s+ — this is +gsub+, not +sub+.
+# Replaces EVERY match of +re+ in +s+: this is +gsub+, not +sub+.
 #
 # The replacement is either a literal +String+, inserted verbatim with no
 # +$1+ / +\1+ backreference syntax, or a block receiving the +Match+, which is
@@ -332,10 +332,10 @@ let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement
 #
 # Plain +s.split(re)+ needs no function here at all: it resolves to
 # +String.split+, which dispatches to this engine when handed a Regex (in both
-# backends), and follows Ruby's semantics — trailing empty fields are dropped,
+# backends), and follows Ruby's semantics: trailing empty fields are dropped,
 # leading ones are kept, and capture groups are interleaved into the result.
 #
-# Only the limit form needs a name, and it deliberately is NOT `split` — this
+# Only the limit form needs a name, and it deliberately is NOT `split`: this
 # module must not export that name. On BEAM, a module in scope via `using`
 # captures a method name for EVERY receiver, so exporting `split` here would
 # route `"a,b".split(",")` and even the no-argument `"hi".split` through this

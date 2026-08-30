@@ -1,7 +1,7 @@
 # Types that can be rendered structurally, for a person reading output.
 #
-# The rendering shows the value's STRUCTURE — quotes on strings, +Just(...)+
-# around an optional — which is what makes it right for debugging and wrong
+# The rendering shows the value's STRUCTURE: quotes on strings, +Just(...)+
+# around an optional, which is what makes it right for debugging and wrong
 # for user-facing text. +Showable+ is the other half of that pair.
 #
 # Every type is inspectable through a structural fallback, so +inspected+ and
@@ -14,7 +14,7 @@ trait Inspectable do
   # Renders the value structurally, with ANSI colors when +colors+ is true.
   #
   # +inspected+ and +IO.inspect+ call this for you, passing the console's own
-  # color setting — call it directly only when you need to force one.
+  # color setting: call it directly only when you need to force one.
   #
   # @param colors [Bool] whether to include ANSI color escapes
   # @return [String] the rendered value
@@ -24,7 +24,24 @@ trait Inspectable do
   inspectValue :> Bool -> String
 end
 
+# Types that have a concise, user-facing text representation.
+#
+# +Showable+ is used by interpolation, printing, and +to(String)+. Its output
+# should describe the value itself rather than its implementation structure:
+# a string is shown without quotes, +Just(x)+ is shown as +x+, and +None+ is
+# shown as an empty string. Use +Inspectable+ when debugging structure matters.
+#
+#   "hello".showValue          # => "hello"
+#   Just("hello").showValue    # => "hello"
+#   None.showValue             # => ""
 trait Showable do
+  # Returns the value's user-facing text representation.
+  #
+  # Implement this for domain types whose useful presentation differs from
+  # their structural rendering. Keep the result free of ANSI styling so it is
+  # safe in files, logs, and interpolation as well as on a terminal.
+  #
+  # @return [String] the display text
   showValue :> String
 end
 
@@ -49,12 +66,12 @@ end
 
 # The same for Result, with one deliberate asymmetry: SHOWING a result shows
 # what it carries, so `Ok(42)` reads as `42` rather than leaking the wrapper
-# into text — but an `Error` keeps its marker. Dropping it made a failure and
+# into text, but an `Error` keeps its marker. Dropping it made a failure and
 # a success print identically, and unlike `None` (which shows as "", visibly
 # not a value) there would be nothing left to tell them apart.
 #
 # The marker is spelled `Error(...)`, matching how the same value renders as
-# an ELEMENT of a collection — `[1, Error(Bad(no))]`. Elements render
+# an ELEMENT of a collection: `[1, Error(Bad(no))]`. Elements render
 # structurally rather than through showValue (as in Ruby, where `nil.to_s` is
 # "" but `[nil].to_s` is "[nil]"), so this is the one spelling that reads the
 # same at both levels.
@@ -66,7 +83,7 @@ make Result<X, E>, implement: Showable do
   let showValue(@Error(e)) = "Error(${e.showValue})"
 end
 
-# The running toolchain: which backend, which version, which features.
+# The running toolchain, which backend, which version, which features.
 #
 #   Kex.BACKEND                  # => Interpreter
 #   Kex.Kernel.VERSION.release   # => "0.4.0"
@@ -101,7 +118,7 @@ module Kex do
 
   # Returns +true+ when running on the BEAM.
   #
-  # The backend a program is on decides what is available — processes and the
+  # The backend a program is on decides what is available: processes and the
   # web server need the BEAM (+kex -R file.kex+).
   #
   # @return [Bool] +true+ under the BEAM
@@ -110,11 +127,15 @@ module Kex do
   #   Kex.underBeam?   # => true under `kex -R file.kex`
   let underBeam? = Kex.BACKEND == Kex.Beam
 
+  # Build identity for the compiler and runtime executing this program.
+  #
+  # Useful in bug reports, generated artifacts, and compatibility checks where
+  # +Kex.BACKEND+ alone is not enough to identify the toolchain.
   module Kernel do
     # The toolchain a program is running on. `kex --version` and the REPL
     # banner report the same numbers.
     #
-    # `revision` is the git commit the compiler was built from — `None` when
+    # `revision` is the git commit the compiler was built from: `None` when
     # it was built from a source archive rather than a checkout, which is why
     # it is an Optional rather than a String.
     #
@@ -137,15 +158,15 @@ module Kex do
       revision : String?
 
       # The release channel: "" for a stable build, otherwise "rc.1",
-      # "beta.2", "prealpha.1" — the part of VERSION after the dash.
+      # "beta.2", "prealpha.1": the part of VERSION after the dash.
       preRelease : String = ""
     end
 
     make Version do
       # The version's four values as a tuple, for destructuring.
       #
-      # A tuple cannot carry accessors of its own — there is no named type for
-      # a `make` block to target — so the record is the value and this is the
+      # A tuple cannot carry accessors of its own: there is no named type for
+      # a `make` block to target, so the record is the value and this is the
       # view.
       #
       # @return [(Integer, Integer, Integer, String?)] major, minor, patch, revision
@@ -172,8 +193,8 @@ module Kex do
       #
       # This is what +kex --version+ and the REPL banner print.
       #
-      # `to(String)` — the language's conversion protocol, and what this
-      # should really be — is deliberately NOT defined here: a second
+      # `to(String)`: the language's conversion protocol, and what this
+      # should really be: is deliberately NOT defined here: a second
       # `to(String)` implementation anywhere in the prelude breaks
       # type-directed `to` dispatch for every prelude type on BEAM, so adding
       # one here silently broke `3.kilo.watt.to(String)`. Pinned by
@@ -241,8 +262,8 @@ end
 
 # Reading the typed public surface of a compiled Kex module.
 module Kex.Interface do
-  # Reads the KexI interface chunk of a compiled Kex module — its typed public
-  # surface — and answers the decoded term, or None when the file has no such
+  # Reads the KexI interface chunk of a compiled Kex module: its typed public
+  # surface, and answers the decoded term, or None when the file has no such
   # chunk, does not exist, or is not a BEAM artifact.
   #
   # The term is an ordinary tree of tuples, lists, atoms, integers and
@@ -259,13 +280,13 @@ module Kex.Interface do
   let read(path) = Kex.Intrinsic.Interface.read(path)
 end
 
-# Returns the pretty-printed representation of any value as a STRING — the
+# Returns the pretty-printed representation of any value as a STRING: the
 # same form the REPL echoes. Universal: reachable on every type through UFCS.
 #
 # Named apart from `inspect`, which prints and returns its INPUT so it can be
 # dropped into a pipeline. Both spellings used to be called `inspect`, and
 # which one a call reached depended on whether it was written `x.inspect` or
-# `IO.inspect(x)` — so `[1, 2].inspect.count` answered 24, the length of the
+# `IO.inspect(x)`, so `[1, 2].inspect.count` answered 24, the length of the
 # rendered string, rather than 2.
 #
 # @param value [A] any value

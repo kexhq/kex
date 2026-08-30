@@ -32,7 +32,7 @@
 # reads as +"true"+ when present.
 type OptionKind = StringValue | IntegerValue | FlagValue
 
-# One declared option. Built for you by the +OptionConfig+ builders — you
+# One declared option. Built for you by the +OptionConfig+ builders: you
 # rarely construct one by hand.
 record OptionSpec do
   # The long spelling, without its dashes: +"name"+ for +--name+.
@@ -61,14 +61,14 @@ type CommandHandler = ParsedOptions -> Integer
 
 # One declared command. Built for you by the +OptionConfig.command+ builders.
 record CommandSpec do
-  # A name may be several words — `kex install` — and the longest match wins,
+  # A name may be several words (`kex install`) and the longest match wins,
   # so a group and its subcommands can both be declared.
   name : String
 
   # The one-line description shown in the help text.
   description : String = ""
 
-  # What the help line shows after the name — +"<file>"+, +"[args...]"+.
+  # What the help line shows after the name: +"<file>"+, +"[args...]"+.
   # Empty for a command that takes no further words.
   usage : String = ""
 
@@ -77,8 +77,8 @@ record CommandSpec do
 
   # The help heading this command is listed under. "" is the tool's own
   # `Commands:` block; anything else gets its own heading, in the order the
-  # sections were first declared. Commands a tool discovers at runtime — a
-  # package manifest's own — are not the tool's vocabulary, and a reader who
+  # sections were first declared. Commands a tool discovers at runtime: a
+  # package manifest's own: are not the tool's vocabulary, and a reader who
   # cannot tell which is which has to guess where to file a bug.
   section : String = ""
 end
@@ -234,7 +234,7 @@ make OptionConfig do
   # with +ParsedOptions.flagEnabled?+. Giving it a value is an error
   # (+UnexpectedValue+).
   #
-  # Declare a flag named +help+ if you want +--help+ to print the help text —
+  # Declare a flag named +help+ if you want +--help+ to print the help text:
   # +run+ looks for exactly that name, and adds nothing on its own.
   #
   # @param long [String] the long spelling, without dashes
@@ -254,7 +254,7 @@ make OptionConfig do
 
   # Declares a command and the function that runs it.
   #
-  # A command name may be several words — +"docs build"+ — and the longest
+  # A command name may be several words (+"docs build"+) and the longest
   # match wins, so a group and its subcommands can both be declared. The
   # handler receives the parsed options with the command's own words already
   # removed, and returns the process exit code.
@@ -281,7 +281,7 @@ make OptionConfig do
 
   # Declares a command whose help line shows the shape of its arguments.
   #
-  # +usage+ is what appears after the name — +"<file>"+, +"[args...]"+.
+  # +usage+ is what appears after the name: +"<file>"+, +"[args...]"+.
   #
   # @param name [String] the command's name, one or more words
   # @param usage [String] the argument shape shown in the help text
@@ -300,8 +300,8 @@ make OptionConfig do
   # Declares a command listed under its own help heading, rather than with the
   # tool's built-ins.
   #
-  # Use it for commands a tool discovers at run time — a package manifest's
-  # own, a plugin's — so a reader can tell them apart from the tool's own
+  # Use it for commands a tool discovers at run time: a package manifest's
+  # own, a plugin's, so a reader can tell them apart from the tool's own
   # vocabulary. Sections appear in the order they were first declared.
   #
   # @param name [String] the command's name, one or more words
@@ -348,7 +348,7 @@ make OptionConfig do
   # the result to +System.exit+.
   #
   # A parse failure, an unknown command, or a line with no command at all
-  # reports the problem along with the help text and returns 1 — the one place
+  # reports the problem along with the help text and returns 1: the one place
   # that policy has to live for every tool to behave the same way. A set
   # +help+ flag prints the help and returns 0.
   #
@@ -441,7 +441,7 @@ make OptionConfig do
       let own = section == ""
       let heading = own then "Commands:" else "${section}:"
       # A section exists to say "these came from somewhere else", so its NAMES
-      # carry their own colour — that is what a reader scans. The heading
+      # carry their own colour: that is what a reader scans. The heading
       # stays plain bold like every other heading on the page.
       let nameColor = own then Console.BLUE else Console.MAGENTA
       let listed = @commands.filter { |command| command.section == section }
@@ -463,11 +463,25 @@ make OptionConfig do
 end
 
 module OptionParser do
+  # Starts an immutable command-line interface definition.
+  #
+  # Chain options and commands onto the returned +OptionConfig+, then call
+  # +parse+ with the process arguments. +name+ appears in usage text and
+  # +description+ introduces the generated help page.
+  #
+  # @param name [String] the executable name shown in usage
+  # @param description [String] the one-line purpose of the command
+  # @return [OptionConfig] an empty parser configuration
+  #
+  # @example Defining a small file-conversion command
+  #   let cli = OptionParser.define("convert", "Convert a document to PDF")
+  #     .string("input", Just('i'), "Source document", None, true)
+  #     .flag("verbose", Just('v'), "Show conversion details")
   let define(name: String, description: String) -> OptionConfig do
     OptionConfig { name: name, description: description }
   end
 
-  # Returns the label a command is listed under in the help text — its name,
+  # Returns the label a command is listed under in the help text: its name,
   # followed by its usage when it has one.
   #
   # @param command [CommandSpec] the command to label
@@ -507,7 +521,7 @@ module OptionParser do
 
   # Returns +true+ when +arguments+ begins with the words of +name+.
   #
-  # The word-wise prefix test +commandFor+ matches with — +"docs build"+ opens
+  # The word-wise prefix test +commandFor+ matches with: +"docs build"+ opens
   # +["docs", "build", "src"]+ but not +["docs"]+.
   #
   # @param arguments [[String]] the positional words from the command line
@@ -603,7 +617,7 @@ module OptionParser do
       let spelling = equals.first.or(argument)
       match OptionParser.findOption(options, spelling) do
         # An option the tool itself does not know, meeting the line AFTER a
-        # command word, is the command's own vocabulary — `tey docs build
+        # command word, is the command's own vocabulary: `tey docs build
         # --source src` must reach the docs handler with `--source src` in
         # its arguments rather than die as Tey's unknown option. Before any
         # command word it is still this parser's error to report: nothing
