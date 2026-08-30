@@ -16,7 +16,7 @@ FROM debian:bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git \
         libgmp-dev libpcre2-dev libreadline-dev libboost-context-dev libssl-dev \
-        erlang-base erlang-dev erlang-odbc \
+        erlang-base erlang-dev erlang-odbc erlang-crypto \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -63,7 +63,7 @@ FROM debian:bookworm-slim
 # `--compile` and the REPL's BEAM mode.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgmp10 libpcre2-8-0 libreadline8 libboost-context1.74.0 libssl3 \
-        erlang-base erlang-odbc \
+        erlang-base erlang-odbc erlang-crypto \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/kex /opt/kex
