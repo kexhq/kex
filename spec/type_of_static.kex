@@ -17,17 +17,17 @@ answer : Type.of(42)
 let answer = 7
 
 main do
-  IO.printLine(Type.of(Date.of(2026, 7, 30)).toString)
-  IO.printLine(Type.of(Integer.parse("12x")).toString)
-  IO.printLine(Type.of([Light, Dark(3)]).toString)
-  IO.printLine(Type.of("hi").toString)
+  IO.printLine(Type.of(Date.of(2026, 7, 30)).to(String))
+  IO.printLine(Type.of(Integer.parse("12x")).to(String))
+  IO.printLine(Type.of([Light, Dark(3)]).to(String))
+  IO.printLine(Type.of("hi").to(String))
 
   # A function's type is its signature: parameters, result, and whether
   # calling it is a side effect. Only the compiler knows any of that — the
   # value is just a closure.
-  IO.printLine(Type.of(double).toString)
-  IO.printLine(Type.of(loudly).toString)
-  IO.printLine(Type.of(Date.parse).toString)
+  IO.printLine(Type.of(double).to(String))
+  IO.printLine(Type.of(loudly).to(String))
+  IO.printLine(Type.of(Date.parse).to(String))
   # Bound outside the interpolation on purpose: expressions inside `${}` are
   # not type-checked, so a `Type.of` written there falls back to the value and
   # reports a bare `Function`.
@@ -40,8 +40,8 @@ main do
   IO.printLine("${greeting}")
 
   # Answered by the compiler alone: a function value has no signature at runtime.
-  IO.printLine(Type.returnedBy(double).toString)
-  IO.printLine(Type.returnedBy(Date.parse).toString)
-  IO.printLine(Type.returnedBy(Time.midnight).toString)
+  IO.printLine(Type.returnedBy(double).to(String))
+  IO.printLine(Type.returnedBy(Date.parse).to(String))
+  IO.printLine(Type.returnedBy(Time.midnight).to(String))
   IO.printLine("${answer}")
 end

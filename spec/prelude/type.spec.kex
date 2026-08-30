@@ -7,28 +7,28 @@ end
 
 describe("Type") do
   it("names primitives") do
-    assert(Type.of(42).toString == "Integer")
-    assert(Type.of(1.5).toString == "Float")
-    assert(Type.of("hi").toString == "String")
-    assert(Type.of(true).toString == "Bool")
-    assert(Type.of('c').toString == "Char")
+    assert(Type.of(42).to(String) == "Integer")
+    assert(Type.of(1.5).to(String) == "Float")
+    assert(Type.of("hi").to(String) == "String")
+    assert(Type.of(true).to(String) == "Bool")
+    assert(Type.of('c').to(String) == "Char")
     assert(Type.of(42).name == "Integer")
     assert(Type.of(42).args == [])
   end
 
   it("renders containers the way they are written") do
-    assert(Type.of([1, 2]).toString == "[Integer]")
-    assert(Type.of([[1], [2]]).toString == "[[Integer]]")
-    assert(Type.of((1, "a")).toString == "(Integer, String)")
-    assert(Type.of({ "a": 1 }).toString == "{String: Integer}")
+    assert(Type.of([1, 2]).to(String) == "[Integer]")
+    assert(Type.of([[1], [2]]).to(String) == "[[Integer]]")
+    assert(Type.of((1, "a")).to(String) == "(Integer, String)")
+    assert(Type.of({ "a": 1 }).to(String) == "{String: Integer}")
     assert(Type.of([1, 2]).name == "List")
     assert(Type.of([1, 2]).args.count == 1)
   end
 
   it("names records and ADTs, not their constructors") do
-    assert(Type.of(Point { x: 1, y: 2 }).toString == "Point")
-    assert(Type.of(Light).toString == "Shade")
-    assert(Type.of(Dark(3)).toString == "Shade")
+    assert(Type.of(Point { x: 1, y: 2 }).to(String) == "Point")
+    assert(Type.of(Light).to(String) == "Shade")
+    assert(Type.of(Dark(3)).to(String) == "Shade")
   end
 
   it("reads what the value carries when nothing else knows") do
@@ -37,12 +37,12 @@ describe("Type") do
     # spec/type_of_static.kex.
     assert(Type.of(Date.of(2026, 7, 30)).name == "Result")
     assert(Type.of(Date.of(2026, 7, 30)).args.count == 2)
-    assert(Type.of(Date.of(2026, 7, 30).try).toString == "Date")
+    assert(Type.of(Date.of(2026, 7, 30).try).to(String) == "Date")
   end
 
   it("degrades honestly when nothing knows the type") do
     # An empty list has no element to inspect and no annotation to read.
-    assert(Type.of([]).toString == "[?]")
+    assert(Type.of([]).to(String) == "[?]")
     assert(Type.of([]).args.count == 1)
   end
 

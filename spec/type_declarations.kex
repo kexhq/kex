@@ -56,10 +56,10 @@ main do
   IO.printLine("=== function types ===")
   # A function's type is its signature: parameters, result, and purity. None
   # of that survives into the value, so only the compiler can answer.
-  IO.printLine(Type.of(helloWorld).toString)
-  IO.printLine(Type.of(rowCount).toString)
-  IO.printLine(Type.of(readLoudly).toString)
-  IO.printLine(Type.of(Date.parse).toString)
+  IO.printLine(Type.of(helloWorld).to(String))
+  IO.printLine(Type.of(rowCount).to(String))
+  IO.printLine(Type.of(readLoudly).to(String))
+  IO.printLine(Type.of(Date.parse).to(String))
 
   let effectful = Type.of(readLoudly)
   let pure = Type.of(helloWorld)
@@ -71,20 +71,20 @@ main do
   # `Type.of(Hello)` names a TYPE, not a value: the walker used to die on
   # "Undefined identifier: Hello" and BEAM lowered it to an atom and answered
   # `Atom`. A bare type name is already a value in `x.to(String)`.
-  IO.printLine(Type.of(Hello).toString)
-  IO.printLine(Type.of(String).toString)
-  IO.printLine(Type.of(Date).toString)
+  IO.printLine(Type.of(Hello).to(String))
+  IO.printLine(Type.of(String).to(String))
+  IO.printLine(Type.of(Date).to(String))
   let hello = Type.of(Hello)
   IO.printLine("${hello.constructors.count} ${hello.adt?}")
   # A CONSTRUCTOR still reads as a value of its ADT.
-  IO.printLine(Type.of(World).toString)
-  IO.printLine(Type.of(You("a")).toString)
+  IO.printLine(Type.of(World).to(String))
+  IO.printLine(Type.of(You("a")).to(String))
 
   # An alias OF a type name is that type, and answers identically.
-  IO.printLine(Type.of(HelloClone).toString)
+  IO.printLine(Type.of(HelloClone).to(String))
   let cloned = Type.of(HelloClone) == Type.of(Hello)
   IO.printLine("${cloned}")
-  IO.printLine(Type.of(TextClone).toString)
+  IO.printLine(Type.of(TextClone).to(String))
 
   IO.printLine("")
   IO.printLine("=== the two forms agree ===")
@@ -96,7 +96,7 @@ main do
   let counted = Type.returnedBy(rowCount)
   let sameAnswer = Type.of(42) == Type.of(answer)
   IO.printLine("${returned == Type.named("String")}")
-  IO.printLine(counted.toString)
+  IO.printLine(counted.to(String))
   IO.printLine("${sameAnswer}")
 end
 
