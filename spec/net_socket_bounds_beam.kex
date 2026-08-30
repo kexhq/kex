@@ -3,16 +3,23 @@
 # Offline loopback coverage for bounded stream reads and datagram limits.
 
 using Net.Socket
+using Net.IP, only: [Address]
 
 main do
-  let listener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let listener = TCP.listen(
+    TCP.Endpoint.loopback(Net.Port.from(0).try),
+    TCP.ListenOptions { backlog: 16, reuseAddress?: true }
+  ).try
   let tcpPort = listener.localAddress.try.port
   let tcpServer = Task.start do
     let peer = listener.accept.try
     peer.sendAll("abcdef--tail\nrest".to(Binary).try).try
     peer.close
   end
-  let connection = TCP.connect(TCP.Endpoint.loopback(tcpPort)).try
+  let connection = TCP.connect(
+    TCP.Endpoint.loopback(tcpPort),
+    TCP.ConnectOptions { connectTimeout: 2.seconds, keepAlive?: true }
+  ).try
   assert(connection.receiveChunk(2).try.to(String).try == "ab")
   assert(connection.receiveChunk(2).try.to(String).try == "cd")
   assert(connection.receiveChunk(2).try.to(String).try == "ef")
@@ -23,6 +30,26 @@ main do
   tcpServer.await
   listener.close
 
+  let idleListener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  match idleListener.accept(0.seconds) do
+    Error(error) => assert(error.kind == Timeout)
+    Ok(_) => assert(false, "zero-timeout accept must not block")
+  end
+  let idlePort = idleListener.localAddress.try.port
+  let idleServer = Task.start do
+    let idlePeer = idleListener.accept.try
+    Task.sleep(100.milliseconds)
+    idlePeer.close
+  end
+  let idleClient = TCP.connect(TCP.Endpoint.loopback(idlePort)).try
+  match idleClient.receiveChunk(1, 0.seconds) do
+    Error(error) => assert(error.kind == Timeout)
+    Ok(_) => assert(false, "zero-timeout receive must not block")
+  end
+  idleClient.close
+  idleServer.await
+  idleListener.close
+
   let receiver = UDP.bind(UDP.Endpoint.loopback(Net.Port.from(0).try)).try
   let udpPort = receiver.localAddress.try.port
   let sender = UDP.bind(UDP.Endpoint.loopback(Net.Port.from(0).try)).try
@@ -30,5 +57,30 @@ main do
   assert(receiver.receiveFrom(2).error?, "oversized datagrams must not be truncated")
   sender.close
   receiver.close
+
+  let configured = UDP.bind(
+    UDP.Endpoint.any(Net.Port.from(0).try),
+    UDP.BindOptions {
+      broadcast?: true,
+      multicastTtl: 4,
+      multicastLoopback?: true,
+      receiveTimeout: 0.seconds
+    }
+  ).try
+  let timedOut = configured.receiveFrom(1)
+  match timedOut do
+    Error(error) => assert(error.kind == Timeout, "receive timeout must retain its typed kind")
+    Ok(_) => assert(false, "configured zero receive timeout must not block")
+  end
+  let group = Address.parse("239.255.0.1").try
+  let multicastInterface = Address.parse("0.0.0.0").try
+  configured.joinMulticast(group, multicastInterface).try
+  configured.leaveMulticast(group, multicastInterface).try
+  let unicast = configured.joinMulticast(Address.parse("127.0.0.1").try, multicastInterface)
+  match unicast do
+    Error(error) => assert(error.kind == UnsupportedOption)
+    Ok(_) => assert(false, "joining a unicast address must fail")
+  end
+  configured.close
   IO.printLine("ok")
 end

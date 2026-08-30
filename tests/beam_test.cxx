@@ -786,6 +786,11 @@ int main() {
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
             test::assertEqual(chunk.typeInterface.exports[0].name,
                               std::string("text"));
+            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.methods[0].name,
+                              std::string("text"));
+            test::assertEqual(chunk.typeInterface.methods[0].receiverType->name,
+                              std::string("String"));
             test::assertEqual(chunk.metadata.sourceModule,
                               std::string("Web.Response"));
         });

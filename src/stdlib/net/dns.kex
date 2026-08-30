@@ -37,6 +37,22 @@ record CacheOptions do
   negativeTtl : Duration = Duration.seconds(30)
 end
 
+# One DNS server used by a custom resolver.
+record Nameserver do
+  address : Net.IP.Address
+  port : Net.Port
+end
+
+# Isolated resolver configuration. An empty search list only queries the name
+# as written; search domains are tried in order for single-label names.
+record ResolverOptions do
+  cache : CacheOptions = CacheOptions {}
+  nameservers : [Nameserver]
+  search : [Name] = []
+  retries : Integer = 2
+  timeout : Duration = 2.seconds
+end
+
 # Lifetime cache counters. +clear+ empties entries but keeps these counters.
 record CacheStatistics do
   entries : Integer
@@ -67,6 +83,12 @@ module Resolver do
   # @param cache [CacheOptions] entry and TTL limits
   # @return [Result<Resolver, NetError>] a resolver, or +Parse+
   foul system(cache: CacheOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolver(cache)
+  # Opens an isolated resolver with typed nameservers and query bounds.
+  # @param options [ResolverOptions] nameservers, search domains, retry count,
+  #   per-query timeout, and cache bounds
+  # @return [Result<Resolver, NetError>] a resolver, or +Parse+
+  # @example +Resolver.custom(ResolverOptions { nameservers: [Nameserver { address: Net.IP.Address.parse("127.0.0.1").try, port: Net.Port.from(53).try }], timeout: 100.milliseconds }).try+
+  foul custom(options: ResolverOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolverWith(options)
 end
 
 make Resolver do

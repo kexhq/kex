@@ -57,9 +57,13 @@ or closed-handle errors.
 using Net.Socket
 
 let endpoint = TCP.Endpoint.host("example.com", Net.Port.from(80).try)
-let connection = TCP.connect(endpoint).try
+let connection = TCP.connect(endpoint, TCP.ConnectOptions {
+  connectTimeout: 10.seconds,
+  noDelay?: true,
+  keepAlive?: true
+}).try
 connection.sendAll("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n".to(Binary).try).try
-let statusLine = connection.receiveLine(8192).try.to(String).try
+let statusLine = connection.receiveLine(8192, 30.seconds).try.to(String).try
 IO.printLine(statusLine)
 connection.close
 ```
@@ -68,10 +72,41 @@ Listening on port zero asks the operating system for an ephemeral port;
 `listener.localAddress.try` reports the assigned endpoint. UDP preserves
 datagram boundaries. If an incoming datagram exceeds `receiveFrom`'s limit, it
 is consumed and returned as a typed `Limit` error—never silently truncated.
+UDP bind policy is explicit: `UDP.BindOptions` controls broadcast permission,
+multicast TTL and loopback, and the per-receive timeout. IPv4 multicast groups
+are joined and left with an explicit local interface; attempting to join a
+unicast group returns `UnsupportedOption`.
+
+```kex
+let socket = UDP.bind(
+  UDP.Endpoint.any(Net.Port.from(5353).try),
+  UDP.BindOptions {
+    broadcast?: true,
+    multicastTtl: 4,
+    receiveTimeout: 2.seconds
+  }
+).try
+socket.joinMulticast(
+  Net.IP.Address.parse("239.255.0.1").try,
+  Net.IP.Address.parse("0.0.0.0").try
+).try
+```
 
 Unix addresses must be nonempty absolute filesystem paths. Listening never
 removes an existing path implicitly; closing a listener unlinks the path that
 listener successfully created.
+
+```kex
+let address = Unix.Address.path("/tmp/my-service.sock").try
+let listener = Unix.listen(address, Unix.ListenOptions {
+  removeStale?: true,
+  acceptTimeout: 2.seconds,
+  receiveTimeout: 100.milliseconds
+}).try
+```
+
+`removeStale?` removes only an existing filesystem socket. Regular files,
+directories, and other path types are preserved and return `UnsupportedOption`.
 
 Direct TLS clients enable TLS 1.2 and 1.3. Certificate and hostname
 verification use system trust by default; disabling verification requires
@@ -88,8 +123,8 @@ using Net.DNS
 
 let resolver = Resolver.system(CacheOptions {
   entries: 1024,
-  maximumTtl: Duration.hours(1),
-  negativeTtl: Duration.seconds(30)
+  maximumTtl: 1.hours,
+  negativeTtl: 30.seconds
 }).try
 let name = Name.parse("localhost").try
 let addresses = resolver.addresses(name).try
@@ -100,8 +135,32 @@ resolver.close
 
 `lookup` supports A, AAAA, CNAME, MX, TXT, SRV, and PTR records. Kex reports
 the resolver's DNSSEC state but does not independently validate DNSSEC; the
-system resolver currently reports `Indeterminate`. Custom nameservers, search
-domains, and retry policy are not yet public.
+system resolver currently reports `Indeterminate`.
+
+Use `Resolver.custom` for an isolated resolver configuration. It does not
+modify the VM's system resolver:
+
+```kex
+using Net.DNS
+using Net.IP, only: [Address]
+
+let resolver = Resolver.custom(ResolverOptions {
+  nameservers: [Nameserver {
+    address: Address.parse("127.0.0.1").try,
+    port: Net.Port.from(53).try
+  }],
+  search: [Name.parse("internal.example").try],
+  retries: 2,
+  timeout: 100.milliseconds
+}).try
+
+let result = resolver.addresses(Name.parse("service").try)
+resolver.close
+```
+
+The timeout bounds a query attempt; retry behavior remains bounded by the
+resolver owner. Search domains apply in order to single-label names, followed
+by the name as written.
 
 ## Buffered HTTP/1.1
 
@@ -187,14 +246,17 @@ using Control.Retry
 
 let policy = Retry.exponential(
   4,
-  Duration.milliseconds(100),
-  Duration.seconds(2)
-)
-let response = Retry.run(policy) do
+  100.milliseconds,
+  2.seconds
+).withMaximumElapsed(5.seconds).withJitter(0.25)
+let response = Retry.run(policy, { |error| error.retryable? }) do
   client.get(url)
 end.try
 ```
 
-The current helper supports fixed and capped exponential schedules. Predicates,
-elapsed-time bounds, jitter, cancellation, and injectable virtual time/random
-sources remain in the networking plan.
+The helper supports fixed and capped exponential schedules, predicates,
+elapsed-delay bounds, and symmetric bounded jitter. Production jitter uses a
+cryptographically secure backend source. Tests can use `Retry.runWithRandom`
+to inject both a sleeper and a `0.0..1.0` random sample without sleeping or
+depending on nondeterminism. Retry cancellation and a full virtual-clock
+capability remain design work.

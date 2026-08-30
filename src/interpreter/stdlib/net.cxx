@@ -503,7 +503,7 @@ auto Evaluator::registerNetBuiltins() -> void {
     defineIntrinsic("NetDNS::addresses", [](std::vector<ValuePtr>) -> ValuePtr {
         return netError("UnsupportedBackend", "DNS", "DNS is available only through a mock on the tree-walking backend");
     });
-    for (const char* name : {"NetDNS::resolverDefault", "NetDNS::resolver",
+    for (const char* name : {"NetDNS::resolverDefault", "NetDNS::resolver", "NetDNS::resolverWith",
                              "NetDNS::resolverAddresses", "NetDNS::lookup"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
             return netError("UnsupportedBackend", "DNS",
@@ -614,16 +614,16 @@ auto Evaluator::registerNetBuiltins() -> void {
                             operation + " is available only through a mock on the tree-walking backend");
         };
     };
-    for (const char* name : {"NetTCP::connect", "NetTCP::listen", "NetTCP::accept",
+    for (const char* name : {"NetTCP::connect", "NetTCP::connectWith", "NetTCP::listen", "NetTCP::listenWith", "NetTCP::accept", "NetTCP::acceptWithin",
                              "NetTCP::sendAll", "NetTCP::receiveChunk",
-                             "NetTCP::receiveExactly", "NetTCP::receiveUntil", "NetTCP::receiveLine",
+                             "NetTCP::receiveChunkWithin", "NetTCP::receiveExactly", "NetTCP::receiveExactlyWithin", "NetTCP::receiveUntil", "NetTCP::receiveUntilWithin", "NetTCP::receiveLine", "NetTCP::receiveLineWithin",
                              "NetTCP::shutdownWrite", "NetTCP::localAddress",
                              "NetTCP::peerAddress"})
         defineIntrinsic(name, unsupportedSocket("TCP"));
-    for (const char* name : {"NetUDP::bind", "NetUDP::sendTo", "NetUDP::receiveFrom",
-                             "NetUDP::localAddress"})
+    for (const char* name : {"NetUDP::bind", "NetUDP::bindWith", "NetUDP::sendTo", "NetUDP::receiveFrom",
+                             "NetUDP::localAddress", "NetUDP::joinMulticast", "NetUDP::leaveMulticast"})
         defineIntrinsic(name, unsupportedSocket("UDP"));
-    for (const char* name : {"NetUnix::connect", "NetUnix::listen", "NetUnix::accept",
+    for (const char* name : {"NetUnix::connect", "NetUnix::connectWith", "NetUnix::listen", "NetUnix::listenWith", "NetUnix::accept",
                              "NetUnix::sendAll", "NetUnix::receiveChunk", "NetUnix::receiveExactly",
                              "NetUnix::receiveUntil", "NetUnix::receiveLine", "NetUnix::shutdownWrite"})
         defineIntrinsic(name, unsupportedSocket("Unix"));

@@ -23,6 +23,21 @@ module TCP do
     host : String
     port : Net.Port
   end
+  record ConnectOptions do
+    connectTimeout : Duration = 10.seconds
+    noDelay? : Bool = true
+    keepAlive? : Bool = true
+    sendBuffer : Integer = 0
+    receiveBuffer : Integer = 0
+  end
+  record ListenOptions do
+    backlog : Integer = 128
+    reuseAddress? : Bool = true
+    noDelay? : Bool = true
+    keepAlive? : Bool = true
+    sendBuffer : Integer = 0
+    receiveBuffer : Integer = 0
+  end
 
   module Endpoint do
     # @return [Endpoint] an endpoint using +name+ exactly as supplied
@@ -44,18 +59,24 @@ module TCP do
   # @example +TCP.connect(TCP.Endpoint.host("example.test", Port.from(80).try))+.
   connect : Endpoint -> Result<TCPConnection, NetError>
   foul connect(endpoint) = Kex.Intrinsic.NetTCP.connect(endpoint)
+  connect : Endpoint -> ConnectOptions -> Result<TCPConnection, NetError>
+  foul connect(endpoint, options) = Kex.Intrinsic.NetTCP.connectWith(endpoint, options)
   # Binds and starts listening. Port zero selects an ephemeral local port.
   # @return [Result<TCPListener, NetError>] a listener or +Connect+
   # @example +TCP.listen(TCP.Endpoint.loopback(Port.from(0).try))+.
   listen : Endpoint -> Result<TCPListener, NetError>
   foul listen(endpoint) = Kex.Intrinsic.NetTCP.listen(endpoint)
+  listen : Endpoint -> ListenOptions -> Result<TCPListener, NetError>
+  foul listen(endpoint, options) = Kex.Intrinsic.NetTCP.listenWith(endpoint, options)
 
   # Sends every byte or reports the failure and transfer progress.
   foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
   # Receives one bounded chunk; EOF is reported as +Closed+.
   foul receiveChunk(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunk(connection, limit)
+  foul receiveChunk(connection: TCPConnection, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveChunkWithin(connection, limit, timeout)
   # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
   foul receiveExactly(connection: TCPConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactly(connection, count)
+  foul receiveExactly(connection: TCPConnection, count: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveExactlyWithin(connection, count, timeout)
   # Receives through the first +delimiter+ without exceeding +limit+ bytes.
   #
   # The delimiter is included in the returned bytes. An empty delimiter is a
@@ -63,12 +84,15 @@ module TCP do
   #
   # @example +connection.receiveUntil("\r\n\r\n".to(Binary).try, 65536).try+
   foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntil(connection, delimiter, limit)
+  foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntilWithin(connection, delimiter, limit, timeout)
   # Receives through a newline without exceeding +limit+ bytes.
   foul receiveLine(connection: TCPConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLine(connection, limit)
+  foul receiveLine(connection: TCPConnection, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveLineWithin(connection, limit, timeout)
   # Half-closes the write side while leaving reads available.
   foul shutdownWrite(connection: TCPConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetTCP.shutdownWrite(connection)
   # Waits for and returns the next connection.
   foul accept(listener: TCPListener) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.accept(listener)
+  foul accept(listener: TCPListener, timeout: Duration) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.acceptWithin(listener, timeout)
   # Idempotently closes a connected stream.
   foul close(connection: TCPConnection) -> Void = Kex.Intrinsic.NetTCP.close(connection)
   # Idempotently closes a listener and releases its port.
@@ -108,6 +132,14 @@ module UDP do
     source : Endpoint
     data : Binary
   end
+  # Curated socket policy. Broadcast is opt-in. The receive timeout applies to
+  # each +receiveFrom+ call; multicast TTL is bounded to the IP hop-limit range.
+  record BindOptions do
+    broadcast? : Bool = false
+    multicastTtl : Integer = 1
+    multicastLoopback? : Bool = true
+    receiveTimeout : Duration = 30.seconds
+  end
   module Endpoint do
     # @return [Endpoint] an endpoint using +name+ exactly as supplied
     host : String -> Net.Port -> Endpoint
@@ -122,6 +154,9 @@ module UDP do
   # Binds a datagram socket. Port zero selects an ephemeral local port.
   bind : Endpoint -> Result<Socket, NetError>
   foul bind(endpoint) = Kex.Intrinsic.NetUDP.bind(endpoint)
+  # Binds with explicit broadcast, multicast, and receive-timeout policy.
+  bind : Endpoint -> BindOptions -> Result<Socket, NetError>
+  foul bind(endpoint, options) = Kex.Intrinsic.NetUDP.bindWith(endpoint, options)
 
   # Sends one complete datagram and returns its byte count.
   foul sendTo(socket: Socket, endpoint: Endpoint, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUDP.sendTo(socket, endpoint, data)
@@ -133,6 +168,11 @@ module UDP do
   foul closed?(socket: Socket) -> Bool = Kex.Intrinsic.NetUDP.closed?(socket)
   # Returns the bound endpoint, including an ephemeral assigned port.
   foul localAddress(socket: Socket) -> Result<Endpoint, NetError> = Kex.Intrinsic.NetUDP.localAddress(socket)
+  # Joins an IPv4 multicast group on the selected local interface. The group
+  # must be multicast and the interface must be an IPv4 address.
+  foul joinMulticast(socket: Socket, group: Net.IP.Address, interface: Net.IP.Address) -> Result<Void, NetError> = Kex.Intrinsic.NetUDP.joinMulticast(socket, group, interface)
+  # Leaves a membership previously joined with the same group and interface.
+  foul leaveMulticast(socket: Socket, group: Net.IP.Address, interface: Net.IP.Address) -> Result<Void, NetError> = Kex.Intrinsic.NetUDP.leaveMulticast(socket, group, interface)
 
 end
 
@@ -153,6 +193,16 @@ module Unix do
   record Address do
     path : String
   end
+  record ConnectOptions do
+    connectTimeout : Duration = 10.seconds
+    receiveTimeout : Duration = 30.seconds
+  end
+  record ListenOptions do
+    backlog : Integer = 128
+    removeStale? : Bool = false
+    acceptTimeout : Duration = 30.seconds
+    receiveTimeout : Duration = 30.seconds
+  end
   module Address do
     # Validates a nonempty absolute Unix-domain socket path.
     # @return [Result<Address, NetError>] the address, or +Parse+
@@ -162,9 +212,15 @@ module Unix do
   # Connects to a filesystem-domain listener.
   connect : Address -> Result<UnixConnection, NetError>
   foul connect(address) = Kex.Intrinsic.NetUnix.connect(address)
+  connect : Address -> ConnectOptions -> Result<UnixConnection, NetError>
+  foul connect(address, options) = Kex.Intrinsic.NetUnix.connectWith(address, options)
   # Binds a new path; an existing filesystem entry is never removed implicitly.
   listen : Address -> Result<UnixListener, NetError>
   foul listen(address) = Kex.Intrinsic.NetUnix.listen(address)
+  # With +removeStale?+, only an existing filesystem socket is removed;
+  # regular files, directories, and other path types are always preserved.
+  listen : Address -> ListenOptions -> Result<UnixListener, NetError>
+  foul listen(address, options) = Kex.Intrinsic.NetUnix.listenWith(address, options)
 
   # Sends every byte and returns the count.
   foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)

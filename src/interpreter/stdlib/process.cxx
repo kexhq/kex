@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
+#include <random>
 #include <thread>
 
 namespace {
@@ -82,6 +83,12 @@ namespace kex::interpreter {
 // SpawnExpr/ReceiveExpr branches). This file only covers the ordinary
 // builtins: Process.self and pid.send(msg).
 auto Evaluator::registerProcessBuiltins() -> void {
+
+    defineIntrinsic("Retry::randomUnit", [](std::vector<ValuePtr>) -> ValuePtr {
+        std::random_device source;
+        std::uniform_real_distribution<double> distribution(0.0, 1.0);
+        return Value::floating(distribution(source));
+    });
 
     defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();

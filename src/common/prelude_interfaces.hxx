@@ -439,15 +439,18 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto addModuleSig = [&](const std::string& mod,
-                            const kex::semantic::Signature& sig) {
+                            const kex::semantic::Signature& sig,
+                            std::vector<std::string> paramNames = {}) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
         ifn.sourceModule = mod;
+        ifn.paramNames = std::move(paramNames);
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
-            ifn.backendArity = static_cast<int>(sig.params.size());
+            ifn.backendArity = static_cast<int>(sig.params.size()) +
+                (sig.isFoul ? 1 : 0);
         }
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
     };
@@ -474,15 +477,18 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto addReceiverSig = [&](const std::string& mod,
-                              const kex::semantic::Signature& sig) {
+                              const kex::semantic::Signature& sig,
+                              std::vector<std::string> paramNames = {}) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
         ifn.sourceModule = mod;
+        ifn.paramNames = std::move(paramNames);
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
-            ifn.backendArity = static_cast<int>(sig.params.size());
+            ifn.backendArity = static_cast<int>(sig.params.size()) +
+                (sig.isFoul ? 1 : 0);
         }
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
         ifaces.receiverFunctions[sig.name].push_back(ifn);
@@ -563,10 +569,23 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         // parameter type), and reading those as ordinary
                         // parameter annotations invents contracts that do not
                         // exist. Module-level functions have no such form.
-                        if (!directBackendOwnership &&
-                            !annotatedMembers.count((*fn)->name))
-                            addReceiverSig(sourceModule,
-                                           shapeOnlySignature(**fn, selfType));
+                        if (!annotatedMembers.count((*fn)->name)) {
+                            if (directBackendOwnership &&
+                                sourceModule.find('.') != std::string::npos) {
+                                if (auto sig = inlineSignature(**fn, selfType)) {
+                                    std::vector<std::string> paramNames;
+                                    for (const auto& param :
+                                         (*fn)->clauses.front().params)
+                                        paramNames.push_back(
+                                            param.name ? *param.name : "");
+                                    addReceiverSig(sourceModule, *sig,
+                                                   std::move(paramNames));
+                                }
+                            } else if (!directBackendOwnership) {
+                                addReceiverSig(sourceModule,
+                                               shapeOnlySignature(**fn, selfType));
+                            }
+                        }
                     }
             };
             for (const auto& item : make.body) {
@@ -679,23 +698,31 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         };
 
         std::unordered_set<std::string> moduleAnnotated;
-        std::function<void(const ast::ModuleDef&)> collectAnnotatedNames =
-            [&](const ast::ModuleDef& mod) {
+        std::function<void(const ast::ModuleDef&, const std::string&)>
+            collectAnnotatedNames =
+            [&](const ast::ModuleDef& mod, const std::string& parent) {
+            const auto moduleName = parent.empty() ||
+                    mod.name.starts_with(parent + ".")
+                ? mod.name : parent + "." + mod.name;
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) moduleAnnotated.insert(mod.name + "::" + (*ann)->name);
+                    if (*ann) moduleAnnotated.insert(moduleName + "::" + (*ann)->name);
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*nested) collectAnnotatedNames(**nested);
+                    if (*nested) collectAnnotatedNames(**nested, moduleName);
             }
         };
-        std::function<void(const ast::ModuleDef&)> collectModule =
-            [&](const ast::ModuleDef& mod) {
-            collectAnnotatedNames(mod);
-            ifaces.modules[mod.name].sourceModule = mod.name;
-            ifaces.modules[mod.name].backendModule =
-                backendModuleFor(mod.name);
-            ifaces.modules[mod.name].automaticImport = automaticImport;
-            ifaces.modules[mod.name].isCapability = mod.isCapability;
+        std::function<void(const ast::ModuleDef&, const std::string&)>
+            collectModule =
+            [&](const ast::ModuleDef& mod, const std::string& parent) {
+            const auto moduleName = parent.empty() ||
+                    mod.name.starts_with(parent + ".")
+                ? mod.name : parent + "." + mod.name;
+            collectAnnotatedNames(mod, parent);
+            ifaces.modules[moduleName].sourceModule = moduleName;
+            ifaces.modules[moduleName].backendModule =
+                backendModuleFor(moduleName);
+            ifaces.modules[moduleName].automaticImport = automaticImport;
+            ifaces.modules[moduleName].isCapability = mod.isCapability;
             // `foul` is written on the definition, never on the annotation
             // above it — `foul name : T` is the foul VALUE-binding form, so
             // an arrow signature cannot carry the marker. An annotated
@@ -708,26 +735,67 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             for (const auto& item : mod.body) {
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) {
-                        ifaces.modules[mod.name].exports.try_emplace((*fn)->name);
-                        if (!moduleAnnotated.count(mod.name + "::" + (*fn)->name))
-                            if (auto sig = inlineSignature(**fn, nullptr))
-                                addModuleSig(mod.name, *sig);
+                        ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
+                        if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
+                            if (auto sig = inlineSignature(**fn, nullptr)) {
+                                std::vector<std::string> paramNames;
+                                for (const auto& param :
+                                     (*fn)->clauses.front().params)
+                                    paramNames.push_back(
+                                        param.name ? *param.name : "");
+                                addModuleSig(moduleName, *sig, paramNames);
+                                if (directBackendOwnership &&
+                                    !sig->params.empty()) {
+                                    if (auto* named = std::get_if<
+                                            kex::semantic::NamedType>(
+                                            &sig->params.front()->kind)) {
+                                        const auto qualified =
+                                            moduleName + "." + named->name;
+                                        if (ifaces.typeNames.count(qualified) > 0)
+                                            named->name = qualified;
+                                    }
+                                    // The first parameter is the UFCS
+                                    // receiver here, so the receiver
+                                    // registration's param names exclude it —
+                                    // matching backendArity's later
+                                    // subtraction of the receiver slot when
+                                    // ordering named arguments during BEAM
+                                    // lowering.
+                                    addReceiverSig(
+                                        moduleName, *sig,
+                                        std::vector<std::string>(
+                                            paramNames.begin() + 1,
+                                            paramNames.end()));
+                                }
+                            }
                     }
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) {
                         auto sig = annotationToSignature(**ann, nullptr);
                         sig.isFoul = sig.isFoul || foulDefs.count(sig.name) > 0;
+                        // A first parameter naming a type declared by this
+                        // nested companion has the companion's nominal
+                        // identity at import sites. Preserve that identity so
+                        // sibling operations such as TCP.accept and
+                        // Unix.accept remain distinct during UFCS selection.
+                        if (!sig.params.empty())
+                            if (auto* named = std::get_if<
+                                    kex::semantic::NamedType>(
+                                    &sig.params.front()->kind)) {
+                                const auto qualified = moduleName + "." + named->name;
+                                if (ifaces.typeNames.count(qualified) > 0)
+                                    named->name = qualified;
+                            }
+                        addModuleSig(moduleName, sig);
                         if (directBackendOwnership && !sig.params.empty())
-                            addReceiverSig(mod.name, sig);
-                        else
-                            addModuleSig(mod.name, sig);
+                            addReceiverSig(moduleName, sig);
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
-                    if (*make) collectMakeAnnotations(**make, mod.name);
+                    if (*make) collectMakeAnnotations(**make, moduleName);
                 if (const auto* record =
                         std::get_if<std::unique_ptr<ast::RecordDef>>(&item);
                     record && *record) {
-                    const auto qualified = mod.name + "." + (*record)->name;
+                    const auto qualified = moduleName + "." + (*record)->name;
                     ifaces.recordArities[qualified] = (*record)->fields.size();
                     ifaces.recordArities.try_emplace(
                         (*record)->name, (*record)->fields.size());
@@ -754,11 +822,11 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     ifaces.typeNames.insert(qualified);
                 }
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*nested) collectModule(**nested);
+                    if (*nested) collectModule(**nested, moduleName);
                 if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item))
                     if (*td) {
                         collectTypeAlias(**td);
-                        collectModuleConstructors(mod.name, **td);
+                        collectModuleConstructors(moduleName, **td);
                     }
                 if (const auto* visibility =
                         std::get_if<std::unique_ptr<
@@ -772,7 +840,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                     ast::TypeDef>>(&visible);
                             td && *td) {
                             collectTypeAlias(**td);
-                            collectModuleConstructors(mod.name,
+                            collectModuleConstructors(moduleName,
                                                       **td);
                         }
                     }
@@ -877,7 +945,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*make) collectMakeAnnotations(**make);
             } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) collectModule(**mod);
+                if (*mod) collectModule(**mod, {});
             } else if (const auto* trait =
                            std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
                 if (*trait) ifaces.traits.push_back(importedTraitFromSource(**trait));

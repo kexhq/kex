@@ -1,0 +1,32 @@
+# kex: run-beam
+# Offline coverage for typed custom DNS resolver configuration.
+
+using Net.DNS
+using Net.IP, only: [Address]
+
+main do
+  let loopback = Address.parse("127.0.0.1").try
+  let dnsPort = Net.Port.from(53).try
+  let nameserver = Nameserver { address: loopback, port: dnsPort }
+
+  let resolver = Resolver.custom(ResolverOptions {
+    nameservers: [nameserver],
+    search: [Name.parse("example.test").try],
+    retries: 1,
+    timeout: 100.milliseconds
+  }).try
+  assert(resolver.statistics.entries == 0)
+  resolver.close
+  resolver.close
+
+  let validationTimeout = 100.milliseconds
+  match Resolver.custom(ResolverOptions {
+    nameservers: [],
+    timeout: validationTimeout
+  }) do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "a custom resolver requires a nameserver")
+  end
+
+  IO.printLine("ok")
+end

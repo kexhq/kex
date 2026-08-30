@@ -148,6 +148,7 @@ int main() {
         it("maps.kex", []() { assertTrue(runFileOk("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });
+        it("net_values.kex", []() { assertTrue(runFileOk("examples/net_values.kex")); });
         it("pattern_matching.kex", []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
         it("proc_ping.kex", []() { assertTrue(runFileOk("examples/proc_ping.kex")); });
         it("proc_link.kex", []() { assertTrue(runFileOk("examples/proc_link.kex")); });

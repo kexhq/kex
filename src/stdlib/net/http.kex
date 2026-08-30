@@ -208,7 +208,8 @@ module Client do
   open : Result<Client, NetError>
   foul open() = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
   # Opens an explicit client owning the supplied pool policy.
-  foul open(options: ClientOptions) -> Result<Client, NetError> = Kex.Intrinsic.NetHTTPClient.open(options)
+  open : ClientOptions -> Result<Client, NetError>
+  foul open(options) = Kex.Intrinsic.NetHTTPClient.open(options)
 end
 
 make Client do
