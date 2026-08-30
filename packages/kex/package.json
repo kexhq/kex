@@ -1,6 +1,6 @@
 {
   "name": "@kexhq/kex",
-  "version": "0.4.0-alpha.3",
+  "version": "0.4.0-beta",
   "description": "Kex language interpreter compiled to WebAssembly, for embedding a Kex REPL in the browser or Node.",
   "type": "module",
   "main": "dist/index.mjs",
