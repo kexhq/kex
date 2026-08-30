@@ -611,7 +611,8 @@ auto Parser::parseRecordBody(ast::RecordDef &into) -> void {
     // Field names can be keywords (e.g. 'end', 'type')
     if (check(TokenType::LowerIdent) || check(TokenType::End) ||
         check(TokenType::Type) || check(TokenType::Match) ||
-        check(TokenType::Loop) || check(TokenType::Timeout)) {
+        check(TokenType::Loop) || check(TokenType::Timeout) ||
+        check(TokenType::Next)) {
       field.name = advance().value;
     } else {
       error("Expected field name");
@@ -783,8 +784,11 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
       def->body.push_back(parseFunctionDef());
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent) &&
-               !(allowDrivers && isMakeDriverAhead())) {
+    } else if ((check(TokenType::LowerIdent) &&
+                !(allowDrivers && isMakeDriverAhead())) ||
+               (check(TokenType::Next) &&
+                (peekNext().type == TokenType::Colon ||
+                 peekNext().type == TokenType::TypeAnnotation))) {
       def->body.push_back(parseTypeAnnotation());
     } else if (isOverloadableOperator(peek().type) &&
                (peekNext().type == TokenType::Colon ||
@@ -841,7 +845,8 @@ auto Parser::parseFunctionDef(bool isFoul)
   // keyword-as-name, splice ident, or operator
   else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
            check(TokenType::Loop) || check(TokenType::Match) ||
-           check(TokenType::Spawn) || check(TokenType::SpliceIdent)) {
+           check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
+           check(TokenType::Next)) {
     // A splice keeps its `%` so callers can tell `let %name(...)` (the name
     // is computed at compile time) from an ordinary `let name(...)`. The
     // lexer strips the sigil, so it is restored here.
@@ -1064,7 +1069,8 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   auto ann = std::make_unique<ast::TypeAnnotation>();
   ann->location = currentLocation();
   if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-      check(TokenType::After) || check(TokenType::Spawn))
+      check(TokenType::After) || check(TokenType::Spawn) ||
+      check(TokenType::Next))
     ann->name = advance().value;
   else if (isOverloadableOperator(peek().type))
     ann->name = std::string(tokenTypeName(advance().type));
@@ -1662,7 +1668,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
           !check(TokenType::End) && !check(TokenType::Type) &&
           !check(TokenType::Match) && !check(TokenType::Loop) &&
-          !check(TokenType::Timeout) && !check(TokenType::Spawn)) {
+          !check(TokenType::Timeout) && !check(TokenType::Spawn) &&
+          !check(TokenType::Next)) {
         error("Expected method or module name after '.'");
       }
       auto methodTok = advance();

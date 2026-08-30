@@ -618,6 +618,53 @@ int main() {
             );
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
+
+        // Regression for #246: `next` is the loop-continue keyword, but the
+        // lexer produced that token even in member/name position, where a
+        // loop-continue statement can never appear. A method literally named
+        // `next` (a natural name for "advance and yield the next element")
+        // failed to parse its declaration, and the parser's error recovery
+        // silently dropped every declaration after it out of the `make`
+        // block with no diagnostic at all.
+        it("allows 'next' as a method name declared and called in a make block", []() {
+            auto program = parse(
+                "make Feed do\n"
+                "  next :> Integer?\n"
+                "  let next = 1\n"
+                "\n"
+                "  take :> Integer -> [Integer]\n"
+                "  let take(n) = [1]\n"
+                "end\n"
+                "\n"
+                "let useIt(f) = f.next\n"
+            );
+            assertTrue(!parseFails(
+                "make Feed do\n"
+                "  next :> Integer?\n"
+                "  let next = 1\n"
+                "\n"
+                "  take :> Integer -> [Integer]\n"
+                "  let take(n) = [1]\n"
+                "end\n"
+                "\n"
+                "let useIt(f) = f.next\n"
+            ), "declaring and calling a 'next' method must not be a parse error");
+            assertEqual(program.items.size(), size_t{2});
+            auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
+            // Both 'next' (contract + let) and 'take' (contract + let) must
+            // survive — 'take' silently vanishing was the reported bug.
+            assertEqual(make->body.size(), size_t{4});
+        });
+
+        it("still lexes 'next' as loop-continue inside a loop body", []() {
+            assertTrue(!parseFails(
+                "main do\n"
+                "  loop do\n"
+                "    next if true\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Parser — Serving Blocks", []() {
