@@ -727,6 +727,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
                         if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
                             if (auto sig = inlineSignature(**fn, nullptr)) {
+                                addModuleSig(moduleName, *sig);
                                 if (directBackendOwnership &&
                                     !sig->params.empty()) {
                                     if (auto* named = std::get_if<
@@ -738,8 +739,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                             named->name = qualified;
                                     }
                                     addReceiverSig(moduleName, *sig);
-                                } else {
-                                    addModuleSig(moduleName, *sig);
                                 }
                             }
                     }
@@ -760,10 +759,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                 if (ifaces.typeNames.count(qualified) > 0)
                                     named->name = qualified;
                             }
+                        addModuleSig(moduleName, sig);
                         if (directBackendOwnership && !sig.params.empty())
                             addReceiverSig(moduleName, sig);
-                        else
-                            addModuleSig(moduleName, sig);
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
                     if (*make) collectMakeAnnotations(**make, moduleName);
