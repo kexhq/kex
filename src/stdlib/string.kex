@@ -288,6 +288,31 @@ make String, implement: Enumerable, Foldable do
   length :> Integer
   let length = Kex.Intrinsic.List.length(this)
 
+  # Returns the number of user-perceived characters — extended grapheme
+  # clusters (Unicode UAX #29) — which is not always +count+.
+  #
+  # +count+ answers the codepoint count, and most text is one codepoint per
+  # grapheme cluster, so the two usually agree. They part ways for a base
+  # character combined with a following mark, an emoji built from more than
+  # one codepoint, and `"\r\n"`, which is one grapheme cluster over two
+  # codepoints — reach for +graphemeCount+ over +count+ wherever "how many
+  # characters does a person see" is the question, such as sizing text for
+  # display or truncating it at a boundary a reader would recognize.
+  #
+  # @return [Integer] the grapheme cluster count
+  #
+  # @example
+  #   "hello".graphemeCount   # => 5, same as count
+  #   "\r\n".graphemeCount    # => 1 ("\r\n".count is 2 -- a CR codepoint and an LF codepoint)
+  #
+  # @example A base character plus a combining mark
+  #   let acute = String.fromCodepoint(0x301).or("")     # combining acute accent
+  #   let e = "e" + acute
+  #   e.count           # => 2 (two codepoints: 'e' and the combining mark)
+  #   e.graphemeCount   # => 1 (one character on screen)
+  graphemeCount :> Integer
+  let graphemeCount = Kex.Intrinsic.String.graphemeCount(this)
+
   # Returns +true+ when the string has no characters.
   #
   # Note that a string of spaces is not empty — use +blank?+ from the

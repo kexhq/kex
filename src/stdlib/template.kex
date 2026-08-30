@@ -93,6 +93,18 @@ record TemplateParam do
   type : String
 end
 
+# One scanned `<% ... %>` region: its node, and the whitespace trims its
+# delimiters asked for. Not part of the public API — internal to scanning —
+# but declared at module scope rather than inside `private do`: nested
+# there, this record's fields lose their names under BEAM codegen and the
+# value round-trips as an untagged tuple (`Undefined method: leftTrim for
+# Tuple`), even though the same code is fine on the tree-walking interpreter.
+record TagScan do
+  node      : Node
+  leftTrim  : Bool
+  rightTrim : Bool
+end
+
 # A scanned template: its frontmatter tags, and its body as a node list.
 record Parsed do
   frontmatter : {String: Tag}
@@ -365,14 +377,6 @@ private do
     end
   end
 
-  # One scanned `<% ... %>` region: its node, and the whitespace trims its
-  # delimiters asked for.
-  record TagScan do
-    node      : Node
-    leftTrim  : Bool
-    rightTrim : Bool
-  end
-
   # The node a tag's kind and trimmed body settle into.
   let tagNode(kind: String, body: String) -> Node do
     if kind == "raw"
@@ -404,12 +408,16 @@ private do
     loop do
       let (text, afterText) = scanText(cur)
       if afterText.peek == None
-        nodes.push!(Text(text)) if !text.empty?
+        if !text.empty?
+          nodes.push!(Text(text))
+        end
         return Ok((nodes, afterText))
       end
       let (tag, afterTag) = scanTag(afterText).try
       let keptText = tag.leftTrim then trimTrailingIndent(text) else text
-      nodes.push!(Text(keptText)) if !keptText.empty?
+      if !keptText.empty?
+        nodes.push!(Text(keptText))
+      end
       nodes.push!(tag.node)
       cur = tag.rightTrim then skipOneNewline(afterTag) else afterTag
     end

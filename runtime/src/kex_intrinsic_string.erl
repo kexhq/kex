@@ -6,7 +6,7 @@
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1,
-          bytes/1, fromBytes/1]).
+          bytes/1, fromBytes/1, graphemeCount/1]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
 %% ('h'.upperCase → 'H'). A Char cannot expand, so it takes the SIMPLE
@@ -32,6 +32,14 @@ chars(S) -> kex_intrinsic_list:as_list(S).
 %% TEXT view and this is the STORAGE view: "é" is one Char and two bytes.
 bytes(S) when is_binary(S) -> binary_to_list(S);
 bytes(_) -> [].
+
+%% graphemeCount/1 — the string's length in extended grapheme clusters
+%% (Unicode UAX #29): `"e\x{301}"` (e + combining acute) and `"\r\n"` each
+%% count as one, where `count` (codepoints, via
+%% kex_intrinsic_list:length/1) counts two. `string:length/1` IS the
+%% grapheme-cluster count on BEAM — it is the wrong primitive for `count`
+%% (see kex_intrinsic_list:length/1's comment) but the right one here.
+graphemeCount(S) -> string:length(S).
 
 %% fromBytes/1 — the inverse. A String is TEXT, so bytes outside 0..255 or a
 %% malformed UTF-8 sequence answer None rather than building a binary that

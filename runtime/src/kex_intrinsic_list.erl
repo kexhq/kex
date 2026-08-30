@@ -112,8 +112,14 @@ max([]) -> 'None';
 max(L)  -> {'Just', lists:max(L)}.
 
 %% length/1 — element count, backing List.count (was a non-tail `1 + xs.count`
-%% recursion in the prelude). Also backs String.count (codepoint count).
-length(B) when is_binary(B) -> string:length(B);
+%% recursion in the prelude). Also backs String.count (codepoint count) —
+%% `string:length/1` is the wrong primitive here: it counts *extended
+%% grapheme clusters* (Unicode UAX #29), which folds a `\r\n` pair into a
+%% single unit and silently undercounts any string containing one. Decoding
+%% through `unicode:characters_to_list/1`, the same way `as_list/1` above
+%% does for `.chars`, counts codepoints instead, so `String.count` agrees
+%% with `String.chars.count` the way the interpreter backend already does.
+length(B) when is_binary(B) -> erlang:length(unicode:characters_to_list(B));
 length(L) -> erlang:length(L).
 
 %% join/1,2 — string join for [String|Char] lists, producing a String (UTF-8

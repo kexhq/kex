@@ -6,7 +6,47 @@
 #include <cctype>
 #include <stdexcept>
 
+#include <pcre2.h>
+
 namespace kex::interpreter {
+
+namespace {
+
+// Extended grapheme clusters (Unicode UAX #29) via PCRE2's `\X`, matching
+// `PCRE2_UTF | PCRE2_UCP` — the same options regex.cxx pins for every other
+// pattern, so a grapheme cluster here is the same one PCRE2/Erlang's `re`
+// agree on elsewhere. `\r\n`, a base character with combining marks, and an
+// emoji-plus-modifier sequence each count as one; `.chars.count` (codepoints)
+// would count each of those as more than one.
+auto graphemeClusterCount(const std::string& text) -> int64_t {
+    static pcre2_code* pattern = [] {
+        int errorCode = 0;
+        PCRE2_SIZE errorOffset = 0;
+        return pcre2_compile(reinterpret_cast<PCRE2_SPTR>("\\X"), 2,
+                              PCRE2_UTF | PCRE2_UCP, &errorCode, &errorOffset,
+                              nullptr);
+    }();
+    // No PCRE2 build lacks `\X` support; this is defensive, not reachable.
+    if (!pattern) return static_cast<int64_t>(utf8::length(text));
+
+    pcre2_match_data* matchData =
+        pcre2_match_data_create_from_pattern(pattern, nullptr);
+    int64_t count = 0;
+    PCRE2_SIZE offset = 0;
+    while (offset <= text.size()) {
+        const int rc = pcre2_match(
+            pattern, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
+            offset, 0, matchData, nullptr);
+        if (rc < 0) break;
+        const PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(matchData);
+        ++count;
+        offset = ovector[1] > offset ? ovector[1] : offset + 1;
+    }
+    pcre2_match_data_free(matchData);
+    return count;
+}
+
+} // namespace
 
 auto Evaluator::registerStringBuiltins() -> void {
     defineModule("String");
@@ -129,6 +169,16 @@ auto Evaluator::registerStringBuiltins() -> void {
         for (unsigned char byte : str->value)
             out.push_back(Value::integer(static_cast<int64_t>(byte)));
         return Value::list(std::move(out));
+    });
+
+    // Kex.Intrinsic.String.graphemeCount — backs the prelude's
+    // `graphemeCount` (src/stdlib/string.kex), distinct from `count`
+    // (codepoints, via Kex.Intrinsic.List.length).
+    defineIntrinsic("String::graphemeCount", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        if (!str) return Value::integer(0);
+        return Value::integer(graphemeClusterCount(str->value));
     });
 
     defineIntrinsic("String::fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
