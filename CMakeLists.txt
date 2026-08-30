@@ -733,3 +733,13 @@ target_include_directories(info_cli_test PRIVATE tests)
 target_compile_definitions(info_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(info_cli_test kex)
 add_test(NAME info_cli_test COMMAND info_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Regression test for #248: `--parse` must report a syntax error rather than
+# silently printing a partial AST with the offending (and subsequent)
+# declarations missing.
+add_executable(parse_diagnostics_cli_test tests/parse_diagnostics_cli_test.cxx)
+target_link_libraries(parse_diagnostics_cli_test PRIVATE kex_lib)
+target_include_directories(parse_diagnostics_cli_test PRIVATE tests)
+target_compile_definitions(parse_diagnostics_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(parse_diagnostics_cli_test kex)
+add_test(NAME parse_diagnostics_cli_test COMMAND parse_diagnostics_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

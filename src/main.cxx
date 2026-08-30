@@ -3834,7 +3834,8 @@ int main(int argc, char *argv[]) {
     // case). In --check mode the SemanticDB re-parses and reports them
     // itself; printing here would duplicate every message.
     if (!parser.diagnostics().empty() &&
-        (mode == "run" || mode == "compile" || mode == "emit-ast")) {
+        (mode == "run" || mode == "compile" || mode == "emit-ast" ||
+         mode == "parse" || mode == "expand" || mode == "emit-core")) {
       if (mode == "emit-ast") {
         const auto &diagnostic = parser.diagnostics().front();
         const auto logicalFilename =
@@ -3874,7 +3875,11 @@ int main(int argc, char *argv[]) {
                 << errorCountPhrase(static_cast<int>(parser.diagnostics().size()),
                                     "syntax")
                 << " — fix before "
-                << (mode == "run" || compileRun ? "running" : "compiling")
+                << (mode == "run" || compileRun
+                        ? "running"
+                        : (mode == "parse" || mode == "expand"
+                               ? "parsing"
+                               : "compiling"))
                 << ".\n";
       return 1;
     }
