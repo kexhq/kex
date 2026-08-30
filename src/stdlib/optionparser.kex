@@ -445,12 +445,16 @@ make OptionConfig do
       # stays plain bold like every other heading on the page.
       let nameColor = own then Console.BLUE else Console.MAGENTA
       let listed = @commands.filter { |command| command.section == section }
+      # Each block is its own table: a section of short names should not be
+      # pushed across the page by the longest built-in three headings up.
+      let width = listed.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
       let commandLines = listed.map do |command|
+        let label = OptionParser.commandLabel(command)
         # The name is the thing to type; the usage beside it is a shape to
         # read, so it is dimmed rather than given a colour of its own.
         let styled = "${nameColor}${command.name}${Console.RESET}"
         let usage = command.usage == "" then "" else " ${Console.DIM}${command.usage}${Console.RESET}"
-        "  ${styled}${usage}  ${command.description}"
+        "  ${styled}${usage}${" ".repeat(width - label.count)}  ${command.description}"
       end
       "${Console.BOLD}${heading}${Console.RESET}\n${commandLines.join("\n")}"
     end
