@@ -7297,6 +7297,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         for (const auto& tn : mk.implements) {
             auto it = traitDefs.find(tn);
             if (it == traitDefs.end()) continue;
+            // Kex writes a multi-clause function as separate `let`
+            // declarations, so ONE trait default can be several FunctionDefs
+            // sharing a key (`let repeat(0)` then `let repeat(n: Integer)`).
+            // They must all come through, or the group below lowers with the
+            // first clause alone and every other call raises `function_clause`
+            // (kexhq/kex#261). Dedupe across traits only: `added` gains this
+            // trait's keys after its body, never during it.
+            std::set<MethodKey> fromThisTrait;
             for (const auto& ti : it->second->body) {
                 auto* f = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ti);
                 if (!f || !*f) continue;
@@ -7305,8 +7313,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // Only default methods (with a body) are inherited; a bare
                 // signature `describe : () -> String` carries no clause body.
                 if ((*f)->clauses.empty() || (*f)->clauses[0].body.empty()) continue;
-                out.push_back(f->get()); added.insert(key);
+                out.push_back(f->get()); fromThisTrait.insert(key);
             }
+            added.insert(fromThisTrait.begin(), fromThisTrait.end());
         }
         return out;
     };

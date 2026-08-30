@@ -526,7 +526,7 @@ make String, implement: Enumerable, Foldable do
   let indentRest(prefix) do
     let all = this.lines
     let rest = all.drop(1).map do |line|
-      if line.empty? then line else prefix + line end
+      line.empty? then line else prefix + line
     end
     ([all.first.or("")] + rest).join("\n")
   end
@@ -586,9 +586,11 @@ make String, implement: Enumerable, Foldable do
   #   let greeting = "Dear $NAME$,\n\nYour order $ID$ has shipped."
   #   greeting.substitute({"$NAME$": "Ada", "$ID$": "A-1701"})
   substitute :> {String: String} -> String
-  let substitute(replacements) = replacements.entries.reduce(this) do |text, entry|
-    let (key, value) = entry
-    text.replace(key, value)
+  let substitute(replacements) do
+    replacements.entries.reduce(this) do |text, entry|
+      let (key, value) = entry
+      text.replace(key, value)
+    end
   end
 
   # Removes leading and trailing whitespace. Whitespace inside the string is
@@ -671,9 +673,11 @@ make String, implement: Enumerable, Foldable do
   # s.filter(~alpha?) }` (spec/list_hof.kex) with a badarg, because flatMap
   # needs a list to flatten. Any real fix has to keep both readings working.
   # Until then `chars` is explicit on both backends.
-  let capitalize = match this.chars do
-    []       => ""
-    [c | cs] => "${c.upperCase}${cs.join("").lowerCase}"
+  let capitalize do
+    match this.chars do
+      []       => ""
+      [c | cs] => "${c.upperCase}${cs.join("").lowerCase}"
+    end
   end
 
   # Returns the string with its characters in reverse order.

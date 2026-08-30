@@ -1,25 +1,16 @@
 # A terminal clock: clears the display and redraws the time once a second.
 # Runs on both the tree-walking interpreter (`kex`) and the BEAM backend
 # (`kex -R`). Ctrl+C to stop.
-#
-# A `receive` with no clauses and only an `after` is how a process sleeps:
-# there is no message it could accept, so it waits out the timeout.
-
-foul sleep(ms: Int) do
-  receive do
-  after timeout: ms
-  end
-end
-
-foul tick do
-  # `iso` carries sub-second precision; a wall clock wants only hh:mm:ss.
-  let now = Time.now().iso.split(".").first.try
-  IO.print(Console.CLEAR)
-  IO.printLine(now.enclose(Console.BLUE, Console.RESET))
-  sleep(1000)
-  tick()
-end
 
 main do
-  tick()
+  let task = Task.start do
+    loop do
+      let now = Time.now().iso.split(".").first.try
+      IO.print(Console.CLEAR)
+      IO.printLine(now.enclose(Console.BLUE + Console.BOLD, Console.RESET))
+      Task.sleep(1.seconds)
+    end
+  end
+
+  task.start.await
 end

@@ -125,6 +125,10 @@ trait Monoid do
   #
   # @example Drawing a separator line
   #   IO.printLine("-".repeat(40))
+  # NOTE: one clause, not `let repeat(0) = this.identity` plus a general
+  # clause. Multi-clause dispatch inside a TRAIT DEFAULT body lowers wrong on
+  # BEAM and dies with `function_clause` (kexhq/kex#261); it is fine in a
+  # `make` block or a module. Restore the clauses once that is fixed.
   let repeat(0) = this.identity
   let repeat(n: Integer) -> This do
     die("repeat count cannot be negative") if n < 0
