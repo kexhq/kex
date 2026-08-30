@@ -761,6 +761,67 @@ int main() {
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
+
+        it("parses while loop with a required 'do'", []() {
+            auto program = parse(
+                "main do\n"
+                "  var i = 0\n"
+                "  while i < 3 do\n"
+                "    i = i + 1\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& loop = std::get<ast::WhileExpr>(main->body[1]->kind);
+            assertEqual(loop.body.size(), size_t(1));
+        });
+
+        it("rejects while without 'do'", []() {
+            assertTrue(parseFails(
+                "main do\n  var i = 0\n  while i < 3\n    i = i + 1\n  end\nend\n"));
+        });
+
+        it("desugars '+=' to 'x = x + value'", []() {
+            auto program = parse("main do\n  var x = 1\n  x += 2\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& assign = std::get<ast::AssignExpr>(main->body[1]->kind);
+            assertEqual(assign.name, std::string("x"));
+            auto& binary = std::get<ast::BinaryOp>(assign.value->kind);
+            assertTrue(binary.op == TokenType::Plus);
+            assertEqual(std::get<ast::Identifier>(binary.left->kind).name,
+                        std::string("x"));
+        });
+
+        it("desugars '&&=' and '||=' to their binary op", []() {
+            auto program = parse(
+                "main do\n"
+                "  var a = true\n"
+                "  a &&= false\n"
+                "  var b = false\n"
+                "  b ||= true\n"
+                "end\n"
+            );
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& andAssign = std::get<ast::AssignExpr>(main->body[1]->kind);
+            assertTrue(std::get<ast::BinaryOp>(andAssign.value->kind).op ==
+                       TokenType::AmpAmp);
+            auto& orAssign = std::get<ast::AssignExpr>(main->body[3]->kind);
+            assertTrue(std::get<ast::BinaryOp>(orAssign.value->kind).op ==
+                       TokenType::PipePipe);
+        });
+
+        it("desugars compound assignment on a record field path", []() {
+            auto program = parse("main do\n  var x = box\n  x.value *= 3\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& assign = std::get<ast::AssignExpr>(main->body[1]->kind);
+            assertEqual(assign.name, std::string("x"));
+            assertEqual(assign.path.size(), size_t(1));
+            assertEqual(assign.path[0], std::string("value"));
+            auto& binary = std::get<ast::BinaryOp>(assign.value->kind);
+            assertTrue(binary.op == TokenType::Star);
+            auto& fieldRead = std::get<ast::MethodCall>(binary.left->kind);
+            assertEqual(fieldRead.method, std::string("value"));
+        });
     });
 
     describe("Parser — Receive clause body", []() {

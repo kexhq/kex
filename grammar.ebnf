@@ -386,7 +386,7 @@ after_clause = AFTER TIMEOUT COLON expr NEWLINE body ;
 loop_expr = LOOP DO ( PIPE ( LOWER_IDENT | UNDERSCORE ) PIPE )? NEWLINE body END ;
 (* The optional binding is a 0-based iteration counter: loop do |i| ... end *)
 
-while_expr = WHILE expr NEWLINE body END ;
+while_expr = WHILE expr DO NEWLINE body END ;
 
 (* ===== Let / Var / Assignment ===== *)
 
@@ -395,7 +395,8 @@ let_expr = LET pattern ( COLON type_expr )? EQUALS expr ;
 
 var_expr = VAR LOWER_IDENT ( COLON type_expr )? EQUALS expr ;
 
-assign_expr = LOWER_IDENT ( DOT LOWER_IDENT )* EQUALS expr ;
+assign_expr = LOWER_IDENT ( DOT LOWER_IDENT )* ( EQUALS | COMPOUND_ASSIGN_OP ) expr ;
+(* `target <op>= value` desugars to `target = target <op> value`. *)
 
 return_expr = RETURN expr ;
 
@@ -589,6 +590,7 @@ TILDE        = "~" ;
 TYPE_ANNOTATION = ":>" ;
 SLOT_ANNOTATION = "::>" ;
 UNDERSCORE   = "_" ;
+COMPOUND_ASSIGN_OP = "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" ;
 
 (* Identifiers *)
 LOWER_IDENT  = [a-z] [a-z0-9_]* "?"? ;

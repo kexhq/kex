@@ -177,7 +177,7 @@ private do
       return Ok(current) if !allowComments || current.peek != Just('/')
       if current.peekAt(1) == Just('/')
         current = current.advanceBy(2)
-        while !current.atEnd? && current.peek != Just('\n')
+        while !current.atEnd? && current.peek != Just('\n') do
           current = current.advance
         end
         current = skipWhitespace(current)
@@ -228,7 +228,7 @@ private do
   let parseLiteral(cursor: Input, literal: String, value: Any) -> Result<(Any, Input), Error> do
     var current = cursor
     var index = 0
-    while index < literal.count
+    while index < literal.count do
       # Both sides are `Char?`, and `index < literal.count` keeps the right
       # one a `Just`, so a spent cursor's `None` never compares equal.
       return Error(InvalidLiteral(literal, cursor.pos)) if current.peek != literal.at(index)
@@ -308,7 +308,7 @@ private do
     var current = cursor
     var value = 0
     var count = 0
-    while count < 4
+    while count < 4 do
       match current.peek do
         Just(c) => do
           match hexValue(c) do
@@ -395,7 +395,7 @@ private do
         end
       end
       Just(c) when c >= '1' && c <= '9' => do
-        while match current.peek do Just(d) => d.digit? _ => false end
+        while match current.peek do Just(d) => d.digit? _ => false end do
           let Just(integerDigit) = current.peek
           chars.push!(integerDigit)
           current = current.advance
@@ -410,7 +410,7 @@ private do
       chars.push!('.')
       current = current.advance
       return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) => !d.digit? _ => true end
-      while match current.peek do Just(d) => d.digit? _ => false end
+      while match current.peek do Just(d) => d.digit? _ => false end do
         let Just(fractionDigit) = current.peek
         chars.push!(fractionDigit)
         current = current.advance
@@ -428,7 +428,7 @@ private do
         current = current.advance
       end
       return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) => !d.digit? _ => true end
-      while match current.peek do Just(d) => d.digit? _ => false end
+      while match current.peek do Just(d) => d.digit? _ => false end do
         let Just(exponentDigit) = current.peek
         chars.push!(exponentDigit)
         current = current.advance
@@ -451,7 +451,7 @@ private do
   let encodeString(value: String) -> String do
     var pieces: [String] = ["\""]
     var index = 0
-    while index < value.count
+    while index < value.count do
       match value.at(index) do
         Just('"') => pieces.push!("\\\"")
         Just('\\') => pieces.push!("\\\\")

@@ -1,0 +1,7 @@
+# `while` requires a `do ... end` block.
+main do
+  var i = 0
+  while i < 3
+    break
+  end
+end

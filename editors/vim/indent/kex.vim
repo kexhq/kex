@@ -84,15 +84,15 @@ endfunction
 
 " What opens a block, for pairing an `end` with its head:
 "   - `do`, with or without block parameters, at the end of a line;
-"   - a `do`-less `if` or `while` header at the start of a line — but not one
-"     ending in `do` (`if @order do |o|` is already counted above), and not the
+"   - a `do`-less `if` header at the start of a line — but not one ending in
+"     `do` (`if @order do |o|` is already counted above), and not the
 "     modifier form (`break if i > 3`), which is never line-initial. The match
 "     starts at the keyword rather than at the indent, so that a line-initial
 "     inline `if` counts once rather than twice;
 "   - an inline `if … then … end`, whose `if` sits mid-line but does open the
 "     `end` that closes it.
 let s:blockOpen = '\%(\<do\>\s*\%(|[^|]*|\)\?\s*$'
-      \ . '\|\%(^\s*\)\@<=\%(if\|while\)\>\%(.*\<do\>\s*\%(|[^|]*|\)\?\s*$\)\@!'
+      \ . '\|\%(^\s*\)\@<=\<if\>\%(.*\<do\>\s*\%(|[^|]*|\)\?\s*$\)\@!'
       \ . '\|\<if\>\%(.*\<then\>\)\@='
       \ . '\)'
 
@@ -209,15 +209,12 @@ function GetKexIndent() abort
   let l:opens = l:prev =~# '\%(\<do\>\s*\%(|[^|]*|\)\?\|[^=<>!]=\)\s*$'
         \ || l:prev =~# '^\s*\%(else\|rescue\)\s*$'
   " So does a header whose body starts on the next line with no `do` to say
-  " so: `while cond`, and `if cond` / `elif cond` written without `then`.
-  " A one-line `if … then … end` closes on the spot and opens nothing.
-  " `let x = if cond` counts too; `return x if cond` — the modifier form —
-  " does not, hence the anchors before the keyword.
+  " so: `if cond` / `elif cond` written without `then`. A one-line
+  " `if … then … end` closes on the spot and opens nothing. `let x = if cond`
+  " counts too; `return x if cond` — the modifier form — does not, hence the
+  " anchors before the keyword.
   if !l:opens && l:prev =~# '\%(^\s*\|[=(,]\s*\)\<\%(if\|elif\)\>'
         \ && l:prev !~# '\<\%(then\|end\)\>'
-    let l:opens = 1
-  endif
-  if !l:opens && l:prev =~# '^\s*while\>' && l:prev !~# '\<end\>\s*$'
     let l:opens = 1
   endif
   " `after timeout: …` heads the receive branch that follows it. Only that

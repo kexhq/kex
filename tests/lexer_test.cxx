@@ -419,6 +419,21 @@ int main() {
             assertEqual(firstToken("...").type, TokenType::DotDotDot);
         });
 
+        it("tokenizes compound assignment operators", []() {
+            assertEqual(firstToken("+=").type, TokenType::PlusEq);
+            assertEqual(firstToken("-=").type, TokenType::MinusEq);
+            assertEqual(firstToken("*=").type, TokenType::StarEq);
+            assertEqual(firstToken("/=").type, TokenType::SlashEq);
+            assertEqual(firstToken("%=").type, TokenType::PercentEq);
+            assertEqual(firstToken("&&=").type, TokenType::AmpAmpEq);
+            assertEqual(firstToken("||=").type, TokenType::PipePipeEq);
+            // Must not disturb the plain forms sharing a prefix.
+            assertEqual(firstToken("+").type, TokenType::Plus);
+            assertEqual(firstToken("&&").type, TokenType::AmpAmp);
+            assertEqual(firstToken("||").type, TokenType::PipePipe);
+            assertEqual(firstToken("->").type, TokenType::Arrow);
+        });
+
         it("tokenizes brackets and delimiters", []() {
             assertEqual(firstToken("(").type, TokenType::LParen);
             assertEqual(firstToken(")").type, TokenType::RParen);

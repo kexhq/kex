@@ -1,7 +1,7 @@
 # `break`/`next` loop control — apply to the nearest enclosing while/loop.
 main do
   var i = 0
-  while i < 10
+  while i < 10 do
     i = i + 1
     break if i > 3
   end
@@ -16,7 +16,7 @@ main do
 
   var sum = 0
   var k = 0
-  while k < 10
+  while k < 10 do
     k = k + 1
     next if k.modulo(2) == 0
     sum = sum + k
@@ -35,7 +35,7 @@ main do
 
   # break if condition (trailing if)
   var j = 0
-  while j < 100
+  while j < 100 do
     j = j + 1
     break if j == 5
   end
@@ -44,7 +44,7 @@ main do
   # next if condition (trailing if)
   var total = 0
   var p = 0
-  while p < 5
+  while p < 5 do
     p = p + 1
     next if p == 3
     total = total + p
@@ -53,7 +53,7 @@ main do
 
   # break inside match inside while — exits the while
   var q = 0
-  while q < 10
+  while q < 10 do
     q = q + 1
     match q do
       5 => break
@@ -64,10 +64,10 @@ main do
 
   # Nested loops: break only exits the inner loop
   var outerN = 0
-  while outerN < 2
+  while outerN < 2 do
     outerN = outerN + 1
     var innerN = 0
-    while innerN < 10
+    while innerN < 10 do
       innerN = innerN + 1
       break if innerN > 1
     end

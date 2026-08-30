@@ -90,6 +90,13 @@ enum class TokenType {
     Tilde,        // ~
     Underscore,   // _
     HashLBracket, // #[
+    PlusEq,       // +=
+    MinusEq,      // -=
+    StarEq,       // *=
+    SlashEq,      // /=
+    PercentEq,    // %=
+    AmpAmpEq,     // &&=
+    PipePipeEq,   // ||=
 
     // Identifiers and literals
     LowerIdent,   // lowercase identifier (may end with ?)

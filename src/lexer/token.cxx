@@ -85,6 +85,13 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Tilde: return "~";
         case TokenType::Underscore: return "_";
         case TokenType::HashLBracket: return "#[";
+        case TokenType::PlusEq: return "+=";
+        case TokenType::MinusEq: return "-=";
+        case TokenType::StarEq: return "*=";
+        case TokenType::SlashEq: return "/=";
+        case TokenType::PercentEq: return "%=";
+        case TokenType::AmpAmpEq: return "&&=";
+        case TokenType::PipePipeEq: return "||=";
         case TokenType::LowerIdent: return "LowerIdent";
         case TokenType::UpperIdent: return "UpperIdent";
         case TokenType::SpliceIdent: return "SpliceIdent";

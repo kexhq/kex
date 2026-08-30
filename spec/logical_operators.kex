@@ -14,7 +14,7 @@ main do
   end
 
   var i = 0
-  while !done?(i)
+  while !done?(i) do
     i = i + 1
   end
   IO.printLine("while loop with !: ${i}")

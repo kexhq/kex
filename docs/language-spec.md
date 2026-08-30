@@ -530,6 +530,22 @@ var done  : Bool = false
 
 Only `var` bindings can be reassigned; `let` bindings are immutable.
 
+### Compound Assignment
+
+`+=`, `-=`, `*=`, `/=`, `%=`, `&&=`, and `||=` combine a binary operator with
+assignment. `target <op>= value` desugars to `target = target <op> value`, so
+`&&=`/`||=` keep `&&`/`||`'s short-circuit evaluation of `value`:
+
+```kex
+var count = 0
+count += 1        # count = count + 1
+
+var enabled = true
+enabled &&= ready  # enabled = enabled && ready
+
+mutable.age *= 2   # record fields too: mutable.age = mutable.age * 2
+```
+
 ---
 
 ## 6. Functions
@@ -717,7 +733,7 @@ end
 ### While / Loop
 
 ```kex
-while condition
+while condition do
   body
 end
 

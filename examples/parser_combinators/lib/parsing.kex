@@ -46,7 +46,7 @@ make Parser do
   # Skip a run of spaces (never fails).
   let whiteSpaces -> Parser do
     var p = this
-    while p.peek == Just(' ')
+    while p.peek == Just(' ') do
       p = p.advance
     end
     p

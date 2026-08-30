@@ -712,7 +712,7 @@ module Time do
   # one character too long.
   let padTo(value: Integer, width: Integer) -> String do
     var text = "${value}"
-    while text.count < width
+    while text.count < width do
       text = "0${text}"
     end
     return text
@@ -748,7 +748,7 @@ module Time do
     return Ok(0) if text.blank?
     return Error(InvalidFormat(whole)) if text.count > 9
     var digits = text
-    while digits.count < 9
+    while digits.count < 9 do
       digits = "${digits}0"
     end
     return Time.digitsIn(digits, whole)
