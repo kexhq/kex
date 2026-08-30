@@ -439,11 +439,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto addModuleSig = [&](const std::string& mod,
-                            const kex::semantic::Signature& sig) {
+                            const kex::semantic::Signature& sig,
+                            std::vector<std::string> paramNames = {}) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
         ifn.sourceModule = mod;
+        ifn.paramNames = std::move(paramNames);
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
@@ -475,11 +477,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto addReceiverSig = [&](const std::string& mod,
-                              const kex::semantic::Signature& sig) {
+                              const kex::semantic::Signature& sig,
+                              std::vector<std::string> paramNames = {}) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
         ifn.sourceModule = mod;
+        ifn.paramNames = std::move(paramNames);
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
@@ -568,8 +572,15 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         if (!annotatedMembers.count((*fn)->name)) {
                             if (directBackendOwnership &&
                                 sourceModule.find('.') != std::string::npos) {
-                                if (auto sig = inlineSignature(**fn, selfType))
-                                    addReceiverSig(sourceModule, *sig);
+                                if (auto sig = inlineSignature(**fn, selfType)) {
+                                    std::vector<std::string> paramNames;
+                                    for (const auto& param :
+                                         (*fn)->clauses.front().params)
+                                        paramNames.push_back(
+                                            param.name ? *param.name : "");
+                                    addReceiverSig(sourceModule, *sig,
+                                                   std::move(paramNames));
+                                }
                             } else if (!directBackendOwnership) {
                                 addReceiverSig(sourceModule,
                                                shapeOnlySignature(**fn, selfType));
@@ -727,7 +738,12 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
                         if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
                             if (auto sig = inlineSignature(**fn, nullptr)) {
-                                addModuleSig(moduleName, *sig);
+                                std::vector<std::string> paramNames;
+                                for (const auto& param :
+                                     (*fn)->clauses.front().params)
+                                    paramNames.push_back(
+                                        param.name ? *param.name : "");
+                                addModuleSig(moduleName, *sig, paramNames);
                                 if (directBackendOwnership &&
                                     !sig->params.empty()) {
                                     if (auto* named = std::get_if<
@@ -738,7 +754,18 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                         if (ifaces.typeNames.count(qualified) > 0)
                                             named->name = qualified;
                                     }
-                                    addReceiverSig(moduleName, *sig);
+                                    // The first parameter is the UFCS
+                                    // receiver here, so the receiver
+                                    // registration's param names exclude it —
+                                    // matching backendArity's later
+                                    // subtraction of the receiver slot when
+                                    // ordering named arguments during BEAM
+                                    // lowering.
+                                    addReceiverSig(
+                                        moduleName, *sig,
+                                        std::vector<std::string>(
+                                            paramNames.begin() + 1,
+                                            paramNames.end()));
                                 }
                             }
                     }
