@@ -1,0 +1,49 @@
+# `+=`, `-=`, `*=`, `/=`, `%=`, `&&=`, `||=` on vars and record fields.
+
+record Counter do
+  value : Integer
+end
+
+main do
+  var n = 10
+  n += 5
+  IO.printLine(n)
+  n -= 3
+  IO.printLine(n)
+  n *= 4
+  IO.printLine(n)
+  n /= 2
+  IO.printLine(n)
+  n %= 5
+  IO.printLine(n)
+
+  var flagT = true
+  flagT &&= false
+  IO.printLine(flagT)
+
+  var flagF = false
+  flagF ||= true
+  IO.printLine(flagF)
+
+  var flagKeepTrue = true
+  flagKeepTrue &&= true
+  IO.printLine(flagKeepTrue)
+
+  var flagKeepFalse = false
+  flagKeepFalse ||= false
+  IO.printLine(flagKeepFalse)
+
+  var counter = Counter { value: 1 }
+  counter.value += 9
+  IO.printLine(counter.value)
+  counter.value *= 3
+  IO.printLine(counter.value)
+
+  var total = 0
+  var i = 0
+  while i < 5 do
+    total += i
+    i += 1
+  end
+  IO.printLine(total)
+end

@@ -169,13 +169,19 @@ auto Lexer::scanToken() -> Token {
         case '`': return lexRawString();
         case '?':
             return makeToken(TokenType::Question);
-        case '/': return makeToken(TokenType::Slash);
-        case '*': return makeToken(TokenType::Star);
+        case '/':
+            if (match('=')) return makeToken(TokenType::SlashEq);
+            return makeToken(TokenType::Slash);
+        case '*':
+            if (match('=')) return makeToken(TokenType::StarEq);
+            return makeToken(TokenType::Star);
         case '+':
+            if (match('=')) return makeToken(TokenType::PlusEq);
             return makeToken(TokenType::Plus);
 
         case '-':
             if (match('>')) return makeToken(TokenType::Arrow);
+            if (match('=')) return makeToken(TokenType::MinusEq);
             return makeToken(TokenType::Minus);
 
         case '.':
@@ -203,11 +209,17 @@ auto Lexer::scanToken() -> Token {
             return makeToken(TokenType::GreaterThan);
 
         case '|':
-            if (match('|')) return makeToken(TokenType::PipePipe);
+            if (match('|')) {
+                if (match('=')) return makeToken(TokenType::PipePipeEq);
+                return makeToken(TokenType::PipePipe);
+            }
             return makeToken(TokenType::Pipe);
 
         case '&':
-            if (match('&')) return makeToken(TokenType::AmpAmp);
+            if (match('&')) {
+                if (match('=')) return makeToken(TokenType::AmpAmpEq);
+                return makeToken(TokenType::AmpAmp);
+            }
             return makeToken(TokenType::Amp);
 
         case ':':
@@ -236,6 +248,7 @@ auto Lexer::scanToken() -> Token {
             // is `x % y`, not `x` followed by a splice.
             if (isLowerAlpha(peek()) && !canEndExpression(m_prevType))
                 return lexSpliceIdent();
+            if (match('=')) return makeToken(TokenType::PercentEq);
             return makeToken(TokenType::Percent);
 
         case '"': return lexString();

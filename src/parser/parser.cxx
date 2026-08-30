@@ -1381,6 +1381,22 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
   return complete(std::move(expr));
 }
 
+// `<op>=` (`+=`, `-=`, `*=`, `/=`, `%=`, `&&=`, `||=`) desugars to
+// `name = name <op> value` (or `name.path = name.path <op> value`), reusing
+// the plain BinaryOp so every later pass only ever sees ordinary assignment.
+static auto compoundAssignBinaryOp(TokenType type) -> std::optional<TokenType> {
+  switch (type) {
+    case TokenType::PlusEq: return TokenType::Plus;
+    case TokenType::MinusEq: return TokenType::Minus;
+    case TokenType::StarEq: return TokenType::Star;
+    case TokenType::SlashEq: return TokenType::Slash;
+    case TokenType::PercentEq: return TokenType::Percent;
+    case TokenType::AmpAmpEq: return TokenType::AmpAmp;
+    case TokenType::PipePipeEq: return TokenType::PipePipe;
+    default: return std::nullopt;
+  }
+}
+
 auto Parser::parseAssignment() -> ast::ExprPtr {
   // Assignment targets are deliberately narrower than postfix expressions:
   // a mutable local, optionally followed by record fields. Calls and computed
@@ -1392,12 +1408,15 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
            type == TokenType::Type || type == TokenType::Match ||
            type == TokenType::Loop || type == TokenType::Timeout;
   };
+  auto isAssignOp = [](TokenType type) {
+    return type == TokenType::Equals || compoundAssignBinaryOp(type);
+  };
   if (check(TokenType::LowerIdent)) {
     assignmentOffset = 1;
     while (peekAt(assignmentOffset).type == TokenType::Dot &&
            isFieldName(peekAt(assignmentOffset + 1).type))
       assignmentOffset += 2;
-    assignmentAhead = peekAt(assignmentOffset).type == TokenType::Equals;
+    assignmentAhead = isAssignOp(peekAt(assignmentOffset).type);
   }
   if (assignmentAhead) {
     auto loc = currentLocation();
@@ -1407,13 +1426,31 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
       if (!isFieldName(peek().type)) error("Expected field name");
       path.push_back(advance().value);
     }
-    advance(); // =
+    auto opType = advance().type; // = or <op>=
     // The value stops short of a trailing `if`: in
     // `status = code if failed?` the condition decides whether the
     // ASSIGNMENT happens. Read as part of the value it would instead
     // store None whenever the condition was false — silently replacing
     // the variable's contents with nothing, which is never the intent.
     auto value = parseExprWithoutGuard();
+
+    if (auto binaryOp = compoundAssignBinaryOp(opType)) {
+      ast::ExprPtr target = std::make_unique<ast::Expr>();
+      target->location = loc;
+      target->kind = ast::Identifier{name};
+      for (const auto &field : path) {
+        auto access = std::make_unique<ast::Expr>();
+        access->location = loc;
+        access->kind =
+            ast::MethodCall{std::move(target), field, {}, {}, std::nullopt, false};
+        target = std::move(access);
+      }
+      auto combined = std::make_unique<ast::Expr>();
+      combined->location = loc;
+      combined->kind =
+          ast::BinaryOp{std::move(target), *binaryOp, std::move(value)};
+      value = complete(std::move(combined));
+    }
 
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
@@ -2985,6 +3022,7 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
   m_noDoBlocks = true;
   auto condition = parseExpr();
   m_noDoBlocks = false;
+  expect(TokenType::Do, "Expected 'do' after 'while' condition");
   skipNewlines();
 
   std::vector<ast::ExprPtr> body;

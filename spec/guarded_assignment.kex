@@ -41,7 +41,7 @@ main do
 
   var count = 0
   var n = 0
-  while n < 4
+  while n < 4 do
     count = count + 1 if n != 2
     n = n + 1
   end

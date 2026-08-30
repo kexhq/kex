@@ -1,2 +1,0 @@
-spec/error_while_with_do.kex:7:4: error: Expected 'end' to close main block, got Eof
-Aborted: 1 syntax error — fix before running.

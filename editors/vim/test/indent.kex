@@ -65,7 +65,7 @@ module Demo do
     end
 
     var i = 0
-    while i < 10
+    while i < 10 do
       i = i + 1
       break if i > 3
     end

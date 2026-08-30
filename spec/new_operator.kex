@@ -37,7 +37,7 @@ make Profile, implement: ProfileCopy do
 
   let looped -> Profile do
     var remaining = 3
-    while remaining > 0
+    while remaining > 0 do
       new.age = new.age + 1
       remaining = remaining - 1
     end
