@@ -1708,6 +1708,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                       "`::>` is not valid on a cast slot — casts have no `from`; use `:>`");
             sig->params.insert(sig->params.begin(), receiver);
             m_annotatedMethods.insert(ann->name);
+            m_annotatedReceiverKeys[ann->name].insert(typeToString(receiver));
             // Skip a signature already registered with the same parameters —
             // the same guard checkFunctionDef applies. A prelude type whose
             // method is registered both from the imported interface and from
@@ -1760,7 +1761,11 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     // Registering the declared shape here makes the method visible to whatever
     // is checked first; the body still refines it later.
     const auto preRegister = [&](const ast::FunctionDef& method) {
-        if (m_annotatedMethods.count(method.name)) return;
+        // Only THIS type's own `:>` contract for `method.name` should defer
+        // to it — an unrelated type's same-named annotation (Char's
+        // `string :> String` vs. Input's own plain `let string(...)`) must
+        // not block this type's method from registering at all (#251).
+        if (hasAnnotatedSignatureForReceiver(method.name, receiver)) return;
         if (method.clauses.empty()) return;
         const auto& clause = method.clauses.front();
         // Only plain named parameters. A pattern in first position is the
@@ -3013,7 +3018,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // generic `to` instead — on BEAM that lowered to `kex_prelude:to`, ignoring
     // the module's own `to__Vec2`.
     if (m_inMakeBlock && m_currentMakeType &&
-        !m_annotatedMethods.count(def.name)) {
+        !hasAnnotatedSignatureForReceiver(def.name, m_currentMakeType)) {
         // A method reaches its receiver implicitly through `this`, or as a
         // first parameter that MATCHES the receiver: `let head(@[x | _])`,
         // `let rangeStart(x.._)`. Only the implicit form needs a receiver
@@ -6022,6 +6027,13 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (isStringType(argType) && isStringType(paramType)) return true;
 
     return typesEqual(argType, paramType);
+}
+
+auto TypeChecker::hasAnnotatedSignatureForReceiver(
+    const std::string& name, const TypePtr& receiverType) const -> bool {
+    auto it = m_annotatedReceiverKeys.find(name);
+    if (it == m_annotatedReceiverKeys.end()) return false;
+    return it->second.count(typeToString(receiverType)) > 0;
 }
 
 auto TypeChecker::displaySignature(const std::string& name, const Signature& sig) const -> std::string {

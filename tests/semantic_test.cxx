@@ -3133,6 +3133,77 @@ int main() {
         });
     });
 
+    // Regression for #251: one type's EXPLICITLY `:>`-annotated method must
+    // not block a same-named, unannotated `let` method on an UNRELATED type
+    // from ever registering. The typechecker tracked "has this method NAME
+    // been given a `:>` contract" globally (m_annotatedMethods, keyed only by
+    // name), so Char's `string :> String` made every other type's plain
+    // `let string(...)` silently fail to register — `cursor.string("---")`
+    // on an `Input` resolved against Char's zero-arg contract instead
+    // ("`string` expects 1 argument(s), got 2").
+    describe("cross-type method name collisions (#251)", []() {
+        it("registers an unannotated method even when an unrelated type annotates the same name", []() {
+            assertTrue(noErrors(
+                "record Widget do x: Integer end\n"
+                "record Gadget do y: String end\n"
+                "\n"
+                "make Widget do\n"
+                "  greet :> String\n"
+                "  let greet = \"hi from widget\"\n"
+                "end\n"
+                "\n"
+                "make Gadget do\n"
+                "  let greet(name: String) -> String do\n"
+                "    \"hello \" + name\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                "let useIt(g: Gadget) -> String = g.greet(\"world\")\n"
+                "\n"
+                "main do\n"
+                "  IO.printLine(useIt(Gadget { y: \"z\" }))\n"
+                "end\n"
+            ));
+        });
+
+        it("still resolves a type's own annotated method correctly", []() {
+            assertTrue(noErrors(
+                "record Widget do x: Integer end\n"
+                "\n"
+                "make Widget do\n"
+                "  greet :> String\n"
+                "  let greet = \"hi from widget\"\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  IO.printLine(Widget { x: 1 }.greet)\n"
+                "end\n"
+            ));
+        });
+
+        it("keeps sibling overloads on the SAME type registering after one is annotated", []() {
+            // A type overloading one name by arity (Date's own `+(Duration)`
+            // and `+(Period)` in time.kex) must not have the second
+            // overload's registration blocked by the first's presence.
+            assertTrue(noErrors(
+                "record Meters do n: Integer end\n"
+                "record Feet do n: Integer end\n"
+                "\n"
+                "make Meters do\n"
+                "  let +(other: Meters) -> Meters = Meters { n: this.n + other.n }\n"
+                "  let +(other: Feet) -> Meters = Meters { n: this.n + other.n }\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  let a = Meters { n: 1 } + Meters { n: 2 }\n"
+                "  let b = Meters { n: 1 } + Feet { n: 3 }\n"
+                "  IO.printLine(a.n)\n"
+                "  IO.printLine(b.n)\n"
+                "end\n"
+            ));
+        });
+    });
+
     describe("Process<T> send-site typing", []() {
         it("typed process rejects wrong message type (method call)", []() {
             assertTrue(hasError(

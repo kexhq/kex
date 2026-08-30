@@ -345,7 +345,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
     } else if (check(TokenType::Let)) {
       mod->body.push_back(parseFunctionDef());
     } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-               check(TokenType::Spawn)) {
+               check(TokenType::Spawn) || check(TokenType::After)) {
       mod->body.push_back(parseTypeAnnotation());
     } else {
       error("Unexpected token in module body: " +
@@ -611,7 +611,8 @@ auto Parser::parseRecordBody(ast::RecordDef &into) -> void {
     // Field names can be keywords (e.g. 'end', 'type')
     if (check(TokenType::LowerIdent) || check(TokenType::End) ||
         check(TokenType::Type) || check(TokenType::Match) ||
-        check(TokenType::Loop) || check(TokenType::Timeout)) {
+        check(TokenType::Loop) || check(TokenType::Timeout) ||
+        check(TokenType::After)) {
       field.name = advance().value;
     } else {
       error("Expected field name");
@@ -783,8 +784,11 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
       def->body.push_back(parseFunctionDef());
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent) &&
-               !(allowDrivers && isMakeDriverAhead())) {
+    } else if ((check(TokenType::LowerIdent) &&
+                !(allowDrivers && isMakeDriverAhead())) ||
+               (check(TokenType::After) &&
+                (peekNext().type == TokenType::Colon ||
+                 peekNext().type == TokenType::TypeAnnotation))) {
       def->body.push_back(parseTypeAnnotation());
     } else if (isOverloadableOperator(peek().type) &&
                (peekNext().type == TokenType::Colon ||
@@ -841,7 +845,8 @@ auto Parser::parseFunctionDef(bool isFoul)
   // keyword-as-name, splice ident, or operator
   else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
            check(TokenType::Loop) || check(TokenType::Match) ||
-           check(TokenType::Spawn) || check(TokenType::SpliceIdent)) {
+           check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
+           check(TokenType::After)) {
     // A splice keeps its `%` so callers can tell `let %name(...)` (the name
     // is computed at compile time) from an ordinary `let name(...)`. The
     // lexer strips the sigil, so it is restored here.
@@ -1662,7 +1667,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
           !check(TokenType::End) && !check(TokenType::Type) &&
           !check(TokenType::Match) && !check(TokenType::Loop) &&
-          !check(TokenType::Timeout) && !check(TokenType::Spawn)) {
+          !check(TokenType::Timeout) && !check(TokenType::Spawn) &&
+          !check(TokenType::After)) {
         error("Expected method or module name after '.'");
       }
       auto methodTok = advance();
@@ -2283,7 +2289,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
           std::string fieldName;
           if (check(TokenType::LowerIdent) || check(TokenType::End) ||
               check(TokenType::Type) || check(TokenType::Match) ||
-              check(TokenType::Loop) || check(TokenType::Timeout)) {
+              check(TokenType::Loop) || check(TokenType::Timeout) ||
+              check(TokenType::After)) {
             fieldName = advance().value;
           } else {
             error("Expected field name");
@@ -3088,7 +3095,8 @@ auto Parser::isLetFunctionDefAhead() -> bool {
       nextType == TokenType::LowerIdent || nextType == TokenType::Loop ||
       nextType == TokenType::Match || nextType == TokenType::SpliceIdent ||
       nextType == TokenType::Plus || nextType == TokenType::Minus ||
-      nextType == TokenType::Star || nextType == TokenType::EqEq;
+      nextType == TokenType::Star || nextType == TokenType::EqEq ||
+      nextType == TokenType::After;
   bool isUpperName = nextType == TokenType::UpperIdent;
   if (!isLowerName && !isUpperName)
     return false; // `let { ... }`, `let ( ... )`, `let [ ... ]`
@@ -3768,7 +3776,8 @@ auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
         field.name = advance().value;
       } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
                  check(TokenType::Type) || check(TokenType::Loop) ||
-                 check(TokenType::Match) || check(TokenType::Timeout)) {
+                 check(TokenType::Match) || check(TokenType::Timeout) ||
+                 check(TokenType::After)) {
         field.name = advance().value;
       } else {
         error("Expected field name");
@@ -3913,7 +3922,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
   }
 
   // Variable binding
-  if (check(TokenType::LowerIdent)) {
+  if (check(TokenType::LowerIdent) || check(TokenType::After)) {
     pattern->kind = ast::VarPattern{advance().value};
     return complete(std::move(pattern));
   }
