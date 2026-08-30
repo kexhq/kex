@@ -1,0 +1,38 @@
+using Template
+
+describe("Template") do
+  it("scans holes, control regions, and comments") do
+    let source = "Hi <%= name %>! <% if admin %>(admin)<% end %><%# hidden %>"
+    let parsed = Template.scan(source).try
+    assert(parsed.nodes == [
+      Text("Hi "),
+      Interpolate("name"),
+      Text("! "),
+      Control("if admin"),
+      Text("(admin)"),
+      Control("end"),
+      Comment("hidden")
+    ])
+  end
+
+  it("reads frontmatter tags ahead of the body") do
+    let source = "---\nlayout: page\ntags: [intro, tutorial]\n---\n<%= title %>"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == {
+      "layout": Scalar("page"),
+      "tags": Tags(["intro", "tutorial"])
+    })
+  end
+
+  it("reads declared parameters off a `params` frontmatter key") do
+    let source = "---\nparams: [title: String, draft: Bool]\n---\n<%= title %>"
+    assert(Template.scan(source).try.parameters == [
+      TemplateParam { name: "title", type: "String" },
+      TemplateParam { name: "draft", type: "Bool" }
+    ])
+  end
+
+  it("reports where an unclosed tag gave up") do
+    assert(!Template.scan("<%= name").ok?)
+  end
+end

@@ -1,0 +1,425 @@
+# An ERB-shaped template scanner: template text in, a template AST out.
+#
+# Opt-in — nothing here is in scope until `using Template`.
+#
+# This is the scanning stage only (see the Template proposal for the fuller
+# design): it turns template source into a flat list of +Node+s — plain text,
+# and the four kinds of `<% %>` region — plus whatever frontmatter tags sit
+# ahead of the body. It does not evaluate anything and does not know Kex
+# syntax; the text inside a hole is kept as-is, for a later stage to parse
+# and lower into real Kex.
+#
+#   using Template
+#
+#   let source = "---\nlayout: page\nparams: [name, library: Bool]\n---\nHi <%= name %>!"
+#   let parsed = Template.scan(source).try
+#   parsed.frontmatter.get("layout")   # => Just(Scalar("page"))
+#   parsed.parameters                  # => [TemplateParam { name: "name", type: "" },
+#                                       #     TemplateParam { name: "library", type: "Bool" }]
+#   parsed.nodes                       # => [Text("Hi "), Interpolate("name"), Text("!")]
+#
+# ## Syntax
+#
+#   <%= expr %>     interpolate (escaping is a later stage's job)
+#   <%== expr %>    interpolate raw, no escaping
+#   <% ... %>       a Kex control region: `if`/`match` arms, block bodies, `let`
+#   <%# ... %>      comment, emits nothing
+#   <%- ... -%>     whitespace control: trims the line's leading indent before
+#                   the tag, and the newline right after it
+#   <%%             a literal `<%`, for a template that generates ERB-shaped
+#                   output itself
+#
+# ## Frontmatter
+#
+# A template file may open with a `---` line, generic `key: value` tags up to
+# a closing `---` line, and then the body. This is metadata for whatever
+# reads the template — a title, a layout name, a list of tags — and there is
+# nothing template-specific about it: it is scanned the same generic way
+# whatever key is used.
+#
+#   ---
+#   title: Release notes
+#   tags: [changelog, public]
+#   ---
+#   # <%= title %>
+#
+# A template's parameters, when a later stage needs them declared rather than
+# inferred, are just another frontmatter key — conventionally `params`, a
+# list of names each with an optional `: Type`:
+#
+#   ---
+#   params: [name, library: Bool, dependencies: [Dependency]]
+#   ---
+#   # <%= name %>
+#
+# Nothing in the scanner treats `params` specially while scanning — it is
+# metadata like any other key, a `[a, b, c]` list same as `tags` above.
+# `Parsed#parameters` is a convenience reader for it: it splits each entry on
+# its first colon into a `TemplateParam { name, type }` (`type` is `""` for a bare
+# name), so a caller does not need to know the key name, match on `Tag`
+# itself, or split each entry by hand. `type` is raw text, same as
+# everywhere else in this module — turning `[Dependency]` into a real,
+# resolved Kex type is later work, not this module's.
+module Template
+using Parsing
+
+# One piece of a scanned template.
+#
+# Hole and control content is carried as raw text — the Kex source that was
+# between the delimiters, trimmed of surrounding whitespace. Turning that
+# text into real, type-checked Kex expressions is later work; a `Node` only
+# records what KIND of region it is and what text it held.
+type Node = Text(String)
+          | Interpolate(String)
+          | InterpolateRaw(String)
+          | Control(String)
+          | Comment(String)
+
+# A frontmatter value: a plain scalar, or a `[a, b, c]` list.
+type Tag = Scalar(String)
+         | Tags([String])
+
+# Why a template's text could not be scanned, and where.
+type TemplateError = UnterminatedTag(Integer)
+                    | UnterminatedFrontmatter
+                    | MalformedFrontmatterLine(String)
+
+# One entry from a `params: [...]` frontmatter list: a name, and its
+# optional `: Type` annotation. `type` is raw text — `""` for a bare name,
+# never a resolved Kex type — the same way a frontmatter `Tag` is text and
+# not a parsed value.
+record TemplateParam do
+  name : String
+  type : String
+end
+
+# One scanned `<% ... %>` region: its node, and the whitespace trims its
+# delimiters asked for. Not part of the public API — internal to scanning —
+# but declared at module scope rather than inside `private do`: nested
+# there, this record's fields lose their names under BEAM codegen and the
+# value round-trips as an untagged tuple (`Undefined method: leftTrim for
+# Tuple`), even though the same code is fine on the tree-walking interpreter.
+record TagScan do
+  node      : Node
+  leftTrim  : Bool
+  rightTrim : Bool
+end
+
+# A scanned template: its frontmatter tags, and its body as a node list.
+record Parsed do
+  frontmatter : {String: Tag}
+  nodes       : [Node]
+end
+
+make Parsed do
+  # The template's declared parameters, out of a `params: [...]` frontmatter
+  # key — `[]` when the template declares none, or when `params` holds a
+  # bare scalar rather than a list.
+  #
+  # @return [[TemplateParam]] the declared parameters, in the order written
+  #
+  # @example
+  #   parsed.parameters
+  #   # => [TemplateParam { name: "name", type: "" }, TemplateParam { name: "library", type: "Bool" }]
+  let parameters -> [TemplateParam] do
+    let none: [TemplateParam] = []
+    match @frontmatter.get("params") do
+      Just(Tags(names)) => parseTemplateParams(names)
+      _ => none
+    end
+  end
+end
+
+# Scans template source into a `Parsed` template, or says where it broke.
+#
+# @param source [String] the template file's full text
+# @return [Result<Parsed, TemplateError>] the scanned template, or why not
+#
+# @example
+#   Template.scan("Hi <%= name %>!").map(~nodes)
+#   # => Ok([Text("Hi "), Interpolate("name"), Text("!")])
+let scan(source: String) -> Result<Parsed, TemplateError> do
+  let cursor = Input { input: source }
+  let (frontmatter, afterFrontmatter) = scanFrontmatter(cursor).try
+  let (nodes, _) = scanBody(afterFrontmatter).try
+  Ok(Parsed { frontmatter: frontmatter, nodes: nodes })
+end
+
+private do
+  # True when `cursor` sits at the very start of the input and that line is
+  # exactly `---` — the only place a frontmatter block may open.
+  # Hand-rolled peek chain rather than `Input#string("---")`: `string`'s name
+  # collides with `Char#string` (a zero-arg property) the same way
+  # `takeWhile`/`atEnd?`/`readLine` collide elsewhere in this file — the
+  # prelude-interface build picks the wrong candidate and reports an arity
+  # mismatch even though the receiver type here is unambiguous.
+  let atFrontmatterOpen?(cursor: Input) -> Bool do
+    (cursor.pos == 0 &&
+      cursor.peek == Just('-') && cursor.peekAt(1) == Just('-') && cursor.peekAt(2) == Just('-') &&
+      (cursor.peekAt(3) == Just('\n') || cursor.peekAt(3) == Just('\r') || cursor.peekAt(3) == None))
+  end
+
+  # A cursor advanced past the current character if it is `\r\n` or `\n`;
+  # otherwise unchanged. What a `-%>` closer's trailing-newline trim needs.
+  let skipOneNewline(cursor: Input) -> Input do
+    if cursor.peek == Just('\r') && cursor.peekAt(1) == Just('\n')
+      cursor.advanceBy(2)
+    elif cursor.peek == Just('\n')
+      cursor.advance
+    else
+      cursor
+    end
+  end
+
+  # A cursor advanced to the next `\n` (not past it), and the text skipped.
+  #
+  # Hand-rolled rather than `Input#takeWhile` — see `scanText`'s comment on why.
+  let scanLine(cursor: Input) -> (String, Input) do
+    var cur = cursor
+    var chars: [Char] = []
+    loop do
+      break if cur.peek == None
+      break if cur.peek == Just('\n')
+      let Just(ch) = cur.peek
+      chars.push!(ch)
+      cur.advance!
+    end
+    (chars.join(""), cur)
+  end
+
+  # A line's text with any trailing `\r` dropped, for a source that mixes
+  # `\r\n` and `\n` line endings.
+  let stripTrailingCR(text: String) -> String do
+    text.endsWith?("\r") then text.take(text.count - 1) else text
+  end
+
+  # Strips one layer of matching `"..."` or `'...'` quotes, if present.
+  let unquote(text: String) -> String do
+    let quoted = (text.count >= 2 &&
+      ((text.startsWith?("\"") && text.endsWith?("\"")) || (text.startsWith?("'") && text.endsWith?("'"))))
+    quoted then text.drop(1).take(text.count - 2) else text
+  end
+
+  # A frontmatter value's text, parsed as a `[a, b, c]` list or a scalar.
+  # Splits `text` on commas that are not nested inside `[]`, `()`, `<>`, or
+  # `{}` — so a `params` entry's type, `Map<String, Integer>` or
+  # `[Dependency, Other]`, stays one list item rather than splitting on its
+  # own internal comma.
+  let splitTopLevelCommas(text: String) -> [String] do
+    let empty: ([String], String, Integer) = ([], "", 0)
+    let (parts, last, _) = text.reduce(empty) do |acc, ch|
+      let (parts, current, depth) = acc
+      if ch == '[' || ch == '(' || ch == '<' || ch == '{'
+        (parts, "${current}${ch}", depth + 1)
+      elif ch == ']' || ch == ')' || ch == '>' || ch == '}'
+        (parts, "${current}${ch}", depth - 1)
+      elif ch == ',' && depth == 0
+        ([...parts, current], "", depth)
+      else
+        (parts, "${current}${ch}", depth)
+      end
+    end
+    last.empty? then parts else [...parts, last]
+  end
+
+  let parseFrontmatterValue(raw: String) -> Tag do
+    if raw.startsWith?("[") && raw.endsWith?("]")
+      let inner = raw.drop(1).take(raw.count - 2).trim
+      let items = inner.empty? then [] else splitTopLevelCommas(inner).map { |item| unquote(item.trim) }
+      Tags(items)
+    else
+      Scalar(unquote(raw))
+    end
+  end
+
+  # One `key: value` frontmatter line, split at its first colon.
+  let parseFrontmatterLine(line: String) -> Result<(String, Tag), TemplateError> do
+    let colon = line.findIndex { |ch| ch == ':' }
+    return Error(MalformedFrontmatterLine(line)) if colon == None
+    # `.or(0)` rather than `let Just(index) = colon`: the guard above already
+    # rules out `None`, but destructuring it and feeding the bound name
+    # straight into another generic call (`take`/`drop`) trips a real
+    # type-checker bug where the prelude-interface build cross-contaminates
+    # unrelated generic inference elsewhere in the stdlib. Unwrapping with a
+    # (dead) default avoids it.
+    let index = colon.or(0)
+    let key = line.take(index).trim
+    return Error(MalformedFrontmatterLine(line)) if key.empty?
+    let value = parseFrontmatterValue(line.drop(index + 1).trim)
+    Ok((key, value))
+  end
+
+  # One `params` list entry, split into a name and its optional `: Type`.
+  # `type` is `""` when `raw` is a bare name.
+  let parseTemplateParam(raw: String) -> TemplateParam do
+    let colon = raw.findIndex { |ch| ch == ':' }
+    if colon == None
+      TemplateParam { name: raw.trim, type: "" }
+    else
+      # `.or(0)` rather than destructuring — see `parseFrontmatterLine`'s
+      # comment on why.
+      let index = colon.or(0)
+      TemplateParam { name: raw.take(index).trim, type: raw.drop(index + 1).trim }
+    end
+  end
+
+  # `names.map(~parseTemplateParam)`, spelled as an indexed loop rather than a
+  # generic `map`/`reduce` call: `[String]`'s element type is itself a type
+  # that implements `Enumerable`, and going through the shared HOF name here
+  # sends the prelude-interface build's overload resolution to `String`'s own
+  # `reduce` (iterating characters) instead of `List`'s — the bound block
+  # parameter then type-checks as `Char`, not `String`. Same collision class
+  # as `Input#takeWhile`/`atEnd?`/`string` elsewhere in this file.
+  let parseTemplateParams(names: [String]) -> [TemplateParam] do
+    var params: [TemplateParam] = []
+    var i = 0
+    loop do
+      break if i >= names.count
+      params.push!(parseTemplateParam(names.at(i).or("")))
+      i = i + 1
+    end
+    params
+  end
+
+  # Reads a leading `---` ... `---` frontmatter block, if the input opens with
+  # one. Answers an empty map and the cursor unmoved when it does not.
+  let scanFrontmatter(cursor: Input) -> Result<({String: Tag}, Input), TemplateError> do
+    return Ok(({}, cursor)) if !atFrontmatterOpen?(cursor)
+
+    let (_, afterOpenLine) = scanLine(cursor)
+    var cur = skipOneNewline(afterOpenLine)
+    var tags: {String: Tag} = {}
+    loop do
+      return Error(UnterminatedFrontmatter) if cur.peek == None
+      let (rawLine, afterLine) = scanLine(cur)
+      let line = stripTrailingCR(rawLine).trim
+      cur = skipOneNewline(afterLine)
+      return Ok((tags, cur)) if line == "---"
+      if !line.empty?
+        let (key, value) = parseFrontmatterLine(line).try
+        tags = tags.put(key, value)
+      end
+    end
+  end
+
+  # True when `cursor` sits at a `<%` tag opener (and it is not the `<%%`
+  # escape for a literal `<%`).
+  let atTagOpen?(cursor: Input) -> Bool do
+    cursor.peek == Just('<') && cursor.peekAt(1) == Just('%') && cursor.peekAt(2) != Just('%')
+  end
+
+  # Reads plain text up to the next tag opener or end of input. `<%%` is
+  # consumed as a literal `<%` and folded into the text rather than ending it.
+  #
+  # Hand-rolled rather than built on `Input#takeWhile`: that method's name
+  # collides with `List#takeWhile`, and calling it through an `Input` receiver
+  # sends overload resolution down the wrong path (`json.kex`'s own scanners
+  # hit the same thing and avoid it the same way).
+  let scanText(cursor: Input) -> (String, Input) do
+    var cur = cursor
+    var chars: [Char] = []
+    loop do
+      break if cur.peek == None
+      break if atTagOpen?(cur)
+      if cur.peek == Just('<') && cur.peekAt(1) == Just('%') && cur.peekAt(2) == Just('%')
+        chars.push!('<')
+        chars.push!('%')
+        cur.advanceBy!(3)
+      else
+        let Just(ch) = cur.peek
+        chars.push!(ch)
+        cur.advance!
+      end
+    end
+    (chars.join(""), cur)
+  end
+
+  # Strips trailing spaces and tabs (not newlines) — the indentation a `<%-`
+  # opener asks to have removed from the text before it.
+  let trimTrailingIndent(text: String) -> String do
+    var chars = text.chars
+    loop do
+      break if chars.empty?
+      let Just(last) = chars.last
+      break if last != ' ' && last != '\t'
+      chars = chars.take(chars.count - 1)
+    end
+    chars.join("")
+  end
+
+  # `<%=`, `<%==`, `<%#`, or plain `<%` — which kind of region this is, and
+  # the cursor past the marker.
+  let classifyTag(cursor: Input) -> (String, Input) do
+    if cursor.peek == Just('=') && cursor.peekAt(1) == Just('=')
+      ("raw", cursor.advanceBy(2))
+    elif cursor.peek == Just('=')
+      ("interpolate", cursor.advance)
+    elif cursor.peek == Just('#')
+      ("comment", cursor.advance)
+    else
+      ("control", cursor)
+    end
+  end
+
+  # Reads a tag's body up to its closer, `%>` or `-%>`. Answers the raw text,
+  # whether the closer trims the following newline, and the cursor past it.
+  let scanTagBody(cursor: Input) -> Result<(String, Bool, Input), TemplateError> do
+    let start = cursor.pos
+    var cur = cursor
+    var chars: [Char] = []
+    loop do
+      return Error(UnterminatedTag(start)) if cur.peek == None
+      return Ok((chars.join(""), true, cur.advanceBy(3))) if cur.peek == Just('-') && cur.peekAt(1) == Just('%') && cur.peekAt(2) == Just('>')
+      return Ok((chars.join(""), false, cur.advanceBy(2))) if cur.peek == Just('%') && cur.peekAt(1) == Just('>')
+      let Just(ch) = cur.peek
+      chars.push!(ch)
+      cur.advance!
+    end
+  end
+
+  # The node a tag's kind and trimmed body settle into.
+  let tagNode(kind: String, body: String) -> Node do
+    if kind == "raw"
+      InterpolateRaw(body)
+    elif kind == "interpolate"
+      Interpolate(body)
+    elif kind == "comment"
+      Comment(body)
+    else
+      Control(body)
+    end
+  end
+
+  # Scans one tag starting at `cursor`, which must sit at a `<%` opener.
+  let scanTag(cursor: Input) -> Result<(TagScan, Input), TemplateError> do
+    let opened = cursor.advanceBy(2)
+    let leftTrim = opened.peek == Just('-')
+    let afterTrim = leftTrim then opened.advance else opened
+    let (kind, afterKind) = classifyTag(afterTrim)
+    let (body, rightTrim, rest) = scanTagBody(afterKind).try
+    let scanned = TagScan { node: tagNode(kind, body.trim), leftTrim: leftTrim, rightTrim: rightTrim }
+    Ok((scanned, rest))
+  end
+
+  # Scans the template body — everything after any frontmatter — into nodes.
+  let scanBody(cursor: Input) -> Result<([Node], Input), TemplateError> do
+    var cur = cursor
+    var nodes: [Node] = []
+    loop do
+      let (text, afterText) = scanText(cur)
+      if afterText.peek == None
+        if !text.empty?
+          nodes.push!(Text(text))
+        end
+        return Ok((nodes, afterText))
+      end
+      let (tag, afterTag) = scanTag(afterText).try
+      let keptText = tag.leftTrim then trimTrailingIndent(text) else text
+      if !keptText.empty?
+        nodes.push!(Text(keptText))
+      end
+      nodes.push!(tag.node)
+      cur = tag.rightTrim then skipOneNewline(afterTag) else afterTag
+    end
+  end
+end

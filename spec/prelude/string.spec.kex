@@ -12,6 +12,26 @@ describe("String — length and emptiness") do
     assert(!"hello".empty?)
     assert(!" ".empty?)
   end
+
+  it("graphemeCount agrees with count when every grapheme is one codepoint") do
+    assert("hello".graphemeCount == 5)
+    assert("".graphemeCount == 0)
+    assert("kex lang".graphemeCount == 8)
+  end
+
+  it("graphemeCount counts a CRLF pair as one character, unlike count") do
+    assert("\r\n".count == 2)
+    assert("\r\n".graphemeCount == 1)
+    assert("a\r\nb".count == 4)
+    assert("a\r\nb".graphemeCount == 3)
+  end
+
+  it("graphemeCount counts a base character plus a combining mark as one") do
+    let acute = String.fromCodepoint(0x301).or("")
+    let e = "e" + acute
+    assert(e.count == 2)
+    assert(e.graphemeCount == 1)
+  end
 end
 
 describe("String — indexing") do

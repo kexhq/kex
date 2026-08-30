@@ -1,0 +1,26 @@
+# The ERB-shaped template scanner is an opt-in standard-library module.
+using Template
+
+main do
+  let source = `
+    ---
+    title: Release notes
+    tags: [changelog, public]
+    params: [title: String, draft: Bool, tags: [String]]
+    ---
+    # <%= title %>
+
+    <% if draft %>(draft)<% end %>
+    <%# internal note, never rendered %>
+    Tags: <%== tags.join(", ") %>
+  `
+
+  match Template.scan(source) do
+    Ok(parsed) => do
+      IO.printLine("frontmatter: ${parsed.frontmatter}")
+      IO.printLine("parameters: ${parsed.parameters}")
+      parsed.nodes.each { |node| IO.printLine(node) }
+    end
+    Error(error) => IO.printError("template error: ${error}")
+  end
+end
