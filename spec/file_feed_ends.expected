@@ -1,4 +1,12 @@
 [one, two]
 [two]
 [one, two]
+[one]
+[two]
+[]
+true
+[one, two]
+[one, two]
 [0, 1, 2, 3, 4]
+[2, 3, 4]
+[0, 1000, 2000]

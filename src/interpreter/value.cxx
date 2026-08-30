@@ -77,6 +77,48 @@ auto formatFloat(double v) -> std::string {
 
 } // namespace
 
+StreamCell::~StreamCell() {
+    // Walk the chain releasing cell by cell rather than letting each tail's
+    // destructor call the next one's. `use_count() == 1` stops the walk the
+    // moment a cell is still reachable from somewhere else — a stream someone
+    // holds a later cell of (any `drop`) must survive its head being dropped.
+    auto next = std::move(tail);
+    while (next && next.use_count() == 1) {
+        auto following = std::move(next->tail);
+        next.reset();
+        next = std::move(following);
+    }
+}
+
+auto forceStream(const StreamCellPtr& cell) -> StreamCell* {
+    if (!cell) return nullptr;   // a null cell is the end of the stream
+    if (!cell->forced) {
+        cell->forced = true;     // set first: a thunk that re-enters its own
+                                 // cell sees the end rather than looping
+        auto thunk = std::move(cell->thunk);
+        cell->thunk = nullptr;   // release what it captured
+        if (thunk) {
+            auto [head, tail] = thunk();
+            cell->head = std::move(head);
+            cell->tail = std::move(tail);
+        }
+    }
+    return cell->head ? cell.get() : nullptr;
+}
+
+auto pullFeed(const std::shared_ptr<FeedState>& state) -> ValuePtr {
+    if (!state || state->spent) return nullptr;
+    auto value = state->pull ? state->pull() : nullptr;
+    if (!value) {
+        // Latch at the end and drop the source, so a spent feed holds no file
+        // handle open and a second `each` over it is a no-op rather than a
+        // second traversal.
+        state->spent = true;
+        state->pull = nullptr;
+    }
+    return value;
+}
+
 auto Value::none() -> ValuePtr {
     return std::make_shared<Value>(Value{VariantValue{"None", "Optional", {}, {"X"}, {}}});
 }
@@ -324,6 +366,9 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, StreamValue>) {
             return "<Stream>";
         }
+        else if constexpr (std::is_same_v<T, FeedValue>) {
+            return v.state && v.state->spent ? "<Feed: spent>" : "<Feed>";
+        }
         else if constexpr (std::is_same_v<T, FileHandleValue>) {
             return "<FileHandle: \"" + v.path + "\">";
         }
@@ -496,6 +541,7 @@ auto Value::typeName() const -> std::string {
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";
         else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
+        else if constexpr (std::is_same_v<T, FeedValue>) return "Feed";
         else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
         else if constexpr (std::is_same_v<T, RecordValue>) return v.typeName;
         else if constexpr (std::is_same_v<T, FunctionValue>) return "Function";
@@ -723,6 +769,10 @@ auto Value::inspect() const -> std::string {
             }
             else if constexpr (std::is_same_v<T, StreamValue>)
                 return std::string(c(gray)) + "<Stream>" + c(reset);
+            else if constexpr (std::is_same_v<T, FeedValue>)
+                return std::string(c(gray))
+                       + (node.state && node.state->spent ? "<Feed: spent>" : "<Feed>")
+                       + c(reset);
             else if constexpr (std::is_same_v<T, FileHandleValue>)
                 return std::string(c(gray)) + "<FileHandle: \"" + node.path + "\">" + c(reset);
             else if constexpr (std::is_same_v<T, RecordValue>) {
@@ -779,6 +829,7 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         else if constexpr (std::is_same_v<T, BinaryValue>) return "Binary";
         else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
+        else if constexpr (std::is_same_v<T, FeedValue>) return "Feed";
         else return "";
     }, v->data);
 }
@@ -809,6 +860,7 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
         else if constexpr (std::is_same_v<T, MapValue>) return name == "Map";
         else if constexpr (std::is_same_v<T, RangeValue>) return name == "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return name == "Stream";
+        else if constexpr (std::is_same_v<T, FeedValue>) return name == "Feed";
         else return false;
     }, v->data);
 }

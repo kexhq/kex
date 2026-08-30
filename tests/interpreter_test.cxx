@@ -1533,7 +1533,7 @@ int main() {
             std::filesystem::remove(path);
         });
 
-        it("feed wraps file lines in a stream", [scratchPath]() {
+        it("feed reads a file's lines as a feed", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
             auto result = runFS(
@@ -1546,6 +1546,46 @@ int main() {
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
             assertEqual(std::get<StringValue>(list.elements[1]->data).value, std::string("b"));
+            std::filesystem::remove(path);
+        });
+
+        it("feed consumes the file rather than replaying it", [scratchPath]() {
+            // The file is read a line at a time off a handle held open for the
+            // feed, so taking twice walks forward. It used to answer a stream
+            // over a vector of EVERY line, read before the call returned.
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = runFS(
+                "main do\n"
+                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
+                "  let lines = FS.File.feed(\"" + path + "\").try\n"
+                "  lines.take(1) + lines.take(1) + lines.take(1) + lines.take(1)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(3));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
+            assertEqual(std::get<StringValue>(list.elements[2]->data).value, std::string("c"));
+            std::filesystem::remove(path);
+        });
+
+        it("handle feed continues from the handle's own position", [scratchPath]() {
+            // Reading off the handle's stream, not reopening the path: the feed
+            // answers the REMAINING lines, and shares the handle's cursor.
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = runFS(
+                "main do\n"
+                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
+                "  let handle = FS.File.open(\"" + path + "\", Read).try\n"
+                "  handle.readLine\n"
+                "  handle.feed.try.take(5)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(2));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("b"));
+            assertEqual(std::get<StringValue>(list.elements[1]->data).value, std::string("c"));
             std::filesystem::remove(path);
         });
 
@@ -1987,6 +2027,149 @@ int main() {
             assertEqual(std::get<IntValue>(list.elements[3]->data).value, int64_t(7));
             assertEqual(std::get<IntValue>(list.elements[4]->data).value, int64_t(11));
             assertEqual(std::get<IntValue>(list.elements[9]->data).value, int64_t(29));
+        });
+
+        it("keeps a filter whose matches are far apart", []() {
+            // The index-addressed generator this replaced had to cap how far
+            // `filter` would rescan, and reported a stream whose matches were
+            // merely sparse as ENDED — `take(5)` here answered three elements.
+            auto result = run(
+                "main do\n"
+                "  Sequence(from: 0) { |n| n + 1 }\n"
+                "    .filter { |n| n.modulo(1000) == 0 }\n"
+                "    .take(5)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(5));
+            assertEqual(std::get<IntValue>(list.elements[4]->data).value, int64_t(4000));
+        });
+
+        it("computes each element once however often it is walked", []() {
+            // Memoised cells: the step function runs once per element, not once
+            // per element per access. Under the old generator this counted
+            // ~5000 steps rather than 100.
+            auto result = run(
+                "main do\n"
+                "  var steps = 0\n"
+                "  let s = Sequence(from: 0) do |n|\n"
+                "    steps = steps + 1\n"
+                "    n + 1\n"
+                "  end\n"
+                "  s.take(100)\n"
+                "  s.take(100)\n"
+                "  steps\n"
+                "end\n"
+            );
+            // 99 steps to reach the 100th element, and nothing on the second walk.
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(99));
+        });
+
+        it("shares forced elements between a stream and its drop", []() {
+            auto result = run(
+                "main do\n"
+                "  let s = Sequence(from: 0) { |n| n + 1 }\n"
+                "  let rest = s.drop(3)\n"
+                "  s.take(2) + rest.take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(0));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(3));
+            assertEqual(std::get<IntValue>(list.elements[3]->data).value, int64_t(4));
+        });
+
+        it("walks a long stream without overflowing the stack", []() {
+            // A memoised chain is a linked list, so releasing one by recursion
+            // would die on a stream of any real length.
+            auto result = run(
+                "main do\n"
+                "  Sequence(from: 0) { |n| n + 1 }.take(50000).count\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(50000));
+        });
+    });
+
+    describe("Interpreter — Feeds", []() {
+        it("consumes as it is read", []() {
+            auto result = run(
+                "main do\n"
+                "  let f = Feed.Elements([1, 2, 3, 4])\n"
+                "  f.take(2) + f.take(2) + f.take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            // Two windows and then nothing — not the same window three times.
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(3));
+        });
+
+        it("reports itself spent once the source runs out", []() {
+            auto result = run(
+                "main do\n"
+                "  let f = Feed.Elements([1])\n"
+                "  f.collect\n"
+                "  f.spent?\n"
+                "end\n"
+            );
+            assertEqual(std::get<BoolValue>(result->data).value, true);
+        });
+
+        it("draws map and filter from the same cursor", []() {
+            // A mapped feed is not a second cursor over the same source:
+            // reading through the map consumes the receiver too.
+            auto result = run(
+                "main do\n"
+                "  let f = Feed.Elements([1, 2, 3, 4])\n"
+                "  let doubled = f.map { |n| n * 2 }\n"
+                "  doubled.take(2) + f.take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(2));
+            assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(4));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(3));
+        });
+
+        it("becomes a replayable stream with toStream", []() {
+            auto result = run(
+                "main do\n"
+                "  let s = Feed.Elements([1, 2, 3]).toStream\n"
+                "  s.take(2) + s.take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(1));
+        });
+
+        it("walks a stream once without holding its start", []() {
+            auto result = run(
+                "main do\n"
+                "  let f = Sequence(from: 1) { |n| n + 1 }.toFeed\n"
+                "  f.take(2) + f.take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(3));
+        });
+
+        it("answers None past the end", []() {
+            auto result = run(
+                "main do\n"
+                "  let f = Feed.Elements([1])\n"
+                "  f.pull\n"
+                "  f.pull\n"
+                "end\n"
+            );
+            assertEqual(result->isNone(), true);
         });
     });
 

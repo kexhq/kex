@@ -337,6 +337,7 @@ private:
     auto registerNumberBuiltins() -> void;
     auto registerRegexBuiltins() -> void;
     auto registerStreamBuiltins() -> void;
+    auto registerFeedBuiltins() -> void;
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;
     auto registerMathBuiltins() -> void;

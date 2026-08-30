@@ -55,6 +55,7 @@ auto typeOfValue(const ValuePtr& value) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, RangeValue>) return namedType("Range");
         else if constexpr (std::is_same_v<T, StreamValue>) return namedType("Stream");
+        else if constexpr (std::is_same_v<T, FeedValue>) return namedType("Feed");
         else if constexpr (std::is_same_v<T, RecordValue>) return namedType(v.typeName);
         else if constexpr (std::is_same_v<T, TupleValue>) {
             std::vector<ValuePtr> args;

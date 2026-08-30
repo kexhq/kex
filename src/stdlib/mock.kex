@@ -371,7 +371,7 @@ module Mock do
       None => Error(ReadFailed(path))
     end
     foul readLines(path) = this.cannedRead(path).map { |content| content.lines }
-    foul feed(path) = this.cannedRead(path).map { |content| content.lines }
+    foul feed(path) = this.cannedRead(path).map { |content| Feed.Elements(content.lines) }
     foul size(path) = this.cannedRead(path).map { |content| content.bytes.count }
     foul exists?(path) = this.cannedRead(path) != None
     foul file?(path) = this.cannedRead(path) != None

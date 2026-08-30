@@ -212,9 +212,21 @@ rename(From, To) ->
             delete(From)
     end.
 
-%% File.feed(path) → Just([String]) | None — lazy-stream placeholder; returns the
-%% same eager list as lines/1.
-feed(Path) -> lines(Path).
+%% File.feed(path) → Just(Feed<String>) | None.
+%%
+%% A real one-shot feed over an open device, read a line at a time — not the
+%% eager list lines/1 answers, which is what this used to be. A mocked file is
+%% already resident, so it feeds its lines instead; either way what comes back
+%% consumes, so a test sees the semantics the real thing has.
+feed(Path) ->
+    case mock_content(Path) of
+        undefined ->
+            case file:open(pth(Path), [read, binary]) of
+                {ok, Dev}   -> {'Just', kex_intrinsic_feed:of_device(Dev)};
+                {error, _}  -> 'None'
+            end;
+        C -> {'Just', kex_intrinsic_feed:elements(split_lines(C))}
+    end.
 
 %% FS.File.open(path, mode) -> Result<FileHandle<R,W>, FileError>
 open(Path, Mode) ->

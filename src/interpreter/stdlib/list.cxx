@@ -1,5 +1,6 @@
 #include "../evaluator.hxx"
 #include "../../common/utf8.hxx"
+#include "lazy.hxx"
 #include <algorithm>
 
 namespace kex::interpreter {
@@ -92,19 +93,17 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("map", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
+        // A stream reaching the generic `map` stays lazy — same implementation
+        // the Stream domain registers, so the two cannot drift apart.
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
             if (!fn || !fn->native) return Value::list({});
-            auto gen = stream->generator;
-            auto offset = stream->offset;
-            auto mapFn = fn->native;
-            auto newStream = std::make_shared<Value>();
-            newStream->data = StreamValue{[gen, offset, mapFn](int64_t index) -> ValuePtr {
-                auto element = gen(offset + index);
-                if (!element) return nullptr;   // the source ended; so does this
-                return mapFn({std::move(element)});
-            }, 0};
-            return newStream;
+            return lazy::streamValue(lazy::mapStream(stream->cell, fn->native));
+        }
+        if (auto* feed = std::get_if<FeedValue>(&args[0]->data)) {
+            auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+            if (!fn || !fn->native) return Value::list({});
+            return lazy::mapFeed(feed->state, fn->native);
         }
         bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
@@ -120,27 +119,12 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
             if (!fn || !fn->native) return Value::list({});
-            auto gen = stream->generator;
-            auto offset = stream->offset;
-            auto filterFn = fn->native;
-            auto newStream = std::make_shared<Value>();
-            newStream->data = StreamValue{[gen, offset, filterFn](int64_t index) -> ValuePtr {
-                // The search cap keeps an infinite source with a predicate
-                // that almost never holds from hanging; a finite source ends
-                // on its own, which the null check below picks up.
-                int64_t found = 0, i = 0, maxSearch = index * 100 + 1000;
-                while (found <= index && i < maxSearch) {
-                    auto val = gen(offset + i);
-                    if (!val) return nullptr;
-                    if (filterFn({val})->isTrue()) {
-                        if (found == index) return val;
-                        found++;
-                    }
-                    i++;
-                }
-                return nullptr;
-            }, 0};
-            return newStream;
+            return lazy::streamValue(lazy::filterStream(stream->cell, fn->native));
+        }
+        if (auto* feed = std::get_if<FeedValue>(&args[0]->data)) {
+            auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+            if (!fn || !fn->native) return Value::list({});
+            return lazy::filterFeed(feed->state, fn->native);
         }
         bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);

@@ -1,0 +1,188 @@
+# A one-shot sequence over a source that can only be read once.
+#
+# A feed is what +Stream+ is not: reading it CONSUMES it. Where a stream
+# remembers its elements so it can be walked again, a feed keeps nothing, and
+# that is the point — it is how to walk a file, a socket or a device larger
+# than memory, which a stream cannot do while anything still holds its start.
+#
+#   foul lines = FS.File.feed("huge.log").or(Feed.empty)
+#   lines.each { |line| IO.printLine(line) if line.contains?("ERROR") }
+#
+# +map+, +filter+ and +drop+ answer a feed over the SAME cursor rather than a
+# second cursor over the same source, so a pipeline is one pass:
+#
+#   FS.File.feed("app.log").or(Feed.empty)
+#     .filter { |line| line.contains?("ERROR") }
+#     .take(10)
+#
+# Taking twice answers two different windows — the first ten, then the ten
+# after them. That is the whole difference from +Stream+, where taking twice
+# answers the same ten. When you want the stream behaviour on a small source,
+# +toStream+ asks for it explicitly, at the cost of holding what it reads.
+type Feed<A>
+
+# Constructors for +Feed+.
+module Feed do
+  # A feed with nothing in it, already spent.
+  #
+  # Mostly the +or+ half of a failed open: +FS.File.feed(path).or(Feed.empty)+
+  # reads nothing rather than stopping the program.
+  #
+  # @return [Feed<A>] the empty feed
+  #
+  # @example
+  #   Feed.empty.take(3)   # => []
+  empty : Feed<A>
+  let empty = Kex.Intrinsic.Feed.empty()
+
+  # A feed over a list that is already in hand.
+  #
+  # The elements are there, so nothing is saved by feeding them — this is for
+  # standing in for a real source, in a test, with something that consumes the
+  # way the real one does.
+  #
+  # @param xs [[A]] the elements to feed
+  # @return [Feed<A>] a feed over +xs+
+  #
+  # @example
+  #   let feed = Feed.Elements(["one", "two"])
+  #   feed.take(1)   # => ["one"]
+  #   feed.take(1)   # => ["two"]  — the first one is gone
+  Elements : [A] -> Feed<A>
+  let Elements(xs) = Kex.Intrinsic.Feed.elements(xs)
+end
+
+# Every method below is `let`, not `foul`, though reading a feed plainly is an
+# effect. Two reasons, one principled and one practical.
+#
+# The effect is already tracked where it enters: a feed over anything outside
+# the program comes from `FS.File.feed` or `handle.feed`, both foul, so a pure
+# function cannot obtain one. What `Feed.Elements` and `Stream.toFeed` build
+# from data in hand mutates only a cursor the caller just made.
+#
+# And a foul method takes the hidden capability context, which puts it one BEAM
+# arity above the pure `take`/`map`/`filter` every other receiver has. A feed
+# usually arrives with no static type — `FS.File.feed(p).or(Feed.empty)`, or a
+# `Just(f) =>` binding — and such a call has to go through the runtime
+# dispatcher, which is built per arity and so could never reach a method one
+# arity up. Marking these foul made every dynamically-typed feed call fail with
+# "Undefined method: take for Tuple".
+make Feed<A> do
+  # Answers the next element and consumes it, or +None+ once the source is
+  # spent.
+  #
+  # @return [A?] the next element, or +None+
+  #
+  # NOT named +next+: that is the loop-continue keyword, and the lexer reads it
+  # as one even after a dot, so a call to it silently swallows the rest of the
+  # enclosing block.
+  #
+  # @example
+  #   let feed = Feed.Elements([1, 2])
+  #   feed.pull   # => Just(1)
+  #   feed.pull   # => Just(2)
+  #   feed.pull   # => None
+  pull :> A?
+  let pull = Kex.Intrinsic.Feed.pull(this)
+
+  # Whether the source has run out.
+  #
+  # +false+ does not promise another element — only that the feed has not been
+  # told otherwise yet. The source is asked, and may end, on the next read.
+  #
+  # @return [Bool] +true+ once the feed is spent
+  spent? :> Bool
+  let spent? = Kex.Intrinsic.Feed.spent?(this)
+
+  # Returns the next +n+ elements as a list, consuming them.
+  #
+  # Answers fewer than +n+ when the source ends first, and +[]+ once it is
+  # spent. Unlike +Stream.take+, calling it twice walks forward.
+  #
+  # @param n [Integer] how many elements to consume
+  # @return [[A]] up to +n+ elements
+  #
+  # @example Two windows, not the same one twice
+  #   let feed = Feed.Elements([1, 2, 3, 4])
+  #   feed.take(2)   # => [1, 2]
+  #   feed.take(2)   # => [3, 4]
+  take :> Integer -> [A]
+  let take(n) = Kex.Intrinsic.Feed.take(this, n)
+
+  # Discards the next +n+ elements and answers the feed.
+  #
+  # There is only ever one cursor, so this hands back the same feed rather
+  # than a second one positioned differently.
+  #
+  # @param n [Integer] how many elements to discard
+  # @return [Feed<A>] the same feed, advanced
+  #
+  # @example
+  #   FS.File.feed("log.txt").or(Feed.empty).drop(1).take(3)
+  drop :> Integer -> Feed<A>
+  let drop(n) = Kex.Intrinsic.Feed.drop(this, n)
+
+  # Returns a feed with +f+ applied to each element.
+  #
+  # +f+ runs as elements are read, and only for those that are. The result
+  # draws from the same cursor, so reading it consumes the receiver too.
+  #
+  # @param f [A -> B] applied to each element
+  # @return [Feed<B>] the mapped feed
+  #
+  # @example
+  #   FS.File.feed("log.txt").or(Feed.empty).map(~trim).take(5)
+  map :> (A -> B) -> Feed<B>
+  let map(f) = Kex.Intrinsic.Feed.map(this, f)
+
+  # Returns a feed of only the elements +pred+ accepts.
+  #
+  # Reading one element of the result may consume many of the receiver's.
+  #
+  # @param pred [A -> Bool] the test applied to each element
+  # @return [Feed<A>] the filtered feed
+  #
+  # @example The first ten errors in a long log
+  #   FS.File.feed("app.log").or(Feed.empty)
+  #     .filter { |line| line.contains?("ERROR") }
+  #     .take(10)
+  filter :> (A -> Bool) -> Feed<A>
+  let filter(pred) = Kex.Intrinsic.Feed.filter(this, pred)
+
+  # Applies +f+ to every remaining element, draining the feed.
+  #
+  # @param f [A -> Void] applied to each element
+  # @return [Void]
+  #
+  # @example
+  #   FS.File.feed("log.txt").or(Feed.empty).each { |line| IO.printLine(line) }
+  each :> (A -> Void) -> Void
+  let each(f) = Kex.Intrinsic.Feed.each(this, f)
+
+  # Drains the feed into a list.
+  #
+  # This is the operation that gives up constant space, which is why it is
+  # named rather than implicit: on a source too large to hold, use +each+.
+  #
+  # @return [[A]] every remaining element
+  #
+  # @example
+  #   FS.File.feed("short.txt").or(Feed.empty).collect
+  collect :> [A]
+  let collect = Kex.Intrinsic.Feed.collect(this)
+
+  # Returns a +Stream+ drawn from the feed.
+  #
+  # The stream remembers what it reads, so it can be walked again — at the
+  # cost of holding every element forced through it. Worth it for a source
+  # small enough to replay; the opposite of what a feed is for otherwise.
+  #
+  # @return [Stream<A>] a replayable view of the remaining elements
+  #
+  # @example
+  #   let lines = FS.File.feed("small.txt").or(Feed.empty).toStream
+  #   lines.take(2)   # => ["one", "two"]
+  #   lines.take(2)   # => ["one", "two"]  — a stream, so the same two
+  toStream :> Stream<A>
+  let toStream = Kex.Intrinsic.Feed.toStream(this)
+end

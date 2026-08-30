@@ -16,7 +16,8 @@ let r = 1..100
 let firstTen = naturals.take(10)
 let nextFive = naturals.drop(10).take(5)
 
-# Streams are reusable — naturals hasn't changed
+# Streams are reusable — naturals hasn't changed, and the elements it already
+# produced are remembered rather than recomputed
 let anotherTen = naturals.take(10)
 
 # Range operations
@@ -26,8 +27,10 @@ let evensInRange = (1..20).filter { |x| x.modulo(2) == 0 }
 
 # Feeds are IO resources, so the functions that read them are foul
 module FileReader do
-  foul processLarge(path: String) -> Result<Int, IOError> do
-    let feed = FS.File.feed(path).or(Stream.empty)
+  # A feed is consumed as it is walked, so a file of any size costs the same
+  # memory to count through.
+  foul processLarge(path: String) -> Result<Int, FS.FileError> do
+    let feed = FS.File.feed(path).or(Feed.empty)
     var count = 0
 
     feed.each do |line|
@@ -37,13 +40,22 @@ module FileReader do
     return Ok(count)
   end
 
-  foul processWithStream(path: String) -> Result<[String], IOError> do
+  # filter and take stay lazy on a feed too: this stops reading at the tenth
+  # error rather than at the end of the file.
+  foul processWithFeed(path: String) -> Result<[String], FS.FileError> do
     let handle = FS.File.open(path, FS.Read).try
-    let lines = handle.feed
-    let errors = lines
-      .filter(&.contains?("ERROR"))
-      .take(10)
+    let errors = handle.feed
+      .map { |lines| lines.filter(&.contains?("ERROR")).take(10) }
+      .or([])
     return Ok(errors)
+  end
+
+  # A small file worth reading more than once becomes a Stream, which
+  # remembers what it read.
+  foul reusableLines(path: String) -> [String] do
+    let lines = FS.File.feed(path).or(Feed.empty).toStream
+    let head = lines.take(3)
+    return head + lines.take(3)   # the same three lines again
   end
 end
 
