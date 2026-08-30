@@ -105,8 +105,14 @@ auto Evaluator::registerStreamBuiltins() -> void {
         return lazy::feedValue([at]() -> ValuePtr {
             auto* forced = forceStream(*at);
             if (!forced) return nullptr;
+            // Copy the head out before retargeting `*at` — if `*at` is the
+            // only owner of `forced`'s cell (the common case, since nothing
+            // else keeps the intermediate stream alive), reassigning it
+            // destroys the cell `forced` points into, and reading
+            // `forced->head` afterward would be a use-after-free.
+            auto head = forced->head;
             *at = forced->tail;
-            return forced->head;
+            return head;
         });
     });
 }
