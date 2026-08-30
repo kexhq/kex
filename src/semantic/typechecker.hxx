@@ -253,6 +253,19 @@ private:
                    const ast::MethodCall* methodCall = nullptr,
                    const ast::Expr* callExpr = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    // Whether `name` has an EXPLICIT `:>` contract for a receiver matching
+    // `receiverType` (see m_annotatedReceiverKeys). m_annotatedMethods only
+    // tracks NAMES, so an unrelated type's `:>` contract (Char's
+    // `string :> String`) must not stop a different type's own plain `let`
+    // method of the same name (Input's `string(expected: String)`) from
+    // registering — receiver, not name, is what makes two methods the same.
+    // Deliberately NOT a lookup into m_methodSignatures: that table also
+    // holds this same method's OWN provisional/plain-`let` registrations
+    // (a type may overload one name several times, e.g. Date's `+(Duration)`
+    // and `+(Period)`), so checking "any signature already there" would make
+    // the first overload block every sibling one from ever registering.
+    auto hasAnnotatedSignatureForReceiver(const std::string& name,
+                                          const TypePtr& receiverType) const -> bool;
     auto resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr;
     auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
     auto typeNameReference(const ast::Expr& expr) -> TypePtr;
@@ -345,6 +358,15 @@ private:
     // authoritative, so the inferred signature of its `let` must not be
     // registered alongside it as a second, permissive overload.
     std::unordered_set<std::string> m_annotatedMethods;
+    // Same idea, scoped by RECEIVER as well as name: method name -> the set
+    // of receiver types (as typeToString) that have their OWN explicit `:>`
+    // contract. m_annotatedMethods alone cannot answer "does THIS type's
+    // method have a contract" — only "does ANY type's method by this name"
+    // — which let one type's annotation (Char's `string :> String`) block a
+    // same-named plain `let` method on an unrelated type (Input's
+    // `string(expected: String)`) from ever registering (#251).
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_annotatedReceiverKeys;
     auto checkPatternArity(const ast::Pattern& pattern) -> void;
     // The ADT a scrutinee type belongs to ("Optional", "Result", …), or ""
     // when the type is not a closed ADT (a type variable, Any, a record).

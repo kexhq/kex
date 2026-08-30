@@ -667,6 +667,70 @@ int main() {
         });
     });
 
+    // Regression for #251: `after` is the `receive ... after timeout:`
+    // keyword, but the lexer produced that token in every position, not just
+    // inside a receive clause. As a local binding it failed outright
+    // ("Expected pattern"); as a top-level `let after -> T do ... end` it
+    // was silently dropped by the same recovery path fixed for #248/#246.
+    describe("Parser — 'after' as an identifier", []() {
+        it("binds 'after' via tuple destructuring", []() {
+            auto program = parse(
+                "main do\n"
+                "  let (_, after) = (\"x\", 1)\n"
+                "  IO.printLine(after)\n"
+                "end\n"
+            );
+            assertTrue(!parseFails(
+                "main do\n"
+                "  let (_, after) = (\"x\", 1)\n"
+                "  IO.printLine(after)\n"
+                "end\n"
+            ));
+            assertEqual(program.items.size(), size_t{1});
+        });
+
+        it("declares 'after' as a top-level function without dropping later declarations", []() {
+            auto program = parse(
+                "let first -> Integer = 1\n"
+                "\n"
+                "let after -> Integer do\n"
+                "  2\n"
+                "end\n"
+            );
+            assertEqual(program.items.size(), size_t{2});
+            assertTrue(firstItemIs<std::unique_ptr<ast::FunctionDef>>(program));
+            auto& second =
+                std::get<std::unique_ptr<ast::FunctionDef>>(program.items[1]);
+            assertEqual(second->name, std::string("after"));
+        });
+
+        it("allows 'after' as a record field, both declared and constructed", []() {
+            assertTrue(!parseFails(
+                "record Timer do\n"
+                "  after : Integer\n"
+                "end\n"
+                "\n"
+                "let describe(t: Timer) = \"after=${t.after}\"\n"
+                "\n"
+                "main do\n"
+                "  IO.printLine(describe(Timer { after: 5 }))\n"
+                "end\n"
+            ));
+        });
+
+        it("still lexes 'after' as the receive-clause keyword", []() {
+            assertTrue(!parseFails(
+                "main do\n"
+                "  receive do\n"
+                "    x => IO.printLine(x)\n"
+                "  after timeout: 100\n"
+                "    IO.printLine(\"timed out\")\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+    });
+
     describe("Parser — Serving Blocks", []() {
         it("parses serving with call and cast slots", []() {
             auto program = parse(
