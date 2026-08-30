@@ -372,7 +372,9 @@ end
 
 `Stream<A>` remains lazy and provides its own `map`, `filter`, `take`, and
 `drop`; it is not `Foldable` because reducing an unbounded stream may not
-terminate.
+terminate. `Feed<A>`, the one-shot counterpart for a source that can only be
+read once, is not `Foldable` either — folding it twice would answer different
+things. See `docs/streams.md`.
 
 ## Atoms
 

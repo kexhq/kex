@@ -97,18 +97,65 @@ struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
 struct RangeValue { int64_t start; int64_t end; bool isChar = false; };
 
-// A generator answers the element at `index`, or a null pointer once the
-// stream has ended. The null is a sentinel OUTSIDE the value domain on
-// purpose: a finite stream (`FS.File.feed`) used to signal end-of-file with
-// `None`, which is a perfectly good element of a `Stream<String?>` — so
-// `take` could not tell a real element from the end and padded the result
-// with Nones. Generators for genuinely infinite streams (`Stream.Sequence`)
-// never return null, and stay infinite.
-using StreamGenerator = std::function<std::shared_ptr<struct Value>(int64_t index)>;
-struct StreamValue {
-    StreamGenerator generator;
-    int64_t offset = 0;
+// A stream is a chain of cells. Forcing one answers the element there and the
+// cell after it, and MEMOISES both, so the element behind a given cell is
+// computed once however often the stream is walked.
+//
+// The chain replaced an index-addressed generator (`answer element n`), which
+// had to replay the stream from its seed on every access: `take(n)` cost n²
+// steps, and `filter` — needing random access into a sequence whose n-th match
+// is only findable by rescanning — bounded its rescan with a search cap and so
+// silently ENDED a stream whose matches were merely sparse. Both problems are
+// properties of index addressing, and neither survives it.
+//
+// A null tail marks the end. That sentinel is a null POINTER rather than a
+// value on purpose: a finite stream (`FS.File.feed`) once signalled
+// end-of-file with `None`, which is a perfectly good element of a
+// `Stream<String?>`, so `take` could not tell a real element from the end and
+// padded its answer with Nones (issue #215). Genuinely infinite streams
+// (`Stream.Sequence`) never produce a null tail, and stay infinite.
+struct StreamCell;
+using StreamCellPtr = std::shared_ptr<StreamCell>;
+
+struct StreamCell {
+    // Answers this cell's element and the rest of the chain. Cleared once
+    // forced, releasing whatever it captured.
+    std::function<std::pair<std::shared_ptr<struct Value>, StreamCellPtr>()> thunk;
+    bool forced = false;
+    std::shared_ptr<struct Value> head;   // null once forced marks the end
+    StreamCellPtr tail;
+
+    // A forced chain is a linked list, so the default destructor would
+    // release it by recursing one frame per cell and overflow the stack on a
+    // stream of any real length. Unlink iteratively instead, and only through
+    // cells nothing else still holds.
+    ~StreamCell();
 };
+
+// A null cell IS the empty stream, which is why `Stream.empty` needs no
+// special case anywhere downstream.
+struct StreamValue { StreamCellPtr cell; };
+
+// Forces `cell` to its memoised element, answering it. Answers null at the
+// end of the stream — for an already-ended cell, and for a null cell, which
+// is the end by construction.
+auto forceStream(const StreamCellPtr& cell) -> StreamCell*;
+
+// A feed is a one-shot source: pulling an element CONSUMES it. Where a stream
+// memoises so that walking it twice costs one walk, a feed deliberately keeps
+// nothing — that is precisely what lets it front a file or a socket bigger
+// than memory, which a memoising stream cannot do while anything still holds
+// its head. The state is shared, so every reference to a feed advances one
+// cursor and a feed cannot be replayed.
+struct FeedState {
+    std::function<std::shared_ptr<struct Value>()> pull;  // null == spent
+    bool spent = false;
+};
+struct FeedValue { std::shared_ptr<FeedState> state; };
+
+// Pulls the next element, or null once the source is spent. Latches: a source
+// that has ended once is never asked again.
+auto pullFeed(const std::shared_ptr<FeedState>& state) -> std::shared_ptr<Value>;
 
 struct FileHandleValue {
     std::shared_ptr<std::fstream> stream;
@@ -191,6 +238,7 @@ struct Value {
         MapValue,
         RangeValue,
         StreamValue,
+        FeedValue,
         FileHandleValue,
         RecordValue,
         FunctionValue,

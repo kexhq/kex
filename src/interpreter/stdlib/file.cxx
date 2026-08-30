@@ -1,6 +1,7 @@
 #include <algorithm>
 #include "../evaluator.hxx"
 #include "../../common/utf8.hxx"
+#include "lazy.hxx"
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -443,15 +444,32 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
             defineIntrinsic("FileHandle::" + std::string(publicName), value);
     }
+    // FileHandle.feed -> Feed<String>? — the handle's REMAINING lines.
+    //
+    // Read off the handle's own stream, so the feed continues from wherever
+    // the handle has got to and shares its position: interleaving `readLine`
+    // with the feed advances one cursor, which is what having opened one file
+    // once means. Delegating to `File::feed` by path, as this used to, opened
+    // a second handle at the top of the file and answered the whole thing.
     defineIntrinsic("FileHandle::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* handle = std::get_if<FileHandleValue>(&args[0]->data);
         if (!handle) return Value::none();
-        auto feed = m_intrinsicEnv->get("File::feed");
-        auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
-        return function && function->native
-            ? function->native({Value::string(handle->path)})
-            : Value::none();
+        if (!handle->stream) {
+            // A standard stream sentinel carries no fstream (kexhq/kex#139);
+            // there is nothing to read from stdout or stderr.
+            auto feed = m_intrinsicEnv->get("File::feed");
+            auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
+            return function && function->native
+                ? function->native({Value::string(handle->path)})
+                : Value::none();
+        }
+        auto stream = handle->stream;
+        return Value::just(lazy::feedValue([stream]() -> ValuePtr {
+            std::string line;
+            if (!std::getline(*stream, line)) return nullptr;
+            return Value::string(line);
+        }));
     });
 
     // File.read(path) -> Result<String, FileError>
@@ -623,33 +641,41 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::just(Value::list(std::move(result)));
     });
 
-    // File.feed(path) -> Stream<String>?
+    // File.feed(path) -> Feed<String>?
+    //
+    // A `Feed`, not a `Stream`, and read a line at a time off a handle held
+    // open for the feed's lifetime — which is the whole point of the
+    // operation. It used to answer a stream built over a vector of every line,
+    // so "process a file without holding it in memory" held the entire file in
+    // memory before returning. A one-shot feed is what a file honestly is:
+    // reading consumes, and rewinding is not on offer.
     reg("File::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
-        auto lines = std::make_shared<std::vector<std::string>>();
-        auto mocked = mockFileContent(pathStr->value);
-        if (mocked) {
-            std::istringstream ss((*mocked));
-            std::string line;
-            while (std::getline(ss, line)) lines->push_back(line);
-        } else {
-            std::ifstream file(pathStr->value, std::ios::binary);
-            if (!file.is_open()) return Value::none();
-            std::string line;
-            while (std::getline(file, line)) lines->push_back(line);
-            if (file.bad()) return Value::none();
+
+        // A mocked file is a string that is already resident, so there is
+        // nothing to stream off disk — walk it as a feed anyway, so a test
+        // sees the same consuming semantics the real thing has.
+        if (auto mocked = mockFileContent(pathStr->value)) {
+            auto text = std::make_shared<std::istringstream>(*mocked);
+            return Value::just(lazy::feedValue([text]() -> ValuePtr {
+                std::string line;
+                if (!std::getline(*text, line)) return nullptr;
+                return Value::string(line);
+            }));
         }
-        auto stream = std::make_shared<Value>();
-        stream->data = StreamValue{[lines](int64_t index) -> ValuePtr {
-            // A file has an end: past the last line the stream is exhausted,
-            // not producing None forever (issue #215).
-            if (index < 0 || static_cast<size_t>(index) >= lines->size())
-                return nullptr;
-            return Value::string((*lines)[index]);
-        }, 0};
-        return Value::just(stream);
+
+        auto file = std::make_shared<std::ifstream>(pathStr->value, std::ios::binary);
+        if (!file->is_open()) return Value::none();
+        return Value::just(lazy::feedValue([file]() -> ValuePtr {
+            // A file has an end: past the last line the feed is spent, not
+            // producing None forever (issue #215). pullFeed latches on the
+            // first null, so the handle closes with the last reference.
+            std::string line;
+            if (!std::getline(*file, line)) return nullptr;
+            return Value::string(line);
+        }));
     });
 
     // File.size(path) -> Int?

@@ -34,6 +34,7 @@ using Console
 using Enumerable
 using Env
 using Errorable
+using Feed
 using FileHandle
 using IO
 using Kex

@@ -178,6 +178,7 @@ add_library(kex_lib
     src/interpreter/stdlib/number.cxx
     src/interpreter/stdlib/regex.cxx
     src/interpreter/stdlib/stream.cxx
+    src/interpreter/stdlib/feed.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx
     src/interpreter/stdlib/digest.cxx

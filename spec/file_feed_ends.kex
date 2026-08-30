@@ -1,5 +1,8 @@
 # A file has an end, so its feed stops there instead of yielding None forever
 # (issue #215). `Stream.Sequence` stays deliberately infinite.
+#
+# A file feed is a `Feed`, not a `Stream`: reading it consumes, so taking twice
+# walks forward rather than answering the same lines again.
 
 using FS
 
@@ -23,8 +26,26 @@ main do
     Error(_)   => IO.printLine("cannot open")
   end
 
-  # An infinite stream is still infinite.
+  # A feed is consumed: the second take walks on rather than repeating.
+  let feed = FS.File.feed(path).or(Feed.empty)
+  IO.printLine(feed.take(1))
+  IO.printLine(feed.take(1))
+  IO.printLine(feed.take(1))
+  IO.printLine(feed.spent?)
+
+  # `toStream` buys replay back, for a source small enough to hold.
+  let lines = FS.File.feed(path).or(Feed.empty).toStream
+  IO.printLine(lines.take(2))
+  IO.printLine(lines.take(2))
+
+  # An infinite stream is still infinite, and reusable.
   IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }.take(5))
+  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }.drop(2).take(3))
+
+  # A filter whose matches are far apart is not silently cut short.
+  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }
+    .filter { |n| n.modulo(1000) == 0 }
+    .take(3))
 
   FS.File.delete(path)
 end
