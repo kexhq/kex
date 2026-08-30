@@ -3223,5 +3223,23 @@ int main() {
         });
     });
 
+    describe("Semantic — typed networking interfaces", []() {
+        it("keeps custom DNS resolvers nominal and checks their options", []() {
+            assertTrue(noErrors(
+                "using Net.DNS\n"
+                "using Net.IP, only: [Address]\n"
+                "main do\n"
+                "  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n"
+                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.milliseconds }).try\n"
+                "  resolver.close\n"
+                "end\n"));
+            assertTrue(hasError(
+                "using Net.DNS\n"
+                "main do\n"
+                "  Resolver.custom(ResolverOptions { nameservers: [], timeout: \"soon\" })\n"
+                "end\n"));
+        });
+    });
+
     return runAll();
 }

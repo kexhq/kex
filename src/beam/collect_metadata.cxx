@@ -511,6 +511,20 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                         const std::string& modulePath = {}) {
     auto receiverType = convertTypeExpr(md.target);
     auto typeName = makeTargetName(receiverType);
+    // Records and opaque types declared inside a module are imported under
+    // their qualified nominal identity. Keep ADT receivers bare so their
+    // constructor variants continue to match the shared parent type.
+    if (!modulePath.empty() && receiverType &&
+        receiverType->kind == KexiType::Named &&
+        receiverType->name.find('.') == std::string::npos) {
+        const auto ownedNominal = std::find_if(
+            iface.types.begin(), iface.types.end(), [&](const auto& type) {
+                return type.name == receiverType->name &&
+                    type.constructors.empty();
+            });
+        if (ownedNominal != iface.types.end())
+            receiverType->name = modulePath + "." + receiverType->name;
+    }
     for (const auto& trait : md.implements) {
         if (typeName.empty()) continue;
         meta.traitConformances.push_back({typeName, trait});
@@ -740,14 +754,25 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                 iface.exports.push_back(std::move(overload));
             }
         }
-        // Module functions participate in UFCS just like top-level
-        // functions. Preserve the typed first parameter in the compiled
-        // interface so equally named functions owned by sibling modules can
-        // be selected by receiver type instead of declaration order.
-        if (!fd.clauses.empty() && !fd.clauses[0].params.empty()) {
+        // A nested companion module's typed operations participate in UFCS
+        // when its parent is imported. Keep plain namespace modules
+        // qualified-only so they cannot pollute global receiver selection.
+        if (modulePath.find('.') != std::string::npos &&
+            !fd.clauses.empty() && !fd.clauses[0].params.empty()) {
             const auto& first = fd.clauses[0].params.front();
             auto receiver = first.type && *first.type
                 ? convertTypeExpr(*first.type) : kexiUnknown();
+            if (receiver && receiver->kind == KexiType::Named &&
+                receiver->name.find('.') == std::string::npos) {
+                const auto ownedNominal = std::find_if(
+                    iface.types.begin(), iface.types.end(),
+                    [&](const auto& type) {
+                        return type.name == receiver->name &&
+                            type.constructors.empty();
+                    });
+                if (ownedNominal != iface.types.end())
+                    receiver->name = modulePath + "." + receiver->name;
+            }
             addReceiverFunction(fd, std::move(receiver), iface, meta,
                                 analysis, true);
             if (it != standaloneSigs.end()) {

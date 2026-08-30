@@ -565,10 +565,16 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         // parameter type), and reading those as ordinary
                         // parameter annotations invents contracts that do not
                         // exist. Module-level functions have no such form.
-                        if (!directBackendOwnership &&
-                            !annotatedMembers.count((*fn)->name))
-                            addReceiverSig(sourceModule,
-                                           shapeOnlySignature(**fn, selfType));
+                        if (!annotatedMembers.count((*fn)->name)) {
+                            if (directBackendOwnership &&
+                                sourceModule.find('.') != std::string::npos) {
+                                if (auto sig = inlineSignature(**fn, selfType))
+                                    addReceiverSig(sourceModule, *sig);
+                            } else if (!directBackendOwnership) {
+                                addReceiverSig(sourceModule,
+                                               shapeOnlySignature(**fn, selfType));
+                            }
+                        }
                     }
             };
             for (const auto& item : make.body) {
@@ -721,26 +727,39 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
                         if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
                             if (auto sig = inlineSignature(**fn, nullptr)) {
-                                // Every ordinary function with a first
-                                // parameter participates in UFCS. Source-owned
-                                // opt-in modules therefore need the same typed
-                                // receiver entry as a standalone annotation.
-                                // Recording inline definitions only as module
-                                // exports discarded their receiver type, so
-                                // sibling APIs such as TCP.accept(TCPListener)
-                                // and Unix.accept(UnixListener) collapsed to
-                                // declaration order during BEAM lowering.
                                 if (directBackendOwnership &&
-                                    !sig->params.empty())
+                                    !sig->params.empty()) {
+                                    if (auto* named = std::get_if<
+                                            kex::semantic::NamedType>(
+                                            &sig->params.front()->kind)) {
+                                        const auto qualified =
+                                            moduleName + "." + named->name;
+                                        if (ifaces.typeNames.count(qualified) > 0)
+                                            named->name = qualified;
+                                    }
                                     addReceiverSig(moduleName, *sig);
-                                else
+                                } else {
                                     addModuleSig(moduleName, *sig);
+                                }
                             }
                     }
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) {
                         auto sig = annotationToSignature(**ann, nullptr);
                         sig.isFoul = sig.isFoul || foulDefs.count(sig.name) > 0;
+                        // A first parameter naming a type declared by this
+                        // nested companion has the companion's nominal
+                        // identity at import sites. Preserve that identity so
+                        // sibling operations such as TCP.accept and
+                        // Unix.accept remain distinct during UFCS selection.
+                        if (!sig.params.empty())
+                            if (auto* named = std::get_if<
+                                    kex::semantic::NamedType>(
+                                    &sig.params.front()->kind)) {
+                                const auto qualified = moduleName + "." + named->name;
+                                if (ifaces.typeNames.count(qualified) > 0)
+                                    named->name = qualified;
+                            }
                         if (directBackendOwnership && !sig.params.empty())
                             addReceiverSig(moduleName, sig);
                         else

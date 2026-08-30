@@ -92,6 +92,31 @@ int main() {
                        "distinct nominal mismatch did not reach LSP diagnostics");
         });
 
+        it("hovers custom DNS resolvers as nominal typed handles", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex","languageId":"kex","version":1,"text":"using Net.DNS\nusing Net.IP, only: [Address]\nmain do\n  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.milliseconds }).try\n  resolver.close\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex"},"position":{"line":5,"character":5}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("resolver : Net.DNS.Resolver") != std::string::npos ||
+                           result.find("resolver : Resolver") != std::string::npos,
+                       "custom DNS resolver hover lost its nominal type: " + result);
+            assertTrue(result.find("Undefined") == std::string::npos,
+                       "typed DNS source produced LSP diagnostics: " + result);
+        });
+
         it("publishes diagnostics for unknown types in bare declarations", []() {
             std::string messages;
             messages += frame(

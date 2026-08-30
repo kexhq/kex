@@ -10,7 +10,7 @@ Current checkpoint evidence:
 |---|---|---|---|
 | Foundations | Partial | Strict URI/URL values, explicit IRI conversion, query/form separation, IP/CIDR, ports, headers, statuses, typed errors, credential-safe URI/header inspection, and fixed/exponential retry with predicates, elapsed-delay bounds, bounded jitter, secure production randomness, and injected sleep/random sources | Complete UTS #46 processing |
 | Raw transports | Partial | Process-owned TCP and Unix streams with bounded chunk/exact/delimiter/line reads and half-close, curated TCP and Unix connect/listen policy and operation timeouts, safe opt-in stale Unix-socket removal, UDP datagrams with explicit receive timeout/broadcast/IPv4 multicast policy, address inspection, and direct TLS client primitives with typed unsupported tree fallbacks | Remaining send policy, bounded servers/events, IPv6 multicast and UDP workers/events, TLS upgrade/server/identity/session surface, scripted mocks |
-| DNS | Partial | System resolver, A/AAAA/CNAME/MX/TXT/SRV/PTR values, bounded positive/negative cache and statistics | Typed custom nameservers/search/retry/timeout configuration, stronger DNSSEC reporting, scripted capability mock |
+| DNS | Partial | System and isolated typed custom resolvers, nameservers/search/retry/timeout configuration, A/AAAA/CNAME/MX/TXT/SRV/PTR values, bounded positive/negative cache and statistics | Stronger DNSSEC reporting, scripted capability mock |
 | HTTP client | Partial | Stateless helpers, explicit buffered client, strict response framing, bounded bodies, origin reuse, idle expiry/statistics/close | Concurrent bounded pool/wait queues, streaming/trailers API, redirects, cookies, compression, proxies/CONNECT, cancellation, replaceable transport mock |
 | HTTP server | Partial | Ordered exact/named/wildcard routes, HEAD fallback, OPTIONS/405, buffered bodies, sequential keep-alive, bounded handlers, graceful stop | Body streaming/trailers, middleware/groups/error renderers, full context/events, deadlines, Expect/continue, forms/multipart, response validation, TLS serving |
 | WebSocket | Partial | Verified `ws`/`wss` client handshake, subprotocols, masked sends, fragmented high-level receive, UTF-8/close/limit checks, automatic pong | Server upgrades, raw frames, heartbeat, reconnecting client, scripted mock, browser implementation |
@@ -251,7 +251,6 @@ server.join.try
   general request retry.
 
 ```kex
-# Proposed API.
 using Net.IP
 using Net.DNS
 
@@ -260,15 +259,28 @@ let network = Network.parse("2001:db8::/32").try
 IO.printLine("${network.contains(address)}")
 IO.printLine("${address.private?} ${address.loopback?}")
 
-let resolver = Resolver.system(cache: DNS.CacheOptions {
+let resolver = Resolver.system(CacheOptions {
   entries: 1024,
   maximumTtl: 1.hours,
   negativeTtl: 30.seconds
-})
+}).try
 let name = Name.parse("service.example").try
 let addresses = resolver.addresses(name).try
-let services = resolver.lookup(SRV, "_https._tcp.service.example").try
-IO.printLine("cache hits: ${resolver.statistics.cacheHits}")
+let service = Name.parse("_https._tcp.service.example").try
+let services = resolver.lookup(SRV, service).try
+IO.printLine("cache hits: ${resolver.statistics.hits}")
+resolver.close
+
+let localResolver = Resolver.custom(ResolverOptions {
+  nameservers: [Nameserver {
+    address: Address.parse("127.0.0.1").try,
+    port: Net.Port.from(53).try
+  }],
+  search: [Name.parse("internal.example").try],
+  retries: 2,
+  timeout: 100.milliseconds
+}).try
+localResolver.close
 ```
 
 ### TCP and Unix streams

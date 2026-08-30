@@ -118,7 +118,7 @@ resolve(Kind, {'Net.DNS.Name', _, ASCII}, Query) ->
     end.
 
 resolve_values(Kind, ASCII, Type, Query) ->
-    try lookup_candidates(query_names(ASCII, maps:get(search, Query)), Type, Query) of
+    try lookup_values(ASCII, Type, Query) of
         {ok, Values} when Values =/= [] ->
             {'Ok', {'Net.DNS.LookupResponse',
                     [record_value(Kind, Value) || Value <- Values],
@@ -126,6 +126,18 @@ resolve_values(Kind, ASCII, Type, Query) ->
         timeout -> error_value('Timeout', <<"DNS lookup timed out">>);
         _ -> error_value('Resolve', <<"DNS record did not resolve">>)
     catch _:_ -> error_value('Resolve', <<"DNS lookup failed">>) end.
+
+%% Preserve the operating system resolver's hosts-file/NSS behavior for the
+%% ordinary A and AAAA path. Custom resolvers deliberately bypass it.
+lookup_values(ASCII, Type, #{nameservers := [], search := []})
+  when Type =:= a; Type =:= aaaa ->
+    Family = case Type of a -> inet; aaaa -> inet6 end,
+    case inet:getaddrs(binary_to_list(ASCII), Family) of
+        {ok, Values} when Values =/= [] -> {ok, Values};
+        _ -> not_found
+    end;
+lookup_values(ASCII, Type, Query) ->
+    lookup_candidates(query_names(ASCII, maps:get(search, Query)), Type, Query).
 
 lookup_candidates([], _, _) -> not_found;
 lookup_candidates([Name | Rest], Type, Query) ->

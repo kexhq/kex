@@ -135,8 +135,32 @@ resolver.close
 
 `lookup` supports A, AAAA, CNAME, MX, TXT, SRV, and PTR records. Kex reports
 the resolver's DNSSEC state but does not independently validate DNSSEC; the
-system resolver currently reports `Indeterminate`. Custom nameservers, search
-domains, and retry policy are not yet public.
+system resolver currently reports `Indeterminate`.
+
+Use `Resolver.custom` for an isolated resolver configuration. It does not
+modify the VM's system resolver:
+
+```kex
+using Net.DNS
+using Net.IP, only: [Address]
+
+let resolver = Resolver.custom(ResolverOptions {
+  nameservers: [Nameserver {
+    address: Address.parse("127.0.0.1").try,
+    port: Net.Port.from(53).try
+  }],
+  search: [Name.parse("internal.example").try],
+  retries: 2,
+  timeout: 100.milliseconds
+}).try
+
+let result = resolver.addresses(Name.parse("service").try)
+resolver.close
+```
+
+The timeout bounds a query attempt; retry behavior remains bounded by the
+resolver owner. Search domains apply in order to single-label names, followed
+by the name as written.
 
 ## Buffered HTTP/1.1
 
