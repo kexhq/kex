@@ -1,0 +1,191 @@
+using Template
+
+describe("Template.scan: body") do
+  it("scans plain text with no tags into a single Text node") do
+    let parsed = Template.scan("just text").try
+    assert(parsed.frontmatter == {})
+    assert(parsed.nodes == [Text("just text")])
+  end
+
+  it("scans every tag kind") do
+    let source = "Hi <%= name %>, <%== raw %>. <% if x %>body<% end %><%# note %>"
+    let parsed = Template.scan(source).try
+    assert(parsed.nodes == [
+      Text("Hi "),
+      Interpolate("name"),
+      Text(", "),
+      InterpolateRaw("raw"),
+      Text(". "),
+      Control("if x"),
+      Text("body"),
+      Control("end"),
+      Comment("note")
+    ])
+  end
+
+  it("trims surrounding whitespace inside a hole") do
+    let parsed = Template.scan("<%=   name   %>").try
+    assert(parsed.nodes == [Interpolate("name")])
+  end
+
+  it("produces an empty-string hole for an empty tag body") do
+    assert(Template.scan("<%= %>").try.nodes == [Interpolate("")])
+    assert(Template.scan("<% %>").try.nodes == [Control("")])
+  end
+
+  it("leaves a lone `%` inside a control tag alone, closing only at `%>`") do
+    let parsed = Template.scan("<% count % 2 %>").try
+    assert(parsed.nodes == [Control("count % 2")])
+  end
+
+  it("produces no Text node between two adjacent tags") do
+    let parsed = Template.scan("<%= a %><%= b %>").try
+    assert(parsed.nodes == [Interpolate("a"), Interpolate("b")])
+  end
+
+  it("treats `<%%` as a literal `<%` rather than a tag opener") do
+    let parsed = Template.scan("<%% not a tag %>").try
+    assert(parsed.nodes == [Text("<% not a tag %>")])
+  end
+
+  it("scans an empty source to no nodes at all") do
+    assert(Template.scan("").try.nodes == [])
+  end
+
+  it("reports an unterminated tag, positioned after its opening marker") do
+    assert(Template.scan("Hi <%= name") == Error(UnterminatedTag(6)))
+  end
+
+  it("reports an unterminated control tag the same way as an unterminated hole") do
+    assert(Template.scan("<% if x") == Error(UnterminatedTag(2)))
+  end
+end
+
+describe("Template.scan: whitespace control") do
+  it("trims the preceding indent for `<%-` and the trailing newline for `-%>`") do
+    let source = "line\n  <%- if x -%>\nbody\n<% end %>\n"
+    let parsed = Template.scan(source).try
+    assert(parsed.nodes == [
+      Text("line\n"),
+      Control("if x"),
+      Text("body\n"),
+      Control("end"),
+      Text("\n")
+    ])
+  end
+
+  it("leaves text alone when `<%-` has no indentation to trim") do
+    let parsed = Template.scan("x<%- if y %>z").try
+    assert(parsed.nodes == [Text("x"), Control("if y"), Text("z")])
+  end
+
+  it("`<%-` trims only spaces and tabs, not the text on an earlier line") do
+    let parsed = Template.scan("one\ntwo  <%- if y %>").try
+    assert(parsed.nodes == [Text("one\ntwo"), Control("if y")])
+  end
+
+  it("`-%>` trims a `\\r\\n` as a single unit, not just the `\\n`") do
+    let parsed = Template.scan("<% if y -%>\r\nbody").try
+    assert(parsed.nodes == [Control("if y"), Text("body")])
+  end
+
+  it("`-%>` at the end of input trims nothing, since there is no newline left") do
+    let parsed = Template.scan("<% if y -%>").try
+    assert(parsed.nodes == [Control("if y")])
+  end
+
+  it("combines `<%-` and `-%>` on the same tag") do
+    let parsed = Template.scan("a\n  <%- if y -%>\nb").try
+    assert(parsed.nodes == [Text("a\n"), Control("if y"), Text("b")])
+  end
+end
+
+describe("Template.scan: frontmatter") do
+  it("parses frontmatter scalars and lists ahead of the body") do
+    let source = "---\ntitle: Release notes\ntags: [changelog, public]\n---\n# <%= title %>"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == {
+      "title": Scalar("Release notes"),
+      "tags": Tags(["changelog", "public"])
+    })
+    assert(parsed.nodes == [Text("# "), Interpolate("title")])
+  end
+
+  it("reads a `params` key the same generic way as any other frontmatter tag") do
+    # `params` names a template's holes for a later stage to declare a real,
+    # type-checked signature from — this module treats it as an ordinary
+    # frontmatter list, with no special parsing of its own.
+    let source = "---\nparams: [name, library, dependencies]\n---\n<%= name %>"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter.get("params") == Just(Tags(["name", "library", "dependencies"])))
+  end
+
+  it("unquotes a scalar value wrapped in matching quotes") do
+    let source = "---\ntitle: \"Hello, World\"\nauthor: 'Ada'\n---\nbody"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == {
+      "title": Scalar("Hello, World"),
+      "author": Scalar("Ada")
+    })
+  end
+
+  it("unquotes list items individually") do
+    let source = "---\ntags: [\"a b\", 'c', d]\n---\nbody"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == { "tags": Tags(["a b", "c", "d"]) })
+  end
+
+  it("parses an empty list as no items") do
+    let parsed = Template.scan("---\ntags: []\n---\nbody").try
+    assert(parsed.frontmatter == { "tags": Tags([]) })
+  end
+
+  it("skips blank lines inside the frontmatter block") do
+    let source = "---\ntitle: a\n\ntags: [x]\n---\nbody"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == { "title": Scalar("a"), "tags": Tags(["x"]) })
+  end
+
+  it("keeps the later value when a key repeats") do
+    let parsed = Template.scan("---\ntitle: a\ntitle: b\n---\nbody").try
+    assert(parsed.frontmatter == { "title": Scalar("b") })
+  end
+
+  it("allows a frontmatter block with nothing after it") do
+    let parsed = Template.scan("---\ntitle: a\n---\n").try
+    assert(parsed.frontmatter == { "title": Scalar("a") })
+    assert(parsed.nodes == [])
+  end
+
+  it("reads a frontmatter block delimited by CRLF line endings") do
+    let source = "---\r\ntitle: a\r\n---\r\nbody"
+    let parsed = Template.scan(source).try
+    assert(parsed.frontmatter == { "title": Scalar("a") })
+    assert(parsed.nodes == [Text("body")])
+  end
+
+  it("leaves frontmatter empty when the file does not open with `---`") do
+    let parsed = Template.scan("Hi\n---\nnot frontmatter\n").try
+    assert(parsed.frontmatter == {})
+  end
+
+  it("leaves frontmatter empty when the first line has trailing text after `---`") do
+    let parsed = Template.scan("--- not a delimiter\nbody").try
+    assert(parsed.frontmatter == {})
+    assert(parsed.nodes == [Text("--- not a delimiter\nbody")])
+  end
+
+  it("reports an unterminated frontmatter block") do
+    assert(Template.scan("---\ntitle: no closer") == Error(UnterminatedFrontmatter))
+  end
+
+  it("reports a frontmatter line with no colon") do
+    assert(Template.scan("---\nnonsense\n---\nbody") ==
+      Error(MalformedFrontmatterLine("nonsense")))
+  end
+
+  it("reports a frontmatter line whose key is blank") do
+    assert(Template.scan("---\n: value\n---\nbody") ==
+      Error(MalformedFrontmatterLine(": value")))
+  end
+end

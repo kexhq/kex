@@ -70,6 +70,7 @@ int main() {
         it("regexes.kex", []() { assertTrue(parseFile("examples/regexes.kex")); });
         it("json_parser.kex", []() { assertTrue(parseFile("examples/json_parser.kex")); });
         it("json_stdlib.kex", []() { assertTrue(parseFile("examples/json_stdlib.kex")); });
+        it("template_stdlib.kex", []() { assertTrue(parseFile("examples/template_stdlib.kex")); });
         it("loop_counter.kex", []() { assertTrue(parseFile("examples/loop_counter.kex")); });
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
@@ -178,6 +179,15 @@ int main() {
         it("parsing_stdlib.kex", []() {
             auto output = runFile("examples/parsing_stdlib.kex");
             assertEqual(output, std::string("123|abc\n"));
+        });
+        it("template_stdlib.kex", []() {
+            auto output = runFile("examples/template_stdlib.kex");
+            assertTrue(output.find("tags: Tags([changelog, public])") != std::string::npos, output);
+            assertTrue(output.find("title: Scalar(Release notes)") != std::string::npos, output);
+            assertTrue(output.find("Interpolate(title)") != std::string::npos, output);
+            assertTrue(output.find("Control(if draft)") != std::string::npos, output);
+            assertTrue(output.find("Comment(internal note, never rendered)") != std::string::npos, output);
+            assertTrue(output.find("InterpolateRaw(tags.join(\", \"))") != std::string::npos, output);
         });
         it("testing.kex", []() {
             // Rewritten to use real, parenthesized describe/it/assert
