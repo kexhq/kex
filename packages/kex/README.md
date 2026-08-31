@@ -15,14 +15,11 @@ path (e.g. kex.run's site repo).
 
 **Pre-release.** The package's version follows the language's `VERSION` file:
 
-- Every push to the repo publishes `<VERSION>-dev.<sha>` under the `next`
-  dist-tag (e.g. `0.3.0-beta.dev.a1b2c3d`) — a dev build names the version it
-  is working toward, distinguished by revision, exactly like a native
-  `kex --version` built from the same tree.
-- A release publishes the plain `VERSION` (`0.3.0-beta`) with the same
-  dist-tag rule as the container images: `latest` for a stable release, the
-  channel name (`rc`, `beta`) for a pre-release. The `version` field in
-  `package.json` is a placeholder — the number is stamped at publish time.
+- Published only on release, with the plain `VERSION` (`0.3.0-beta`) as its
+  number and the same dist-tag rule as the container images: `latest` for a
+  stable release, the channel name (`rc`, `beta`) for a pre-release. The
+  `version` field in `package.json` is a placeholder — the number is stamped
+  at publish time.
 
 Expect breaking changes without notice until 1.0.0; pin a version if you need
 reproducible builds.
@@ -34,7 +31,7 @@ used to cause duplicated output and lost state for `receive`,
 ## Installing
 
 ```
-npm install @kexhq/kex@next
+npm install @kexhq/kex
 ```
 
 ## Usage
@@ -79,10 +76,8 @@ stripping them, unless you specifically want plain text.
 ## For kex.run specifically
 
 This is the package kex.run is expected to import as its in-browser
-interpreter. Float on `next` for development; for a deployed build pin an
-exact version — a released one (`@kexhq/kex@0.3.0-beta`) or a specific dev
-build (`@kexhq/kex@0.3.0-beta.dev.a1b2c3d`) — since `next` moves on every
-push.
+interpreter. Pin an exact released version (`@kexhq/kex@0.3.0-beta`) for a
+deployed build.
 
 ## Building locally
 

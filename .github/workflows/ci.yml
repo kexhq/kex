@@ -347,11 +347,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      # Lets npm exchange this job's GitHub Actions OIDC token for a
-      # short-lived publish token on npmjs.org (Trusted Publishing) — see the
-      # npm publish step below.
-      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -494,46 +489,3 @@ jobs:
       # documented backend gap).
       - name: Spec suite via wasm (Node)
         run: make spec-wasm
-
-      # Published to BOTH the public npm registry (the primary, public path)
-      # and GitHub Packages (a mirror kept for existing internal consumers
-      # already wired to it, e.g. kexhq/site's install and its
-      # update-kex.yml, which reads the GitHub Packages API directly).
-      #
-      # npmjs.org uses Trusted Publishing (OIDC): this workflow file is
-      # registered as a trusted publisher for @kexhq/kex on npmjs.com, so npm
-      # exchanges this job's GitHub Actions OIDC token (id-token: write,
-      # above) for a short-lived publish token by itself — no stored secret
-      # to leak or rotate, and npm requires this over a 2FA-bypass token for
-      # anything automated. `npm install -g npm@latest` guarantees a CLI new
-      # enough to speak it (Trusted Publishing needs npm 11.5.1+; the
-      # runner's bundled npm isn't pinned to any particular version).
-      #
-      # GitHub Packages has no such mechanism, so it still uses a real token,
-      # keyed by host in .npmrc.
-      #
-      # A dev build carries the version it is working toward, exactly like a
-      # native `kex --version` built from the same tree: <VERSION>-dev.<short-sha>
-      # (0.3.0-beta -> 0.3.0-beta.dev.a1b2c3d, 0.3.0 -> 0.3.0-dev.a1b2c3d).
-      # The `next` dist-tag floats over these; real versions — the plain
-      # VERSION as the npm number, `latest` or a channel tag — are published
-      # by the Release workflow. Skipped on pull_request builds so PRs from
-      # forks (which don't get repository secrets or OIDC tokens) don't fail
-      # here. See packages/kex/README.md.
-      - name: Ensure npm supports Trusted Publishing
-        run: npm install -g npm@latest
-
-      - name: Publish @kexhq/kex to npm
-        if: github.event_name == 'push'
-        working-directory: packages/kex
-        run: |
-          set -euo pipefail
-          version=$(tr -d "[:space:]" < "${GITHUB_WORKSPACE}/VERSION")
-          npm version "${version}-dev.${GITHUB_SHA::7}" --no-git-tag-version
-
-          npm publish --registry https://registry.npmjs.org --tag next --provenance
-
-          echo "//npm.pkg.github.com/:_authToken=${GH_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --registry https://npm.pkg.github.com --tag next
-        env:
-          GH_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

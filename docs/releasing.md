@@ -89,9 +89,8 @@ The channel follows from the version:
 
 The npm package (`@kexhq/kex`, the wasm interpreter) is published with the
 plain `VERSION` as its version number, so every channel answers "which Kex is
-this?" with the same number. CI covers the dev side in between releases: every
-push publishes `<VERSION>-dev.<sha>` under the floating `next` dist-tag, which
-a release never touches.
+this?" with the same number. It is published only on release — there is no
+per-merge dev build on npm, and no `next` dist-tag.
 
 A pre-release is published with GitHub's `prerelease` flag, which is what keeps
 `/releases/latest` meaning "the current stable Kex" without anyone maintaining
@@ -165,8 +164,8 @@ Without it, only the `formula` job fails, and only on a stable release.
    the same pinned toolchain as CI's wasm job (the cache keys match, so this
    restores rather than rebuilds). Runs the wasm unit and spec suites, stamps
    the package with the release's `VERSION`, and uploads the tarball for the
-   `npm` job. Built here rather than repackaged from a CI dev build so the
-   binary's `built` date is the release commit's, like the archives.
+    `npm` job. Built here rather than repackaged from CI's wasm build so the
+    binary's `built` date is the release commit's, like the archives.
 4. **`image`** (3 variants × 2 architectures) — each built on a runner of its
    own architecture, not under QEMU, because the image build runs the spec
    suites inside itself. Pushed to GHCR by digest.
