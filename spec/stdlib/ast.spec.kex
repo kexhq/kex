@@ -285,9 +285,8 @@ describe("Kex.AST") do
       end
       let compute() do
         work().try
-      rescue do |error|
+      rescue |error|
         error
-      end
       end
       main do
         compute()

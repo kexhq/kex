@@ -16,9 +16,8 @@ end
 let withCatchAll(a: Int, b: Int) -> String do
   let r = divide(a, b).try
   "ok: ${r}"
-rescue do |e|
+rescue |e|
   "caught: ${e}"
-end
 end
 
 let withInlineRescue(items: [Int]) -> Int do
@@ -85,8 +84,8 @@ describe(".try / rescue / trying") do
     end
   end
 
-  describe("rescue do |e| ... end") do
-    it("catches with catch-all block") do
+  describe("rescue |e| ... end") do
+    it("catches with catch-all syntax") do
       assert(withCatchAll(10, 2) == "ok: 5")
       assert(withCatchAll(10, 0) == "caught: division by zero")
     end

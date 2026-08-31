@@ -54,14 +54,13 @@ let safeGetFirst(items: [Int]) -> Int do
   end
 end
 
-# --- rescue do |e| ... end (catch-all block) ---
+# --- rescue |e| ... end (catch-all) ---
 
 let verboseDivide(a: Int, b: Int) -> String do
   let r = divide(a, b).try
   "ok: ${r}"
-rescue do |e|
+rescue |e|
   "caught: ${e}"
-end
 end
 
 # --- Nested trying ---

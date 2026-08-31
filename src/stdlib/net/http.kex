@@ -49,8 +49,9 @@ record Context do
   route : RouteContext
 end
 
-# A buffered HTTP route handler.
-type Handler = Request<Binary> -> Context -> Response<Binary>
+# A buffered HTTP route handler. Handling a request is effectful: routes may
+# read files, query a database, send messages, or perform other application IO.
+type Handler = Type.of(handlerType)
 
 # One declared route; routers preserve declaration order.
 record Route do
@@ -416,4 +417,11 @@ module HTTP do
   # Sends one stateless buffered binary PATCH.
   patch : String -> Binary -> Result<Response<Binary>, NetError>
   let patch(url, body) = request("PATCH", url, Headers.empty, body)
+end
+
+private do
+  foul handlerType(
+    _request: Request<Binary>,
+    _context: Context
+  ) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseEmpty(500)
 end

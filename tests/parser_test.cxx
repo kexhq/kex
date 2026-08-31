@@ -1500,6 +1500,18 @@ int main() {
         it("rejects invalid token at top level", []() {
             assertTrue(parseFails("+ 5"));
         });
+
+        it("accepts rescue pipe catch-all", []() {
+            assertFalse(parseFails(
+                "let f do\n  Error(\"x\").try\n"
+                "rescue |error|\n  error\nend\n"));
+        });
+
+        it("rejects the removed rescue do catch-all", []() {
+            assertTrue(parseFails(
+                "let f do\n  Error(\"x\").try\n"
+                "rescue do |error|\n  error\nend\nend\n"));
+        });
     });
 
     return runAll();

@@ -30,13 +30,12 @@ rescue
 end
 IO.printLine(v2)
 
-# Function-level rescue with catch-all
+# Function-level concise catch-all
 let safeDivide(a: Int, b: Int) -> String do
   let result = if b == 0 then Error("division by zero") else Ok(a / b) end
   "result: ${result.try}"
-rescue do |e|
+rescue |e|
   "error: ${e}"
-end
 end
 
 IO.printLine(safeDivide(10, 2))
@@ -62,7 +61,7 @@ IO.printLine(lookup("email"))
 let safeHead(list: [Int]) -> Int do
   let val = if list.count > 0 then Ok(list.at(0)) else Error("empty") end
   val.try
-rescue return -1
+  rescue return -1
 end
 
 IO.printLine(safeHead([3, 4, 5]))
