@@ -1298,6 +1298,61 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     matched = false;
 
                 if (matched) {
+                    auto collectionBlock = [&](const ast::TypeExpr* type) {
+                        std::function<bool(const ast::TypeExpr*)> check =
+                            [&](const ast::TypeExpr* current) -> bool {
+                            if (!current) return false;
+                            if (const auto* block =
+                                    std::get_if<ast::BlockType>(
+                                        &current->kind))
+                                return block->inner &&
+                                       std::holds_alternative<ast::ListType>(
+                                           block->inner->kind);
+                            if (const auto* name =
+                                    std::get_if<ast::TypeName>(
+                                        &current->kind);
+                                name && name->parts.size() == 1) {
+                                auto alias = m_typeAliases.find(
+                                    name->parts.front());
+                                return alias != m_typeAliases.end() &&
+                                       check(alias->second);
+                            }
+                            return false;
+                        };
+                        return check(type);
+                    };
+                    const RuntimeSignature* runtimeSignature = nullptr;
+                    if (auto found = m_runtimeSignatures.find(regName);
+                        found != m_runtimeSignatures.end())
+                        for (const auto& signature : found->second)
+                            if (signature.params.size() ==
+                                clause.params.size()) {
+                                runtimeSignature = &signature;
+                                break;
+                            }
+                    struct CollectionGuard {
+                        std::vector<std::shared_ptr<int>> depths;
+                        ~CollectionGuard() {
+                            for (const auto& depth : depths) --*depth;
+                        }
+                    } collectionGuard;
+                    for (size_t i = 0; i < clause.params.size() &&
+                                           i + argOffset < args.size(); ++i) {
+                        const ast::TypeExpr* type =
+                            clause.params[i].type && *clause.params[i].type
+                                ? clause.params[i].type->get()
+                                : runtimeSignature &&
+                                          i < runtimeSignature->params.size()
+                                      ? runtimeSignature->params[i]
+                                      : nullptr;
+                        if (!collectionBlock(type)) continue;
+                        auto* function = std::get_if<FunctionValue>(
+                            &args[i + argOffset]->data);
+                        if (!function || !function->collectionDepth) continue;
+                        ++*function->collectionDepth;
+                        collectionGuard.depths.push_back(
+                            function->collectionDepth);
+                    }
                     // catch(...) (not just ReturnException) so a RuntimeError
                     // — e.g. a failed `assert` caught higher up by `it` — still
                     // pops this scope before propagating; otherwise m_env
@@ -2498,8 +2553,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
 
             const ast::RescueBlock* rescuePtr = node.rescue ? &*node.rescue : nullptr;
+            const bool collection = node.collection;
+            auto collectionDepth = std::make_shared<int>(0);
             lambda->data = FunctionValue{"<lambda>",
-                [this, bodyPtr, paramNames, capturedEnv, rescuePtr](std::vector<ValuePtr> args) -> ValuePtr {
+                [this, bodyPtr, paramNames, capturedEnv, rescuePtr,
+                 collection, collectionDepth](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
                     // If the lambda expects multiple params but receives a single
@@ -2521,7 +2579,39 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     // `it`) still restores m_env before unwinding further —
                     // same reasoning as the MatchExpr/function-clause guards.
                     try {
-                        result = evalBody(*bodyPtr);
+                        if (collection || *collectionDepth > 0) {
+                            std::vector<ValuePtr> values;
+                            for (const auto& item : *bodyPtr) {
+                                if (!item) continue;
+                                if (const auto* spread =
+                                        std::get_if<ast::SpreadExpr>(
+                                            &item->kind)) {
+                                    auto value = eval(*spread->inner);
+                                    auto* list =
+                                        std::get_if<ListValue>(&value->data);
+                                    if (!list)
+                                        throw RuntimeError(
+                                            "collection-block spread expects a list",
+                                            item->location);
+                                    values.insert(values.end(),
+                                                  list->elements.begin(),
+                                                  list->elements.end());
+                                    continue;
+                                }
+                                if (const auto* guarded =
+                                        std::get_if<ast::TrailingIf>(
+                                            &item->kind)) {
+                                    auto condition = eval(*guarded->condition);
+                                    if (condition->isTrue())
+                                        values.push_back(eval(*guarded->expr));
+                                    continue;
+                                }
+                                values.push_back(eval(*item));
+                            }
+                            result = Value::list(std::move(values));
+                        } else {
+                            result = evalBody(*bodyPtr);
+                        }
                     } catch (TryException& e) {
                         if (rescuePtr) {
                             try {
@@ -2552,7 +2642,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     m_env = prevEnv;
                     return result;
-                }, static_cast<int>(paramNames.size())};
+                }, static_cast<int>(paramNames.size()), collectionDepth};
             return lambda;
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {

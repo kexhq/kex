@@ -219,7 +219,9 @@ private:
     // types. Returns the resolved block param types, or empty if not found.
     auto resolveBlockHints(const std::string& name,
                            const std::vector<TypePtr>& nonBlockArgTypes,
-                           bool isMethodCall = false) -> std::vector<TypePtr>;
+                           bool isMethodCall = false,
+                           bool* collection = nullptr)
+        -> std::vector<TypePtr>;
     // Like resolveBlockHints but for an inline lambda at a specific arg index.
     // Returns the FuncType param hints for that position, applying generic substitution
     // from the other (already-known) arg types.

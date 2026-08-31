@@ -7,38 +7,6 @@ not a wishlist.
 Verify the state of a section before acting on it; `make test-all` and
 `make spec-beam` are the two commands that show it.
 
-## `Block<[A]>` collection blocks are not implemented
-
-`docs/dsl.md` documents a `Block<[A]>` parameter as collecting each expression
-in the `do…end` body into a list. Neither backend does that — the block arrives
-as an opaque callable instead:
-
-```kex
-record El do
-  tag : String
-end
-let p(text: String) -> El = El { tag: text }
-let div(children: Block<[El]>) -> [El] = children
-
-main do
-  let out = div do
-    p("first")
-    p("second")
-  end
-  IO.printLine(out.length())
-  # walker: Undefined method: length for Function
-  # BEAM:   Undefined method: length for Any
-end
-```
-
-The `...expr` spread that `docs/dsl.md` describes as part of the same feature
-is accepted in a `do` body by the parser, but nothing consumes it: on BEAM it
-reaches lowering as `IR lower: unimplemented expr node SpreadExpr`. Spreading
-into a list or a map literal is unaffected and works on both backends.
-
-Every use of `Block<[A]>` in the tree is under `examples/aspirational/`, which
-is not run by any suite — so nothing catches this today.
-
 ## Interpreter crashes on the no-argument `String.split`
 
 ```kex
@@ -212,6 +180,90 @@ compile path.
 `standalone_module.kex` and `static_namespacing.kex` (now
 `record_module_constructors.kex`, after `static do` was removed) were both in
 this list previously and now match.
+
+## Cross-file `using` imports are barely type-checked
+
+```kex
+# src/mymod.kex
+module MyMod
+
+type Handler = String -> String
+
+get : String -> Handler -> String
+let get(path, handler) = handler(path)
+```
+
+```kex
+# main.kex — compiled with `kex --source-root src main.kex`
+using MyMod
+
+main do
+  IO.printLine(MyMod.get("hi", 42))   # Integer where Handler is declared
+end
+# No type error. Reaches runtime: 'handler' is not callable
+```
+
+A **qualified** call to a function declared in a different file is never
+checked against that function's declared signature — any argument shape
+typechecks silently, and a real mismatch only surfaces as a runtime crash.
+
+The **bare** form (`get(...)` after `using MyMod`, no `MyMod.` prefix) hits
+the same leniency, *unless* a same-named function also exists in the prelude
+— then the opposite failure appears: the strict candidate-checking path
+activates, sees only the prelude's overloads, and rejects the call outright
+because `MyMod.get` is never in the list it draws from:
+
+```kex
+using MyMod
+
+main do
+  IO.printLine(get("hi", { |x| "handled ${x}" }))
+end
+# error: `get` expects argument 1 to be Mock.Env, but got String
+#   get : FileHandle<CanRead, A> -> Result<String?, ReadError>
+#   get : Mock.Env -> Any -> Any
+#   get : Range -> Integer -> A?
+#   get : String -> Integer -> Char?
+#   get : [A] -> Integer -> A?
+#   get : {A: B} -> A -> B?
+#   ... (MyMod.get : String -> Handler -> String is never listed)
+```
+
+Neither symptom reproduces with `MyMod` and `main` declared in the **same**
+file — there, both the wrong-argument-type call is rejected correctly and the
+`get`-collision call resolves to `MyMod.get` as intended. The boundary is
+strictly cross-file.
+
+**Root cause, located but not fixed.** `TypeChecker::checkCall`
+(`src/semantic/typechecker.cxx`) builds its overload-candidate list from two
+registries: `m_userSignatures`/`m_scopedDeclaredSignatures` (populated by
+`registerDeclaredSignatures`, which walks only the entry file's own
+`ast::Program`) and `m_importedInterfaces` (prelude and package-level
+interfaces). A module loaded from a separate project file via
+`--source-root`/`using` lands in neither — confirmed by dumping
+`m_importedInterfaces->modules`'s keys from inside `checkCall`: only
+prelude/package modules appear (`Net.HTTP`, `JSON`, `Mock.*`, etc.), never a
+project's own cross-file module. With no candidates, `checkCall` takes its
+lenient fallback for a call to it, qualified or bare — which is silently
+correct until a prelude name collision forces the strict path, where the
+real target still isn't a candidate.
+
+A narrow attempted patch — extend the bare-call candidate loop in `checkCall`
+to also pull in a non-`automaticImport` module's exports when
+`moduleMemberImported` confirms the caller explicitly `using`s that name —
+does not help: the guard never fires, since a local cross-file module never
+appears in `m_importedInterfaces->modules` as shown above, regardless of
+import scope. A real fix has to thread the declaring file's signatures into
+the same registries `checkCall` reads, which means touching how
+`Analyzer`/`TypeChecker` are wired to multi-file compilation in
+`src/main.cxx` (`moduleRootsFor`, the module `Resolver`, `SemanticDB`) — a
+bigger, riskier change than a local patch to `checkCall`, and one that needs
+full `make test-all` / `make spec-beam` regression runs to land safely.
+
+This does not show up in `spec/`'s own suite because those specs are single
+files; the gap is specific to multi-file (`--source-root`) projects, which
+is how every real Kex project outside this repo's own spec/example tree is
+structured.
 
 ## Interpreter REPL prints a stray continuation prompt
 

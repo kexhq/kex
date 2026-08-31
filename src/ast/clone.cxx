@@ -343,6 +343,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.body = cloneVec(node.body);
                 copy.returnAnnotation = cloneOpt(node.returnAnnotation);
                 copy.rescue = cloneOpt(node.rescue);
+                copy.collection = node.collection;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
                 out->kind =

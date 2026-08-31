@@ -93,6 +93,8 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
                              semanticType(type->typeArgs[1], vars));
         if (type->name == "List" && type->typeArgs.size() == 1)
             return Type::list(semanticType(type->typeArgs[0], vars));
+        if (type->name == "Block" && type->typeArgs.size() == 1)
+            return Type::func({}, semanticType(type->typeArgs[0], vars), true);
         // `Any` is the source spelling of "no constraint" — every other path
         // that reads a type annotation resolves it to Unknown. Carried
         // through as a named type instead, `JSON.parse`'s `Result<Any, Error>`

@@ -43,6 +43,9 @@ struct NamedType {
 struct FuncType {
     std::vector<TypePtr> params;
     TypePtr result;
+    // True only for source-level Block<T>; ordinary function types remain
+    // false even when they have the same parameters and result.
+    bool block = false;
 };
 
 struct TupleType {
@@ -132,7 +135,8 @@ struct Type {
     static auto unknown() -> TypePtr;
     static auto voidType(std::string reason = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
-    static auto func(std::vector<TypePtr> params, TypePtr result) -> TypePtr;
+    static auto func(std::vector<TypePtr> params, TypePtr result,
+                     bool block = false) -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;
     static auto tuple(std::vector<TypePtr> elements) -> TypePtr;
     static auto map(TypePtr key, TypePtr value) -> TypePtr;

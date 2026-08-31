@@ -386,6 +386,10 @@ struct Lambda {
     std::vector<ExprPtr> body;
     std::optional<TypeExprPtr> returnAnnotation;
     std::optional<RescueBlock> rescue;
+    // Set by semantic analysis when this lambda is passed to Block<[A]>.
+    // Both backends then collect body expressions instead of returning only
+    // the final one.
+    mutable bool collection = false;
 };
 
 // `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
