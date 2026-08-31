@@ -1,10 +1,10 @@
 # An ERB-shaped template scanner: template text in, a template AST out.
 #
-# Opt-in — nothing here is in scope until `using Template`.
+# Opt-in: nothing here is in scope until `using Template`.
 #
 # This is the scanning stage only (see the Template proposal for the fuller
-# design): it turns template source into a flat list of +Node+s — plain text,
-# and the four kinds of `<% %>` region — plus whatever frontmatter tags sit
+# design): it turns template source into a flat list of +Node+s: plain text,
+# and the four kinds of `<% %>` region, plus whatever frontmatter tags sit
 # ahead of the body. It does not evaluate anything and does not know Kex
 # syntax; the text inside a hole is kept as-is, for a later stage to parse
 # and lower into real Kex.
@@ -33,7 +33,7 @@
 #
 # A template file may open with a `---` line, generic `key: value` tags up to
 # a closing `---` line, and then the body. This is metadata for whatever
-# reads the template — a title, a layout name, a list of tags — and there is
+# reads the template (a title, a layout name, a list of tags) and there is
 # nothing template-specific about it: it is scanned the same generic way
 # whatever key is used.
 #
@@ -44,7 +44,7 @@
 #   # <%= title %>
 #
 # A template's parameters, when a later stage needs them declared rather than
-# inferred, are just another frontmatter key — conventionally `params`, a
+# inferred, are just another frontmatter key: conventionally `params`, a
 # list of names each with an optional `: Type`:
 #
 #   ---
@@ -52,20 +52,20 @@
 #   ---
 #   # <%= name %>
 #
-# Nothing in the scanner treats `params` specially while scanning — it is
+# Nothing in the scanner treats `params` specially while scanning: it is
 # metadata like any other key, a `[a, b, c]` list same as `tags` above.
 # `Parsed#parameters` is a convenience reader for it: it splits each entry on
 # its first colon into a `TemplateParam { name, type }` (`type` is `""` for a bare
 # name), so a caller does not need to know the key name, match on `Tag`
 # itself, or split each entry by hand. `type` is raw text, same as
-# everywhere else in this module — turning `[Dependency]` into a real,
+# everywhere else in this module: turning `[Dependency]` into a real,
 # resolved Kex type is later work, not this module's.
 module Template
 using Parsing
 
 # One piece of a scanned template.
 #
-# Hole and control content is carried as raw text — the Kex source that was
+# Hole and control content is carried as raw text: the Kex source that was
 # between the delimiters, trimmed of surrounding whitespace. Turning that
 # text into real, type-checked Kex expressions is later work; a `Node` only
 # records what KIND of region it is and what text it held.
@@ -85,8 +85,8 @@ type TemplateError = UnterminatedTag(Integer)
                     | MalformedFrontmatterLine(String)
 
 # One entry from a `params: [...]` frontmatter list: a name, and its
-# optional `: Type` annotation. `type` is raw text — `""` for a bare name,
-# never a resolved Kex type — the same way a frontmatter `Tag` is text and
+# optional `: Type` annotation. `type` is raw text: `""` for a bare name,
+# never a resolved Kex type: the same way a frontmatter `Tag` is text and
 # not a parsed value.
 record TemplateParam do
   name : String
@@ -94,8 +94,8 @@ record TemplateParam do
 end
 
 # One scanned `<% ... %>` region: its node, and the whitespace trims its
-# delimiters asked for. Not part of the public API — internal to scanning —
-# but declared at module scope rather than inside `private do`: nested
+# delimiters asked for. It is internal to scanning, not part of the public API,
+# but declared at module scope rather than inside `private do`. Nested
 # there, this record's fields lose their names under BEAM codegen and the
 # value round-trips as an untagged tuple (`Undefined method: leftTrim for
 # Tuple`), even though the same code is fine on the tree-walking interpreter.
@@ -113,7 +113,7 @@ end
 
 make Parsed do
   # The template's declared parameters, out of a `params: [...]` frontmatter
-  # key — `[]` when the template declares none, or when `params` holds a
+  # key: `[]` when the template declares none, or when `params` holds a
   # bare scalar rather than a list.
   #
   # @return [[TemplateParam]] the declared parameters, in the order written
@@ -147,10 +147,10 @@ end
 
 private do
   # True when `cursor` sits at the very start of the input and that line is
-  # exactly `---` — the only place a frontmatter block may open.
+  # exactly `---`: the only place a frontmatter block may open.
   # Hand-rolled peek chain rather than `Input#string("---")`: `string`'s name
   # collides with `Char#string` (a zero-arg property) the same way
-  # `takeWhile`/`atEnd?`/`readLine` collide elsewhere in this file — the
+  # `takeWhile`/`atEnd?`/`readLine` collide elsewhere in this file: the
   # prelude-interface build picks the wrong candidate and reports an arity
   # mismatch even though the receiver type here is unambiguous.
   let atFrontmatterOpen?(cursor: Input) -> Bool do
@@ -173,7 +173,7 @@ private do
 
   # A cursor advanced to the next `\n` (not past it), and the text skipped.
   #
-  # Hand-rolled rather than `Input#takeWhile` — see `scanText`'s comment on why.
+  # Hand-rolled rather than `Input#takeWhile`: see `scanText`'s comment on why.
   let scanLine(cursor: Input) -> (String, Input) do
     var cur = cursor
     var chars: [Char] = []
@@ -202,7 +202,7 @@ private do
 
   # A frontmatter value's text, parsed as a `[a, b, c]` list or a scalar.
   # Splits `text` on commas that are not nested inside `[]`, `()`, `<>`, or
-  # `{}` — so a `params` entry's type, `Map<String, Integer>` or
+  # `{}`, so a `params` entry's type, `Map<String, Integer>` or
   # `[Dependency, Other]`, stays one list item rather than splitting on its
   # own internal comma.
   let splitTopLevelCommas(text: String) -> [String] do
@@ -256,7 +256,7 @@ private do
     if colon == None
       TemplateParam { name: raw.trim, type: "" }
     else
-      # `.or(0)` rather than destructuring — see `parseFrontmatterLine`'s
+      # `.or(0)` rather than destructuring: see `parseFrontmatterLine`'s
       # comment on why.
       let index = colon.or(0)
       TemplateParam { name: raw.take(index).trim, type: raw.drop(index + 1).trim }
@@ -267,7 +267,7 @@ private do
   # generic `map`/`reduce` call: `[String]`'s element type is itself a type
   # that implements `Enumerable`, and going through the shared HOF name here
   # sends the prelude-interface build's overload resolution to `String`'s own
-  # `reduce` (iterating characters) instead of `List`'s — the bound block
+  # `reduce` (iterating characters) instead of `List`'s: the bound block
   # parameter then type-checks as `Char`, not `String`. Same collision class
   # as `Input#takeWhile`/`atEnd?`/`string` elsewhere in this file.
   let parseTemplateParams(names: [String]) -> [TemplateParam] do
@@ -334,7 +334,7 @@ private do
     (chars.join(""), cur)
   end
 
-  # Strips trailing spaces and tabs (not newlines) — the indentation a `<%-`
+  # Strips trailing spaces and tabs (not newlines): the indentation a `<%-`
   # opener asks to have removed from the text before it.
   let trimTrailingIndent(text: String) -> String do
     var chars = text.chars
@@ -347,7 +347,7 @@ private do
     chars.join("")
   end
 
-  # `<%=`, `<%==`, `<%#`, or plain `<%` — which kind of region this is, and
+  # `<%=`, `<%==`, `<%#`, or plain `<%`, which kind of region this is, and
   # the cursor past the marker.
   let classifyTag(cursor: Input) -> (String, Input) do
     if cursor.peek == Just('=') && cursor.peekAt(1) == Just('=')
@@ -401,7 +401,7 @@ private do
     Ok((scanned, rest))
   end
 
-  # Scans the template body — everything after any frontmatter — into nodes.
+  # Scans the template body (everything after any frontmatter) into nodes.
   let scanBody(cursor: Input) -> Result<([Node], Input), TemplateError> do
     var cur = cursor
     var nodes: [Node] = []

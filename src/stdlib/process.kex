@@ -114,7 +114,7 @@ module Process do
   #
   # The state you pass is the server's initial state. Every +slot+ in the
   # +serving+ block becomes a method on the returned +Server+, and each answers
-  # a +Result+ — a call can time out or find the process gone.
+  # a +Result+: a call can time out or find the process gone.
   #
   # @param state [X] the server's initial state
   # @return [Server<X>] a handle on the running server
@@ -134,7 +134,7 @@ module Process do
   # arguments containing spaces need no quoting. Output is captured as UTF-8
   # strings.
   #
-  # A non-zero exit status is still +Ok+ — the program ran and said something,
+  # A non-zero exit status is still +Ok+: the program ran and said something,
   # which is information, not a failure to run it. +Error+ means the child
   # could not be started at all.
   #
@@ -164,7 +164,7 @@ module Process do
   # Runs an executable with the CALLER's stdout and stderr, so its output
   # appears as it is produced rather than in one block when it exits.
   #
-  # Answers the exit code; nothing is captured — that is the trade, and it is
+  # Answers the exit code; nothing is captured: that is the trade, and it is
   # what a long-running child a person is watching needs (kexhq/kex#187).
   #
   # +run+ remains the one to use when the output is data to be READ.
@@ -271,7 +271,7 @@ end
 make Pid do
   # Sends +msg+ to the process, unchanged, as a raw BEAM term.
   #
-  # Sending never blocks and never fails, even when the process is gone —
+  # Sending never blocks and never fails, even when the process is gone:
   # that is the BEAM's model, not an oversight. Monitor the process when
   # delivery matters.
   #
@@ -395,7 +395,7 @@ make Server<X> do
   # Returns the same server with a different default call timeout, in
   # milliseconds.
   #
-  # The server is untouched — this is a new view of it, so one slow call can be
+  # The server is untouched: this is a new view of it, so one slow call can be
   # given more room without changing anything for other callers.
   #
   # @param timeout [Integer] the call timeout in milliseconds
@@ -440,8 +440,8 @@ end
 make From<X> do
   # Answers the pending call this value identifies.
   #
-  # A slot that cannot answer immediately — because it is waiting on something
-  # else — omits +reply+ from its transition and calls this later instead.
+  # A slot that cannot answer immediately, because it is waiting on something
+  # else: omits +reply+ from its transition and calls this later instead.
   #
   # @param value [X] the answer to send
   # @return [Void]

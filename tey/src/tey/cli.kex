@@ -94,7 +94,7 @@ foul parser -> OptionConfig do
       Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
     end
     .command("help", "[--json]", "show this help") do |options|
-      Tey.Cli.help(options.flagEnabled?("json"))
+      Tey.Cli.showHelp(options.flagEnabled?("json"))
     end
     # Bare `tey kex` lists, rather than reporting the group name as an
     # unknown command. A group with subcommands is still a word somebody
@@ -156,9 +156,11 @@ end
 # to `run` as well: reporting it with the help text is the one policy every
 # tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
-  Tey.Cli.announceToolchain
   match Tey.Cli.parser.parse(args) do
-    Error(_) => Tey.Cli.cli.run(args)
+    Error(_) => do
+      Tey.Cli.announceToolchain
+      Tey.Cli.cli.run(args)
+    end
     Ok(options) => Tey.Cli.dispatchParsed(args, options)
   end
 end
@@ -552,8 +554,10 @@ private do
     # `--help`, and a line with no command at all, are both `run`'s job — but
     # its exits for them call `this.printHelp`, which the BEAM backend emits at
     # the wrong arity, so the compiled `tey` answers `undef` (kexhq/kex#192).
-    # The text is the same from here; drop this once that call lowers right.
-    return Tey.Cli.cli.printHelp if options.flagEnabled?("help") || options.arguments.empty?
+    # Call directly rather than going through `run`, whose help exit used to
+    # lower at the wrong arity on BEAM (kexhq/kex#192).
+    return Tey.Cli.parser.printHelp if options.flagEnabled?("help") || options.arguments.empty?
+    Tey.Cli.announceToolchain
     # A built-in needs no manifest, and reading one costs a `kex --emit-ast`
     # per invocation — a price `bin/kex` would pay on every single `kex` call,
     # since it asks `tey kex which` where the compiler is. So a package's own
@@ -593,7 +597,7 @@ private do
   # package.kex with a second manifest reader of its own. Outside a package it
   # is the built-ins alone: no package.kex is a state, not a failure, and an
   # editor asks in every workspace it opens.
-  foul help(asJson: Bool) -> Integer do
+  foul showHelp(asJson: Bool) -> Integer do
     return Tey.Cli.cli.printHelp if !asJson
     let entries = Tey.Cli.cli.commands.map do |command|
       { name: command.name, usage: command.usage,

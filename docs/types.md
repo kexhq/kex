@@ -220,14 +220,14 @@ The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
 and take apart. It is in the prelude.
 
 ```kex
-Type.of(42).toString                  # "Integer"
-Type.of([1, 2]).toString              # "[Integer]"
-Type.of((1, "a")).toString            # "(Integer, String)"
+Type.of(42).to(String)                  # "Integer"
+Type.of([1, 2]).to(String)              # "[Integer]"
+Type.of((1, "a")).to(String)            # "(Integer, String)"
 Type.of(Date.of(2026, 7, 30))         # Result<Date, TimeError>
 Type.of(x) == Type.named("Date")      # ordinary record equality
 Type.of(point).fields                 # ["x", "y"]
 Type.of(Light).constructors           # ["Light", "Dark"]
-Type.returnedBy(Date.parse).toString  # "Result<Date, TimeError>"
+Type.returnedBy(Date.parse).to(String)  # "Result<Date, TimeError>"
 
 "34".to(Type.of(234))                 # Just(34) — `.to` takes a Type value
 5.to(String)                          # Just("5") — or a bare type name
@@ -244,8 +244,8 @@ A function's type is its signature — parameters, result, and whether calling i
 is a side effect:
 
 ```kex
-Type.of(helloWorld).toString    # "String -> String"
-Type.of(shout).toString         # "foul String -> String"
+Type.of(helloWorld).to(String)    # "String -> String"
+Type.of(shout).to(String)         # "foul String -> String"
 Type.of(shout).pure           # true
 ```
 

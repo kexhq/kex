@@ -1,6 +1,6 @@
 # A first-in-first-out queue.
 #
-# Opt-in — nothing here is in scope until `using Data.Queue`.
+# Opt-in: nothing here is in scope until `using Data.Queue`.
 #
 #   using Data.Queue
 #
@@ -15,7 +15,7 @@
 #   q.dequeue             # => Just((1, Queue(2, 3)))
 #   q.peek                # => Just(1)
 #
-# +items+ is +@front + @back.reverse+, so the queue is not opaque — it is
+# +items+ is +@front + @back.reverse+, so the queue is not opaque: it is
 # always a real list you can hand to anything, the same promise +Data.Set+
 # makes.
 #
@@ -23,7 +23,7 @@
 # and `Queue.from([1]).enqueue(2)` hold the same elements in different
 # +front+/+back+ splits, so they are structurally unequal even though they
 # answer the same to every method. `==` is therefore overloaded to compare
-# +items+ rather than the record fields directly — but that overload only
+# +items+ rather than the record fields directly, but that overload only
 # reaches ordinary `==` calls. Two such queues used as map keys, or matched
 # against each other as record patterns, still compare structurally on both
 # backends, and can disagree with `==`.
@@ -75,7 +75,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = this.items.reduce(acc, f)
 
-  # The empty queue — the +Monoid+ identity.
+  # The empty queue: the +Monoid+ identity.
   #
   # @return [Queue<A>] the empty queue
   identity :> Queue<A>
@@ -91,7 +91,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   combine :> Queue<A> -> Queue<A>
   let combine(other) = Queue.from(this.items + other.items)
 
-  # Returns the elements front to back. Never opaque — this is a real list.
+  # Returns the elements front to back. Never opaque: this is a real list.
   #
   # @return [[A]] the elements, front first
   #
@@ -115,7 +115,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # Returns the front element and the queue without it, wrapped in +Just+,
   # or +None+ for an empty queue.
   #
-  # Rotates +back+ into +front+ (reversing it) when +front+ has run out —
+  # Rotates +back+ into +front+ (reversing it) when +front+ has run out:
   # the one case that is not O(1), and only amortized so because each
   # element is reversed at most once over the queue's lifetime.
   #
@@ -167,7 +167,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   empty? :> Bool
   let empty? = @front.empty? && @back.empty?
 
-  # Compares two queues by their elements, front to back — NOT by their
+  # Compares two queues by their elements, front to back: NOT by their
   # +front+/+back+ split, which is not canonical. See the file header.
   #
   # @param other [Queue<A>] the queue to compare against

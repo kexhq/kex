@@ -9,18 +9,31 @@ module Net
 # A validated TCP or UDP port number in +0..65535+.
 #
 # Use +Port.from+ at input boundaries. Port zero requests an ephemeral port
-# where a listening API permits it.
+# where a listening API permits it; after binding, ask the server or socket for
+# the concrete port the operating system chose.
 record Port do
+  # The validated numeric port.
   value : Integer
 end
 
 # Whether a feature was compiled into this backend and is usable now.
+#
+# +compiled?+ describes the build; +usable?+ also accounts for the environment
+# it is running in. A browser build may contain an HTTP client, for example,
+# while browser policy still prevents a particular lower-level capability.
 record SupportValue do
+  # Whether the running Kex build contains the feature.
   compiled? : Bool
+
+  # Whether the feature can be used in the current environment.
   usable? : Bool
 end
 
 # Granular networking capabilities for the current backend and environment.
+#
+# Read this before choosing a transport dynamically. Applications that require
+# one capability can instead check that single field during startup and fail
+# with a useful message.
 record SupportReport do
   dns : SupportValue
   tcp : SupportValue
@@ -33,21 +46,30 @@ record SupportReport do
   webSocketServer : SupportValue
 end
 
+# Validated +Port+ construction.
 module Port do
   # Validates a port number.
   #
   # @param value [Integer] a number in +0..65535+
   # @return [Result<Port, NetError>] the validated port, or +Parse+
-  # @example +Port.from(443).try+.
+  #
+  # @example Reading a listen port from the environment
+  #   let number = ENV.get("PORT").flatMap { |text| text.to(Integer) }.or(8080)
+  #   let port = Port.from(number).try
   from : Integer -> Result<Port, NetError>
   let from(value) = Kex.Intrinsic.Net.port(value)
 end
 
+# Runtime discovery for optional network transports and protocols.
 module Support do
   # Reports compiled and currently usable networking features.
   #
   # @return [SupportReport] granular capability flags
-  # @example +Support.current.httpClient.usable?+.
+  #
+  # @example Explaining why an HTTP-dependent command cannot run
+  #   if !Support.current.httpClient.usable?
+  #     die("this Kex build cannot make HTTP requests here")
+  #   end
   current : SupportReport
   let current = Kex.Intrinsic.Net.support()
 end
@@ -58,8 +80,12 @@ type NetOperation = DNS | TCP | UDP | Unix | TLS | HTTPClient | HTTPServer | Web
 # Stable, backend-independent networking failure categories.
 type NetErrorKind = Parse | Resolve | Connect | Protocol | Timeout | Cancelled | Limit | Closed | ReadInProgress | UnsupportedBackend | UnsupportedOption | BrowserRestricted | OpaqueRedirect | MockEmpty | Backend
 
-# A typed networking failure. +phase+ adds optional protocol context and
-# +progress+ records bytes transferred before a partial-operation failure.
+# A typed networking failure shared by every network module.
+#
+# +kind+ is the stable category to branch on. +message+ is for a person, while
+# +phase+ adds protocol context such as a TLS handshake and +progress+ records
+# bytes transferred before a partial-operation failure. Keeping those roles
+# separate lets programs recover without matching backend-specific prose.
 record NetError do
   kind : NetErrorKind
   operation : NetOperation
@@ -72,5 +98,8 @@ make Port do
   # Renders the decimal port without a host or scheme.
   #
   # @return [String] decimal port text
+  #
+  # @example Building an address for display
+  #   IO.printLine("listening on 127.0.0.1:${port.string}")
   let string -> String = @value.to(String).or("")
 end

@@ -1,3 +1,18 @@
+# Bounded retries for operations whose failures can be classified by the
+# application.
+#
+# A retry is never automatically safe just because an error was temporary.
+# The caller owns the operation and, where necessary, a predicate that excludes
+# permanent failures and non-idempotent work. Policies bound attempts, delay,
+# and optionally total sleep so a dependency cannot stall the program forever.
+#
+#   using Control.Retry
+#
+#   let policy = Retry.exponential(4, 100.milliseconds, 2.seconds)
+#     .withJitter(0.2)
+#   Retry.run(policy, ~retryable?) do
+#     client.get("https://api.example.com/inventory")
+#   end
 module Control.Retry
 
 # A bounded retry schedule. Attempts includes the initial call.
@@ -20,10 +35,16 @@ type Sleeper = Duration -> Void
 
 # Builds a constant-delay retry policy.
 #
+# Fixed delays are predictable and useful for a local resource expected to
+# become ready shortly. For many clients sharing a remote dependency, prefer
+# exponential backoff with jitter to avoid synchronized retry bursts.
+#
 # @param maximumAttempts [Integer] total calls including the first
 # @param delay [Duration] delay before each subsequent call
 # @return [Policy] the retry schedule
-# @example +Retry.fixed(3, 100.milliseconds)+.
+#
+# @example Waiting briefly for a local test server to start
+#   let policy = Retry.fixed(5, 50.milliseconds)
 fixed : Integer -> Duration -> Policy
 let fixed(maximumAttempts, delay) = Policy {
   maximumAttempts: maximumAttempts,
@@ -36,10 +57,16 @@ let fixed(maximumAttempts, delay) = Policy {
 
 # Builds a doubling backoff capped at +maximumDelay+.
 #
+# The first retry waits +initialDelay+; later delays double until they reach
+# the cap. Add jitter for production network traffic.
+#
 # @param maximumAttempts [Integer] total calls including the first
 # @param initialDelay [Duration] delay after the first failure
 # @param maximumDelay [Duration] upper bound for each delay
 # @return [Policy] the retry schedule
+#
+# @example Backing off calls to a busy upstream service
+#   Retry.exponential(5, 200.milliseconds, 5.seconds).withJitter(0.25)
 exponential : Integer -> Duration -> Duration -> Policy
 let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
   maximumAttempts: maximumAttempts,
@@ -72,6 +99,15 @@ make Policy do
   # Returns the same schedule with symmetric bounded jitter. A fraction of
   # +0.25+ selects each actual delay from 75% through 125% of its scheduled
   # value. Fractions are clamped to +0.0..1.0+.
+  #
+  # Jitter prevents many workers that failed together from retrying together.
+  # It changes delay timing, never the number of attempts or the backoff cap.
+  #
+  # @param fraction [Float] maximum proportional variation on either side
+  # @return [Policy] a copied policy with bounded jitter
+  #
+  # @example Spreading retries by up to 20 percent
+  #   Retry.exponential(4, 1.seconds, 10.seconds).withJitter(0.2)
   let withJitter(fraction: Float) -> Policy = Policy {
     maximumAttempts: @maximumAttempts,
     initialDelay: @initialDelay,
@@ -90,6 +126,11 @@ end
 # @param policy [Policy] the bounded schedule
 # @param operation [Block<Result<X,E>>] a fresh attempt
 # @return [Result<X,E>] the first success or final failure
+#
+# @example Retrying an idempotent health check
+#   Retry.run(Retry.fixed(3, 250.milliseconds)) do
+#     HTTP.get("https://service.example.com/health")
+#   end
 run : Policy -> Block<Result<X, E>> -> Result<X, E>
 foul run(policy, operation) = runWithRandom(policy, { |error| true }, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
 
@@ -102,7 +143,11 @@ foul run(policy, operation) = runWithRandom(policy, { |error| true }, { |delay| 
 # @param predicate [Predicate<E>] whether an error may be retried
 # @param operation [Block<Result<X,E>>] a fresh attempt
 # @return [Result<X,E>] the first success or final/non-retryable failure
-# @example +Retry.run(policy, { |error| error.retryable? }, do request() end)+
+#
+# @example Retrying timeouts but returning parse failures immediately
+#   Retry.run(policy, { |error| error.kind == Timeout }) do
+#     client.get(url)
+#   end
 run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
 foul run(policy, predicate, operation) = runWithRandom(policy, predicate, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
 

@@ -8,7 +8,7 @@
 # working with a protocol that describes its fields in bits.
 #
 # Integers are arbitrary precision, and a negative one behaves as if it were
-# written in infinite-precision two's complement — so +Bits.not(0)+ is +-1+ and
+# written in infinite-precision two's complement, so +Bits.not(0)+ is +-1+ and
 # +Bits.and(-1, 255)+ is +255+, with no word size to overflow. Shifts and bit
 # indices count from bit 0 (the least significant bit).
 module Bits do
@@ -85,7 +85,7 @@ module Bits do
   shiftLeft : Integer -> Integer -> Integer
   let shiftLeft(n, by) = Kex.Intrinsic.Bits.shiftLeft(n, by)
 
-  # Shifts +n+ right by +by+ bits, propagating the sign — the result of
+  # Shifts +n+ right by +by+ bits, propagating the sign: the result of
   # shifting a negative number stays negative. Raises if +by+ is negative.
   #
   # @param n [Integer] the value to shift

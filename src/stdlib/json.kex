@@ -1,6 +1,6 @@
 # JSON parsing and serialization.
 #
-# Opt-in — nothing here is in scope until `using JSON`.
+# Opt-in: nothing here is in scope until `using JSON`.
 #
 #   using JSON
 #
@@ -43,7 +43,7 @@ type Error
 
 # Parses a JSON document, strictly.
 #
-# The whole text must be one JSON value with nothing after it — trailing input
+# The whole text must be one JSON value with nothing after it: trailing input
 # is +TrailingInput+, not a silently ignored tail. Objects come back as maps
 # with atom keys, arrays as lists, +null+ as +None+.
 #
@@ -66,7 +66,7 @@ let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
 # Parses a JSON document with parsing options.
 #
 # The one option today is +allowComments+, which accepts +//+ and +/* */+
-# comments — the JSONC dialect config files often use. It is off by default,
+# comments: the JSONC dialect config files often use. It is off by default,
 # so strict JSON stays strict unless you ask otherwise. An unrecognised option
 # is +UnknownOption+, not a silent no-op.
 #
@@ -87,7 +87,7 @@ private do
   # Camel-case atom literals are represented by map-field syntax today.
   # Derive the key from that syntax so the compiler has no JSON-specific
   # constant or option-name special case. The one-field map has exactly one
-  # key, so the single-element pattern is what unwraps it — `at(0)` would
+  # key, so the single-element pattern is what unwraps it: `at(0)` would
   # answer `Just(key)`, and there is no atom literal to `or` it with.
   let allowCommentsKey = match Kex.Intrinsic.Map.keys({ allowComments: false }) do
     [key] => key
@@ -112,7 +112,7 @@ end
 # Renders a Kex value as strict JSON text.
 #
 # Maps become objects, lists become arrays, +None+ becomes +null+, and strings
-# are escaped. A map written with atom keys — the usual Kex spelling — renders
+# are escaped. A map written with atom keys (the usual Kex spelling) renders
 # with those names as strings, so +{ name: "Ada" }+ becomes +{"name":"Ada"}+.
 # Object keys come out in canonical key order.
 #
@@ -155,7 +155,7 @@ end
 
 private do
   # A JSON object key is a string, but a Kex map literal is written with ATOM
-  # keys (`{ n: 1 }`) — the shape most values being stringified actually have.
+  # keys (`{ n: 1 }`): the shape most values being stringified actually have.
   # Rendering one gives `:n`, so drop the leading colon; anything else goes
   # through its ordinary text form.
   let objectKey(key: Any) -> String do

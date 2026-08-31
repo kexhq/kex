@@ -1,7 +1,7 @@
 # The built-in testing DSL: +describe+, +it+, +before+, +after+, and
 # assertion helpers.
 #
-# Everything here is always in scope — no import, and no separate test
+# Everything here is always in scope: no import, and no separate test
 # runner. Write a test file and run it with +kex+:
 #
 #   describe "arithmetic" do
@@ -28,7 +28,7 @@
 # Groups related test cases under a label, and runs them.
 #
 # The block is called immediately. +describe+ blocks nest, and the output is
-# indented to match. This is a foul function — it prints.
+# indented to match. This is a foul function: it prints.
 #
 # @param label [String] what this group is about
 # @param block [Block] the tests, and any nested groups
@@ -46,9 +46,9 @@ describe : String -> Block<Void> -> Void
 
 # Defines a single test case, and runs it.
 #
-# The block runs, and anything thrown inside it — typically a failed +assert+ —
+# The block runs, and anything thrown inside it: typically a failed +assert+:
 # marks the test failed without aborting the rest of the suite. This is a foul
-# function — it prints.
+# function: it prints.
 #
 # @param label [String] what this case establishes, phrased as a claim
 # @param block [Block] the case body
@@ -94,7 +94,7 @@ before : Block<Void> -> Void
 # Registers setup with an explicit scope: +:each+ before every test in the
 # group, +:all+ once before the first.
 #
-# Use +:all+ for setup that is expensive and that the tests do not change —
+# Use +:all+ for setup that is expensive and that the tests do not change,
 # and +:each+ for anything a test might leave in a different state.
 #
 # @param scope [Atom] +:each+ or +:all+
@@ -110,14 +110,14 @@ before : Block<Void> -> Void
 #     counter = 0
 #   end
 # The scoped form the runtime has always accepted, and the paragraph above has
-# always documented, but which was never declared — so every spec using
+# always documented, but which was never declared, so every spec using
 # `before(:all)` had to be `# kex: no-check` (kexhq/kex#143).
 before : Atom -> Block<Void> -> Void
 
 # Registers cleanup to run after the current group's tests.
 #
-# Defaults to +:each+. Cleanup is unconditional — it runs whether the test
-# passed or failed — and inner per-test hooks run before outer hooks.
+# Defaults to +:each+. Cleanup is unconditional: it runs whether the test
+# passed or failed, and inner per-test hooks run before outer hooks.
 #
 # @param block [Block] the cleanup to run
 # @return [Void]
@@ -144,7 +144,7 @@ after : Atom -> Block<Void> -> Void
 # Fails the enclosing +it+ when +value+ is falsy.
 #
 # The primitive every other assertion is built on. Prefer the +Assert+ helpers
-# where one fits — they report what was expected and what arrived, which a
+# where one fits: they report what was expected and what arrived, which a
 # bare +assert+ cannot.
 #
 # @param value [Bool] the condition that must hold
@@ -158,7 +158,7 @@ assert : Bool -> Bool
 # Fails the enclosing +it+ when +value+ is falsy, showing +message+ in the
 # failure output.
 #
-# Say what should have been true, not what went wrong — the runner already
+# Say what should have been true, not what went wrong: the runner already
 # reports that the assertion failed.
 #
 # @param value [Bool] the condition that must hold
@@ -204,7 +204,7 @@ module Assert do
   #   Assert.notEqual(newId, oldId)
   let notEqual(actual, expected) = assert(actual != expected, "expected values to differ, both were ${actual}")
 
-  # Fails unless +value+ is truthy — anything except +false+, +None+ and
+  # Fails unless +value+ is truthy: anything except +false+, +None+ and
   # +()+.
   #
   # @param value [A] the value to test
@@ -214,7 +214,7 @@ module Assert do
   #   Assert.truthy("hello".contains?("ell"))
   let truthy(value) = assert(value, "expected a truthy value")
 
-  # Fails unless +value+ is falsy — +false+, +None+ or +()+.
+  # Fails unless +value+ is falsy: +false+, +None+ or +()+.
   #
   # @param value [A] the value to test
   # @return [Bool] +true+ when the value is falsy

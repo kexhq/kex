@@ -9,8 +9,8 @@
 #   scores.sort                      # => [2, 4, 7, 9]
 #   scores.map { |n| n * 10 }.sum    # => 220
 #
-# Anything that might not be there — the first element, an element at an
-# index, a search result — answers with an +Optional+, so an empty list is an
+# Anything that might not be there: the first element, an element at an
+# index, a search result: answers with an +Optional+, so an empty list is an
 # ordinary case rather than a crash:
 #
 #   [].first.or(0)        # => 0
@@ -352,7 +352,7 @@ make [X], implement: Enumerable, Foldable do
   end
 
   # Returns the longest leading run of elements satisfying +pred+. Stops at the
-  # first element that does not, so it is not +filter+ — later matches are
+  # first element that does not, so it is not +filter+: later matches are
   # dropped with everything after the first failure.
   #
   # @param pred [(X) -> Bool]
@@ -366,7 +366,7 @@ make [X], implement: Enumerable, Foldable do
     return pred(x) then [x | xs.takeWhile(pred)] else []
   end
 
-  # Returns what is left after +takeWhile+ — everything from the first element
+  # Returns what is left after +takeWhile+: everything from the first element
   # that does not satisfy +pred+ onwards.
   #
   # @param pred [(X) -> Bool]
@@ -532,20 +532,19 @@ make [X], implement: Enumerable, Foldable do
   sum :> (X -> Number) -> Number
   let sum(f) = Kex.Intrinsic.List.sum(this.map(f))
 
-# Receiver is `[X]`, not `[String | Char]`: the intrinsic renders whatever it
-# is given, so `[1, 2].join(", ")` is "1, 2" on both backends. The narrower
-# receiver only ever fired once element types became precise enough to catch
-# it — until then `map`/`filter` handed `join` an unknown element type and the
-# restriction checked nothing.
-  # Concatenates all elements, placing +sep+ between each adjacent pair.
-  # With no separator the elements are joined directly.
+  # Renders and concatenates the elements, placing +sep+ between adjacent
+  # values. With no separator, the rendered values are joined directly.
   #
-  # @param sep [String]
-  # @return [String]
+  # Elements do not have to be strings: each is rendered using the same
+  # user-facing conversion used by interpolation and printing.
+  #
+  # @param sep [String] text placed between adjacent elements
+  # @return [String] the concatenated rendering
   #
   # @example
   #   ["hello", "world", "kex"].join(", ")   # => "hello, world, kex"
   #   ["a", "b", "c"].join                   # => "abc"
+  #   [1, 2, 3].join(" + ")                 # => "1 + 2 + 3"
   join :> String -> String
   let join(sep) = Kex.Intrinsic.List.join(this, sep)
 

@@ -1,7 +1,7 @@
 # SI units: metres, grams, watts, volts and the rest, with prefixes and
 # dimensional arithmetic.
 #
-# Opt-in — nothing here is in scope until `using Units.SI`.
+# Opt-in: nothing here is in scope until `using Units.SI`.
 #
 #   using Units.SI
 #
@@ -14,7 +14,7 @@
 # Every value is a +Measure+ from the prelude, so the arithmetic, conversion
 # and comparison described there apply unchanged. What this module adds is the
 # SI vocabulary, the prefixes, and a table of which dimension results from
-# multiplying or dividing two others — so +2.newton * 3.meter+ answers in
+# multiplying or dividing two others, so +2.newton * 3.meter+ answers in
 # joules and +100.meter / 10.sec+ in metres per second.
 module Units.SI
 
@@ -227,7 +227,7 @@ let to(measure: Measure, String, @Nano) -> String? = Just(displayWithPrefix(meas
 # Renders a measure at a chosen prefix and unit.
 #
 # Answers +None+ when the measure and the target unit are of different
-# dimensions — you cannot express watts in metres, and this says so rather
+# dimensions: you cannot express watts in metres, and this says so rather
 # than producing a wrong number.
 #
 # @param String [Type] the target type
@@ -282,7 +282,7 @@ let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
 #
 # The spelled-out form of +/+: +100.meter.per(10.sec)+ and
 # +100.meter / 10.sec+ are the same call. Metres over seconds is speed, energy
-# over time is power, force over area is pressure — the dimension table
+# over time is power, force over area is pressure: the dimension table
 # decides, and the symbol follows it.
 #
 # @param measure [Measure] the numerator
@@ -391,7 +391,7 @@ end
 
 private do
   # Divides `canonical` by a prefix factor. The conversion is exact in
-  # principle — 0.000005 W is 5 μW — but neither the measured value nor the
+  # principle (0.000005 W is 5 μW) but neither the measured value nor the
   # prefix factor is exactly representable in binary, so the quotient lands an
   # ulp or two off (5.000000000000001). Round back to 15 significant digits,
   # comfortably inside a double's ~15.95, so prefixed measures read the way

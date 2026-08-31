@@ -1,9 +1,11 @@
 # Modules and Visibility
 
-> **Status.** Module declaration, nesting, `private do`, and
-> qualified access all work in the interpreter. `using` is currently a **no-op**
-> in the interpreter (names are not actually brought into scope — see
-> `docs/testing.md`), and a full module system across BEAM modules is still in
+> **Status.** Module declaration, nesting, `private do`, and qualified access
+> all work in the interpreter. `using` — including `only:`, `except:`, and
+> `as:` — is parsed and resolved during semantic analysis
+> (`src/semantic/resolve_pass.cxx`), but the tree-walk interpreter still treats
+> it as a **no-op** at runtime (names are not actually brought into scope — see
+> `docs/testing.md`). A full module system across BEAM modules is still in
 > progress.
 
 ## Module Declaration
@@ -42,7 +44,8 @@ Visibility scoping:
 
 ## Using (Scoped Imports)
 
-`using` brings all public names from a module into scope:
+`using` brings public names from a module into scope. Bare, it takes everything
+public:
 
 ```kex
 using Html.Language do
@@ -54,7 +57,49 @@ using Html.Language do
 end
 ```
 
-No selective imports — `using` brings everything public. If a module exports too much, split it.
+### Selective imports
+
+`only:` takes just the names listed; `except:` takes everything but them. The
+two are mutually exclusive — using both is an error. `as:` binds the module to
+a shorter name and imports nothing, leaving call sites qualified.
+
+```kex
+using Math, only: [square, cube]     # square and cube, nothing else
+using Math, except: [cube]           # everything public but cube
+using Pricing, as: P                 # no names imported; call it P.total
+```
+
+A name in an `only:`/`except:` list is a function, a type, or an operator in
+parentheses:
+
+```kex
+using Vector, only: [magnitude, (+), (==)]
+```
+
+Prefer a short `only:` list to a bare `using`: it says what this scope borrowed,
+and a name added to the module later cannot appear here without an edit. See
+[STYLE.md](../STYLE.md) §7 for the full ladder — qualified call, `as:`,
+`only:`, then bare `using`.
+
+### Scope
+
+Three placements, narrowest first:
+
+```kex
+let report(rows: [Row]) -> String do
+  using Formatting                   # rest of this function body
+  return rows.map(&.render).join("\n")
+end
+
+module App do
+  using Http do                      # just these declarations
+    let handleHome(req: Request) -> Response = Response.ok("Welcome!")
+  end
+end
+
+module URI                           # rest of the file
+using Parsing
+```
 
 ## Effects in a Module
 

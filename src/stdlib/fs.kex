@@ -1,7 +1,7 @@
 # The filesystem: reading and writing files, walking directories, and
 # manipulating paths.
 #
-# +FS+ is not in the prelude — start with +using FS+.
+# +FS+ is not in the prelude: start with +using FS+.
 #
 #   using FS
 #
@@ -154,7 +154,7 @@ module FS do
     #
     # Answers +Error(ReadFailed(path))+ when the file does not exist or cannot
     # be read, and +Error(InvalidUtf8(path, offset))+ when the bytes are not
-    # valid UTF-8 — so a missing or non-text file is something you handle
+    # valid UTF-8, so a missing or non-text file is something you handle
     # rather than something that stops the program. Reach for
     # +FS.File.readBytes+ when the contents are not text.
     #
@@ -211,7 +211,7 @@ module FS do
     # Writes +content+ to +path+, replacing whatever was there.
     #
     # Creates the file if it does not exist. The containing directory must
-    # already exist — see +FS.Directory.create+. Answers +false+ when the
+    # already exist: see +FS.Directory.create+. Answers +false+ when the
     # write fails.
     #
     # @param path [FilePath] the file to write
@@ -250,7 +250,7 @@ module FS do
     append : FilePath -> String -> Bool
     foul append(path, content) = Kex.Intrinsic.File.append(path, content)
 
-    # Returns +true+ when something exists at +path+ — a file, a directory, or
+    # Returns +true+ when something exists at +path+: a file, a directory, or
     # anything else. Use +file?+ or +directory?+ when the kind matters.
     #
     # @param path [FilePath] the path to test
@@ -269,7 +269,7 @@ module FS do
     exists? : FilePath -> Bool
     foul exists?(path) = Kex.Intrinsic.File.exists?(path)
 
-    # Returns +true+ when +path+ exists and is a regular file — not a
+    # Returns +true+ when +path+ exists and is a regular file: not a
     # directory.
     #
     # @param path [FilePath] the path to test
@@ -328,7 +328,7 @@ module FS do
     copy : FilePath -> FilePath -> Bool
     foul copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
 
-    # Renames — or moves — the file at +src+ to +dst+.
+    # Renames (or moves) the file at +src+ to +dst+.
     #
     # @param src [FilePath] the current path
     # @param dst [FilePath] the new path
@@ -364,7 +364,7 @@ module FS do
     # NOT `lines`: FilePath is an alias for String, so a receiver function
     # named `lines` here is indistinguishable from String's own `lines` at
     # every call site, and merely saying `using FS` made `text.lines`
-    # ambiguous. `readLines` also says what it does — it reads the file.
+    # ambiguous. `readLines` also says what it does: it reads the file.
     readLines : FilePath -> [String]?
     foul readLines(path) = Kex.Intrinsic.File.lines(path)
 
@@ -373,7 +373,7 @@ module FS do
     #
     # Unlike +readLines+, the file is read a line at a time off a handle held
     # open for the feed's lifetime, so this is the way to walk a file too large
-    # to hold in memory — nothing but the current line is retained.
+    # to hold in memory: nothing but the current line is retained.
     #
     # A +Feed+ rather than a +Stream+ because that is what a file honestly is:
     # reading consumes, and there is no rewinding. Taking twice walks forward
@@ -381,7 +381,7 @@ module FS do
     # replay, +toStream+ buys that back.
     #
     # The feed ends at the last line, so asking for more lines than the file
-    # has answers just the lines there are — unlike +Stream.Sequence+, which is
+    # has answers just the lines there are: unlike +Stream.Sequence+, which is
     # deliberately infinite.
     #
     #   FS.File.feed("two-lines.txt").map { |lines| lines.take(5) }.or([])
@@ -405,7 +405,7 @@ module FS do
 
     # Returns the file's size in bytes, or +None+ when it cannot be read.
     #
-    # Bytes, not characters — a file of non-ASCII text has more bytes than it
+    # Bytes, not characters: a file of non-ASCII text has more bytes than it
     # has characters.
     #
     # @param path [FilePath] the file to measure
@@ -434,11 +434,11 @@ module FS do
     #
     # @example Reporting a file unambiguously
     #   IO.printError("failed: ${FS.File.absolute(path).or(path)}")
-    # Path manipulation lives in FS.Path — `basename`, `dirname`,
+    # Path manipulation lives in FS.Path: `basename`, `dirname`,
     # `extension` and `join` used to be here too, but a name cannot sit in
     # both modules: FilePath IS String, so two same-named receiver functions
     # on it are indistinguishable at every call site. `absolute` stays
-    # because it is not lexical — it asks the process where it is.
+    # because it is not lexical: it asks the process where it is.
     absolute : FilePath -> String?
     foul absolute(path) = Kex.Intrinsic.File.absolute(path)
   end
@@ -446,7 +446,7 @@ module FS do
   # Path arithmetic: joining, splitting, normalising and comparing paths.
   #
   # Everything here is pure string manipulation with no filesystem access, so
-  # the answer is the same whether or not the path exists — which also means
+  # the answer is the same whether or not the path exists, which also means
   # these functions can be called from ordinary pure code, unlike +FS.File+.
   # POSIX separators only for now.
   #
@@ -467,7 +467,7 @@ module FS do
     #
     # Repeated separators collapse, so +join("a/", "/b")+ is +"a/b"+ and not
     # +"a//b"+. An absolute second part does NOT restart the path, the way
-    # Ruby's +Pathname#join+ would — use that part on its own if that is what
+    # Ruby's +Pathname#join+ would: use that part on its own if that is what
     # you mean.
     #
     # @param a [FilePath] the first part
@@ -523,8 +523,8 @@ module FS do
     # Resolves +.+ and +..+ in a path, lexically.
     #
     # Because it is lexical it never follows a symlink and never touches the
-    # disk. A leading +..+ in a RELATIVE path is kept — there is no way to
-    # know what it escapes to — while one in an absolute path is dropped,
+    # disk. A leading +..+ in a RELATIVE path is kept: there is no way to
+    # know what it escapes to, while one in an absolute path is dropped,
     # since +/+ has no parent.
     #
     # @param path [FilePath] the path to normalise
@@ -623,7 +623,7 @@ module FS do
       return head
     end
 
-    # Returns the last segment of the path — the file or directory name.
+    # Returns the last segment of the path: the file or directory name.
     #
     # The root itself answers +"/"+, and an empty path answers +"."+.
     #
@@ -678,7 +678,7 @@ module FS do
 
     # Returns the basename with its extension removed.
     #
-    # A name that IS its extension — +".gitignore"+ — keeps it, because it has
+    # A name that IS its extension (+".gitignore"+) keeps it, because it has
     # none to drop.
     #
     # @param path [FilePath] the path to inspect
@@ -851,7 +851,7 @@ module FS do
 
     # Removes the directory at +path+ and everything inside it, recursively.
     #
-    # This deletes data and cannot be undone — check the path before calling
+    # This deletes data and cannot be undone: check the path before calling
     # it, particularly when it was computed or came from user input.
     #
     # @param path [FilePath] the directory tree to remove
@@ -866,7 +866,7 @@ module FS do
     deleteAll : FilePath -> Bool
     foul deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
 
-    # Lists the names in +path+ — both files and directories, one level deep.
+    # Lists the names in +path+: both files and directories, one level deep.
     #
     # The results are bare names, not paths; join them with +path+ to get
     # something you can open. Answers +None+ when the directory cannot be
