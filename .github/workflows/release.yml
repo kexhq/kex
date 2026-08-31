@@ -32,8 +32,7 @@ name: Release
 #
 # The npm package is built and published here too, with VERSION as its version
 # number — every channel answers "which Kex is this?" with the same number.
-# CI covers the dev side: every push publishes <VERSION>-dev.<sha> under the
-# floating `next` dist-tag (see ci.yml's wasm job).
+# npm is published only on release; there is no per-merge dev build.
 #
 # docs/releasing.md is the maintainer's runbook: how to run one, what each job
 # publishes, and what to do when a job fails.
@@ -739,8 +738,7 @@ jobs:
   # before it exists on npm — the tag is what makes it real.
   #
   # The dist-tag mirrors the image channels exactly: stable moves `latest`,
-  # a pre-release gets its channel name (`rc`, `beta`). CI's `next` tag floats
-  # over dev builds and is never touched here.
+  # a pre-release gets its channel name (`rc`, `beta`).
   #
   # Unlike every other job, this one is NOT idempotent-by-replacement: npm
   # versions are immutable, so a re-run can only skip — the first publish of a
