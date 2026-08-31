@@ -2159,10 +2159,18 @@ struct Lowering {
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
             ex->node = localCall(n.name, {});
-        else if (knownFns.count(n.name))
-            ex->node = localCall(n.name, std::move(args));
+        // A `using` import of this lexical scope outranks the flat knownFns
+        // set. That set spans the whole merged program and carries every
+        // module's `make` methods under their bare names, so `post` in main
+        // after `using Rodolfo` lowered to a nonexistent local `post/2` (or,
+        // when a colliding function happens to exist at the same arity, to
+        // that function) although the tree-walker honours the import. The
+        // receiver path already lets the source import win over identically
+        // named prelude methods; see lowerMethodCall.
         else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
             ex->node = localCall(imp->second, std::move(args));
+        else if (knownFns.count(n.name))
+            ex->node = localCall(n.name, std::move(args));
         else if (subst.count(n.name))
             // A lexical binding (for example a `block` parameter) can hold a
             // callable value. Keep this indirect apply distinct from a truly

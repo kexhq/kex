@@ -4412,6 +4412,35 @@ int main(int argc, char *argv[]) {
         program.items = std::move(merged);
         break;
       }
+
+      // Cross-file dependency resolution: walk `using` statements and
+      // qualified module references, parse their source files, and merge
+      // them into `program` so the checker AND the evaluator see every
+      // declaration a project-local module makes — mirrors what `mode ==
+      // "compile"` below already does for BEAM (see its own comment).
+      // Without this, a call into a module declared in a different file
+      // took the checker's lenient fallback instead of being verified
+      // against that function's real signature: a qualified call typechecked
+      // with any argument shape and only failed at runtime, and a bare call
+      // typechecked only by accident, breaking outright the moment a
+      // same-named prelude function also existed (docs/known-gaps.md,
+      // "Cross-file `using` imports are barely type-checked").
+      {
+        kex::semantic::Analyzer dependencyAnalysis(&preludeSemanticInterfaces());
+        (void)dependencyAnalysis.analyze(program);
+        auto qualifiedModules = dependencyAnalysis.referencedModules();
+        for (auto it = qualifiedModules.begin(); it != qualifiedModules.end();) {
+          const auto imported = preludeSemanticInterfaces().modules.find(*it);
+          if (imported != preludeSemanticInterfaces().modules.end() &&
+              imported->second.automaticImport)
+            it = qualifiedModules.erase(it);
+          else
+            ++it;
+        }
+        resolveBeamDeps(program, moduleRootsFor(filepath),
+                        &preludeSemanticInterfaces(), qualifiedModules);
+      }
+
       if (!expandParsedProgram(program, false)) return 1;
     }
 
