@@ -5,7 +5,7 @@
 main do
   let task = Task.start do
     loop do
-      let now = Time.now().iso.split(".").first.try
+      let Just(now) = Time.now().iso.split(".").first
       IO.print(Console.CLEAR)
       IO.printLine(now.enclose(Console.BLUE + Console.BOLD, Console.RESET))
       Task.sleep(1.seconds)
