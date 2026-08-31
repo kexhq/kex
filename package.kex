@@ -26,8 +26,6 @@ bundle "kex" do
           description: "Build the Emscripten target and run its suite")
   command("repl", run: "make repl",
           description: "Start the REPL on the freshly built compiler")
-  command("serve", run: "tools/serve.kex",
-          description: "Serve the WebAssembly demo on localhost")
   command("tey", run: "make build-tey",
           description: "Rebuild Tey and ./tey-run from this checkout")
   command("docs-all", run: "tools/build-docs.sh",
