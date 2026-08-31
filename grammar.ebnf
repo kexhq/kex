@@ -181,8 +181,14 @@ return_annotation = ARROW type_expr ;
 
 clause_body
   = EQUALS expr
-  | DO body END
+  | DO body rescue_block? END
   | DO PIPE params PIPE body END
+  ;
+
+rescue_block
+  = RESCUE RETURN expr
+  | RESCUE PIPE LOWER_IDENT PIPE body
+  | RESCUE match_clause+
   ;
 
 params = param ( COMMA param )* | (* empty *) ;
@@ -211,7 +217,7 @@ type_annotation
 
 (* ===== Main ===== *)
 
-main_block = MAIN ( LPAREN params RPAREN )? DO body END ;
+main_block = MAIN ( LPAREN params RPAREN )? DO body rescue_block? END ;
 
 (* ===== Compiled ===== *)
 
@@ -289,6 +295,7 @@ expr
   | return_expr
   | spawn_expr
   | with_expr
+  | trying_expr
   | break_expr
   | next_expr
   | lambda
@@ -412,6 +419,8 @@ spawn_expr = SPAWN DO body END ;
    per-process and are snapshotted at spawn, so a process spawned inside the
    region inherits the replacement and one spawned outside it never sees. *)
 with_expr = WITH type_name EQUALS expr DO body END ;
+
+trying_expr = TRYING DO body rescue_block END ;
 
 (* break/next apply to the nearest enclosing while/loop only — not to
    each blocks or other closures. Using them inside a closure (a do-block

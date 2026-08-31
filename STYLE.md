@@ -216,6 +216,11 @@ does not treat it as an exit.
 adjacent, most specific first, with no unrelated declaration in between
 (`split-clauses`).
 
+**[A]** Start an executable script with its `main` block, then order functions
+in the call path a reader encounters. Kex does not require declarations before
+their use; do not bury the entry point after helpers merely to satisfy a
+dependency-first ordering.
+
 **[L]** **A pattern-matching function types itself once, in a standalone
 signature.** Clause heads then carry patterns only — no per-parameter
 annotations, no return annotation (`clause-signature`):
@@ -1038,6 +1043,34 @@ let base = URL.parse("https://example.test/a/").try     # yes
 match URL.parse(url) do                                  # only when the
   Ok(u)    => ...                                        # two branches
   Error(e) => ...                                        # really differ
+end
+```
+
+**[L]** A catch-all rescue binds its error between pipes and shares the
+enclosing function, `main`, or `trying` block's `end`:
+
+```kex
+foul load(path: String) -> String do
+  return FS.File.read(path).try
+rescue |error|
+  IO.printError("load: ${error}\n")
+  return ""
+end
+```
+
+There is no `rescue do |error| ... end` form. The rescue is already part of a
+body opened by `do`, so a second block boundary only adds another `end`.
+
+Use rescue arms when different error patterns receive different answers, and
+the inline form when every failure returns one expression:
+
+```kex
+rescue
+  NotFound(path) => return "missing: ${path}"
+  PermissionDenied(_) => return "forbidden"
+end
+
+rescue return None
 end
 ```
 

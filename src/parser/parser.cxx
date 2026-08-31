@@ -4355,24 +4355,22 @@ auto Parser::parseRescueBlock() -> ast::RescueBlock {
     return rescue;
   }
 
-  // `rescue do |param| ... end` — catch-all block
-  if (check(TokenType::Do)) {
-    advance();
+  // `rescue |param| ... end` — concise catch-all. The enclosing function,
+  // main, or trying block owns the `end`; unlike the explicit `do` form this
+  // rescue does not open and close a nested block of its own.
+  if (match(TokenType::Pipe)) {
     rescue.isCatchAll = true;
-    if (match(TokenType::Pipe)) {
-      if (check(TokenType::LowerIdent)) {
-        rescue.catchAllParam = advance().value;
-      } else {
-        error("Expected parameter name after '|' in rescue");
-      }
-      expect(TokenType::Pipe, "Expected '|' after rescue parameter");
+    if (check(TokenType::LowerIdent)) {
+      rescue.catchAllParam = advance().value;
+    } else {
+      error("Expected parameter name after '|' in rescue");
     }
+    expect(TokenType::Pipe, "Expected '|' after rescue parameter");
     skipNewlines();
     while (!check(TokenType::End) && !atEnd()) {
       rescue.catchAllBody.push_back(parseExpr());
       skipNewlines();
     }
-    expect(TokenType::End, "Expected 'end' to close rescue block");
     return rescue;
   }
 

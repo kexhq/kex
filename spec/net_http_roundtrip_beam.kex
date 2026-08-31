@@ -13,8 +13,20 @@
 using Net.HTTP
 using Net.Socket
 
-let pong(request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "pong")
-let headPong(request: Request<Binary>, context: Context) -> Response<Binary> = Response.binary(200, "ignored".to(Binary).try, Headers.from([("X-Route", "head")]).try)
+foul pong(
+  _request: Request<Binary>,
+  _context: Context
+) -> Response<Binary> = Response.text(200, "pong")
+
+foul headPong(
+  _request: Request<Binary>,
+  _context: Context
+) -> Response<Binary> do
+  return Response.binary(
+    200,
+    "ignored".to(Binary).try,
+    Headers.from([("X-Route", "head")]).try)
+end
 
 let drainHeaders(connection: TCP.TCPConnection) -> Void do
   let line = connection.receiveLine(8192).try.to(String).try
