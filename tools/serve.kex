@@ -1,0 +1,77 @@
+# Static file server for `make web-demo`, serving the repository it is started
+# in. `.wasm` must be `application/wasm` for instantiateStreaming to accept it.
+using Net.HTTP
+using Net.Socket
+
+main(args) do
+  let port = Integer.parse(args.first.or("8743")).or(8743)
+  return System.exit(runServer(port))
+end
+
+foul runServer(port: Integer) -> Integer do
+  let root = FS.Directory.current
+  let router = Router.build
+    .get("/", ~serveRoot)
+    .get("/*path", ~serveRequest)
+
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(port).try)
+  IO.printLine("Serving ${root} on http://localhost:${port}")
+  Server.serve(endpoint, router).try
+  return 0
+
+rescue |error|
+  IO.printError(error)
+  return 1
+end
+
+foul serveRoot(_request: Request<Binary>, _context: Context) -> Response<Binary> do
+  servePath(FS.Directory.current, "web/index.html")
+end
+
+foul serveRequest(_request: Request<Binary>, context: Context) -> Response<Binary> do
+  servePath(FS.Directory.current, context.route.parameter("path").or(""))
+end
+
+foul servePath(root: String, requested: String) -> Response<Binary> do
+  let candidate = requestedPath(root, requested)
+  return Response.text(403, "forbidden") if !contained?(root, candidate)
+
+  let path = normalizePath(candidate)
+  let body = FS.File.readBytes(path).try
+  Response.binary(200, body, Headers.empty.set("Content-Type", contentTypeFor(path)))
+rescue
+  _ => Response.text(404, "not found")
+end
+
+foul requestedPath(root: String, requested: String) -> String do
+  let direct = FS.File.absolute(FS.Path.join(root, requested)).or("")
+  return direct if FS.Directory.file?(direct) || FS.Directory.directory?(direct)
+
+  FS.File.absolute(FS.Path.join(root, "web", requested)).or("")
+end
+
+foul normalizePath(candidate: String) -> String do
+  FS.Directory.directory?(candidate) then FS.Path.join(candidate, "index.html") else candidate
+end
+
+let contained?(root: String, path: String) -> Bool do
+  path == root || path.startsWith?("${root}${FS.Path.separator}")
+end
+
+let contentTypeFor(path: String) -> String do
+  let extension = FS.Path.extension(path).lowerCase
+  match extension do
+    ".html" => "text/html; charset=utf-8"
+    ".js" => "text/javascript; charset=utf-8"
+    ".mjs" => "text/javascript; charset=utf-8"
+    ".css" => "text/css; charset=utf-8"
+    ".json" => "application/json; charset=utf-8"
+    ".map" => "application/json; charset=utf-8"
+    ".wasm" => "application/wasm"
+    ".svg" => "image/svg+xml"
+    ".png" => "image/png"
+    ".ico" => "image/x-icon"
+    ".kex" => "text/plain; charset=utf-8"
+    _ => "application/octet-stream"
+  end
+end

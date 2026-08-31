@@ -114,7 +114,7 @@ test-wasm: build-wasm
 # from inside web/. Ctrl-C to stop.
 web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
-	@ruby tools/serve.rb 8743
+	@$(KEX) -R tools/serve.kex 8743
 
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
