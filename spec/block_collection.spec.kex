@@ -1,0 +1,56 @@
+collect : Block<[Integer]> -> [Integer]
+let collect(block) = block()
+
+lastValue : Block<Integer> -> Integer
+let lastValue(block) = block()
+
+describe("Block collection") do
+  it("collects each expression in source order") do
+    let values = collect do
+      1
+      2
+      3
+    end
+
+    Assert.equal(values, [1, 2, 3])
+  end
+
+  it("skips false guards and includes true guards") do
+    let include = true
+    let skip = false
+    let values = collect do
+      1
+      2 if include
+      3 if skip
+    end
+
+    Assert.equal(values, [1, 2])
+  end
+
+  it("splices spread expressions") do
+    let middle = [2, 3]
+    let values = collect do
+      1
+      ...middle
+      4
+    end
+
+    Assert.equal(values, [1, 2, 3, 4])
+  end
+
+  it("collects an empty body into an empty list") do
+    let values = collect do
+    end
+
+    Assert.equal(values, [])
+  end
+
+  it("leaves ordinary blocks returning their last expression") do
+    let value = lastValue do
+      1
+      2
+    end
+
+    Assert.equal(value, 2)
+  end
+end

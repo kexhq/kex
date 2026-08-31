@@ -190,6 +190,9 @@ struct FunctionValue {
     // erlang:fun_info(F, arity) — Kex.Intrinsic.Fun.applyIndexed needs it to
     // tell `|item, i|` from `|k, v, i|`.
     int arity = -1;
+    // A caller whose parameter is Block<[A]> raises this for the duration of
+    // the call. Lambda evaluation consults it to collect body expressions.
+    std::shared_ptr<int> collectionDepth;
 };
 
 // A runtime value standing in for ITSELF during compile-time evaluation.

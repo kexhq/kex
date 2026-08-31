@@ -147,7 +147,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             if (name == "Result" && args.size() == 2)
                 return Type::named("Result", std::move(args));
             if (name == "Block" && args.size() == 1)
-                return Type::func({}, args[0]);
+                return Type::func({}, args[0], true);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -206,6 +206,13 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             // as Unknown, so `:macos | :linux` printed as "? | ?".
             return Type::atom(node.name);
         }
+        else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            return Type::func(
+                {}, node.inner
+                        ? resolveSourceType(*node.inner, vars, aliases, traits)
+                        : Type::unknown(),
+                true);
+        }
         else { return Type::unknown(); }
     }, expr.kind);
 }
@@ -218,6 +225,8 @@ inline auto uncurryFuncType(kex::semantic::TypePtr type)
     using Type = kex::semantic::Type;
     auto* fn = std::get_if<kex::semantic::FuncType>(&type->kind);
     if (!fn) return type;
+    if (fn->block)
+        return Type::func({}, uncurryFuncType(fn->result), true);
     std::vector<kex::semantic::TypePtr> allParams;
     auto cur = type;
     while (auto* f = std::get_if<kex::semantic::FuncType>(&cur->kind)) {
@@ -996,7 +1005,7 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         for (auto& [exportName, functions] : module.exports) {
             auto& destination = it->second.exports[exportName];
             for (auto& function : functions) {
-                const bool duplicate = std::any_of(
+                const auto duplicate = std::find_if(
                     destination.begin(), destination.end(),
                     [&](const kex::semantic::ImportedFunction& existing) {
                         return existing.sourceName == function.sourceName &&
@@ -1011,7 +1020,14 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                 // hidden protocol dictionaries. Source extraction augments
                 // missing type shapes, but must not append a source-arity
                 // duplicate that can later win overload selection.
-                if (!duplicate) destination.push_back(std::move(function));
+                if (duplicate == destination.end()) {
+                    destination.push_back(std::move(function));
+                } else if (duplicate->paramNames.empty() &&
+                           !function.paramNames.empty()) {
+                    // Keep the compiled entry's backend ABI, but enrich it
+                    // with source parameter labels needed by named arguments.
+                    duplicate->paramNames = std::move(function.paramNames);
+                }
             }
         }
     }

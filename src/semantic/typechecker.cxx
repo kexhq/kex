@@ -1161,7 +1161,8 @@ auto TypeChecker::distinctBacking(const TypePtr& type) const -> TypePtr {
                 std::vector<TypePtr> params;
                 for (const auto& param : fn->params)
                     params.push_back(substitute(param));
-                return Type::func(std::move(params), substitute(fn->result));
+                return Type::func(std::move(params), substitute(fn->result),
+                                  fn->block);
             }
             if (const auto* intersection =
                     std::get_if<IntersectionType>(&part->kind)) {
@@ -2069,7 +2070,7 @@ auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
     if (auto* fn = std::get_if<FuncType>(&type->kind)) {
         std::vector<TypePtr> params;
         for (const auto& param : fn->params) params.push_back(recur(param));
-        return Type::func(std::move(params), recur(fn->result));
+        return Type::func(std::move(params), recur(fn->result), fn->block);
     }
     if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
         std::vector<TypePtr> members;
@@ -2214,6 +2215,12 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 : Type::unknown();
             return Type::func(std::move(params), std::move(result));
         }
+        else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            auto result = node.inner
+                ? resolveTypeExpr(*node.inner, genericVars)
+                : Type::unknown();
+            return Type::func({}, std::move(result), true);
+        }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<TypePtr> elements;
             for (const auto& elem : node.elements) {
@@ -2266,7 +2273,6 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return var;
         }
         else {
-            // BlockType — not modeled as a distinct semantic::Type yet.
             return Type::unknown();
         }
     }, typeExpr.kind);
@@ -3393,7 +3399,8 @@ auto TypeChecker::moduleMemberImported(const std::string& module,
 
 auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes,
-                                     bool isMethodCall) -> std::vector<TypePtr> {
+                                     bool isMethodCall,
+                                     bool* collection) -> std::vector<TypePtr> {
     auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = nullptr;
     if (auto scoped = m_scopedDeclaredSignatures.find(
@@ -3409,7 +3416,9 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
     if (!sigs && imported.empty() && methodIt == m_methodSignatures.end())
         return {};
 
+    bool matched = false;
     auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
+        matched = false;
         if (sig.params.size() != nonBlockArgTypes.size() + 1) return {};
         auto* blockParam = std::get_if<FuncType>(&sig.params.back()->kind);
         if (!blockParam) return {};
@@ -3441,22 +3450,28 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
 
         std::vector<TypePtr> hints;
         for (const auto& p : blockParam->params) hints.push_back(applySubst(p));
+        if (collection) {
+            auto result = resolve(blockParam->result);
+            *collection = blockParam->block &&
+                std::holds_alternative<ListType>(result->kind);
+        }
+        matched = true;
         return hints;
     };
 
     if (methodIt != m_methodSignatures.end())
         for (const auto& sig : methodIt->second) {
             auto hints = hintsFrom(sig);
-            if (!hints.empty()) return hints;
+            if (matched) return hints;
         }
     for (const auto& sig : imported) {
         auto hints = hintsFrom(sig);
-        if (!hints.empty()) return hints;
+        if (matched) return hints;
     }
     if (sigs)
         for (const auto& sig : *sigs) {
             auto hints = hintsFrom(sig);
-            if (!hints.empty()) return hints;
+            if (matched) return hints;
         }
     return {};
 }
@@ -3548,7 +3563,7 @@ static auto isBareCapture(const ast::Expr* e) -> bool {
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
-        if (lam->params.empty()) {
+        if (lam->params.empty() && !lam->collection) {
             // Zero-param lambda `{ }` / `do end` — infer body but stay permissive
             // so it matches any FuncType param (the block ignores the passed arg).
             inferExpr(blockExpr);
@@ -3585,7 +3600,50 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             }
         }
         m_blockDepth++;
-        auto bodyType = inferBody(lam->body);
+        TypePtr bodyType;
+        if (lam->collection) {
+            TypePtr element = freshTypeVar();
+            bool haveElement = false;
+            for (const auto& item : lam->body) {
+                if (!item) continue;
+                TypePtr itemType;
+                if (const auto* spread =
+                        std::get_if<ast::SpreadExpr>(&item->kind)) {
+                    auto spreadType = resolve(inferExpr(*spread->inner));
+                    if (auto* list = std::get_if<ListType>(&spreadType->kind))
+                        itemType = list->element;
+                    else {
+                        error(item->location,
+                              "Collection-block spread expects a list, got " +
+                                  typeToString(spreadType));
+                        itemType = Type::unknown();
+                    }
+                } else if (const auto* guarded =
+                               std::get_if<ast::TrailingIf>(&item->kind)) {
+                    auto condition = resolve(inferExpr(*guarded->condition));
+                    if (!std::holds_alternative<UnknownType>(condition->kind) &&
+                        !std::holds_alternative<TypeVar>(condition->kind) &&
+                        !typesEqual(condition, Type::boolean()))
+                        error(guarded->condition->location,
+                              "Collection-block guard requires Bool, got " +
+                                  typeToString(condition));
+                    itemType = inferExpr(*guarded->expr);
+                } else {
+                    itemType = inferExpr(*item);
+                }
+                if (!haveElement) {
+                    element = itemType;
+                    haveElement = true;
+                } else if (!argMatchesParam(itemType, element) &&
+                           !argMatchesParam(element, itemType)) {
+                    typeMismatch(item->location, resolve(element),
+                                 resolve(itemType));
+                }
+            }
+            bodyType = Type::list(resolve(element));
+        } else {
+            bodyType = inferBody(lam->body);
+        }
         m_blockDepth--;
         auto resultType = resolve(bodyType);
         if (lam->returnAnnotation) {
@@ -4129,7 +4187,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes[argIdx] = inferBlock(*node.args[rawIdx], hints);
             }
             if (node.block) {
-                auto hints = resolveBlockHints(node.name, argTypes);
+                bool collection = false;
+                auto hints = resolveBlockHints(node.name, argTypes, false,
+                                               &collection);
+                if (collection)
+                    if (auto* lambda = std::get_if<ast::Lambda>(
+                            &(**node.block).kind))
+                        lambda->collection = true;
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
             // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
@@ -4555,8 +4619,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes[argIdx] = inferBlock(*node.args[rawIdx], hints);
             }
             if (node.block) {
+                bool collection = false;
                 auto hints = resolveBlockHints(
-                    callName, argTypes, /*isMethodCall=*/!isNamespaceCall);
+                    callName, argTypes, /*isMethodCall=*/!isNamespaceCall,
+                    &collection);
+                if (collection)
+                    if (auto* lambda = std::get_if<ast::Lambda>(
+                            &(**node.block).kind))
+                        lambda->collection = true;
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
             // `Type.of(x)`: record what the CHECKER knows about the argument.
@@ -6081,7 +6151,8 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
             } else if constexpr (std::is_same_v<T, FuncType>) {
                 std::vector<TypePtr> ps;
                 for (const auto& p : node.params) ps.push_back(remap(p));
-                return std::make_shared<Type>(Type{FuncType{std::move(ps), remap(node.result)}});
+                return std::make_shared<Type>(Type{FuncType{
+                    std::move(ps), remap(node.result), node.block}});
             } else if constexpr (std::is_same_v<T, TupleType>) {
                 std::vector<TypePtr> es;
                 for (const auto& e : node.elements) es.push_back(remap(e));

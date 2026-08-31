@@ -41,8 +41,9 @@ auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr 
     return std::make_shared<Type>(Type{NamedType{name, std::move(args)}});
 }
 
-auto Type::func(std::vector<TypePtr> params, TypePtr result) -> TypePtr {
-    return std::make_shared<Type>(Type{FuncType{std::move(params), std::move(result)}});
+auto Type::func(std::vector<TypePtr> params, TypePtr result, bool block) -> TypePtr {
+    return std::make_shared<Type>(
+        Type{FuncType{std::move(params), std::move(result), block}});
 }
 
 auto Type::list(TypePtr element) -> TypePtr {
@@ -257,6 +258,7 @@ auto typeToString(const TypePtr& type) -> std::string {
             return result;
         }
         else if constexpr (std::is_same_v<T, FuncType>) {
+            if (t.block) return "Block<" + typeToString(t.result) + ">";
             // Kex function types are curried, so they print as
             // `A -> B -> R`, matching how they are written in source. A
             // parameter that is itself a function has to be parenthesised or
@@ -496,6 +498,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             return true;
         }
         else if constexpr (std::is_same_v<AT, FuncType>) {
+            if (at.block != bt->block) return false;
             if (at.params.size() != bt->params.size()) return false;
             for (size_t i = 0; i < at.params.size(); i++) {
                 if (!typesEqual(at.params[i], bt->params[i])) return false;

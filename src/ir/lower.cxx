@@ -1482,7 +1482,51 @@ struct Lowering {
                 auto snap = subst;
                 Lambda lam;
                 for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
-                lam.body = lowerBody(n.body);
+                if (n.collection) {
+                    auto singleton = [&](const ast::ExprPtr& item) {
+                        std::vector<Binding> binds;
+                        std::vector<ExprPtr> values;
+                        values.push_back(atomize(item, binds));
+                        auto list = std::make_unique<Expr>();
+                        list->node = MakeList{std::move(values), std::nullopt};
+                        return wrapLets(binds, std::move(list));
+                    };
+                    std::vector<ExprPtr> segments;
+                    for (const auto& item : n.body) {
+                        if (!item) continue;
+                        if (const auto* spread =
+                                std::get_if<ast::SpreadExpr>(&item->kind)) {
+                            segments.push_back(lower(spread->inner));
+                        } else if (const auto* guarded =
+                                       std::get_if<ast::TrailingIf>(
+                                           &item->kind)) {
+                            auto empty = std::make_unique<Expr>();
+                            empty->node = MakeList{{}, std::nullopt};
+                            segments.push_back(matchBool(
+                                lower(guarded->condition),
+                                singleton(guarded->expr), std::move(empty)));
+                        } else {
+                            segments.push_back(singleton(item));
+                        }
+                    }
+                    if (segments.empty()) {
+                        lam.body = std::make_unique<Expr>();
+                        lam.body->node = MakeList{{}, std::nullopt};
+                    } else {
+                        auto result = std::move(segments.back());
+                        segments.pop_back();
+                        while (!segments.empty()) {
+                            auto left = std::move(segments.back());
+                            segments.pop_back();
+                            result = callE("lists", "append", 2,
+                                           two(std::move(left),
+                                               std::move(result)));
+                        }
+                        lam.body = std::move(result);
+                    }
+                } else {
+                    lam.body = lowerBody(n.body);
+                }
                 // Same rule a named function gets: an unrescued `.try` failure
                 // makes THIS body's result `Error(e)` rather than unwinding
                 // past it. A lambda is a function, so `["no"].map { |v|
