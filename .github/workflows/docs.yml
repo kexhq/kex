@@ -47,11 +47,11 @@ jobs:
       - name: Build Tey
         run: make build-tey
 
-      # The site base URL for sitemap/robots/llms. Override to a custom
-      # domain (e.g. https://docs.kex.run) if one is pointed at Pages.
+      # The site base URL for sitemap/robots/llms. Canonical URL is the
+      # custom domain; kexhq.github.io/docs redirects to it.
       - name: Generate docs
         env:
-          BASE_URL: https://kexhq.github.io/docs
+          BASE_URL: https://docs.kex.run
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             tools/build-docs.sh docs-out
@@ -69,5 +69,8 @@ jobs:
           external_repository: kexhq/docs
           publish_branch: gh-pages
           publish_dir: docs-out
+          # Keep the CNAME file on gh-pages so GitHub Pages keeps serving
+          # docs.kex.run; without it every publish detaches the custom domain.
+          cname: docs.kex.run
           enable_jekyll: false
           commit_message: "docs: publish ${{ github.ref_name }}"
