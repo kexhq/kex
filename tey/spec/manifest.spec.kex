@@ -1,4 +1,4 @@
-using Tey.Manifest, only: [ManifestPackage, read]
+using Tey.Manifest, only: [DependencySource, GitSource, ManifestPackage, PathSource, WorkspaceSource, read]
 
 # What a `package.kex` means. The reader is strict on purpose — an unknown
 # declaration is a mistake rather than a comment — which makes every field it
@@ -7,9 +7,43 @@ using Tey.Manifest, only: [ManifestPackage, read]
 # error message. These are the fields, checked without a disk or a network.
 
 describe("Tey.Manifest.read") do
+  it("rejects the retired bundle root") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      bundle "greet" do
+        version("0.1.0")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("package"))
+      Ok(_) => assert(false, "unexpectedly accepted bundle")
+    end
+  end
+
+  it("reads workspace members nested in a package") do
+    let manifest = Tey.Manifest.read(`
+      package "compiler" do
+        workspace do
+          members(["packages/*", "apps/*"])
+        end
+      end
+    `).try
+    assert(manifest.manifestWorkspace.set?, "workspace was absent: ${manifest}")
+    assert(manifest.manifestWorkspace.try.memberPatterns == ["packages/*", "apps/*"],
+           "members were ${manifest.manifestWorkspace.try.memberPatterns}")
+  end
+
+  it("reads a virtual workspace") do
+    let workspace = Tey.Manifest.readWorkspace(`
+      workspace do
+        members(["packages/*"])
+      end
+    `).try
+    assert(workspace.memberPatterns == ["packages/*"], "members were ${workspace.memberPatterns}")
+  end
+
   it("reads the name, version and Kex requirement") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.2.1")
         kex(">= 0.3.3")
       end
@@ -21,7 +55,7 @@ describe("Tey.Manifest.read") do
 
   it("reads a description") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")
         description("The first Kex package")
         license("MIT")
@@ -35,7 +69,7 @@ describe("Tey.Manifest.read") do
     # Optional, because a manifest nobody can write until they have phrased a
     # sentence is a manifest nobody writes.
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")
       end
     `).try
@@ -46,7 +80,7 @@ describe("Tey.Manifest.read") do
     # The strictness that makes `description` need declaring here at all: a
     # typo must not be read as a comment and silently dropped.
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         describtion("typo")
       end
     `)
@@ -64,7 +98,7 @@ describe("Tey.Manifest.read") do
   it("allows comments on their own line, after a declaration, and inside one") do
     let package = Tey.Manifest.read(`
       # What this package is.
-      bundle "greet" do
+      package "greet" do
         # The version people depend on.
         version("0.1.0")
         description("The first Kex package")  # and what it is for
@@ -83,7 +117,7 @@ describe("Tey.Manifest.read") do
 
   it("does not let a comment's parenthesis swallow the next declaration") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")  # bump when you cut a release (see docs/releasing
         description("still here")
         kex(">= 0.3.3")
@@ -95,7 +129,7 @@ describe("Tey.Manifest.read") do
 
   it("keeps a # that is inside a string") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         description("C# interop, of all things")
       end
     `).try
@@ -104,7 +138,7 @@ describe("Tey.Manifest.read") do
 
   it("defaults the entrypoint, and a library leaves it unused") do
     let library = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")
       end
     `).try
@@ -114,7 +148,7 @@ describe("Tey.Manifest.read") do
 
   it("reads dependencies with their selector") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         version("0.1.0")
         tey("greet", git: "https://github.com/kexhq/greet", tag: "~> 0.1")
       end
@@ -122,9 +156,15 @@ describe("Tey.Manifest.read") do
     assert(package.manifestDependencies.count == 1)
     let dependency = package.manifestDependencies.first.try
     assert(dependency.manifestName == "greet")
-    assert(dependency.manifestGit == "https://github.com/kexhq/greet")
-    assert(dependency.manifestSelector == "tag")
-    assert(dependency.manifestRequested == "~> 0.1")
+    match dependency.manifestSource do
+      GitSource(git, selector, requested, subdir) => do
+        assert(git == "https://github.com/kexhq/greet")
+        assert(selector == "tag")
+        assert(requested == "~> 0.1")
+        assert(subdir == "")
+      end
+      _ => assert(false, "dependency was not a Git source")
+    end
   end
 end
 
@@ -134,7 +174,7 @@ end
 describe("Tey.Manifest.read — the whole format") do
   it("reads an entrypoint and a target") do
     let package = Tey.Manifest.read(`
-      bundle "greeter" do
+      package "greeter" do
         version("0.1.0")
         entrypoint("src/main.kex")
 
@@ -149,7 +189,7 @@ describe("Tey.Manifest.read — the whole format") do
 
   it("lets a target default its entrypoint to the package's") do
     let package = Tey.Manifest.read(`
-      bundle "greeter" do
+      package "greeter" do
         entrypoint("src/cli.kex")
         target("greeter")
       end
@@ -160,7 +200,7 @@ describe("Tey.Manifest.read — the whole format") do
   it("reads several targets") do
     # Each names a separate executable, so they must not collapse into one.
     let package = Tey.Manifest.read(`
-      bundle "tools" do
+      package "tools" do
         target("build", entrypoint: "src/build.kex")
         target("serve", entrypoint: "src/serve.kex")
       end
@@ -171,7 +211,7 @@ describe("Tey.Manifest.read — the whole format") do
 
   it("reads an otp requirement") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         kex(">= 0.3.3")
         otp(">= 26")
       end
@@ -183,7 +223,7 @@ describe("Tey.Manifest.read — the whole format") do
   it("leaves the otp requirement empty when there is none") do
     # Absent means "no opinion", which is different from asking for OTP 0.
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")
       end
     `).try
@@ -192,7 +232,7 @@ describe("Tey.Manifest.read — the whole format") do
 
   it("tags a dependency with the group it was declared in") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         tey("greet", git: "https://example.com/greet", tag: "~> 0.1")
 
         group :dev do
@@ -209,7 +249,7 @@ describe("Tey.Manifest.read — the whole format") do
 
   it("closes a group at its end rather than swallowing what follows") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         group :dev do
           tey("helper", git: "https://example.com/h", branch: "main")
         end
@@ -222,7 +262,7 @@ describe("Tey.Manifest.read — the whole format") do
 
   it("reads a declaration spread over several lines") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         tey("greet",
             git: "https://example.com/greet",
             tag: "~> 0.1")
@@ -230,42 +270,115 @@ describe("Tey.Manifest.read — the whole format") do
     `).try
     let dependency = package.manifestDependencies.first.try
     assert(dependency.manifestName == "greet")
-    assert(dependency.manifestGit == "https://example.com/greet")
-    assert(dependency.manifestRequested == "~> 0.1")
+    match dependency.manifestSource do
+      GitSource(git, _, requested, _) => do
+        assert(git == "https://example.com/greet")
+        assert(requested == "~> 0.1")
+      end
+      _ => assert(false)
+    end
   end
 
   it("distinguishes the three dependency selectors") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         tey("a", git: "https://example.com/a", tag: "v1.0.0")
         tey("b", git: "https://example.com/b", branch: "main")
         tey("c", git: "https://example.com/c", ref: "abc123")
       end
     `).try
-    assert(package.manifestDependencies.map { |d| d.manifestSelector } == ["tag", "branch", "ref"])
-    assert(package.manifestDependencies.map { |d| d.manifestRequested } == ["v1.0.0", "main", "abc123"])
+    let selectors = package.manifestDependencies.map do |dependency|
+      match dependency.manifestSource do
+        GitSource(_, selector, _, _) => selector
+        _ => ""
+      end
+    end
+    let requested = package.manifestDependencies.map do |dependency|
+      match dependency.manifestSource do
+        GitSource(_, _, value, _) => value
+        _ => ""
+      end
+    end
+    assert(selectors == ["tag", "branch", "ref"])
+    assert(requested == ["v1.0.0", "main", "abc123"])
   end
 
-  it("refuses a manifest with no bundle name") do
+  it("reads workspace and path dependency sources") do
+    let package = Tey.Manifest.read(`
+      package "app" do
+        tey("parser", workspace: true)
+        tey("fixtures", path: "../fixtures")
+      end
+    `).try
+    match package.manifestDependencies.first.try.manifestSource do
+      WorkspaceSource => assert(true)
+      _ => assert(false, "workspace source was not preserved")
+    end
+    match package.manifestDependencies.second.try.manifestSource do
+      PathSource(path) => assert(path == "../fixtures")
+      _ => assert(false, "path source was not preserved")
+    end
+  end
+
+  it("reads an optional Git monorepo subdirectory") do
+    let dependency = Tey.Manifest.read(`
+      package "app" do
+        tey("parser", git: "https://example.com/compiler", tag: "~> 1.2",
+            subdir: "packages/parser")
+      end
+    `).try.manifestDependencies.first.try
+    match dependency.manifestSource do
+      GitSource(_, _, _, subdir) =>
+        assert(subdir == "packages/parser")
+      _ => assert(false)
+    end
+  end
+
+  it("requires exactly one dependency source") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      package "app" do
+        tey("parser", workspace: true, path: "../parser")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("exactly one"))
+      Ok(_) => assert(false, "accepted two dependency sources")
+    end
+  end
+
+  it("requires an explicit selector for a Git dependency") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      package "app" do
+        tey("parser", git: "https://example.com/parser")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("tag:"))
+      Ok(_) => assert(false, "accepted an unpinned Git dependency")
+    end
+  end
+
+  it("refuses a manifest with no package name") do
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`version("0.1.0")
 `)
     match outcome do
-      Error(message) => assert(message.contains?("bundle"))
+      Error(message) => assert(message.contains?("package"))
       Ok(_) => assert(false)
     end
   end
 
-  it("refuses a dependency with no git URL") do
+  it("refuses a dependency with no source") do
     # Nothing else can locate it, so accepting this would only defer the
     # failure to fetch time with less to say.
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         tey("greet", tag: "~> 0.1")
       end
     `)
     match outcome do
-      Error(message) => assert(message.contains?("git"), "unexpected error: ${message}")
-      Ok(_) => assert(false, "unexpectedly accepted dependency without git")
+      Error(message) => assert(message.contains?("exactly one"),
+                               "unexpected error: ${message}")
+      Ok(_) => assert(false, "unexpectedly accepted dependency without a source")
     end
   end
 end
@@ -278,7 +391,7 @@ end
 describe("Tey.Manifest.read — commands") do
   it("reads a command's name, line and description") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("fmt", run: "kex --format src", description: "Format the sources")
       end
     `).try
@@ -291,7 +404,7 @@ describe("Tey.Manifest.read — commands") do
 
   it("leaves the description empty when there is none") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("release", run: "script/release.kex")
       end
     `).try
@@ -300,7 +413,7 @@ describe("Tey.Manifest.read — commands") do
 
   it("keeps declared commands in order") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("fmt", run: "kex --format src")
         command("release", run: "script/release.kex")
       end
@@ -310,7 +423,7 @@ describe("Tey.Manifest.read — commands") do
 
   it("has no commands when the manifest declares none") do
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         version("0.1.0")
       end
     `).try
@@ -321,7 +434,7 @@ describe("Tey.Manifest.read — commands") do
     # A silent shadow would make `tey test` mean something different depending
     # on which directory you are standing in.
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("test", run: "make test")
       end
     `)
@@ -335,7 +448,7 @@ describe("Tey.Manifest.read — commands") do
     # `:` is the separator every other package manager already taught people,
     # and it survives a shell without quoting.
     let package = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("db:migrate", run: "script/migrate.kex")
       end
     `).try
@@ -346,7 +459,7 @@ describe("Tey.Manifest.read — commands") do
     # It would be two words on the command line, and the second would look
     # like an argument. The colon is the way to group.
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("db migrate", run: "script/migrate.kex")
       end
     `)
@@ -358,7 +471,7 @@ describe("Tey.Manifest.read — commands") do
 
   it("refuses a command with no run:") do
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("fmt", description: "Format the sources")
       end
     `)
@@ -371,7 +484,7 @@ describe("Tey.Manifest.read — commands") do
   it("refuses the same command twice") do
     # Two answers to one name; the second would silently never run.
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
-      bundle "app" do
+      package "app" do
         command("fmt", run: "kex --format src")
         command("fmt", run: "make fmt")
       end
@@ -390,7 +503,7 @@ end
 describe("Tey.Manifest.read — toolchain declarations") do
   it("reads a toolchain's name and parts") do
     let package = Tey.Manifest.read(`
-      bundle "kex" do
+      package "kex" do
         version("0.3.0")
         toolchain("kex", compiler: "bin/kex", runtime: "share/kex/runtime",
                   stdlib: "share/kex/stdlib")
@@ -405,7 +518,7 @@ describe("Tey.Manifest.read — toolchain declarations") do
 
   it("leaves the parts empty when only the name is given") do
     let package = Tey.Manifest.read(`
-      bundle "kex" do
+      package "kex" do
         toolchain("kex")
       end
     `).try
@@ -417,7 +530,7 @@ describe("Tey.Manifest.read — toolchain declarations") do
 
   it("has no toolchain when the manifest declares none") do
     let package = Tey.Manifest.read(`
-      bundle "greet" do
+      package "greet" do
         version("0.1.0")
       end
     `).try

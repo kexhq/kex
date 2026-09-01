@@ -1,0 +1,127 @@
+using Tey.Workspace, only: [Context, discover]
+
+describe("Tey.Workspace.discover") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
+  it("treats an ordinary package as a one-member context") do
+    Mock.FS.Directory("/project")
+    Mock.FS.File("/project/package.kex", `package "app" do end
+`)
+    let context = Tey.Workspace.discover("/project/src").try
+    assert(context.workspaceRoot == "/project")
+    let manifest: Tey.Manifest.ManifestPackage = context.members.first.try.memberManifest
+    let current: Tey.Manifest.ManifestPackage = context.currentMember.try.memberManifest
+    assert(manifest.name == "app")
+    assert(current.name == "app")
+  end
+
+  it("discovers a virtual workspace and its members") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/packages")
+    Mock.FS.Directory("/work/packages/one")
+    Mock.FS.Directory("/work/packages/one/src")
+    Mock.FS.Directory("/work/packages/two")
+    Mock.FS.File("/work/package.kex", `workspace do
+  members(["packages/*"])
+end
+`)
+    Mock.FS.File("/work/packages/one/package.kex", `package "one" do end
+`)
+    Mock.FS.File("/work/packages/two/package.kex", `package "two" do end
+`)
+    assert(FS.Directory.directories("/work/packages").or([]).count == 2,
+           "mock packages were ${FS.Directory.directories("/work/packages").or([])}")
+    let context = Tey.Workspace.discover("/work/packages/one/src").try
+    assert(context.workspaceRoot == "/work")
+    let unsorted = context.members.map do |member|
+      let manifest: Tey.Manifest.ManifestPackage = member.memberManifest
+      manifest.name
+    end
+    let names = unsorted.sort
+    let current: Tey.Manifest.ManifestPackage = context.currentMember.try.memberManifest
+    assert(names == ["one", "two"])
+    assert(current.name == "one")
+  end
+
+  it("includes the root package in a package-root workspace") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/packages")
+    Mock.FS.Directory("/work/packages/child")
+    Mock.FS.File("/work/package.kex", `package "root" do
+  workspace do
+    members(["packages/*"])
+  end
+end
+`)
+    Mock.FS.File("/work/packages/child/package.kex", `package "child" do end
+`)
+    assert(FS.Directory.directories("/work/packages").or([]) == ["child"],
+           "child dirs were ${FS.Directory.directories("/work/packages").or([])}")
+    assert(FS.Directory.directory?("/work/packages"), "packages was not a directory")
+    let context = Tey.Workspace.discover("/work").try
+    let unsorted = context.members.map do |member|
+      let manifest: Tey.Manifest.ManifestPackage = member.memberManifest
+      manifest.name
+    end
+    let names = unsorted.sort
+    assert(names == ["child", "root"],
+           "workspace packages were ${names}; warnings ${context.warnings}")
+  end
+
+  it("joins nested workspaces") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/groups")
+    Mock.FS.Directory("/work/groups/nested")
+    Mock.FS.Directory("/work/groups/nested/packages")
+    Mock.FS.Directory("/work/groups/nested/packages/leaf")
+    Mock.FS.File("/work/package.kex", `workspace do
+  members(["groups/*"])
+end
+`)
+    Mock.FS.File("/work/groups/nested/package.kex", `workspace do
+  members(["packages/*"])
+end
+`)
+    Mock.FS.File("/work/groups/nested/packages/leaf/package.kex",
+                 `package "leaf" do end
+`)
+    let context = Tey.Workspace.discover(
+      "/work/groups/nested/packages/leaf"
+    ).try
+    assert(context.workspaceRoot == "/work")
+    let manifest: Tey.Manifest.ManifestPackage = context.members.first.try.memberManifest
+    assert(manifest.name == "leaf")
+  end
+
+  it("rejects duplicate package names") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/packages")
+    Mock.FS.Directory("/work/packages/a")
+    Mock.FS.Directory("/work/packages/b")
+    Mock.FS.File("/work/package.kex", `workspace do
+  members(["packages/*"])
+end
+`)
+    Mock.FS.File("/work/packages/a/package.kex", `package "same" do end
+`)
+    Mock.FS.File("/work/packages/b/package.kex", `package "same" do end
+`)
+    let outcome: Context or! String = Tey.Workspace.discover("/work")
+    match outcome do
+      Error(message) => assert(message.contains?("more than once"))
+      Ok(_) => assert(false, "duplicate package names were accepted")
+    end
+  end
+
+  it("warns when a member pattern matches nothing") do
+    Mock.FS.Directory("/work")
+    Mock.FS.File("/work/package.kex", `workspace do
+  members(["missing/*"])
+end
+`)
+    let warnings = Tey.Workspace.discover("/work").try.warnings
+    assert(warnings.count == 1)
+    assert(warnings.first.try.contains?("matched no directories"))
+  end
+end

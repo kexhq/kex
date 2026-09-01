@@ -1,0 +1,60 @@
+using Tey.Snapshot, only: [cachedPath, create]
+
+describe("Tey.Snapshot.create") do
+  let root = "/tmp/tey_snapshot_spec"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/dependency/src")
+    FS.Directory.create("${root}/dependency/build")
+    FS.File.write("${root}/dependency/package.kex", `package "dep" do
+  version("1.2.0")
+end
+`)
+    FS.File.write("${root}/dependency/src/main.kex", "module Dep\n")
+    FS.File.write("${root}/dependency/build/generated", "ignored")
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("publishes an immutable content-addressed copy") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      assert(dependency.source == "path")
+      assert(dependency.version == "1.2.0")
+      assert(FS.File.file?("${cached}/src/main.kex"))
+      assert(!FS.File.file?("${cached}/build/generated"))
+      FS.File.write("${root}/dependency/src/main.kex", "module Changed\n")
+      assert(FS.File.read("${cached}/src/main.kex").try == "module Dep\n")
+    end
+  end
+
+  it("honours .teyignore") do
+    FS.File.write("${root}/dependency/.teyignore", "secret/*\n")
+    FS.Directory.create("${root}/dependency/secret")
+    FS.File.write("${root}/dependency/secret/token", "nope")
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      assert(!FS.File.file?("${Tey.Snapshot.cachedPath(dependency)}/secret/token"))
+    end
+  end
+
+  it("changes identity when included content changes") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let first = Tey.Snapshot.create("dep", "dependency", root).try
+      FS.File.write("${root}/dependency/src/main.kex", "module Changed\n")
+      let second = Tey.Snapshot.create("dep", "dependency", root).try
+      assert(first.sha256 != second.sha256)
+    end
+  end
+
+  it("rejects a package with the wrong identity") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      match Tey.Snapshot.create("other", "dependency", root) do
+        Error(message) => assert(message.contains?("declares package `dep`"))
+        Ok(_) => assert(false)
+      end
+    end
+  end
+end

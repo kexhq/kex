@@ -3,18 +3,101 @@ module Tey.Resolver
 using Tey.Cache, only: [fetch]
 using Tey.Git, only: [execute, pinRef, tags]
 using Tey.Lockfile, only: [LockState]
-using Tey.Manifest, only: [ManifestPackage]
+using Tey.Manifest, only: [GitSource, ManifestPackage, PathSource, WorkspaceSource]
 using Tey.Semver, only: [highest, intersect, range?, satisfies, versionOf]
 using Tey.Cache, only: [packagePath]
 using Tey.Manifest, only: [read]
+using Tey.Workspace, only: [Context, Member]
+
+foul resolveWorkspace(context: Context) -> LockState or! String do
+  let toolchain = Tey.Toolchain.activeInfo.try
+  let incompatible = context.members.filter do |member|
+    let manifest: ManifestPackage = member.memberManifest
+    !Tey.Semver.satisfies(Tey.Semver.release(toolchain.version),
+                          manifest.packageKexRequirement)
+  end
+  if !incompatible.empty?
+    let details = incompatible.map do |member|
+      let manifest: ManifestPackage = member.memberManifest
+      "${manifest.name} requires ${manifest.packageKexRequirement}"
+    end.join(", ")
+    return Error("Kex ${toolchain.version} does not satisfy workspace members: ${details}")
+  end
+
+  let running = Tey.Toolchain.runningOtpRelease
+  context.members.each do |member|
+    let manifest: ManifestPackage = member.memberManifest
+    let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
+    match (floor, running) do
+      (Just(required), Just(actual)) when actual < required =>
+        return Error("Erlang/OTP ${actual} is too old for workspace member `${manifest.name}`: ${Tey.Resolver.otpReason(manifest.packageOtpRequirement, required)}")
+      _ => ()
+    end
+  end
+
+  let workspaceNames = context.members.map do |member|
+    let manifest: ManifestPackage = member.memberManifest
+    manifest.name
+  end
+  let declarations: [[Tey.Manifest.Dependency]] = context.members.map do |member|
+    member.memberManifest.manifestDependencies
+  end
+  let emptyDependencies: [Tey.Manifest.Dependency] = []
+  let all = declarations.reduce(emptyDependencies) do |found, dependencies|
+    [...found, ...dependencies]
+  end
+  all.each do |dependency|
+    match dependency.manifestSource do
+      WorkspaceSource => if !workspaceNames.contains?(dependency.manifestName)
+        return Error("workspace dependency `${dependency.manifestName}` is not a workspace member")
+      end
+      _ => ()
+    end
+  end
+  let external = all.filter do |dependency|
+    match dependency.manifestSource do
+      WorkspaceSource => false
+      _ => true
+    end
+  end
+  let resolved = Tey.Resolver.resolveDependencies(external, []).try
+  let workspacePackages = context.members.map do |member|
+    let manifest: ManifestPackage = member.memberManifest
+    Tey.Lockfile.Dependency {
+      name: manifest.name, version: manifest.version, source: "workspace",
+      path: FS.Path.relativeTo(member.memberRoot, context.workspaceRoot),
+      workspace?: true,
+      dependencies: manifest.manifestDependencies.map { |dependency| dependency.manifestName }
+    }
+  end
+  let requirements = context.members.map do |member|
+    member.memberManifest.packageKexRequirement
+  end
+  let requirement = requirements.reduce("") do |combined, wanted|
+    Tey.Semver.intersect(combined, wanted)
+  end
+  return Ok(LockState {
+    kexRequirement: requirement,
+    kexVersion: Tey.Semver.release(toolchain.version),
+    otpRequirement: "",
+    otpRelease: running.or(0),
+    workspaceMembers: Tey.Resolver.workspaceMemberMap(context),
+    manifestFingerprint: Tey.Resolver.workspaceFingerprint(context),
+    lockedDependencies: [...workspacePackages, ...resolved]
+  })
+end
 
 foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
+  let toolchain = match Tey.Toolchain.activeInfo do
+    Error(error) => return Error(error)
+    Ok(info) => info
+  end
   # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
   # satisfies `>= 0.3.0`. Ranges never RESOLVE to a pre-release (see
   # Tey.Semver.satisfies), but refusing to build a package on the rc you
   # deliberately installed would make pre-releases untestable.
-  if !Tey.Semver.satisfies(Tey.Semver.release(Kex.Kernel.VERSION.number), manifest.packageKexRequirement)
-    return Error("Kex ${Kex.Kernel.VERSION.number} does not satisfy ${manifest.packageKexRequirement}")
+  if !Tey.Semver.satisfies(Tey.Semver.release(toolchain.version), manifest.packageKexRequirement)
+    return Error("Kex ${toolchain.version} does not satisfy ${manifest.packageKexRequirement}")
   end
   # The OTP floor actually in force is the higher of what the package asks for
   # and what the toolchain's own runtime beams require — a package cannot ask
@@ -34,13 +117,33 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
                 otpRequirement: manifest.packageOtpRequirement,
                 otpRelease: running.or(0),
-                # The release, not `.number`: that carries the git revision of
-                # whichever build happened to run `tey lock`, so a committed
-                # lockfile would churn on every rebuild of the same version.
-                kexVersion: Kex.Kernel.VERSION.release, lockedDependencies: locked })
+                # The selected project compiler, not the compiler that built
+                # Tey. `--info` is the machine-readable contract for it.
+                kexVersion: Tey.Semver.release(toolchain.version), lockedDependencies: locked })
 end
 
 private do
+  foul workspaceMemberMap(context: Context) -> {String: String} do
+    var members: {String: String} = {}
+    context.members.each do |member|
+      let manifest: ManifestPackage = member.memberManifest
+      members.put!(manifest.name,
+                   FS.Path.relativeTo(member.memberRoot, context.workspaceRoot))
+      ()
+    end
+    return members
+  end
+
+  foul workspaceFingerprint(context: Context) -> String do
+    let entries = context.members.map do |member|
+      let relative = FS.Path.relativeTo(member.memberRoot, context.workspaceRoot)
+      let path = FS.Path.join(member.memberRoot, "package.kex")
+      let text = FS.File.read(path).or("")
+      "${relative}\n${text}"
+    end.sort
+    return Digest.sha256(entries.join("\n--\n"))
+  end
+
   # The lowest OTP this build can legally run on: the higher of the package's
   # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
   # says anything, which is the ordinary case for a package with no interop
@@ -118,16 +221,32 @@ private do
       queue = queue.drop(1)
       let name = dependency.manifestName
 
+      let gitSource = match dependency.manifestSource do
+        GitSource(git, selector, requested, subdir) =>
+          Just((git, selector, requested, subdir))
+        _ => None
+      end
+
       # The same name from two different repositories is a conflict, not two
       # packages: `using Greet` could not say which was meant.
-      match gits[name] do
-        Just(existing) when existing != dependency.manifestGit =>
-          return Error("`${name}` is required from two different repositories:\n  ${existing}\n  ${dependency.manifestGit} (via ${requiredBy})")
-        _ => ()
+      match gitSource do
+        Just((git, _, _, _)) => do
+          match gits[name] do
+            Just(existing) when existing != git =>
+              return Error("`${name}` is required from two different repositories:\n  ${existing}\n  ${git} (via ${requiredBy})")
+            _ => ()
+          end
+          gits.put!(name, git)
+          ()
+        end
+        None => ()
       end
-      gits.put!(name, dependency.manifestGit)
 
-      let combined = Tey.Semver.intersect(wanted[name].or(""), dependency.manifestRequested)
+      let requested = match gitSource do
+        Just((_, _, value, _)) => value
+        None => ""
+      end
+      let combined = Tey.Semver.intersect(wanted[name].or(""), requested)
       wanted.put!(name, combined)
       origin.put!(name, origin[name].or(requiredBy))
 
@@ -136,7 +255,10 @@ private do
         # needs nothing; one it does not is the conflict worth reporting, with
         # both askers named so the reader knows which manifest to open.
         let pinnedRef = resolved.find { |d| d.name == name }.map { |d| d.resolved }.or("")
-        let checkable = dependency.manifestSelector == "tag" && Tey.Semver.range?(dependency.manifestRequested)
+        let checkable = match gitSource do
+          Just((_, "tag", value, _)) => Tey.Semver.range?(value)
+          _ => false
+        end
         let met = Tey.Semver.satisfies(Tey.Semver.versionOf(pinnedRef), combined)
         if checkable && !met
           return Error("cannot satisfy every constraint on `${name}`: ${combined}, asked by ${origin[name].or("?")} and ${requiredBy}, but it resolved to ${pinnedRef}")
@@ -179,7 +301,19 @@ private do
     end
   end
 
-  foul resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
+  foul resolveDependency(dependency: Tey.Manifest.Dependency) -> Tey.Lockfile.Dependency or! String do
+    let manifestName = dependency.manifestName
+    let manifestGroups = dependency.manifestGroups
+    let source = match dependency.manifestSource do
+      GitSource(git, selector, requested, subdir) =>
+        (git, selector, requested, subdir)
+      WorkspaceSource =>
+        return Error("workspace dependency `${manifestName}` requires workspace resolution")
+      PathSource(_) =>
+        return Error("path dependency `${manifestName}` requires snapshot resolution")
+    end
+    let (manifestGit, manifestSelector, manifestRequested, subdir) = source
+    return Error("git dependency `${manifestName}` subdir `${subdir}` requires monorepo resolution") if subdir != ""
     # A range is resolved HERE, not pinned: the manifest keeps the question
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.

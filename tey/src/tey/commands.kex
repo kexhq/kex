@@ -475,7 +475,7 @@ private do
   # `/tmp/ooo`, the way every other scaffolder reads its argument.
   #
   # Without this the whole path WAS the name: it reached the manifest as
-  # `bundle "/tmp/ooo"`, and for a library it reached the module name too, so
+  # `package "/tmp/ooo"`, and for a library it reached the module name too, so
   # the source file was written to `/tmp/ooo/src//tmp/ooo.kex` — a path whose
   # parent does not exist. The scaffold failed halfway, after having created
   # the directories and the manifest.
@@ -673,7 +673,7 @@ private do
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
-    # This fragment is spliced INTO the generated `bundle` block, so its
+    # This fragment is spliced INTO the generated `package` block, so its
     # two-space indent belongs to the generated file and has to survive.
     # Block-shaped, it would be dedented away — every line shares it.
     let entry = library then "" else `  entrypoint("src/main.kex")
@@ -706,7 +706,7 @@ private do
     # it. Commented, because a scaffold must not ship a command that does not
     # run.
     let manifestText = `
-      bundle "$NAME$" do
+      package "$NAME$" do
         version("0.1.0")
         description("A Kex package")
         kex(">= 0.3.0")

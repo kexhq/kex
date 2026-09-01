@@ -1,0 +1,82 @@
+using Tey.Manifest, only: [Dependency, ManifestPackage, WorkspaceSource]
+using Tey.Resolver, only: [resolveWorkspace]
+using Tey.Workspace, only: [Context, Member]
+
+describe("Tey.Resolver.resolveWorkspace") do
+  it("locks workspace members, their edges, and the selected compiler") do
+    let parser = ManifestPackage { name: "parser", version: "1.2.0",
+                                   packageKexRequirement: ">= 0.3.0" }
+    let app = ManifestPackage {
+      name: "app", version: "0.4.0", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [
+        Dependency { manifestName: "parser",
+                     manifestSource: WorkspaceSource }
+      ]
+    }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [
+        Member { memberRoot: "/work", memberManifest: app },
+        Member { memberRoot: "/work/packages/parser", memberManifest: parser }
+      ]
+    }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env { vars: { "TEY_KEX": binary } } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      assert(lock.kexVersion == Tey.Semver.release(Kex.Kernel.VERSION.number),
+             "locked Kex was ${lock.kexVersion}")
+      assert(lock.workspaceMembers["parser"] == Just("packages/parser"),
+             "members were ${lock.workspaceMembers}")
+      assert(lock.manifestFingerprint != "", "manifest fingerprint was empty")
+      let appEntry = lock.lockedDependencies.find { |dep| dep.name == "app" }.try
+      assert(appEntry.source == "workspace", "app source was ${appEntry.source}")
+      assert(appEntry.dependencies == ["parser"],
+             "app dependencies were ${appEntry.dependencies}")
+    end
+  end
+
+  it("reports every member incompatible with the selected compiler") do
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [
+        Member { memberRoot: "/work/a", memberManifest: ManifestPackage {
+          name: "a", packageKexRequirement: ">= 999.0.0"
+        } },
+        Member { memberRoot: "/work/b", memberManifest: ManifestPackage {
+          name: "b", packageKexRequirement: ">= 999.0.0"
+        } }
+      ]
+    }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env { vars: { "TEY_KEX": binary } } do
+      match Tey.Resolver.resolveWorkspace(context) do
+        Error(message) => do
+          assert(message.contains?("a requires"))
+          assert(message.contains?("b requires"))
+        end
+        Ok(_) => assert(false, "accepted incompatible workspace members")
+      end
+    end
+  end
+
+  it("rejects a workspace dependency that is not a member") do
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [
+        Dependency { manifestName: "missing",
+                     manifestSource: WorkspaceSource }
+      ]
+    }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member { memberRoot: "/work", memberManifest: app }]
+    }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env { vars: { "TEY_KEX": binary } } do
+      match Tey.Resolver.resolveWorkspace(context) do
+        Error(message) => assert(message.contains?("not a workspace member"))
+        Ok(_) => assert(false, "accepted a missing workspace member")
+      end
+    end
+  end
+end

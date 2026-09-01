@@ -2,12 +2,19 @@ module Tey.Manifest
 
 using Kex.AST
 
+type DependencySource =
+  | WorkspaceSource
+  | GitSource(String, String, String, String)
+  | PathSource(String)
+
 record Dependency do
   manifestName : String
-  manifestGit : String
-  manifestSelector : String
-  manifestRequested : String
+  manifestSource : DependencySource
   manifestGroups : [String] = []
+end
+
+record ManifestWorkspace do
+  memberPatterns : [String] = []
 end
 
 record Target do
@@ -71,6 +78,7 @@ record ManifestPackage do
   targets : [Target] = []
   commands : [Command] = []
   manifestToolchain : Toolchain? = None
+  manifestWorkspace : ManifestWorkspace? = None
 end
 
 # The command names Tey answers itself. A `command(...)` may not take one of
@@ -103,24 +111,25 @@ let read(text: String) -> ManifestPackage or! String do
   var targets: [Target] = []
   var commands: [Command] = []
   var toolchain: Toolchain? = None
+  var workspace: ManifestWorkspace? = None
   var failures: [String] = []
 
   let program = match Kex.AST.parse(text, "package.kex") do
     Ok(parsed) => parsed
     Error(error) => return Error(error.message)
   end
-  let bundle = match Tey.Manifest.bundle(program) do
+  let package = match Tey.Manifest.packageDeclaration(program) do
     Just(value) => value
-    None => return Error("package.kex must declare bundle \"name\"")
+    None => return Error("package.kex must declare package \"name\"")
   end
-  let (bundleName, bundleBody) = bundle
-  name = bundleName
+  let (packageName, packageBody) = package
+  name = packageName
 
-  Tey.Manifest.declarations(bundleBody, "").each do |entry|
+  Tey.Manifest.declarations(packageBody, "").each do |entry|
     let (expression, group) = entry
     match Tey.Manifest.call(expression) do
       Just(call) => do
-      let (declaration, arguments, named, _) = call
+      let (declaration, arguments, named, block) = call
       if declaration == "version"
         version = Tey.Manifest.argument(arguments).or(version)
       elif declaration == "description"
@@ -175,26 +184,63 @@ let read(text: String) -> ManifestPackage or! String do
       elif declaration == "tey"
       let dependencyName = Tey.Manifest.argument(arguments).or("")
       let dependencyGit = Tey.Manifest.named(named, "git").or("")
-      if dependencyName == "" || dependencyGit == ""
-        failures.push!("every dependency must declare a git URL")
+      let dependencyPath = Tey.Manifest.named(named, "path").or("")
+      let dependencyWorkspace = Tey.Manifest.namedBool(named, "workspace")
+      let sources = [dependencyGit != "", dependencyPath != "",
+                     dependencyWorkspace == Just(true)]
+        .filter { |present| present }.count
+      if dependencyName == ""
+        failures.push!("every dependency must be named")
+        ()
+      elif dependencyWorkspace == Just(false)
+        failures.push!("workspace: must be true when present")
+        ()
+      elif sources != 1
+        failures.push!("dependency `${dependencyName}` must choose exactly one of workspace: true, git:, or path:")
         ()
       end
-      let selector = if Tey.Manifest.named(named, "tag") != None
+      let selectors = ["tag", "branch", "ref"].filter do |name|
+        Tey.Manifest.named(named, name).set?
+      end
+      if dependencyGit != "" && selectors.count != 1
+        failures.push!("git dependency `${dependencyName}` must choose exactly one of tag:, branch:, or ref:")
+        ()
+      end
+      if dependencyGit == "" && !selectors.empty?
+        failures.push!("dependency `${dependencyName}` has a Git selector without git:")
+        ()
+      end
+      let selector = if selectors.contains?("tag")
         "tag"
-      elif Tey.Manifest.named(named, "branch") != None
+      elif selectors.contains?("branch")
         "branch"
       else
         "ref"
       end
-      let requested = Tey.Manifest.named(named, selector).or("HEAD")
+      let requested = Tey.Manifest.named(named, selector).or("")
       let groups = group == "" then [] else [group]
+      let source = if dependencyWorkspace == Just(true)
+        WorkspaceSource
+      elif dependencyPath != ""
+        PathSource(dependencyPath)
+      else
+        GitSource(dependencyGit, selector, requested,
+                  Tey.Manifest.named(named, "subdir").or(""))
+      end
       dependencies.push!(Dependency {
         manifestName: dependencyName,
-        manifestGit: dependencyGit,
-        manifestSelector: selector,
-        manifestRequested: requested,
+        manifestSource: source,
         manifestGroups: groups
       })
+      ()
+      elif declaration == "workspace"
+      workspace = match Tey.Manifest.workspaceFromBlock(block) do
+        Error(error) => do
+          failures.push!(error)
+          None
+        end
+        Ok(value) => Just(value)
+      end
       ()
       elif declaration == "toolchain"
       toolchain = Just(Toolchain {
@@ -216,23 +262,42 @@ let read(text: String) -> ManifestPackage or! String do
     end
   end
   return Error(failures.first.try) if !failures.empty?
-  return Error("package.kex must declare bundle \"name\"") if name == ""
+  return Error("package.kex must declare package \"name\"") if name == ""
   Ok(ManifestPackage { name: name, version: version, description: description, license: license,
                      packageKexRequirement: kexRequirement,
                      packageOtpRequirement: otpRequirement,
                      entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
-                     commands: commands, manifestToolchain: toolchain })
+                     commands: commands, manifestToolchain: toolchain,
+                     manifestWorkspace: workspace })
+end
+
+# Reads a virtual-workspace manifest: a package.kex whose root is `workspace`
+# rather than a publishable package. Package-root workspaces are returned on
+# ManifestPackage.manifestWorkspace by `read` above.
+let readWorkspace(text: String) -> ManifestWorkspace or! String do
+  let program = match Kex.AST.parse(text, "package.kex") do
+    Ok(parsed) => parsed
+    Error(error) => return Error(error.message)
+  end
+  match Tey.Manifest.rootCall(program) do
+    Just(call) => do
+      let (name, _, block) = call
+      return Tey.Manifest.workspaceFromBlock(block) if name == "workspace"
+      return Error("package.kex must declare package \"name\" or workspace")
+    end
+    _ => return Error("package.kex must declare package \"name\" or workspace")
+  end
 end
 
 private do
-  let bundle(program: Program) -> (String, [Expression])? do
+  let packageDeclaration(program: Program) -> (String, [Expression])? do
     match program.items do
       [MainDef(info)] => if info.body.count == 1
         match info.body.first.try do
           Call(target, arguments, _, block) => match (target, block) do
-            (Identifier(name), Just(Lambda(_, body, _, _))) => if name == "bundle"
+            (Identifier(name), Just(Lambda(_, body, _, _))) => if name == "package"
               match Tey.Manifest.argument(arguments) do
-                Just(bundleName) => Just((bundleName, body))
+                Just(packageName) => Just((packageName, body))
                 None => None
               end
             else
@@ -247,6 +312,50 @@ private do
       end
       _ => None
     end
+  end
+
+  let rootCall(program: Program) -> (String, [Expression], Expression?)? do
+    match program.items do
+      [MainDef(info)] => if info.body.count == 1
+        match info.body.first.try do
+          Call(target, arguments, _, block) => match target do
+            Identifier(name) => Just((name, arguments, block))
+            _ => None
+          end
+          _ => None
+        end
+      else
+        None
+      end
+      _ => None
+    end
+  end
+
+  let workspaceFromBlock(None) -> ManifestWorkspace or! String = Error("workspace requires a block")
+  let workspaceFromBlock(Just(expression)) -> ManifestWorkspace or! String do
+    let body = match expression do
+      Lambda(_, expressions, _, _) => expressions
+      _ => return Error("workspace requires a block")
+    end
+    return Ok(ManifestWorkspace {}) if body.empty?
+    return Error("workspace declares members more than once") if body.count > 1
+    let entry = body.first.try
+    let call = match Tey.Manifest.call(entry) do
+      Just(value) => value
+      None => return Error("unknown workspace declaration")
+    end
+    let (name, arguments, _, _) = call
+    return Error("unknown workspace declaration `${name}`") if name != "members"
+    let values = match arguments do
+      [list] => match list do
+        ListLit(items, _) => items
+        _ => return Error("members expects a list of paths")
+      end
+      _ => return Error("members expects a list of paths")
+    end
+    let patterns = values.map { |value| Tey.Manifest.stringValue(value).or("") }
+    return Error("workspace members must be strings") if patterns.any? { |pattern| pattern == "" }
+    return Ok(ManifestWorkspace { memberPatterns: patterns })
   end
 
   let declarations(expressions: [Expression], group: String) -> [(Expression, String)] do
@@ -313,6 +422,20 @@ private do
     var found: String? = None
     arguments.each do |argument|
       found = Tey.Manifest.stringValue(argument.value) if argument.name == name
+      ()
+    end
+    return found
+  end
+
+  let namedBool(arguments: [NamedArgument], name: String) -> Bool? do
+    var found: Bool? = None
+    arguments.each do |argument|
+      if argument.name == name
+        found = match argument.value do
+          LitBool(value) => Just(value)
+          _ => None
+        end
+      end
       ()
     end
     return found

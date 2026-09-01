@@ -176,7 +176,7 @@ below; it does not inject a prelude, evaluate the file, start a subprocess, or
 allow arbitrary Kex expressions.
 
 ```kex
-bundle "myapp" do
+package "myapp" do
   version("0.1.0")
   kex(">= 0.1.0")                  # required compiler version (semver range)
   license("MIT")
