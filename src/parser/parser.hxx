@@ -163,6 +163,10 @@ private:
     // reporting an unexpected token, which sends the reader hunting the line
     // for a syntax slip that is not there.
     auto rejectReservedName(const char* what) -> void;
+    // Same, for a `let` whose binding name is a keyword — the pattern parser
+    // would otherwise report only "Expected pattern". No-op unless the token
+    // after `let` is a keyword in an unambiguous name position.
+    auto rejectReservedBindingName() -> void;
     [[noreturn]] auto error(const std::string& message) -> void;
     auto syncToTopLevel() -> void;
     auto syncToStatement() -> void;

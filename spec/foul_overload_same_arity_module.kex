@@ -1,0 +1,37 @@
+# Same-arity `foul` overloads reached from OUTSIDE the module declaring them.
+#
+# `foul_overload_same_arity.kex` covers the same overload set at top level,
+# which links and dispatches correctly. Move it inside a `module` and call it
+# from outside — the same file is enough, no separate compilation unit needed —
+# and the call site emits the plain arity while the definitions were registered
+# under their per-signature mangled names:
+#
+#   kex_...: undefined function listen/4 in main/0
+#
+# Found in Rodolfo, whose `Router` offers `start(port, options)` alongside
+# `start(host, port)`; every call from an application failed to link.
+module Srv do
+  record Options do
+    limit : Integer
+  end
+
+  record Server do
+    name : String
+  end
+
+  make Server do
+    foul listen(port: Integer, options: Options) -> String do
+      "${@name} port ${port} limit ${options.limit}"
+    end
+
+    foul listen(host: String, port: Integer) -> String do
+      "${@name} ${host}:${port}"
+    end
+  end
+end
+
+main do
+  let s = Srv.Server { name: "api" }
+  IO.printLine(s.listen("0.0.0.0", 3000))
+  IO.printLine(s.listen(3000, Srv.Options { limit: 4 }))
+end

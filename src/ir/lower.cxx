@@ -273,6 +273,40 @@ struct Lowering {
     };
     std::unordered_map<std::string, RecordInfo> records;
 
+    // The inverse of `canonicalRecordName` for MANGLED SYMBOL spellings: given
+    // a type as the checker names it (qualified — `Srv.Server`), the spelling
+    // the declaring module's own `make`/annotation source used, which is what
+    // `mangleReceiverSignature` baked into the emitted function names. Returns
+    // the input unchanged unless the qualifier is demonstrably the module that
+    // declares that type here, so an unrelated `A.Server` is never confused
+    // with a local `Server`.
+    auto moduleLocalTypeSpelling(const std::string& written) const
+        -> std::string {
+        std::string base = written;
+        std::string applied;
+        if (auto angle = base.find('<'); angle != std::string::npos) {
+            applied = base.substr(angle);
+            base.resize(angle);
+        }
+        const auto dot = base.rfind('.');
+        if (dot == std::string::npos) return written;
+        const auto qualifier = base.substr(0, dot);
+        const auto bare = base.substr(dot + 1);
+        auto declaring = localTypeModules.find(bare);
+        if (declaring != localTypeModules.end() &&
+            declaring->second == qualifier)
+            return bare + applied;
+        auto declared = moduleDeclaredTypes.find(bare);
+        if (declared != moduleDeclaredTypes.end() &&
+            declared->second == qualifier)
+            return bare + applied;
+        // A record of a module compiled in this unit. Only when nothing local
+        // already answers to the bare name — two modules may declare the same
+        // record, and stripping then names the wrong one.
+        if (records.count(base) && !records.count(bare)) return bare + applied;
+        return written;
+    }
+
     // Resolve a source spelling to the canonical runtime record identity.
     // Module-owned records are tagged `Module.Record`; top-level records keep
     // their historical bare name. Prefer the innermost lexical module before
@@ -2952,6 +2986,34 @@ struct Lowering {
                         backendFunction = std::move(exact);
                     else if (knownFns.count(byReceiver))
                         backendFunction = std::move(byReceiver);
+                    else {
+                        // The checker names a module's types by their
+                        // QUALIFIED identity (`Srv.Server`, `Srv.Options`),
+                        // but a `make Server` written inside `module Srv`
+                        // mangles its per-signature implementations under the
+                        // spelling as WRITTEN, which inside the module is
+                        // bare. So a call from OUTSIDE the module built
+                        // `listen/Srv.Server,String,Integer`, found nothing,
+                        // kept the plain name — and the plain name is exactly
+                        // what an argument-overloaded method is never emitted
+                        // under: erlc rejected the unit with "undefined
+                        // function listen/4". Retry in the declaring module's
+                        // own spelling before giving up.
+                        auto local = resolved->second.localDispatchTypes;
+                        for (auto& type : local)
+                            type = moduleLocalTypeSpelling(type);
+                        if (local != resolved->second.localDispatchTypes) {
+                            auto localExact =
+                                mangleReceiverSignature(backendFunction, local);
+                            auto localByReceiver =
+                                mangleReceiverImplementation(backendFunction,
+                                                             local.front());
+                            if (knownFns.count(localExact))
+                                backendFunction = std::move(localExact);
+                            else if (knownFns.count(localByReceiver))
+                                backendFunction = std::move(localByReceiver);
+                        }
+                    }
                 }
                 // Same as externalCallExpr: the imported-foul append belongs
                 // with dropping the gate, not before it (kexhq/kex#181).

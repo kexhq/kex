@@ -499,6 +499,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             ifn.backendArity = static_cast<int>(sig.params.size()) +
                 (sig.isFoul ? 1 : 0);
         }
+        ifn.isReceiverMethod = true;
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
         ifaces.receiverFunctions[sig.name].push_back(ifn);
     };

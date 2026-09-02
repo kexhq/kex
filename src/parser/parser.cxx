@@ -126,9 +126,44 @@ auto Parser::rejectSingleLetterTypeName(const std::string &name,
 auto Parser::rejectReservedName(const char *what) -> void {
   if (!isKeywordToken(peek().type))
     return;
-  error("`" + std::string(tokenTypeName(peek().type)) +
-        "` is a reserved keyword in Kex, so it cannot name a " +
-        std::string(what) + " — rename it");
+  const auto loc = currentLocation();
+  const auto message = "`" + std::string(tokenTypeName(peek().type)) +
+                       "` is a reserved keyword in Kex, so it cannot name a " +
+                       std::string(what) + " — rename it";
+  // The keyword is consumed BEFORE reporting, for the same reason `foul
+  // module` consumes its `foul`: error() throws, and syncToTopLevel resumes on
+  // exactly these tokens, so leaving it in place put the recovery loop back on
+  // the token that just failed. Every reserved-keyword report was then
+  // followed by a second, meaningless one — `let compiled = 1` said what was
+  // wrong and then added "Expected 'do' after 'compiled', got =".
+  advance();
+  m_diagnostics.push_back({loc, message});
+  throw ParseError{loc, message};
+}
+
+// `let compiled = 1` / `let compiled(x) = x` — the name is a keyword, so
+// neither `isLetFunctionDefAhead` (which only accepts the name-capable
+// spellings) nor the pattern parser can claim it, and the binding fell all the
+// way through to a bare "Expected pattern" that named neither the keyword nor
+// the real problem. A keyword followed by `=` or `(` is unambiguously a
+// declaration NAME position — no pattern starts that way — so report it the
+// same way a `make` block's method already does.
+auto Parser::rejectReservedBindingName() -> void {
+  const auto name = peekNext().type;
+  if (!isKeywordToken(name))
+    return;
+  // The keywords Kex deliberately lets a declaration use as its name (see
+  // parseFunctionDef's accepted list). `let match = expr` is a legal binding.
+  if (name == TokenType::Loop || name == TokenType::Match ||
+      name == TokenType::Spawn || name == TokenType::After ||
+      name == TokenType::Next)
+    return;
+  const auto after = m_pos + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
+                                                 : TokenType::Eof;
+  if (after != TokenType::Equals && after != TokenType::LParen)
+    return;
+  advance(); // let
+  rejectReservedName("function");
 }
 
 auto Parser::error(const std::string &message) -> void {
@@ -233,6 +268,7 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     if (isLetFunctionDefAhead()) {
       return parseFunctionDef();
     }
+    rejectReservedBindingName();
     // Plain value binding or destructuring (let { ... } = ..., let x = expr,
     // etc.)
     auto mainBlock = std::make_unique<ast::MainBlock>();
@@ -3223,6 +3259,7 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
     return expr;
   }
 
+  rejectReservedBindingName();
   auto expr = std::make_unique<ast::Expr>();
   expr->location = loc;
   expect(TokenType::Let, "Expected 'let'");

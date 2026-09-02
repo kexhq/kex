@@ -308,7 +308,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                     error(loc, "module " + requested + " has no name `" + name + "`");
 
             const bool explicitImport = !onlyNames.empty();
-            for (const auto& [name, _] : exports) {
+            for (const auto& [name, overloads] : exports) {
                 if (!onlyNames.empty()
                     && std::find(onlyNames.begin(), onlyNames.end(), name)
                         == onlyNames.end())
@@ -316,6 +316,17 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                 if (std::find(exceptNames.begin(), exceptNames.end(), name)
                     != exceptNames.end())
                     continue;
+
+                // Same rule as the source-module path below: a name every one
+                // of whose overloads comes from a `make T do` block is reached
+                // through a typed receiver and never competes for the bare
+                // name (kexhq/kex#272). One bare-callable overload is enough to
+                // claim it.
+                const bool receiverMethod = !overloads.empty() &&
+                    std::all_of(overloads.begin(), overloads.end(),
+                                [](const ImportedFunction& fn) {
+                                    return fn.isReceiverMethod;
+                                });
 
                 ImportOrigin* previous = nullptr;
                 for (auto it = m_importScopes.rbegin();
@@ -327,8 +338,12 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                     }
                 }
                 if (previous && previous->module != requested) {
-                    if (explicitImport && !previous->explicitImport) {
-                        *previous = {requested, true};
+                    if (receiverMethod) {
+                        // Nothing to claim; leave the standing origin alone.
+                    } else if (previous->receiverMethod) {
+                        *previous = {requested, explicitImport, false};
+                    } else if (explicitImport && !previous->explicitImport) {
+                        *previous = {requested, true, false};
                     } else if (!explicitImport && previous->explicitImport) {
                         continue;
                     } else {
@@ -340,7 +355,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                     }
                 } else if (!previous) {
                     m_importScopes.back()[name] =
-                        {requested, explicitImport};
+                        {requested, explicitImport, receiverMethod};
                 }
                 defineLocal(name);
             }
@@ -379,6 +394,15 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
             && std::find(onlyNames.begin(), onlyNames.end(), symbol->name) == onlyNames.end()) continue;
         if (std::find(exceptNames.begin(), exceptNames.end(), symbol->name) != exceptNames.end()) continue;
 
+        // A method declared in a `make T do` block is reached through a typed
+        // receiver — `bag.get(name)` dispatches on `Bag` — and has no bare-name
+        // spelling for another module's `get` to be ambiguous with. Counting it
+        // as an ordinary imported name made `using Dsl` and `using Headers`
+        // refuse each other whenever one of them happened to declare a receiver
+        // method of a name the other used for a free function, whether or not
+        // the program ever wrote a bare `get` (kexhq/kex#272).
+        const bool receiverMethod = !symbol->makeTarget.empty();
+
         ImportOrigin* previous = nullptr;
         for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it)
             if (auto found = it->find(symbol->name); found != it->end()) {
@@ -386,8 +410,16 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                 break;
             }
         if (previous && previous->module != resolved) {
-            if (explicitImport && !previous->explicitImport) {
-                *previous = {resolved, true};
+            // Only two BARE names can collide. Either side being a receiver
+            // method settles it: the bare name belongs to whichever import
+            // actually claims it, and a second receiver method changes nothing.
+            if (receiverMethod) {
+                // Leave the standing origin alone — a bare-name owner keeps the
+                // name, and another method has nothing to claim.
+            } else if (previous->receiverMethod) {
+                *previous = {resolved, explicitImport, false};
+            } else if (explicitImport && !previous->explicitImport) {
+                *previous = {resolved, true, false};
             } else if (!explicitImport && previous->explicitImport) {
                 continue;
             } else {
@@ -396,7 +428,8 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                 continue;
             }
         } else if (!previous) {
-            m_importScopes.back()[symbol->name] = {resolved, explicitImport};
+            m_importScopes.back()[symbol->name] =
+                {resolved, explicitImport, receiverMethod};
         }
         defineLocal(symbol->name);
         symbol->references.push_back(loc);
