@@ -6,7 +6,8 @@
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1,
-          bytes/1, fromBytes/1, graphemeCount/1]).
+          bytes/1, fromBytes/1, graphemeCount/1,
+          byteSize/1, byteAt/2, bytePart/3]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
 %% ('h'.upperCase → 'H'). A Char cannot expand, so it takes the SIMPLE
@@ -32,6 +33,27 @@ chars(S) -> kex_intrinsic_list:as_list(S).
 %% TEXT view and this is the STORAGE view: "é" is one Char and two bytes.
 bytes(S) when is_binary(S) -> binary_to_list(S);
 bytes(_) -> [].
+
+%% The STORAGE view without materialising it. `bytes` builds a list, so
+%% `s.bytes.count` on a megabyte costs a million cons cells just to answer a
+%% number; these three answer from the binary itself.
+byteSize(S) when is_binary(S) -> byte_size(S);
+byteSize(_) -> 0.
+
+%% Out of range is 'None', matching `at` on every other indexed type rather
+%% than the badarg binary:at/2 would raise.
+byteAt(S, I) when is_binary(S), is_integer(I), I >= 0, I < byte_size(S) ->
+    {'Just', binary:at(S, I)};
+byteAt(_, _) -> 'None'.
+
+%% Clamped rather than raising: a slice past the end yields what is there,
+%% the way `take`/`drop` already behave.
+bytePart(S, Off, Len) when is_binary(S), is_integer(Off), is_integer(Len) ->
+    Size = byte_size(S),
+    Start = min(max(Off, 0), Size),
+    Count = min(max(Len, 0), Size - Start),
+    binary:part(S, Start, Count);
+bytePart(_, _, _) -> <<>>.
 
 %% graphemeCount/1 — the string's length in extended grapheme clusters
 %% (Unicode UAX #29): `"e\x{301}"` (e + combining acute) and `"\r\n"` each

@@ -1,7 +1,7 @@
 using URI
 using Net.IP, only: [Address, Network]
 using Net.DNS, only: [Name]
-using Net.HTTP, only: [Headers, Status, add, set, get, getAll, success?]
+using Net.HTTP, only: [Headers, Status, add, remove, get, getAll, success?]
 
 describe("network value APIs") do
   it("resolves and normalizes URLs explicitly") do

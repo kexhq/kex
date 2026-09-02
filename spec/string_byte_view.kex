@@ -1,0 +1,37 @@
+# The STORAGE view of a String, without materialising it.
+#
+# `bytes` already answered these questions, but only by building a list: on a
+# megabyte payload `s.bytes.count` costs a million values to produce one
+# number, which is exactly the wrong shape for a driver handing back a BLOB
+# (docs/sql-types-plan.md, "Bytes"). `byteSize`/`byteAt`/`bytePart` read the
+# encoding directly.
+#
+# The two views disagree the moment a string is not pure ASCII, and that
+# disagreement is the point: `count` counts characters, `byteSize` counts the
+# bytes they encode to.
+main do
+  let s = "héllo"
+  IO.printLine("${s.count} ${s.byteSize}")
+
+  # byteAt indexes the ENCODING: at(1) is the character "é", byteAt(1) is the
+  # first of the two bytes encoding it.
+  IO.printLine("${s.at(1)} ${s.byteAt(0)} ${s.byteAt(1)}")
+
+  # Out of range is None, matching `at` on every other indexed type rather
+  # than raising the way binary:at/2 would.
+  IO.printLine("${s.byteAt(99)} ${s.byteAt(-1)}")
+
+  # bytePart clamps rather than refusing, the way take/drop already behave.
+  IO.printLine("${s.bytePart(1, 2).bytes}")
+  IO.printLine("${s.bytePart(0, 99).byteSize} ${s.bytePart(-5, 3).bytes}")
+
+  # A slice taken mid-character is legal storage and not text — the point of
+  # keeping the two views apart.
+  IO.printLine("${s.bytePart(1, 1).byteSize} ${s.bytePart(1, 1).bytes}")
+
+  # The empty string answers all three without a special case.
+  IO.printLine("${"".byteSize} ${"".byteAt(0)} [${"".bytePart(0, 5)}]")
+
+  # ASCII is where the two views agree.
+  IO.printLine("${"abc".count} ${"abc".byteSize} ${"abc".byteAt(2)}")
+end
