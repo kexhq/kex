@@ -1,0 +1,16 @@
+# kex: check-only
+# A match on a closed ADT must cover every constructor.
+#
+# The strongest part of the exhaustiveness checker, and until now nothing
+# pinned it: omitting `Blue` is a compile error, not a runtime fall-through.
+# (Literal patterns and tuples of ADTs are still not covered — see
+# examples/typesystem_audit/.)
+type Color = Red | Green | Blue
+
+main do
+  let describe(c: Color) = match c do
+    Red => "r"
+    Green => "g"
+  end
+  IO.printLine(describe(Red))
+end

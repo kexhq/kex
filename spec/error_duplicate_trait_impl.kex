@@ -1,0 +1,23 @@
+# kex: check-only
+# Two implementations of one trait method for one receiver are rejected.
+#
+# From the type-system audit: TraitRegistry::registerImplementation dedups
+# with a set, so the second `make Alpha, implement: Greeter` was silently
+# dropped and the first won. Nothing said which body would run.
+trait Greeter do
+  greeting :> String
+end
+
+record Alpha do end
+
+make Alpha, implement: Greeter do
+  let greeting = "first"
+end
+
+make Alpha, implement: Greeter do
+  let greeting = "second"
+end
+
+main do
+  IO.printLine(Alpha { }.greeting)
+end

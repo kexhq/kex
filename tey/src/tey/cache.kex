@@ -14,7 +14,7 @@ end
 
 # Include the source URL in the cache identity: two packages with the same
 # display name must never share a checkout.
-let packagePath(dep: Tey.Lockfile.Dependency) -> String do
+foul packagePath(dep: Tey.Lockfile.Dependency) -> String do
   return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
 end
 
@@ -83,7 +83,7 @@ private do
 
   # Sibling of the final path so the move that publishes it stays on one
   # filesystem, and named so a leftover from a killed run is recognizable.
-  let stagingPath(dep: Tey.Lockfile.Dependency) -> String do
+  foul stagingPath(dep: Tey.Lockfile.Dependency) -> String do
     return "${Tey.Cache.packagePath(dep)}.partial"
   end
 end

@@ -1,0 +1,1 @@
+spec/error_exhaustive_adt.kex:11:28: error: Non-exhaustive match on Color: missing case(s) Blue

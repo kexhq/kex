@@ -1,0 +1,9 @@
+spec/error_interpolation_checked.kex:10:21: error: `length` expects argument 1 to be Binary, but got Integer
+
+length : Binary -> Integer
+
+length : Range -> Integer
+
+length : String -> Integer
+
+length : [A] -> Integer
