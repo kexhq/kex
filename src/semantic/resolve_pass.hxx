@@ -73,7 +73,15 @@ private:
     const ImportedInterfaces* m_imports;
 
     std::vector<std::unordered_set<std::string>> m_scopes;
-    struct ImportOrigin { std::string module; bool explicitImport = false; };
+    // `receiverMethod` marks an origin that came from a `make T do` block.
+    // Such a name is reached through a typed receiver (`bag.get(k)`), never as
+    // a bare call, so it does not compete for the bare name and two modules
+    // that each spell it differently are not ambiguous — see importModule.
+    struct ImportOrigin {
+        std::string module;
+        bool explicitImport = false;
+        bool receiverMethod = false;
+    };
     std::vector<std::unordered_map<std::string, ImportOrigin>> m_importScopes;
     std::string m_currentModule;
     // name -> every parameter label its clauses declare, collected from the

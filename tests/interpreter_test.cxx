@@ -475,6 +475,33 @@ int main() {
             assertTrue(rejected);
         });
 
+        it("does not count a make-block method as an ambiguous import", []() {
+            // `Bag.get` is reached through a typed receiver — `bag.get(k)`
+            // dispatches on Bag — so it has no bare-name spelling for `Dsl`'s
+            // free `get` to be ambiguous with. Counting it as an ordinary
+            // import made `using` the two modules together refuse the program
+            // outright, whether or not it ever wrote a bare `get`
+            // (kexhq/kex#272).
+            auto result = run(
+                "module Dsl do\n"
+                "  let get(path: String) = path\n"
+                "end\n"
+                "record Bag do\n"
+                "  n : Integer\n"
+                "end\n"
+                "module Headers do\n"
+                "  make Bag do\n"
+                "    let get(k: Integer) = @n + k\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  using Dsl\n"
+                "  using Headers\n"
+                "  Bag { n: 1 }.get(2)\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(3));
+        });
+
         it("keeps imports inside a visibility block positional and scoped", []() {
             auto inside = run(
                 "module Util do\n"

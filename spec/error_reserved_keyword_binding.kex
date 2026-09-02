@@ -1,0 +1,17 @@
+# kex: check-only
+# A reserved word naming a plain `let` BINDING, not a make-block method.
+#
+# `error_reserved_keyword_name.kex` covers the make-block spelling. This one is
+# the value binding: neither the let-function-definition lookahead nor the
+# pattern parser can claim a keyword, so `let compiled = ...` fell through to a
+# bare "Expected pattern" that named neither the word nor the problem — and
+# then, because recovery resumes on exactly the tokens that report a
+# declaration, the parser landed straight back on `compiled` and added a second
+# meaningless "Expected 'do' after 'compiled', got =".
+#
+# Found while porting Rodolfo (docs/rodolfo-findings.md).
+let compiled = 1
+
+main do
+  IO.printLine("unreachable")
+end
