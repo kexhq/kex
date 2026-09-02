@@ -80,6 +80,40 @@ describe("Tey.Lockfile round trip") do
     assert(back.pluginApprovals["github"] == Just("interface-hash"))
   end
 
+  it("encodes maps deterministically regardless of insertion order") do
+    let a = Dependency { name: "a", git: "https://example.com/a",
+                         commit: "a", sha256: "a" }
+    let z = Dependency { name: "z", git: "https://example.com/z",
+                         commit: "z", sha256: "z" }
+    let first = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      workspaceMembers: {}.put("z", "packages/z").put("a", "packages/a"),
+      lockedDependencies: [z, a],
+      pluginApprovals: {}.put("zeta", "z").put("alpha", "a")
+    }
+    let second = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      workspaceMembers: {}.put("a", "packages/a").put("z", "packages/z"),
+      lockedDependencies: [a, z],
+      pluginApprovals: {}.put("alpha", "a").put("zeta", "z")
+    }
+    assert(Tey.Lockfile.encode(first) == Tey.Lockfile.encode(second))
+  end
+
+
+  it("keeps provider plugin interface fingerprints on package entries") do
+    let dependency = Dependency {
+      name: "provider", git: "https://example.com/provider",
+      resolved: "v1.0.0", commit: "abc123", sha256: "deadbeef",
+      pluginFingerprints: { "github": "interface-hash" }
+    }
+    let state = LockState { kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+                            lockedDependencies: [dependency] }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(state)).try
+    assert(back.lockedDependencies.first.try.pluginFingerprints["github"] ==
+           Just("interface-hash"))
+  end
+
   it("round-trips path and workspace package sources") do
     let state = LockState {
       kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",

@@ -1,0 +1,112 @@
+module Tey.PluginHost
+
+using JSON
+
+record Invocation do
+  invocationKind : String
+  invocationNamespace : String
+  invocationOperation : String
+  workspaceRoot : String
+  currentMember : String? = None
+  members : {String: String} = {}
+  graph : [Tey.Lockfile.Dependency] = []
+  lock : Tey.Lockfile.LockState
+  toolchain : Tey.Toolchain.ToolchainInfo
+  arguments : [String] = []
+  options : {String: Any} = {}
+  environment : {String: String} = {}
+end
+
+# The host-to-child half of protocol version 1. It is deliberately ordinary
+# JSON rather than Kex source: a plugin receives data and cannot make Tey
+# evaluate declarations smuggled into its context.
+let encodeInvocation(invocation: Invocation) -> String do
+  let member = match invocation.currentMember do
+    Just(name) => name
+    None => None
+  end
+  let graph = invocation.graph.map do |dependency|
+    {
+      name: dependency.name,
+      version: dependency.version,
+      source: dependency.source,
+      git: dependency.git,
+      resolved: dependency.resolved,
+      commit: dependency.commit,
+      subdir: dependency.subdir,
+      path: dependency.path,
+      sha256: dependency.sha256,
+      dependencies: dependency.dependencies,
+      workspace: dependency.workspace?
+    }
+  end
+  return JSON.stringify({
+    version: 1,
+    kind: invocation.invocationKind,
+    namespace: invocation.invocationNamespace,
+    operation: invocation.invocationOperation,
+    context: {
+      workspaceRoot: invocation.workspaceRoot,
+      currentMember: member,
+      members: invocation.members,
+      graph: graph,
+      lock: {
+        manifestFingerprint: invocation.lock.manifestFingerprint,
+        kexRequirement: invocation.lock.kexRequirement,
+        kexVersion: invocation.lock.kexVersion,
+        otpRequirement: invocation.lock.otpRequirement,
+        otpFloor: invocation.lock.otpRelease,
+        approvals: invocation.lock.pluginApprovals
+      },
+      toolchain: {
+        kex: invocation.toolchain.version,
+        otpFloor: invocation.toolchain.reportedRuntimeOtpFloor
+      },
+      arguments: invocation.arguments,
+      options: invocation.options,
+      environment: invocation.environment
+    }
+  }) + "\n"
+end
+
+let typedOptions(operation: Tey.Manifest.PluginOperation,
+                 supplied: {String: String}) -> {String: Any} or! String do
+  return Tey.PluginHost.coerceOptions(operation, supplied.entries, {})
+end
+
+private do
+  let dynamic(value: Any) -> Any = value
+
+  let coerceOptions(operation: Tey.Manifest.PluginOperation,
+                    entries, converted: {String: Any}) -> {String: Any} or! String do
+    return Ok(converted) if entries.empty?
+    let (name, text) = entries.first.try
+    let option = match operation.operationOptions.find { |candidate|
+      candidate.optionName == "${name}"
+    } do
+      None => return Error("unknown option `${name}` for plugin operation `${operation.operationName}`")
+      Just(value) => value
+    end
+    let value: Any = match option.optionType do
+      "String" => Tey.PluginHost.dynamic("${text}")
+      "Integer" => match Integer.parse("${text}") do
+        Ok(number) => Tey.PluginHost.dynamic(number)
+        Error(_) => return Error("option `${name}` expects an Integer")
+      end
+      "Float" => match Float.parse("${text}") do
+        Ok(number) => Tey.PluginHost.dynamic(number)
+        Error(_) => return Error("option `${name}` expects a Float")
+      end
+      "Bool" => if "${text}" == "true"
+        Tey.PluginHost.dynamic(true)
+      elif "${text}" == "false"
+        Tey.PluginHost.dynamic(false)
+      else
+        return Error("option `${name}` expects true or false")
+      end
+      _ => return Error("option `${name}` has unsupported type `${option.optionType}`")
+    end
+    return Tey.PluginHost.coerceOptions(operation, entries.drop(1),
+                                        converted.put("${name}", value))
+  end
+end

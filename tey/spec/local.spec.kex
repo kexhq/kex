@@ -1,0 +1,177 @@
+using Tey.Local, only: [Override, load, set, validateAgainstLock]
+using Tey.Manifest, only: [WorkspaceSource]
+using Tey.Workspace, only: [Context, Member]
+
+describe("Tey.Local") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
+  it("writes a member override and workspace ignore rules") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/app")
+    Mock.FS.Directory("/external/dep")
+    Mock.FS.File("/work/app/package.local.kex", "")
+    Mock.FS.File("/work/.gitignore", "")
+    Mock.FS.File("/external/dep/package.kex", `
+      package "dep" do end
+    `)
+    let app = Tey.Manifest.ManifestPackage { name: "app" }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member { memberRoot: "/work/app", memberManifest: app }],
+      currentMember: Just(Member { memberRoot: "/work/app",
+                                   memberManifest: app })
+    }
+    Tey.Local.set(context, "dep", "../../external/dep").try
+    let text = FS.File.read("/work/app/package.local.kex").try
+    assert(text.contains?("local(\"dep\""))
+    let ignored = FS.File.read("/work/.gitignore").try
+    assert(ignored.contains?("package.local.kex"))
+    assert(ignored.contains?("**/package.local.kex"))
+  end
+
+  it("rejects conflicting root and member overrides") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/app")
+    Mock.FS.Directory("/external/dep")
+    Mock.FS.File("/external/dep/package.kex", `
+      package "dep" do end
+    `)
+    Mock.FS.File("/work/package.local.kex",
+                 `
+                   local("dep", path: "/external/dep")
+                 `)
+    Mock.FS.File("/work/app/package.local.kex",
+                 `
+                   local("dep", path: "/external/dep")
+                 `)
+    let app = Tey.Manifest.ManifestPackage { name: "app" }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member { memberRoot: "/work/app", memberManifest: app }]
+    }
+    match Tey.Local.load(context) do
+      Error(message) => assert(message.contains?("more than one scope"))
+      Ok(_) => assert(false, "accepted conflicting overrides")
+    end
+  end
+
+  it("loads a package-root override only once") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/external/dep")
+    Mock.FS.File("/work/package.local.kex", `
+      local("dep", path: "/external/dep")
+    `)
+    Mock.FS.File("/external/dep/package.kex", `
+      package "dep" do end
+    `)
+    let package = Tey.Manifest.ManifestPackage { name: "app" }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member { memberRoot: "/work", memberManifest: package }],
+      currentMember: Just(Member { memberRoot: "/work",
+                                   memberManifest: package })
+    }
+    let overrides = Tey.Local.load(context).try
+    assert(overrides.count == 1)
+    assert(overrides.first.try.overrideName == "dep")
+  end
+
+  it("requires dependency declarations to match the lock") do
+    let manifest = Tey.Manifest.ManifestPackage {
+      name: "dep", version: "1.0.0",
+      manifestDependencies: [Tey.Manifest.Dependency {
+        manifestName: "child", manifestSource: WorkspaceSource
+      }]
+    }
+    let override = Override { overrideName: "dep", overridePath: "/dep",
+                              overrideFile: "/work/package.local.kex",
+                              overrideManifest: manifest }
+    let lock = Tey.Lockfile.LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.4.0",
+      lockedDependencies: [Tey.Lockfile.Dependency {
+        name: "dep", version: "1.0.0", source: "git", git: "https://example.com/dep",
+        commit: "abc", sha256: "hash", dependencies: []
+      }]
+    }
+    match Tey.Local.validateAgainstLock([override], lock) do
+      Error(message) => assert(message.contains?("different dependencies"))
+      Ok(_) => assert(false)
+    end
+  end
+
+  it("requires the package version to match its locked identity") do
+    let override = Override {
+      overrideName: "dep", overridePath: "/dep",
+      overrideFile: "/work/package.local.kex",
+      overrideManifest: Tey.Manifest.ManifestPackage {
+        name: "dep", version: "2.0.0"
+      }
+    }
+    let lock = Tey.Lockfile.LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.4.0",
+      lockedDependencies: [Tey.Lockfile.Dependency {
+        name: "dep", version: "1.0.0", source: "git",
+        git: "https://example.com/dep", commit: "abc", sha256: "hash"
+      }]
+    }
+    match Tey.Local.validateAgainstLock([override], lock) do
+      Error(message) => assert(message.contains?("version `2.0.0`"))
+      Ok(_) => assert(false, "accepted a different package version")
+    end
+  end
+
+
+  it("requires plugin interfaces to match the reproducible lock") do
+    let manifest = Tey.Manifest.read(`
+      package "dep" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run(["curl"])])
+        end
+      end
+    `).try
+    let override = Override { overrideName: "dep", overridePath: "/dep",
+                              overrideFile: "/work/package.local.kex",
+                              overrideManifest: manifest }
+    let lock = Tey.Lockfile.LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.4.0",
+      lockedDependencies: [Tey.Lockfile.Dependency {
+        name: "dep", version: "0.1.0", source: "git", git: "https://example.com/dep",
+        commit: "abc", sha256: "hash", dependencies: [],
+        pluginFingerprints: { "github": "old-interface" }
+      }]
+    }
+    match Tey.Local.validateAgainstLock([override], lock) do
+      Error(message) => assert(message.contains?("different plugin interfaces"))
+      Ok(_) => assert(false)
+    end
+  end
+end
+
+describe("Tey.Local Git protection") do
+  let root = "/tmp/tey_local_tracked_spec"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create(root)
+    FS.Directory.create("${root}/dep")
+    FS.File.write("${root}/package.local.kex", `
+      local("dep", path: "dep")
+    `)
+    FS.File.write("${root}/dep/package.kex", `
+      package "dep" do end
+    `)
+    Process.run("git", ["-C", root, "init"])
+    Process.run("git", ["-C", root, "add", "package.local.kex"])
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("rejects a tracked package.local.kex") do
+    let context = Context { workspaceRoot: root }
+    match Tey.Local.load(context) do
+      Error(message) => assert(message.contains?("tracked by Git"))
+      Ok(_) => assert(false, "accepted a tracked local manifest")
+    end
+  end
+end

@@ -71,7 +71,7 @@ enough.
 
 The reader is strict: a declaration it does not recognize is an error, not a
 comment. That is deliberate — a typo in a manifest must not be silently
-dropped — and it means a misspelled field fails loudly at `tey lock` rather
+dropped — and it means a misspelled field fails loudly at `tey install` rather
 than going missing.
 
 ## Check it before anyone depends on it

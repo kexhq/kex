@@ -1,19 +1,20 @@
 module Tey.Snapshot
 
-using Tey.Lockfile, only: [Dependency]
 using Tey.Manifest, only: [ManifestPackage]
+using Tey.Plugin, only: [approved?]
 
 # Turns a path dependency into an immutable, content-addressed cache entry.
 # The declared path remains in the lockfile for explanation; builds use the
 # snapshot identified by `sha256`, never the live directory.
 foul create(name: String, declaredPath: String,
-            declaringRoot: String) -> Dependency or! String do
+            declaringRoot: String) -> Tey.Lockfile.Dependency or! String do
   let source = if FS.Path.absolute?(declaredPath)
     FS.Path.normalize(declaredPath)
   else
     FS.Path.join(declaringRoot, declaredPath)
   end
   return Error("path dependency `${name}` does not exist at ${source}") if !FS.Directory.directory?(source)
+  Tey.Snapshot.validateSymlinks(source).try
   let manifest = match FS.File.read(FS.Path.join(source, "package.kex")) do
     Error(_) => return Error("path dependency `${name}` has no package.kex")
     Ok(text) => match Tey.Manifest.read(text) do
@@ -22,37 +23,70 @@ foul create(name: String, declaredPath: String,
     end
   end
   return Error("path dependency `${name}` declares package `${manifest.name}`") if manifest.name != name
-  let ignores = Tey.Snapshot.ignorePatterns(source)
-  let files = Tey.Snapshot.files(source, source, ignores).sort
-  let fingerprints = files.map do |relative|
-    let digest = Digest.fileSha256(FS.Path.join(source, relative)).try
-    "${relative}\n${digest}"
-  end
-  let sha = Digest.sha256(fingerprints.join("\n--\n"))
+  let files = Tey.Snapshot.includedFiles(source)
+  let sha = Tey.Snapshot.digest(source).try
   let destination = FS.Path.join(Tey.Cache.root, "snapshots", sha)
   if !FS.Directory.directory?(destination)
-    Tey.Snapshot.publish(source, files, destination).try
+    Tey.Snapshot.publishSnapshot(source, files, destination).try
   end
-  return Ok(Dependency { name: name, version: manifest.version, source: "path",
-                         path: declaredPath, sha256: sha,
-                         dependencies: manifest.manifestDependencies.map do |dep|
-                           dep.manifestName
-                         end })
+  let dependencyNames = manifest.manifestDependencies.map do |dependency|
+    dependency.manifestName
+  end
+  let snapshot = Tey.Lockfile.Dependency {
+    name: name, version: manifest.version, source: "path",
+    path: declaredPath, sha256: sha, dependencies: dependencyNames,
+    pluginFingerprints: Tey.Plugin.fingerprints(manifest.plugins)
+  }
+  return Ok(snapshot)
 end
 
-foul cachedPath(dependency: Dependency) -> String do
+foul cachedPath(dependency: Tey.Lockfile.Dependency) -> String do
   return FS.Path.join(Tey.Cache.root, "snapshots", dependency.sha256)
 end
 
+foul verify(dependency: Tey.Lockfile.Dependency) -> String or! String do
+  let path = Tey.Snapshot.cachedPath(dependency)
+  return Error("${dependency.name} is not present in the snapshot cache") if !FS.Directory.directory?(path)
+  let actual = Tey.Snapshot.digest(path).try
+  return Ok(path) if actual == dependency.sha256
+  return Error("content hash mismatch for ${dependency.name}: expected ${dependency.sha256}, got ${actual}")
+end
+
 private do
-  let excludedNames = [".git", ".tey", "build", "ebin", "erl_crash.dump",
-                       "package.local.kex", "tey.lock"]
+  let excludedNames = [".git", ".hg", ".svn", ".tey", ".cache", ".DS_Store",
+                       "build", "build-wasm", "_build", "dist", "ebin",
+                       "node_modules", "erl_crash.dump", "package.local.kex",
+                       "tey.lock"]
 
   foul ignorePatterns(root: String) -> [String] do
     match FS.File.read(FS.Path.join(root, ".teyignore")) do
       Error(_) => return []
       Ok(text) => return text.lines.map { |line| line.trim }
         .filter { |line| !line.empty? && !line.startsWith?("#") }
+    end
+  end
+
+  foul includedFiles(root: String) -> [String] do
+    return Tey.Snapshot.files(root, root, Tey.Snapshot.ignorePatterns(root)).sort
+  end
+
+  foul digest(root: String) -> String or! String do
+    let fingerprints = Tey.Snapshot.includedFiles(root).map do |relative|
+      Tey.Snapshot.entryFingerprint(root, relative).try
+    end
+    return Ok(Digest.sha256(fingerprints.join("\n--\n")))
+  end
+
+  foul entryFingerprint(root: String, relative: String) -> String or! String do
+    let path = FS.Path.join(root, relative)
+    match Process.run("readlink", ["--", path]) do
+      Ok(result) when result.exitCode == 0 => do
+        return Ok("${relative}\nlink\n${result.stdout.trim}")
+      end
+      _ => do
+        let bytes = FS.File.readBytes(path).try
+        return Ok("${relative}\nfile\n${Digest.sha256(bytes).hex}")
+      end
     end
   end
 
@@ -79,6 +113,7 @@ private do
 
   let ignored?(path: String, patterns: [String]) -> Bool do
     return patterns.any? do |raw|
+      let anchored = raw.startsWith?("/")
       let withoutRoot = raw.startsWith?("/") then raw.drop(1) else raw
       let pattern = if withoutRoot.endsWith?("/")
         withoutRoot.take(withoutRoot.count - 1)
@@ -88,21 +123,44 @@ private do
       let nested = path.startsWith?("${pattern}/")
       let glob = Tey.Snapshot.matches(FS.Path.segments(path),
                                       FS.Path.segments(pattern))
-      path == pattern || nested || glob
+      let basename = (!anchored && !pattern.contains?("/") &&
+                      FS.Path.segments(path).any? do |segment|
+                        Tey.Snapshot.segmentMatches(segment.chars, pattern.chars)
+                      end)
+      path == pattern || nested || glob || basename
     end
   end
 
   let matches([], []) -> Bool = true
+  let matches(path, ["**"]) -> Bool = true
   let matches(_, []) -> Bool = false
   let matches([], _) -> Bool = false
   let matches(path: [String], pattern: [String]) -> Bool do
     let wanted = pattern.first.try
-    return Tey.Snapshot.matches(path.drop(1), pattern.drop(1)) if wanted == "*"
-    return false if wanted != path.first.try
+    if wanted == "**"
+      return true if Tey.Snapshot.matches(path, pattern.drop(1))
+      return Tey.Snapshot.matches(path.drop(1), pattern)
+    end
+    return false if !Tey.Snapshot.segmentMatches(path.first.try.chars,
+                                                  wanted.chars)
     return Tey.Snapshot.matches(path.drop(1), pattern.drop(1))
   end
 
-  foul publish(source: String, files: [String], destination: String) -> String or! String do
+  let segmentMatches([], []) -> Bool = true
+  let segmentMatches(_, []) -> Bool = false
+  let segmentMatches([], pattern: [Char]) -> Bool do
+    return pattern.all? { |character| character == '*' }
+  end
+  let segmentMatches(text: [Char], pattern: [Char]) -> Bool do
+    if pattern.first.try == '*'
+      return true if Tey.Snapshot.segmentMatches(text, pattern.drop(1))
+      return Tey.Snapshot.segmentMatches(text.drop(1), pattern)
+    end
+    return false if text.first.try != pattern.first.try
+    return Tey.Snapshot.segmentMatches(text.drop(1), pattern.drop(1))
+  end
+
+  foul publishSnapshot(source: String, files: [String], destination: String) -> String or! String do
     let snapshots = FS.Path.dirname(destination)
     return Error("could not create snapshot cache") if !FS.Directory.create(Tey.Cache.root)
     return Error("could not create snapshot cache") if !FS.Directory.create(snapshots)
@@ -112,15 +170,58 @@ private do
     files.each do |relative|
       let target = FS.Path.join(staging, relative)
       let directoryReady = FS.Directory.create(FS.Path.dirname(target))
-      let copied = FS.File.copy(FS.Path.join(source, relative), target)
+      let copied = match Process.run("cp", ["-a", "--", FS.Path.join(source, relative), target]) do
+        Ok(result) => result.exitCode == 0
+        Error(_) => false
+      end
       if !directoryReady || !copied
         FS.Directory.deleteAll(staging)
         return Error("could not snapshot ${relative}")
       end
     end
     return Ok(destination) if FS.File.rename(staging, destination)
+    # A concurrent resolver may have published the same content-addressed
+    # snapshot first. Its directory is exactly our result; discard only our
+    # unpublished sibling rather than moving it inside the winner.
     FS.Directory.deleteAll(staging)
     return Ok(destination) if FS.Directory.directory?(destination)
     return Error("could not publish path dependency snapshot")
+  end
+
+
+  foul validateSymlinks(root: String) -> Void or! String do
+    let canonicalRoot = match Process.run("realpath", ["--", root]) do
+      Ok(result) => if result.exitCode == 0
+        result.stdout.trim
+      else
+        return Error("could not resolve path dependency root ${root}")
+      end
+      Error(error) => return Error(error)
+    end
+    let links = match Process.run("find", [root, "-type", "l", "-print"]) do
+      Ok(result) => do
+        return Error("could not inspect path dependency symlinks") if result.exitCode != 0
+        result.stdout.lines
+      end
+      Error(error) => return Error(error)
+    end
+    return Tey.Snapshot.validateLinkTargets(links, canonicalRoot)
+  end
+
+  foul validateLinkTargets(links: [String], canonicalRoot: String) -> Void or! String do
+    return Ok(()) if links.empty?
+    let link = links.first.try
+    let target = match Process.run("realpath", ["--", link]) do
+      Ok(result) => if result.exitCode == 0
+        result.stdout.trim
+      else
+        return Error("path snapshot contains a broken symlink `${link}`")
+      end
+      Error(error) => return Error(error)
+    end
+    if target != canonicalRoot && !target.startsWith?("${canonicalRoot}/")
+      return Error("path snapshot symlink `${link}` escapes the package directory")
+    end
+    return Tey.Snapshot.validateLinkTargets(links.drop(1), canonicalRoot)
   end
 end

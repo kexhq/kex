@@ -172,6 +172,138 @@ end
 # allowed to say, so a reimplementation has to accept all of them and mean the
 # same things by them.
 describe("Tey.Manifest.read — the whole format") do
+  it("parses plugin capabilities, commands, generators, and typed options") do
+    let package = Tey.Manifest.read(`
+      package "kex-github" do
+        version("1.0.0")
+        plugin namespace: "github", tey: ">= 0.6, < 0.8" do
+          capabilities([
+            FS.Read.package,
+            FS.Write.workspace,
+            Process.Run(["git"]),
+            Net.Connect(["api.github.com"])
+          ])
+          command("setup", entrypoint: "src/github/setup.kex") do
+            option("branch", type: String)
+          end
+          generator("workflow", entrypoint: "src/github/workflow.kex") do
+            option("otp", type: Integer)
+          end
+        end
+      end
+    `).try
+    let plugin = package.plugins.first.try
+    assert(plugin.pluginNamespace == "github")
+    assert(plugin.pluginTeyRequirement == ">= 0.6, < 0.8")
+    assert(plugin.pluginCapabilities.map { |resource| resource.capabilityKind } ==
+           ["FS.Read.package", "FS.Write.workspace", "Process.Run", "Net.Connect"])
+    assert(plugin.pluginCapabilities.third.try.capabilityValues == ["git"])
+    assert(plugin.pluginCommands.first.try.operationName == "setup")
+    assert(plugin.pluginCommands.first.try.operationOptions.first.try.optionType == "String")
+    assert(plugin.pluginGenerators.first.try.operationName == "workflow")
+    assert(plugin.pluginGenerators.first.try.operationOptions.first.try.optionType == "Integer")
+  end
+
+  it("rejects malformed plugin schemas without executing their bodies") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      package "unsafe" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          Process.run("touch", ["/tmp/should-never-exist"])
+        end
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("unknown plugin declaration"))
+      Ok(_) => assert(false, "accepted executable plugin manifest code")
+    end
+  end
+
+  it("rejects unknown capabilities and empty resource allowlists") do
+    let unknown: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Danger.All.system])
+        end
+      end
+    `)
+    let empty: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run([])])
+        end
+      end
+    `)
+    match unknown do
+      Error(message) => assert(message.contains?("unsupported plugin capability"))
+      Ok(_) => assert(false, "accepted an unknown capability")
+    end
+    match empty do
+      Error(message) => assert(message.contains?("non-empty resource list"))
+      Ok(_) => assert(false, "accepted an empty process allowlist")
+    end
+  end
+
+  it("rejects duplicate plugin namespaces and invalid option types") do
+    let duplicate: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do end
+        plugin namespace: "github", tey: ">= 0.6" do end
+      end
+    `)
+    match duplicate do
+      Error(message) => assert(message.contains?("declared twice"))
+      Ok(_) => assert(false, "accepted a duplicate namespace")
+    end
+    let invalid: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          command("setup", entrypoint: "setup.kex") do
+            option("branch", type: "String")
+          end
+        end
+      end
+    `)
+    match invalid do
+      Error(message) => assert(message.contains?("name and type"))
+      Ok(_) => assert(false, "accepted a string in a static type schema")
+    end
+  end
+
+  it("keeps plugin entrypoints inside the provider package") do
+    let absolute: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "/tmp/workflow.kex")
+        end
+      end
+    `)
+    let parent: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          command("setup", entrypoint: "../setup.kex")
+        end
+      end
+    `)
+    assert(absolute.error?)
+    assert(parent.error?)
+  end
+
+  it("restricts plugin options to protocol scalar types") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "workflow.kex") do
+            option("config", type: Configuration)
+          end
+        end
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("unsupported type"))
+      Ok(_) => assert(false, "accepted an unserializable option type")
+    end
+  end
+
   it("reads an entrypoint and a target") do
     let package = Tey.Manifest.read(`
       package "greeter" do
@@ -535,5 +667,27 @@ describe("Tey.Manifest.read — toolchain declarations") do
       end
     `).try
     assert(package.manifestToolchain == None)
+  end
+end
+
+describe("Tey.Manifest.readLocal") do
+  it("parses live path overrides without executing them") do
+    let overrides = Tey.Manifest.readLocal(`
+      local("parser", path: "../../parser")
+      local("fixtures", path: "/src/fixtures")
+    `).try
+    assert(overrides.map { |override| override.localName } ==
+           ["parser", "fixtures"])
+    assert(overrides.first.try.localPath == "../../parser")
+  end
+
+  it("rejects duplicate overrides") do
+    match Tey.Manifest.readLocal(`
+      local("parser", path: "one")
+      local("parser", path: "two")
+    `) do
+      Error(message) => assert(message.contains?("twice"))
+      Ok(_) => assert(false)
+    end
   end
 end

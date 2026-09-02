@@ -1,0 +1,152 @@
+module Tey.Plugin
+
+using Tey.Manifest, only: [Plugin, PluginCapability, PluginOperation]
+
+record Binding do
+  approvalKey : String
+  scopeName : String
+  declaration : Plugin
+end
+
+# Fingerprints only the declared interface and requested resources. Provider
+# implementation changes do not silently revoke approval; a capability,
+# command schema, generator schema, or supported-Tey change does.
+let fingerprint(plugin: Plugin) -> String do
+  return Digest.sha256(Tey.Plugin.interfaceText(plugin))
+end
+
+let fingerprints(plugins: [Plugin]) -> {String: String} do
+  return plugins.reduce({}) do |values, declaration|
+    values.put(declaration.pluginNamespace,
+               Tey.Plugin.fingerprint(declaration))
+  end
+end
+
+let approved?(plugin: Plugin, approvals: {String: String}) -> Bool do
+  return approvals[plugin.pluginNamespace] == Just(Tey.Plugin.fingerprint(plugin))
+end
+
+let missingApprovals(plugins: [Plugin], approvals: {String: String}) -> [Plugin] do
+  return plugins.filter { |plugin| !Tey.Plugin.approved?(plugin, approvals) }
+end
+
+# Keeps only approvals still backed by an identical visible declaration.
+# This is used when a lock is refreshed: removed plugins and interfaces whose
+# resources changed cannot inherit an old authorization.
+let validApprovals(plugins: [Plugin], approvals: {String: String}) -> {String: String} do
+  return plugins.reduce({}) do |valid, plugin|
+    if Tey.Plugin.approved?(plugin, approvals)
+      valid.put(plugin.pluginNamespace, Tey.Plugin.fingerprint(plugin))
+    else
+      valid
+    end
+  end
+end
+
+let bindingApproved?(binding: Binding, approvals: {String: String}) -> Bool do
+  return approvals[binding.approvalKey] == Just(
+    Tey.Plugin.fingerprint(binding.declaration)
+  )
+end
+
+let missingBindingApprovals(bindings: [Binding],
+                            approvals: {String: String}) -> [Binding] do
+  return bindings.filter do |binding|
+    !Tey.Plugin.bindingApproved?(binding, approvals)
+  end
+end
+
+let validBindingApprovals(bindings: [Binding],
+                          approvals: {String: String}) -> {String: String} do
+  return bindings.reduce({}) do |valid, binding|
+    if Tey.Plugin.bindingApproved?(binding, approvals)
+      valid.put(binding.approvalKey,
+                Tey.Plugin.fingerprint(binding.declaration))
+    else
+      valid
+    end
+  end
+end
+
+let validateScopes(globals: [Binding], locals: [Binding]) -> Void or! String do
+  let scopes = locals.map { |binding| binding.scopeName }.uniq
+  let allScopes = scopes.empty? then [""] else scopes
+  allScopes.each do |scope|
+    let visible = [...globals, ...locals.filter do |binding|
+      binding.scopeName == scope
+    end]
+    let namespaces = visible.map do |binding|
+      binding.declaration.pluginNamespace
+    end
+    let duplicate = namespaces.find do |namespace|
+      namespaces.filter { |candidate| candidate == namespace }.count > 1
+    end
+    match duplicate do
+      Just(namespace) => do
+        let label = scope == "" then "workspace" else scope
+        return Error("plugin namespace `${namespace}` is provided more than once in `${label}` scope")
+      end
+      None => ()
+    end
+  end
+  return Ok(())
+end
+
+let visibleBinding(bindings: [Binding], namespace: String,
+                   currentMember: String?) -> Binding or! String do
+  let visible = bindings.filter do |binding|
+    binding.scopeName == "" || currentMember == Just(binding.scopeName)
+  end
+  match visible.find { |binding|
+    binding.declaration.pluginNamespace == namespace
+  } do
+    Just(binding) => return Ok(binding)
+    None => do
+      let localExists = bindings.any? do |binding|
+        (binding.scopeName != "" &&
+         binding.declaration.pluginNamespace == namespace)
+      end
+      let noMember = match currentMember do None => true Just(_) => false end
+      if localExists && noMember
+        return Error("member-local plugin `${namespace}` requires a current member or --package")
+      end
+      return Error("no visible plugin namespace `${namespace}`")
+    end
+  end
+end
+
+let generator(binding: Binding,
+              name: String) -> PluginOperation or! String do
+  match binding.declaration.pluginGenerators.find { |operation|
+    operation.operationName == name
+  } do
+    Just(operation) => return Ok(operation)
+    None => return Error("plugin `${binding.declaration.pluginNamespace}` has no generator `${name}`")
+  end
+end
+
+private do
+  let interfaceText(plugin: Plugin) -> String do
+    let capabilities = plugin.pluginCapabilities.map do |resource|
+      "${resource.capabilityKind}(${resource.capabilityValues.sort.join(",")})"
+    end.sort
+    let commands = plugin.pluginCommands.map do |operation|
+      Tey.Plugin.operationText("command", operation)
+    end.sort
+    let generators = plugin.pluginGenerators.map do |operation|
+      Tey.Plugin.operationText("generator", operation)
+    end.sort
+    return ["namespace=${plugin.pluginNamespace}",
+            "tey=${plugin.pluginTeyRequirement}",
+            "capabilities=${capabilities.join(";")}",
+            "commands=${commands.join(";")}",
+            "generators=${generators.join(";")}"].join("\n")
+  end
+
+  let operationText(kind: String, operation: PluginOperation) -> String do
+    let options = operation.operationOptions.map do |option|
+      "${option.optionName}:${option.optionType}"
+    end.sort
+    return "${kind}:${operation.operationName}:${options.join(",")}"
+  end
+end

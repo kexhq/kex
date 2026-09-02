@@ -17,9 +17,38 @@ record ManifestWorkspace do
   memberPatterns : [String] = []
 end
 
+record LocalOverride do
+  localName : String
+  localPath : String
+end
+
 record Target do
   name : String
   entrypoint : String
+end
+
+record PluginCapability do
+  capabilityKind : String
+  capabilityValues : [String] = []
+end
+
+record PluginOption do
+  optionName : String
+  optionType : String
+end
+
+record PluginOperation do
+  operationName : String
+  operationEntrypoint : String
+  operationOptions : [PluginOption] = []
+end
+
+record Plugin do
+  pluginNamespace : String
+  pluginTeyRequirement : String
+  pluginCapabilities : [PluginCapability] = []
+  pluginCommands : [PluginOperation] = []
+  pluginGenerators : [PluginOperation] = []
 end
 
 # A project-specific command, run as `tey <name>`. Without these every package
@@ -79,6 +108,7 @@ record ManifestPackage do
   commands : [Command] = []
   manifestToolchain : Toolchain? = None
   manifestWorkspace : ManifestWorkspace? = None
+  plugins : [Plugin] = []
 end
 
 # The command names Tey answers itself. A `command(...)` may not take one of
@@ -91,7 +121,7 @@ end
 # covers every `kex ...` subcommand).
 let reservedCommands -> [String] do
   return ["add", "build", "clean", "docs", "help", "init", "install", "kex",
-          "list", "lock", "new", "run", "setup", "test", "update"]
+          "list", "local", "new", "run", "setup", "test", "update"]
 end
 
 # Reads a `package.kex`.
@@ -112,6 +142,7 @@ let read(text: String) -> ManifestPackage or! String do
   var commands: [Command] = []
   var toolchain: Toolchain? = None
   var workspace: ManifestWorkspace? = None
+  var plugins: [Plugin] = []
   var failures: [String] = []
 
   let program = match Kex.AST.parse(text, "package.kex") do
@@ -250,6 +281,22 @@ let read(text: String) -> ManifestPackage or! String do
         toolchainStdlib: Tey.Manifest.named(named, "stdlib").or("")
       })
       ()
+      elif declaration == "plugin"
+      match Tey.Manifest.pluginFrom(named, block) do
+        Error(error) => do failures.push!(error) () end
+        Ok(plugin) => do
+          if plugins.any? { |existing| existing.pluginNamespace == plugin.pluginNamespace }
+            failures.push!("plugin namespace `${plugin.pluginNamespace}` is declared twice")
+            ()
+          else
+            plugins.push!(plugin)
+            ()
+          end
+          ()
+          ()
+        end
+      end
+      ()
       else
       failures.push!("unknown declaration `${declaration}`")
       ()
@@ -268,7 +315,7 @@ let read(text: String) -> ManifestPackage or! String do
                      packageOtpRequirement: otpRequirement,
                      entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
                      commands: commands, manifestToolchain: toolchain,
-                     manifestWorkspace: workspace })
+                     manifestWorkspace: workspace, plugins: plugins })
 end
 
 # Reads a virtual-workspace manifest: a package.kex whose root is `workspace`
@@ -287,6 +334,43 @@ let readWorkspace(text: String) -> ManifestWorkspace or! String do
     end
     _ => return Error("package.kex must declare package \"name\" or workspace")
   end
+end
+
+let readLocal(text: String) -> [LocalOverride] or! String do
+  let program = match Kex.AST.parse(text, "package.local.kex") do
+    Ok(parsed) => parsed
+    Error(error) => return Error(error.message)
+  end
+  let bodies: [[Expression]] = program.items.map do |item|
+    match item do
+      MainDef(info) => info.body
+      _ => []
+    end
+  end
+  let empty: [Expression] = []
+  let expressions = bodies.reduce(empty) { |all, body| [...all, ...body] }
+  return Error("package.local.kex may only declare local overrides") if expressions.empty? && !text.trim.empty?
+  var overrides: [LocalOverride] = []
+  expressions.each do |expression|
+    match Tey.Manifest.call(expression) do
+      Just(("local", arguments, named, _)) => do
+        let name = Tey.Manifest.argument(arguments).or("")
+        let path = Tey.Manifest.named(named, "path").or("")
+        if name == "" || path == ""
+          return Error("local overrides require a package name and path:")
+        end
+        if overrides.any? { |override| override.localName == name }
+          return Error("local override `${name}` is declared twice")
+        end
+        overrides.push!(LocalOverride { localName: name, localPath: path })
+        ()
+      end
+      Just((name, _, _, _)) =>
+        return Error("unknown local declaration `${name}`")
+      None => return Error("unknown local declaration")
+    end
+  end
+  return Ok(overrides)
 end
 
 private do
@@ -357,6 +441,147 @@ private do
     return Error("workspace members must be strings") if patterns.any? { |pattern| pattern == "" }
     return Ok(ManifestWorkspace { memberPatterns: patterns })
   end
+
+  let pluginFrom(named: [NamedArgument], block: Expression?) -> Plugin or! String do
+    let namespace = Tey.Manifest.named(named, "namespace").or("")
+    let requirement = Tey.Manifest.named(named, "tey").or("")
+    return Error("plugin requires namespace:") if namespace == ""
+    return Error("plugin `${namespace}` requires tey:") if requirement == ""
+    return Error("plugin namespace `${namespace}` must be one command word") if namespace.contains?(" ") || namespace.contains?(":")
+    let body = match block do
+      Just(Lambda(_, expressions, _, _)) => expressions
+      _ => return Error("plugin `${namespace}` requires a block")
+    end
+    let parsed = Tey.Manifest.pluginEntries(body, namespace, [], [], []).try
+    let (capabilities, commands, generators) = parsed
+    return Ok(Plugin { pluginNamespace: namespace,
+                       pluginTeyRequirement: requirement,
+                       pluginCapabilities: capabilities,
+                       pluginCommands: commands,
+                       pluginGenerators: generators })
+  end
+
+  let pluginEntries(expressions: [Expression], namespace: String,
+                    capabilities: [PluginCapability], commands: [PluginOperation],
+                    generators: [PluginOperation]) -> ([PluginCapability], [PluginOperation], [PluginOperation]) or! String do
+    return Ok((capabilities, commands, generators)) if expressions.empty?
+    let declaration = match Tey.Manifest.call(expressions.first.try) do
+      Just(value) => value
+      None => return Error("unknown plugin declaration in `${namespace}`")
+    end
+    let (name, arguments, operationNamed, operationBlock) = declaration
+    if name == "capabilities"
+      return Error("plugin `${namespace}` declares capabilities more than once") if !capabilities.empty?
+      let values = match arguments do
+        [ListLit(items, None)] => items
+        _ => return Error("plugin `${namespace}` capabilities expects a list")
+      end
+      let parsedCapabilities = Tey.Manifest.capabilitiesFrom(values).try
+      return Tey.Manifest.pluginEntries(expressions.drop(1), namespace,
+                                        parsedCapabilities, commands, generators)
+    end
+    if name == "command" || name == "generator"
+      let operation = Tey.Manifest.operationFrom(name, arguments, operationNamed,
+                                                 operationBlock).try
+      let existing = name == "command" then commands else generators
+      return Error("plugin ${name} `${operation.operationName}` is declared twice") if existing.any? { |item| item.operationName == operation.operationName }
+      let nextCommands = name == "command" then [...commands, operation] else commands
+      let nextGenerators = name == "generator" then [...generators, operation] else generators
+      return Tey.Manifest.pluginEntries(expressions.drop(1), namespace,
+                                        capabilities, nextCommands, nextGenerators)
+    end
+    return Error("unknown plugin declaration `${name}` in `${namespace}`")
+  end
+
+  let capabilityFrom(expression: Expression) -> PluginCapability or! String do
+    match expression do
+      MethodCall(target, name, arguments, _, None, _, _, _) => do
+        let prefix = Tey.Manifest.qualifiedName(target).or("")
+        let kind = prefix == "" then name else "${prefix}.${name}"
+        let values = if arguments.empty?
+          []
+        else
+          match arguments do
+            [ListLit(items, None)] => do
+              let strings = items.map { |item| Tey.Manifest.stringValue(item).or("") }
+              return Error("capability `${kind}` expects string resources") if strings.any? { |value| value == "" }
+              strings
+            end
+            _ => return Error("capability `${kind}` expects a list of string resources")
+          end
+        end
+        let supported = ["FS.Read.package", "FS.Write.workspace",
+                         "Process.Run", "Net.Connect"]
+        return Error("unsupported plugin capability `${kind}`") if !supported.contains?(kind)
+        let allowlisted = kind == "Process.Run" || kind == "Net.Connect"
+        if allowlisted && values.empty?
+          return Error("capability `${kind}` requires a non-empty resource list")
+        end
+        if !allowlisted && !values.empty?
+          return Error("capability `${kind}` does not accept resource names")
+        end
+        return Ok(PluginCapability { capabilityKind: kind,
+                                     capabilityValues: values })
+      end
+      _ => return Error("plugin capabilities must be qualified resource names")
+    end
+  end
+
+  let capabilitiesFrom(expressions: [Expression]) -> [PluginCapability] or! String do
+    return Ok([]) if expressions.empty?
+    let first = Tey.Manifest.capabilityFrom(expressions.first.try).try
+    let rest = Tey.Manifest.capabilitiesFrom(expressions.drop(1)).try
+    return Ok([first, ...rest])
+  end
+
+  let operationFrom(kind: String, arguments: [Expression], named: [NamedArgument],
+                    block: Expression?) -> PluginOperation or! String do
+    let name = Tey.Manifest.argument(arguments).or("")
+    let entrypoint = Tey.Manifest.named(named, "entrypoint").or("")
+    return Error("plugin ${kind} must be named") if name == ""
+    return Error("plugin ${kind} `${name}` must be one command word") if name.contains?(" ") || name.contains?(":")
+    return Error("plugin ${kind} `${name}` requires entrypoint:") if entrypoint == ""
+    if FS.Path.absolute?(entrypoint) || FS.Path.segments(entrypoint).contains?("..")
+      return Error("plugin ${kind} `${name}` entrypoint must remain inside its package")
+    end
+    let body = match block do
+      None => []
+      Just(Lambda(_, expressions, _, _)) => expressions
+      _ => return Error("plugin ${kind} `${name}` has an invalid block")
+    end
+    let options = Tey.Manifest.optionsFrom(body, kind, name, []).try
+    return Ok(PluginOperation { operationName: name,
+                                operationEntrypoint: entrypoint,
+                                operationOptions: options })
+  end
+
+  let optionsFrom(expressions: [Expression], kind: String, operationName: String,
+                  options: [PluginOption]) -> [PluginOption] or! String do
+    return Ok(options) if expressions.empty?
+    let call = match Tey.Manifest.call(expressions.first.try) do
+      Just(value) => value
+      None => return Error("plugin ${kind} `${operationName}` may only declare options")
+    end
+    let (declaration, optionArguments, optionNamed, optionBlock) = call
+    return Error("plugin ${kind} `${operationName}` may only declare options") if declaration != "option" || optionBlock.set?
+    let optionName = Tey.Manifest.argument(optionArguments).or("")
+    let optionType = Tey.Manifest.namedIdentifier(optionNamed, "type").or("")
+    return Error("plugin ${kind} `${operationName}` option requires a name and type:") if optionName == "" || optionType == ""
+    let supportedTypes = ["String", "Integer", "Float", "Bool"]
+    return Error("plugin ${kind} `${operationName}` option `${optionName}` has unsupported type `${optionType}`") if !supportedTypes.contains?(optionType)
+    return Error("plugin ${kind} `${operationName}` option `${optionName}` is declared twice") if options.any? { |option| option.optionName == optionName }
+    let option = PluginOption { optionName: optionName, optionType: optionType }
+    return Tey.Manifest.optionsFrom(expressions.drop(1), kind, operationName,
+                                    [...options, option])
+  end
+
+  let qualifiedName(Identifier(name)) -> String? = Just(name)
+  let qualifiedName(MethodCall(target, name, [], [], None, _, _, _)) -> String? do
+    let prefix = Tey.Manifest.qualifiedName(target).or("")
+    return None if prefix == ""
+    return Just("${prefix}.${name}")
+  end
+  let qualifiedName(_) -> String? = None
 
   let declarations(expressions: [Expression], group: String) -> [(Expression, String)] do
     var found: [(Expression, String)] = []
@@ -433,6 +658,21 @@ private do
       if argument.name == name
         found = match argument.value do
           LitBool(value) => Just(value)
+          _ => None
+        end
+      end
+      ()
+    end
+    return found
+  end
+
+
+  let namedIdentifier(arguments: [NamedArgument], name: String) -> String? do
+    var found: String? = None
+    arguments.each do |argument|
+      if argument.name == name
+        found = match argument.value do
+          Identifier(value) => Just(value)
           _ => None
         end
       end

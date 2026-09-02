@@ -8,9 +8,22 @@ using Tey.Semver, only: [highest, intersect, range?, satisfies, versionOf]
 using Tey.Cache, only: [packagePath]
 using Tey.Manifest, only: [read]
 using Tey.Workspace, only: [Context, Member]
+using Tey.Plugin, only: [approved?]
+
+foul fingerprint(context: Context) -> String do
+  return Tey.Resolver.workspaceFingerprint(context)
+end
 
 foul resolveWorkspace(context: Context) -> LockState or! String do
   let toolchain = Tey.Toolchain.activeInfo.try
+  return Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
+end
+
+# The caller may already have inspected the selected compiler while deciding
+# whether an existing lock is reusable. Passing that result through keeps the
+# `--info` contract to one invocation per install/resolve decision.
+foul resolveWorkspaceWithInfo(context: Context,
+                              toolchain: Tey.Toolchain.ToolchainInfo) -> LockState or! String do
   let incompatible = context.members.filter do |member|
     let manifest: ManifestPackage = member.memberManifest
     !Tey.Semver.satisfies(Tey.Semver.release(toolchain.version),
@@ -27,7 +40,9 @@ foul resolveWorkspace(context: Context) -> LockState or! String do
   let running = Tey.Toolchain.runningOtpRelease
   context.members.each do |member|
     let manifest: ManifestPackage = member.memberManifest
-    let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
+    let floor = Tey.Resolver.effectiveOtpFloor(
+      manifest.packageOtpRequirement, toolchain.reportedRuntimeOtpFloor
+    )
     match (floor, running) do
       (Just(required), Just(actual)) when actual < required =>
         return Error("Erlang/OTP ${actual} is too old for workspace member `${manifest.name}`: ${Tey.Resolver.otpReason(manifest.packageOtpRequirement, required)}")
@@ -56,17 +71,19 @@ foul resolveWorkspace(context: Context) -> LockState or! String do
   end
   let external = all.filter do |dependency|
     match dependency.manifestSource do
-      WorkspaceSource => false
-      _ => true
+      GitSource(_, _, _, _) => true
+      _ => false
     end
   end
   let resolved = Tey.Resolver.resolveDependencies(external, []).try
+  let snapshots = Tey.Resolver.resolvePathDependencies(context.members).try
   let workspacePackages = context.members.map do |member|
     let manifest: ManifestPackage = member.memberManifest
     Tey.Lockfile.Dependency {
       name: manifest.name, version: manifest.version, source: "workspace",
       path: FS.Path.relativeTo(member.memberRoot, context.workspaceRoot),
       workspace?: true,
+      pluginFingerprints: Tey.Resolver.pluginFingerprints(manifest),
       dependencies: manifest.manifestDependencies.map { |dependency| dependency.manifestName }
     }
   end
@@ -76,14 +93,16 @@ foul resolveWorkspace(context: Context) -> LockState or! String do
   let requirement = requirements.reduce("") do |combined, wanted|
     Tey.Semver.intersect(combined, wanted)
   end
+  let locked = Tey.Resolver.uniqueDependencies(
+    [...workspacePackages, ...snapshots, ...resolved], []).try
   return Ok(LockState {
     kexRequirement: requirement,
     kexVersion: Tey.Semver.release(toolchain.version),
     otpRequirement: "",
-    otpRelease: running.or(0),
+    otpRelease: toolchain.reportedRuntimeOtpFloor.or(0),
     workspaceMembers: Tey.Resolver.workspaceMemberMap(context),
-    manifestFingerprint: Tey.Resolver.workspaceFingerprint(context),
-    lockedDependencies: [...workspacePackages, ...resolved]
+    manifestFingerprint: Tey.Resolver.fingerprint(context),
+    lockedDependencies: locked
   })
 end
 
@@ -103,7 +122,9 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   # and what the toolchain's own runtime beams require — a package cannot ask
   # for an Erlang older than the one that compiled the beams it is about to
   # load, however modest its own needs are.
-  let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
+  let floor = Tey.Resolver.effectiveOtpFloor(
+    manifest.packageOtpRequirement, toolchain.reportedRuntimeOtpFloor
+  )
   let running = Tey.Toolchain.runningOtpRelease
   match (floor, running) do
     (Just(required), Just(actual)) when actual < required =>
@@ -116,13 +137,28 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   end
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
                 otpRequirement: manifest.packageOtpRequirement,
-                otpRelease: running.or(0),
+                otpRelease: toolchain.reportedRuntimeOtpFloor.or(0),
                 # The selected project compiler, not the compiler that built
                 # Tey. `--info` is the machine-readable contract for it.
                 kexVersion: Tey.Semver.release(toolchain.version), lockedDependencies: locked })
 end
 
 private do
+  foul uniqueDependencies(entries: [Tey.Lockfile.Dependency],
+                          found: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
+    return Ok(found) if entries.empty?
+    let entry = entries.first.try
+    match found.find { |existing| existing.name == entry.name } do
+      None => return Tey.Resolver.uniqueDependencies(entries.drop(1),
+                                                      [...found, entry])
+      Just(existing) => do
+        let same = existing.source == entry.source && existing.git == entry.git && existing.commit == entry.commit && existing.subdir == entry.subdir && existing.sha256 == entry.sha256
+        return Error("dependency `${entry.name}` resolves to conflicting sources") if !same
+        return Tey.Resolver.uniqueDependencies(entries.drop(1), found)
+      end
+    end
+  end
+
   foul workspaceMemberMap(context: Context) -> {String: String} do
     var members: {String: String} = {}
     context.members.each do |member|
@@ -137,19 +173,95 @@ private do
   foul workspaceFingerprint(context: Context) -> String do
     let entries = context.members.map do |member|
       let relative = FS.Path.relativeTo(member.memberRoot, context.workspaceRoot)
-      let path = FS.Path.join(member.memberRoot, "package.kex")
-      let text = FS.File.read(path).or("")
-      "${relative}\n${text}"
+      let ignores = FS.File.read(FS.Path.join(member.memberRoot, ".teyignore")).or("")
+      "${relative}\n${Tey.Resolver.normalizedManifest(member.memberManifest)}\n.teyignore\n${ignores}"
     end.sort
     return Digest.sha256(entries.join("\n--\n"))
+  end
+
+  let normalizedManifest(manifest: ManifestPackage) -> String do
+    let dependencies = manifest.manifestDependencies.map do |dependency|
+      "${dependency.manifestName}|${Tey.Resolver.sourceText(dependency.manifestSource)}|${dependency.manifestGroups.sort.join(",")}"
+    end.sort
+    let targets = manifest.targets.map { |target| "${target.name}|${target.entrypoint}" }.sort
+    let commands = manifest.commands.map do |command|
+      "${command.commandName}|${command.commandRun}|${command.commandDescription}"
+    end.sort
+    let plugins = Tey.Plugin.fingerprints(manifest.plugins).entries.map do |namespace, fingerprint|
+      "${namespace}|${fingerprint}"
+    end.sort
+    let workspace = match manifest.manifestWorkspace do
+      None => ""
+      Just(value) => value.memberPatterns.sort.join(",")
+    end
+    let toolchain = match manifest.manifestToolchain do
+      None => ""
+      Just(value) => "${value.toolchainName}|${value.toolchainCompiler}|${value.toolchainRuntime}|${value.toolchainStdlib}"
+    end
+    return [manifest.name, manifest.version, manifest.description, manifest.license,
+            manifest.packageKexRequirement, manifest.packageOtpRequirement,
+            manifest.entrypoint, dependencies.join(";"), targets.join(";"),
+            commands.join(";"), plugins.join(";"), workspace, toolchain].join("\n")
+  end
+
+  let sourceText(WorkspaceSource) -> String = "workspace"
+  let sourceText(PathSource(path)) -> String = "path:${path}"
+  let sourceText(GitSource(git, selector, requested, subdir)) -> String do
+    return "git:${git}|${selector}|${requested}|${subdir}"
+  end
+
+  foul resolvePathDependencies(members: [Member]) -> [Tey.Lockfile.Dependency] or! String do
+    return Ok([]) if members.empty?
+    let member = members.first.try
+    let paths = member.memberManifest.manifestDependencies.filter do |dependency|
+      match dependency.manifestSource do
+        PathSource(_) => true
+        _ => false
+      end
+    end
+    let current = Tey.Resolver.resolvePaths(paths, member.memberRoot).try
+    let rest = Tey.Resolver.resolvePathDependencies(members.drop(1)).try
+    return Ok([...current, ...rest])
+  end
+
+  foul resolvePaths(dependencies: [Tey.Manifest.Dependency],
+                    declaringRoot: String) -> [Tey.Lockfile.Dependency] or! String do
+    return Ok([]) if dependencies.empty?
+    let dependency = dependencies.first.try
+    let path = match dependency.manifestSource do
+      PathSource(value) => value
+      _ => return Tey.Resolver.resolvePaths(dependencies.drop(1), declaringRoot)
+    end
+    let snapshot = Tey.Snapshot.create(dependency.manifestName, path,
+                                       declaringRoot).try
+    let withGroups = Tey.Lockfile.Dependency {
+      ...snapshot, groups: dependency.manifestGroups
+    }
+    let sourceRoot = if FS.Path.absolute?(path)
+      FS.Path.normalize(path)
+    else
+      FS.Path.join(declaringRoot, path)
+    end
+    let manifestText = FS.File.read(FS.Path.join(sourceRoot, "package.kex")).try
+    let manifest = Tey.Manifest.read(manifestText).try
+    let childPaths = manifest.manifestDependencies.filter do |child|
+      match child.manifestSource do PathSource(_) => true _ => false end
+    end
+    let childGit = manifest.manifestDependencies.filter do |child|
+      match child.manifestSource do GitSource(_, _, _, _) => true _ => false end
+    end
+    let nestedPaths = Tey.Resolver.resolvePaths(childPaths, sourceRoot).try
+    let nestedGit = Tey.Resolver.resolveDependencies(childGit, []).try
+    let rest = Tey.Resolver.resolvePaths(dependencies.drop(1), declaringRoot).try
+    return Ok([withGroups, ...nestedPaths, ...nestedGit, ...rest])
   end
 
   # The lowest OTP this build can legally run on: the higher of the package's
   # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
   # says anything, which is the ordinary case for a package with no interop
   # needs on a toolchain built without erlc.
-  foul effectiveOtpFloor(requirement: String) -> Integer? do
-    let toolchain = Tey.Toolchain.runtimeOtpFloor
+  let effectiveOtpFloor(requirement: String,
+                        toolchain: Integer?) -> Integer? do
     let declared = Tey.Resolver.lowestSatisfying(requirement)
     match (declared, toolchain) do
       (None, None) => return None
@@ -188,9 +300,28 @@ private do
       Error(error) => return Error(error)
       Ok(value) => value
     end
-    match Tey.Semver.highest(tags, requested) do
-      Just(tag) => return Ok(tag)
+    return Tey.Resolver.chooseFromTags(name, tags, requested)
+  end
+
+  # A monorepo can release its members independently as `parser-v1.2.3`.
+  # Prefer that package's namespace when it exists; a repository with no
+  # package-prefixed tags retains the ordinary `v1.2.3` convention.
+  let chooseFromTags(name: String, tags: [String],
+                     requested: String) -> String or! String do
+    let prefix = "${name}-"
+    let scoped = tags.filter { |tag| tag.startsWith?("${prefix}v") }
+    let candidates = scoped.empty? then tags else scoped
+    let matching = candidates.filter do |tag|
+      Tey.Semver.satisfies(Tey.Semver.versionOf(tag), requested)
+    end
+    let versions = Tey.Semver.newestFirst(
+      matching.map { |tag| Tey.Semver.versionOf(tag) }
+    )
+    match versions.first do
       None => return Error("no tag of ${name} satisfies `${requested}`")
+      Just(version) => return Ok(matching.find do |tag|
+        Tey.Semver.versionOf(tag) == version
+      end.try)
     end
   end
 
@@ -278,12 +409,34 @@ private do
           Error(error) => return Error(error)
           Ok(children) => do
             let inherited = children.filter { |child| child.manifestGroups.empty? }
-            queue = [...queue, ...inherited.map { |child| (child, name) }]
+            let external = Tey.Resolver.externalizeWorkspaceDependencies(
+              inherited, entry
+            )
+            queue = [...queue, ...external.map { |child| (child, name) }]
           end
         end
       end
     end
     Ok(resolved)
+  end
+
+  # `workspace: true` inside a fetched package refers to a sibling in that
+  # package's repository, at exactly the same commit. Once outside the source
+  # workspace it is therefore a Git source with an implicit discoverable
+  # subdirectory, not a reference to the consumer's local workspace.
+  let externalizeWorkspaceDependencies(
+    dependencies: [Tey.Manifest.Dependency],
+    parent: Tey.Lockfile.Dependency
+  ) -> [Tey.Manifest.Dependency] do
+    return dependencies.map do |dependency|
+      match dependency.manifestSource do
+        WorkspaceSource => Tey.Manifest.Dependency {
+          ...dependency,
+          manifestSource: GitSource(parent.git, "ref", parent.commit, "")
+        }
+        _ => dependency
+      end
+    end
   end
 
   # The `tey(...)` lines of a package already in the cache. A checkout with no
@@ -313,7 +466,6 @@ private do
         return Error("path dependency `${manifestName}` requires snapshot resolution")
     end
     let (manifestGit, manifestSelector, manifestRequested, subdir) = source
-    return Error("git dependency `${manifestName}` subdir `${subdir}` requires monorepo resolution") if subdir != ""
     # A range is resolved HERE, not pinned: the manifest keeps the question
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.
@@ -325,19 +477,74 @@ private do
       Error(error) => return Error(error)
       Ok(pin) => pin
     end
-    let candidate = Tey.Lockfile.Dependency { name: manifestName, git: manifestGit,
-      resolved: resolved, commit: commit, sha256: "", groups: manifestGroups }
-    let path = match Tey.Cache.fetch(candidate) do
+    let checkoutCandidate = Tey.Lockfile.Dependency { name: manifestName, git: manifestGit,
+      resolved: resolved, commit: commit, subdir: subdir,
+      sha256: "", groups: manifestGroups }
+    let checkout = match Tey.Cache.fetch(checkoutCandidate) do
       Error(error) => return Error(error)
       Ok(value) => value
     end
-    let sha = match Tey.Git.execute(["-C", path, "archive", "--format=tar", commit]) do
+    let actualSubdir = if subdir == ""
+      Tey.Resolver.discoverGitSubdir(Tey.Cache.repositoryPath(checkoutCandidate),
+                                    manifestName).try
+    else
+      subdir
+    end
+    let candidate = Tey.Lockfile.Dependency { ...checkoutCandidate,
+                                              subdir: actualSubdir }
+    let path = Tey.Cache.packagePath(candidate)
+    let sha = match Tey.Git.execute(["-C", Tey.Cache.repositoryPath(candidate),
+                                     "archive", "--format=tar", commit]) do
       Ok(result) => Digest.sha256(result.stdout)
       Error(error) => return Error(error)
     end
+    let manifest = match FS.File.read(FS.Path.join(path, "package.kex")) do
+      Error(_) => return Error("git dependency `${manifestName}` has no package.kex at `${subdir}`")
+      Ok(text) => match Tey.Manifest.read(text) do
+        Error(error) => return Error("git dependency `${manifestName}` has an unreadable package.kex: ${error}")
+        Ok(value) => value
+      end
+    end
+    return Error("git dependency `${manifestName}` resolves to package `${manifest.name}`") if manifest.name != manifestName
+    let edges = manifest.manifestDependencies.filter do |child|
+      child.manifestGroups.empty?
+    end.map { |child| child.manifestName }
     # The candidate again with the hash filled in: everything else was already
     # decided above, and repeating the five unchanged fields is how the two
     # copies drift when a sixth is added.
-    Ok(Tey.Lockfile.Dependency { ...candidate, sha256: sha })
+    Ok(Tey.Lockfile.Dependency { ...candidate, version: manifest.version,
+                                 sha256: sha, dependencies: edges,
+                                 pluginFingerprints: Tey.Resolver.pluginFingerprints(manifest) })
+  end
+
+  let pluginFingerprints(manifest: ManifestPackage) -> {String: String} do
+    return Tey.Plugin.fingerprints(manifest.plugins)
+  end
+
+  foul discoverGitSubdir(root: String, packageName: String) -> String or! String do
+    let directories = Tey.Resolver.packageDirectories(root, root)
+    let matches = directories.filter do |directory|
+      match FS.File.read(FS.Path.join(directory, "package.kex")) do
+        Error(_) => false
+        Ok(text) => match Tey.Manifest.read(text) do
+          Error(_) => false
+          Ok(manifest) => manifest.name == packageName
+        end
+      end
+    end
+    return Error("Git repository has no package named `${packageName}`; declare subdir:") if matches.empty?
+    return Error("Git repository has more than one package named `${packageName}`; declare subdir:") if matches.count > 1
+    return Ok(FS.Path.relativeTo(matches.first.try, root))
+  end
+
+  foul packageDirectories(root: String, directory: String) -> [String] do
+    let here = FS.File.file?(FS.Path.join(directory, "package.kex")) then [directory] else []
+    let children = FS.Directory.directories(directory).or([])
+      .filter { |name| ![".git", ".tey", "build", "ebin"].contains?(name) }
+    let groups: [[String]] = children.map do |name|
+      Tey.Resolver.packageDirectories(root, FS.Path.join(directory, name))
+    end
+    let empty: [String] = []
+    return [...here, ...groups.reduce(empty) { |all, group| [...all, ...group] }]
   end
 end

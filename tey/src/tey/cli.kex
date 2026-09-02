@@ -1,7 +1,7 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, clean, init, install, list, lock, runCommand, runPackage, setupMergeDriver, test]
+using Tey.Commands, only: [add, build, buildSelected, clean, init, install, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Toolchain, only: [installSource, use]
 
@@ -22,9 +22,12 @@ foul parser -> OptionConfig do
     .string("branch", None, "Git branch", None, false)
     .string("ref", None, "Git ref or commit", None, false)
     .string("without", None, "Dependency group to omit", None, false)
+    .string("package", None, "Select one workspace package", None, false)
+    .string("jobs", Just('j'), "Maximum parallel workspace jobs", None, false)
+    .flag("workspace", None, "Operate on every workspace package")
     .flag("cache", None, "Remove the complete cache with `tey clean`")
     .flag("remove", None, "Remove configuration installed by `tey setup`")
-    .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
+    .flag("merge-driver", None, "Run `tey install` as a Git merge driver")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
     .flag("json", None, "Print `tey kex list`, `tey commands`, or `tey test` as JSON")
@@ -46,36 +49,41 @@ foul parser -> OptionConfig do
         Just(name) => Tey.Commands.add(name, options)
       end
     end
-    .command("install", "", "fetch dependencies, and install this package's targets") do |options|
-      Tey.Commands.install(options.value("without", ""))
+    .command("install", "[<base> <ours> <theirs>]", "resolve, fetch, and install the workspace") do |options|
+      Tey.Cli.installCommand(options)
     end
-    .command("update", "[<name>]", "re-resolve dependencies") do |_|
-      Tey.Commands.lock
+    .command("update", "[<name>]", "re-resolve dependencies transactionally") do |options|
+      Tey.Commands.updateDependencies(options.arguments.first.or(""))
     end
-    # Git hands a merge driver three files (`%O %A %B`), so the command has
-    # arguments in that mode and none otherwise.
-    .command("lock", "", "resolve and write tey.lock") do |options|
-      Tey.Cli.lockCommand(options)
+    .command("local", "[<name> [<path>]] [--list] [--remove]",
+             "manage developer-only live path overrides") do |options|
+      Tey.Cli.localOverride(options)
     end
     .command("list", "", "show locked dependencies") do |_|
       Tey.Commands.list
     end
     .command("run", "[args...]", "run the package entrypoint on the BEAM") do |options|
-      Tey.Commands.runPackage(options.arguments, options.flagEnabled?("interpret"))
+      Tey.Commands.runPackage(options.arguments,
+                              options.flagEnabled?("interpret"),
+                              options.value("package", ""))
     end
-    .command("build", "", "compile the package, and each target(...) into an executable") do |_|
-      Tey.Commands.build
+    .command("build", "[--package <name>] [--workspace]", "compile selected workspace packages and their targets") do |options|
+      Tey.Commands.buildSelected(options.value("package", ""),
+                                 options.flagEnabled?("workspace"),
+                                 options.value("jobs", ""))
     end
     # A named spec runs alone; with none named the whole `spec/` directory
     # runs, which is what `tey test` has always meant. `--json`/`--list`/
     # `--only` are the machine-readable half an editor's test tree drives
     # (kexhq/kex#199) — Tey is the one that knows the package's source roots,
     # so it is what a tool should call rather than `kex` directly.
-    .command("test", "[<spec>...] [--json] [--list] [--only <name>]",
+    .command("test", "[<spec>...] [--package <name>] [--workspace] [--json] [--list] [--only <name>]",
              "run spec/*.spec.kex on the BEAM") do |options|
-      Tey.Commands.test(options.arguments, options.flagEnabled?("interpret"),
-                        options.flagEnabled?("json"), options.flagEnabled?("list"),
-                        options.value("only", ""))
+      Tey.Commands.testSelected(options.arguments, options.value("package", ""),
+                                options.flagEnabled?("workspace"),
+                                options.flagEnabled?("interpret"),
+                                options.flagEnabled?("json"), options.flagEnabled?("list"),
+                                options.value("only", ""), options.value("jobs", ""))
     end
     # Docgen is part of Tey rather than a package: `tey test` and `tey docs`
     # are the same kind of thing — commands that must mean the same thing in
@@ -186,6 +194,14 @@ foul announceToolchain -> Void do
 end
 
 private do
+  foul localOverride(options: ParsedOptions) -> Integer do
+    let name = options.arguments.first.or("")
+    let path = options.arguments.second.or("")
+    return Tey.Commands.localOverride(name, path,
+                                      options.flagEnabled?("remove"),
+                                      options.flagEnabled?("list"))
+  end
+
   foul installKex(version: String) -> Integer do
     match Tey.Toolchain.installRelease(version) do
       Ok(prefix) => do
@@ -351,13 +367,14 @@ private do
     end
   end
 
-  # Bare, this writes tey.lock. Git hands a merge driver three files
-  # (`%O %A %B`) and `--merge-driver` says so, which is the only spelling that
-  # takes arguments at all.
-  foul lockCommand(options: ParsedOptions) -> Integer do
-    return Tey.Commands.lock if options.arguments.empty?
-    return Tey.Commands.lock if options.arguments.count == 3 && options.flagEnabled?("merge-driver")
-    Tey.Cli.unknown("lock")
+  foul installCommand(options: ParsedOptions) -> Integer do
+    if options.flagEnabled?("merge-driver")
+      return Tey.Commands.lock if options.arguments.count == 3
+      return Tey.Cli.incomplete("install --merge-driver", "<base> <ours> <theirs>")
+    end
+    return Tey.Cli.unknown("install") if !options.arguments.empty?
+    return Tey.Commands.install(options.value("without", ""),
+                                options.value("package", ""))
   end
 
   foul kexList(options: ParsedOptions) -> Integer do
@@ -574,13 +591,14 @@ private do
     end
   end
 
-  # The `command(...)` declarations of the package in this directory, or none
-  # outside a package. A manifest that does not READ is reported here rather
+  # The `command(...)` declarations of the containing workspace member, or
+  # none outside a package. A manifest that does not READ is reported here rather
   # than swallowed: the alternative is `tey fmt` answering "unknown command"
   # while the real problem is a typo three lines up in package.kex.
   foul packageCommands -> [Command] do
-    return [] if !FS.File.file?("package.kex")
     match Tey.Commands.manifest do
+      Error(error) when error == "package.kex not found" => []
+      Error(error) when error == "this workspace directory is not inside a package" => []
       Error(error) => do
         IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         []

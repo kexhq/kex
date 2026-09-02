@@ -1,6 +1,6 @@
 module Tey.Workspace
 
-using Tey.Manifest, only: [ManifestPackage, ManifestWorkspace]
+using Tey.Manifest, only: [ManifestPackage, ManifestWorkspace, WorkspaceSource]
 
 record Member do
   memberRoot : String
@@ -42,10 +42,90 @@ foul discover(start: String) -> Context or! String do
   end
   let current = Tey.Workspace.deepestContaining(origin, members)
   return Ok(Context { workspaceRoot: root, members: members,
-                      currentMember: current, warnings: warnings })
+                      currentMember: current,
+                      warnings: [...warnings, ...Tey.Workspace.cycleWarnings(members)] })
+end
+
+# Selects the members a workspace-aware command should operate on. An
+# explicit package always wins; otherwise commands at a member stay local,
+# while commands at the workspace root (or another non-member directory) use
+# every member. `--workspace` broadens the implicit member selection.
+let select(context: Context, packageName: String,
+           workspace?: Bool) -> [Member] or! String do
+  if packageName != ""
+    let selected = context.members.find do |member|
+      let manifest: ManifestPackage = member.memberManifest
+      manifest.name == packageName
+    end
+    return match selected do
+      Just(member) => Ok([member])
+      None => Error("workspace has no package named `${packageName}`")
+    end
+  end
+  return Ok(context.members) if workspace?
+  return match context.currentMember do
+    Just(member) => if member.memberRoot == context.workspaceRoot
+      Ok(context.members)
+    else
+      Ok([member])
+    end
+    None => Ok(context.members)
+  end
+end
+
+# Dependency-ready layers for workspace-wide commands. Cyclic leftovers form
+# one final layer so callers can continue, while discovery reports the cycle.
+let dependencyLayers(members: [Member]) -> [[Member]] do
+  return Tey.Workspace.layers(members, [])
 end
 
 private do
+  let memberName(member: Member) -> String do
+    let manifest: ManifestPackage = member.memberManifest
+    return manifest.name
+  end
+
+  let workspaceDependencies(member: Member) -> [String] do
+    let manifest: ManifestPackage = member.memberManifest
+    return manifest.manifestDependencies.collect do |dependency|
+      match dependency.manifestSource do
+        WorkspaceSource => Just(dependency.manifestName)
+        _ => None
+      end
+    end
+  end
+
+  let layers(pending: [Member], completed: [String]) -> [[Member]] do
+    return [] if pending.empty?
+    let pendingNames = pending.map { |member| Tey.Workspace.memberName(member) }
+    let ready = pending.filter do |member|
+      Tey.Workspace.workspaceDependencies(member).all? do |dependency|
+        completed.contains?(dependency) || !pendingNames.contains?(dependency)
+      end
+    end
+    return [pending] if ready.empty?
+    let readyNames = ready.map { |member| Tey.Workspace.memberName(member) }
+    let rest = pending.filter do |member|
+      !readyNames.contains?(Tey.Workspace.memberName(member))
+    end
+    return [ready, ...Tey.Workspace.layers(rest, [...completed, ...readyNames])]
+  end
+
+  let cycleWarnings(members: [Member]) -> [String] do
+    let layers = Tey.Workspace.dependencyLayers(members)
+    return [] if layers.empty?
+    let last = layers.last.try
+    let lastNames = last.map { |member| Tey.Workspace.memberName(member) }
+    let cyclic = last.filter do |member|
+      Tey.Workspace.workspaceDependencies(member).any? do |dependency|
+        lastNames.contains?(dependency)
+      end
+    end
+    return [] if cyclic.empty?
+    let names = cyclic.map { |member| Tey.Workspace.memberName(member) }.sort
+    return ["workspace dependency cycle involving ${names.join(", ")}"]
+  end
+
   foul absolute(path: String) -> String do
     return FS.Path.normalize(path) if FS.Path.absolute?(path)
     return FS.Path.join(FS.Directory.current, path)

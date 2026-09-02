@@ -1,0 +1,167 @@
+describe("Tey workspace command scope integration") do
+  let root = "/tmp/tey_workspace_commands_spec"
+  let checkout = FS.Directory.current
+  let compiler = FS.Path.join(checkout, "build/kex")
+  let runner = "${root}/run-build.kex"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/src")
+    FS.Directory.create("${root}/packages/child/src")
+    FS.File.write("${root}/package.kex", `
+      package "root" do
+        kex(">= 0.3.0")
+        target("root-tool")
+        workspace do
+          members(["packages/*"])
+        end
+      end
+    `)
+    FS.File.write("${root}/src/main.kex", `
+      main do
+        IO.printLine("root")
+      end
+    `)
+    FS.File.write("${root}/packages/child/package.kex", `
+      package "child" do
+        kex(">= 0.3.0")
+        target("child-tool")
+        command("where", run: "pwd")
+      end
+    `)
+    FS.File.write("${root}/packages/child/src/main.kex", `
+      main do
+        IO.printLine(FS.Directory.current)
+      end
+    `)
+    FS.File.write(runner, `
+      using Tey.Commands
+
+      main do
+        System.exit(Tey.Commands.buildSelected("", false, "2"))
+      end
+    `)
+    FS.File.write("${root}/run-install.kex", `
+      using Tey.Commands
+
+      main do
+        System.exit(Tey.Commands.install("", ""))
+      end
+    `)
+    FS.File.write("${root}/run-tey.kex", `
+      using Tey.Cli
+
+      main(args) do
+        System.exit(Tey.Cli.dispatch(args))
+      end
+    `)
+    ENV.set("TEY_KEX", compiler)
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("builds only the current member from a member directory") do
+    let child = "${root}/packages/child"
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\"",
+      "tey-workspace-spec", child, compiler,
+      FS.Path.join(checkout, "tey/src"), runner]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(FS.Directory.directory?("${child}/ebin"))
+    assert(!FS.Directory.directory?("${root}/ebin"))
+  end
+
+  it("builds every member from a package-root workspace root") do
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\"",
+      "tey-workspace-spec", root, compiler,
+      FS.Path.join(checkout, "tey/src"), runner]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(FS.Directory.directory?("${root}/ebin"))
+    assert(FS.Directory.directory?("${root}/packages/child/ebin"))
+  end
+
+  it("continues unaffected workspace work and aggregates failures") do
+    FS.Directory.create("${root}/packages/broken/src")
+    FS.File.write("${root}/packages/broken/package.kex", `
+      package "broken" do
+        kex(">= 0.3.0")
+      end
+    `)
+    FS.File.write("${root}/packages/broken/src/broken.kex", `
+      module Broken
+
+      let this does not parse
+    `)
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\"",
+      "tey-workspace-spec", root, compiler,
+      FS.Path.join(checkout, "tey/src"), runner]).try
+    assert(result.exitCode != 0, "workspace build ignored a failed member")
+    assert(FS.Directory.directory?("${root}/ebin"),
+           "root build stopped when an independent member failed")
+    assert(FS.Directory.directory?("${root}/packages/child/ebin"),
+           "child build stopped when an independent member failed")
+  end
+
+  it("installs only member targets locally while sharing the root lock") do
+    let child = "${root}/packages/child"
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && TEY_HOME=\"$5\" exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\"",
+      "tey-workspace-spec", child, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-install.kex",
+      "${root}/home"]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(FS.File.file?("${root}/tey.lock"))
+    assert(FS.File.file?("${root}/home/bin/child-tool"))
+    assert(!FS.File.file?("${root}/home/bin/root-tool"))
+  end
+
+  it("installs every member target at the workspace root") do
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && TEY_HOME=\"$5\" exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\"",
+      "tey-workspace-spec", root, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-install.kex",
+      "${root}/home"]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(FS.File.file?("${root}/home/bin/root-tool"))
+    assert(FS.File.file?("${root}/home/bin/child-tool"))
+  end
+
+  it("discovers member package commands from a nested directory") do
+    let nested = "${root}/packages/child/src"
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\" -- help --json",
+      "tey-workspace-spec", nested, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex"]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(result.stdout.contains?("where"), result.stdout)
+    assert(result.stdout.contains?("Package commands"), result.stdout)
+  end
+
+  it("runs packages and shell commands from the containing member root") do
+    let nested = "${root}/packages/child/src"
+    let run = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\" -- run",
+      "tey-workspace-spec", nested, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex"]).try
+    assert(run.exitCode == 0, run.stderr)
+    assert(run.stdout.trim == "${root}/packages/child", run.stdout)
+
+    let command = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\" -- where",
+      "tey-workspace-spec", nested, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex"]).try
+    assert(command.exitCode == 0, command.stderr)
+    assert(command.stdout.trim == "${root}/packages/child", command.stdout)
+  end
+
+  it("runs an explicitly selected member from the workspace root") do
+    let result = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" -R --no-colors --source-root \"$3\" \"$4\" -- run --package child",
+      "tey-workspace-spec", root, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex"]).try
+    assert(result.exitCode == 0, result.stderr)
+    assert(result.stdout.trim == "${root}/packages/child", result.stdout)
+  end
+end

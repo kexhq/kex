@@ -27,13 +27,14 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - OTP is declared, enforced and recorded: `otp(">= 26")` in the manifest,
   `Tey.Toolchain.runtimeOtpFloor` reading the compiling OTP out of
   `kex --info`, an effective floor of `max(package, toolchain)` refused before
-  any resolving happens, and `"otp": {"requirement": ..., "release": N}` in
+  any resolving happens, and `"otp": N` plus `"otp_requirement": ...` in
   `tey.lock`. What is NOT done is inheriting the requirement from
   dependencies — only the root package's `otp(...)` is consulted, so a library
   needing a newer Erlang than its consumer says nothing until the consumer's
   build fails. The intersection machinery to fix it exists
   (`Tey.Semver.intersect`); the walk does not feed OTP through it yet.
-- `tey lock` currently fetches repositories while resolving them because the
+- `tey install` and `tey update` currently fetch repositories while resolving
+  them because the
   content digest is computed from `git archive`. Separating resolution from
   cache population needs a remote/archive strategy or a clearly renamed
   command contract.
@@ -48,11 +49,10 @@ They are kept explicit so temporary workarounds do not become accidental API.
   session. What is NOT solved is the cost: `-R` compiles before it runs, so
   Tey's own five spec files take ~10s where the interpreter takes ~1.4s, and
   nothing is cached between runs.
-- Both call sites buffer the child through `Process.run` and print after it
-  exits, so a long `tey test` shows nothing until it finishes and `tey run`
-  cannot be interactive at all. This needs a streaming `Process` API rather
-  than a change in Tey; the printing is in one place
-  (`Tey.Commands.report`) so that it is one edit when there is one.
+- Child command output streams through `Process.stream`, so long builds and
+  tests report progress. Workspace jobs may interleave their output while a
+  dependency-ready layer runs in parallel; Tey does not yet prefix each line
+  with its member name.
 - Trailing arguments reach a program (`tey run one two`) or a package command
   (`tey fmt src`), but FLAGS do not: Tey's own option parser claims what it
   recognizes and rejects the rest, so `tey run --verbose` and `tey fmt --check`
@@ -83,8 +83,18 @@ They are kept explicit so temporary workarounds do not become accidental API.
   correctly.
 - `tey install --without GROUP` omits a group's dependencies from the fetch
   while leaving them in the lockfile, so turning the flag off later needs no
-  re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, and target
-  selection for build/run remain incomplete.
+  re-resolve. Named and member-local updates now publish only the selected
+  dependency closure, and workspace target selection is implemented for
+  build, test, and install. Orphan-only `tey clean` remains incomplete.
+- Plugin manifests, scoped approvals, interface fingerprints, and generator
+  operation validation are implemented, but plugin execution is not enabled
+  yet. Kex capability substitution falls back to default intrinsic
+  implementations, and Kex has no interactive child-process channel through
+  which Tey could broker filesystem, subprocess, and network requests. Until
+  Kex can both disable those defaults for a plugin child and exchange framed
+  requests with the host, exposing `tey generate` would claim containment it
+  does not provide. This boundary belongs below Tey's command layer; it must
+  not be implemented by evaluating plugin source inside Tey.
 - `tey kex list` reads released versions from the repository's tags on every
   call. There is no cache, so listing needs the network. Pre-releases are
   understood now — `0.4.0-rc.1` parses, sorts below `0.4.0` and above

@@ -17,6 +17,7 @@ record Dependency do
   sha256 : String = ""
   groups : [String] = []
   dependencies : [String] = []
+  pluginFingerprints : {String: String} = {}
   workspace? : Bool = false
 end
 
@@ -41,14 +42,18 @@ record LockState do
 end
 
 let encode(lock: LockState) -> String do
-  let deps = lock.lockedDependencies.reduce("") do |encoded, dep|
+  let ordered = lock.lockedDependencies.sort do |a, b|
+    a.name < b.name
+  end
+  let deps = ordered.reduce("") do |encoded, dep|
     let groups = dep.groups.reduce("") do |items, group|
       let separator = items == "" then "" else ", "
       "${items}${separator}\"${Tey.Lockfile.escape(group)}\""
     end
     let separator = encoded == "" then "" else ",\n"
     let edges = Tey.Lockfile.stringList(dep.dependencies)
-    "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"version\": \"${Tey.Lockfile.escape(dep.version)}\", \"source\": \"${dep.source}\", \"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"subdir\": \"${Tey.Lockfile.escape(dep.subdir)}\", \"path\": \"${Tey.Lockfile.escape(dep.path)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}], \"dependencies\": [${edges}], \"workspace\": ${dep.workspace?}}"
+    let pluginFingerprints = Tey.Lockfile.stringMap(dep.pluginFingerprints)
+    "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"version\": \"${Tey.Lockfile.escape(dep.version)}\", \"source\": \"${dep.source}\", \"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"subdir\": \"${Tey.Lockfile.escape(dep.subdir)}\", \"path\": \"${Tey.Lockfile.escape(dep.path)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}], \"dependencies\": [${edges}], \"plugins\": {${pluginFingerprints}}, \"workspace\": ${dep.workspace?}}"
   end
   let members = Tey.Lockfile.stringMap(lock.workspaceMembers)
   let approvals = Tey.Lockfile.stringMap(lock.pluginApprovals)
@@ -105,6 +110,7 @@ let decode(text: String) -> LockState or! String do
         sha256: Tey.Lockfile.lockText(raw["sha256"]),
         groups: Tey.Lockfile.lockStrings(raw["groups"]),
         dependencies: Tey.Lockfile.lockStrings(raw["dependencies"]),
+        pluginFingerprints: Tey.Lockfile.lockMap(raw["plugins"]),
         workspace?: Tey.Lockfile.lockBool(raw["workspace"])
       }
     end
@@ -136,7 +142,7 @@ private do
   let stringMap(values: {String: String}) -> String do
     return values.entries.map do |key, value|
       "\"${Tey.Lockfile.escape("${key}")}\": \"${Tey.Lockfile.escape(value)}\""
-    end.join(", ")
+    end.sort.join(", ")
   end
 
   let lockText(None) -> String = ""

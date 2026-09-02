@@ -1,4 +1,4 @@
-using Tey.Manifest, only: [Dependency, ManifestPackage, WorkspaceSource]
+using Tey.Manifest, only: [Dependency, GitSource, ManifestPackage, WorkspaceSource]
 using Tey.Resolver, only: [resolveWorkspace]
 using Tey.Workspace, only: [Context, Member]
 
@@ -59,6 +59,58 @@ describe("Tey.Resolver.resolveWorkspace") do
     end
   end
 
+  it("records the selected compiler's reported runtime OTP floor") do
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member {
+        memberRoot: "/work",
+        memberManifest: ManifestPackage {
+          name: "app", packageKexRequirement: ">= 0.3.0"
+        }
+      }]
+    }
+    let info = Tey.Toolchain.ToolchainInfo {
+      version: "0.4.0-beta.1", reportedRuntimeOtpFloor: Just(1)
+    }
+    let lock = Tey.Resolver.resolveWorkspaceWithInfo(context, info).try
+    assert(lock.kexVersion == "0.4.0")
+    assert(lock.otpRelease == 1)
+  end
+
+  it("uses a newer selected Kex rather than the compiler that built Tey") do
+    let root = "/tmp/tey_selected_toolchain_resolver_spec"
+    let binary = "${root}/kex"
+    FS.Directory.deleteAll(root)
+    FS.Directory.create(root)
+    FS.File.write(binary, `
+      #!/bin/sh
+      if [ "$1" = "--info" ]; then
+        printf x >> "$0.count"
+        printf '%s\n' '{"version":"9.1.0","runtime_otp_floor":null}'
+        exit 0
+      fi
+      exit 2
+    `)
+    Process.run("chmod", ["+x", binary])
+    let context = Context {
+      workspaceRoot: root,
+      members: [Member {
+        memberRoot: root,
+        memberManifest: ManifestPackage {
+          name: "rodolfo", packageKexRequirement: ">= 9.0.0"
+        }
+      }]
+    }
+    with ENV = Mock.Env { vars: { "TEY_KEX": binary } } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      assert(lock.kexVersion == "9.1.0")
+      assert(lock.kexVersion != Tey.Semver.release(Kex.Kernel.VERSION.number))
+      assert(FS.File.read("${binary}.count").try == "x",
+             "selected Kex --info was invoked more than once")
+    end
+    FS.Directory.deleteAll(root)
+  end
+
   it("rejects a workspace dependency that is not a member") do
     let app = ManifestPackage {
       name: "app", packageKexRequirement: ">= 0.3.0",
@@ -77,6 +129,259 @@ describe("Tey.Resolver.resolveWorkspace") do
         Error(message) => assert(message.contains?("not a workspace member"))
         Ok(_) => assert(false, "accepted a missing workspace member")
       end
+    end
+  end
+end
+
+describe("Tey.Resolver path dependencies") do
+  let root = "/tmp/tey_resolver_path_spec"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/app")
+    FS.Directory.create("${root}/dep/src")
+    FS.File.write("${root}/dep/package.kex", `
+      package "dep" do
+        version("2.0.0")
+      end
+    `)
+    FS.File.write("${root}/dep/src/dep.kex", "module Dep\n")
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("locks a path dependency as an immutable snapshot") do
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [Dependency {
+        manifestName: "dep", manifestSource: Tey.Manifest.PathSource("../dep")
+      }]
+    }
+    let context = Context {
+      workspaceRoot: root,
+      members: [Member { memberRoot: "${root}/app", memberManifest: app }]
+    }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env {
+      vars: { "TEY_KEX": binary, "TEY_CACHE": "${root}/cache" }
+    } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      let dependency = lock.lockedDependencies.find { |dep| dep.name == "dep" }.try
+      assert(dependency.source == "path")
+      assert(dependency.path == "../dep")
+      assert(dependency.version == "2.0.0")
+      assert(FS.File.file?("${Tey.Snapshot.cachedPath(dependency)}/src/dep.kex"))
+    end
+  end
+
+
+  it("includes .teyignore in the workspace fingerprint") do
+    let manifest = ManifestPackage { name: "app" }
+    let context = Context {
+      workspaceRoot: root,
+      members: [Member { memberRoot: "${root}/app", memberManifest: manifest }]
+    }
+    FS.File.write("${root}/app/package.kex", `
+      package "app" do end
+    `)
+    let before = Tey.Resolver.fingerprint(context)
+    FS.File.write("${root}/app/.teyignore", "generated/*\n")
+    let after = Tey.Resolver.fingerprint(context)
+    assert(before != after)
+  end
+
+
+  it("normalizes manifest formatting and comments in fingerprints") do
+    let plain = Tey.Manifest.read(`
+      package "app" do
+        version("1.0.0")
+      end
+    `).try
+    let commented = Tey.Manifest.read(`
+      # comment only
+      package "app" do
+        version(
+          "1.0.0" # the same value
+        )
+      end
+    `).try
+    let first = Context { workspaceRoot: root,
+      members: [Member { memberRoot: "${root}/app", memberManifest: plain }] }
+    let second = Context { workspaceRoot: root,
+      members: [Member { memberRoot: "${root}/app", memberManifest: commented }] }
+    assert(Tey.Resolver.fingerprint(first) == Tey.Resolver.fingerprint(second))
+  end
+
+
+  it("recursively snapshots transitive path dependencies") do
+    FS.Directory.create("${root}/child/src")
+    FS.File.write("${root}/child/package.kex", `
+      package "child" do
+        version("3.0.0")
+      end
+    `)
+    FS.File.write("${root}/child/src/child.kex", "module Child\n")
+    FS.File.write("${root}/dep/package.kex", `
+      package "dep" do
+        version("2.0.0")
+        tey("child", path: "../child")
+      end
+    `)
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [Dependency {
+        manifestName: "dep", manifestSource: Tey.Manifest.PathSource("../dep")
+      }]
+    }
+    let context = Context {
+      workspaceRoot: root,
+      members: [Member { memberRoot: "${root}/app", memberManifest: app }]
+    }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env {
+      vars: { "TEY_KEX": binary, "TEY_CACHE": "${root}/cache" }
+    } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      let child = lock.lockedDependencies.find { |entry| entry.name == "child" }.try
+      assert(child.source == "path")
+      assert(child.version == "3.0.0")
+      assert(FS.File.file?(FS.Path.join(Tey.Snapshot.cachedPath(child),
+                                       "src/child.kex")))
+    end
+  end
+end
+
+describe("Tey.Resolver Git monorepo dependencies") do
+  let cache = "/tmp/tey_resolver_monorepo_spec"
+
+  after { FS.Directory.deleteAll(cache) }
+
+  it("resolves an explicit subdir and records the member manifest") do
+    FS.Directory.deleteAll(cache)
+    let repository = FS.Directory.current
+    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [Dependency {
+        manifestName: "tey",
+        manifestSource: Tey.Manifest.GitSource(repository, "branch", branch,
+                                               "tey")
+      }]
+    }
+    let context = Context {
+      workspaceRoot: repository,
+      members: [Member { memberRoot: repository, memberManifest: app }]
+    }
+    let binary = FS.Path.join(repository, "build/kex")
+    with ENV = Mock.Env {
+      vars: { "TEY_KEX": binary, "TEY_CACHE": cache }
+    } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      let dependency = lock.lockedDependencies.find { |dep| dep.name == "tey" }.try
+      assert(dependency.subdir == "tey")
+      assert(dependency.version == "0.2.0")
+      assert(Tey.Cache.packagePath(dependency).endsWith?("/tey"))
+      assert(FS.File.file?(FS.Path.join(Tey.Cache.packagePath(dependency),
+                                       "package.kex")))
+    end
+  end
+
+
+  it("discovers a monorepo package by name when subdir is omitted") do
+    FS.Directory.deleteAll(cache)
+    let repository = FS.Directory.current
+    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [Dependency {
+        manifestName: "tey",
+        manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, "")
+      }]
+    }
+    let context = Context {
+      workspaceRoot: repository,
+      members: [Member { memberRoot: repository, memberManifest: app }]
+    }
+    let binary = FS.Path.join(repository, "build/kex")
+    with ENV = Mock.Env {
+      vars: { "TEY_KEX": binary, "TEY_CACHE": cache }
+    } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      let dependency = lock.lockedDependencies.find { |dep| dep.name == "tey" }.try
+      assert(dependency.subdir == "tey")
+      assert(dependency.version == "0.2.0")
+    end
+  end
+
+
+  it("uses one checkout for two packages from the same repository commit") do
+    FS.Directory.deleteAll(cache)
+    let repository = FS.Directory.current
+    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    let app = ManifestPackage {
+      name: "app", packageKexRequirement: ">= 0.3.0",
+      manifestDependencies: [
+        Dependency { manifestName: "kex",
+          manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, ".") },
+        Dependency { manifestName: "tey",
+          manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, "tey") }
+      ]
+    }
+    let context = Context {
+      workspaceRoot: repository,
+      members: [Member { memberRoot: repository, memberManifest: app }]
+    }
+    let binary = FS.Path.join(repository, "build/kex")
+    with ENV = Mock.Env {
+      vars: { "TEY_KEX": binary, "TEY_CACHE": cache }
+    } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      let kex = lock.lockedDependencies.find { |entry| entry.name == "kex" }.try
+      let tey = lock.lockedDependencies.find { |entry| entry.name == "tey" }.try
+      assert(kex.commit == tey.commit)
+      assert(Tey.Cache.repositoryPath(kex) == Tey.Cache.repositoryPath(tey))
+      assert(Tey.Cache.packagePath(kex) != Tey.Cache.packagePath(tey))
+    end
+  end
+end
+
+describe("Tey.Resolver package tag selection") do
+  it("prefers independently versioned package tags in a monorepo") do
+    let selected = Tey.Resolver.chooseFromTags(
+      "parser", ["v9.0.0", "other-v8.0.0", "parser-v1.2.0",
+                 "parser-v1.3.0"], "~> 1.2"
+    ).try
+    assert(selected == "parser-v1.2.0")
+  end
+
+  it("falls back to repository-wide version tags") do
+    let selected = Tey.Resolver.chooseFromTags(
+      "parser", ["v1.1.0", "v1.2.0"], ">= 1.0"
+    ).try
+    assert(selected == "v1.2.0")
+  end
+end
+
+describe("Tey.Resolver external workspace dependencies") do
+  it("pins a fetched workspace sibling to its repository commit") do
+    let dependency = Dependency {
+      manifestName: "parser", manifestSource: WorkspaceSource
+    }
+    let parent = Tey.Lockfile.Dependency {
+      name: "compiler", source: "git", git: "https://example.com/compiler",
+      resolved: "compiler-v1.0.0", commit: "abc123", sha256: "hash"
+    }
+    let external = Tey.Resolver.externalizeWorkspaceDependencies(
+      [dependency], parent
+    ).first.try
+    match external.manifestSource do
+      GitSource(git, selector, requested, subdir) => do
+        assert(git == parent.git)
+        assert(selector == "ref")
+        assert(requested == parent.commit)
+        assert(subdir == "")
+      end
+      _ => assert(false, "workspace sibling was not converted to Git")
     end
   end
 end

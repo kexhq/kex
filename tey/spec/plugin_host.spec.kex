@@ -1,0 +1,62 @@
+using JSON
+using Tey.PluginHost, only: [Invocation]
+
+describe("Tey.PluginHost invocation protocol") do
+  it("encodes the complete versioned child context as JSON data") do
+    let dependency = Tey.Lockfile.Dependency {
+      name: "provider", version: "1.0.0", source: "git",
+      git: "https://example.com/provider", resolved: "provider-v1.0.0",
+      commit: "abc", sha256: "hash", dependencies: ["shared"]
+    }
+    let lock = Tey.Lockfile.LockState {
+      kexRequirement: ">= 0.4", kexVersion: "0.5.0", otpRelease: 27,
+      manifestFingerprint: "manifest", lockedDependencies: [dependency],
+      pluginApprovals: { "app:github": "approved" }
+    }
+    let invocation = Invocation {
+      invocationKind: "generator", invocationNamespace: "github",
+      invocationOperation: "workflow", workspaceRoot: "/work",
+      currentMember: Just("app"), members: { "app": "packages/app" },
+      graph: [dependency], lock: lock,
+      toolchain: Tey.Toolchain.ToolchainInfo {
+        version: "0.5.0", reportedRuntimeOtpFloor: Just(27)
+      },
+      arguments: ["extra"], options: { "otp": 27 },
+      environment: { "CI": "true" }
+    }
+    let document = JSON.parse(Tey.PluginHost.encodeInvocation(invocation)).try
+    assert("${document["version"].or("")}" == "1")
+    assert("${document["kind"].or("")}" == "generator")
+    let context = document["context"].try
+    assert("${context["workspaceRoot"].or("")}" == "/work")
+    assert("${context["currentMember"].or("")}" == "app")
+    assert("${context["toolchain"].try["kex"].or("")}" == "0.5.0")
+    assert("${context["graph"].try.first.try["commit"].or("")}" == "abc")
+    assert("${context["options"].try["otp"].or("")}" == "27")
+    assert("${context["environment"].try["CI"].or("")}" == "true")
+  end
+
+
+  it("coerces declared scalar options and rejects unknown names") do
+    let plugin = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.1" do
+          generator("workflow", entrypoint: "workflow.kex") do
+            option("otp", type: Integer)
+            option("dryRun", type: Bool)
+          end
+        end
+      end
+    `).try.plugins.first.try
+    let operation = plugin.pluginGenerators.first.try
+    let options = Tey.PluginHost.typedOptions(
+      operation, { "otp": "27", "dryRun": "true" }
+    ).try
+    assert("${options["otp"].or("")}" == "27")
+    assert(options["dryRun"] == Just(true))
+    let unknown: {String: Any} or! String = Tey.PluginHost.typedOptions(
+      operation, { "branch": "main" }
+    )
+    assert(unknown.error?)
+  end
+end

@@ -15,11 +15,21 @@ end
 # Include the source URL in the cache identity: two packages with the same
 # display name must never share a checkout.
 foul packagePath(dep: Tey.Lockfile.Dependency) -> String do
+  return Tey.Snapshot.cachedPath(dep) if dep.source == "path"
+  let checkout = Tey.Cache.repositoryPath(dep)
+  return checkout if dep.subdir == ""
+  return FS.Path.join(checkout, dep.subdir)
+end
+
+foul repositoryPath(dep: Tey.Lockfile.Dependency) -> String do
   return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
 end
 
 foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
+  return Tey.Snapshot.verify(dep) if dep.source == "path"
+  return Error("workspace package `${dep.name}` is not fetched into the cache") if dep.source == "workspace"
   let path = Tey.Cache.packagePath(dep)
+  let checkout = Tey.Cache.repositoryPath(dep)
 
   return Ok(path) if FS.Directory.directory?(path)
 
@@ -49,11 +59,14 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
         return Error(error)
       end
       Ok(_) => do
-        return Ok(path) if FS.File.rename(staging, path)
+        return Ok(path) if FS.File.rename(staging, checkout) && FS.Directory.directory?(path)
         # Another run may have finished the same checkout first. Its result
         # is this one's result — the path is content-addressed by commit.
         FS.Directory.deleteAll(staging)
         return Ok(path) if FS.Directory.directory?(path)
+        if FS.Directory.directory?(checkout)
+          return Error("Git dependency `${dep.name}` has no package directory `${dep.subdir}`")
+        end
         return Error("could not move the ${Tey.Lockfile.dependencyName(dep)} checkout into ${path}")
       end
     end
@@ -61,13 +74,15 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
 end
 
 foul verify(dep: Tey.Lockfile.Dependency) -> String or! String do
+  return Tey.Snapshot.verify(dep) if dep.source == "path"
+  return Error("workspace package `${dep.name}` is not verified through the cache") if dep.source == "workspace"
   let path = Tey.Cache.packagePath(dep)
 
   if !FS.Directory.directory?(path)
     return Error("${Tey.Lockfile.dependencyName(dep)} is not present in the Tey cache")
   end
 
-  match Tey.Git.execute(["-C", path, "archive", "--format=tar", Tey.Lockfile.dependencyCommit(dep)]) do
+  match Tey.Git.execute(["-C", Tey.Cache.repositoryPath(dep), "archive", "--format=tar", Tey.Lockfile.dependencyCommit(dep)]) do
     Error(error) => Error(error)
     Ok(archive) => do
       let actual = Digest.sha256(archive.stdout)
@@ -84,6 +99,6 @@ private do
   # Sibling of the final path so the move that publishes it stays on one
   # filesystem, and named so a leftover from a killed run is recognizable.
   foul stagingPath(dep: Tey.Lockfile.Dependency) -> String do
-    return "${Tey.Cache.packagePath(dep)}.partial"
+    return "${Tey.Cache.repositoryPath(dep)}.partial"
   end
 end
