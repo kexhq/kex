@@ -24,34 +24,37 @@
 # Kex and Erlang disagree about what a string is: a Kex String is a binary,
 # while odbc wants a charlist. Rather than convert at each call — which puts
 # the disagreement in front of every query — the whole boundary lives in these
-# four wrappers. Below them, this file is plain Kex and plain SQL.
+# three wrappers. Below them, this file is plain Kex and plain SQL.
+#
+# The conversion is `sql.bytes`, the string's STORAGE view. Not `chars`: that
+# is the TEXT view, and on BEAM a Kex Char is a tagged `{'Char', N}` tuple, so
+# odbc would receive a list of tuples rather than a string. `bytes` is
+# `binary_to_list` — the same BIF this file used to call directly, reached
+# through the stdlib instead of through `Erlang.Erlang`.
 #
 # This is the pattern docs/erlang-ffi-types-plan.md prescribes: a foreign
 # signature describes the BEAM shape, and adaptation is ordinary Kex code in a
 # wrapper rather than an annotation that would quietly claim a binary is a
 # charlist.
 
-# Kex strings are binaries; odbc wants charlists. The one place that knows.
-let chars(text: String) -> Any = Erlang.Erlang.binary_to_list(text)
-
 # {binary_strings, true} makes odbc return text columns as binaries
 # (i.e. real Kex strings) instead of charlists — the same disagreement,
 # settled in the other direction so results need no unwrapping.
 foul connect(dsn: String) -> Any do
-  return Erlang.Odbc.connect(chars(dsn), [(:binary_strings, true)])
+  return Erlang.Odbc.connect(dsn.bytes, [(:binary_strings, true)])
 end
 
 # {:updated, N} for DDL/DML, {:selected, Fields, Rows} for a SELECT,
 # {:error, Reason} for either.
 foul query(ref: Any, sql: String) -> Any do
-  return Erlang.Odbc.sql_query(ref, chars(sql))
+  return Erlang.Odbc.sql_query(ref, sql.bytes)
 end
 
 # A parameterized query, safe against SQL injection. odbc:param_query/3 takes
 # one {Type, [Values...]} tuple per '?', the values list spanning all rows in
 # the batch — so this inserts three users in one call.
 foul params(ref: Any, sql: String, bindings: [Any]) -> Any do
-  return Erlang.Odbc.param_query(ref, chars(sql), bindings)
+  return Erlang.Odbc.param_query(ref, sql.bytes, bindings)
 end
 
 # --- The program ----------------------------------------------------------
