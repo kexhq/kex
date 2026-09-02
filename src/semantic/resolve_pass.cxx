@@ -743,6 +743,8 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
             if (node.name != "_") defineLocal(node.name);
+        } else if constexpr (std::is_same_v<T, ast::TypePattern>) {
+            if (!node.name.empty() && node.name != "_") defineLocal(node.name);
         } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) resolvePattern(*node.inner);
         } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {

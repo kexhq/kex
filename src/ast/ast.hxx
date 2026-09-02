@@ -162,6 +162,15 @@ struct RangePattern {
     PatternPtr end;
 };
 
+// `s : String => ...` in a match clause: matches when the value has that
+// type, and binds it to `name` (empty for `_ : String`). A record
+// alternative can be named with a RecordPattern; without this one there was
+// no way to name the type of any other.
+struct TypePattern {
+    std::string name;
+    TypeExprPtr type;
+};
+
 struct Pattern {
     SourceLocation location;
     std::variant<
@@ -173,7 +182,8 @@ struct Pattern {
         RecordPattern,
         ListPattern,
         TuplePattern,
-        RangePattern
+        RangePattern,
+        TypePattern
     > kind;
 };
 

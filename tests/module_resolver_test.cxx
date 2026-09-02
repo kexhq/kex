@@ -41,6 +41,11 @@ int main() {
         std::ofstream(base / "bad_manifest/prelude.kex")
             << "using Good\nthis is not a manifest entry\n";
         std::ofstream(base / "bad_manifest/good.kex") << "module Good\n";
+        fs::create_directories(base / "snake/web");
+        std::ofstream(base / "snake/mock_data.kex") << "module MockData\n";
+        std::ofstream(base / "snake/web/http_client.kex")
+            << "module Web.HTTPClient\n";
+        std::ofstream(base / "snake/plainname.kex") << "module PlainName\n";
         fs::create_directories(base / "duplicate_manifest");
         std::ofstream(base / "duplicate_manifest/prelude.kex")
             << "using Good\nusing Good\n";
@@ -73,6 +78,28 @@ int main() {
             assertTrue(resolved.has_value());
             assertEqual(resolved->moduleName, std::string("Shop.Cart"));
             assertEqual(resolved->path, (base / "lib/shop.kex").string());
+        });
+
+        it("finds a snake_case file for a CamelCase module name", [&]() {
+            // `module MockData` in `src/mock_data.kex`. The resolver only
+            // lowercased the name, so the file had to be `mockdata.kex` —
+            // and the miss surfaced as every type the module exported being
+            // unknown, which reads like a broken module, not a misnamed file.
+            kex::module::Resolver resolver({(base / "snake").string()});
+            auto resolved = resolver.resolve("MockData");
+            assertTrue(resolved.has_value());
+            assertEqual(resolved->path,
+                        (base / "snake/mock_data.kex").string());
+
+            auto nested = resolver.resolve("Web.HTTPClient");
+            assertTrue(nested.has_value());
+            assertEqual(nested->path,
+                        (base / "snake/web/http_client.kex").string());
+
+            // The run-together spelling still wins where it exists.
+            auto exact = resolver.resolve("PlainName");
+            assertTrue(exact.has_value());
+            assertEqual(exact->path, (base / "snake/plainname.kex").string());
         });
 
         it("does not source-resolve foreign module namespaces", [&]() {

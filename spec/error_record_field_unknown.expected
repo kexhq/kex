@@ -1,0 +1,1 @@
+spec/error_record_field_unknown.kex:13:29: error: Undefined method `nonexistent` for `User`

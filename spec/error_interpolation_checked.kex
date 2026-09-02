@@ -1,0 +1,11 @@
+# kex: check-only
+# A method call inside `${...}` is type-checked like any other.
+#
+# From the type-system audit: interpolation arguments skipped receiver-method
+# validation entirely, so a call rejected in direct position was accepted
+# inside a string and crashed at runtime — reported at `<stdin>:1:3`, because
+# interpolation desugars to a synthesized lambda.
+main do
+  let n = 5
+  IO.printLine("${n.length}")
+end

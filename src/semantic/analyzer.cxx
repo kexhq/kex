@@ -52,6 +52,11 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> v
                 m_symbols.define(Symbol{node.name, SymbolKind::Variable, false, false, true, loc});
             }
         }
+        else if constexpr (std::is_same_v<T, ast::TypePattern>) {
+            if (!node.name.empty() && node.name != "_")
+                m_symbols.define(Symbol{node.name, SymbolKind::Variable, false,
+                                        false, true, loc});
+        }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) bindPatternVars(*node.inner, loc);
         }
@@ -92,6 +97,10 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // before anything else so the message is not buried under the type errors
     // an ambiguous method tends to cause downstream.
     for (auto& conflict : findReceiverConflicts(program))
+        m_diagnostics.push_back(std::move(conflict));
+    // …and a method that collides with a plain function of the same emitted
+    // arity, which erlc could only report as an internal crash.
+    for (auto& conflict : findMethodFunctionCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked
@@ -180,6 +189,31 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
     // A module never carries an effect of its own: entering one leaves the
     // surrounding purity exactly as it was, and each member declares its own.
     m_symbols.pushScope(m_inFoulContext);
+
+    // Members are visible to each other regardless of the order they are
+    // written in — a `make` block above a `private do` may still name what the
+    // block binds. Only declaring them as the walk reached them made
+    // `defaultPort` an undefined identifier purely for standing lower in the
+    // file.
+    const auto declare = [this](const ast::FunctionDef& def) {
+        Symbol symbol{def.name, SymbolKind::Function, def.isFoul, false, true,
+                      def.location};
+        symbol.clauseCount = static_cast<int>(def.clauses.size());
+        m_symbols.define(std::move(symbol));
+    };
+    for (const auto& item : mod.body) {
+        if (const auto* fn =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*fn) declare(**fn);
+        } else if (const auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+            if (!*visibility) continue;
+            for (const auto& inner : (*visibility)->items)
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                    if (*fn) declare(**fn);
+        }
+    }
 
     for (const auto& item : mod.body) {
         std::visit([this](const auto& node) {

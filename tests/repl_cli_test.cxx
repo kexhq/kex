@@ -321,6 +321,165 @@ int main() {
             assertEqual(walker, expected);
             assertEqual(beam, expected);
         });
+
+        it("reaches a parameterless binding declared in `private do`", []() {
+            // A module member is stored under `Module::name`. A public one
+            // answered the bare name only because `using` had copied it into
+            // the importer's scope, so a private binding was invisible to
+            // every function in its own module — including its `make` blocks,
+            // and regardless of declaration order.
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_private_binding_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            fs::create_directories(src);
+            std::ofstream(src / "router.kex")
+                << "module Router\n"
+                   "record Conf do\n"
+                   "  name : String\n"
+                   "end\n"
+                   "make Conf do\n"
+                   "  let described = \"${@name}:${defaultPort}\"\n"
+                   "end\n"
+                   "private do\n"
+                   "  let defaultPort = 3000\n"
+                   "end\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "using Router\n"
+                   "main do\n"
+                   "  IO.printLine(Router.Conf { name: \"api\" }.described)\n"
+                   "end\n";
+
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                entry.string() + " 2>&1");
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(walker, std::string("api:3000\n"));
+            assertEqual(beam, std::string("api:3000\n"));
+        });
+
+        it("evaluates a record's field defaults in its declaring module", []() {
+            // The default is written against the names the DECLARING module
+            // has in scope. Evaluating it where the record is constructed
+            // meant a library had to fully qualify every default, and got a
+            // runtime `Undefined function` if it did not.
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_field_default_scope_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            fs::create_directories(src);
+            std::ofstream(src / "lib.kex")
+                << "module Lib\n"
+                   "using Net.HTTP, only: [Headers]\n"
+                   "module Response do\n"
+                   "  record JSON do\n"
+                   "    status : Integer = 200\n"
+                   "    body : String\n"
+                   "    headers : Headers = Headers.empty\n"
+                   "  end\n"
+                   "end\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "using Lib\n"
+                   "main do\n"
+                   "  let r = Lib.Response.JSON { body: \"{}\" }\n"
+                   "  IO.printLine(\"${r.status} ${r.headers.entries.count}\")\n"
+                   "end\n";
+
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                entry.string() + " 2>&1");
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(walker, std::string("200 0\n"));
+            assertEqual(beam, std::string("200 0\n"));
+        });
+
+        it("captures a module's own helper, not an application's", []() {
+            // `~rendered` inside a library resolved to the bare global name,
+            // so an application that merely happened to define `rendered`
+            // took over the library's `private do` escaping helper. Nothing
+            // warned; the only symptom was that escaping stopped happening.
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_private_capture_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            fs::create_directories(src);
+            std::ofstream(src / "lib.kex")
+                << "module Lib\n"
+                   "render : [String] -> String\n"
+                   "let render(values) = values.map(~rendered).join(\",\")\n"
+                   "private do\n"
+                   "  rendered : String -> String\n"
+                   "  let rendered(value) = \"[escaped ${value}]\"\n"
+                   "end\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "using Lib\n"
+                   "let rendered(value: String) -> String = value\n"
+                   "main do\n"
+                   "  IO.printLine(Lib.render([\"<script>\"]))\n"
+                   "end\n";
+
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                entry.string() + " 2>&1");
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(walker, std::string("[escaped <script>]\n"));
+            assertEqual(beam, std::string("[escaped <script>]\n"));
+        });
+
+        it("passes named arguments to an imported make-method", []() {
+            // Lowering places named arguments by the target's parameter
+            // names, and a make-method reached from another compilation unit
+            // arrived with none: `IR lower: named args to imported function
+            // with unknown params: launchOn`. Annotated or not, both forms.
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_named_make_method_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            fs::create_directories(src);
+            std::ofstream(src / "lib.kex")
+                << "module Lib\n"
+                   "record Router do\n"
+                   "  name : String\n"
+                   "end\n"
+                   "make Router do\n"
+                   "  start :> Integer -> String\n"
+                   "  let start(port) = \"${@name} on ${port}\"\n"
+                   "  let launchOn(port, host) = \"${@name} ${host}:${port}\"\n"
+                   "end\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "using Lib\n"
+                   "main do\n"
+                   "  let r = Lib.Router { name: \"api\" }\n"
+                   "  IO.printLine(r.start(port: 4000))\n"
+                   "  IO.printLine(r.launchOn(host: \"0.0.0.0\", port: 4000))\n"
+                   "  IO.printLine(r.launchOn(4000, host: \"local\"))\n"
+                   "end\n";
+
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                entry.string() + " 2>&1");
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            const std::string expected =
+                "api on 4000\napi 0.0.0.0:4000\napi local:4000\n";
+            assertEqual(walker, expected);
+            assertEqual(beam, expected);
+        });
     });
 
     describe("CLI — installed stdlib discovery", []() {

@@ -24,6 +24,13 @@ struct Signature {
     // zero must remain representable for functions whose every parameter has
     // a default.
     std::optional<std::size_t> requiredParams;
+    // Source parameter names, in order, for a signature that came from a
+    // FunctionDef; empty when the signature came from a `:>` annotation, a
+    // trait requirement or an imported interface, none of which name their
+    // parameters. A receiver prepended to `params` gets no entry here, so a
+    // shorter list than `params` means the first parameter is the receiver.
+    // Named arguments at a call site need these to place their values.
+    std::vector<std::string> paramNames;
     // The module whose `make` block defines this method, "" for a top-level
     // one. A module-scoped `make` is import-gated exactly like every other
     // module member (docs/ufcs-dispatch-plan.md "Follow-up"), so a call site

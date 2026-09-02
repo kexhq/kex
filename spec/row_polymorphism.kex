@@ -1,0 +1,27 @@
+# Row polymorphism — `{ field: T } & R` accepts any record carrying the field.
+#
+# From the type-system audit, where it was a MISSING feature: records are
+# nominal, so "any record with at least a `name`" could not be spelled and
+# such a helper had to leave its parameter unannotated (and unchecked).
+# The intersection form gives the parameter a real type: it accepts both
+# records below, and still rejects a field of the wrong type.
+record User do
+  name : String
+  age  : Int
+end
+
+record Pet do
+  name : String
+  kind : String
+end
+
+let greet(r: { name: String } & R) = "Hello, ${r.name}"
+
+bornIn : Integer -> { age: Integer } & R -> String
+let bornIn(year, s) = "Born in ${year - s.age}"
+
+main do
+  IO.printLine(greet(User { name: "Ada", age: 30 }))
+  IO.printLine(greet(Pet { name: "Rex", kind: "dog" }))
+  IO.printLine(bornIn(2026, User { name: "Ada", age: 30 }))
+end

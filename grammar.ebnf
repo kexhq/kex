@@ -182,7 +182,7 @@ return_annotation = ARROW type_expr ;
 clause_body
   = EQUALS expr
   | DO body rescue_block? END
-  | DO PIPE params PIPE body END
+  | DO PIPE params PIPE body rescue_block? END
   ;
 
 rescue_block
@@ -379,8 +379,15 @@ if_expr
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
 
 match_clause
-  = pattern ( COMMA pattern )* ( WHEN expr )? FAT_ARROW expr
+  = match_pattern ( COMMA match_pattern )* ( WHEN expr )? FAT_ARROW expr
   | WHEN expr FAT_ARROW expr   (* bare when = _ when *)
+  ;
+
+(* A type alternative only exists in a match clause: everywhere else
+   `pattern : type_expr` annotates a binding rather than testing one. *)
+match_pattern
+  = pattern
+  | ( LOWER_IDENT | UNDERSCORE ) COLON type_expr
   ;
 
 receive_expr = RECEIVE DO [ PIPE LOWER_IDENT PIPE ] match_clause* after_clause? END ;
@@ -433,7 +440,7 @@ next_expr  = NEXT ;
 lambda
   = LBRACE PIPE params PIPE expr RBRACE           (* inline lambda *)
   | LBRACE expr RBRACE                            (* zero-arg lambda *)
-  | DO PIPE params PIPE body END                  (* multi-line lambda *)
+  | DO PIPE params PIPE body rescue_block? END    (* multi-line lambda *)
   ;
 
 (* `&` is receiver shorthand only, and the method is always an identifier.

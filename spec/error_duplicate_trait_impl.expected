@@ -1,0 +1,2 @@
+spec/error_duplicate_trait_impl.kex:18:3: error: `greeting` is defined twice for receiver `Alpha` — declaration form carries no dispatch priority, so neither definition can claim the call
+spec/error_duplicate_trait_impl.kex:14:3: note: the other definition is here

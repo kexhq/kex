@@ -97,6 +97,8 @@ auto clone(const PatternPtr& pattern) -> PatternPtr {
                 out->kind = TuplePattern{cloneVec(node.elements)};
             } else if constexpr (std::is_same_v<T, RangePattern>) {
                 out->kind = RangePattern{clone(node.start), clone(node.end)};
+            } else if constexpr (std::is_same_v<T, TypePattern>) {
+                out->kind = TypePattern{node.name, clone(node.type)};
             } else {
                 // LiteralPattern, VarPattern, WildcardPattern — plain values.
                 out->kind = node;

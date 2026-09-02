@@ -1,0 +1,31 @@
+# A union of a record type and a BUILTIN.
+#
+# `type Answer = Alpha | String` registers both members as constructors of
+# Answer, but a String value carries no constructor name to look up — so every
+# member failed to unify and the type could not be spelled at all. A second
+# union naming the same record made it worse: constructor→owner is one entry,
+# so `Alpha` belonged only to whichever union came last.
+record Alpha do
+  n : Integer
+end
+
+record Beta do
+  s : String
+end
+
+type Answer = Alpha | String
+type Pair = Alpha | Beta
+
+let describeIt(a: Answer) -> String = match a do
+  Alpha { n } => "alpha ${n}"
+  s : String => "plain ${s}"
+end
+
+let describePair(p: Pair) -> String = "pair"
+
+main do
+  IO.printLine(describeIt(Alpha { n: 1 }))
+  IO.printLine(describeIt("raw"))
+  IO.printLine(describePair(Alpha { n: 1 }))
+  IO.printLine(describePair(Beta { s: "b" }))
+end
