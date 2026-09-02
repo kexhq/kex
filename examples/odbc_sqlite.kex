@@ -1,0 +1,128 @@
+# ODBC Interop — SQLite via Erlang's 'odbc' module
+#
+# The 'odbc' application talks to any ODBC driver manager. Here we drive
+# SQLite through it, the same way you would from Erlang:
+#
+#   Erlang.Odbc.connect(...)   -> 'odbc':'connect'(...)
+#   Erlang.Odbc.sql_query(...) -> 'odbc':'sql_query'(...)
+#
+# Prerequisites (system level, not Kex):
+#   * Erlang/OTP built with ODBC support   (`erl -man odbc` should work)
+#   * A SQLite ODBC driver installed:
+#       Debian/Ubuntu:  apt install libsqliteodbc
+#       macOS (unixODBC + driver from https://www.ch-werner.de/sqliteodbc/)
+#   * The driver registered with your ODBC manager. The connection string
+#     below uses the Driver={...} form; adjust to your install or use a DSN.
+#
+# Run on BEAM (the tree-walk interpreter cannot call foreign modules):
+#   kex -R examples/odbc_sqlite.kex
+
+# kex: run-beam
+
+# --- The boundary ---------------------------------------------------------
+#
+# Kex and Erlang disagree about what a string is: a Kex String is a binary,
+# while odbc wants a charlist. Rather than convert at each call — which puts
+# the disagreement in front of every query — the whole boundary lives in these
+# three wrappers. Below them, this file is plain Kex and plain SQL.
+#
+# The conversion is `sql.bytes`, the string's STORAGE view. Not `chars`: that
+# is the TEXT view, and on BEAM a Kex Char is a tagged `{'Char', N}` tuple, so
+# odbc would receive a list of tuples rather than a string. `bytes` is
+# `binary_to_list` — the same BIF this file used to call directly, reached
+# through the stdlib instead of through `Erlang.Erlang`.
+#
+# This is the pattern docs/erlang-ffi-types-plan.md prescribes: a foreign
+# signature describes the BEAM shape, and adaptation is ordinary Kex code in a
+# wrapper rather than an annotation that would quietly claim a binary is a
+# charlist.
+
+# {binary_strings, true} makes odbc return text columns as binaries
+# (i.e. real Kex strings) instead of charlists — the same disagreement,
+# settled in the other direction so results need no unwrapping.
+foul connect(dsn: String) -> Any do
+  return Erlang.Odbc.connect(dsn.bytes, [(:binary_strings, true)])
+end
+
+# {:updated, N} for DDL/DML, {:selected, Fields, Rows} for a SELECT,
+# {:error, Reason} for either.
+foul query(ref: Any, sql: String) -> Any do
+  return Erlang.Odbc.sql_query(ref, sql.bytes)
+end
+
+# A parameterized query, safe against SQL injection. odbc:param_query/3 takes
+# one {Type, [Values...]} tuple per '?', the values list spanning all rows in
+# the batch — so this inserts three users in one call.
+foul params(ref: Any, sql: String, bindings: [Any]) -> Any do
+  return Erlang.Odbc.param_query(ref, sql.bytes, bindings)
+end
+
+# --- The program ----------------------------------------------------------
+
+# Everything after a successful connect. Split out so `main` can report a
+# failed one instead of dying in a pattern match: an unregistered driver or a
+# wrong DSN is the FIRST thing a reader of this file hits, and
+# `{badmatch,{error,...}}` says nothing about which.
+foul demo(ref: Any) -> Void do
+  query(ref, `
+    CREATE TABLE IF NOT EXISTS users (
+      id   INTEGER PRIMARY KEY,
+      name TEXT,
+      age  INTEGER
+    )
+  `)
+
+  # The inner value lists are typed [Any] so the two tuples unify as
+  # (Atom, [Any]).
+  let names : [Any] = ["Ada", "Linus", "Guido"]
+  let ages : [Any] = [36, 54, 67]
+  params(ref, "INSERT INTO users (name, age) VALUES(?, ?)", [
+    (:sql_varchar, names),
+    (:sql_integer, ages)
+  ])
+
+  match query(ref, "UPDATE users SET age = age + 1 WHERE name = 'Ada'") do
+    (:updated, n) => IO.printLine("updated ${n} row(s)")
+    (:error, reason) => IO.printLine("update failed: ${reason}")
+  end
+
+  # Rows is a list of tuples, one tuple per row, values in column order.
+  #
+  # `{binary_strings, true}` means a text column arrives as a binary — which is
+  # exactly what a Kex String already is, so both views of it are available
+  # with no conversion and no wrapper. `count` is the TEXT view (characters)
+  # and `byteSize` is the STORAGE view (the encoding), and they disagree the
+  # moment a name is not pure ASCII.
+  #
+  # `byteSize` reads the encoded length directly instead of building the byte
+  # list `bytes` would — which is the difference between a number and a
+  # million cons cells once the column is a BLOB rather than a name.
+  match query(ref, "SELECT id, name, age FROM users ORDER BY name") do
+    (:selected, fields, rows) => do
+      IO.printLine("fields: ${fields}")
+      rows.each do |row|
+        match row do
+          (id, name, age) =>
+            IO.printLine("${id}: ${name} — ${name.count} chars, ${name.byteSize} bytes, age ${age}")
+        end
+      end
+    end
+    (:error, reason) => IO.printLine("select failed: ${reason}")
+  end
+
+  match query(ref, "DELETE FROM users WHERE age > 60") do
+    (:updated, n) => IO.printLine("deleted ${n} row(s)")
+    (:error, reason) => IO.printLine("delete failed: ${reason}")
+  end
+
+  Erlang.Odbc.disconnect(ref)
+end
+
+main do
+  Erlang.Odbc.start()
+  match connect("Driver={SQLite3};Database=kex_demo.db") do
+    (:ok, ref) => demo(ref)
+    (:error, reason) => IO.printLine("connect failed: ${reason} — see the prerequisites at the top of this file")
+  end
+  Erlang.Odbc.stop()
+end

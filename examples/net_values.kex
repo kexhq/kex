@@ -11,8 +11,8 @@ main do
   IO.printLine("${address.string} private=${address.private?} in-network=${network.contains(address)}")
 
   let headers = Headers.empty
-    .add("Accept", "application/json")
-    .add("X-Trace", "example")
+    .add("Accept", "application/json").try
+    .add("X-Trace", "example").try
   IO.printLine("headers=${headers.entries.length}")
 
   # Generic queries preserve bare keys and encode spaces as %20. HTML form

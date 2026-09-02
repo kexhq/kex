@@ -171,6 +171,44 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::list(std::move(out));
     });
 
+    // The same STORAGE view, without materialising it. `bytes` builds a list,
+    // so `s.bytes.count` on a megabyte costs a million values just to answer a
+    // number; these three read the buffer directly. Written for a driver
+    // handing back a BLOB (docs/sql-types-plan.md, "Bytes"), where the whole
+    // point is not to walk the payload.
+    defineIntrinsic("String::byteSize", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        return Value::integer(str ? static_cast<int64_t>(str->value.size()) : 0);
+    });
+
+    // Out of range is None, matching `at` on every other indexed type.
+    defineIntrinsic("String::byteAt", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        auto* index = std::get_if<IntValue>(&args[1]->data);
+        if (!str || !index) return Value::none();
+        const auto at = index->value;
+        if (at < 0 || static_cast<size_t>(at) >= str->value.size())
+            return Value::none();
+        return Value::just(Value::integer(static_cast<int64_t>(
+            static_cast<unsigned char>(str->value[static_cast<size_t>(at)]))));
+    });
+
+    // Clamped rather than raising, the way `take`/`drop` already behave.
+    defineIntrinsic("String::bytePart", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3) return Value::string("");
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        auto* offset = std::get_if<IntValue>(&args[1]->data);
+        auto* count = std::get_if<IntValue>(&args[2]->data);
+        if (!str || !offset || !count) return Value::string("");
+        const auto size = static_cast<int64_t>(str->value.size());
+        const auto start = std::min(std::max(offset->value, int64_t{0}), size);
+        const auto take = std::min(std::max(count->value, int64_t{0}), size - start);
+        return Value::string(str->value.substr(static_cast<size_t>(start),
+                                               static_cast<size_t>(take)));
+    });
+
     // Kex.Intrinsic.String.graphemeCount — backs the prelude's
     // `graphemeCount` (src/stdlib/string.kex), distinct from `count`
     // (codepoints, via Kex.Intrinsic.List.length).

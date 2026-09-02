@@ -438,6 +438,52 @@ make String, implement: Enumerable, Foldable do
   bytes :> [Byte]
   let bytes = Kex.Intrinsic.String.bytes(this)
 
+  # The storage size in bytes, without building the byte list.
+  #
+  # +bytes.count+ answers the same number by materialising every byte first,
+  # which on a megabyte payload means a million values to count them. This
+  # reads the encoded length directly.
+  #
+  # @return [Integer] the length of the UTF-8 encoding
+  #
+  # @example Text length and storage length differ
+  #   "héllo".count      # => 5
+  #   "héllo".byteSize   # => 6
+  byteSize :> Integer
+  let byteSize = Kex.Intrinsic.String.byteSize(this)
+
+  # One byte of the storage view, or +None+ when the index is out of range.
+  #
+  # This indexes the ENCODING, not the text: +byteAt+ on a multi-byte
+  # character returns one of its bytes, never the character. Use +at+ or
+  # +chars+ for the text view.
+  #
+  # @param index [Integer] a zero-based byte offset
+  # @return [Byte?] the byte, or +None+ past the end
+  #
+  # @example The two views of the same string
+  #   "héllo".byteAt(1)   # => Just(195)
+  #   "héllo".at(1)       # => Just("é")
+  #   "héllo".byteAt(99)  # => None
+  byteAt :> Integer -> Byte?
+  let byteAt(index: Integer) = Kex.Intrinsic.String.byteAt(this, index)
+
+  # A slice of the storage view, by byte offset and byte count.
+  #
+  # The range is clamped rather than refused, the way +take+ and +drop+
+  # already behave. Slicing mid-character yields a string holding partial
+  # UTF-8 — legal storage, but not text: decode it only at a boundary you
+  # know is a character boundary.
+  #
+  # @param offset [Integer] a zero-based byte offset, clamped to the string
+  # @param count [Integer] how many bytes, clamped to what remains
+  # @return [String] the bytes in that range
+  #
+  # @example Reading a length-prefixed field out of a payload
+  #   payload.bytePart(4, payload.byteSize - 4)
+  bytePart :> Integer -> Integer -> String
+  let bytePart(offset: Integer, count: Integer) = Kex.Intrinsic.String.bytePart(this, offset, count)
+
   # Splits the string into its individual characters, as one-character
   # strings.
   #

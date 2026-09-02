@@ -15,6 +15,18 @@ module Net.HTTP
 
 # An insertion-ordered HTTP field collection. Names compare case-insensitively
 # and duplicate fields are preserved.
+#
+# A list of pairs rather than a +{String: String}+ map, and deliberately so.
+# A map cannot hold the same name twice, and +Set-Cookie+ needs exactly that:
+# RFC 6265 does not define it as a comma-separated list, so two cookies must
+# travel as two fields and cannot be joined into one. A map interface would
+# read as the obvious one right up to the first response that sets two
+# cookies, then silently keep one — the same class of quiet data loss this
+# module's +Result+-returning builders exist to avoid.
+#
+# Order is kept for the same reason. RFC 9110 makes order insignificant
+# BETWEEN different names but significant between fields sharing a name, and
+# a map has no order to keep.
 record Headers do
   entries : [(String, String)]
 end
@@ -117,8 +129,8 @@ module Headers do
   #
   # @example Building request headers immutably
   #   Headers.empty
-  #     .add("Accept", "application/json")
-  #     .add("User-Agent", "inventory-sync/1.0")
+  #     .add("Accept", "application/json").try
+  #     .add("User-Agent", "inventory-sync/1.0").try
   empty : Headers
   let empty = Headers { entries: [] }
 
@@ -170,7 +182,7 @@ module Response do
   # Builds a buffered binary response with validated headers.
   #
   # @example Returning a downloaded file without decoding it as text
-  #   Response.binary(200, archive, Headers.empty.set("Content-Type", "application/zip"))
+  #   Response.binary(200, archive, Headers.empty.add("Content-Type", "application/zip").try)
   foul binary(status: Integer, body: Binary, headers: Headers) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseBinary(status, body, headers)
   # Builds a UTF-8 text response with an explicit text/plain content type.
   #
@@ -296,8 +308,8 @@ make Client do
   #
   # @example Sending JSON with an idempotency key
   #   let headers = Headers.empty
-  #     .set("Content-Type", "application/json")
-  #     .set("Idempotency-Key", requestId)
+  #     .add("Content-Type", "application/json").try
+  #     .add("Idempotency-Key", requestId).try
   #   client.request("POST", url, headers, JSON.stringify(order).to(Binary).try)
   foul request(method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body)
   # Sends a buffered GET request.
@@ -329,12 +341,27 @@ make Client do
 end
 
 make Headers, implement: Showable, Inspectable do
-  # Appends a field without replacing existing fields of the same name.
-  # @example +Headers.empty.add("Accept", "text/plain")+
-  let add(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
-  # Replaces all fields of +name+ with one value.
-  # @example +headers.set("Content-Type", "application/json")+
-  let set(name: String, value: String) -> Headers = Kex.Intrinsic.NetHTTP.setHeader(this, name, value)
+  # Appends a field, keeping existing fields of the same name.
+  #
+  # Repeats are how +Set-Cookie+ works: it is not a comma-separated list, so
+  # two cookies must be two fields. For replace-semantics, +remove+ first.
+  #
+  # An invalid name or value is an +Error+, not a silent drop. Rejecting
+  # +"a\r\nX: y"+ is what stops response splitting, but dropping it quietly
+  # left the caller holding a valid +Headers+ that simply lacked the field it
+  # asked for, and a response with no +Content-Type+ invites MIME sniffing.
+  # +from+ and +parse+ already answer with a +Result+ for this same input.
+  #
+  # @return [Result<Headers, NetError>] the extended fields, or +Parse+
+  #
+  # @example Two cookies on one response
+  #   Headers.empty
+  #     .add("Set-Cookie", "session=abc; HttpOnly").try
+  #     .add("Set-Cookie", "theme=dark").try
+  #
+  # @example Replacing a field
+  #   headers.remove("Content-Type").add("Content-Type", "application/json").try
+  let add(name: String, value: String) -> Result<Headers, NetError> = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
   # Removes every field matching +name+ case-insensitively.
   #
   # @example Stripping hop-by-hop state before forwarding
@@ -391,7 +418,7 @@ module HTTP do
   # occasional requests; use +Client+ for a service making repeated calls.
   #
   # @example A one-off authenticated request in a command-line tool
-  #   let headers = Headers.empty.set("Authorization", "Bearer ${token}")
+  #   let headers = Headers.empty.add("Authorization", "Bearer ${token}").try
   #   HTTP.request("GET", url, headers).try
   request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
