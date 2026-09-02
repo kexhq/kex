@@ -569,8 +569,14 @@ auto Evaluator::registerNetBuiltins() -> void {
         while (std::getline(input, line)) { if (!line.empty() && line.back() == '\r') line.pop_back(); if (line.empty()) continue; if (line.front() == ' ' || line.front() == '\t') return netError("Parse", "HTTPClient", "obsolete folded headers are rejected"); auto colon = line.find(':'); if (colon == std::string::npos) return netError("Parse", "HTTPClient", "header line requires a colon"); auto name=line.substr(0,colon), value=line.substr(colon+1); while(!value.empty()&&(value.front()==' '||value.front()=='\t'))value.erase(value.begin()); while(!value.empty()&&(value.back()==' '||value.back()=='\t'))value.pop_back(); if(!validHeader(name,value))return netError("Parse","HTTPClient","invalid HTTP header"); entries.emplace_back(name,value); }
         return Value::ok(headersValue(entries));
     });
-    defineIntrinsic("NetHTTP::addHeader", [](std::vector<ValuePtr> args) { auto entries=headerEntries(args[0]); if(args.size()>=3&&textOf(args[1])&&textOf(args[2])&&validHeader(*textOf(args[1]),*textOf(args[2])))entries.emplace_back(*textOf(args[1]),*textOf(args[2])); return headersValue(entries); });
-    defineIntrinsic("NetHTTP::setHeader", [](std::vector<ValuePtr> args) { auto entries=headerEntries(args[0]); if(args.size()<3||!textOf(args[1])||!textOf(args[2])||!validHeader(*textOf(args[1]),*textOf(args[2])))return headersValue(entries); auto key=lowerASCII(*textOf(args[1])); entries.erase(std::remove_if(entries.begin(),entries.end(),[&](auto& e){return lowerASCII(e.first)==key;}),entries.end()); entries.emplace_back(*textOf(args[1]),*textOf(args[2])); return headersValue(entries); });
+    defineIntrinsic("NetHTTP::addHeader", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3 || !textOf(args[1]) || !textOf(args[2]) ||
+            !validHeader(*textOf(args[1]), *textOf(args[2])))
+            return netError("Parse", "HTTPClient", "invalid HTTP header");
+        auto entries = headerEntries(args[0]);
+        entries.emplace_back(*textOf(args[1]), *textOf(args[2]));
+        return Value::ok(headersValue(entries));
+    });
     defineIntrinsic("NetHTTP::removeHeader", [](std::vector<ValuePtr> args) { auto entries=headerEntries(args[0]); if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));entries.erase(std::remove_if(entries.begin(),entries.end(),[&](auto&e){return lowerASCII(e.first)==key;}),entries.end());} return headersValue(entries); });
     defineIntrinsic("NetHTTP::getAllHeaders", [](std::vector<ValuePtr> args) { std::vector<ValuePtr> out; if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)out.push_back(Value::string(v));}return Value::list(std::move(out)); });
     defineIntrinsic("NetHTTP::getHeader", [](std::vector<ValuePtr> args) { if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)return Value::just(Value::string(v));}return Value::none(); });

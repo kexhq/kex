@@ -1,14 +1,21 @@
 -module(kex_intrinsic_nethttp).
--export([headers/1, parseHeaders/1, addHeader/3, setHeader/3, removeHeader/2,
+-export([headers/1, parseHeaders/1, addHeader/3, removeHeader/2,
          getHeader/2, getAllHeaders/2, status/1, get/1, request/4,
          responseBinary/3, responseText/2, responseEmpty/1, redactedHeaders/1]).
 
-headers(Entries) -> case lists:all(fun valid/1, Entries) of true -> {'Ok', {'Net.HTTP.Headers', Entries}}; false -> net_error(<<"invalid HTTP header">>) end.
+headers(Entries) ->
+    case lists:all(fun valid/1, Entries) of
+        true -> {'Ok', {'Net.HTTP.Headers', Entries}};
+        false -> net_error(<<"invalid HTTP header">>)
+    end.
 parseHeaders(Text) ->
     Lines = [L || L <- binary:split(Text, <<"\n">>, [global]), L =/= <<>>, L =/= <<"\r">>],
     try headers([parse_line(L) || L <- Lines]) catch _:_ -> net_error(<<"invalid HTTP header">>) end.
-addHeader({'Net.HTTP.Headers', E}, N, V) -> case valid({N,V}) of true -> {'Net.HTTP.Headers', E ++ [{N,V}]}; false -> {'Net.HTTP.Headers', E} end.
-setHeader({'Net.HTTP.Headers', E}, N, V) -> addHeader({'Net.HTTP.Headers', [P || P={K,_} <- E, lower(K) =/= lower(N)]}, N, V).
+addHeader({'Net.HTTP.Headers', E}, N, V) ->
+    case valid({N,V}) of
+        true -> {'Ok', {'Net.HTTP.Headers', E ++ [{N,V}]}};
+        false -> net_error(<<"invalid HTTP header">>)
+    end.
 removeHeader({'Net.HTTP.Headers', E}, N) -> {'Net.HTTP.Headers', [P || P={K,_} <- E, lower(K) =/= lower(N)]}.
 getHeader(H, N) -> case getAllHeaders(H, N) of [] -> 'None'; [V|_] -> {'Just', V} end.
 getAllHeaders({'Net.HTTP.Headers', E}, N) -> [V || {K,V} <- E, lower(K) == lower(N)].

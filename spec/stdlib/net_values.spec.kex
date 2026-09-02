@@ -38,9 +38,9 @@ describe("network value APIs") do
 
   it("preserves header order and duplicates with insensitive lookup") do
     let headers = Headers.empty
-      .add("Set-Cookie", "theme=dark")
-      .add("set-cookie", "session=redacted")
-      .set("Content-Type", "application/json")
+      .add("Set-Cookie", "theme=dark").try
+      .add("set-cookie", "session=redacted").try
+      .add("Content-Type", "application/json").try
     assert(headers.getAll("SET-COOKIE").length == 2)
     assert(headers.getAll("content-type") == ["application/json"])
     let sensitive = Headers.from([("Authorization", "Bearer secret"), ("X-Safe", "visible")]).try
@@ -50,6 +50,9 @@ describe("network value APIs") do
     assert(sensitive.inspected.contains?("visible"), "non-sensitive fields remain useful in inspection")
     assert(Headers.from([("Bad Name", "value")]).error?)
     assert(Headers.from([("Good-Name", "bad\nvalue")]).error?)
+    # A rejected field is reported, not dropped: the whole point of the Result.
+    assert(Headers.empty.add("Content-Type", "text/html\r\nX-Admin: true").error?)
+    assert(Headers.empty.add("Bad Name", "value").error?)
   end
 
   it("validates status and port ranges") do
