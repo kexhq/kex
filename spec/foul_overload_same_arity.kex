@@ -1,0 +1,30 @@
+# Same-arity `foul` overloads on one receiver.
+#
+# The overload set is keyed by the SOURCE arity, but a foul method's lowered
+# arity also counts the capability context — so the emitted definition looked
+# up a key that was never registered, kept the bare name, and every call site
+# (which had mangled the name per signature) failed to link:
+# `undefined function 'background/Router,Integer'/3`.
+record Endpoint do
+  host : String
+end
+
+record Router do
+  name : String
+end
+
+make Router do
+  foul background(port: Integer) -> String do
+    "${@name} on port ${port}"
+  end
+
+  foul background(endpoint: Endpoint) -> String do
+    "${@name} at ${endpoint.host}"
+  end
+end
+
+main do
+  let r = Router { name: "api" }
+  IO.printLine(r.background(3000))
+  IO.printLine(r.background(Endpoint { host: "0.0.0.0" }))
+end

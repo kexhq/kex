@@ -1,0 +1,27 @@
+# `x : T` in a match clause — a TYPE alternative.
+#
+# A record alternative can always be named (`Alpha { n }`), but nothing else
+# could: the only way to reach a String or an Integer branch was a bare
+# catch-all placed in the right order, which says nothing about what it
+# catches. The binding takes the alternative's type, so the arm can use it.
+record Alpha do
+  n : Integer
+end
+
+let describe(v: Any) -> String = match v do
+  Alpha { n } => "alpha ${n}"
+  s : String => "string ${s.upperCase}"
+  i : Integer when i > 10 => "big ${i}"
+  i : Integer => "int ${i}"
+  _ : [Integer] => "list"
+  _ => "other"
+end
+
+main do
+  IO.printLine(describe(Alpha { n: 1 }))
+  IO.printLine(describe("hi"))
+  IO.printLine(describe(42))
+  IO.printLine(describe(3))
+  IO.printLine(describe([1, 2]))
+  IO.printLine(describe(1.5))
+end

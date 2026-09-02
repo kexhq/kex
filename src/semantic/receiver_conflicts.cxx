@@ -3,6 +3,8 @@
 #include "../common/type_def_utils.hxx"
 
 #include <map>
+#include <type_traits>
+#include <variant>
 #include <string>
 #include <vector>
 
@@ -159,6 +161,183 @@ auto findReceiverConflicts(const ast::Program& program)
             break;  // one report per (type, method, arity)
         }
     }
+    return diagnostics;
+}
+
+namespace {
+
+// Top-level items and module-body items are different variants: only the
+// latter can hold a `private do` block. Asking the top-level variant for one
+// is a compile error, not a `nullptr`, so the alternative is checked first.
+template <typename T, typename V>
+struct HasAlternative : std::false_type {};
+template <typename T, typename... Ts>
+struct HasAlternative<T, std::variant<Ts...>>
+    : std::disjunction<std::is_same<T, Ts>...> {};
+
+template <typename Item>
+auto asVisibilityBlock(const Item& item)
+    -> const std::unique_ptr<ast::VisibilityBlock>* {
+    if constexpr (HasAlternative<std::unique_ptr<ast::VisibilityBlock>,
+                                 Item>::value)
+        return std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+    else
+        return nullptr;
+}
+
+// One scope's declarations, keyed by the BEAM symbol they end up sharing.
+struct EmittedSymbol {
+    std::string receiver;         // the `make` target; "" for a plain function
+    SourceLocation location;
+    std::string claimedReceiver;  // a plain function's first-parameter type
+};
+
+class SymbolCollector {
+public:
+    template <typename Items>
+    void walk(const Items& items) {
+        std::map<std::pair<std::string, size_t>, std::vector<EmittedSymbol>> scope;
+        // `name : String -> String` states a receiver the definition below it
+        // leaves unannotated.
+        std::map<std::string, std::string> annotatedReceiver;
+        for (const auto& item : items)
+            if (const auto* annotation =
+                    std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
+                if (*annotation && (*annotation)->type)
+                    if (const auto* fn = std::get_if<ast::FunctionType>(
+                            &(*annotation)->type->kind))
+                        annotatedReceiver[(*annotation)->name] =
+                            typeNameOf(fn->param);
+        for (const auto& item : items) {
+            if (const auto* make =
+                    std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                if (*make) collectMake(**make, scope);
+            } else if (const auto* fn =
+                           std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) collectFunction(**fn, scope, annotatedReceiver);
+            } else if (const auto* visibility = asVisibilityBlock(item)) {
+                // `private do ... end` is a visibility marker, not a scope of
+                // its own: its functions are emitted into the same module.
+                if (!*visibility) continue;
+                for (const auto& inner : (*visibility)->items) {
+                    if (const auto* fn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner)) {
+                        if (*fn) collectFunction(**fn, scope, annotatedReceiver);
+                    } else if (const auto* make =
+                                   std::get_if<std::unique_ptr<ast::MakeDef>>(&inner)) {
+                        if (*make) collectMake(**make, scope);
+                    }
+                }
+            } else if (const auto* module =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                // A nested module is its own BEAM module, so its symbols
+                // never meet this scope's.
+                if (*module) walk((*module)->body);
+            }
+        }
+        m_scopes.push_back(std::move(scope));
+    }
+
+    auto scopes() const
+        -> const std::vector<
+            std::map<std::pair<std::string, size_t>, std::vector<EmittedSymbol>>>& {
+        return m_scopes;
+    }
+
+private:
+    using Scope = std::map<std::pair<std::string, size_t>, std::vector<EmittedSymbol>>;
+
+    void collectMake(const ast::MakeDef& make, Scope& scope) {
+        // A `serving` slot is reached through the gen_server plumbing under a
+        // name of its own, so it never competes for the bare symbol.
+        if (make.isServing) return;
+        for (const auto& target : makeTargetNames(make.target)) {
+            auto method = [&](const ast::FunctionDef& def) {
+                // Only the implicit-receiver form. A method that matches its
+                // receiver in a pattern (`let or(@Just(x), _)`) is emitted as
+                // further CLAUSES of the shared symbol, which is how
+                // optional.kex's `or` on Optional, on Result and as a plain
+                // catch-all all live at `or/2`. The implicit form gets a
+                // function of its own, and two of those cannot share a name.
+                if (receiverIsFirstParam(def)) return;
+                scope[{def.name, paramCount(def) + 1}].push_back(
+                    {target, def.location, ""});
+            };
+            for (const auto& item : make.body) {
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                    if (*fn) method(**fn);
+                } else if (const auto* visibility =
+                               std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                                   &item)) {
+                    if (!*visibility) continue;
+                    for (const auto& inner : (*visibility)->items)
+                        if (const auto* fn =
+                                std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                            if (*fn) method(**fn);
+                }
+            }
+        }
+    }
+
+    void collectFunction(const ast::FunctionDef& def, Scope& scope,
+                         const std::map<std::string, std::string>& annotated) {
+        // The receiver this function would claim, if any: findReceiverConflicts
+        // already reports a function and a method that name the SAME one, with
+        // a message about dispatch rather than about symbols.
+        std::string receiver;
+        if (!def.clauses.empty() && !def.clauses[0].params.empty()) {
+            const auto& declared = def.clauses[0].params[0].type;
+            receiver = declared ? typeNameOf(*declared) : std::string{};
+        }
+        if (receiver.empty())
+            if (auto found = annotated.find(def.name); found != annotated.end())
+                receiver = found->second;
+        scope[{def.name, paramCount(def)}].push_back(
+            {"", def.location, receiver});
+    }
+
+    std::vector<Scope> m_scopes;
+};
+
+} // namespace
+
+auto findMethodFunctionCollisions(const ast::Program& program)
+    -> std::vector<Diagnostic> {
+    SymbolCollector collector;
+    collector.walk(program.items);
+
+    std::vector<Diagnostic> diagnostics;
+    for (const auto& scope : collector.scopes())
+        for (const auto& [key, symbols] : scope) {
+            const auto& [name, arity] = key;
+            const EmittedSymbol* function = nullptr;
+            const EmittedSymbol* method = nullptr;
+            for (const auto& symbol : symbols) {
+                if (symbol.receiver.empty()) {
+                    if (!function) function = &symbol;
+                } else if (!method) {
+                    method = &symbol;
+                }
+            }
+            if (!function || !method) continue;
+            if (function->location.file != method->location.file) continue;
+            // Same receiver on both sides is a dispatch tie, and
+            // findReceiverConflicts has already said so.
+            if (function->claimedReceiver == method->receiver) continue;
+
+            Diagnostic diagnostic;
+            diagnostic.level = Diagnostic::Level::Error;
+            diagnostic.location = method->location;
+            diagnostic.message = "`" + name + "` is both a method on `" +
+                method->receiver + "` and a function of " +
+                std::to_string(arity) + " argument(s) here — a method takes " +
+                "its receiver as an argument, so the two compile to the same " +
+                "`" + name + "/" + std::to_string(arity) + "`; rename one";
+            diagnostic.notes.push_back(
+                {function->location, "the function is here"});
+            diagnostics.push_back(std::move(diagnostic));
+        }
     return diagnostics;
 }
 

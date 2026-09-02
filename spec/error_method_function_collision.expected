@@ -1,0 +1,2 @@
+spec/error_method_function_collision.kex:15:5: error: `formFields` is both a method on `Env` and a function of 1 argument(s) here — a method takes its receiver as an argument, so the two compile to the same `formFields/1`; rename one
+spec/error_method_function_collision.kex:19:5: note: the function is here

@@ -56,6 +56,12 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"with", TokenType::With},
 };
 
+auto isKeywordToken(TokenType type) -> bool {
+    for (const auto& [spelling, keywordType] : keywords)
+        if (keywordType == type) return true;
+    return false;
+}
+
 // Every SourceLocation keeps a `string_view` of the file name, and an AST
 // routinely outlives the string its caller passed in — the prelude's most of
 // all, parsed from a local `std::string` that is gone long before a prelude

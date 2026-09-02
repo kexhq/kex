@@ -1786,6 +1786,11 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         signature.result = clause.returnAnnotation
             ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
             : freshTypeVar();
+        // Without the names a call site cannot place named arguments, and
+        // lowering refused `router.launchOn(port: 4000)` for a method this
+        // pass — not checkFunctionDef — registered.
+        for (const auto& param : clause.params)
+            signature.paramNames.push_back(*param.name);
         signature.makeModule = modulePath;
         auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
@@ -2418,6 +2423,18 @@ auto TypeChecker::bindPatternVars(
                 m_patternBindings.push_back({node.name, pat.location, bound});
             }
         }
+        else if constexpr (std::is_same_v<T, ast::TypePattern>) {
+            // The alternative's own type is what the binding has inside the
+            // arm — that is the whole point of naming it.
+            if (!node.name.empty() && node.name != "_") {
+                std::unordered_map<std::string, TypePtr> noGenerics;
+                auto bound = node.type
+                    ? resolveTypeExpr(*node.type, noGenerics)
+                    : freshTypeVar();
+                defineVar(node.name, bound);
+                m_patternBindings.push_back({node.name, pat.location, bound});
+            }
+        }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) bindPatternVars(*node.inner, expected);
         }
@@ -2984,9 +3001,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // Trailing parameters with a default are optional at the call site.
         std::size_t required = clause.params.size();
         while (required > 0 && clause.params[required - 1].defaultValue) required--;
-        signatures.push_back(
-            Signature{def.name, std::move(paramTypes), resultType, def.isFoul,
-                      required});
+        Signature checkedSignature{def.name, std::move(paramTypes), resultType,
+                                  def.isFoul, required};
+        // Kept so a call site can place NAMED arguments into this method's
+        // parameter slots. Only a FunctionDef knows the names; a `:>`
+        // annotation does not spell them.
+        for (const auto& param : clause.params)
+            checkedSignature.paramNames.push_back(param.name ? *param.name : "");
+        signatures.push_back(std::move(checkedSignature));
     }
 
     // Preserve the checked declaration interface before the signatures are
@@ -3010,6 +3032,9 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     method.requiredParams =
                         checked.requiredParams.value_or(checked.params.size()) +
                         receiverOffset;
+                    // The annotation gave the types, the definition gives the
+                    // names — a named argument at a call site needs both.
+                    method.paramNames = checked.paramNames;
                 }
     }
 
@@ -6059,6 +6084,17 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
                 if (owner != m_adtOfConstructor.end() &&
                     owner->second == paramNamed->name)
                     return true;
+                // m_adtOfConstructor keeps ONE owner per constructor, so a
+                // record named by two unions belongs only to whichever was
+                // declared last — adding `type Pair = Alpha | Beta` below
+                // `type Answer = Alpha | String` stopped `Alpha` from being
+                // an `Answer`. Membership is the question, so ask the union.
+                if (m_recordFields.count(resolveRecordName(argNamed->name)))
+                    if (auto members = m_adtVariants.find(paramNamed->name);
+                        members != m_adtVariants.end())
+                        for (const auto& member : members->second)
+                            if (namedTypesMatch(argNamed->name, member))
+                                return true;
                 // The same constructor/ADT relationship must survive a
                 // `using` boundary. Imported nullary variants are recorded
                 // per provider module rather than in m_adtOfConstructor.
@@ -6071,6 +6107,20 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
                 }
             }
             if (isStringType(argType) && isStringType(paramType)) return true;
+            // A union alias may name a BUILTIN alongside its record members:
+            // `type Answer = Alpha | String`. Every member is registered as a
+            // constructor of `Answer`, which answers `Alpha` above — but a
+            // plain String value carries no constructor name to look up, so
+            // its printed identity is compared against the member names.
+            // Without this the type could not be spelled at all, and route
+            // handlers wanting "a reply record, or a string" had to say `Any`.
+            if (!argNamed && paramNamed->typeArgs.empty())
+                if (auto members = m_adtVariants.find(paramNamed->name);
+                    members != m_adtVariants.end()) {
+                    const auto actual = typeToString(argType);
+                    for (const auto& member : members->second)
+                        if (namedTypesMatch(actual, member)) return true;
+                }
             return false;
         }
         // An unparameterized receiver declaration is the erased/wildcard
@@ -7179,6 +7229,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 target.backendArity = static_cast<int>(matched.params.size());
                 target.passesReceiver = true;
                 target.isFoul = matched.isFoul;
+                // Lowering places named arguments by these. A make-method
+                // reached from another compilation unit used to arrive with
+                // none, and `router.start(port: 4000)` failed to lower.
+                target.paramNames = matched.paramNames;
                 if (!matched.params.empty()) {
                     auto receiver = resolve(matched.params.front());
                     auto* named = std::get_if<NamedType>(&receiver->kind);

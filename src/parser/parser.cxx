@@ -123,6 +123,14 @@ auto Parser::rejectSingleLetterTypeName(const std::string &name,
         ", give it a longer name");
 }
 
+auto Parser::rejectReservedName(const char *what) -> void {
+  if (!isKeywordToken(peek().type))
+    return;
+  error("`" + std::string(tokenTypeName(peek().type)) +
+        "` is a reserved keyword in Kex, so it cannot name a " +
+        std::string(what) + " — rename it");
+}
+
 auto Parser::error(const std::string &message) -> void {
   auto loc = currentLocation();
   std::string msg = message;
@@ -776,36 +784,46 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
   skipNewlines();
 
   while (!check(TokenType::End) && !atEnd()) {
-    if (check(TokenType::Public) || check(TokenType::Private)) {
-      def->body.push_back(parseVisibilityBlock());
-    } else if (check(TokenType::Foul)) {
-      def->body.push_back(parseFunctionDef(true));
-    } else if (def->isServing && check(TokenType::Slot)) {
-      def->body.push_back(parseFunctionDef());
-    } else if (check(TokenType::Let)) {
-      def->body.push_back(parseFunctionDef());
-    } else if ((check(TokenType::LowerIdent) &&
-                !(allowDrivers && isMakeDriverAhead())) ||
-               ((check(TokenType::After) || check(TokenType::Next)) &&
-                (peekNext().type == TokenType::Colon ||
-                 peekNext().type == TokenType::TypeAnnotation))) {
-      def->body.push_back(parseTypeAnnotation());
-    } else if (isOverloadableOperator(peek().type) &&
-               (peekNext().type == TokenType::Colon ||
-                peekNext().type == TokenType::TypeAnnotation)) {
-      // `+ :> Set<A> -> Set<A>` — an operator overload's contract, written
-      // the same way an ordinary method's is. The `:`/`:>` lookahead keeps
-      // this from swallowing a driver body's own use of a leading operator.
-      def->body.push_back(parseTypeAnnotation());
-    } else if (allowDrivers) {
-      // A driver loop inside a GENERATED make:
-      // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
-      // bodies never reach here, so a stray expression in one still
-      // reports "Unexpected token in make body" as before.
-      def->body.push_back(parseExpr());
-    } else {
-      error("Unexpected token in make body: " +
-            std::string(tokenTypeName(peek().type)));
+    try {
+      if (check(TokenType::Public) || check(TokenType::Private)) {
+        def->body.push_back(parseVisibilityBlock());
+      } else if (check(TokenType::Foul)) {
+        def->body.push_back(parseFunctionDef(true));
+      } else if (def->isServing && check(TokenType::Slot)) {
+        def->body.push_back(parseFunctionDef());
+      } else if (check(TokenType::Let)) {
+        def->body.push_back(parseFunctionDef());
+      } else if ((check(TokenType::LowerIdent) &&
+                  !(allowDrivers && isMakeDriverAhead())) ||
+                 ((check(TokenType::After) || check(TokenType::Next)) &&
+                  (peekNext().type == TokenType::Colon ||
+                   peekNext().type == TokenType::TypeAnnotation))) {
+        def->body.push_back(parseTypeAnnotation());
+      } else if (isOverloadableOperator(peek().type) &&
+                 (peekNext().type == TokenType::Colon ||
+                  peekNext().type == TokenType::TypeAnnotation)) {
+        // `+ :> Set<A> -> Set<A>` — an operator overload's contract, written
+        // the same way an ordinary method's is. The `:`/`:>` lookahead keeps
+        // this from swallowing a driver body's own use of a leading operator.
+        def->body.push_back(parseTypeAnnotation());
+      } else if (allowDrivers) {
+        // A driver loop inside a GENERATED make:
+        // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
+        // bodies never reach here, so a stray expression in one still
+        // reports "Unexpected token in make body" as before.
+        def->body.push_back(parseExpr());
+      } else {
+        rejectReservedName("method");
+        error("Unexpected token in make body: " +
+              std::string(tokenTypeName(peek().type)));
+      }
+    } catch (const ParseError &) {
+      // Diagnostic already recorded. Recover inside the make body: unwinding
+      // to the top level makes every remaining method read as a stray token,
+      // so one bad declaration reported a screenful of unrelated errors.
+      const int before = m_pos;
+      syncToStatement();
+      if (m_pos == before && !check(TokenType::End) && !atEnd()) advance();
     }
     skipNewlines();
   }
@@ -860,6 +878,7 @@ auto Parser::parseFunctionDef(bool isFoul)
              check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
     def->name = std::string(tokenTypeName(advance().type));
   } else {
+    rejectReservedName("function");
     error("Expected function name");
   }
 
@@ -2876,9 +2895,26 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
     return clause;
   }
 
-  clause.patterns.push_back(parsePattern());
+  // `name : Type` / `_ : Type` — a TYPE alternative. Only a match clause
+  // accepts one: everywhere else `pattern : Type` is an annotation on a
+  // binding, not a test.
+  auto matchPattern = [this]() -> ast::PatternPtr {
+    auto pattern = parsePattern();
+    if (!check(TokenType::Colon)) return pattern;
+    std::string bound;
+    if (const auto* variable = std::get_if<ast::VarPattern>(&pattern->kind))
+      bound = variable->name;
+    else if (!std::holds_alternative<ast::WildcardPattern>(pattern->kind))
+      error("a type alternative binds a name or `_`, as in `s : String =>`");
+    advance(); // ":"
+    auto typed = std::make_unique<ast::Pattern>();
+    typed->location = pattern->location;
+    typed->kind = ast::TypePattern{std::move(bound), parseTypeExpr()};
+    return complete(std::move(typed));
+  };
+  clause.patterns.push_back(matchPattern());
   while (match(TokenType::Comma)) {
-    clause.patterns.push_back(parsePattern());
+    clause.patterns.push_back(matchPattern());
   }
 
   // Guard
@@ -3382,16 +3418,26 @@ auto Parser::parseLambda() -> ast::ExprPtr {
 
     skipNewlines();
     std::vector<ast::ExprPtr> body;
-    while (!check(TokenType::End) && !atEnd()) {
+    while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
       // A `Block<[A]>` parameter collects these, and `...expr` splices a
       // list into what it collects (see docs/dsl.md).
       body.push_back(parseSpreadableExpr());
       skipNewlines();
     }
+
+    // A block rescues exactly the way a function body does. Without this a
+    // route handler — the archetypal block — had to nest a whole `trying`
+    // inside itself to answer a failure.
+    std::optional<ast::RescueBlock> rescue;
+    if (match(TokenType::Rescue)) {
+      skipNewlines();
+      rescue = parseRescueBlock();
+      skipNewlines();
+    }
     expect(TokenType::End, "Expected 'end' to close do block");
 
     expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                             std::nullopt};
+                             std::move(rescue)};
     return expr;
   }
 

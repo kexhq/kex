@@ -467,6 +467,19 @@ private:
     // declared field defaults (e.g. `pos : Int = 0`) for fields the
     // constructor call doesn't specify explicitly.
     std::unordered_map<std::string, const ast::RecordDef*> m_recordDefs;
+    // A field default is written in the DECLARING module and must be
+    // evaluated there. Constructing `Response.JSON { body: "{}" }` from an
+    // application ran `headers : Headers = Headers.empty` in the
+    // application's scope, where nothing named `Headers`, so the library had
+    // to fully qualify every default. The module and the names it had
+    // imported are captured when the record is declared.
+    struct RecordScope {
+        std::string module;
+        std::vector<std::pair<std::string, ValuePtr>> imports;
+    };
+    std::unordered_map<std::string, RecordScope> m_recordScopes;
+    auto evalFieldDefault(const std::string& typeName, const ast::Expr& value)
+        -> ValuePtr;
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
     bool m_preludeLoaded = false;

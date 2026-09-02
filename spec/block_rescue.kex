@@ -1,0 +1,64 @@
+# `rescue` on a block that takes parameters.
+#
+# The grammar allowed a rescue only on the parameterless body form, so a
+# named function could rescue but `list.map do |x| ... end` could not — the
+# workaround was nesting a whole `trying` inside the block. All three rescue
+# forms are accepted here, exactly as in a function body.
+#
+# A `Block<[T]>` parameter collects the body expressions instead of taking
+# only the last, and a rescue on one of those is the same parser loop — so it
+# is covered too. A failure abandons the collection: the rescue supplies the
+# block's whole value, not one more element.
+collect : Block<[Integer]> -> [Integer]
+let collect(block) = block()
+
+let divide(a: Int, b: Int) -> Result<Int, String> do
+  if b == 0
+    Error("division by zero")
+  else
+    Ok(a / b)
+  end
+end
+
+main do
+  IO.printLine("${[1, 0, 2].map do |d|
+    "ok ${divide(10, d).try}"
+  rescue |e|
+    "caught: ${e}"
+  end}")
+
+  IO.printLine("${[1, 0, 2].map do |d|
+    divide(10, d).try
+  rescue return -1
+  end}")
+
+  IO.printLine("${[1, 0].map do |d|
+    divide(10, d).try
+  rescue
+    _ => -2
+  end}")
+
+  # Collecting blocks: spreads and guards still apply, and the rescue
+  # replaces the collected list rather than appending to it.
+  IO.printLine("${collect do
+    1
+    divide(10, 5).try
+    ...[3, 4]
+    5 if true
+  rescue |unused|
+    []
+  end}")
+
+  IO.printLine("${collect do
+    1
+    divide(10, 0).try
+    3
+  rescue |e|
+    [-1]
+  end}")
+
+  IO.printLine("${collect do
+    divide(10, 0).try
+  rescue return [0]
+  end}")
+end

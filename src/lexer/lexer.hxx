@@ -7,6 +7,11 @@
 
 namespace kex {
 
+// True for a token type a keyword spells — the parser uses it to say
+// "`compiled` is reserved" instead of "unexpected token" when a program
+// tries to name something with one.
+auto isKeywordToken(TokenType type) -> bool;
+
 class Lexer {
 public:
     explicit Lexer(std::string source, std::string_view filename = "<stdin>");

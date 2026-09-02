@@ -1,0 +1,24 @@
+# kex: check-only
+# A `make` method and a plain function that land on ONE BEAM symbol.
+#
+# A method takes its receiver as an argument, so `let formFields` on Env and
+# `let formFields(text)` both emit `formFields/1`. erlc could only report that
+# as an internal crash in one of its own passes —
+# `{key_exists,{b_local,{b_literal,formFields},1}}` — naming neither
+# declaration. `private do` does not change it: visibility is erased on BEAM.
+module Forms do
+  record Env do
+    raw : String
+  end
+
+  make Env do
+    let formFields = decodeFields(@raw)
+  end
+
+  private do
+    let formFields(text) = text.split(",")
+
+    decodeFields : String -> [String]
+    let decodeFields(text) = formFields(text)
+  end
+end

@@ -264,6 +264,12 @@ struct Lowering {
     struct RecordInfo {
         std::vector<std::string> fields;
         std::vector<const ast::ExprPtr*> defaults;
+        // The module that DECLARED the record, and the names it had in scope.
+        // A default is written against those, not against whatever is in
+        // scope wherever the record happens to be constructed.
+        std::string owner;
+        std::unordered_map<std::string, std::string> imports;
+        std::unordered_map<std::string, std::string> aliases;
     };
     std::unordered_map<std::string, RecordInfo> records;
 
@@ -417,6 +423,10 @@ struct Lowering {
     // Top-level zero-parameter functions (e.g. `foul name do ... end`). A bare
     // reference to one (no parens) is a call `apply 'name'/0()`, not a var.
     std::unordered_set<std::string> zeroArgFns;
+    // `Module.name` for every parameterless module member. A bare reference
+    // from inside that module is a call to it — the only way to reach one
+    // that `private do` keeps out of the module's exports.
+    std::unordered_set<std::string> moduleZeroArgFns;
     // Capability substitution threads one context — a map from capability
     // name to implementation — through foul functions instead of keeping
     // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
@@ -1079,6 +1089,41 @@ struct Lowering {
         return {};
     }
 
+    // The emitted symbol for a parameterless member of the module being
+    // lowered (or of one enclosing it), or "" when the name is not one.
+    auto moduleConstantSymbol(const std::string& name) const -> std::string {
+        for (auto scope = currentModulePath; !scope.empty();) {
+            const auto qualified = scope + "." + name;
+            if (moduleZeroArgFns.count(qualified))
+                if (auto emitted = moduleFunctions.find(qualified);
+                    emitted != moduleFunctions.end())
+                    return emitted->second;
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+        return {};
+    }
+
+    // A field default, lowered in its declaring module rather than in the one
+    // doing the constructing.
+    auto lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
+        -> ExprPtr {
+        if (info.owner.empty() || info.owner == currentModulePath)
+            return lower(e);
+        auto savedPath = currentModulePath;
+        auto savedImports = moduleImports;
+        auto savedAliases = moduleAliases;
+        currentModulePath = info.owner;
+        if (!info.imports.empty()) moduleImports = info.imports;
+        if (!info.aliases.empty()) moduleAliases = info.aliases;
+        auto result = lower(e);
+        currentModulePath = std::move(savedPath);
+        moduleImports = std::move(savedImports);
+        moduleAliases = std::move(savedAliases);
+        return result;
+    }
+
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr {
         if (!e) return litBool(false);
@@ -1128,6 +1173,11 @@ struct Lowering {
                     return var(it->second);
                 if (knownFns.count(n.name))
                     return var(n.name);
+                if (auto symbol = moduleConstantSymbol(n.name); !symbol.empty()) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = localCall(symbol, {});
+                    return ex;
+                }
                 // Genuinely unbound: every binding site registers itself in
                 // `subst`, so absence means the walker would raise at runtime —
                 // emit the same error so `it`-caught failures match exactly.
@@ -1812,7 +1862,23 @@ struct Lowering {
                     slots.push_back({true, nullptr});
                 else slots.push_back({false, atomize(a, binds)});
             }
-        const std::string qualKey = n.module.empty() ? n.name : n.module + "." + n.name;
+        // Inside a module, a bare `~name` means THAT module's member. Falling
+        // through to the global bare name let an application's function of
+        // the same name answer a library's `values.map(~rendered)` — where
+        // `rendered` was the library's own `private do` helper.
+        std::string owningModule = n.module;
+        if (owningModule.empty() && !n.isOperator && !subst.count(n.name))
+            for (auto scope = currentModulePath; !scope.empty();) {
+                if (moduleFunctions.count(scope + "." + n.name)) {
+                    owningModule = scope;
+                    break;
+                }
+                const auto dot = scope.rfind('.');
+                if (dot == std::string::npos) break;
+                scope.resize(dot);
+            }
+        const std::string qualKey =
+            owningModule.empty() ? n.name : owningModule + "." + n.name;
 
         const bool isUnaryOp = n.isOperator && n.name == "!";
 
@@ -1820,18 +1886,18 @@ struct Lowering {
         if (n.isOperator) arity = isUnaryOp ? 1 : 2;
         else if (auto it = fnParamNames.find(qualKey); it != fnParamNames.end())
             arity = static_cast<int>(it->second.size());
-        else if (!n.module.empty() && externalModules) {
+        else if (!owningModule.empty() && externalModules) {
             auto pit = externalModules->exportParamNames.find(qualKey);
             if (pit != externalModules->exportParamNames.end())
                 arity = static_cast<int>(pit->second.size());
         }
 
         // Can this qualified name be emitted as a direct module call?
-        const bool qualifiedKnown = !n.module.empty()
+        const bool qualifiedKnown = !owningModule.empty()
             && (moduleFunctions.count(qualKey)
                 || (externalModules
                     && externalModules->exportToBeamFn.count(qualKey)
-                    && externalModules->nameToAtom.count(n.module)));
+                    && externalModules->nameToAtom.count(owningModule)));
 
         // A bare reference whose arity isn't known here: an unqualified
         // builtin/module-local/local binding, or a qualified name belonging to
@@ -1848,7 +1914,7 @@ struct Lowering {
                 if (auto op = curryOp(n.name))
                     return intrin(*op, two(std::move(args[0]), std::move(args[1])));
             int ar = static_cast<int>(args.size());
-            if (!n.module.empty()) {
+            if (!owningModule.empty()) {
                 // Same two lookups the namespace MethodCall path uses: a
                 // function of a module in this compilation unit, else an
                 // export of a separately compiled one.
@@ -1856,7 +1922,7 @@ struct Lowering {
                     return localCallExpr(it->second, std::move(args));
                 if (externalModules) {
                     auto eit = externalModules->exportToBeamFn.find(qualKey);
-                    auto ait = externalModules->nameToAtom.find(n.module);
+                    auto ait = externalModules->nameToAtom.find(owningModule);
                     if (eit != externalModules->exportToBeamFn.end()
                         && ait != externalModules->nameToAtom.end())
                         return externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args));
@@ -1880,10 +1946,10 @@ struct Lowering {
             // substitution dispatch. This is the path a PRELUDE capability
             // takes — `ENV.get(...)` never reaches the receiver or module
             // paths (kexhq/kex#143).
-            if (threadsCapabilities() && !n.module.empty() &&
-                isCapabilityModule(n.module))
+            if (threadsCapabilities() && !owningModule.empty() &&
+                isCapabilityModule(owningModule))
                 return capabilityDispatchLowered(
-                    n.module, n.name, std::move(args), binds,
+                    owningModule, n.name, std::move(args), binds,
                     [&](std::vector<ExprPtr> callArgs) {
                         return buildCall(std::move(callArgs));
                     });
@@ -3273,7 +3339,7 @@ struct Lowering {
                         if (pit != provided.end() && *pit->second)
                             fieldArgs.push_back(lower(*pit->second));
                         else if (info.defaults[i])
-                            fieldArgs.push_back(lower(*info.defaults[i]));
+                            fieldArgs.push_back(lowerFieldDefault(info, *info.defaults[i]));
                         else
                             fieldArgs.push_back(lit(LitKind::None, "none"));
                     }
@@ -3449,7 +3515,7 @@ struct Lowering {
                     if (pit != provided.end() && *pit->second)
                         fieldArgs.push_back(lower(*pit->second));
                     else if (info.defaults[i])
-                        fieldArgs.push_back(lower(*info.defaults[i]));
+                        fieldArgs.push_back(lowerFieldDefault(info, *info.defaults[i]));
                     else
                         fieldArgs.push_back(lit(LitKind::None, "none"));
                 }
@@ -3810,7 +3876,14 @@ struct Lowering {
                     binds.push_back({name, std::move(read)});
                     args.push_back(var(name));
                 } else if (info.defaults[i]) {
-                    args.push_back(atomize(*info.defaults[i], binds));
+                    auto lowered = lowerFieldDefault(info, *info.defaults[i]);
+                    if (isAtomic(*lowered)) {
+                        args.push_back(std::move(lowered));
+                    } else {
+                        auto name = fresh();
+                        binds.push_back({name, std::move(lowered)});
+                        args.push_back(var(name));
+                    }
                 } else {
                     args.push_back(lit(LitKind::None, "none"));
                 }
@@ -4543,6 +4616,24 @@ struct Lowering {
         auto pat = lowerPattern(le.pattern);
         return makeMatch1(std::move(val), std::move(pat), var(name));
     }
+    // Type tests contributed by `name : Type` patterns in the clause being
+    // lowered, waiting to be folded into its guard.
+    std::vector<ExprPtr> pendingTypeGuards;
+
+    // Combines them with whatever guard the clause already had. Always call
+    // it where a clause is built, even when it has no `when`: leaving a test
+    // behind would silently make the alternative match everything.
+    auto withTypeGuards(ExprPtr existing) -> std::optional<ExprPtr> {
+        for (auto& test : pendingTypeGuards)
+            existing = existing
+                ? callE("erlang", "and", 2,
+                        two(std::move(existing), std::move(test)))
+                : std::move(test);
+        pendingTypeGuards.clear();
+        if (!existing) return std::nullopt;
+        return std::optional<ExprPtr>{std::move(existing)};
+    }
+
     auto lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
         if (!p) { auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }
         return std::visit([&](const auto& pn) -> PatternPtr {
@@ -4553,6 +4644,17 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::VarPattern>) {
                 out->kind = PatKind::Var; out->name = pn.name;
                 subst[pn.name] = pn.name; // pattern vars are binding sites
+            } else if constexpr (std::is_same_v<T, ast::TypePattern>) {
+                // `s : String =>` binds like a variable and tests like a
+                // guard. The test is left in pendingTypeGuards for the clause
+                // being built to pick up — a pattern alone cannot carry one.
+                const auto name = pn.name.empty() || pn.name == "_"
+                    ? fresh("Typed") : pn.name;
+                out->kind = PatKind::Var; out->name = name;
+                subst[name] = name;
+                pendingTypeGuards.push_back(
+                    typeGuard(pn.type ? renderDispatchType(*pn.type) : "Any",
+                              var(name)));
             } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
                 out->kind = PatKind::Lit;
                 switch (pn.literal.type) {
@@ -4776,7 +4878,7 @@ struct Lowering {
             for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
             // `when` guards lower as ordinary expressions; expandGuards moves
             // the predicate out of BEAM guard position into a nested match.
-            if (cl.guard) mc.guard = lower(*cl.guard);
+            mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
             mc.body = lower(cl.body);
             // The tail of a list pattern keeps the SUBJECT's type: over a
             // String `[c | rest]` binds `rest` to the rest of the string.
@@ -4813,6 +4915,10 @@ struct Lowering {
             if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
+            // A receive clause has no guard slot to hold the test.
+            if (!pendingTypeGuards.empty())
+                throw LowerError("IR lower: a type pattern (`x : T`) is not "
+                                 "supported in a receive clause");
             rc.body = lower(cl.body);
             subst = snap;
             r.clauses.push_back(std::move(rc));
@@ -4854,7 +4960,7 @@ struct Lowering {
                 mc.patterns.push_back(wildPat());
                 mc.patterns.push_back(wildPat());
             }
-            if (cl.guard) mc.guard = lower(*cl.guard);
+            mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
             mc.body = lower(cl.body);
             subst = snap;
             cls.push_back(std::move(mc));
@@ -5071,7 +5177,7 @@ struct Lowering {
                 auto snap = subst;
                 MatchClause mcx;
                 for (const auto& p : cl.patterns) mcx.patterns.push_back(lowerPattern(p));
-                if (cl.guard) mcx.guard = lower(*cl.guard);
+                mcx.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
                 mcx.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
                 subst = snap;
                 cls.push_back(std::move(mcx));
@@ -5522,7 +5628,7 @@ struct Lowering {
                             MatchClause mc;
                             for (const auto& p : cl.patterns)
                                 mc.patterns.push_back(lowerPattern(p));
-                            if (cl.guard) mc.guard = lower(*cl.guard);
+                            mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
                             mc.body = lowerLoopArmU(cl.body, "", mutVars, yieldState);
                             subst = snap;
                             cls.push_back(std::move(mc));
@@ -5608,6 +5714,8 @@ struct Lowering {
                 } else {
                     mc.patterns.push_back(wildPat());
                 }
+                mc.guard = withTypeGuards(
+                    clause.guard ? lower(*clause.guard) : nullptr);
                 mc.body = clause.body ? lower(clause.body) : lit(LitKind::Atom, "ok");
                 out.push_back(std::move(mc));
             }
@@ -6022,6 +6130,7 @@ struct Lowering {
                        const std::string& owner = {}) {
         const auto name = owner.empty() ? rec.name : owner + "." + rec.name;
         RecordInfo info;
+        info.owner = owner;
         for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
             info.fields.push_back(rec.fields[i].name);
             info.defaults.push_back(rec.fields[i].defaultValue ? &*rec.fields[i].defaultValue
@@ -6448,8 +6557,16 @@ struct Lowering {
         // trait default); such a definition must not also end in an error.
         bool forwarded = false;
         if (listReceiver) def = coerceListReceiver(std::move(def));
+        // The overload set was keyed by the SOURCE arity (receiver included).
+        // `def.arity` also counts the trait dictionaries and the capability
+        // context lowering appends, so a `foul` overload looked up a key that
+        // was never registered: call sites emitted
+        // `background/Router,Integer` while the definition kept the bare name,
+        // and erlc reported an undefined function.
+        const auto sourceArity = static_cast<size_t>(def.arity) -
+            def.dictionaryTraits.size() - (def.hasCapabilityContext ? 1u : 0u);
         if (argumentOverloadedMethods.count(
-                localOverloadKey(first.name, typeName, def.arity)))
+                localOverloadKey(first.name, typeName, sourceArity)))
             def.name = mangleReceiverSignature(
                 first.name, methodDispatchTypes(first, typeName));
         else if ((collidingMethods.count(first.name) ||
@@ -7616,6 +7733,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     fd->name + "/" +
                     std::to_string(fd->clauses[0].params.size()));
             L.moduleFunctions[path + "." + fd->name] = emitted;
+            if (!fd->clauses.empty() && fd->clauses[0].params.empty())
+                L.moduleZeroArgFns.insert(path + "." + fd->name);
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;
                 for (const auto& p : fd->clauses[0].params)
@@ -8128,6 +8247,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             }
                         }
                         flush();
+                        // The names in scope HERE are what this module's
+                        // record defaults were written against; a construction
+                        // in another module lowers them with these restored.
+                        for (const auto& bi : m.body) {
+                            const auto* rd =
+                                std::get_if<std::unique_ptr<ast::RecordDef>>(&bi);
+                            if (!rd || !*rd) continue;
+                            auto entry = L.records.find(m.name + "." + (*rd)->name);
+                            if (entry == L.records.end()) continue;
+                            entry->second.imports = L.moduleImports;
+                            entry->second.aliases = L.moduleAliases;
+                        }
                         L.moduleImports = std::move(savedImports);
                         L.moduleAliases = std::move(savedAliases);
                         L.currentModulePath = std::move(savedModulePath);

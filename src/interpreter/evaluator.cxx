@@ -959,6 +959,48 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
         m_env->define(scoped, Value::record(typeName, {}));
         m_recordDefs[scoped] = &def;
         m_recordDefs[typeName] = &def;
+
+        // The names this module (and every module enclosing it) had imported
+        // are what a field default was written against. They are live now and
+        // gone by the time some other package constructs the record.
+        RecordScope captured;
+        captured.module = moduleScope;
+        for (auto scope = moduleScope; !scope.empty();) {
+            const auto prefix = scope + "::";
+            for (const auto& [name, _] : m_moduleImportOrigins)
+                if (name.rfind(prefix, 0) == 0)
+                    if (auto value = m_env->get(name))
+                        captured.imports.push_back({name, std::move(value)});
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+        m_recordScopes[typeName] = captured;
+        m_recordScopes[scoped] = std::move(captured);
+    }
+}
+
+auto Evaluator::evalFieldDefault(const std::string& typeName,
+                                 const ast::Expr& value) -> ValuePtr {
+    auto scope = m_recordScopes.find(typeName);
+    if (scope == m_recordScopes.end()) return eval(value);
+
+    struct ModuleScopeGuard {
+        std::string& current;
+        std::string saved;
+        ~ModuleScopeGuard() { current = std::move(saved); }
+    } guard{m_currentModule, m_currentModule};
+    m_currentModule = scope->second.module;
+    pushEnv();
+    for (const auto& [name, imported] : scope->second.imports)
+        m_env->define(name, imported);
+    try {
+        auto result = eval(value);
+        popEnv();
+        return result;
+    } catch (...) {
+        popEnv();
+        throw;
     }
 }
 
@@ -1684,6 +1726,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             auto val = m_env->get(node.name);
+            // A module member is stored under `Module::name`. An unexported
+            // one is reachable no other way: a public binding only answered
+            // the bare name because `using` had copied it into the importer's
+            // scope, so `private do let defaultPort = 3000 end` was invisible
+            // to every function in its own module.
+            for (auto scope = m_currentModule; !val && !scope.empty();) {
+                val = m_env->get(scope + "::" + node.name);
+                const auto dot = scope.rfind('.');
+                if (dot == std::string::npos) break;
+                scope.resize(dot);
+            }
             if (!val) {
                 throw RuntimeError("Undefined variable: " + node.name, expr.location);
             }
@@ -2172,7 +2225,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             for (const auto& field : defIt->second->fields) {
                                 if (fields.count(field.name)) continue;
                                 if (field.defaultValue && *field.defaultValue)
-                                    fields[field.name] = eval(**field.defaultValue);
+                                    fields[field.name] =
+                                        evalFieldDefault(recName, **field.defaultValue);
                             }
                         }
                         return Value::record(recName, std::move(fields));
@@ -2716,7 +2770,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 for (const auto& field : defIt->second->fields) {
                     if (fields.count(field.name)) continue;
                     if (field.defaultValue && *field.defaultValue) {
-                        fields[field.name] = eval(**field.defaultValue);
+                        fields[field.name] =
+                            evalFieldDefault(typeName, **field.defaultValue);
                     } else {
                         fields[field.name] = Value::none();
                     }
@@ -3980,6 +4035,11 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         }
         else if constexpr (std::is_same_v<T, ast::VarPattern>) {
             m_env->define(pat.name, value);
+            return true;
+        }
+        else if constexpr (std::is_same_v<T, ast::TypePattern>) {
+            if (!pat.type || !runtimeTypeMatches(value, *pat.type)) return false;
+            if (!pat.name.empty()) m_env->define(pat.name, value);
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {

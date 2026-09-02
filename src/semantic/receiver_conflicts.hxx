@@ -32,4 +32,16 @@ namespace kex::semantic {
 auto findReceiverConflicts(const ast::Program& program)
     -> std::vector<Diagnostic>;
 
+// A `make` method and a plain function in the same scope that land on ONE
+// BEAM symbol. A method reaches its receiver as an extra argument, so
+// `make Env do let formFields = ... end` emits `formFields/1` — exactly what a
+// module-level `let formFields(text)` emits, private or not. erlc used to
+// report this as an internal crash in `beam_ssa_throw`
+// (`{key_exists,{b_local,{b_literal,formFields},1}}`) with nothing naming
+// either declaration.
+//
+// Same-receiver ties are findReceiverConflicts' business and are left to it.
+auto findMethodFunctionCollisions(const ast::Program& program)
+    -> std::vector<Diagnostic>;
+
 } // namespace kex::semantic

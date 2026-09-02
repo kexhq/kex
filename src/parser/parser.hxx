@@ -159,6 +159,10 @@ private:
     // Rejects a single uppercase letter as a declaration name: those are
     // type parameters. `what` names the construct for the message.
     auto rejectSingleLetterTypeName(const std::string& name, const char* what) -> void;
+    // A keyword where a name belongs: says which word is reserved instead of
+    // reporting an unexpected token, which sends the reader hunting the line
+    // for a syntax slip that is not there.
+    auto rejectReservedName(const char* what) -> void;
     [[noreturn]] auto error(const std::string& message) -> void;
     auto syncToTopLevel() -> void;
     auto syncToStatement() -> void;

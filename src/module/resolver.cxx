@@ -17,17 +17,53 @@ auto Resolver::isForeignNamespace(const std::string& name) -> bool {
 
 namespace {
 
-auto sourcePath(const std::string& moduleName) -> std::filesystem::path {
+auto lowered(const std::string& part) -> std::string {
+    std::string result = part;
+    for (auto& c : result)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return result;
+}
+
+// `MockData` names `mockdata.kex` and `mock_data.kex` alike: a module name is
+// CamelCase and a file name is conventionally snake_case, so the resolver has
+// to try both spellings rather than force the run-together one.
+auto snakeCased(const std::string& part) -> std::string {
+    std::string result;
+    for (std::size_t i = 0; i < part.size(); ++i) {
+        const auto c = static_cast<unsigned char>(part[i]);
+        const bool boundary = i > 0 && std::isupper(c)
+            && (std::islower(static_cast<unsigned char>(part[i - 1]))
+                || std::isdigit(static_cast<unsigned char>(part[i - 1]))
+                || (i + 1 < part.size()
+                    && std::islower(static_cast<unsigned char>(part[i + 1]))));
+        if (boundary && !result.empty() && result.back() != '_') result += '_';
+        result += static_cast<char>(std::tolower(c));
+    }
+    return result;
+}
+
+// Every file spelling a module name can take, most specific first. Each name
+// part contributes its own spellings, so `Web.MockData` reaches
+// `web/mock_data.kex` as readily as `web/mockdata.kex`.
+auto sourcePaths(const std::string& moduleName)
+    -> std::vector<std::filesystem::path> {
+    std::vector<std::filesystem::path> paths{{}};
     std::stringstream parts(moduleName);
-    std::filesystem::path path;
     std::string part;
     while (std::getline(parts, part, '.')) {
-        for (auto& c : part)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        path /= part;
+        std::vector<std::string> spellings{lowered(part)};
+        if (auto snake = snakeCased(part); snake != spellings.front())
+            spellings.push_back(std::move(snake));
+
+        std::vector<std::filesystem::path> extended;
+        extended.reserve(paths.size() * spellings.size());
+        for (const auto& prefix : paths)
+            for (const auto& spelling : spellings)
+                extended.push_back(prefix / spelling);
+        paths = std::move(extended);
     }
-    path += ".kex";
-    return path;
+    for (auto& path : paths) path += ".kex";
+    return paths;
 }
 
 auto candidates(const std::string& moduleName, std::string currentModule)
@@ -54,18 +90,25 @@ auto Resolver::resolve(const std::string& moduleName,
     for (const auto& candidateName : candidates(moduleName, currentModule)) {
         std::optional<Resolution> result;
         for (const auto& root : m_roots) {
-            auto direct = std::filesystem::path(root) / sourcePath(candidateName);
             std::optional<std::string> matchedPath;
-            if (std::filesystem::is_regular_file(direct)) {
-                matchedPath = direct.string();
+            for (const auto& relative : sourcePaths(candidateName)) {
+                auto direct = std::filesystem::path(root) / relative;
+                if (std::filesystem::is_regular_file(direct)) {
+                    matchedPath = direct.string();
+                    break;
+                }
             }
 
             const auto dot = candidateName.find('.');
             if (!matchedPath && dot != std::string::npos) {
-                auto container = std::filesystem::path(root)
-                    / sourcePath(candidateName.substr(0, dot));
-                if (std::filesystem::is_regular_file(container))
-                    matchedPath = container.string();
+                for (const auto& relative :
+                     sourcePaths(candidateName.substr(0, dot))) {
+                    auto container = std::filesystem::path(root) / relative;
+                    if (std::filesystem::is_regular_file(container)) {
+                        matchedPath = container.string();
+                        break;
+                    }
+                }
             }
 
             if (!matchedPath) continue;
