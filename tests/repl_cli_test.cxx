@@ -633,7 +633,7 @@ int main() {
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("function:") == std::string::npos, out);
                 assertTrue(out.find("Expected ')'") == std::string::npos, out);
-                assertTrue(out.find("=> 42 : Int") != std::string::npos, out);
+                assertTrue(out.find("=> 42 : Integer") != std::string::npos, out);
                 assertTrue(out.find("=> 43 : Int") != std::string::npos, out);
             }
         });
@@ -696,7 +696,7 @@ int main() {
                 "reader.readLine\n"
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
-            // the value-derived fallback said `Option<String>`.
+            // the value-derived fallback said `Optional<String>`.
             assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
                            std::string::npos,
                        out);
@@ -817,7 +817,7 @@ int main() {
 
         it("renders Just(...) the same way", []() {
             auto out = runRepl("Just(42)\n");
-            assertTrue(out.find("=> Just(42) : Option<Int>") != std::string::npos, out);
+            assertTrue(out.find("=> Just(42) : Optional<Integer>") != std::string::npos, out);
         });
     });
 
@@ -877,7 +877,7 @@ int main() {
                 "reader.readLine\n"
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
-            // the value-derived fallback said `Option<String>`.
+            // the value-derived fallback said `Optional<String>`.
             assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
                            std::string::npos,
                        out);
@@ -972,7 +972,7 @@ int main() {
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("[Red, Red] : [Colour]")
                            != std::string::npos, out);
-                assertTrue(out.find("Just(Red) : Option<Colour>")
+                assertTrue(out.find("Just(Red) : Optional<Colour>")
                            != std::string::npos, out);
                 assertTrue(out.find("Atom") == std::string::npos, out);
             }
@@ -1023,7 +1023,7 @@ int main() {
                 "Just(42)\n"
                 "Ok(\"ready\")\n"
                 "Error(\"bad\")\n");
-            assertTrue(out.find("=> Just(42) : Option<Int>")
+            assertTrue(out.find("=> Just(42) : Optional<Integer>")
                        != std::string::npos, out);
             assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>")
                        != std::string::npos, out);

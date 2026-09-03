@@ -261,21 +261,6 @@ make Result<X, E>, implement: Resultable do
   let optional(@Error(_)) = None
 end
 
-# Returns the value unchanged.
-#
-# The catch-all clause of +or+: a value that is neither an +Optional+ nor a
-# +Result+ has already succeeded, so there is nothing to fall back to. This is
-# what lets +.or(default)+ be written after a call whose return type may later
-# stop being optional, without the call site changing.
-#
-# @param value [A] any plain value
-# @return [A] the same value
-#
-# @example
-#   42.or(0)        # => 42
-#   "text".or("")   # => "text"
-let or(value, _) = value
-
 # Converts +value+ to the type +t+, or +None+ if it cannot be represented.
 #
 # +t+ is a runtime type value: write the type name itself: +String+,

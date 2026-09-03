@@ -43,6 +43,39 @@ case "$BAKED_ERL" in
 esac
 if [ -n "${TEY_ERL:-}" ]; then ERL=$TEY_ERL; fi
 
-exec "$ERL" -noshell -pa "$TEY_EBIN" \
+# Ctrl+C has to become a SIGTERM before it reaches this VM, and that is why
+# `erl` is no longer `exec`ed here.
+#
+# `tey run` starts the application through a BEAM port, and `erl_child_setup`
+# gives every port child its OWN process group — so a terminal's Ctrl+C reaches
+# THIS VM and nothing below it. SIGINT is also the one signal Erlang cannot be
+# handed (`os:set_signal(sigint, handle)` is a `badarg`), so it runs no Erlang
+# code: `kex_child_guard`, which is what kills a port's child, never fires, and
+# the application's `kex` launcher, its VM and whatever it was serving were all
+# left holding their port. The next `tey run` then met `eaddrinuse`.
+#
+# SIGTERM does reach `erl_signal_server`, and it cascades the whole way down:
+# measured, a SIGTERM to this VM alone takes the launcher, the app's VM and its
+# OS child with it. So:
+#
+#   +Bi          the VM ignores SIGINT rather than aborting on the break
+#                handler's second one, which killed it without running a guard;
+#   trap ... INT the shell turns the terminal's SIGINT into the SIGTERM that
+#                does run one.
+#
+# Neither half works alone: without `+Bi` the VM dies on the break path before
+# the SIGTERM lands, and without the trap nothing sends a SIGTERM at all.
+"$ERL" +Bi -noshell -pa "$TEY_EBIN" \
   -eval 'io:setopts(standard_io, [{encoding, unicode}]), io:setopts(standard_error, [{encoding, unicode}]), case code:ensure_loaded(kex_main) of {error, LoadErr} -> io:format(standard_error, "tey: cannot load kex_main from ~ts (~p).~nThis usually means tey was built with a newer Erlang/OTP than the one running it (~s). Set TEY_ERL to the erl that built it, or reinstall.~n", [os:getenv("TEY_EBIN", "?"), LoadErr, erlang:system_info(otp_release)]), halt(1); _ -> ok end, try kex_main:main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) catch _:Reason:_ -> io:format(standard_error, "tey: ~p~n", [Reason]), halt(1) end' \
-  -extra "$@"
+  -extra "$@" &
+tey_vm=$!
+trap 'kill -TERM "$tey_vm" 2>/dev/null' INT TERM HUP QUIT
+# `wait` returns 128+signal if the shell itself was interrupted; wait again so
+# the status reported is the VM's own once it has finished shutting down.
+wait "$tey_vm"
+tey_status=$?
+if [ "$tey_status" -gt 128 ]; then
+  wait "$tey_vm" 2>/dev/null
+  tey_status=$?
+fi
+exit "$tey_status"

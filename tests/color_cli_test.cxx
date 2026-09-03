@@ -186,7 +186,7 @@ int main() {
                                         std::vector<std::string>{"-R", "--no-colors", path}}) {
                 auto captured = runKexStreams(backend);
                 assertEqual(captured.out, std::string("printed\n"));
-                assertEqual(captured.err, std::string("42 : Int\n"));
+                assertEqual(captured.err, std::string("42 : Integer\n"));
             }
             std::remove(path.c_str());
         });
@@ -288,7 +288,7 @@ int main() {
         it("renders the REPL result with no ANSI escapes", []() {
             auto out = runKex({"--no-colors"}, "42\n");
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
-            assertTrue(contains(out, "=> 42 : Int"), "missing plain result line: " + out);
+            assertTrue(contains(out, "=> 42 : Integer"), "missing plain result line: " + out);
         });
 
         it("renders BEAM IO.inspect like the walker, without a REPL prefix", []() {
@@ -299,7 +299,7 @@ int main() {
             auto walker = runKex({"--no-colors", path}, "");
             auto beam = runKex({"-R", "--no-colors", path}, "");
             std::remove(path.c_str());
-            assertEqual(walker, std::string("42 : Int\n"));
+            assertEqual(walker, std::string("42 : Integer\n"));
             assertEqual(beam, walker);
             assertFalse(hasAnsi(beam), "unexpected ANSI escapes in: " + beam);
             assertFalse(contains(beam, "=> "), "unexpected REPL prefix in: " + beam);

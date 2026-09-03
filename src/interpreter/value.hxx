@@ -52,7 +52,7 @@ struct AtomValue { std::string name; };
 
 struct VariantValue {
     std::string tag;         // "Ok", "Less", "None"
-    std::string parentType;  // "Result", "Ordering", "Option", "" if unknown
+    std::string parentType;  // "Result", "Ordering", "Optional", "" if unknown
     std::vector<ValuePtr> args;  // payload — empty for zero-arg
 
     // Declared type params of parentType, e.g. ["X"] for Optional<X> or
@@ -262,11 +262,11 @@ struct Value {
     static auto variant(std::string tag, std::string parentType = "", std::vector<ValuePtr> args = {},
                          std::vector<std::string> typeParams = {}, std::vector<int> argParamIndex = {}) -> ValuePtr;
     // Convenience wrappers over variant() for the prelude's builtin generic
-    // ADTs (Option<T> = Just(T) | None, Result<T, E> = Ok(T) | Error(E)) —
+    // ADTs (Optional<T> = Just(T) | None, Result<T, E> = Ok(T) | Error(E)) —
     // every stdlib call site that constructs one of these should go through
     // here rather than calling variant() directly with the tag/parentType
-    // spelled out, so typeName() can always render "Option<Int>"/
-    // "Result<String, Int>" instead of just the bare "Option"/"Result"
+    // spelled out, so typeName() can always render "Optional<Integer>"/
+    // "Result<String, Integer>" instead of just the bare "Optional"/"Result"
     // (which is what happens if typeParams/argParamIndex are left empty).
     static auto just(ValuePtr inner) -> ValuePtr;
     static auto ok(ValuePtr inner) -> ValuePtr;

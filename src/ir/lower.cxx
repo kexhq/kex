@@ -1385,8 +1385,8 @@ struct Lowering {
                     // the user's override once ANY local type overloads `==`
                     // (`make Queue do let ==(other: Queue<A>)`) left every
                     // OTHER tuple with no owner to fall back to — the
-                    // dispatcher only knows Queue, so `Option<Int>`'s `==`
-                    // died `Undefined method: == for Option<Int>` for a
+                    // dispatcher only knows Queue, so `Optional<Integer>`'s `==`
+                    // died `Undefined method: == for Optional<Integer>` for a
                     // comparison the language answers fine on its own
                     // (kexhq/kex#235). Other operators keep the old path: they
                     // have no such structural default, so the wider tuple
