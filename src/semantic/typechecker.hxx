@@ -486,6 +486,13 @@ private:
     auto unifyVar(int id, TypePtr concrete) -> void;
 
     auto freshTypeVar() -> TypePtr;
+
+    // Let-polymorphism. Rewrites the inference variables a definition left
+    // free — those created while checking it, hence `varMark` — into the
+    // per-signature generic placeholders (negative ids) that call sites
+    // already instantiate afresh. See the definition for why this is the
+    // whole of the fix.
+    auto generalizeSignature(Signature& signature, int varMark) -> void;
 };
 
 } // namespace kex::semantic

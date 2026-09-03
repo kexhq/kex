@@ -1,0 +1,4 @@
+spec/error_polymorphic_instantiation.kex:25:20: error: Cannot add Integer and String
+spec/error_polymorphic_instantiation.kex:26:16: error: `takesInteger` expects argument 1 to be Integer, but got String
+
+takesInteger : Integer -> String

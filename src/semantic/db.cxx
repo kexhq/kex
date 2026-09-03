@@ -367,7 +367,15 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                 // those complete under `Version.`, which is what makeTarget
                 // matches below.
                 bool matchesMod = sym.module == qualifier && sym.makeTarget.empty();
-                bool matchesMake = (!sym.makeTarget.empty() && sym.makeTarget == qualifier);
+                // A make target declared inside a module is written bare
+                // there (`make Circle` in `module Shapes`), while a receiver
+                // reached from ANOTHER file is typed by its qualified
+                // identity (`Shapes.Circle`) — so `circle.` offered nothing
+                // across a file boundary while working within one file.
+                bool matchesMake = !sym.makeTarget.empty() &&
+                    (sym.makeTarget == qualifier ||
+                     (!sym.module.empty() &&
+                      sym.module + "." + sym.makeTarget == qualifier));
                 if ((matchesMod || matchesMake) && sym.isExported
                     && sym.name.rfind(memberPrefix, 0) == 0) {
                     results.push_back(qualifier + "." + sym.name);

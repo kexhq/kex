@@ -1,0 +1,68 @@
+# A union of RECORDS declared inside a module.
+#
+# `type Reply = String | Safe | Redirect` registers its members under the bare
+# spelling the declaration uses, while a record declared in a module carries
+# its module-qualified identity (`Web.Redirect`) — so the union rejected its
+# own members and `-> Reply` was unusable from anywhere, including from inside
+# the declaring module. A BUILTIN in the union was reported as the trigger; it
+# is not, so both a record member and the String member are exercised here.
+
+module Web do
+  record Safe do
+    html : String
+  end
+
+  record Redirect do
+    status : Integer
+    location : String
+  end
+
+  type Reply = String | Safe | Redirect
+
+  # The same union written with QUALIFIED members. Mixing a bare name with a
+  # qualified one satisfied neither classifier: the alias pass saw `String`,
+  # called the whole thing an ADT and skipped it, while the ADT pass saw
+  # `Web.Redirect`, could not name a constructor for it and registered
+  # nothing — so `Qualified` existed nowhere and refused every member. A
+  # `--source-root` boundary forces this spelling, which is why it looked
+  # like a cross-unit bug; it is not, and this file is one unit.
+  type Qualified = String | Web.Safe | Web.Redirect
+
+  # Inside the declaring module nothing imports it, so membership rests on
+  # the qualified identity alone.
+  let seeOther(location: String) -> Reply do
+    Redirect { status: 303, location: location }
+  end
+end
+
+using Web
+
+# ...and from outside it, where the record is reached through the import.
+let redirected(location: String) -> Web.Reply do
+  Redirect { status: 302, location: location }
+end
+
+let safely(html: String) -> Web.Reply = Safe { html: html }
+
+let plain(text: String) -> Web.Reply = text
+
+let qualified(location: String) -> Web.Qualified do
+  Redirect { status: 307, location: location }
+end
+
+let qualifiedPlain(text: String) -> Web.Qualified = text
+
+let describeIt(reply: Web.Reply) -> String = match reply do
+  Redirect { status, location } => "redirect ${status} -> ${location}"
+  Safe { html } => "safe ${html}"
+  s : String => "plain ${s}"
+end
+
+main do
+  IO.printLine(describeIt(seeOther("/next")))
+  IO.printLine(describeIt(redirected("/old")))
+  IO.printLine(describeIt(safely("<b>")))
+  IO.printLine(describeIt(plain("raw")))
+  IO.printLine(describeIt(qualified("/qualified")))
+  IO.printLine(describeIt(qualifiedPlain("qualified raw")))
+end

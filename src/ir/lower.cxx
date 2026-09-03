@@ -3712,10 +3712,25 @@ struct Lowering {
             // that name sent a Map's `get` to Kex.Regex and crashed with
             // function_clause where the walker dispatched on the value — see
             // dualProviderDispatch.
-            if (auto dual = dualProviderDispatch(n, m, methodReceiverOwner(m),
-                                                 "", imported->second, arity,
-                                                 args))
-                return ret(std::move(dual));
+            //
+            // That reading only holds when the import IS the receiver method
+            // for the local owner — i.e. when it came from the very module
+            // that declares the owner's `make` block. Otherwise the import is
+            // an unrelated free function, and dualProviderDispatch's first
+            // arm would send the owner's own values straight to it: `using
+            // Dsl`'s `get(path, handler)` swallowed every `bag.get(name)`.
+            if (importOwnsLocalReceiver(m, imported->second))
+                if (auto dual = dualProviderDispatch(
+                        n, m, methodReceiverOwner(m), "", imported->second,
+                        arity, args))
+                    return ret(std::move(dual));
+            // `dualProviderDispatch` only covers a name this unit imports as
+            // a RECEIVER METHOD. An imported FREE function competing with
+            // some other module's receiver method needs the same treatment
+            // from the other side.
+            if (auto guarded = importedFreeFunctionDispatch(
+                    n, m, imported->second, arity, args))
+                return ret(std::move(guarded));
             return ret(localCallExpr(imported->second, std::move(args)));
         }
 
@@ -6275,6 +6290,35 @@ struct Lowering {
 
     // The single receiver type a method of a module compiled in THIS unit
     // belongs to, or "" when the method has no such unambiguous owner.
+    // The module a `using`-imported emitted symbol came from, or "" when this
+    // unit cannot say.
+    auto importSourceModule(const std::string& emittedSymbol) const
+        -> std::string {
+        for (const auto& [qualified, emitted] : moduleFunctions) {
+            if (emitted != emittedSymbol) continue;
+            const auto dot = qualified.rfind('.');
+            return dot == std::string::npos ? std::string()
+                                            : qualified.substr(0, dot);
+        }
+        return {};
+    }
+
+    // Is the imported symbol the receiver method of the LOCAL type that owns
+    // this name? True only when the import came from the module declaring
+    // that type's `make` block — `using Regex` importing Match's `get`. An
+    // unrelated free function of the same name is not that, however much the
+    // spelling suggests it.
+    auto importOwnsLocalReceiver(const std::string& method,
+                                 const std::string& emittedSymbol) const
+        -> bool {
+        const auto owner = methodReceiverOwner(method);
+        if (owner.empty()) return false;
+        auto declaring = localTypeModules.find(owner);
+        if (declaring == localTypeModules.end()) return false;
+        const auto source = importSourceModule(emittedSymbol);
+        return !source.empty() && source == declaring->second;
+    }
+
     auto methodReceiverOwner(const std::string& method) const -> std::string {
         auto owners = methodOwners.find(method);
         if (owners == methodOwners.end() || owners->second.size() != 1)
@@ -6424,6 +6468,129 @@ struct Lowering {
             arm(nullptr, callE(fallbackModule, fallbackFunction, arity,
                                std::move(fallbackArgs)));
         }
+        auto out = std::make_unique<Expr>();
+        out->node = std::move(dispatch);
+        return out;
+    }
+
+    // `hs.get(name)` where `get` is ALSO a bare function this unit imported —
+    // `using Rodolfo` brings its DSL verb `get(path, handler)` into scope
+    // alongside `Net.HTTP.Headers`'s own `get(name)`. With the receiver's
+    // type statically known the checker settles it; on an unannotated
+    // parameter it has nothing to settle with, and lowering bound the call to
+    // the imported free function outright — so a Headers value came back as a
+    // `Rodolfo.Definition` built out of the receiver and the argument, with no
+    // error anywhere. The walker dispatches on the value; BEAM has to as well.
+    // Guard on every nominal receiver type that provides this name at this
+    // arity and keep the imported function as the final arm.
+    auto importedFreeFunctionDispatch(const ast::MethodCall& n,
+                                      const std::string& method,
+                                      const std::string& importedFunction,
+                                      int arity,
+                                      std::vector<ExprPtr>& args) -> ExprPtr {
+        if (!externalModules || args.empty()) return nullptr;
+        if (!expressionTypes || !n.receiver) return nullptr;
+        // The receiver's NOMINAL identity, or "" when the checker has nothing
+        // concrete for it. Only the type's name matters here — a provider is
+        // keyed by the record, not by its type arguments — so this reads the
+        // NamedType rather than rendering the whole type.
+        std::string staticReceiver;
+        if (auto found = expressionTypes->find(n.receiver.get());
+            found != expressionTypes->end() && found->second)
+            if (auto* named =
+                    std::get_if<semantic::NamedType>(&found->second->kind))
+                staticReceiver = canonicalRecordName(named->name);
+        // Nominal providers only — a record whose tag a guard can actually
+        // test. For a builtin receiver (String, List, Map) the tables below
+        // are an incomplete view of who answers, so guarding on one would
+        // reorder dispatch for values they know nothing about.
+        struct Provider {
+            std::string receiverType;   // as written, for the guard
+            std::string moduleAtom;
+            std::string function;
+        };
+        std::vector<Provider> providers;
+        std::set<std::string> seen;
+        auto consider = [&](const std::string& receiverType,
+                            const std::string& moduleAtom,
+                            const std::string& function) {
+            if (receiverType.empty()) return;
+            const auto canonical = canonicalRecordName(receiverType);
+            if (!records.count(canonical)) return;
+            if (!seen.insert(canonical).second) return;
+            providers.push_back({receiverType, moduleAtom, function});
+        };
+        // A module compiled in THIS unit (`using Net.HTTP` merges the stdlib
+        // module in) is not in the external registry; its bare-name runtime
+        // dispatcher is what the call would have reached without the import.
+        if (auto owners = methodOwners.find(method); owners != methodOwners.end())
+            if (localMethodArities.count(method + "/" + std::to_string(arity)))
+                for (const auto& owner : owners->second) {
+                    auto declaring = localTypeModules.find(owner);
+                    if (declaring == localTypeModules.end()) continue;
+                    consider(owner, "Kex." + declaring->second, method);
+                }
+        if (auto candidates = externalModules->receiverFunctions.find(method);
+            candidates != externalModules->receiverFunctions.end())
+            for (const auto& candidate : candidates->second) {
+                if (candidate.beamArity != arity) continue;
+                if (candidate.beamFunction != method) continue;
+                consider(candidate.receiverType, candidate.moduleAtom,
+                         candidate.beamFunction);
+            }
+        if (providers.empty()) return nullptr;
+        // The receiver's type is KNOWN and one of these providers owns it.
+        // That settles the call outright: a receiver method answers for its
+        // own type, and a bare function some `using` happens to have brought
+        // into scope does not get to claim it. No guard is needed — and this
+        // is the case an annotation was supposed to make safe but did not:
+        // `response.headers.get(name)` with `headers` typed
+        // `Net.HTTP.Headers` still lowered to `Kex.Dsl:get/2`.
+        if (!staticReceiver.empty()) {
+            for (const auto& provider : providers)
+                if (canonicalRecordName(provider.receiverType) == staticReceiver)
+                    return callE(provider.moduleAtom, provider.function, arity,
+                                 std::move(args));
+            // Known, and no provider owns it: the import is the right answer
+            // (`100.meter` is units' `meter(100)`), so leave it alone.
+            return nullptr;
+        }
+        // Every arm needs its own copy of the arguments; a non-atomic one
+        // cannot be duplicated, and the direct call stays as it was.
+        auto copyArgs = [&](const char* what) -> std::optional<std::vector<ExprPtr>> {
+            std::vector<ExprPtr> out;
+            for (const auto& arg : args) {
+                try {
+                    out.push_back(clone(arg, what));
+                } catch (const LowerError&) {
+                    return std::nullopt;
+                }
+            }
+            return out;
+        };
+        auto subject = copyArgs("importedFreeFunctionDispatch subject");
+        if (!subject) return nullptr;
+        Match dispatch;
+        dispatch.subjects.push_back(std::move((*subject)[0]));
+        auto arm = [&](ExprPtr guard, ExprPtr body) {
+            MatchClause clause;
+            auto pattern = std::make_unique<Pattern>();
+            pattern->kind = PatKind::Var;
+            pattern->name = fresh("_provider");
+            clause.patterns.push_back(std::move(pattern));
+            if (guard) clause.guard = std::move(guard);
+            clause.body = std::move(body);
+            dispatch.clauses.push_back(std::move(clause));
+        };
+        for (const auto& provider : providers) {
+            auto guardArgs = copyArgs("importedFreeFunctionDispatch guard");
+            auto callArgs = copyArgs("importedFreeFunctionDispatch call");
+            if (!guardArgs || !callArgs) return nullptr;
+            arm(typeGuard(provider.receiverType, std::move((*guardArgs)[0])),
+                callE(provider.moduleAtom, provider.function, arity,
+                      std::move(*callArgs)));
+        }
+        arm(nullptr, localCallExpr(importedFunction, std::move(args)));
         auto out = std::make_unique<Expr>();
         out->node = std::move(dispatch);
         return out;

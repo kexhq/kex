@@ -1,0 +1,56 @@
+# A free function still captures a receiver call when the receiver's type comes
+# from a module that is NOT in the import list.
+#
+# `ufcs_free_function_vs_method.kex` covers the unannotated-parameter case and
+# passes. This is the same defect reached differently: the receiver's type is
+# perfectly well known — it is written out in full — but its module was never
+# `using`-imported, and the free function wins again.
+#
+#   using Net.HTTP, only: [Headers]          # note: no Response
+#   Net.HTTP.Response.text(200, "hi").headers.get("Content-Type")
+#   => Rodolfo.Definition { handler: Content-Type, path: Headers { … } }
+#
+# Adding `Response` to the `only:` list makes the very same expression
+# dispatch correctly, which is the whole difference.
+#
+# The boundary is not "is the receiver's type known" — an annotation makes no
+# difference either way — but "does a receiver method own this name for this
+# type". See Lowering::importedFreeFunctionDispatch.
+#
+# This is the shape Rodolfo's spec has, and why it still reads headers through
+# `getAll(name).first`.
+module Dsl do
+  record Env do
+    name : String
+  end
+
+  type Handler = Env -> Any
+
+  record Definition do
+    method : String
+    path : String
+    handler : Handler
+  end
+
+  get : String -> Handler -> Definition
+  let get(path, handler) = Definition {
+    method: "GET",
+    path: path,
+    handler: handler
+  }
+end
+
+using Dsl
+using Net.HTTP, only: [Headers]
+
+# Annotated with the fully-qualified type; the annotation makes no difference.
+let header(response: Net.HTTP.Response<Binary>, name: String) -> String? do
+  response.headers.get(name)
+end
+
+main do
+  IO.printLine("${header(Net.HTTP.Response.text(200, "hi"), "Content-Type")}")
+  IO.printLine("${Net.HTTP.Response.text(200, "hi").headers.get("Content-Type")}")
+  # The free function under its own name still works.
+  IO.printLine(Dsl.get("/health", { |_| "ok" }).path)
+end

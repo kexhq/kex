@@ -1,6 +1,7 @@
 #include "../evaluator.hxx"
 
 #ifndef __EMSCRIPTEN__
+#include <csignal>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/wait.h>
@@ -16,6 +17,45 @@
 namespace {
 
 #ifndef __EMSCRIPTEN__
+// The child `Process.stream` is currently waiting on, for the signal handler
+// to forward to. A handler may only touch a `volatile sig_atomic_t`.
+volatile sig_atomic_t g_streamedChild = -1;
+
+extern "C" void forwardSignalToStreamedChild(int sig) {
+    if (g_streamedChild > 0) kill(static_cast<pid_t>(g_streamedChild), sig);
+}
+
+// Forward SIGINT/SIGTERM/SIGHUP/SIGQUIT to `child` for as long as this object
+// lives, restoring the previous dispositions afterwards. Without it a signal
+// that takes the interpreter down leaves the grandchild running: `tey run`
+// exited on Ctrl+C while the server it started kept serving and kept its port.
+class SignalForwarder {
+public:
+    explicit SignalForwarder(pid_t child) {
+        g_streamedChild = child;
+        struct sigaction forward {};
+        forward.sa_handler = forwardSignalToStreamedChild;
+        sigemptyset(&forward.sa_mask);
+        forward.sa_flags = 0; // no SA_RESTART: waitpid must return EINTR
+        sigaction(SIGINT, &forward, &m_int);
+        sigaction(SIGTERM, &forward, &m_term);
+        sigaction(SIGHUP, &forward, &m_hup);
+        sigaction(SIGQUIT, &forward, &m_quit);
+    }
+    ~SignalForwarder() {
+        sigaction(SIGINT, &m_int, nullptr);
+        sigaction(SIGTERM, &m_term, nullptr);
+        sigaction(SIGHUP, &m_hup, nullptr);
+        sigaction(SIGQUIT, &m_quit, nullptr);
+        g_streamedChild = -1;
+    }
+    SignalForwarder(const SignalForwarder&) = delete;
+    auto operator=(const SignalForwarder&) -> SignalForwarder& = delete;
+
+private:
+    struct sigaction m_int {}, m_term {}, m_hup {}, m_quit {};
+};
+
 // Reads both pipes to EOF, closing each as it ends. Interleaved rather than
 // sequential on purpose: a child that writes a lot to the stream we are not
 // reading yet would block forever once its pipe buffer filled.
@@ -174,10 +214,19 @@ auto Evaluator::registerProcessBuiltins() -> void {
 
         std::string stdoutText;
         std::string stderrText;
-        drainPipes(outPipe[0], stdoutText, errPipe[0], stderrText);
-
         int status = 0;
-        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        {
+            // Installed BEFORE the drain: a Ctrl+C while the child is still
+            // writing has to reach it too, not only one that arrives during
+            // the wait.
+            SignalForwarder forwarding(child);
+            drainPipes(outPipe[0], stdoutText, errPipe[0], stderrText);
+            while (waitpid(child, &status, 0) < 0) {
+                if (errno == EINTR) continue;
+                kill(child, SIGTERM);
+                break;
+            }
+        }
         const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
                                               : 128 + WTERMSIG(status);
         return Value::ok(Value::record("ProcessResult", {
@@ -246,7 +295,16 @@ auto Evaluator::registerProcessBuiltins() -> void {
             return Value::error(Value::string("could not start process"));
 
         int status = 0;
-        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        {
+            SignalForwarder forwarding(child);
+            while (waitpid(child, &status, 0) < 0) {
+                if (errno == EINTR) continue;
+                // Waiting failed for a reason retrying cannot fix; never
+                // leave the child behind holding its port.
+                kill(child, SIGTERM);
+                break;
+            }
+        }
         const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
                                               : 128 + WTERMSIG(status);
         return Value::ok(Value::integer(exitCode));
