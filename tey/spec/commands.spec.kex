@@ -131,3 +131,37 @@ describe("Tey.Commands.lockReusable?") do
     assert(!Tey.Commands.lockReusable?(lock, "changed", toolchain))
   end
 end
+
+describe("Tey.Commands.updateScopeMembers") do
+  let rootPackage = Tey.Manifest.ManifestPackage { name: "root" }
+  let childPackage = Tey.Manifest.ManifestPackage { name: "child" }
+  let rootMember = Tey.Workspace.Member {
+    memberRoot: "/work", memberManifest: rootPackage
+  }
+  let childMember = Tey.Workspace.Member {
+    memberRoot: "/work/packages/child", memberManifest: childPackage
+  }
+
+  it("limits a member-local update to the current member") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember],
+      currentMember: Just(childMember)
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [childMember])
+  end
+
+  it("keeps every member in scope at a package-root workspace root") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember],
+      currentMember: Just(rootMember)
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [rootMember, childMember])
+  end
+
+  it("keeps every member in scope at a virtual workspace root") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember]
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [rootMember, childMember])
+  end
+end

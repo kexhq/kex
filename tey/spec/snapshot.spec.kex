@@ -31,6 +31,22 @@ describe("Tey.Snapshot.create") do
     end
   end
 
+  it("allows concurrent publication of the same snapshot") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let first = Task.start do
+        Tey.Snapshot.create("dep", "dependency", root)
+      end
+      let second = Task.start do
+        Tey.Snapshot.create("dep", "dependency", root)
+      end
+      let firstSnapshot = first.await.try.try
+      let secondSnapshot = second.await.try.try
+      assert(firstSnapshot.sha256 == secondSnapshot.sha256)
+      assert(Tey.Snapshot.verify(firstSnapshot).ok?)
+      assert(Tey.Snapshot.verify(secondSnapshot).ok?)
+    end
+  end
+
   it("honours .teyignore") do
     FS.File.write("${root}/dependency/.teyignore", "secret/*\n")
     FS.Directory.create("${root}/dependency/secret")
@@ -94,6 +110,18 @@ describe("Tey.Snapshot.create") do
     end
   end
 
+  it("does not reuse a corrupted snapshot during resolution") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      FS.File.write("${cached}/src/main.kex", "corrupted\n")
+      match Tey.Snapshot.create("dep", "dependency", root) do
+        Error(message) => assert(message.contains?("is corrupted"))
+        Ok(_) => assert(false, "reused a corrupted snapshot")
+      end
+    end
+  end
+
   it("rejects a package with the wrong identity") do
     with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
       match Tey.Snapshot.create("other", "dependency", root) do
@@ -111,6 +139,21 @@ describe("Tey.Snapshot.create") do
       let link = "${Tey.Snapshot.cachedPath(dependency)}/src/current.kex"
       let result = Process.run("test", ["-L", link]).try
       assert(result.exitCode == 0, "snapshot dereferenced the internal symlink")
+    end
+  end
+
+  it("preserves symlinks to directories instead of materializing them") do
+    FS.Directory.create("${root}/dependency/assets")
+    FS.File.write("${root}/dependency/assets/value.txt", "inside\n")
+    Process.run("ln", ["-s", "assets",
+                       "${root}/dependency/linked-assets"])
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let snapshot = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(snapshot)
+      let link = Process.run("readlink", ["--",
+                                          "${cached}/linked-assets"]).try
+      assert(link.exitCode == 0, "directory symlink was materialized")
+      assert(link.stdout.trim == "assets")
     end
   end
 

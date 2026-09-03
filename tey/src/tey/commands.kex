@@ -11,6 +11,11 @@ using Tey.PluginHost, only: [Invocation]
 using Tey.Toolchain, only: [kex]
 using Tey.Workspace, only: [Context, Member, discover, select]
 
+record WorkspaceRunState do
+  runStatus : Integer = 0
+  failedMembers : [String] = []
+end
+
 foul manifest -> ManifestPackage or! String do
   let context = Tey.Workspace.discover(FS.Directory.current).try
   match context.currentMember do
@@ -142,7 +147,9 @@ foul updateDependencies(name: String = "") -> Integer do
     Ok(value) => value
   end
   if name != ""
-    match Tey.Commands.validateUpdateName(context.members, name) do
+    match Tey.Commands.validateUpdateName(
+      Tey.Commands.updateScopeMembers(context), name
+    ) do
       Error(error) => return Tey.Commands.fail(error)
       Ok(_) => ()
     end
@@ -241,6 +248,13 @@ let validateUpdateName(members: [Member], name: String) -> Void or! String do
     dependency.manifestName == name
   end
   return Tey.Commands.validateUpdateName(members.drop(1), name)
+end
+
+let updateScopeMembers(context: Context) -> [Member] do
+  match context.currentMember do
+    Just(member) when member.memberRoot != context.workspaceRoot => [member]
+    _ => context.members
+  end
 end
 
 # Puts this package's `target(...)` executables where they can be run by name.
@@ -524,7 +538,9 @@ foul buildSelected(packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  return Tey.Commands.buildLayers(Tey.Workspace.dependencyLayers(members), jobs, 0)
+  return Tey.Commands.buildLayers(
+    Tey.Workspace.dependencyLayers(members), jobs, WorkspaceRunState {}
+  ).runStatus
 end
 
 foul buildMember(member: Member) -> Integer do
@@ -609,8 +625,10 @@ foul testSelected(requested: [String], packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  return Tey.Commands.testLayers(Tey.Workspace.dependencyLayers(members), jobs,
-                                 requested, interpret?, json?, list?, only, 0)
+  return Tey.Commands.testLayers(
+    Tey.Workspace.dependencyLayers(members), jobs, requested, interpret?,
+    json?, list?, only, WorkspaceRunState {}
+  ).runStatus
 end
 
 foul testAt(packageRoot: String, requested: [String], interpret?: Bool,
@@ -768,58 +786,102 @@ private do
   end
 
   foul buildLayers(layers: [[Member]], jobs: Integer,
-                   status: Integer) -> Integer do
-    return status if layers.empty?
-    let layerStatus = Tey.Commands.buildChunks(layers.first.try, jobs, status)
-    return Tey.Commands.buildLayers(layers.drop(1), jobs, layerStatus)
+                   state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if layers.empty?
+    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let layerState = Tey.Commands.buildChunks(ready, jobs, prepared)
+    return Tey.Commands.buildLayers(layers.drop(1), jobs, layerState)
   end
 
   foul buildChunks(members: [Member], jobs: Integer,
-                   status: Integer) -> Integer do
-    return status if members.empty?
+                   state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if members.empty?
     let batch = members.take(jobs)
     let tasks = batch.map do |member|
-      Task.start { Tey.Commands.buildMember(member) }
+      (member, Task.start { Tey.Commands.buildMember(member) })
     end
-    let nextStatus = tasks.reduce(status) do |current, task|
+    let nextState = tasks.reduce(state) do |current, item|
+      let (member, task) = item
       match task.await do
-        Ok(code) => code == 0 then current else code
-        Error(_) => 1
+        Ok(0) => current
+        Ok(code) => WorkspaceRunState {
+          runStatus: code,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+        Error(_) => WorkspaceRunState {
+          runStatus: 1,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
       end
     end
-    return Tey.Commands.buildChunks(members.drop(jobs), jobs, nextStatus)
+    return Tey.Commands.buildChunks(members.drop(jobs), jobs, nextState)
   end
 
   foul testLayers(layers: [[Member]], jobs: Integer, requested: [String],
                   interpret?: Bool, json?: Bool, list?: Bool, only: String,
-                  status: Integer) -> Integer do
-    return status if layers.empty?
-    let layerStatus = Tey.Commands.testChunks(layers.first.try, jobs, requested,
-                                              interpret?, json?, list?, only,
-                                              status)
+                  state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if layers.empty?
+    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let layerState = Tey.Commands.testChunks(ready, jobs, requested,
+                                             interpret?, json?, list?, only,
+                                             prepared)
     return Tey.Commands.testLayers(layers.drop(1), jobs, requested, interpret?,
-                                   json?, list?, only, layerStatus)
+                                   json?, list?, only, layerState)
   end
 
   foul testChunks(members: [Member], jobs: Integer, requested: [String],
                   interpret?: Bool, json?: Bool, list?: Bool, only: String,
-                  status: Integer) -> Integer do
-    return status if members.empty?
+                  state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if members.empty?
     let batch = members.take(jobs)
     let tasks = batch.map do |member|
-      Task.start do
+      (member, Task.start do
         Tey.Commands.testAt(member.memberRoot, requested, interpret?, json?,
                             list?, only)
-      end
+      end)
     end
-    let nextStatus = tasks.reduce(status) do |current, task|
+    let nextState = tasks.reduce(state) do |current, item|
+      let (member, task) = item
       match task.await do
-        Ok(code) => code == 0 then current else code
-        Error(_) => 1
+        Ok(0) => current
+        Ok(code) => WorkspaceRunState {
+          runStatus: code,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+        Error(_) => WorkspaceRunState {
+          runStatus: 1,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
       end
     end
     return Tey.Commands.testChunks(members.drop(jobs), jobs, requested,
-                                   interpret?, json?, list?, only, nextStatus)
+                                   interpret?, json?, list?, only, nextState)
+  end
+
+  foul readyMembers(members: [Member],
+                    state: WorkspaceRunState) -> ([Member], WorkspaceRunState) do
+    let blocked = members.filter do |member|
+      Tey.Workspace.memberDependencies(member).any? do |dependency|
+        state.failedMembers.contains?(dependency)
+      end
+    end
+    blocked.each do |member|
+      let dependencies = Tey.Workspace.memberDependencies(member).filter do |name|
+        state.failedMembers.contains?(name)
+      end
+      IO.printError("Skipping ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed\n")
+    end
+    let ready = members.filter { |member| !blocked.contains?(member) }
+    let failed = [...state.failedMembers,
+                  ...blocked.map { |member| Tey.Workspace.memberName(member) }]
+    let status = blocked.empty? then state.runStatus else 1
+    return (ready, WorkspaceRunState {
+      runStatus: status, failedMembers: failed
+    })
   end
 
   foul installLock(context: Context) -> LockState or! String do
@@ -840,7 +902,8 @@ private do
   end
 
   foul publishLock(path: String, state: LockState) -> Void or! String do
-    let staging = "${path}.partial"
+    let nonce = Digest.sha256("${path}:${DateTime.epochNanos()}")
+    let staging = "${path}.partial.${nonce}"
     return Error("could not stage tey.lock") if !FS.File.write(staging, Tey.Lockfile.encode(state))
     match Process.run("mv", ["--", staging, path]) do
       Ok(result) => return Ok(()) if result.exitCode == 0

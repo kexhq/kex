@@ -216,6 +216,7 @@ let read(text: String) -> ManifestPackage or! String do
       let dependencyName = Tey.Manifest.argument(arguments).or("")
       let dependencyGit = Tey.Manifest.named(named, "git").or("")
       let dependencyPath = Tey.Manifest.named(named, "path").or("")
+      let dependencySubdir = Tey.Manifest.named(named, "subdir").or("")
       let dependencyWorkspace = Tey.Manifest.namedBool(named, "workspace")
       let sources = [dependencyGit != "", dependencyPath != "",
                      dependencyWorkspace == Just(true)]
@@ -241,6 +242,10 @@ let read(text: String) -> ManifestPackage or! String do
         failures.push!("dependency `${dependencyName}` has a Git selector without git:")
         ()
       end
+      if dependencyGit == "" && dependencySubdir != ""
+        failures.push!("dependency `${dependencyName}` has subdir: without git:")
+        ()
+      end
       let selector = if selectors.contains?("tag")
         "tag"
       elif selectors.contains?("branch")
@@ -256,7 +261,7 @@ let read(text: String) -> ManifestPackage or! String do
         PathSource(dependencyPath)
       else
         GitSource(dependencyGit, selector, requested,
-                  Tey.Manifest.named(named, "subdir").or(""))
+                  dependencySubdir)
       end
       dependencies.push!(Dependency {
         manifestName: dependencyName,
@@ -282,7 +287,7 @@ let read(text: String) -> ManifestPackage or! String do
       })
       ()
       elif declaration == "plugin"
-      match Tey.Manifest.pluginFrom(named, block) do
+      match Tey.Manifest.pluginFrom(arguments, named, block) do
         Error(error) => do failures.push!(error) () end
         Ok(plugin) => do
           if plugins.any? { |existing| existing.pluginNamespace == plugin.pluginNamespace }
@@ -353,7 +358,14 @@ let readLocal(text: String) -> [LocalOverride] or! String do
   var overrides: [LocalOverride] = []
   expressions.each do |expression|
     match Tey.Manifest.call(expression) do
-      Just(("local", arguments, named, _)) => do
+      Just(("local", arguments, named, block)) => do
+        if arguments.count != 1 || block.set?
+          return Error("local overrides require exactly one package name and no block")
+        end
+        match Tey.Manifest.validateNamed(named, ["path"], "local override") do
+          Error(error) => return Error(error)
+          Ok(_) => ()
+        end
         let name = Tey.Manifest.argument(arguments).or("")
         let path = Tey.Manifest.named(named, "path").or("")
         if name == "" || path == ""
@@ -442,7 +454,10 @@ private do
     return Ok(ManifestWorkspace { memberPatterns: patterns })
   end
 
-  let pluginFrom(named: [NamedArgument], block: Expression?) -> Plugin or! String do
+  let pluginFrom(arguments: [Expression], named: [NamedArgument],
+                 block: Expression?) -> Plugin or! String do
+    return Error("plugin accepts only namespace: and tey:") if !arguments.empty?
+    Tey.Manifest.validateNamed(named, ["namespace", "tey"], "plugin").try
     let namespace = Tey.Manifest.named(named, "namespace").or("")
     let requirement = Tey.Manifest.named(named, "tey").or("")
     return Error("plugin requires namespace:") if namespace == ""
@@ -471,6 +486,9 @@ private do
     end
     let (name, arguments, operationNamed, operationBlock) = declaration
     if name == "capabilities"
+      if !operationNamed.empty? || operationBlock.set?
+        return Error("plugin `${namespace}` capabilities accepts only a list")
+      end
       return Error("plugin `${namespace}` declares capabilities more than once") if !capabilities.empty?
       let values = match arguments do
         [ListLit(items, None)] => items
@@ -495,9 +513,12 @@ private do
 
   let capabilityFrom(expression: Expression) -> PluginCapability or! String do
     match expression do
-      MethodCall(target, name, arguments, _, None, _, _, _) => do
+      MethodCall(target, name, arguments, named, None, _, _, _) => do
         let prefix = Tey.Manifest.qualifiedName(target).or("")
         let kind = prefix == "" then name else "${prefix}.${name}"
+        if !named.empty?
+          return Error("capability `${kind}` does not accept named arguments")
+        end
         let values = if arguments.empty?
           []
         else
@@ -536,6 +557,11 @@ private do
 
   let operationFrom(kind: String, arguments: [Expression], named: [NamedArgument],
                     block: Expression?) -> PluginOperation or! String do
+    Tey.Manifest.validateNamed(named, ["entrypoint"],
+                               "plugin ${kind}").try
+    if arguments.count != 1
+      return Error("plugin ${kind} requires exactly one name")
+    end
     let name = Tey.Manifest.argument(arguments).or("")
     let entrypoint = Tey.Manifest.named(named, "entrypoint").or("")
     return Error("plugin ${kind} must be named") if name == ""
@@ -564,6 +590,11 @@ private do
     end
     let (declaration, optionArguments, optionNamed, optionBlock) = call
     return Error("plugin ${kind} `${operationName}` may only declare options") if declaration != "option" || optionBlock.set?
+    Tey.Manifest.validateNamed(optionNamed, ["type"],
+                               "plugin ${kind} `${operationName}` option").try
+    if optionArguments.count != 1
+      return Error("plugin ${kind} `${operationName}` option requires exactly one name")
+    end
     let optionName = Tey.Manifest.argument(optionArguments).or("")
     let optionType = Tey.Manifest.namedIdentifier(optionNamed, "type").or("")
     return Error("plugin ${kind} `${operationName}` option requires a name and type:") if optionName == "" || optionType == ""
@@ -679,6 +710,22 @@ private do
       ()
     end
     return found
+  end
+
+  let validateNamed(arguments: [NamedArgument], allowed: [String],
+                    context: String) -> Void or! String do
+    let unknown = arguments.find { |argument| !allowed.contains?(argument.name) }
+    match unknown do
+      Just(argument) => return Error("${context} does not accept ${argument.name}:")
+      None => ()
+    end
+    let duplicate = arguments.find do |argument|
+      arguments.filter { |candidate| candidate.name == argument.name }.count > 1
+    end
+    match duplicate do
+      Just(argument) => return Error("${context} declares ${argument.name}: more than once")
+      None => return Ok(())
+    end
   end
 
   let stringValue(expression: Expression) -> String? = match expression do

@@ -218,6 +218,52 @@ describe("Tey.Manifest.read — the whole format") do
     end
   end
 
+  it("rejects ignored plugin fields and extra positional arguments") do
+    let manifests = [`
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6", hidden: true do end
+      end
+    `, `
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([FS.Read.package(scope: "all")])
+        end
+      end
+    `, `
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          command("setup", "ignored", entrypoint: "setup.kex")
+        end
+      end
+    `, `
+      package "plugins" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "workflow.kex") do
+            option("otp", "ignored", type: Integer)
+          end
+        end
+      end
+    `]
+    manifests.each do |text|
+      match Tey.Manifest.read(text) do
+        Error(_) => assert(true)
+        Ok(_) => assert(false, "accepted ignored plugin schema data")
+      end
+    end
+  end
+
+  it("rejects duplicate plugin schema labels") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      package "plugins" do
+        plugin namespace: "github", namespace: "other", tey: ">= 0.6" do end
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("more than once"))
+      Ok(_) => assert(false, "accepted duplicate namespace:")
+    end
+  end
+
   it("rejects unknown capabilities and empty resource allowlists") do
     let unknown: ManifestPackage or! String = Tey.Manifest.read(`
       package "plugins" do
@@ -466,6 +512,23 @@ describe("Tey.Manifest.read — the whole format") do
     end
   end
 
+  it("rejects subdir on non-Git dependency sources") do
+    [`
+      package "app" do
+        tey("dep", path: "../dep", subdir: "packages/dep")
+      end
+    `, `
+      package "app" do
+        tey("dep", workspace: true, subdir: "packages/dep")
+      end
+    `].each do |text|
+      match Tey.Manifest.read(text) do
+        Error(message) => assert(message.contains?("subdir: without git:"))
+        Ok(_) => assert(false, "accepted subdir: on a non-Git dependency")
+      end
+    end
+  end
+
   it("requires exactly one dependency source") do
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`
       package "app" do
@@ -688,6 +751,21 @@ describe("Tey.Manifest.readLocal") do
     `) do
       Error(message) => assert(message.contains?("twice"))
       Ok(_) => assert(false)
+    end
+  end
+
+  it("rejects ignored local override syntax") do
+    [`
+      local("dep", "ignored", path: "../dep")
+    `, `
+      local("dep", path: "../dep", hidden: true)
+    `, `
+      local("dep", path: "../dep") do end
+    `].each do |text|
+      match Tey.Manifest.readLocal(text) do
+        Error(_) => assert(true)
+        Ok(_) => assert(false, "accepted ignored local override syntax")
+      end
     end
   end
 end

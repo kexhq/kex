@@ -99,6 +99,9 @@ private do
   # Sibling of the final path so the move that publishes it stays on one
   # filesystem, and named so a leftover from a killed run is recognizable.
   foul stagingPath(dep: Tey.Lockfile.Dependency) -> String do
-    return "${Tey.Cache.repositoryPath(dep)}.partial"
+    let nonce = Digest.sha256(
+      "${Tey.Cache.repositoryPath(dep)}:${DateTime.epochNanos()}"
+    )
+    return "${Tey.Cache.repositoryPath(dep)}.partial.${nonce}"
   end
 end

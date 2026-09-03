@@ -30,6 +30,28 @@ describe("Tey.Local") do
     assert(ignored.contains?("**/package.local.kex"))
   end
 
+  it("does not create an override when Git-ignore protection cannot be written") do
+    let package = Tey.Manifest.ManifestPackage { name: "app" }
+    let context = Context {
+      workspaceRoot: "/work",
+      members: [Member { memberRoot: "/work", memberManifest: package }],
+      currentMember: Just(Member {
+        memberRoot: "/work", memberManifest: package
+      })
+    }
+    let files = Mock.Files { files: {
+      "/external/dep/package.kex": `
+        package "dep" do end
+      `
+    } }
+    with FS.File = files do
+      match Tey.Local.set(context, "dep", "/external/dep") do
+        Error(message) => assert(message.contains?("package.local.kex"))
+        Ok(_) => assert(false, "created an override without ignore protection")
+      end
+    end
+  end
+
   it("rejects conflicting root and member overrides") do
     Mock.FS.Directory("/work")
     Mock.FS.Directory("/work/app")
@@ -173,5 +195,16 @@ describe("Tey.Local Git protection") do
       Error(message) => assert(message.contains?("tracked by Git"))
       Ok(_) => assert(false, "accepted a tracked local manifest")
     end
+  end
+
+  it("does not overwrite a tracked package.local.kex") do
+    let context = Context { workspaceRoot: root }
+    let before = FS.File.read("${root}/package.local.kex").try
+    match Tey.Local.set(context, "dep", "dep") do
+      Error(message) => assert(message.contains?("tracked by Git"))
+      Ok(_) => assert(false, "updated a tracked local manifest")
+    end
+    assert(FS.File.read("${root}/package.local.kex").try == before,
+           "tracked local manifest changed before rejection")
   end
 end

@@ -1,5 +1,6 @@
 module Tey.Local
 
+using JSON
 using Tey.Manifest, only: [LocalOverride, ManifestPackage]
 using Tey.Workspace, only: [Context]
 using Tey.Plugin, only: [fingerprints]
@@ -25,6 +26,10 @@ foul set(context: Context, name: String, path: String) -> String or! String do
   let absolute = Tey.Local.absolute(path, root)
   let manifest = Tey.Local.validatePackage(name, absolute).try
   let file = FS.Path.join(root, "package.local.kex")
+  if Tey.Local.tracked?(context.workspaceRoot, file)
+    let relative = FS.Path.relativeTo(file, context.workspaceRoot)
+    return Error("${relative} is tracked by Git; remove it from the index")
+  end
   let existing = match FS.File.read(file) do
     Error(_) => []
     Ok(text) => if text.trim.empty?
@@ -36,10 +41,10 @@ foul set(context: Context, name: String, path: String) -> String or! String do
   let kept = existing.filter { |override| override.localName != name }
   let updated = [...kept, LocalOverride { localName: name, localPath: path }]
   let text = updated.map do |override|
-    "local(\"${override.localName}\", path: \"${override.localPath}\")"
+    "local(${JSON.stringify(override.localName)}, path: ${JSON.stringify(override.localPath)})"
   end.join("\n") + "\n"
+  Tey.Local.ensureIgnored(context.workspaceRoot).try
   return Error("could not write ${file}") if !FS.File.write(file, text)
-  Tey.Local.ensureIgnored(context.workspaceRoot)
   return Ok(manifest.name)
 end
 
@@ -52,7 +57,7 @@ foul remove(context: Context, name: String) -> String or! String do
   let entries = Tey.Manifest.readLocal(FS.File.read(override.overrideFile).try).try
   let remaining = entries.filter { |entry| entry.localName != name }
   let text = remaining.map do |entry|
-    "local(\"${entry.localName}\", path: \"${entry.localPath}\")"
+    "local(${JSON.stringify(entry.localName)}, path: ${JSON.stringify(entry.localPath)})"
   end.join("\n")
   let finalText = text.empty? then "" else "${text}\n"
   if !FS.File.write(override.overrideFile, finalText)
@@ -145,18 +150,20 @@ private do
     end
   end
 
-  foul ensureIgnored(workspaceRoot: String) -> Void do
+  foul ensureIgnored(workspaceRoot: String) -> Void or! String do
     let path = FS.Path.join(workspaceRoot, ".gitignore")
     let existing = FS.File.read(path).or("")
     let rules = ["package.local.kex", "**/package.local.kex"]
     let missing = rules.filter { |rule| !existing.lines.contains?(rule) }
-    return () if missing.empty?
+    return Ok(()) if missing.empty?
     let prefix = if existing.empty? || existing.endsWith?("\n")
       existing
     else
       "${existing}\n"
     end
-    FS.File.write(path, "${prefix}${missing.join("\n")}\n")
-    ()
+    if !FS.File.write(path, "${prefix}${missing.join("\n")}\n")
+      return Error("could not add package.local.kex to ${path}")
+    end
+    return Ok(())
   end
 end

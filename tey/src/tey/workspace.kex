@@ -35,7 +35,8 @@ foul discover(start: String) -> Context or! String do
       Ok(value) => value
     end
   end
-  let (members, warnings) = collected
+  let (collectedMembers, warnings) = collected
+  let members = Tey.Workspace.uniqueMembers(collectedMembers, [])
   let duplicates = Tey.Workspace.duplicateNames(members)
   if !duplicates.empty?
     return Error("workspace package name `${duplicates.first.try}` is declared more than once")
@@ -79,20 +80,34 @@ let dependencyLayers(members: [Member]) -> [[Member]] do
   return Tey.Workspace.layers(members, [])
 end
 
+let memberName(member: Member) -> String do
+  let manifest: ManifestPackage = member.memberManifest
+  return manifest.name
+end
+
+let memberDependencies(member: Member) -> [String] do
+  let manifest: ManifestPackage = member.memberManifest
+  return manifest.manifestDependencies.collect do |dependency|
+    match dependency.manifestSource do
+      WorkspaceSource => Just(dependency.manifestName)
+      _ => None
+    end
+  end
+end
+
 private do
-  let memberName(member: Member) -> String do
-    let manifest: ManifestPackage = member.memberManifest
-    return manifest.name
+  let uniqueMembers(members: [Member], found: [Member]) -> [Member] do
+    return found if members.empty?
+    let member = members.first.try
+    let duplicate = found.any? do |existing|
+      existing.memberRoot == member.memberRoot
+    end
+    let nextFound = duplicate then found else [...found, member]
+    return Tey.Workspace.uniqueMembers(members.drop(1), nextFound)
   end
 
   let workspaceDependencies(member: Member) -> [String] do
-    let manifest: ManifestPackage = member.memberManifest
-    return manifest.manifestDependencies.collect do |dependency|
-      match dependency.manifestSource do
-        WorkspaceSource => Just(dependency.manifestName)
-        _ => None
-      end
-    end
+    return Tey.Workspace.memberDependencies(member)
   end
 
   let layers(pending: [Member], completed: [String]) -> [[Member]] do

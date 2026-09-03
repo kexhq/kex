@@ -15,20 +15,24 @@ foul create(name: String, declaredPath: String,
   end
   return Error("path dependency `${name}` does not exist at ${source}") if !FS.Directory.directory?(source)
   Tey.Snapshot.validateSymlinks(source).try
-  let manifest = match FS.File.read(FS.Path.join(source, "package.kex")) do
+  let sourceManifest = match FS.File.read(FS.Path.join(source, "package.kex")) do
     Error(_) => return Error("path dependency `${name}` has no package.kex")
     Ok(text) => match Tey.Manifest.read(text) do
       Error(error) => return Error("path dependency `${name}` has an unreadable package.kex: ${error}")
       Ok(package) => package
     end
   end
-  return Error("path dependency `${name}` declares package `${manifest.name}`") if manifest.name != name
+  return Error("path dependency `${name}` declares package `${sourceManifest.name}`") if sourceManifest.name != name
   let files = Tey.Snapshot.includedFiles(source)
-  let sha = Tey.Snapshot.digest(source).try
-  let destination = FS.Path.join(Tey.Cache.root, "snapshots", sha)
-  if !FS.Directory.directory?(destination)
-    Tey.Snapshot.publishSnapshot(source, files, destination).try
+  let (sha, destination) = Tey.Snapshot.publishSnapshot(source, files).try
+  let manifest = match FS.File.read(FS.Path.join(destination, "package.kex")) do
+    Error(_) => return Error("staged path dependency `${name}` has no package.kex")
+    Ok(text) => match Tey.Manifest.read(text) do
+      Error(error) => return Error("staged path dependency `${name}` has an unreadable package.kex: ${error}")
+      Ok(package) => package
+    end
   end
+  return Error("staged path dependency `${name}` declares package `${manifest.name}`") if manifest.name != name
   let dependencyNames = manifest.manifestDependencies.map do |dependency|
     dependency.manifestName
   end
@@ -72,7 +76,10 @@ private do
 
   foul digest(root: String) -> String or! String do
     let fingerprints = Tey.Snapshot.includedFiles(root).map do |relative|
-      Tey.Snapshot.entryFingerprint(root, relative).try
+      match Tey.Snapshot.entryFingerprint(root, relative) do
+        Error(error) => return Error(error)
+        Ok(value) => value
+      end
     end
     return Ok(Digest.sha256(fingerprints.join("\n--\n")))
   end
@@ -96,19 +103,33 @@ private do
       let includedName = !Tey.Snapshot.excludedNames.contains?(name)
       includedName && !Tey.Snapshot.ignored?(relative, ignores)
     end
-    let here = fileNames.map do |name|
+    let directoryCandidates = FS.Directory.directories(directory).or([])
+      .filter do |name|
+        let relative = FS.Path.relativeTo(FS.Path.join(directory, name), root)
+        let includedName = !Tey.Snapshot.excludedNames.contains?(name)
+        includedName && !Tey.Snapshot.ignored?(relative, ignores)
+      end
+    let linkNames = directoryCandidates.filter do |name|
+      Tey.Snapshot.symlink?(FS.Path.join(directory, name))
+    end
+    let here = [...fileNames, ...linkNames].uniq.map do |name|
       FS.Path.relativeTo(FS.Path.join(directory, name), root)
     end
-    let directoryNames = FS.Directory.directories(directory).or([]).filter do |name|
-      let relative = FS.Path.relativeTo(FS.Path.join(directory, name), root)
-      let includedName = !Tey.Snapshot.excludedNames.contains?(name)
-      includedName && !Tey.Snapshot.ignored?(relative, ignores)
+    let directoryNames = directoryCandidates.filter do |name|
+      !linkNames.contains?(name)
     end
     let groups: [[String]] = directoryNames.map do |name|
       Tey.Snapshot.files(root, FS.Path.join(directory, name), ignores)
     end
     let empty: [String] = []
     return [...here, ...groups.reduce(empty) { |all, group| [...all, ...group] }]
+  end
+
+  foul symlink?(path: String) -> Bool do
+    match Process.run("readlink", ["--", path]) do
+      Ok(result) => return result.exitCode == 0
+      Error(_) => return false
+    end
   end
 
   let ignored?(path: String, patterns: [String]) -> Bool do
@@ -160,12 +181,13 @@ private do
     return Tey.Snapshot.segmentMatches(text.drop(1), pattern.drop(1))
   end
 
-  foul publishSnapshot(source: String, files: [String], destination: String) -> String or! String do
-    let snapshots = FS.Path.dirname(destination)
+  foul publishSnapshot(source: String,
+                       files: [String]) -> (String, String) or! String do
+    let snapshots = FS.Path.join(Tey.Cache.root, "snapshots")
     return Error("could not create snapshot cache") if !FS.Directory.create(Tey.Cache.root)
     return Error("could not create snapshot cache") if !FS.Directory.create(snapshots)
-    let staging = "${destination}.partial"
-    FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+    let nonce = Digest.sha256("${source}:${DateTime.epochNanos()}")
+    let staging = FS.Path.join(snapshots, ".partial.${nonce}")
     return Error("could not stage path dependency") if !FS.Directory.create(staging)
     files.each do |relative|
       let target = FS.Path.join(staging, relative)
@@ -179,12 +201,41 @@ private do
         return Error("could not snapshot ${relative}")
       end
     end
-    return Ok(destination) if FS.File.rename(staging, destination)
+    match Tey.Snapshot.validateSymlinks(staging) do
+      Error(error) => do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(_) => ()
+    end
+    let sha = match Tey.Snapshot.digest(staging) do
+      Error(error) => do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(value) => value
+    end
+    let destination = FS.Path.join(snapshots, sha)
+    if FS.Directory.directory?(destination)
+      FS.Directory.deleteAll(staging)
+      let actual = Tey.Snapshot.digest(destination).try
+      if actual != sha
+        return Error("cached path dependency snapshot `${sha}` is corrupted")
+      end
+      return Ok((sha, destination))
+    end
+    return Ok((sha, destination)) if FS.File.rename(staging, destination)
     # A concurrent resolver may have published the same content-addressed
     # snapshot first. Its directory is exactly our result; discard only our
     # unpublished sibling rather than moving it inside the winner.
     FS.Directory.deleteAll(staging)
-    return Ok(destination) if FS.Directory.directory?(destination)
+    if FS.Directory.directory?(destination)
+      let winningDigest = Tey.Snapshot.digest(destination).try
+      if winningDigest == sha
+        return Ok((sha, destination))
+      end
+      return Error("cached path dependency snapshot `${sha}` is corrupted")
+    end
     return Error("could not publish path dependency snapshot")
   end
 

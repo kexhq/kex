@@ -126,6 +126,24 @@ describe("Tey.Workspace.discover") do
     end
   end
 
+  it("deduplicates one member reached through overlapping patterns") do
+    Mock.FS.Directory("/work")
+    Mock.FS.Directory("/work/packages")
+    Mock.FS.Directory("/work/packages/parser")
+    Mock.FS.File("/work/package.kex", `
+      workspace do
+        members(["packages/*", "packages/parser"])
+      end
+    `)
+    Mock.FS.File("/work/packages/parser/package.kex", `
+      package "parser" do end
+    `)
+    let context = Tey.Workspace.discover("/work").try
+    assert(context.members.count == 1)
+    let manifest: Tey.Manifest.ManifestPackage = context.members.first.try.memberManifest
+    assert(manifest.name == "parser")
+  end
+
   it("warns when a member pattern matches nothing") do
     Mock.FS.Directory("/work")
     Mock.FS.File("/work/package.kex", `
