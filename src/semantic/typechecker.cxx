@@ -2826,6 +2826,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // is the clause's to quantify over once its body is checked. Anything
         // older is an enclosing inference's — see generalizeSignature.
         const int typeVarMark = m_nextTypeVar;
+        // Published for checkCall, which needs the same "created by this
+        // clause" test to decide whether calling a variable-typed binding may
+        // constrain that variable to a function type. Restored on every exit
+        // from the clause, including the nested definitions inside it.
+        struct ClauseVarMark {
+            int& slot;
+            int previous;
+            ~ClauseVarMark() { slot = previous; }
+        } clauseVarMark{m_clauseVarMark, m_clauseVarMark};
+        m_clauseVarMark = typeVarMark;
         pushScope();
         if (m_inMakeBlock && m_currentMakeType) {
             auto receiver = resolve(m_currentMakeType);
@@ -6371,6 +6381,33 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     if (!argMatchesParam(argTypes[i], function->params[i]))
                         typeMismatch(loc, function->params[i], argTypes[i]);
                 return function->result;
+            }
+        // The binding's type is still an inference variable — an unannotated
+        // parameter that the body CALLS, as in `let applyTo(f, x) = f(x)`.
+        // The call is itself the evidence that the variable is a function, so
+        // bind it to one built from the argument types and a fresh result.
+        // Without this the call answered `Any`, and `applyTo` inferred
+        // `A -> B -> Any` instead of `(A -> B) -> A -> B`.
+        //
+        // Two gates, and both matter:
+        //
+        //  - a NEGATIVE id is an annotated signature's generic placeholder,
+        //    instantiated per call site by bindGenerics. Binding one in the
+        //    global substitution would leak one call's argument types into
+        //    every other call of that signature;
+        //  - a variable older than this clause's mark is not this clause's to
+        //    constrain. Inference variables live in one substitution shared by
+        //    the whole program, so one reached through an earlier
+        //    instantiation can also stand for a binding elsewhere — writing a
+        //    function type into it types that unrelated binding as a function.
+        //    Only what this clause created is safe, which is the same rule
+        //    generalizeSignature quantifies by.
+        if (resolvedLocal)
+            if (auto* var = std::get_if<TypeVar>(&resolvedLocal->kind);
+                var && var->id >= 0 && var->id >= m_clauseVarMark) {
+                auto result = freshTypeVar();
+                unifyVar(var->id, Type::func(argTypes, result));
+                return result;
             }
     }
     const std::vector<Signature>* userSignatures = nullptr;

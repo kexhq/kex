@@ -1,0 +1,27 @@
+# Calling a parameter whose type is still an inference variable tells the
+# checker what that variable IS. `let applyTo(f, x) = f(x)` used to infer
+# `A -> B -> Any`: the call through `f` produced no result type at all, so
+# everything downstream of it was gradual. It now reads `(A -> B) -> A -> B`,
+# which is what the call itself already said.
+#
+# Found while porting Rodolfo (docs/rodolfo-findings.md).
+
+let applyTo(f, x) = f(x)
+
+# The same through two hops, so the result travels rather than being read off
+# the immediate call.
+let twice(f, x) = f(f(x))
+
+# A parameter called with two arguments: the whole signature is built from the
+# call, not just its result.
+let combine(f, a, b) = f(a, b)
+
+main do
+  # The result is the FUNCTION's result, per call site: an Integer here…
+  IO.printLine((applyTo({ |n| n + 1 }, 41) + 0).to(String))
+  # …and a String here, from the same definition.
+  IO.printLine(applyTo({ |s| s + "!" }, "hi").upperCase)
+
+  IO.printLine(twice({ |n| n * 2 }, 10).to(String))
+  IO.printLine(combine({ |a, b| "${a}-${b}" }, "left", "right"))
+end

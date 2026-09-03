@@ -7249,12 +7249,24 @@ struct Lowering {
     // context along handed it to the prelude as a user argument — `[..].count`
     // reached `kex_prelude:count/2`, the `count(pred)` overload, with the
     // context where the predicate goes, and died `badarg` (kexhq/kex#143).
+    //
+    // `contextualOwners` says the same thing about the DISPATCHER's own
+    // arity: its last parameter is that hidden context rather than a user
+    // argument. The two places that care are the ones which read the call as
+    // something other than a method call — a record field read takes no
+    // arguments at all, and a field holding a function takes only the user's.
+    // Without this a `foul routes` on one type turned every OTHER type's
+    // `routes` FIELD read into a one-argument call and died with "Undefined
+    // method: routes for Net.HTTP.Router" (kexhq/kex#242).
     auto makeDispatcher(const std::string& name, int arity,
                         const std::vector<std::string>& owners,
                         const std::string& genericFallback = {},
                         const std::string& genericFallbackModule = {},
-                        int genericFallbackArity = -1) -> FunDef {
+                        int genericFallbackArity = -1,
+                        bool contextualOwners = false) -> FunDef {
         if (genericFallbackArity < 0) genericFallbackArity = arity;
+        // The arity the CALL was written at, context excluded.
+        const int callArity = contextualOwners ? arity - 1 : arity;
         FunDef def; def.name = name; def.arity = arity;
         FunClause fc;
         std::vector<ExprPtr> fwdArgs;
@@ -7458,7 +7470,7 @@ struct Lowering {
             mc.body = std::move(call);
             m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
-        appendFieldClauses(name, arity, m);
+        appendFieldClauses(name, callArity, m);
         // Tuple last, for the reason its extraction above records: it accepts
         // every record and variant, so it is only ever the right answer once
         // the types that actually own the name have declined.
@@ -7507,7 +7519,7 @@ struct Lowering {
             // the reason this call is unresolved is that lowering does not
             // know the receiver's type.
             std::vector<ExprPtr> fieldArgs;
-            for (int i = 1; i < arity; i++)
+            for (int i = 1; i < callArity; i++)
                 fieldArgs.push_back(var("_a" + std::to_string(i)));
             auto fieldArgList = std::make_unique<Expr>();
             fieldArgList->node = MakeList{std::move(fieldArgs), std::nullopt};
@@ -8922,7 +8934,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 mod.functions.push_back(
                     L.makeDispatcher(name, arity, owners, genericFallback,
-                                     genericFallbackModule, fallbackArity));
+                                     genericFallbackModule, fallbackArity,
+                                     contextualOwners));
             }
         }
     }

@@ -1,0 +1,3 @@
+spec/error_make_field_annotation.kex:22:3: error: `b` is declared in this `make` block but nothing defines it — inside a `make` block `b : …` declares a METHOD, not a record field; declare fields in `record Thing`
+spec/error_make_field_annotation.kex:25:3: error: `a` is declared in this `make` block but nothing defines it — inside a `make` block `a : …` declares a METHOD, not a record field; the field is already declared by `record Thing`, so drop this line
+spec/error_make_field_annotation.kex:28:3: error: `shout` is declared in this `make` block but nothing defines it — a method the runtime provides is declared with `:>`, which makes the receiver implicit

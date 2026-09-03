@@ -329,6 +329,16 @@ static auto replTrimLeadingIndent(std::string source) -> std::string {
 // straight from main() truncates to the low 8 bits, which are zero for every
 // normal exit: `System.exit(3)` reported 0 under `-R` where the walker
 // reported 3, and `die` reported 0 where the walker reported 1.
+#ifdef __EMSCRIPTEN__
+// The browser build has no processes to fork, signal, or wait on — and the
+// POSIX headers the implementation below needs are not included there either
+// (see the guard at the top of this file). Keep the one entry point so every
+// call site stays shared, and let `std::system` answer the way it did before
+// the signal-forwarding version existed.
+static auto runShellCommand(const std::string &command) -> int {
+  return std::system(command.c_str());
+}
+#else
 // The pid of the program `runShellCommand` is currently waiting on, for the
 // signal handler to forward to. A signal handler may only touch a
 // `volatile sig_atomic_t`, so the pid lives here rather than in a closure.
@@ -396,6 +406,7 @@ static auto runShellCommand(const std::string &command) -> int {
   g_childPid = -1;
   return status;
 }
+#endif
 
 static auto exitStatusOf(int waitStatus) -> int {
   if (WIFEXITED(waitStatus))

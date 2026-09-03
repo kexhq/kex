@@ -17,7 +17,7 @@ let describe(s) = "got " + s
 # inference, not to the closure — quantifying over it would cut the
 # connection `outer` still needs.
 let outer(captured) do
-  let inner = do |_| captured end
+  let inner = { |_| captured }
   inner(0)
 end
 
@@ -33,7 +33,7 @@ main do
   IO.printLine(firstArg("left", 42))
   IO.printLine(firstArg(42, "right").to(String))
 
-  IO.printLine(applyTo(do |n| n * 2 end, 21).to(String))
+  IO.printLine(applyTo({ |n| n * 2 }, 21).to(String))
   IO.printLine(addOne(41).to(String))
   IO.printLine(describe("it"))
   IO.printLine(outer("captured"))

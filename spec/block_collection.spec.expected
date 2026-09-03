@@ -1,0 +1,8 @@
+Block collection
+  ✓ collects each expression in source order
+  ✓ skips false guards and includes true guards
+  ✓ splices spread expressions
+  ✓ collects an empty body into an empty list
+  ✓ leaves ordinary blocks returning their last expression
+
+5 passed, 0 failed
