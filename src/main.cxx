@@ -344,9 +344,26 @@ static auto runShellCommand(const std::string &command) -> int {
 // `volatile sig_atomic_t`, so the pid lives here rather than in a closure.
 static volatile sig_atomic_t g_childPid = -1;
 
+// SIGINT is forwarded as SIGTERM, and that substitution is the whole reason a
+// Ctrl+C stops leaking the port's OS child.
+//
+// SIGINT is the one signal Erlang cannot be handed: `os:set_signal(sigint,
+// handle)` is a `badarg`, so it never reaches `erl_signal_server` and no Erlang
+// code runs — `kex_child_guard`, which is what kills a port's child, is a
+// gen_event handler there. It instead reaches the VM's BREAK handler, which
+// takes TWO SIGINTs to abort: measured, the first leaves `beam.smp` running and
+// the second kills it outright, cleaning up nothing. That is why Ctrl+C at a
+// terminal left an HTTP server holding its port — the terminal signals the
+// whole process group, so the VM took one SIGINT directly and one from this
+// forward, hit the abort path, and the child outlived it.
+//
+// SIGTERM does reach `erl_signal_server`, and the guard on it is already proven
+// clean end to end. So the child a `Process.stream` spawned is claimed on the
+// way down instead of being orphaned. The other three signals pass through
+// unchanged — only SIGINT has the break handler in the way.
 extern "C" void forwardSignalToChild(int sig) {
   if (g_childPid > 0)
-    kill(static_cast<pid_t>(g_childPid), sig);
+    kill(static_cast<pid_t>(g_childPid), sig == SIGINT ? SIGTERM : sig);
 }
 
 // Run a shell command and wait for it, the way `std::system` does — except
@@ -3834,7 +3851,19 @@ int main(int argc, char *argv[]) {
     // Erlang prepends each -pa directory, so add the toolchain first and the
     // compiled unit last. A source module intentionally shadows a stdlib
     // module with the same public name (for example a user-defined `Math`).
-    std::string runCmd = erlExecutable() + " -noshell";
+    // `+Bi` is the other half of forwardSignalToChild's SIGINT→SIGTERM
+    // substitution, and neither works alone. A terminal's Ctrl+C signals the
+    // whole process group, so the VM takes a SIGINT DIRECTLY as well as this
+    // launcher's forward. Without `+Bi` that direct one drives the VM into its
+    // break handler, where the forwarded SIGTERM no longer lands and nothing
+    // exits at all; with `+Bi` the VM ignores SIGINT entirely and the SIGTERM
+    // does the work — `erl_signal_server` runs, `kex_child_guard` kills the
+    // port's OS child, and the run ends clean.
+    //
+    // Deliberately NOT applied to the REPL's persistent VM (the `BeamVm` block
+    // above), where Ctrl+C should interrupt evaluation rather than end the
+    // session.
+    std::string runCmd = erlExecutable() + " +Bi -noshell";
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
     runCmd += " -pa " + absBeamDir;
@@ -4444,7 +4473,10 @@ int main(int argc, char *argv[]) {
         // embedded in it survive into erl correctly regardless of
         // where they land (spec/json_parser.spec.kex).
         std::string runCmd =
-            erlExecutable() + " -noshell -pa " + outputDir + " -eval " +
+            // `+Bi` for the same reason as the other run path above: it is
+            // half of the Ctrl+C fix, with forwardSignalToChild's
+            // SIGINT→SIGTERM the other half.
+            erlExecutable() + " +Bi -noshell -pa " + outputDir + " -eval " +
             shellSingleQuote(mainCall);
         if (result.mainArity == 1 && !scriptArgs.empty()) {
           runCmd += " -extra";
