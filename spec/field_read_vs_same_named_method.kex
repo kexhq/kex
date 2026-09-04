@@ -1,0 +1,41 @@
+# A record FIELD read loses to a make-method of the same name declared on an
+# unrelated type (kexhq/kex#242).
+#
+# `Net.HTTP.Router` has a `routes` field. A `make` block elsewhere that declares
+# a method also called `routes` — on a completely different type — captures the
+# field read:
+#
+#   runtime error: Undefined method: routes for Net.HTTP.Router
+#
+# The two types need share nothing: naming ours `Site` rather than `Router`
+# makes no difference, so it is the method NAME alone, not a type collision.
+# Reading the field through a pattern match instead works, which is the
+# workaround Rodolfo carries.
+module Web do
+  using Net.HTTP, only: [Route]
+
+  record Site do
+    paths : [String]
+  end
+
+  make Site do
+    # A method named `routes` on OUR type.
+    routes :> [Route]
+    foul routes = this.built.routes      # reads the FIELD off Net.HTTP.Router
+
+    built :> Net.HTTP.Router
+    foul built = Net.HTTP.Router { routes: [] }
+
+    # The same read, destructured — this one works.
+    routesViaMatch :> [Route]
+    foul routesViaMatch = match this.built do
+      Net.HTTP.Router { routes } => routes
+    end
+  end
+end
+
+main do
+  let site = Web.Site { paths: ["/"] }
+  IO.printLine("${site.routesViaMatch.count}")
+  IO.printLine("${site.routes.count}")
+end

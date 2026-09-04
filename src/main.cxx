@@ -329,6 +329,102 @@ static auto replTrimLeadingIndent(std::string source) -> std::string {
 // straight from main() truncates to the low 8 bits, which are zero for every
 // normal exit: `System.exit(3)` reported 0 under `-R` where the walker
 // reported 3, and `die` reported 0 where the walker reported 1.
+#ifdef __EMSCRIPTEN__
+// The browser build has no processes to fork, signal, or wait on — and the
+// POSIX headers the implementation below needs are not included there either
+// (see the guard at the top of this file). Keep the one entry point so every
+// call site stays shared, and let `std::system` answer the way it did before
+// the signal-forwarding version existed.
+static auto runShellCommand(const std::string &command) -> int {
+  return std::system(command.c_str());
+}
+#else
+// The pid of the program `runShellCommand` is currently waiting on, for the
+// signal handler to forward to. A signal handler may only touch a
+// `volatile sig_atomic_t`, so the pid lives here rather than in a closure.
+static volatile sig_atomic_t g_childPid = -1;
+
+// SIGINT is forwarded as SIGTERM, and that substitution is the whole reason a
+// Ctrl+C stops leaking the port's OS child.
+//
+// SIGINT is the one signal Erlang cannot be handed: `os:set_signal(sigint,
+// handle)` is a `badarg`, so it never reaches `erl_signal_server` and no Erlang
+// code runs — `kex_child_guard`, which is what kills a port's child, is a
+// gen_event handler there. It instead reaches the VM's BREAK handler, which
+// takes TWO SIGINTs to abort: measured, the first leaves `beam.smp` running and
+// the second kills it outright, cleaning up nothing. That is why Ctrl+C at a
+// terminal left an HTTP server holding its port — the terminal signals the
+// whole process group, so the VM took one SIGINT directly and one from this
+// forward, hit the abort path, and the child outlived it.
+//
+// SIGTERM does reach `erl_signal_server`, and the guard on it is already proven
+// clean end to end. So the child a `Process.stream` spawned is claimed on the
+// way down instead of being orphaned. The other three signals pass through
+// unchanged — only SIGINT has the break handler in the way.
+extern "C" void forwardSignalToChild(int sig) {
+  if (g_childPid > 0)
+    kill(static_cast<pid_t>(g_childPid), sig == SIGINT ? SIGTERM : sig);
+}
+
+// Run a shell command and wait for it, the way `std::system` does — except
+// that POSIX requires `system()` to IGNORE SIGINT and SIGQUIT in the calling
+// process for the whole call, and gives back no pid. So `kex` could not
+// observe Ctrl+C at all, had no child to forward it to, and left whatever
+// `sh` started reparented to init: a `tey run` server kept serving and kept
+// its port after its launcher was gone, and `eaddrinuse` met the next run.
+//
+// The child stays in this process group deliberately, so a terminal's
+// Ctrl+C keeps reaching `erl` directly the way it already did. What is new
+// is the second path: a signal delivered to the LAUNCHER alone now reaches
+// the child too, and a launcher going down takes the child with it.
+//
+// Returns a wait status, as `std::system` does — pass it to `exitStatusOf`.
+static auto runShellCommand(const std::string &command) -> int {
+  pid_t pid = fork();
+  if (pid < 0)
+    return -1;
+  if (pid == 0) {
+    // Whatever the parent chose to ignore, the program itself should not.
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
+    _exit(127);
+  }
+  g_childPid = pid;
+  struct sigaction forward {};
+  forward.sa_handler = forwardSignalToChild;
+  sigemptyset(&forward.sa_mask);
+  forward.sa_flags = 0; // no SA_RESTART: waitpid must return EINTR
+  struct sigaction previousInt {}, previousTerm {}, previousHup {},
+      previousQuit {};
+  sigaction(SIGINT, &forward, &previousInt);
+  sigaction(SIGTERM, &forward, &previousTerm);
+  sigaction(SIGHUP, &forward, &previousHup);
+  sigaction(SIGQUIT, &forward, &previousQuit);
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno == EINTR)
+      continue; // a forwarded signal; keep waiting for the child to act on it
+    // Waiting failed for a reason retrying cannot fix. Never leave the child
+    // behind holding its port — that is the orphaned `beam.smp` this exists
+    // to prevent.
+    kill(pid, SIGTERM);
+    status = -1;
+    break;
+  }
+
+  sigaction(SIGINT, &previousInt, nullptr);
+  sigaction(SIGTERM, &previousTerm, nullptr);
+  sigaction(SIGHUP, &previousHup, nullptr);
+  sigaction(SIGQUIT, &previousQuit, nullptr);
+  g_childPid = -1;
+  return status;
+}
+#endif
+
 static auto exitStatusOf(int waitStatus) -> int {
   if (WIFEXITED(waitStatus))
     return WEXITSTATUS(waitStatus);
@@ -2151,7 +2247,7 @@ int main(int argc, char *argv[]) {
           std::string cmd = erlcExecutable() + " +from_core -W0 -pa " + dir +
                             " -o " + dir + " " + dir + "/" +
                             module.emitted.moduleName + ".core";
-          if (std::system(cmd.c_str()) != 0) return 1;
+          if (runShellCommand(cmd) != 0) return 1;
         }
 
         for (size_t i = 1; i < modules.size(); i++)
@@ -3069,7 +3165,7 @@ int main(int argc, char *argv[]) {
             std::string erlCmd = erlcExecutable() + " +from_core -W0 -pa " +
                                  beamDir + " -o " + beamDir + " " +
                                  corePath + " 2>&1";
-            int erlcRet = std::system(erlCmd.c_str());
+            int erlcRet = runShellCommand(erlCmd);
             std::filesystem::remove(corePath);
             if (erlcRet != 0) {
               compiled = false;
@@ -3755,7 +3851,19 @@ int main(int argc, char *argv[]) {
     // Erlang prepends each -pa directory, so add the toolchain first and the
     // compiled unit last. A source module intentionally shadows a stdlib
     // module with the same public name (for example a user-defined `Math`).
-    std::string runCmd = erlExecutable() + " -noshell";
+    // `+Bi` is the other half of forwardSignalToChild's SIGINT→SIGTERM
+    // substitution, and neither works alone. A terminal's Ctrl+C signals the
+    // whole process group, so the VM takes a SIGINT DIRECTLY as well as this
+    // launcher's forward. Without `+Bi` that direct one drives the VM into its
+    // break handler, where the forwarded SIGTERM no longer lands and nothing
+    // exits at all; with `+Bi` the VM ignores SIGINT entirely and the SIGTERM
+    // does the work — `erl_signal_server` runs, `kex_child_guard` kills the
+    // port's OS child, and the run ends clean.
+    //
+    // Deliberately NOT applied to the REPL's persistent VM (the `BeamVm` block
+    // above), where Ctrl+C should interrupt evaluation rather than end the
+    // session.
+    std::string runCmd = erlExecutable() + " +Bi -noshell";
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
     runCmd += " -pa " + absBeamDir;
@@ -3769,7 +3877,7 @@ int main(int argc, char *argv[]) {
       for (const auto &a : beamArgs)
         runCmd += " " + a;
     }
-    int rc = std::system(runCmd.c_str());
+    int rc = runShellCommand(runCmd);
     return exitStatusOf(rc);
   }
 
@@ -4210,16 +4318,15 @@ int main(int argc, char *argv[]) {
         } else {
           std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
         }
-        erlcRet = std::system(coreCmd.c_str());
+        erlcRet = runShellCommand(coreCmd);
         if (erlcRet != 0) {
           // The quiet mode above swallows erlc's own diagnostic — which is the
           // only thing that says WHY. Re-run it loudly on failure so the
           // message reaches the terminal (and CI) instead of a bare
           // "erlc failed", which is all a failing spec could report.
           if (!tempDir.empty())
-            std::system((erlcExecutable() + " +from_core -pa " + outputDir +
-                         " -o " + outputDir + " " + corePaths[moduleIndex])
-                            .c_str());
+            runShellCommand(erlcExecutable() + " +from_core -pa " + outputDir +
+                            " -o " + outputDir + " " + corePaths[moduleIndex]);
           std::cerr << "error: erlc failed\n";
           if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
           return 1;
@@ -4366,14 +4473,17 @@ int main(int argc, char *argv[]) {
         // embedded in it survive into erl correctly regardless of
         // where they land (spec/json_parser.spec.kex).
         std::string runCmd =
-            erlExecutable() + " -noshell -pa " + outputDir + " -eval " +
+            // `+Bi` for the same reason as the other run path above: it is
+            // half of the Ctrl+C fix, with forwardSignalToChild's
+            // SIGINT→SIGTERM the other half.
+            erlExecutable() + " +Bi -noshell -pa " + outputDir + " -eval " +
             shellSingleQuote(mainCall);
         if (result.mainArity == 1 && !scriptArgs.empty()) {
           runCmd += " -extra";
           for (const auto &a : scriptArgs)
             runCmd += " " + a;
         }
-        int ret = std::system(runCmd.c_str());
+        int ret = runShellCommand(runCmd);
         if (!tempDir.empty())
           std::filesystem::remove_all(tempDir);
         return exitStatusOf(ret);
@@ -4524,6 +4634,48 @@ int main(int argc, char *argv[]) {
         merged.push_back(std::move(item));
       program.items = std::move(merged);
       break;
+    }
+
+    // ...and so are the project's OTHER modules. `mode == "run"` and
+    // `mode == "compile"` both merge every module a `using` or a qualified
+    // reference reaches before checking; this path did not, so it built its
+    // checker from the prelude interface alone. A two-module program then
+    // reported errors no other mode saw — a record declared in a sibling
+    // module was an unknown name here, so a union declared alongside it
+    // refused its own members and any annotation naming it went unverified.
+    // The editor sees this too: the LSP checks the way `-C` does.
+    {
+      kex::semantic::Analyzer dependencyAnalysis(&preludeSemanticInterfaces());
+      (void)dependencyAnalysis.analyze(program);
+      auto qualifiedModules = dependencyAnalysis.referencedModules();
+      for (auto it = qualifiedModules.begin(); it != qualifiedModules.end();) {
+        const auto imported = preludeSemanticInterfaces().modules.find(*it);
+        if (imported != preludeSemanticInterfaces().modules.end() &&
+            imported->second.automaticImport)
+          it = qualifiedModules.erase(it);
+        else
+          ++it;
+      }
+      // PROJECT roots only. A stdlib module reached by `using FS` already
+      // has a compiled interface, and merging its SOURCE on top of that adds
+      // a second, unannotated candidate for every method it defines — enough
+      // to switch off a mismatch report that the interface alone gets right
+      // (spec/typestate_survives_standin.kex: writing through a read-only
+      // FileHandle stopped being an error). The run and compile paths merge
+      // the stdlib too, but they consume it for CODEGEN, where having the
+      // source is the point.
+      auto projectRoots = moduleRootsFor(filepath);
+      const auto stdlibRoots = kex::standardLibraryModuleRoots();
+      projectRoots.erase(
+          std::remove_if(projectRoots.begin(), projectRoots.end(),
+                         [&](const std::string &root) {
+                           return std::find(stdlibRoots.begin(),
+                                            stdlibRoots.end(),
+                                            root) != stdlibRoots.end();
+                         }),
+          projectRoots.end());
+      resolveBeamDeps(program, projectRoots, &preludeSemanticInterfaces(),
+                      qualifiedModules);
     }
 
     // Pass 1+2: collect symbols and resolve names via SemanticDB

@@ -1,0 +1,6 @@
+redirect 303 -> /next
+redirect 302 -> /old
+safe <b>
+plain raw
+redirect 307 -> /qualified
+plain qualified raw

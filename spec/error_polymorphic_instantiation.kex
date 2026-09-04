@@ -1,0 +1,27 @@
+# kex: check-only
+# A polymorphic function specializes at each CALL SITE.
+#
+# `let id(x) = x` leaves one inference variable behind, and every call site
+# used to share it — so `id(5)` was not an Integer and `id("a")` was not a
+# String, and neither of these programs was rejected. The first crashed at
+# runtime with "Cannot add Int and String"; the second silently passed a
+# String to a function that takes an Integer.
+#
+# A definition's leftover inference variables are now quantified into the same
+# per-signature placeholders an ANNOTATED generic uses (`let first(xs: [A])`),
+# which call sites already instantiate afresh. See `spec/polymorphic_reuse.kex`
+# for the calls that must keep working, and TypeChecker::generalizeSignature.
+#
+# Found while porting Rodolfo (docs/rodolfo-findings.md, and the audit case
+# examples/typesystem_audit/03_polymorphic_unspecialized.kex).
+
+let id(x) = x
+
+let takesInteger(n: Integer) -> String = n.to(String)
+
+main do
+  let n = id(5)
+  let s = id("a")
+  IO.printLine(n + s)
+  IO.printLine(takesInteger(id("not an integer")))
+end

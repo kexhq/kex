@@ -1,0 +1,37 @@
+# kex: check-only
+# A `make` body holds METHODS. Per grammar.ebnf's `make_item` a type
+# annotation there is a method signature, and fields belong to `record` — but
+# `make T do a: String end` was accepted by the walker (which answered the
+# read off the record literal) and emitted a tuple with no layout on BEAM,
+# where dispatch then died with `undef`. Neither backend said anything.
+#
+# The declaration is now judged for what the grammar says it is: a method
+# contract, and one that nothing defines.
+#
+# A `:>` contract with no body in sight stays legal — that is how the stdlib
+# declares a method the RUNTIME provides (`collect :> (X -> Y?) -> [Y]` on
+# `make List`), so only the plain-colon spelling is reported.
+#
+# Found while porting Rodolfo (docs/rodolfo-findings.md).
+record Thing do
+  a : String
+end
+
+make Thing do
+  # The mistake: this looks like a field and is not one.
+  b : Integer
+
+  # The same name as a field the record already declares.
+  a : String
+
+  # Plain colon on a function type: a method contract, still undefined.
+  shout : String -> String
+
+  # Fine — defined right below it.
+  describe :> String
+  let describe -> String = "thing"
+end
+
+main do
+  IO.printLine(Thing { a: "x" }.describe)
+end

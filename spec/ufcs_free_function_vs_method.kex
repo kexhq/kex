@@ -1,0 +1,58 @@
+# A `using`-imported FREE function must not capture a receiver call of the
+# same name and arity.
+#
+# `using Dsl` brings a bare `get(path, handler)` into scope; `Headers.Bag`
+# declares its own `get(name)`, reached through the receiver. With the
+# receiver's type written down the checker settles which one a call means —
+# but on an UNANNOTATED parameter it has nothing to settle with, and BEAM
+# lowering bound the call to the imported free function outright. No error
+# anywhere: `bag.get("Content-Type")` came back as a `Dsl.Route` built out of
+# the receiver and the argument. The walker dispatches on the value; this
+# pins BEAM to the same answer.
+
+module Dsl do
+  record Route do
+    routePath : String
+    routeHandler : String
+  end
+
+  let get(routePath: String, routeHandler: String) -> Route do
+    Route { routePath: routePath, routeHandler: routeHandler }
+  end
+end
+
+module Headers do
+  record Bag do
+    names : [String]
+    values : [String]
+  end
+
+  make Bag do
+    let get(name: String) -> String do
+      match this.names.indexOf(name) do
+        Just(at) => match this.values.at(at) do
+          Just(value) => value
+          None => "<missing>"
+        end
+        None => "<missing>"
+      end
+    end
+  end
+end
+
+using Dsl
+using Headers
+
+# No annotation: the receiver's type is not known to the checker here.
+let lookup(bag, name) -> String = bag.get(name)
+
+main do
+  let bag = Bag { names: ["Content-Type"], values: ["application/json"] }
+  # Annotated receiver — this already worked.
+  IO.printLine(bag.get("Content-Type"))
+  # Unannotated receiver — this is the regression.
+  IO.printLine(lookup(bag, "Content-Type"))
+  IO.printLine(lookup(bag, "Accept"))
+  # The free function is still reachable under its own name.
+  IO.printLine(get("/health", "ok").routePath)
+end

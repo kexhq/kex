@@ -1,0 +1,13 @@
+# kex: check-only
+# The other half of `spec/call_through_type_variable.kex`: once the call
+# through a variable-typed parameter has a result type, using that result
+# wrongly is an error. It used to be `Any`, so none of these was reported.
+
+let applyTo(f, x) = f(x)
+
+let takesString(s: String) -> String = s
+
+main do
+  IO.printLine(applyTo({ |n| n + 1 }, 41).upperCase)
+  IO.printLine(takesString(applyTo({ |n| n + 1 }, 41)))
+end

@@ -1,0 +1,40 @@
+# The other half of `spec/error_polymorphic_instantiation.kex`: quantifying a
+# definition's leftover inference variables must not cost the calls that were
+# always correct.
+#
+# Each call site gets its OWN instance of the signature, so one call can no
+# longer decide what the next one means — and a variable the body actually
+# constrained is not quantified at all, so `addOne` stays `Number -> Integer`
+# rather than becoming spuriously generic.
+
+let id(x) = x
+let firstArg(a, b) = a
+let applyTo(f, x) = f(x)
+let addOne(n) = n + 1
+let describe(s) = "got " + s
+
+# The enclosing parameter a closure captures belongs to the enclosing
+# inference, not to the closure — quantifying over it would cut the
+# connection `outer` still needs.
+let outer(captured) do
+  let inner = { |_| captured }
+  inner(0)
+end
+
+main do
+  # One definition, four different types, in one program.
+  IO.printLine(id("a string"))
+  IO.printLine((id(5) + 1).to(String))
+  IO.printLine(id([1, 2, 3]).length.to(String))
+  IO.printLine(id(true).to(String))
+
+  # A relationship between two parameters survives instantiation, and each
+  # call binds them independently: `firstArg : A -> B -> A`.
+  IO.printLine(firstArg("left", 42))
+  IO.printLine(firstArg(42, "right").to(String))
+
+  IO.printLine(applyTo({ |n| n * 2 }, 21).to(String))
+  IO.printLine(addOne(41).to(String))
+  IO.printLine(describe("it"))
+  IO.printLine(outer("captured"))
+end

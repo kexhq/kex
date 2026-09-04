@@ -1,0 +1,44 @@
+# CLOSED — polymorphic functions now specialize at call sites.
+#
+# This file is kept as the regression it became. `kex -C` REJECTS it now:
+#
+#   error: Cannot add Integer and String
+#
+# What the audit found, and what it was:
+#
+# `id(x) = x` was accepted at both `Int` and `String` (good), but the result
+# was not constrained: `n` was not typed as `Int`, `s` was not typed as
+# `String`. The checker accepted `n + s` and the program crashed at runtime.
+# Direct `5 + "a"` WAS rejected, so the bug was specifically that `id(5)` did
+# not produce an `Int`-typed result — free type variables from a function body
+# never got bound to the argument type at the call site.
+#
+# The cause: an unannotated parameter is an inference variable living in one
+# global substitution, so every call site shared it. An ANNOTATED generic
+# (`let first(xs: [A]) -> A?`) was already a per-signature placeholder that
+# call sites instantiate afresh; `TypeChecker::generalizeSignature` now moves
+# a definition's leftover inference variables into that same representation,
+# so inferred and annotated generics behave identically from there on.
+#
+# Haskell (HM + let-polymorphism), which Kex now matches here:
+#   id :: a -> a
+#   n  = id 5      -- inferred n :: Int
+#   s  = id "a"    -- inferred s :: [Char], separate instantiation
+#   n + s          -- COMPILE ERROR: cannot match expected type Int with [Char]
+#
+# It had also grown a HANG — `kex -C`, the LSP, and every other mode stopped
+# responding on this file — from a separate defect: `n + s` resolved both
+# operands to one shared variable, which was then bound to itself, and
+# `TypeChecker::resolve` walks the substitution chain to a fixed point that no
+# longer existed. Fixed too; see `spec/self_referential_typevar.kex`.
+#
+# Specs: spec/error_polymorphic_instantiation.kex (this program's diagnostics)
+#        spec/polymorphic_reuse.kex (the calls that must keep working)
+
+let id(x) = x
+
+main do
+  let n = id(5)
+  let s = id("a")
+  IO.printLine(n + s)
+end

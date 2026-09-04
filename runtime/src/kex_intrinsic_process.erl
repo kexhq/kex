@@ -57,7 +57,9 @@ run_split(Shell, Executable, Arguments, Fifo) ->
     Port = open_port({spawn_executable, Shell},
                      [binary, exit_status, use_stdio, hide,
                       {args, ["-c", Script, Executable | Arguments]}]),
+    Guard = kex_child_guard:protect(Port),
     {Status, Out} = collect_port(Port, []),
+    kex_child_guard:release(Guard),
     Err = await_stderr(Reader, Fifo),
     {'Ok', {'ProcessResult', Status, Out, Err}}.
 
@@ -92,12 +94,18 @@ stream(Command, Args) ->
             %% input that can never arrive. The feeder reads this process's
             %% own stdin and forwards it, in its own process so that waiting
             %% for a line never stops the output loop below.
+            %% A port's child is in its own process group and nothing
+            %% reaps it, so it outlives this VM with its socket still bound:
+            %% `tey run` exited and left the server it started serving. See
+            %% kex_child_guard.
+            Guard = kex_child_guard:protect(Port),
             Feeder = erlang:spawn(fun() -> feed_port(Port) end),
             Status = pump_port(Port),
             %% The child is gone; whatever the feeder is waiting for is no
             %% longer wanted, and leaving it blocked on stdin would eat the
             %% next thing typed at Tey itself.
             erlang:exit(Feeder, kill),
+            kex_child_guard:release(Guard),
             {'Ok', Status}
     end.
 
@@ -162,7 +170,9 @@ run_merged(Executable, Arguments) ->
     Port = open_port({spawn_executable, Executable},
                      [binary, exit_status, use_stdio, stderr_to_stdout,
                       hide, {args, Arguments}]),
+    Guard = kex_child_guard:protect(Port),
     {Status, Out} = collect_port(Port, []),
+    kex_child_guard:release(Guard),
     {'Ok', {'ProcessResult', Status, Out, <<>>}}.
 
 make_fifo(Mkfifo) ->

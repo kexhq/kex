@@ -1,0 +1,24 @@
+# A type variable must never be bound to itself.
+#
+# `let id(x) = x` leaves one unconstrained type variable behind, and every
+# call site shares it — so in `a + b` both operands resolved to the SAME
+# variable. `inferBinaryOp` records "these two share a type" by binding one
+# operand to the other, which in that case wrote `T ↦ T`; `resolve` walks the
+# substitution chain, so it never terminated. `kex -C` hung, and so did every
+# other mode, because the check runs first (there was nothing to report — the
+# compiler simply stopped responding).
+#
+# This says nothing about the SEPARATE soundness hole that `id(5)` is not
+# specialized to Integer — see examples/typesystem_audit/.
+
+let id(x) = x
+
+let twice(x) = x + x
+
+main do
+  let a = id(1)
+  let b = id(2)
+  IO.printLine((a + b).to(String))
+  IO.printLine(twice(21).to(String))
+  IO.printLine(id("passed"))
+end

@@ -9,6 +9,7 @@
 #include "../semantic/analyzer.hxx"
 #include "../semantic/db.hxx"
 #include "../semantic/types.hxx"
+#include "../module/resolver.hxx"
 #include "../validation/tag_validator.hxx"
 #include "tey_roots.hxx"
 
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <istream>
 #include <iterator>
@@ -100,6 +102,120 @@ auto uriPath(const ::lsp::DocumentUri& uri) -> std::string {
 void appendRoot(std::vector<std::string>& roots, std::string root) {
     if (std::find(roots.begin(), roots.end(), root) == roots.end())
         roots.push_back(std::move(root));
+}
+
+// Every project-local module a program reaches by name: the `using` targets,
+// at file scope and inside nested modules alike. `Analyzer::referencedModules`
+// covers the qualified-only references; this covers the imports.
+auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
+    std::vector<std::string> names;
+    auto add = [&](const ast::TypeName& name) {
+        std::string joined;
+        for (size_t i = 0; i < name.parts.size(); ++i) {
+            if (i) joined += ".";
+            joined += name.parts[i];
+        }
+        if (!module::Resolver::isForeignNamespace(joined))
+            names.push_back(std::move(joined));
+    };
+    auto scanBody = [&](auto& self, const std::vector<ast::ModuleItem>& body)
+        -> void {
+        for (const auto& item : body) {
+            if (auto* import = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+                if (*import) add((*import)->module);
+            if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*nested) self(self, (*nested)->body);
+        }
+    };
+    for (const auto& item : program.items) {
+        if (auto* import = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+            if (*import) add((*import)->module);
+        if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+            if (*nested) scanBody(scanBody, (*nested)->body);
+    }
+    return names;
+}
+
+// A document's sibling modules, parsed and kept alive. AST locations hold a
+// `string_view` into the path, so these strings must outlive the merged items
+// — which is the whole reason this is a type and not a function-local.
+struct ProjectModules {
+    std::vector<std::unique_ptr<std::string>> paths;
+    std::vector<std::unique_ptr<std::string>> sources;
+    std::vector<std::unique_ptr<ast::Program>> programs;
+};
+
+// Merge every project-local module this document reaches into its program,
+// the way `kex -c`, `kex -R` and `kex -C` all do before checking. Without it
+// the language server builds its checker from the prelude interface alone, so
+// a record declared in a sibling module is an unknown name here: a union
+// declared alongside it refuses its own members, and an annotation naming it
+// goes unverified. Diagnostics then disagreed with every CLI mode.
+//
+// Unlike the compiler's own version, a dependency that does not parse is
+// SKIPPED rather than fatal. A language server sees half-typed files
+// constantly, including in the modules next door, and the right response is
+// to check what it can.
+auto mergeProjectModules(ast::Program& program,
+                         const std::vector<std::string>& moduleRoots,
+                         const semantic::ImportedInterfaces* interfaces,
+                         ProjectModules& retained) -> void {
+    module::Resolver resolver(moduleRoots);
+    std::unordered_set<std::string> loaded;
+    std::vector<ast::Program*> pending;
+
+    auto discover = [&](const ast::Program& from) {
+        auto names = usingModuleNames(from);
+        semantic::Analyzer references(interfaces);
+        (void)references.analyze(from);
+        auto referenced = references.referencedModules();
+        std::vector<std::string> ordered(referenced.begin(), referenced.end());
+        // Sorted: `referencedModules` is a hash set, and letting the host's
+        // hash order decide what gets merged makes diagnostics irreproducible.
+        std::sort(ordered.begin(), ordered.end());
+        for (const auto& name : ordered) {
+            if (interfaces) {
+                auto imported = interfaces->modules.find(name);
+                if (imported != interfaces->modules.end() &&
+                    imported->second.automaticImport)
+                    continue;
+            }
+            names.push_back(name);
+        }
+        for (const auto& name : names) {
+            auto resolved = resolver.resolve(name);
+            if (!resolved) continue;
+            if (!loaded.insert(resolved->path).second) continue;
+            auto path = std::make_unique<std::string>(resolved->path);
+            std::ifstream file(*path, std::ios::binary);
+            if (!file) continue;
+            auto source = std::make_unique<std::string>(
+                std::istreambuf_iterator<char>(file),
+                std::istreambuf_iterator<char>());
+            Lexer lexer(std::string(*source), *path);
+            Parser parser(lexer.tokenizeAll(), *path);
+            auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
+            if (!parser.diagnostics().empty()) continue;
+            pending.push_back(parsed.get());
+            retained.paths.push_back(std::move(path));
+            retained.sources.push_back(std::move(source));
+            retained.programs.push_back(std::move(parsed));
+        }
+    };
+
+    discover(program);
+    // Breadth-first: a module just merged can name modules of its own, and
+    // discovery must not stop after one hop.
+    for (size_t i = 0; i < pending.size(); ++i) discover(*pending[i]);
+
+    if (retained.programs.empty()) return;
+    std::vector<ast::TopLevelItem> merged;
+    for (auto& dependency : retained.programs)
+        for (auto& item : dependency->items)
+            if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+                merged.push_back(std::move(item));
+    for (auto& item : program.items) merged.push_back(std::move(item));
+    program.items = std::move(merged);
 }
 
 // The search path for a document, in the order `tey` gives the compiler: the
@@ -1962,6 +2078,27 @@ private:
         return moduleRootsFor(path, m_configuredSourceRoots);
     }
 
+    // The same roots minus the standard library's. A stdlib module already
+    // has a compiled interface; merging its SOURCE on top adds a second,
+    // unannotated candidate for every method it defines, which is enough to
+    // switch off a mismatch the interface alone reports correctly — writing
+    // through a read-only FileHandle stopped being an error
+    // (spec/typestate_survives_standin.kex). Merging is for the PROJECT's own
+    // modules, which have no interface to consult.
+    auto projectModuleRoots(const std::string& path) const
+        -> std::vector<std::string> {
+        auto roots = documentModuleRoots(path);
+        const auto stdlib = standardLibraryModuleRoots();
+        roots.erase(std::remove_if(roots.begin(), roots.end(),
+                                   [&](const std::string& root) {
+                                       return std::find(stdlib.begin(),
+                                                        stdlib.end(),
+                                                        root) != stdlib.end();
+                                   }),
+                    roots.end());
+        return roots;
+    }
+
     void verifyInitialized() const {
         if (!m_initialized)
             throw ::lsp::RequestError(::lsp::MessageError::ServerNotInitialized,
@@ -2137,6 +2274,14 @@ private:
         document.documentation = sourceDocumentation(document.text);
         m_db.setModuleRoots(documentModuleRoots(path));
         m_db.updateFile(path, document.text, specCompanions(path));
+        // Once per parse, and only here: `updateFile` is what replaces the
+        // file's AST, so this is the one place the merge cannot double up.
+        if (auto* state = m_db.fileState(path)) {
+            auto& retained = m_projectModules[path];
+            retained = {};
+            mergeProjectModules(state->ast, projectModuleRoots(path),
+                                &m_interfaces, retained);
+        }
         m_referenceIndexReady = false;
         m_referenceIndexWord.clear();
         publishDiagnostics(uri, document);
@@ -4067,6 +4212,10 @@ private:
     semantic::SemanticDB m_db;
     semantic::SemanticDB m_referenceDb;
     std::unordered_map<std::string, Document> m_documents;
+    // The sibling modules merged into each document's AST. Keyed by document
+    // because the merged items borrow their `location.file` from these
+    // strings, so they must live exactly as long as that AST does.
+    std::unordered_map<std::string, ProjectModules> m_projectModules;
     std::vector<std::string> m_workspaceRoots;
     std::vector<std::string> m_configuredSourceRoots;
     std::vector<IndexedCallReference> m_indexedCallReferences;

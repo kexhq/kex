@@ -418,7 +418,7 @@ inspect_typed(X, Type) ->
 inspect_real(X) when is_integer(X) ->
     inspect_format(?YELL ++ "~p" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Int" ++ ?RESET ++ "~n", [X]), X;
+              ++ " " ++ ?CYAN ++ "Integer" ++ ?RESET ++ "~n", [X]), X;
 %% format_float/1, not ~g: ~g rendered 3.0e11 as "3.00000e+11" in the BEAM
 %% REPL while the walker REPL and every non-REPL path printed
 %% "300000000000.0" for the same value.
@@ -441,7 +441,7 @@ inspect_real(ok) ->
 inspect_real('None') ->
     inspect_format(?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), 'None';
+              ++ " " ++ ?CYAN ++ "Optional" ++ ?RESET ++ "~n"), 'None';
 inspect_real(X) when is_atom(X) ->
     Name = atom_to_list(X),
     case Name of
@@ -630,7 +630,7 @@ list_type_name([H | T]) ->
     end.
 
 value_type_name(X) when is_binary(X) -> "String";
-value_type_name(X) when is_integer(X) -> "Int";
+value_type_name(X) when is_integer(X) -> "Integer";
 value_type_name(X) when is_float(X) -> "Float";
 value_type_name(true) -> "Bool";
 value_type_name(false) -> "Bool";
@@ -638,8 +638,8 @@ value_type_name({'Char', _}) -> "Char";
 value_type_name({'Binary', Bin}) when is_binary(Bin) -> "Binary";
 value_type_name(X) when is_list(X) -> list_type_name(X);
 value_type_name(X) when is_map(X) -> "Map";
-value_type_name({'Just', V}) -> "Option<" ++ value_type_name(V) ++ ">";
-value_type_name({'Some', V}) -> "Option<" ++ value_type_name(V) ++ ">";
+value_type_name({'Just', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
+value_type_name({'Some', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
 value_type_name({'Ok', V}) -> "Result<" ++ value_type_name(V) ++ ", ?>";
 value_type_name({'Error', V}) -> "Result<?, " ++ value_type_name(V) ++ ">";
 value_type_name(X) when is_tuple(X) ->
@@ -661,7 +661,7 @@ value_type_name(X) when is_tuple(X) ->
     end;
 %% A nullary constructor lowers to a bare atom, so its type has to come from
 %% the variant registry — otherwise every one of them reported "Atom", and
-%% containers holding them reported "[Atom]" / "Option<Atom>".
+%% containers holding them reported "[Atom]" / "Optional<Atom>".
 value_type_name(X) when is_atom(X) -> nullary_type_name(X);
 value_type_name(_) -> "Any".
 

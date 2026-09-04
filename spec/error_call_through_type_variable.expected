@@ -1,0 +1,8 @@
+spec/error_call_through_type_variable.kex:11:52: error: `upperCase` expects argument 1 to be Char, but got Integer
+
+upperCase : Char -> Char
+
+upperCase : String -> String
+spec/error_call_through_type_variable.kex:12:16: error: `takesString` expects argument 1 to be String, but got Integer
+
+takesString : String -> String

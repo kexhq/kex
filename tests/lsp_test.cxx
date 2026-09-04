@@ -1188,6 +1188,77 @@ int main() {
             fs::remove(root / "z_consumer.kex");
             fs::remove(root);
         });
+        // The editor checks the way `kex -C` does, and it too built its
+        // checker from the prelude interface alone: a record declared in a
+        // sibling module was an unknown name, so a union declared alongside
+        // it refused its own members and the editor reported errors no other
+        // mode saw. Member completion on such a receiver offered nothing for
+        // the same reason — the type is qualified across a file boundary
+        // (`Shapes.Circle`) while the `make` target is written bare.
+        it("checks and completes against a sibling module's declarations", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-sibling-module";
+            fs::remove_all(root);
+            fs::create_directories(root / "lib");
+            {
+                std::ofstream library(root / "lib" / "shapes.kex");
+                library << "module Shapes\n"
+                           "\n"
+                           "record Circle do\n"
+                           "  radius : Float\n"
+                           "end\n"
+                           "\n"
+                           "module Kinds do\n"
+                           "  record Ellipse do\n"
+                           "    major : Float\n"
+                           "  end\n"
+                           "end\n"
+                           "\n"
+                           "type Shape = Shapes.Circle | Shapes.Kinds.Ellipse\n"
+                           "\n"
+                           "make Circle do\n"
+                           "  let area() -> Float = 3.0 * this.radius\n"
+                           "end\n";
+            }
+            // Newlines stay ESCAPED here: this text is embedded in the
+            // didOpen JSON, not written to disk.
+            const char* entry =
+                "using Shapes\\n"
+                "let rounder(radius: Float) -> Shapes.Shape do\\n"
+                "  Kinds.Ellipse { major: radius }\\n"
+                "end\\n"
+                "main do\\n"
+                "  let c = Circle { radius: 2.0 }\\n"
+                "  IO.printLine(c.area().to(String))\\n"
+                "end\\n";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-sibling-module","capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                std::string(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-module/main.kex","languageId":"kex","version":1,"text":")") +
+                entry + R"("}}})");
+            // Just past the `.` of `c.area()`.
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-module/main.kex"},"position":{"line":6,"character":17}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto text = output.str();
+            // A union member declared one module deeper is still a member.
+            assertTrue(text.find("declared to return") == std::string::npos,
+                       "sibling module's union refused its own member: " +
+                           text.substr(0, 2000));
+            const auto completion = responseForId(text, 2);
+            assertTrue(completion.find(R"("label":"area")") != std::string::npos,
+                       "member completion missed the sibling module's method: " +
+                           completion);
+            fs::remove_all(root);
+        });
         // What `tey build` sees and the editor did not: a dependency's
         // modules, reachable through the roots `tey.lock` names.
         it("resolves modules from a tey package's locked dependencies", []() {

@@ -5,4 +5,4 @@ true
 true
 true
 [1, 2, 3]
-Internal error: spec/backend_runtime_errors.kex:16:22: runtime error: Cannot compare String and Int
+Internal error: spec/backend_runtime_errors.kex:16:22: runtime error: Cannot compare String and Integer

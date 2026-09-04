@@ -229,7 +229,7 @@ auto Value::variant(std::string tag, std::string parentType, std::vector<ValuePt
 }
 
 auto Value::just(ValuePtr inner) -> ValuePtr {
-    return variant("Just", "Option", {std::move(inner)}, {"T"}, {0});
+    return variant("Just", "Optional", {std::move(inner)}, {"T"}, {0});
 }
 
 auto Value::ok(ValuePtr inner) -> ValuePtr {
@@ -499,7 +499,7 @@ auto Value::typeName() const -> std::string {
         if constexpr (std::is_same_v<T, PlaceholderValue>)
             throw PlaceholderMisuse(v.name, "asking for its type");
         else if constexpr (std::is_same_v<T, UnitValue>) return "Void";
-        else if constexpr (std::is_same_v<T, IntValue>) return "Int";
+        else if constexpr (std::is_same_v<T, IntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
         else if constexpr (std::is_same_v<T, StringValue>) return "String";

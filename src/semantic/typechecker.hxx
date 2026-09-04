@@ -6,6 +6,7 @@
 #include "traits.hxx"
 #include "types.hxx"
 #include <algorithm>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -316,6 +317,13 @@ private:
     std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
         m_mainImports;
     int m_nextTypeVar = 0;
+    // `m_nextTypeVar` as it stood when the clause being checked started, so a
+    // variable can be told apart from one an enclosing — or an already
+    // finished — inference owns. `checkCall` uses it to decide whether calling
+    // a variable-typed binding may bind that variable to a function type;
+    // outside any clause nothing qualifies, which is what the initial value
+    // says.
+    int m_clauseVarMark = std::numeric_limits<int>::max();
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
@@ -486,6 +494,13 @@ private:
     auto unifyVar(int id, TypePtr concrete) -> void;
 
     auto freshTypeVar() -> TypePtr;
+
+    // Let-polymorphism. Rewrites the inference variables a definition left
+    // free — those created while checking it, hence `varMark` — into the
+    // per-signature generic placeholders (negative ids) that call sites
+    // already instantiate afresh. See the definition for why this is the
+    // whole of the fix.
+    auto generalizeSignature(Signature& signature, int varMark) -> void;
 };
 
 } // namespace kex::semantic
