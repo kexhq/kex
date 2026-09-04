@@ -426,12 +426,21 @@ foul librarySources -> [String] do
     .map { |path| "src/${path}" }
 end
 
+# Returns units relative to `packageRoot`, not absolute: the compiler
+# double-registers a module's declarations when the entry file it is asked to
+# compile is an absolute path that also falls under an explicit
+# `--source-root` (kexhq/kex#?, surfaced by `tey build`ing Rodolfo — a
+# `private do` function building a record literal of a type carrying earlier
+# `make` methods reported that type's method "defined twice"). A relative
+# unit, resolved through the working directory `streamAt`/`runAt` `cd` into,
+# does not collide with the source-root the same way. Callers must invoke the
+# compiler with `packageRoot` as the working directory.
 foul librarySourcesAt(packageRoot: String) -> [String] do
   let source = FS.Path.join(packageRoot, "src")
   return FS.Directory.files(source).or([])
     .filter { |path| path.endsWith?(".kex") }
     .sort
-    .map { |path| FS.Path.join(source, path) }
+    .map { |path| "src/${path}" }
 end
 
 # What `tey build` produces is what ships, so what `tey run` and `tey test`
@@ -452,15 +461,20 @@ foul runPackage(extra: [String], interpret?: Bool,
     Ok(value) => value
   end
   let package: ManifestPackage = member.memberManifest
-  let entrypoint = FS.Path.join(member.memberRoot, package.entrypoint)
   # The literal `--` stops kex's own option parsing: without it, program
   # arguments that look like flags (`--source`, `--out`) are permuted into
   # kex's options and rejected as unrecognized.
+  #
+  # `package.entrypoint` is passed relative to `member.memberRoot` (which
+  # `streamAt` below `cd`s into), not joined into an absolute path — an
+  # absolute entry file that also falls under one of its own `--source-root`s
+  # makes the compiler double-register that module's declarations (see the
+  # comment on `librarySourcesAt`).
   Tey.Commands.report(Tey.Commands.streamAt(
     member.memberRoot, Tey.Toolchain.kex,
     [...Tey.Commands.backendFlags(interpret?),
      ...Tey.Commands.sourceRootsAt(member.memberRoot),
-     entrypoint, "--", ...extra]
+     package.entrypoint, "--", ...extra]
   ))
 end
 
@@ -483,11 +497,12 @@ foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer 
   let words = command.commandRun.split(" ").filter { |word| word != "" }
   let entry = words.first.or("")
   if entry.endsWith?(".kex")
-    let entrypoint = FS.Path.join(member.memberRoot, entry)
+    # `entry` stays relative to `member.memberRoot` — see the comment on
+    # `librarySourcesAt` for why an absolute entry file breaks the compiler.
     return Tey.Commands.report(Tey.Commands.streamAt(
       member.memberRoot, Tey.Toolchain.kex,
       [...Tey.Commands.backendFlags(interpret?),
-       ...Tey.Commands.sourceRootsAt(member.memberRoot), entrypoint, "--",
+       ...Tey.Commands.sourceRootsAt(member.memberRoot), entry, "--",
        ...words.drop(1), ...extra]
     ))
   end
@@ -551,8 +566,8 @@ foul buildMember(member: Member) -> Integer do
   # what makes `tey build` mean something in a library, which until now
   # reported `could not open file: src/main.kex` and left the author to guess
   # that the command was for applications only.
-  let entrypoint = FS.Path.join(packageRoot, package.entrypoint)
-  let units = FS.File.file?(entrypoint) then [entrypoint] else Tey.Commands.librarySourcesAt(packageRoot)
+  let entrypointAbsolute = FS.Path.join(packageRoot, package.entrypoint)
+  let units = FS.File.file?(entrypointAbsolute) then [package.entrypoint] else Tey.Commands.librarySourcesAt(packageRoot)
   if units.empty?
     return Tey.Commands.fail("nothing to build: no ${package.entrypoint} and no modules under src/")
   end
@@ -566,8 +581,9 @@ foul buildMember(member: Member) -> Integer do
     return Tey.Commands.fail("could not create ${output}")
   end
   let status = Tey.Commands.report(
-    Process.stream(Tey.Toolchain.kex, ["--compile", "-o", output,
-                                       ...Tey.Commands.sourceRootsAt(packageRoot), ...units]))
+    Tey.Commands.streamAt(packageRoot, Tey.Toolchain.kex,
+      ["--compile", "-o", output,
+       ...Tey.Commands.sourceRootsAt(packageRoot), ...units]))
   return status if status != 0
   Tey.Commands.buildTargetsAt(package, packageRoot)
 end
@@ -743,6 +759,16 @@ private do
   foul streamAt(directory: String, command: String,
                 arguments: [String]) -> Integer or! String do
     return Process.stream("sh", ["-c",
+      "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
+      command, ...arguments])
+  end
+
+  # Same working-directory change as `streamAt`, but buffered — for a caller
+  # that wants the child's captured stdout/stderr rather than its output
+  # streamed live.
+  foul runAt(directory: String, command: String,
+            arguments: [String]) -> Process.ProcessResult or! String do
+    return Process.run("sh", ["-c",
       "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
       command, ...arguments])
   end
@@ -1073,10 +1099,11 @@ private do
       if !FS.Directory.create(staging)
         status = Tey.Commands.fail("could not create ${staging}")
       end
-      let entrypoint = FS.Path.join(packageRoot, target.entrypoint)
-      let outcome = match Process.run(Tey.Toolchain.kex,
+      # `target.entrypoint` stays relative to `packageRoot`, which `runAt`
+      # below `cd`s into — see the comment on `librarySourcesAt`.
+      let outcome = match Tey.Commands.runAt(packageRoot, Tey.Toolchain.kex,
                                        ["--compile", "-o", staging,
-                                        ...Tey.Commands.sourceRootsAt(packageRoot), entrypoint]) do
+                                        ...Tey.Commands.sourceRootsAt(packageRoot), target.entrypoint]) do
         Error(error) => Tey.Commands.fail(error)
         Ok(result) => do
           IO.printError(result.stderr) if result.stderr != ""
