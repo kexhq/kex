@@ -7,11 +7,18 @@ using JSON
 
 record Dependency do
   name : String
-  git : String
-  resolved : String
-  commit : String
-  sha256 : String
+  version : String = ""
+  source : String = "git"
+  git : String = ""
+  resolved : String = ""
+  commit : String = ""
+  subdir : String = ""
+  path : String = ""
+  sha256 : String = ""
   groups : [String] = []
+  dependencies : [String] = []
+  pluginFingerprints : {String: String} = {}
+  workspace? : Bool = false
 end
 
 record LockState do
@@ -28,26 +35,37 @@ record LockState do
   # toolchain that cannot report its floor is a fact about the toolchain.
   otpRequirement : String = ""
   otpRelease : Integer = 0
+  workspaceMembers : {String: String} = {}
+  manifestFingerprint : String = ""
   lockedDependencies : [Dependency]
+  pluginApprovals : {String: String} = {}
 end
 
 let encode(lock: LockState) -> String do
-  let deps = lock.lockedDependencies.reduce("") do |encoded, dep|
+  let ordered = lock.lockedDependencies.sort do |a, b|
+    a.name < b.name
+  end
+  let deps = ordered.reduce("") do |encoded, dep|
     let groups = dep.groups.reduce("") do |items, group|
       let separator = items == "" then "" else ", "
       "${items}${separator}\"${Tey.Lockfile.escape(group)}\""
     end
     let separator = encoded == "" then "" else ",\n"
-    "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}]}"
+    let edges = Tey.Lockfile.stringList(dep.dependencies)
+    let pluginFingerprints = Tey.Lockfile.stringMap(dep.pluginFingerprints)
+    "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"version\": \"${Tey.Lockfile.escape(dep.version)}\", \"source\": \"${dep.source}\", \"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"subdir\": \"${Tey.Lockfile.escape(dep.subdir)}\", \"path\": \"${Tey.Lockfile.escape(dep.path)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}], \"dependencies\": [${edges}], \"plugins\": {${pluginFingerprints}}, \"workspace\": ${dep.workspace?}}"
   end
+  let members = Tey.Lockfile.stringMap(lock.workspaceMembers)
+  let approvals = Tey.Lockfile.stringMap(lock.pluginApprovals)
   [
     "{",
     "  \"version\": 1,",
-    "  \"kex\": {\"requirement\": \"${Tey.Lockfile.escape(lock.kexRequirement)}\", \"version\": \"${Tey.Lockfile.escape(lock.kexVersion)}\"},",
-    "  \"otp\": {\"requirement\": \"${Tey.Lockfile.escape(lock.otpRequirement)}\", \"release\": ${lock.otpRelease}},",
-    "  \"deps\": {",
+    "  \"workspace\": {\"members\": {${members}}, \"manifest_fingerprint\": \"${lock.manifestFingerprint}\"},",
+    "  \"toolchain\": {\"kex\": \"${Tey.Lockfile.escape(lock.kexVersion)}\", \"kex_requirement\": \"${Tey.Lockfile.escape(lock.kexRequirement)}\", \"otp\": ${lock.otpRelease}, \"otp_requirement\": \"${Tey.Lockfile.escape(lock.otpRequirement)}\"},",
+    "  \"packages\": {",
     deps,
-    "  }",
+    "  },",
+    "  \"plugins\": {\"approvals\": {${approvals}}}",
     "}"
   ].join("\n") + "\n"
 end
@@ -57,7 +75,11 @@ let dependencyGit(dep: Dependency) -> String = dep.git
 let dependencyCommit(dep: Dependency) -> String = dep.commit
 let dependencySha256(dep: Dependency) -> String = dep.sha256
 let dependencyGroups(dep: Dependency) -> [String] = dep.groups
-let dependencyListLine(dep: Dependency) -> String = "${dep.name} ${dep.resolved} (${dep.commit})"
+let dependencyListLine(dep: Dependency) -> String do
+  return "${dep.name} ${dep.path} (${dep.sha256})" if dep.source == "path"
+  return "${dep.name} workspace" if dep.source == "workspace"
+  return "${dep.name} ${dep.resolved} (${dep.commit})"
+end
 
 let decode(text: String) -> LockState or! String do
   let root = match JSON.parse(text) do
@@ -66,48 +88,65 @@ let decode(text: String) -> LockState or! String do
   end
   let version = Tey.Lockfile.lockText(root["version"])
   return Error("unsupported tey.lock version '${version}'") if version != "1"
-  let kex = match root["kex"] do
+  let workspace = match root["workspace"] do
     Just(value) => value
-    None => return Error("tey.lock is missing kex metadata")
+    None => return Error("tey.lock is missing workspace metadata")
   end
-  # Absent in a lockfile written before the field existed, which is not an
-  # error: it means "this resolve had no opinion about OTP".
-  let otp = root["otp"]
-  let dependencies = match root["deps"] do
+  let toolchain = match root["toolchain"] do
+    Just(value) => value
+    None => return Error("tey.lock is missing toolchain metadata")
+  end
+  let dependencies = match root["packages"] do
     Just(value) => value.entries.map do |name, raw|
       Tey.Lockfile.Dependency {
         name: "${name}",
+        version: Tey.Lockfile.lockText(raw["version"]),
+        source: Tey.Lockfile.lockText(raw["source"]),
         git: Tey.Lockfile.lockText(raw["git"]),
         resolved: Tey.Lockfile.lockText(raw["resolved"]),
         commit: Tey.Lockfile.lockText(raw["commit"]),
+        subdir: Tey.Lockfile.lockText(raw["subdir"]),
+        path: Tey.Lockfile.lockText(raw["path"]),
         sha256: Tey.Lockfile.lockText(raw["sha256"]),
-        groups: Tey.Lockfile.lockStrings(raw["groups"])
+        groups: Tey.Lockfile.lockStrings(raw["groups"]),
+        dependencies: Tey.Lockfile.lockStrings(raw["dependencies"]),
+        pluginFingerprints: Tey.Lockfile.lockMap(raw["plugins"]),
+        workspace?: Tey.Lockfile.lockBool(raw["workspace"])
       }
     end
     None => []
   end
-  if dependencies.any? { |dep| dep.git == "" || dep.commit == "" || dep.sha256 == "" }
+  if dependencies.any? { |dep| !Tey.Lockfile.complete?(dep) }
     return Error("tey.lock contains an incomplete dependency")
   end
+  let plugins = root["plugins"]
   Ok(LockState {
-    kexRequirement: Tey.Lockfile.lockText(kex["requirement"]),
-    otpRequirement: Tey.Lockfile.lockField(otp, "requirement"),
-    otpRelease: Tey.Lockfile.lockNumber(Tey.Lockfile.lockSub(otp, "release")),
-    kexVersion: Tey.Lockfile.lockText(kex["version"]),
-    lockedDependencies: dependencies
+    kexRequirement: Tey.Lockfile.lockText(toolchain["kex_requirement"]),
+    otpRequirement: Tey.Lockfile.lockText(toolchain["otp_requirement"]),
+    otpRelease: Tey.Lockfile.lockNumber(toolchain["otp"]),
+    kexVersion: Tey.Lockfile.lockText(toolchain["kex"]),
+    workspaceMembers: Tey.Lockfile.lockMap(workspace["members"]),
+    manifestFingerprint: Tey.Lockfile.lockText(workspace["manifest_fingerprint"]),
+    lockedDependencies: dependencies,
+    pluginApprovals: Tey.Lockfile.lockMap(Tey.Lockfile.lockSub(plugins, "approvals"))
   })
 end
 
 private do
   let escape(text: String) = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 
+  let stringList(values: [String]) -> String do
+    return values.map { |value| "\"${Tey.Lockfile.escape(value)}\"" }.join(", ")
+  end
+
+  let stringMap(values: {String: String}) -> String do
+    return values.entries.map do |key, value|
+      "\"${Tey.Lockfile.escape("${key}")}\": \"${Tey.Lockfile.escape(value)}\""
+    end.sort.join(", ")
+  end
+
   let lockText(None) -> String = ""
   let lockText(Just(value)) -> String = "${value}"
-
-  # An `otp` block absent from an older lockfile reads as "no opinion" rather
-  # than as a malformed file.
-  let lockField(None, _) -> String = ""
-  let lockField(Just(block), key: String) -> String = Tey.Lockfile.lockText(block[key])
 
   let lockSub(None, _) = None
   let lockSub(Just(block), key: String) = block[key]
@@ -117,4 +156,24 @@ private do
 
   let lockStrings(None) -> [String] = []
   let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }
+
+  let lockBool(None) -> Bool = false
+  let lockBool(Just(value)) -> Bool = "${value}" == "true"
+
+  let lockMap(None) -> {String: String} = {}
+  let lockMap(Just(values)) -> {String: String} do
+    var decoded: {String: String} = {}
+    values.entries.each do |key, value|
+      decoded.put!("${key}", "${value}")
+      ()
+    end
+    return decoded
+  end
+
+  let complete?(dep: Dependency) -> Bool do
+    return dep.path != "" && dep.sha256 != "" if dep.source == "path"
+    return dep.workspace? if dep.source == "workspace"
+    return dep.git != "" && dep.commit != "" && dep.sha256 != "" if dep.source == "git"
+    return false
+  end
 end

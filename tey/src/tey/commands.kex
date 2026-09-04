@@ -1,22 +1,41 @@
 module Tey.Commands
 
 using Tey.Cache, only: [fetch, packagePath, root, verify]
+using Tey.Generator, only: [Operation]
 using Tey.Lockfile, only: [LockState, decode, encode]
-using Tey.Manifest, only: [Command, ManifestPackage, read]
-using Tey.Resolver, only: [resolvePackage]
+using Tey.Local, only: [Override, load, remove, set, validateAgainstLock]
+using Tey.Manifest, only: [Command, ManifestPackage, Plugin, read]
+using Tey.Resolver, only: [resolvePackage, resolveWorkspace]
+using Tey.Plugin, only: [approved?, Binding]
+using Tey.PluginHost, only: [Invocation]
 using Tey.Toolchain, only: [kex]
+using Tey.Workspace, only: [Context, Member, discover, select]
+
+record WorkspaceRunState do
+  runStatus : Integer = 0
+  failedMembers : [String] = []
+end
 
 foul manifest -> ManifestPackage or! String do
-  match FS.File.read("package.kex") do
-    Ok(text) => Tey.Manifest.read(text)
-    Error(_) => Error("package.kex not found")
+  let context = Tey.Workspace.discover(FS.Directory.current).try
+  match context.currentMember do
+    Just(member) => Ok(member.memberManifest)
+    None => Error("this workspace directory is not inside a package")
   end
 end
 
 foul lock -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
-  let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
-  if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  let resolved = match Tey.Resolver.resolveWorkspace(context) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let path = FS.Path.join(context.workspaceRoot, "tey.lock")
+  if Tey.Commands.publishLock(path, resolved).ok?
     IO.printLine("${Console.GREEN}Locked${Console.RESET} ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
     0
   else
@@ -43,32 +62,56 @@ foul add(name: String, options: ParsedOptions) -> Integer do
   `.substitute({"$BODY$": body, "$NAME$": name, "$GIT$": git,
                 "$SELECTOR$": selector, "$REQUESTED$": requested})
   return Tey.Commands.fail("could not update package.kex") if !FS.File.write("package.kex", updated)
-  Tey.Commands.lock
+  Tey.Commands.updateDependencies(name)
+end
+
+foul localOverride(name: String, path: String, remove?: Bool,
+                   list?: Bool) -> Integer do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  if list?
+    let overrides = match Tey.Local.load(context) do
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(value) => value
+    end
+    overrides.each do |override|
+      IO.printLine("${override.overrideName} ${override.overridePath}")
+    end
+    return 0
+  end
+  if remove?
+    return Tey.Commands.fail("tey local --remove needs a package name") if name == ""
+    match Tey.Local.remove(context, name) do
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(_) => do IO.printLine("Removed local override ${name}") return 0 end
+    end
+  end
+  return Tey.Commands.fail("tey local needs a package name and path") if name == "" || path == ""
+  match Tey.Local.set(context, name, path) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => do IO.printLine("Using local ${name} at ${path}") return 0 end
+  end
 end
 
 # `--without dev` leaves a group's dependencies out of this install. The
 # LOCKFILE still lists them — what is omitted is the fetching, so switching
 # the flag off later needs no re-resolve.
-foul install(without: String) -> Integer do
-  let state = match FS.File.read("tey.lock") do
-    Error(_) => do
-      let status = Tey.Commands.lock
-      return status if status != 0
-      match FS.File.read("tey.lock") do
-        Ok(text) => match Tey.Lockfile.decode(text) do
-          Ok(value) => value
-          Error(error) => return Tey.Commands.fail(error)
-        end
-        Error(_) => return Tey.Commands.fail("could not read generated tey.lock")
-      end
-    end
-    Ok(text) => match Tey.Lockfile.decode(text) do
-      Ok(value) => value
-      Error(error) => return Tey.Commands.fail(error)
-    end
+foul install(without: String, packageName: String = "") -> Integer do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let state = match Tey.Commands.installLock(context) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
   end
   let wanted = state.lockedDependencies.filter do |dependency|
-    without == "" || !Tey.Lockfile.dependencyGroups(dependency).contains?(without)
+    let external = dependency.source != "workspace"
+    let excluded = Tey.Lockfile.dependencyGroups(dependency).contains?(without)
+    let included = without == "" || !excluded
+    external && included
   end
   wanted.each do |dependency|
     let path = match Tey.Cache.fetch(dependency) do
@@ -80,10 +123,138 @@ foul install(without: String) -> Integer do
       Ok(_) => IO.printLine("${Console.GREEN}Installed${Console.RESET} ${Tey.Lockfile.dependencyName(dependency)} ${Console.DIM}at ${path}${Console.RESET}")
     end
   end
-  let omitted = state.lockedDependencies.count - wanted.count
+  let approvedState = match Tey.Commands.approvePlugins(context, state) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let lockPath = FS.Path.join(context.workspaceRoot, "tey.lock")
+  match Tey.Commands.publishLock(lockPath, approvedState) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
+  let externalCount = state.lockedDependencies.filter do |dependency|
+    dependency.source != "workspace"
+  end.count
+  let omitted = externalCount - wanted.count
   IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s)") if omitted == 0
   IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
-  Tey.Commands.installTargets
+  Tey.Commands.installTargetsSelected(context, packageName)
+end
+
+foul updateDependencies(name: String = "") -> Integer do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  if name != ""
+    match Tey.Commands.validateUpdateName(
+      Tey.Commands.updateScopeMembers(context), name
+    ) do
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(_) => ()
+    end
+  end
+  let fresh = match Tey.Resolver.resolveWorkspace(context) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let previous = match Tey.Commands.readLock do
+    Ok(value) => Just(value)
+    Error(_) => None
+  end
+  let wholeWorkspace = name == "" && match context.currentMember do
+    None => true
+    Just(member) => member.memberRoot == context.workspaceRoot
+  end
+  let roots = if name != ""
+    [name]
+  else
+    match context.currentMember do
+      Just(member) => member.memberManifest.manifestDependencies.map do |dependency|
+        dependency.manifestName
+      end
+      None => []
+    end
+  end
+  let state = match previous do
+    None => fresh
+    Just(old) => Tey.Commands.mergeUpdate(old, fresh, roots, wholeWorkspace)
+  end
+  let noPrevious = match previous do None => true Just(_) => false end
+  let fetchAll = wholeWorkspace || noPrevious
+  let changed = fetchAll then [] else Tey.Commands.dependencyClosure(fresh, roots)
+  let externals = state.lockedDependencies.filter do |dependency|
+    dependency.source != "workspace" && (fetchAll || changed.contains?(dependency.name))
+  end
+  externals.each do |dependency|
+    match Tey.Cache.fetch(dependency) do
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(_) => match Tey.Cache.verify(dependency) do
+        Error(error) => return Tey.Commands.fail(error)
+        Ok(_) => ()
+      end
+    end
+  end
+  let approved = match Tey.Commands.approvePlugins(context, state) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  match Tey.Commands.publishLock(FS.Path.join(context.workspaceRoot, "tey.lock"),
+                                 approved) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => do
+      IO.printLine("${Console.GREEN}Updated${Console.RESET} ${externals.count} package(s)")
+      return 0
+    end
+  end
+end
+
+# Names affected by a member-local or named update, including transitive
+# dependency edges recorded in the newly resolved graph.
+let dependencyClosure(state: LockState, roots: [String]) -> [String] do
+  return Tey.Commands.collectClosure(state, roots, [])
+end
+
+# Publishes fresh workspace metadata and selected resolutions while retaining
+# unrelated external pins. Existing approvals are carried forward here and
+# subsequently filtered against the visible declarations by approvePlugins.
+let mergeUpdate(previous: LockState, fresh: LockState, roots: [String],
+                wholeWorkspace?: Bool) -> LockState do
+  return LockState { ...fresh, pluginApprovals: previous.pluginApprovals } if wholeWorkspace?
+  let selected = Tey.Commands.dependencyClosure(fresh, roots)
+  let dependencies = fresh.lockedDependencies.map do |dependency|
+    let replace = dependency.source == "workspace" || selected.contains?(dependency.name)
+    if replace
+      dependency
+    else
+      previous.lockedDependencies.find { |old| old.name == dependency.name }.or(dependency)
+    end
+  end
+  return LockState { ...fresh, lockedDependencies: dependencies,
+                     pluginApprovals: previous.pluginApprovals }
+end
+
+let lockReusable?(state: LockState, manifestFingerprint: String,
+                  toolchain: Tey.Toolchain.ToolchainInfo) -> Bool do
+  return (state.manifestFingerprint == manifestFingerprint &&
+          state.kexVersion == Tey.Semver.release(toolchain.version) &&
+          state.otpRelease == toolchain.reportedRuntimeOtpFloor.or(0))
+end
+
+let validateUpdateName(members: [Member], name: String) -> Void or! String do
+  return Error("workspace has no direct dependency named `${name}`") if members.empty?
+  let manifest: ManifestPackage = members.first.try.memberManifest
+  return Ok(()) if manifest.manifestDependencies.any? do |dependency|
+    dependency.manifestName == name
+  end
+  return Tey.Commands.validateUpdateName(members.drop(1), name)
+end
+
+let updateScopeMembers(context: Context) -> [Member] do
+  match context.currentMember do
+    Just(member) when member.memberRoot != context.workspaceRoot => [member]
+    _ => context.members
+  end
 end
 
 # Puts this package's `target(...)` executables where they can be run by name.
@@ -128,12 +299,52 @@ foul installTargets -> Integer do
   0
 end
 
+foul installTargetsSelected(context: Context, packageName: String) -> Integer do
+  let members = match Tey.Workspace.select(context, packageName, false) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  var failures = 0
+  members.each do |member|
+    let outcome = Tey.Commands.installMemberTargets(member)
+    failures = outcome if outcome != 0
+    ()
+  end
+  return failures
+end
+
+foul installMemberTargets(member: Member) -> Integer do
+  let package: ManifestPackage = member.memberManifest
+  return 0 if package.targets.empty?
+  let status = Tey.Commands.buildMember(member)
+  return status if status != 0
+  let binDirectory = Tey.Toolchain.binDirectory
+  return Tey.Commands.fail("could not create ${binDirectory}") if !FS.Directory.create(binDirectory)
+  var failures = 0
+  package.targets.each do |target|
+    let built = FS.Path.join(member.memberRoot, Tey.Commands.outputDirectory,
+                             target.name)
+    let installed = FS.Path.join(binDirectory, target.name)
+    if FS.File.copy(built, installed) && Tey.Commands.runStatus("chmod", ["+x", installed]) == 0
+      IO.printLine("${Console.GREEN}Installed${Console.RESET} ${target.name} ${Console.DIM}to ${installed}${Console.RESET}")
+    else
+      failures = Tey.Commands.fail("could not install ${target.name} to ${installed}")
+    end
+    ()
+  end
+  return failures
+end
+
 # `--source-root` for every fetched dependency. Without these a dependency is
 # just bytes in the cache: `using Greet` cannot find it, and the package that
 # declared it does not compile. A dependency the lockfile names but the cache
 # does not have is reported rather than quietly dropped — the answer is
 # `tey install`, and silence would look like a broken `using`.
 foul dependencyRoots -> [String] do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(_) => return []
+    Ok(value) => value
+  end
   let state = match Tey.Commands.readLock do
     Error(_) => do
       # No lockfile at all. Only worth saying when the package actually
@@ -146,10 +357,35 @@ foul dependencyRoots -> [String] do
     end
     Ok(value) => value
   end
+  let overrides = match Tey.Local.load(context) do
+    Error(error) => do
+      IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+      return []
+    end
+    Ok(value) => value
+  end
+  match Tey.Local.validateAgainstLock(overrides, state) do
+    Error(error) => do
+      IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+      return []
+    end
+    Ok(_) => ()
+  end
   var roots: [String] = []
   var missing: [String] = []
   state.lockedDependencies.each do |dependency|
-    let source = "${Tey.Cache.packagePath(dependency)}/src"
+    let local = overrides.find do |override|
+      override.overrideName == dependency.name
+    end
+    let packageRoot = match local do
+      Just(override) => override.overridePath
+      None => if dependency.source == "workspace"
+      FS.Path.join(context.workspaceRoot, dependency.path)
+      else
+        Tey.Cache.packagePath(dependency)
+      end
+    end
+    let source = FS.Path.join(packageRoot, "src")
     if FS.Directory.directory?(source)
       roots.push!("--source-root")
       roots.push!(source)
@@ -173,12 +409,35 @@ foul sourceRoots -> [String] do
   return [...own, ...Tey.Commands.dependencyRoots]
 end
 
+foul sourceRootsAt(packageRoot: String) -> [String] do
+  let source = FS.Path.join(packageRoot, "src")
+  let own = FS.Directory.directory?(source) then ["--source-root", source] else []
+  return [...own, ...Tey.Commands.dependencyRoots]
+end
+
 # A library's compilable units: every `.kex` directly under `src/`. Not a
 # recursive walk — a nested module is reached by the file that declares it,
 # and compiling it twice by name is how you get a duplicate-module error out
 # of a perfectly good package.
 foul librarySources -> [String] do
   return FS.Directory.files("src").or([])
+    .filter { |path| path.endsWith?(".kex") }
+    .sort
+    .map { |path| "src/${path}" }
+end
+
+# Returns units relative to `packageRoot`, not absolute: the compiler
+# double-registers a module's declarations when the entry file it is asked to
+# compile is an absolute path that also falls under an explicit
+# `--source-root` (kexhq/kex#?, surfaced by `tey build`ing Rodolfo — a
+# `private do` function building a record literal of a type carrying earlier
+# `make` methods reported that type's method "defined twice"). A relative
+# unit, resolved through the working directory `streamAt`/`runAt` `cd` into,
+# does not collide with the source-root the same way. Callers must invoke the
+# compiler with `packageRoot` as the working directory.
+foul librarySourcesAt(packageRoot: String) -> [String] do
+  let source = FS.Path.join(packageRoot, "src")
+  return FS.Directory.files(source).or([])
     .filter { |path| path.endsWith?(".kex") }
     .sort
     .map { |path| "src/${path}" }
@@ -195,15 +454,28 @@ let backendFlags(interpret?: Bool) -> [String] do
   return interpret? then [] else ["-R"]
 end
 
-foul runPackage(extra: [String], interpret?: Bool) -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
+foul runPackage(extra: [String], interpret?: Bool,
+                packageName: String = "") -> Integer do
+  let member = match Tey.Commands.selectedMember(packageName) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let package: ManifestPackage = member.memberManifest
   # The literal `--` stops kex's own option parsing: without it, program
   # arguments that look like flags (`--source`, `--out`) are permuted into
   # kex's options and rejected as unrecognized.
-  Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
-                                  [...Tey.Commands.backendFlags(interpret?),
-                                   ...Tey.Commands.sourceRoots,
-                                   package.entrypoint, "--", ...extra]))
+  #
+  # `package.entrypoint` is passed relative to `member.memberRoot` (which
+  # `streamAt` below `cd`s into), not joined into an absolute path — an
+  # absolute entry file that also falls under one of its own `--source-root`s
+  # makes the compiler double-register that module's declarations (see the
+  # comment on `librarySourcesAt`).
+  Tey.Commands.report(Tey.Commands.streamAt(
+    member.memberRoot, Tey.Toolchain.kex,
+    [...Tey.Commands.backendFlags(interpret?),
+     ...Tey.Commands.sourceRootsAt(member.memberRoot),
+     package.entrypoint, "--", ...extra]
+  ))
 end
 
 # `tey <name>` for a `command(...)` the manifest declares.
@@ -218,20 +490,29 @@ end
 #
 # The `--` before the arguments plays the same role as in runPackage.
 foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer do
+  let member = match Tey.Commands.selectedMember("") do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
   let words = command.commandRun.split(" ").filter { |word| word != "" }
   let entry = words.first.or("")
   if entry.endsWith?(".kex")
-    return Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
-                                           [...Tey.Commands.backendFlags(interpret?),
-                                            ...Tey.Commands.sourceRoots,
-                                            entry, "--", ...words.drop(1), ...extra]))
+    # `entry` stays relative to `member.memberRoot` — see the comment on
+    # `librarySourcesAt` for why an absolute entry file breaks the compiler.
+    return Tey.Commands.report(Tey.Commands.streamAt(
+      member.memberRoot, Tey.Toolchain.kex,
+      [...Tey.Commands.backendFlags(interpret?),
+       ...Tey.Commands.sourceRootsAt(member.memberRoot), entry, "--",
+       ...words.drop(1), ...extra]
+    ))
   end
   # Tey's own bin directory goes FIRST on the command's PATH, so a `kex` in a
   # shell line means the toolchain this package selected rather than whatever
   # else the machine has installed — the same promise `tey run` makes. "tey"
   # names $0, which is what a shell error message quotes.
-  let line = "PATH=\"${Tey.Toolchain.binDirectory}:$PATH\"; ${command.commandRun} \"$@\""
-  Tey.Commands.report(Process.stream("sh", ["-c", line, "tey", ...extra]))
+  let line = "cd \"$1\" || exit 1; shift; PATH=\"${Tey.Toolchain.binDirectory}:$PATH\"; ${command.commandRun} \"$@\""
+  Tey.Commands.report(Process.stream("sh", ["-c", line, "tey",
+                                             member.memberRoot, ...extra]))
 end
 
 foul list -> Integer do
@@ -246,13 +527,47 @@ foul list -> Integer do
 end
 
 foul build -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let member = match context.currentMember do
+    None => return Tey.Commands.fail("this workspace directory is not inside a package")
+    Just(value) => value
+  end
+  return Tey.Commands.buildMember(member)
+end
+
+foul buildSelected(packageName: String, workspace?: Bool,
+                   requestedJobs: String = "") -> Integer do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let members = match Tey.Workspace.select(context, packageName, workspace?) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  let jobs = match Tey.Commands.concurrency(requestedJobs) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  return Tey.Commands.buildLayers(
+    Tey.Workspace.dependencyLayers(members), jobs, WorkspaceRunState {}
+  ).runStatus
+end
+
+foul buildMember(member: Member) -> Integer do
+  let package: ManifestPackage = member.memberManifest
+  let packageRoot = member.memberRoot
   # A library declares no entrypoint, so there is no `src/main.kex` to reach
   # its modules from — every one of them is a root. Compiling them by name is
   # what makes `tey build` mean something in a library, which until now
   # reported `could not open file: src/main.kex` and left the author to guess
   # that the command was for applications only.
-  let units = FS.File.file?(package.entrypoint) then [package.entrypoint] else Tey.Commands.librarySources
+  let entrypointAbsolute = FS.Path.join(packageRoot, package.entrypoint)
+  let units = FS.File.file?(entrypointAbsolute) then [package.entrypoint] else Tey.Commands.librarySourcesAt(packageRoot)
   if units.empty?
     return Tey.Commands.fail("nothing to build: no ${package.entrypoint} and no modules under src/")
   end
@@ -261,14 +576,16 @@ foul build -> Integer do
   # files sitting next to package.kex. They go under `ebin/` instead, which
   # is both the BEAM convention and where a package's launcher expects its
   # code path to point.
-  if !FS.Directory.create(Tey.Commands.outputDirectory)
-    return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
+  let output = FS.Path.join(packageRoot, Tey.Commands.outputDirectory)
+  if !FS.Directory.create(output)
+    return Tey.Commands.fail("could not create ${output}")
   end
   let status = Tey.Commands.report(
-    Process.stream(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
-                                       ...Tey.Commands.sourceRoots, ...units]))
+    Tey.Commands.streamAt(packageRoot, Tey.Toolchain.kex,
+      ["--compile", "-o", output,
+       ...Tey.Commands.sourceRootsAt(packageRoot), ...units]))
   return status if status != 0
-  Tey.Commands.buildTargets(package)
+  Tey.Commands.buildTargetsAt(package, packageRoot)
 end
 
 # How `tey test` should REPORT, as compiler flags (kexhq/kex#199).
@@ -304,7 +621,44 @@ end
 
 foul test(requested: [String], interpret?: Bool, json?: Bool, list?: Bool,
           only: String) -> Integer do
-  let specs = Tey.Commands.testSpecs(requested)
+  return Tey.Commands.testAt(FS.Directory.current, requested, interpret?,
+                             json?, list?, only)
+end
+
+foul testSelected(requested: [String], packageName: String, workspace?: Bool,
+                  interpret?: Bool, json?: Bool, list?: Bool,
+                  only: String, requestedJobs: String = "") -> Integer do
+  let context = match Tey.Workspace.discover(FS.Directory.current) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let members = match Tey.Workspace.select(context, packageName, workspace?) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  let jobs = match Tey.Commands.concurrency(requestedJobs) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  return Tey.Commands.testLayers(
+    Tey.Workspace.dependencyLayers(members), jobs, requested, interpret?,
+    json?, list?, only, WorkspaceRunState {}
+  ).runStatus
+end
+
+foul testAt(packageRoot: String, requested: [String], interpret?: Bool,
+            json?: Bool, list?: Bool, only: String) -> Integer do
+  let specs = if requested.empty?
+    FS.Directory.files(FS.Path.join(packageRoot, "spec")).or([])
+      .filter { |path| path.endsWith?(".spec.kex") }
+      .sort
+      .map { |path| FS.Path.join(FS.Path.join(packageRoot, "spec"), path) }
+  else
+    requested.map do |path|
+      FS.Path.absolute?(path) then path else FS.Path.join(packageRoot, path)
+    end
+  end
   let machineReadable? = json? || list?
   if specs.empty?
     # Silent in the machine-readable modes: their output is records, and a
@@ -319,7 +673,7 @@ foul test(requested: [String], interpret?: Bool, json?: Bool, list?: Bool,
   # `spec/greet.spec.kex` calling `Greet.greeting` died with `Undefined
   # function`, which reads like a bug in the package rather than a missing
   # compiler flag.
-  let roots = [...Tey.Commands.backendFlags(interpret?), ...Tey.Commands.sourceRoots,
+  let roots = [...Tey.Commands.backendFlags(interpret?), ...Tey.Commands.sourceRootsAt(packageRoot),
                ...Tey.Commands.testReportingFlags(json?, list?, only)]
   specs.each do |spec|
     # A spec that could not even be STARTED is reported and counted as a
@@ -347,7 +701,7 @@ end
 
 foul setupMergeDriver(remove?: Bool) -> Integer do
   let key = "merge.tey.driver"
-  let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey lock --merge-driver %O %A %B"]
+  let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey install --merge-driver %O %A %B"]
   match Tey.Commands.runStatus("git", arguments) do
     0 => do
       IO.printLine(remove? then "Removed Tey merge driver" else "Configured Tey merge driver")
@@ -402,6 +756,293 @@ foul init(name: String, library: Bool) -> Integer do
 end
 
 private do
+  foul streamAt(directory: String, command: String,
+                arguments: [String]) -> Integer or! String do
+    return Process.stream("sh", ["-c",
+      "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
+      command, ...arguments])
+  end
+
+  # Same working-directory change as `streamAt`, but buffered — for a caller
+  # that wants the child's captured stdout/stderr rather than its output
+  # streamed live.
+  foul runAt(directory: String, command: String,
+            arguments: [String]) -> Process.ProcessResult or! String do
+    return Process.run("sh", ["-c",
+      "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
+      command, ...arguments])
+  end
+
+  foul selectedMember(packageName: String) -> Member or! String do
+    let context = Tey.Workspace.discover(FS.Directory.current).try
+    if packageName != ""
+      return Ok(Tey.Workspace.select(context, packageName, false).try.first.try)
+    end
+    match context.currentMember do
+      Just(member) => return Ok(member)
+      None => return Error("this workspace directory is not inside a package")
+    end
+  end
+
+  let collectClosure(state: LockState, pending: [String],
+                     found: [String]) -> [String] do
+    return found if pending.empty?
+    let name = pending.first.try
+    return Tey.Commands.collectClosure(state, pending.drop(1), found) if found.contains?(name)
+    let edges = match state.lockedDependencies.find { |dependency| dependency.name == name } do
+      Just(dependency) => dependency.dependencies
+      None => []
+    end
+    return Tey.Commands.collectClosure(state, [...pending.drop(1), ...edges],
+                                       [...found, name])
+  end
+
+  foul concurrency(requested: String) -> Integer or! String do
+    if requested != ""
+      return match Integer.parse(requested) do
+        Ok(value) => value > 0 then Ok(value) else Error("--jobs must be a positive integer")
+        Error(_) => Error("--jobs must be a positive integer")
+      end
+    end
+    let detected = match Process.run("getconf", ["_NPROCESSORS_ONLN"]) do
+      Ok(result) => Integer.parse(result.stdout.trim).or(1)
+      Error(_) => 1
+    end
+    return Ok(detected > 0 then detected else 1)
+  end
+
+  foul buildLayers(layers: [[Member]], jobs: Integer,
+                   state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if layers.empty?
+    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let layerState = Tey.Commands.buildChunks(ready, jobs, prepared)
+    return Tey.Commands.buildLayers(layers.drop(1), jobs, layerState)
+  end
+
+  foul buildChunks(members: [Member], jobs: Integer,
+                   state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if members.empty?
+    let batch = members.take(jobs)
+    let tasks = batch.map do |member|
+      (member, Task.start { Tey.Commands.buildMember(member) })
+    end
+    let nextState = tasks.reduce(state) do |current, item|
+      let (member, task) = item
+      match task.await do
+        Ok(0) => current
+        Ok(code) => WorkspaceRunState {
+          runStatus: code,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+        Error(_) => WorkspaceRunState {
+          runStatus: 1,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+      end
+    end
+    return Tey.Commands.buildChunks(members.drop(jobs), jobs, nextState)
+  end
+
+  foul testLayers(layers: [[Member]], jobs: Integer, requested: [String],
+                  interpret?: Bool, json?: Bool, list?: Bool, only: String,
+                  state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if layers.empty?
+    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let layerState = Tey.Commands.testChunks(ready, jobs, requested,
+                                             interpret?, json?, list?, only,
+                                             prepared)
+    return Tey.Commands.testLayers(layers.drop(1), jobs, requested, interpret?,
+                                   json?, list?, only, layerState)
+  end
+
+  foul testChunks(members: [Member], jobs: Integer, requested: [String],
+                  interpret?: Bool, json?: Bool, list?: Bool, only: String,
+                  state: WorkspaceRunState) -> WorkspaceRunState do
+    return state if members.empty?
+    let batch = members.take(jobs)
+    let tasks = batch.map do |member|
+      (member, Task.start do
+        Tey.Commands.testAt(member.memberRoot, requested, interpret?, json?,
+                            list?, only)
+      end)
+    end
+    let nextState = tasks.reduce(state) do |current, item|
+      let (member, task) = item
+      match task.await do
+        Ok(0) => current
+        Ok(code) => WorkspaceRunState {
+          runStatus: code,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+        Error(_) => WorkspaceRunState {
+          runStatus: 1,
+          failedMembers: [...current.failedMembers,
+                          Tey.Workspace.memberName(member)]
+        }
+      end
+    end
+    return Tey.Commands.testChunks(members.drop(jobs), jobs, requested,
+                                   interpret?, json?, list?, only, nextState)
+  end
+
+  foul readyMembers(members: [Member],
+                    state: WorkspaceRunState) -> ([Member], WorkspaceRunState) do
+    let blocked = members.filter do |member|
+      Tey.Workspace.memberDependencies(member).any? do |dependency|
+        state.failedMembers.contains?(dependency)
+      end
+    end
+    blocked.each do |member|
+      let dependencies = Tey.Workspace.memberDependencies(member).filter do |name|
+        state.failedMembers.contains?(name)
+      end
+      IO.printError("Skipping ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed\n")
+    end
+    let ready = members.filter { |member| !blocked.contains?(member) }
+    let failed = [...state.failedMembers,
+                  ...blocked.map { |member| Tey.Workspace.memberName(member) }]
+    let status = blocked.empty? then state.runStatus else 1
+    return (ready, WorkspaceRunState {
+      runStatus: status, failedMembers: failed
+    })
+  end
+
+  foul installLock(context: Context) -> LockState or! String do
+    let toolchain = Tey.Toolchain.activeInfo.try
+    let path = FS.Path.join(context.workspaceRoot, "tey.lock")
+    match FS.File.read(path) do
+      Error(_) => return Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
+      Ok(text) => match Tey.Lockfile.decode(text) do
+        Error(error) => return Error(error)
+        Ok(state) => do
+          let current = Tey.Resolver.fingerprint(context)
+          return Ok(state) if Tey.Commands.lockReusable?(state, current,
+                                                         toolchain)
+          return Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
+        end
+      end
+    end
+  end
+
+  foul publishLock(path: String, state: LockState) -> Void or! String do
+    let nonce = Digest.sha256("${path}:${DateTime.epochNanos()}")
+    let staging = "${path}.partial.${nonce}"
+    return Error("could not stage tey.lock") if !FS.File.write(staging, Tey.Lockfile.encode(state))
+    match Process.run("mv", ["--", staging, path]) do
+      Ok(result) => return Ok(()) if result.exitCode == 0
+      Error(_) => ()
+    end
+    FS.File.delete(staging)
+    return Error("could not publish tey.lock")
+  end
+
+  foul approvePlugins(context: Context, state: LockState) -> LockState or! String do
+    let bindings = Tey.Commands.directPluginBindings(context, state).try
+    let incompatible = bindings.filter do |binding|
+      !Tey.Semver.satisfies(Tey.Version.number,
+                           binding.declaration.pluginTeyRequirement)
+    end
+    if !incompatible.empty?
+      let details = incompatible.map do |binding|
+        let declaration = binding.declaration
+        "${binding.approvalKey} requires Tey ${declaration.pluginTeyRequirement}"
+      end
+      return Error("plugin interfaces are incompatible with Tey ${Tey.Version.number}: ${details.join(", ")}")
+    end
+    let valid = Tey.Plugin.validBindingApprovals(bindings,
+                                                 state.pluginApprovals)
+    let missing = Tey.Plugin.missingBindingApprovals(bindings, valid)
+    let approvals = Tey.Commands.requestApprovals(missing, valid).try
+    return Ok(LockState { ...state, pluginApprovals: approvals })
+  end
+
+  foul requestApprovals(bindings: [Binding], approvals: {String: String}) -> {String: String} or! String do
+    return Ok(approvals) if bindings.empty?
+    let binding = bindings.first.try
+    let declaration = binding.declaration
+    let resources = declaration.pluginCapabilities.map do |resource|
+      let detail = resource.capabilityValues.empty? then "" else " [${resource.capabilityValues.join(", ")}]"
+      "${resource.capabilityKind}${detail}"
+    end
+    IO.print("Approve plugin `${binding.approvalKey}` with resources ${resources.join(", ")}? [y/N] ")
+    let answer = IO.getLine.or("").trim.lowerCase
+    return Error("plugin `${binding.approvalKey}` was not approved") if answer != "y" && answer != "yes"
+    let updated = approvals.put(binding.approvalKey,
+                                Tey.Plugin.fingerprint(declaration))
+    return Tey.Commands.requestApprovals(bindings.drop(1), updated)
+  end
+
+  foul directPluginBindings(context: Context,
+                            state: LockState) -> [Binding] or! String do
+    let root = context.members.find do |member|
+      member.memberRoot == context.workspaceRoot
+    end
+    let globals = match root do
+      None => []
+      Just(member) => Tey.Commands.bindPlugins(member, "", context,
+                                                state).try
+    end
+    let locals = Tey.Commands.bindMemberPlugins(context.members, root,
+                                                context, state).try
+    Tey.Plugin.validateScopes(globals, locals).try
+    return Ok([...globals, ...locals])
+  end
+
+  foul bindMemberPlugins(members: [Member], root: Member?, context: Context,
+                         state: LockState) -> [Binding] or! String do
+    return Ok([]) if members.empty?
+    let member = members.first.try
+    let isRoot = match root do
+      Just(value) => value.memberRoot == member.memberRoot
+      None => false
+    end
+    let manifest: ManifestPackage = member.memberManifest
+    let here = isRoot then [] else Tey.Commands.bindPlugins(
+      member, manifest.name, context, state
+    ).try
+    let rest = Tey.Commands.bindMemberPlugins(members.drop(1), root, context,
+                                              state).try
+    return Ok([...here, ...rest])
+  end
+
+  foul bindPlugins(member: Member, scopeName: String, context: Context,
+                   state: LockState) -> [Binding] or! String do
+    let manifest: ManifestPackage = member.memberManifest
+    let names = manifest.manifestDependencies.map { |dependency| dependency.manifestName }
+    let declarations = Tey.Commands.pluginsForNames(names, context, state).try
+    return declarations.map do |declaration|
+      let key = scopeName == "" then declaration.pluginNamespace else "${scopeName}:${declaration.pluginNamespace}"
+      Binding { approvalKey: key, scopeName: scopeName,
+                declaration: declaration }
+    end
+  end
+
+  foul pluginsForNames(names: [String], context: Context,
+                       state: LockState) -> [Plugin] or! String do
+    return Ok([]) if names.empty?
+    let name = names.first.try
+    let member = context.members.find do |candidate|
+      let manifest: ManifestPackage = candidate.memberManifest
+      manifest.name == name
+    end
+    let manifest = match member do
+      Just(value) => value.memberManifest
+      None => do
+        let dependency = match state.lockedDependencies.find { |entry| entry.name == name } do
+          None => return Error("direct plugin dependency `${name}` is absent from tey.lock")
+          Just(value) => value
+        end
+        let text = FS.File.read(FS.Path.join(Tey.Cache.packagePath(dependency), "package.kex")).try
+        Tey.Manifest.read(text).try
+      end
+    end
+    let rest = Tey.Commands.pluginsForNames(names.drop(1), context, state).try
+    return Ok([...manifest.plugins, ...rest])
+  end
+
   # Where `tey build` puts compiled artifacts, and what `tey init` tells Git
   # to ignore.
   let outputDirectory -> String do
@@ -449,6 +1090,40 @@ private do
     return status
   end
 
+  foul buildTargetsAt(package: ManifestPackage, packageRoot: String) -> Integer do
+    return 0 if package.targets.empty?
+    let outputDirectory = FS.Path.join(packageRoot, Tey.Commands.outputDirectory)
+    var status = 0
+    package.targets.each do |target|
+      let staging = "${outputDirectory}/.${target.name}"
+      if !FS.Directory.create(staging)
+        status = Tey.Commands.fail("could not create ${staging}")
+      end
+      # `target.entrypoint` stays relative to `packageRoot`, which `runAt`
+      # below `cd`s into — see the comment on `librarySourcesAt`.
+      let outcome = match Tey.Commands.runAt(packageRoot, Tey.Toolchain.kex,
+                                       ["--compile", "-o", staging,
+                                        ...Tey.Commands.sourceRootsAt(packageRoot), target.entrypoint]) do
+        Error(error) => Tey.Commands.fail(error)
+        Ok(result) => do
+          IO.printError(result.stderr) if result.stderr != ""
+          result.exitCode
+        end
+      end
+      status = outcome if outcome != 0
+      let output = "${outputDirectory}/${target.name}"
+      if outcome == 0
+        if Tey.Commands.writeEscript(staging, output)
+          IO.printLine("  Target  ${output}")
+        else
+          status = Tey.Commands.fail("could not write ${output}")
+        end
+      end
+      ()
+    end
+    return status
+  end
+
   # An escript: the BEAM's single-file executable. A shebang, the emulator
   # flags naming the entry module, and a zip of every beam the program needs —
   # the runtime and the prelude included, which is what makes the result
@@ -475,7 +1150,7 @@ private do
   # `/tmp/ooo`, the way every other scaffolder reads its argument.
   #
   # Without this the whole path WAS the name: it reached the manifest as
-  # `bundle "/tmp/ooo"`, and for a library it reached the module name too, so
+  # `package "/tmp/ooo"`, and for a library it reached the module name too, so
   # the source file was written to `/tmp/ooo/src//tmp/ooo.kex` — a path whose
   # parent does not exist. The scaffold failed halfway, after having created
   # the directories and the manifest.
@@ -673,7 +1348,7 @@ private do
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
-    # This fragment is spliced INTO the generated `bundle` block, so its
+    # This fragment is spliced INTO the generated `package` block, so its
     # two-space indent belongs to the generated file and has to survive.
     # Block-shaped, it would be dedented away — every line shares it.
     let entry = library then "" else `  entrypoint("src/main.kex")
@@ -706,7 +1381,7 @@ private do
     # it. Commented, because a scaffold must not ship a command that does not
     # run.
     let manifestText = `
-      bundle "$NAME$" do
+      package "$NAME$" do
         version("0.1.0")
         description("A Kex package")
         kex(">= 0.3.0")
@@ -759,8 +1434,9 @@ private do
   end
 
   foul readLock -> LockState or! String do
-    match FS.File.read("tey.lock") do
-      Error(_) => Error("tey.lock not found; run `tey lock`")
+    let context = Tey.Workspace.discover(FS.Directory.current).try
+    match FS.File.read(FS.Path.join(context.workspaceRoot, "tey.lock")) do
+      Error(_) => Error("tey.lock not found; run `tey install`")
       Ok(text) => Tey.Lockfile.decode(text)
     end
   end

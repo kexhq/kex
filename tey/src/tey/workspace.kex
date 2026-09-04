@@ -1,0 +1,293 @@
+module Tey.Workspace
+
+using Tey.Manifest, only: [ManifestPackage, ManifestWorkspace, WorkspaceSource]
+
+record Member do
+  memberRoot : String
+  memberManifest : ManifestPackage
+end
+
+record Context do
+  workspaceRoot : String
+  members : [Member] = []
+  currentMember : Member? = None
+  warnings : [String] = []
+end
+
+# Discovers the outermost workspace containing `start`. Without a workspace,
+# the nearest package is a one-member context. Paths are lexical and absolute;
+# discovery never changes the process working directory.
+foul discover(start: String) -> Context or! String do
+  let origin = Tey.Workspace.absolute(start)
+  let manifests = Tey.Workspace.manifestsAbove(origin)
+  return Error("package.kex not found") if manifests.empty?
+
+  let roots = manifests.filter { |root| Tey.Workspace.workspaceAt(root).set? }
+  let root = roots.last.or(manifests.first.try)
+  let workspace = Tey.Workspace.workspaceAt(root)
+  let collected = match workspace do
+    None => match Tey.Workspace.packageAt(root) do
+      Ok(package) => ([Member { memberRoot: root, memberManifest: package }], [])
+      Error(error) => return Error(error)
+    end
+    Just(declaration) => match Tey.Workspace.collect(root, declaration, []) do
+      Error(error) => return Error(error)
+      Ok(value) => value
+    end
+  end
+  let (collectedMembers, warnings) = collected
+  let members = Tey.Workspace.uniqueMembers(collectedMembers, [])
+  let duplicates = Tey.Workspace.duplicateNames(members)
+  if !duplicates.empty?
+    return Error("workspace package name `${duplicates.first.try}` is declared more than once")
+  end
+  let current = Tey.Workspace.deepestContaining(origin, members)
+  return Ok(Context { workspaceRoot: root, members: members,
+                      currentMember: current,
+                      warnings: [...warnings, ...Tey.Workspace.cycleWarnings(members)] })
+end
+
+# Selects the members a workspace-aware command should operate on. An
+# explicit package always wins; otherwise commands at a member stay local,
+# while commands at the workspace root (or another non-member directory) use
+# every member. `--workspace` broadens the implicit member selection.
+let select(context: Context, packageName: String,
+           workspace?: Bool) -> [Member] or! String do
+  if packageName != ""
+    let selected = context.members.find do |member|
+      let manifest: ManifestPackage = member.memberManifest
+      manifest.name == packageName
+    end
+    return match selected do
+      Just(member) => Ok([member])
+      None => Error("workspace has no package named `${packageName}`")
+    end
+  end
+  return Ok(context.members) if workspace?
+  return match context.currentMember do
+    Just(member) => if member.memberRoot == context.workspaceRoot
+      Ok(context.members)
+    else
+      Ok([member])
+    end
+    None => Ok(context.members)
+  end
+end
+
+# Dependency-ready layers for workspace-wide commands. Cyclic leftovers form
+# one final layer so callers can continue, while discovery reports the cycle.
+let dependencyLayers(members: [Member]) -> [[Member]] do
+  return Tey.Workspace.layers(members, [])
+end
+
+let memberName(member: Member) -> String do
+  let manifest: ManifestPackage = member.memberManifest
+  return manifest.name
+end
+
+let memberDependencies(member: Member) -> [String] do
+  let manifest: ManifestPackage = member.memberManifest
+  return manifest.manifestDependencies.collect do |dependency|
+    match dependency.manifestSource do
+      WorkspaceSource => Just(dependency.manifestName)
+      _ => None
+    end
+  end
+end
+
+private do
+  let uniqueMembers(members: [Member], found: [Member]) -> [Member] do
+    return found if members.empty?
+    let member = members.first.try
+    let duplicate = found.any? do |existing|
+      existing.memberRoot == member.memberRoot
+    end
+    let nextFound = duplicate then found else [...found, member]
+    return Tey.Workspace.uniqueMembers(members.drop(1), nextFound)
+  end
+
+  let workspaceDependencies(member: Member) -> [String] do
+    return Tey.Workspace.memberDependencies(member)
+  end
+
+  let layers(pending: [Member], completed: [String]) -> [[Member]] do
+    return [] if pending.empty?
+    let pendingNames = pending.map { |member| Tey.Workspace.memberName(member) }
+    let ready = pending.filter do |member|
+      Tey.Workspace.workspaceDependencies(member).all? do |dependency|
+        completed.contains?(dependency) || !pendingNames.contains?(dependency)
+      end
+    end
+    return [pending] if ready.empty?
+    let readyNames = ready.map { |member| Tey.Workspace.memberName(member) }
+    let rest = pending.filter do |member|
+      !readyNames.contains?(Tey.Workspace.memberName(member))
+    end
+    return [ready, ...Tey.Workspace.layers(rest, [...completed, ...readyNames])]
+  end
+
+  let cycleWarnings(members: [Member]) -> [String] do
+    let layers = Tey.Workspace.dependencyLayers(members)
+    return [] if layers.empty?
+    let last = layers.last.try
+    let lastNames = last.map { |member| Tey.Workspace.memberName(member) }
+    let cyclic = last.filter do |member|
+      Tey.Workspace.workspaceDependencies(member).any? do |dependency|
+        lastNames.contains?(dependency)
+      end
+    end
+    return [] if cyclic.empty?
+    let names = cyclic.map { |member| Tey.Workspace.memberName(member) }.sort
+    return ["workspace dependency cycle involving ${names.join(", ")}"]
+  end
+
+  foul absolute(path: String) -> String do
+    return FS.Path.normalize(path) if FS.Path.absolute?(path)
+    return FS.Path.join(FS.Directory.current, path)
+  end
+
+  foul manifestsAbove(start: String) -> [String] do
+    var found: [String] = []
+    var cursor = start
+    loop do
+      if FS.File.file?(FS.Path.join(cursor, "package.kex"))
+        found.push!(cursor)
+        ()
+      end
+      let parent = FS.Path.dirname(cursor)
+      break if parent == cursor
+      cursor = parent
+    end
+    return found
+  end
+
+  foul textAt(root: String) -> String or! String do
+    match FS.File.read(FS.Path.join(root, "package.kex")) do
+      Ok(text) => return Ok(text)
+      Error(_) => return Error("could not read ${FS.Path.join(root, "package.kex")}")
+    end
+  end
+
+  foul packageAt(root: String) -> ManifestPackage or! String do
+    let text = Tey.Workspace.textAt(root).try
+    match Tey.Manifest.read(text) do
+      Ok(package) => return Ok(package)
+      Error(error) => return Error("${FS.Path.join(root, "package.kex")}: ${error}")
+    end
+  end
+
+  foul workspaceAt(root: String) -> ManifestWorkspace? do
+    let text = match Tey.Workspace.textAt(root) do
+      Error(_) => return None
+      Ok(value) => value
+    end
+    match Tey.Manifest.read(text) do
+      Ok(package) => return package.manifestWorkspace
+      Error(_) => match Tey.Manifest.readWorkspace(text) do
+        Ok(workspace) => return Just(workspace)
+        Error(_) => return None
+      end
+    end
+  end
+
+  foul collect(root: String, workspace: ManifestWorkspace,
+               seen: [String]) -> ([Member], [String]) or! String do
+    return Ok(([], [])) if seen.contains?(root)
+    let rootMembers = match Tey.Workspace.packageAt(root) do
+      Ok(package) => [Member { memberRoot: root, memberManifest: package }]
+      Error(_) => []
+    end
+    let groups: [[String]] = workspace.memberPatterns.map do |pattern|
+      Tey.Workspace.expand(root, pattern)
+    end
+    let empty: [String] = []
+    let roots = groups.reduce(empty) { |all, group| [...all, ...group] }
+    let unmatched = workspace.memberPatterns.filter do |pattern|
+      Tey.Workspace.expand(root, pattern).empty?
+    end.map do |pattern|
+      "workspace member pattern `${pattern}` matched no directories"
+    end
+    let collected = Tey.Workspace.collectRoots(roots, [...seen, root]).try
+    let (members, warnings) = collected
+    return Ok(([...rootMembers, ...members], [...unmatched, ...warnings]))
+  end
+
+  foul collectRoots(roots: [String], seen: [String]) -> ([Member], [String]) or! String do
+    return Ok(([], [])) if roots.empty?
+    let root = roots.first.try
+    let current = match Tey.Workspace.workspaceAt(root) do
+      Just(nested) => Tey.Workspace.collect(root, nested, seen).try
+      None => if FS.File.file?(FS.Path.join(root, "package.kex"))
+        let package = Tey.Workspace.packageAt(root).try
+        ([Member { memberRoot: root, memberManifest: package }], [])
+      else
+        ([], ["workspace member `${root}` has no package.kex"])
+      end
+    end
+    let rest = Tey.Workspace.collectRoots(roots.drop(1), seen).try
+    let (currentMembers, currentWarnings) = current
+    let (restMembers, restWarnings) = rest
+    return Ok(([...currentMembers, ...restMembers],
+               [...currentWarnings, ...restWarnings]))
+  end
+
+  # Member patterns are path segments. `*` selects every direct subdirectory;
+  # literal segments select exactly one. This covers the documented
+  # `packages/*` and `apps/*` forms without shell expansion or subprocesses.
+  foul expand(root: String, pattern: String) -> [String] do
+    return Tey.Workspace.expandSegments([root], FS.Path.segments(pattern))
+  end
+
+  foul expandSegments(paths: [String], segments: [String]) -> [String] do
+    return paths if segments.empty?
+    let segment = segments.first.try
+    let empty: [String] = []
+    let expanded: [String] = if segment == "*"
+      let groups: [[String]] = paths.map do |path|
+        FS.Directory.directories(path).or([]).map do |name|
+          FS.Path.join(path, name)
+        end
+      end
+      groups.reduce(empty) { |all, group| [...all, ...group] }
+    else
+      paths.map { |path| FS.Path.join(path, segment) }
+        .filter { |path| FS.Directory.directory?(path) }
+    end
+    return Tey.Workspace.expandSegments(expanded, segments.drop(1))
+  end
+
+  let duplicateNames(members: [Member]) -> [String] do
+    var seen: [String] = []
+    var duplicates: [String] = []
+    members.each do |member|
+      let manifest: ManifestPackage = member.memberManifest
+      let name = manifest.name
+      if seen.contains?(name) && !duplicates.contains?(name)
+        duplicates.push!(name)
+      end
+      seen.push!(name)
+    end
+    return duplicates
+  end
+
+  let deepestContaining(path: String, members: [Member]) -> Member? do
+    let candidates = members.filter do |member|
+      path == member.memberRoot || path.startsWith?("${member.memberRoot}/")
+    end
+    var selected: Member? = None
+    candidates.each do |member|
+      match selected do
+        None => selected = Just(member)
+        Just(current) => do
+          let memberDepth = FS.Path.segments(member.memberRoot).count
+          let currentDepth = FS.Path.segments(current.memberRoot).count
+          if memberDepth > currentDepth
+            selected = Just(member)
+          end
+        end
+      end
+      ()
+    end
+    return selected
+  end
+end

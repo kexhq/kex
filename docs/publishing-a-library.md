@@ -51,7 +51,7 @@ because the resolver finds a module by lowercasing its name.
 
 ```kex
 # The first Kex package, kept small on purpose.
-bundle "greet" do
+package "greet" do
   version("0.1.0")
   description("Greets a user, or the whole world")
   kex(">= 0.3.3")
@@ -71,7 +71,7 @@ enough.
 
 The reader is strict: a declaration it does not recognize is an error, not a
 comment. That is deliberate — a typo in a manifest must not be silently
-dropped — and it means a misspelled field fails loudly at `tey lock` rather
+dropped — and it means a misspelled field fails loudly at `tey install` rather
 than going missing.
 
 ## Check it before anyone depends on it
@@ -100,7 +100,7 @@ The other things a package needs run — the formatter, the migration, the
 release script — go in the manifest rather than in a `Makefile` beside it:
 
 ```kex
-bundle "greet" do
+package "greet" do
   version("0.1.0")
 
   command("fmt", run: "kex --format src", description: "Format the sources")

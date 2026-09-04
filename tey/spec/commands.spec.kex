@@ -57,3 +57,111 @@ describe("Tey.Commands.testReportingFlags") do
     assert(Tey.Commands.testReportingFlags(false, false, "") == [])
   end
 end
+
+describe("Tey.Commands.mergeUpdate") do
+  let dependency(name: String, commit: String,
+                 edges: [String] = []) -> Tey.Lockfile.Dependency do
+    return Tey.Lockfile.Dependency {
+      name: name, source: "git", git: "https://example.com/${name}",
+      commit: commit, sha256: "hash-${commit}", dependencies: edges
+    }
+  end
+
+  let state(dependencies: [Tey.Lockfile.Dependency],
+            approval: String) -> Tey.Lockfile.LockState do
+    return Tey.Lockfile.LockState {
+      kexRequirement: ">= 0.4", kexVersion: "0.4.0",
+      lockedDependencies: dependencies,
+      pluginApprovals: { "tool": approval }
+    }
+  end
+
+  it("updates only a named dependency and its transitive closure") do
+    let old = state([dependency("a", "old-a", ["child"]),
+                     dependency("child", "old-child", []),
+                     dependency("other", "old-other", [])], "approved")
+    let fresh = state([dependency("a", "new-a", ["child"]),
+                       dependency("child", "new-child", []),
+                       dependency("other", "new-other", [])], "")
+    let merged = Tey.Commands.mergeUpdate(old, fresh, ["a"], false)
+    assert(merged.lockedDependencies.find { |dep| dep.name == "a" }.try.commit == "new-a")
+    assert(merged.lockedDependencies.find { |dep| dep.name == "child" }.try.commit == "new-child")
+    assert(merged.lockedDependencies.find { |dep| dep.name == "other" }.try.commit == "old-other")
+    assert(merged.pluginApprovals["tool"] == Just("approved"))
+  end
+
+  it("replaces every resolution for a workspace-root update") do
+    let old = state([dependency("a", "old", []), dependency("b", "old", [])], "approved")
+    let fresh = state([dependency("a", "new", []), dependency("b", "new", [])], "")
+    let merged = Tey.Commands.mergeUpdate(old, fresh, [], true)
+    assert(merged.lockedDependencies.map { |dep| dep.commit } == ["new", "new"])
+    assert(merged.pluginApprovals["tool"] == Just("approved"))
+  end
+
+  it("changes no external pins for a member with no dependencies") do
+    let old = state([dependency("a", "old", [])], "approved")
+    let fresh = state([dependency("a", "new", [])], "")
+    let merged = Tey.Commands.mergeUpdate(old, fresh, [], false)
+    assert(merged.lockedDependencies.first.try.commit == "old")
+  end
+end
+
+describe("Tey.Commands.lockReusable?") do
+  let lock = Tey.Lockfile.LockState {
+    kexRequirement: ">= 0.4", kexVersion: "0.5.0", otpRelease: 27,
+    manifestFingerprint: "manifest", lockedDependencies: []
+  }
+  let toolchain = Tey.Toolchain.ToolchainInfo {
+    version: "0.5.0-beta.1", reportedRuntimeOtpFloor: Just(27)
+  }
+
+  it("requires the selected release and reported runtime floor to match") do
+    assert(Tey.Commands.lockReusable?(lock, "manifest", toolchain))
+    assert(!Tey.Commands.lockReusable?(
+      Tey.Lockfile.LockState { ...lock, kexVersion: "0.4.0" },
+      "manifest", toolchain
+    ))
+    assert(!Tey.Commands.lockReusable?(
+      Tey.Lockfile.LockState { ...lock, otpRelease: 26 },
+      "manifest", toolchain
+    ))
+  end
+
+  it("requires the normalized workspace fingerprint to match") do
+    assert(!Tey.Commands.lockReusable?(lock, "changed", toolchain))
+  end
+end
+
+describe("Tey.Commands.updateScopeMembers") do
+  let rootPackage = Tey.Manifest.ManifestPackage { name: "root" }
+  let childPackage = Tey.Manifest.ManifestPackage { name: "child" }
+  let rootMember = Tey.Workspace.Member {
+    memberRoot: "/work", memberManifest: rootPackage
+  }
+  let childMember = Tey.Workspace.Member {
+    memberRoot: "/work/packages/child", memberManifest: childPackage
+  }
+
+  it("limits a member-local update to the current member") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember],
+      currentMember: Just(childMember)
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [childMember])
+  end
+
+  it("keeps every member in scope at a package-root workspace root") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember],
+      currentMember: Just(rootMember)
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [rootMember, childMember])
+  end
+
+  it("keeps every member in scope at a virtual workspace root") do
+    let context = Tey.Workspace.Context {
+      workspaceRoot: "/work", members: [rootMember, childMember]
+    }
+    assert(Tey.Commands.updateScopeMembers(context) == [rootMember, childMember])
+  end
+end

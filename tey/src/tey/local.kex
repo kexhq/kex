@@ -1,0 +1,169 @@
+module Tey.Local
+
+using JSON
+using Tey.Manifest, only: [LocalOverride, ManifestPackage]
+using Tey.Workspace, only: [Context]
+using Tey.Plugin, only: [fingerprints]
+
+record Override do
+  overrideName : String
+  overridePath : String
+  overrideFile : String
+  overrideManifest : ManifestPackage
+end
+
+foul load(context: Context) -> [Override] or! String do
+  let memberRoots = context.members.map { |member| member.memberRoot }
+  return Tey.Local.loadRoots([context.workspaceRoot, ...memberRoots].uniq,
+                             context.workspaceRoot, [])
+end
+
+foul set(context: Context, name: String, path: String) -> String or! String do
+  let root = match context.currentMember do
+    Just(member) => member.memberRoot
+    None => context.workspaceRoot
+  end
+  let absolute = Tey.Local.absolute(path, root)
+  let manifest = Tey.Local.validatePackage(name, absolute).try
+  let file = FS.Path.join(root, "package.local.kex")
+  if Tey.Local.tracked?(context.workspaceRoot, file)
+    let relative = FS.Path.relativeTo(file, context.workspaceRoot)
+    return Error("${relative} is tracked by Git; remove it from the index")
+  end
+  let existing = match FS.File.read(file) do
+    Error(_) => []
+    Ok(text) => if text.trim.empty?
+      []
+    else
+      Tey.Manifest.readLocal(text).try
+    end
+  end
+  let kept = existing.filter { |override| override.localName != name }
+  let updated = [...kept, LocalOverride { localName: name, localPath: path }]
+  let text = updated.map do |override|
+    "local(${JSON.stringify(override.localName)}, path: ${JSON.stringify(override.localPath)})"
+  end.join("\n") + "\n"
+  Tey.Local.ensureIgnored(context.workspaceRoot).try
+  return Error("could not write ${file}") if !FS.File.write(file, text)
+  return Ok(manifest.name)
+end
+
+foul remove(context: Context, name: String) -> String or! String do
+  let overrides = Tey.Local.load(context).try
+  let override = match overrides.find { |entry| entry.overrideName == name } do
+    None => return Error("no local override for `${name}`")
+    Just(value) => value
+  end
+  let entries = Tey.Manifest.readLocal(FS.File.read(override.overrideFile).try).try
+  let remaining = entries.filter { |entry| entry.localName != name }
+  let text = remaining.map do |entry|
+    "local(${JSON.stringify(entry.localName)}, path: ${JSON.stringify(entry.localPath)})"
+  end.join("\n")
+  let finalText = text.empty? then "" else "${text}\n"
+  if !FS.File.write(override.overrideFile, finalText)
+    return Error("could not update ${override.overrideFile}")
+  end
+  return Ok(name)
+end
+
+let validateAgainstLock(overrides: [Override], lock: Tey.Lockfile.LockState) -> Void or! String do
+  overrides.each do |override|
+    let found = lock.lockedDependencies.find do |dependency|
+      dependency.name == override.overrideName
+    end
+    let locked = match found do
+      None => return Error("local override `${override.overrideName}` is not in tey.lock")
+      Just(value) => value
+    end
+    if override.overrideManifest.version != locked.version
+      return Error("local override `${override.overrideName}` has version `${override.overrideManifest.version}`, but tey.lock records `${locked.version}`")
+    end
+    let declared = override.overrideManifest.manifestDependencies
+      .map { |dependency| dependency.manifestName }.sort
+    if declared != locked.dependencies.sort
+      return Error("local override `${override.overrideName}` has different dependencies from tey.lock")
+    end
+    let pluginFingerprints = Tey.Plugin.fingerprints(override.overrideManifest.plugins)
+    if pluginFingerprints != locked.pluginFingerprints
+      return Error("local override `${override.overrideName}` has different plugin interfaces from tey.lock")
+    end
+  end
+  return Ok(())
+end
+
+private do
+  foul loadRoots(roots: [String], workspaceRoot: String,
+                 seen: [String]) -> [Override] or! String do
+    return Ok([]) if roots.empty?
+    let root = roots.first.try
+    let file = FS.Path.join(root, "package.local.kex")
+    let here = match FS.File.read(file) do
+      Error(_) => []
+      Ok(text) => if text.trim.empty?
+        []
+      else
+        if Tey.Local.tracked?(workspaceRoot, file)
+          let relative = FS.Path.relativeTo(file, workspaceRoot)
+          return Error("${relative} is tracked by Git; remove it from the index")
+        end
+        Tey.Manifest.readLocal(text).try.map do |entry|
+          let absolute = Tey.Local.absolute(entry.localPath, root)
+          let manifest = Tey.Local.validatePackage(entry.localName, absolute).try
+          Override { overrideName: entry.localName, overridePath: absolute,
+                     overrideFile: file, overrideManifest: manifest }
+        end
+      end
+    end
+    let duplicates = here.filter do |override|
+      seen.contains?(override.overrideName)
+    end
+    if !duplicates.empty?
+      let duplicate = duplicates.first.try
+      return Error("local override `${duplicate.overrideName}` is declared in more than one scope")
+    end
+    let names = [...seen, ...here.map { |override| override.overrideName }]
+    let rest = Tey.Local.loadRoots(roots.drop(1), workspaceRoot, names).try
+    return Ok([...here, ...rest])
+  end
+
+  let absolute(path: String, root: String) -> String do
+    return FS.Path.normalize(path) if FS.Path.absolute?(path)
+    return FS.Path.join(root, path)
+  end
+
+  foul validatePackage(name: String, root: String) -> ManifestPackage or! String do
+    let text = match FS.File.read(FS.Path.join(root, "package.kex")) do
+      Error(_) => return Error("local override `${name}` has no package.kex at ${root}")
+      Ok(value) => value
+    end
+    let manifest = Tey.Manifest.read(text).try
+    return Error("local override `${name}` declares package `${manifest.name}`") if manifest.name != name
+    return Ok(manifest)
+  end
+
+  foul tracked?(workspaceRoot: String, file: String) -> Bool do
+    let relative = FS.Path.relativeTo(file, workspaceRoot)
+    match Process.run("git", ["-C", workspaceRoot, "ls-files",
+                              "--error-unmatch", relative]) do
+      Error(_) => return false
+      Ok(result) => return result.exitCode == 0
+    end
+  end
+
+  foul ensureIgnored(workspaceRoot: String) -> Void or! String do
+    let path = FS.Path.join(workspaceRoot, ".gitignore")
+    let existing = FS.File.read(path).or("")
+    let rules = ["package.local.kex", "**/package.local.kex"]
+    let missing = rules.filter { |rule| !existing.lines.contains?(rule) }
+    return Ok(()) if missing.empty?
+    let prefix = if existing.empty? || existing.endsWith?("\n")
+      existing
+    else
+      "${existing}\n"
+    end
+    if !FS.File.write(path, "${prefix}${missing.join("\n")}\n")
+      return Error("could not add package.local.kex to ${path}")
+    end
+    return Ok(())
+  end
+end

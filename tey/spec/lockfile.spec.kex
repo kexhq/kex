@@ -65,6 +65,72 @@ describe("Tey.Lockfile round trip") do
     assert(back.lockedDependencies.empty?)
     assert(back.kexVersion == "0.3.4")
   end
+
+  it("keeps workspace metadata and plugin approvals") do
+    let state = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      workspaceMembers: { "app": ".", "parser": "packages/parser" },
+      manifestFingerprint: "manifest-hash",
+      lockedDependencies: [],
+      pluginApprovals: { "github": "interface-hash" }
+    }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(state)).try
+    assert(back.workspaceMembers["parser"] == Just("packages/parser"))
+    assert(back.manifestFingerprint == "manifest-hash")
+    assert(back.pluginApprovals["github"] == Just("interface-hash"))
+  end
+
+  it("encodes maps deterministically regardless of insertion order") do
+    let a = Dependency { name: "a", git: "https://example.com/a",
+                         commit: "a", sha256: "a" }
+    let z = Dependency { name: "z", git: "https://example.com/z",
+                         commit: "z", sha256: "z" }
+    let first = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      workspaceMembers: {}.put("z", "packages/z").put("a", "packages/a"),
+      lockedDependencies: [z, a],
+      pluginApprovals: {}.put("zeta", "z").put("alpha", "a")
+    }
+    let second = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      workspaceMembers: {}.put("a", "packages/a").put("z", "packages/z"),
+      lockedDependencies: [a, z],
+      pluginApprovals: {}.put("alpha", "a").put("zeta", "z")
+    }
+    assert(Tey.Lockfile.encode(first) == Tey.Lockfile.encode(second))
+  end
+
+
+  it("keeps provider plugin interface fingerprints on package entries") do
+    let dependency = Dependency {
+      name: "provider", git: "https://example.com/provider",
+      resolved: "v1.0.0", commit: "abc123", sha256: "deadbeef",
+      pluginFingerprints: { "github": "interface-hash" }
+    }
+    let state = LockState { kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+                            lockedDependencies: [dependency] }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(state)).try
+    assert(back.lockedDependencies.first.try.pluginFingerprints["github"] ==
+           Just("interface-hash"))
+  end
+
+  it("round-trips path and workspace package sources") do
+    let state = LockState {
+      kexRequirement: ">= 0.4.0", kexVersion: "0.4.1",
+      lockedDependencies: [
+        Dependency { name: "fixtures", source: "path", path: "../fixtures",
+                     sha256: "path-hash", dependencies: ["shared"] },
+        Dependency { name: "shared", source: "workspace", workspace?: true,
+                     version: "0.2.0" }
+      ]
+    }
+    let packages = Tey.Lockfile.decode(Tey.Lockfile.encode(state)).try
+      .lockedDependencies
+    assert(packages.first.try.source == "path")
+    assert(packages.first.try.path == "../fixtures")
+    assert(packages.first.try.dependencies == ["shared"])
+    assert(packages.second.try.workspace?)
+  end
 end
 
 describe("Tey.Lockfile.encode") do
@@ -112,10 +178,11 @@ describe("Tey.Lockfile.decode") do
     end
   end
 
-  it("refuses a lockfile with no kex metadata") do
-    let state: LockState or! String = Tey.Lockfile.decode(`{"version": 1, "deps": {}}`)
+  it("refuses a lockfile with no toolchain metadata") do
+    let state: LockState or! String = Tey.Lockfile.decode(
+      `{"version": 1, "workspace": {"members": {}}}`)
     match state do
-      Error(message) => assert(message.contains?("kex"))
+      Error(message) => assert(message.contains?("toolchain"))
       Ok(_) => assert(false)
     end
   end
@@ -125,9 +192,10 @@ describe("Tey.Lockfile.decode") do
     # be verified — either would let `tey install` fetch something and report
     # success, which is the failure this format exists to prevent.
     let noCommit: LockState or! String = Tey.Lockfile.decode(`
-      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-       "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
-                          "commit": "", "sha256": "deadbeef", "groups": []}}}
+      {"version": 1, "workspace": {"members": {}, "manifest_fingerprint": "x"},
+       "toolchain": {"kex": "0.3.4", "kex_requirement": ">= 0.3.0"},
+       "packages": {"greet": {"source": "git", "git": "https://example.com/g",
+                    "resolved": "main", "commit": "", "sha256": "deadbeef"}}}
     `)
     match noCommit do
       Error(message) => assert(message.contains?("incomplete"))
@@ -135,9 +203,10 @@ describe("Tey.Lockfile.decode") do
     end
 
     let noDigest: LockState or! String = Tey.Lockfile.decode(`
-      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-       "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
-                          "commit": "abc123", "sha256": "", "groups": []}}}
+      {"version": 1, "workspace": {"members": {}, "manifest_fingerprint": "x"},
+       "toolchain": {"kex": "0.3.4", "kex_requirement": ">= 0.3.0"},
+       "packages": {"greet": {"source": "git", "git": "https://example.com/g",
+                    "resolved": "main", "commit": "abc123", "sha256": ""}}}
     `)
     match noDigest do
       Error(message) => assert(message.contains?("incomplete"))
@@ -145,11 +214,12 @@ describe("Tey.Lockfile.decode") do
     end
   end
 
-  it("treats a lockfile with no deps key as having none") do
+  it("treats a lockfile with no packages key as having none") do
     # Distinct from a malformed one: `tey lock` on a package with no
     # dependencies is an ordinary thing, not an error.
     let state = Tey.Lockfile.decode(
-      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"}}`).try
+      `{"version": 1, "workspace": {"members": {}},
+        "toolchain": {"kex": "0.3.4", "kex_requirement": ">= 0.3.0"}}`).try
     assert(state.lockedDependencies.empty?)
   end
 end
@@ -178,16 +248,15 @@ describe("Tey.Lockfile — the OTP record") do
     assert(back.otpRelease == 29)
   end
 
-  it("reads a lockfile written before the OTP block existed") do
-    # The compatibility that lets an old lockfile keep working: absent means
-    # "this resolve had no opinion", not "malformed".
-    let old = Tey.Lockfile.decode(`
-      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-       "deps": {}}
+  it("defaults omitted optional toolchain fields") do
+    let minimal = Tey.Lockfile.decode(`
+      {"version": 1, "workspace": {"members": {}},
+       "toolchain": {"kex": "0.3.4", "kex_requirement": ">= 0.3.0"},
+       "packages": {}}
     `).try
-    assert(old.otpRequirement == "")
-    assert(old.otpRelease == 0)
-    assert(old.kexVersion == "0.3.4")
+    assert(minimal.otpRequirement == "")
+    assert(minimal.otpRelease == 0)
+    assert(minimal.kexVersion == "0.3.4")
   end
 
   it("keeps a zero release out of the way of a real one") do

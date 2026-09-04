@@ -3,6 +3,15 @@ module Tey.Toolchain
 using Tey.Cache, only: [root]
 using Tey.Git, only: [execute]
 
+# Facts reported by the compiler Tey selected for this project. This is
+# deliberately not Kex.Kernel.VERSION: that names the compiler which built
+# Tey itself, and a package may select a newer (or older) compiler to build
+# its own sources.
+record ToolchainInfo do
+  version : String
+  reportedRuntimeOtpFloor : Integer? = None
+end
+
 foul home -> String do
   let userHome = ENV.get("HOME", ".")
   ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
@@ -197,6 +206,37 @@ foul kex -> String do
   return Tey.Toolchain.resolved.or("kex")
 end
 
+# Read the machine contract from the selected compiler. Keeping this in one
+# call prevents dependency resolution and OTP validation from accidentally
+# observing two different binaries if selection changes between them.
+foul activeInfo -> ToolchainInfo or! String do
+  match Process.run(Tey.Toolchain.kex, ["--info"]) do
+    Error(error) => return Error("could not inspect selected Kex: ${error}")
+    Ok(result) => do
+      return Error("selected Kex could not report its toolchain information: ${result.stderr}") if result.exitCode != 0
+      match JSON.parse(result.stdout) do
+        Error(_) => return Error("selected Kex returned invalid --info JSON")
+        Ok(info) => do
+          let version = match info["version"] do
+            None => ""
+            Just(value) => "${value}"
+          end
+          return Error("selected Kex --info is missing its version") if version == ""
+          let floor = match info["runtime_otp_floor"] do
+            None => None
+            Just(value) => match Integer.parse("${value}") do
+              Ok(number) => Just(number)
+              Error(_) => None
+            end
+          end
+          return Ok(ToolchainInfo { version: version,
+                                    reportedRuntimeOtpFloor: floor })
+        end
+      end
+    end
+  end
+end
+
 # The OTP release that compiled the selected toolchain's runtime beams — the
 # oldest Erlang that can load them, since a `.beam` cannot be read by a runtime
 # older than the `erlc` that produced it.
@@ -211,21 +251,9 @@ end
 # three mean the same thing to a caller — "this toolchain does not say" — and
 # none of them is an error worth stopping a build for.
 foul runtimeOtpFloor -> Integer? do
-  match Process.run(Tey.Toolchain.kex, ["--info"]) do
-    Error(_) => return None
-    Ok(result) => do
-      return None if result.exitCode != 0
-      match JSON.parse(result.stdout) do
-        Error(_) => return None
-        Ok(info) => match info["runtime_otp_floor"] do
-          None => return None
-          Just(value) => match Integer.parse("${value}") do
-            Error(_) => return None
-            Ok(floor) => return Just(floor)
-          end
-        end
-      end
-    end
+  match Tey.Toolchain.activeInfo do
+    Error(_) => None
+    Ok(info) => info.reportedRuntimeOtpFloor
   end
 end
 

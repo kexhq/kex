@@ -1,0 +1,66 @@
+describe("Tey plugin update transaction integration") do
+  let root = "/tmp/tey_plugin_update_spec"
+  let checkout = FS.Directory.current
+  let compiler = FS.Path.join(checkout, "build/kex")
+  let sources = FS.Path.join(checkout, "tey/src")
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/provider")
+    FS.File.write("${root}/package.kex", `
+      package "app" do
+        kex(">= 0.3.0")
+        tey("provider", path: "provider")
+      end
+    `)
+    FS.File.write("${root}/provider/package.kex", `
+      package "provider" do
+        version("1.0.0")
+        plugin namespace: "tools", tey: ">= 0.1" do
+          capabilities([Process.Run(["git"])])
+        end
+      end
+    `)
+    FS.File.write("${root}/install.kex", `
+      using Tey.Commands
+
+      main do
+        System.exit(Tey.Commands.install("", ""))
+      end
+    `)
+    FS.File.write("${root}/update.kex", `
+      using Tey.Commands
+
+      main do
+        System.exit(Tey.Commands.updateDependencies())
+      end
+    `)
+    FS.File.write("${root}/yes", "yes\n")
+    FS.File.write("${root}/no", "no\n")
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("leaves the old lock untouched when changed resources are declined") do
+    let install = Process.run("sh", ["-c",
+      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" -R --no-colors --source-root \"$4\" install.kex < yes",
+      "tey-plugin-update-spec", root, compiler, "${root}/cache", sources]).try
+    assert(install.exitCode == 0, install.stderr)
+    let before = FS.File.read("${root}/tey.lock").try
+
+    FS.File.write("${root}/provider/package.kex", `
+      package "provider" do
+        version("1.0.0")
+        plugin namespace: "tools", tey: ">= 0.1" do
+          capabilities([Process.Run(["git", "gh"])])
+        end
+      end
+    `)
+    let update = Process.run("sh", ["-c",
+      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" -R --no-colors --source-root \"$4\" update.kex < no",
+      "tey-plugin-update-spec", root, compiler, "${root}/cache", sources]).try
+    assert(update.exitCode != 0, "declined plugin update succeeded")
+    assert(FS.File.read("${root}/tey.lock").try == before,
+           "declined plugin update changed tey.lock")
+  end
+end

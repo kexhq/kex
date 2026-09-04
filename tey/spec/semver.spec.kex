@@ -129,6 +129,11 @@ describe("Tey.Semver.satisfies") do
     assert(!Tey.Semver.satisfies("2.5.0", ">= 1.0.0 < 2.0.0"))
   end
 
+  it("accepts comma-separated compound requirements") do
+    assert(Tey.Semver.satisfies("0.7.0", ">= 0.6, < 0.8"))
+    assert(!Tey.Semver.satisfies("0.8.0", ">= 0.6, < 0.8"))
+  end
+
   it("keeps a pre-release out of a range that did not ask for one") do
     # The rule that stops `~> 0.3` resolving to 0.4.0-rc.1 and shipping an
     # untested compiler to somebody who never opted in.
@@ -243,6 +248,7 @@ describe("Tey.Semver.versionOf") do
   it("pulls the version out of a resolved ref") do
     assert(Tey.Semver.versionOf("refs/tags/v0.1.1") == "v0.1.1")
     assert(Tey.Semver.versionOf("v0.1.1") == "v0.1.1")
+    assert(Tey.Semver.versionOf("refs/tags/parser-v1.2.3") == "v1.2.3")
   end
 
   it("is empty for a ref that names no version") do

@@ -1,4 +1,4 @@
-bundle "tey" do
+package "tey" do
   description("Yet another manager, Kex's default package manager.")
   version("0.2.0")
   kex(">= 0.3.0")

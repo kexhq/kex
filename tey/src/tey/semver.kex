@@ -67,6 +67,7 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   let version = Tey.Semver.parseVersion(versionText)
   return false if version == None
   let req = requirement.trim
+    .replace(",", " ")
     .replace(">= ", ">=")
     .replace("<= ", "<=")
     .replace("~> ", "~>")
@@ -121,7 +122,9 @@ end
 # gives "", which satisfies nothing and so never claims to meet a range.
 let versionOf(ref: String) -> String do
   let last = ref.split("/").last.or(ref)
-  return Tey.Semver.parseVersion(last) == None then "" else last
+  return last if Tey.Semver.parseVersion(last).set?
+  let scoped = last.split("-v").last.or("")
+  return Tey.Semver.parseVersion(scoped).set? then "v${scoped}" else ""
 end
 
 # Channel precedence, lowest first: prealpha < alpha < beta < rc < release.

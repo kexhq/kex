@@ -1,0 +1,186 @@
+using Tey.Snapshot, only: [cachedPath, create, verify]
+
+describe("Tey.Snapshot.create") do
+  let root = "/tmp/tey_snapshot_spec"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/dependency/src")
+    FS.Directory.create("${root}/dependency/build")
+    FS.File.write("${root}/dependency/package.kex", `
+      package "dep" do
+        version("1.2.0")
+      end
+    `)
+    FS.File.write("${root}/dependency/src/main.kex", "module Dep\n")
+    FS.File.write("${root}/dependency/build/generated", "ignored")
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("publishes an immutable content-addressed copy") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      assert(dependency.source == "path")
+      assert(dependency.version == "1.2.0")
+      assert(FS.File.file?("${cached}/src/main.kex"))
+      assert(!FS.File.file?("${cached}/build/generated"))
+      FS.File.write("${root}/dependency/src/main.kex", "module Changed\n")
+      assert(FS.File.read("${cached}/src/main.kex").try == "module Dep\n")
+    end
+  end
+
+  it("allows concurrent publication of the same snapshot") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let first = Task.start do
+        Tey.Snapshot.create("dep", "dependency", root)
+      end
+      let second = Task.start do
+        Tey.Snapshot.create("dep", "dependency", root)
+      end
+      let firstSnapshot = first.await.try.try
+      let secondSnapshot = second.await.try.try
+      assert(firstSnapshot.sha256 == secondSnapshot.sha256)
+      assert(Tey.Snapshot.verify(firstSnapshot).ok?)
+      assert(Tey.Snapshot.verify(secondSnapshot).ok?)
+    end
+  end
+
+  it("honours .teyignore") do
+    FS.File.write("${root}/dependency/.teyignore", "secret/*\n")
+    FS.Directory.create("${root}/dependency/secret")
+    FS.File.write("${root}/dependency/secret/token", "nope")
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      assert(!FS.File.file?("${Tey.Snapshot.cachedPath(dependency)}/secret/token"))
+    end
+  end
+
+  it("supports basename wildcards and recursive directory patterns") do
+    FS.File.write("${root}/dependency/.teyignore", `
+      *.log
+      **/fixtures
+    `)
+    FS.Directory.create("${root}/dependency/nested/fixtures")
+    FS.File.write("${root}/dependency/nested/debug.log", "ignored")
+    FS.File.write("${root}/dependency/nested/fixtures/data", "ignored")
+    FS.File.write("${root}/dependency/nested/kept.txt", "kept")
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      assert(!FS.File.file?("${cached}/nested/debug.log"))
+      assert(!FS.File.file?("${cached}/nested/fixtures/data"))
+      assert(FS.File.file?("${cached}/nested/kept.txt"))
+    end
+  end
+
+  it("always excludes VCS metadata, outputs, and caches") do
+    [".hg", ".svn", ".cache", "build-wasm", "dist", "node_modules"].each do |name|
+      FS.Directory.create("${root}/dependency/${name}")
+      FS.File.write("${root}/dependency/${name}/data", "ignored")
+    end
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      assert(!FS.Directory.directory?("${cached}/.hg"))
+      assert(!FS.Directory.directory?("${cached}/node_modules"))
+      assert(!FS.Directory.directory?("${cached}/build-wasm"))
+    end
+  end
+
+  it("changes identity when included content changes") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let first = Tey.Snapshot.create("dep", "dependency", root).try
+      FS.File.write("${root}/dependency/src/main.kex", "module Changed\n")
+      let second = Tey.Snapshot.create("dep", "dependency", root).try
+      assert(first.sha256 != second.sha256)
+    end
+  end
+
+  it("detects corruption in a cached snapshot") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      FS.File.write("${cached}/src/main.kex", "corrupted\n")
+      match Tey.Snapshot.verify(dependency) do
+        Error(message) => assert(message.contains?("content hash mismatch"))
+        Ok(_) => assert(false, "accepted a corrupted snapshot")
+      end
+    end
+  end
+
+  it("does not reuse a corrupted snapshot during resolution") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(dependency)
+      FS.File.write("${cached}/src/main.kex", "corrupted\n")
+      match Tey.Snapshot.create("dep", "dependency", root) do
+        Error(message) => assert(message.contains?("is corrupted"))
+        Ok(_) => assert(false, "reused a corrupted snapshot")
+      end
+    end
+  end
+
+  it("rejects a package with the wrong identity") do
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      match Tey.Snapshot.create("other", "dependency", root) do
+        Error(message) => assert(message.contains?("declares package `dep`"))
+        Ok(_) => assert(false)
+      end
+    end
+  end
+
+
+  it("preserves symlinks whose targets remain inside the package") do
+    Process.run("ln", ["-s", "main.kex", "${root}/dependency/src/current.kex"])
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let dependency = Tey.Snapshot.create("dep", "dependency", root).try
+      let link = "${Tey.Snapshot.cachedPath(dependency)}/src/current.kex"
+      let result = Process.run("test", ["-L", link]).try
+      assert(result.exitCode == 0, "snapshot dereferenced the internal symlink")
+    end
+  end
+
+  it("preserves symlinks to directories instead of materializing them") do
+    FS.Directory.create("${root}/dependency/assets")
+    FS.File.write("${root}/dependency/assets/value.txt", "inside\n")
+    Process.run("ln", ["-s", "assets",
+                       "${root}/dependency/linked-assets"])
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let snapshot = Tey.Snapshot.create("dep", "dependency", root).try
+      let cached = Tey.Snapshot.cachedPath(snapshot)
+      let link = Process.run("readlink", ["--",
+                                          "${cached}/linked-assets"]).try
+      assert(link.exitCode == 0, "directory symlink was materialized")
+      assert(link.stdout.trim == "assets")
+    end
+  end
+
+  it("changes identity when a symlink is retargeted") do
+    FS.File.write("${root}/dependency/src/first.kex", "same\n")
+    FS.File.write("${root}/dependency/src/second.kex", "same\n")
+    Process.run("ln", ["-s", "first.kex",
+                       "${root}/dependency/src/current.kex"])
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      let first = Tey.Snapshot.create("dep", "dependency", root).try
+      FS.File.delete("${root}/dependency/src/current.kex")
+      Process.run("ln", ["-s", "second.kex",
+                         "${root}/dependency/src/current.kex"])
+      let second = Tey.Snapshot.create("dep", "dependency", root).try
+      assert(first.sha256 != second.sha256)
+    end
+  end
+
+  it("rejects symlinks that escape the package directory") do
+    FS.File.write("${root}/outside", "secret")
+    Process.run("ln", ["-s", "../../outside",
+                       "${root}/dependency/src/escape"])
+    with ENV = Mock.Env { vars: { "TEY_CACHE": "${root}/cache" } } do
+      match Tey.Snapshot.create("dep", "dependency", root) do
+        Error(message) => assert(message.contains?("escapes"))
+        Ok(_) => assert(false, "snapshotted an escaping symlink")
+      end
+    end
+  end
+end

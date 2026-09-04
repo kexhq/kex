@@ -1,0 +1,90 @@
+using Tey.Generator, only: [DeleteFile, Operation, WriteFile]
+
+describe("Tey.Generator protocol") do
+  it("decodes versioned write and delete operations") do
+    let operations = Tey.Generator.decode(`
+      {"version": 1, "operations": [
+        {"kind": "write", "path": "ci/build.yml", "content": "build"},
+        {"kind": "delete", "path": "old.yml"}
+      ]}
+    `).try
+    assert(operations == [WriteFile("ci/build.yml", "build"),
+                          DeleteFile("old.yml")])
+  end
+
+  it("rejects unknown versions and operations") do
+    let version: [Operation] or! String = Tey.Generator.decode(`
+      {"version": 2, "operations": []}
+    `)
+    let operation: [Operation] or! String = Tey.Generator.decode(`
+      {"version": 1, "operations": [{"kind": "move", "path": "x"}]}
+    `)
+    assert(version.error?)
+    assert(operation.error?)
+  end
+
+  it("rejects malformed protocol shapes and missing write data") do
+    let root: [Operation] or! String = Tey.Generator.decode(`
+      []
+    `)
+    let operations: [Operation] or! String = Tey.Generator.decode(`
+      {"version": 1, "operations": {}}
+    `)
+    let content: [Operation] or! String = Tey.Generator.decode(`
+      {"version": 1, "operations": [{"kind": "write", "path": "x"}]}
+    `)
+    let path: [Operation] or! String = Tey.Generator.decode(`
+      {"version": 1, "operations": [{"kind": "delete"}]}
+    `)
+    assert(root.error?)
+    assert(operations.error?)
+    assert(content.error?)
+    assert(path.error?)
+  end
+end
+
+describe("Tey.Generator paths") do
+  let root = "/tmp/tey_generator_spec"
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create(root)
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  it("writes new files and reports no confirmation requirement") do
+    Tey.Generator.apply([WriteFile("ci/build.yml", "build\n")], root, false).try
+    assert(FS.File.read("${root}/ci/build.yml").try == "build\n")
+  end
+
+  it("rejects absolute paths and parent traversal") do
+    let absolute: String or! String = Tey.Generator.safePath(root, "/tmp/out")
+    let parent: String or! String = Tey.Generator.safePath(root, "../out")
+    assert(absolute.error?)
+    assert(parent.error?)
+  end
+
+  it("rejects paths escaping through a symlink") do
+    FS.Directory.create("${root}-outside")
+    Process.run("ln", ["-s", "${root}-outside", "${root}/escape"])
+    let outcome: String or! String = Tey.Generator.safePath(root,
+                                                            "escape/file")
+    assert(outcome.error?)
+    FS.Directory.deleteAll("${root}-outside")
+  end
+
+  it("requires confirmation for existing files unless forced") do
+    FS.File.write("${root}/existing", "old")
+    Mock.IO.start()
+    Mock.IO.input("no")
+    match Tey.Generator.apply([WriteFile("existing", "new")], root, false) do
+      Error(message) => assert(message.contains?("not confirmed"))
+      Ok(_) => assert(false)
+    end
+    Mock.IO.stop()
+    assert(FS.File.read("${root}/existing").try == "old")
+    Tey.Generator.apply([WriteFile("existing", "new")], root, true).try
+    assert(FS.File.read("${root}/existing").try == "new")
+  end
+end

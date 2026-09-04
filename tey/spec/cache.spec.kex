@@ -40,6 +40,18 @@ describe("Tey.Cache.packagePath") do
     assert(once == twice)
   end
 
+  it("shares one repository checkout across monorepo package subdirectories") do
+    let parser = Dependency { name: "parser", git: "https://example.com/compiler",
+                              commit: "aaa111", subdir: "packages/parser",
+                              sha256: "deadbeef" }
+    let lexer = Dependency { name: "lexer", git: "https://example.com/compiler",
+                             commit: "aaa111", subdir: "packages/lexer",
+                             sha256: "deadbeef" }
+    assert(Tey.Cache.repositoryPath(parser) == Tey.Cache.repositoryPath(lexer))
+    assert(Tey.Cache.packagePath(parser).endsWith?("aaa111/packages/parser"))
+    assert(Tey.Cache.packagePath(lexer).endsWith?("aaa111/packages/lexer"))
+  end
+
   it("ignores the parts of a dependency that are not its identity") do
     # `resolved` is a human-facing label for the same commit — `refs/tags/v1`
     # and `main` can name one — so it must not split the cache. The commit is

@@ -1,0 +1,142 @@
+using Tey.Manifest, only: [Plugin]
+using Tey.Plugin, only: [Binding]
+
+describe("Tey.Plugin approvals") do
+  let provider(programName: String) -> Plugin do
+    let text = `
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run(["$PROGRAM$"])])
+          generator("workflow", entrypoint: "workflow.kex") do
+            option("otp", type: Integer)
+          end
+        end
+      end
+    `.substitute({"$PROGRAM$": programName})
+    return Tey.Manifest.read(text).try.plugins.first.try
+  end
+
+  it("accepts exactly the approved interface fingerprint") do
+    let plugin = provider("git")
+    assert(plugin.pluginCapabilities.first.try.capabilityValues == ["git"])
+    let approvals: {String: String} = {}.put("github", Tey.Plugin.fingerprint(plugin))
+    assert(Tey.Plugin.approved?(plugin, approvals))
+    assert(Tey.Plugin.missingApprovals([plugin], approvals).empty?)
+  end
+
+  it("invalidates approval when requested resources change") do
+    let old = provider("git")
+    let changed = provider("curl")
+    let approvals: {String: String} = {}.put("github", Tey.Plugin.fingerprint(old))
+    assert(!Tey.Plugin.approved?(changed, approvals))
+    assert(Tey.Plugin.missingApprovals([changed], approvals).count == 1)
+    assert(Tey.Plugin.validApprovals([changed], approvals).empty?)
+  end
+
+  it("normalizes declaration ordering") do
+    let first = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Net.Connect(["b.example", "a.example"]), Process.Run(["git"])])
+        end
+      end
+    `).try.plugins.first.try
+    let second = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run(["git"]), Net.Connect(["a.example", "b.example"])])
+        end
+      end
+    `).try.plugins.first.try
+    assert(Tey.Plugin.fingerprint(first) == Tey.Plugin.fingerprint(second))
+  end
+
+  it("does not revoke approval when implementation paths move") do
+    let first = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "src/old.kex") do
+            option("otp", type: Integer)
+          end
+        end
+      end
+    `).try.plugins.first.try
+    let moved = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "src/new.kex") do
+            option("otp", type: Integer)
+          end
+        end
+      end
+    `).try.plugins.first.try
+    assert(Tey.Plugin.fingerprint(first) == Tey.Plugin.fingerprint(moved))
+  end
+end
+
+describe("Tey.Plugin scoped approvals") do
+  let binding(key: String, scope: String, plugin: Plugin) -> Binding do
+    return Binding { approvalKey: key, scopeName: scope,
+                     declaration: plugin }
+  end
+
+  it("keeps member-local approvals independent") do
+    let first = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run(["git"])])
+        end
+      end
+    `).try.plugins.first.try
+    let second = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          capabilities([Process.Run(["gh"])])
+        end
+      end
+    `).try.plugins.first.try
+    let bindings = [binding("app:github", "app", first),
+                    binding("docs:github", "docs", second)]
+    let approvals: {String: String} = {}
+      .put("app:github", Tey.Plugin.fingerprint(first))
+      .put("docs:github", Tey.Plugin.fingerprint(second))
+    assert(Tey.Plugin.missingBindingApprovals(bindings, approvals).empty?)
+    assert(Tey.Plugin.validBindingApprovals(bindings, approvals).count == 2)
+  end
+
+  it("allows a namespace in disjoint members but rejects visible collisions") do
+    let plugin = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do end
+      end
+    `).try.plugins.first.try
+    let app = binding("app:github", "app", plugin)
+    let docs = binding("docs:github", "docs", plugin)
+    assert(Tey.Plugin.validateScopes([], [app, docs]).ok?)
+    let global = binding("github", "", plugin)
+    match Tey.Plugin.validateScopes([global], [app]) do
+      Error(message) => assert(message.contains?("provided more than once"))
+      Ok(_) => assert(false, "accepted a visible namespace collision")
+    end
+  end
+
+  it("requires member context for local plugins and resolves generators") do
+    let plugin = Tey.Manifest.read(`
+      package "provider" do
+        plugin namespace: "github", tey: ">= 0.6" do
+          generator("workflow", entrypoint: "workflow.kex")
+        end
+      end
+    `).try.plugins.first.try
+    let local = binding("app:github", "app", plugin)
+    let outside: Binding or! String = Tey.Plugin.visibleBinding(
+      [local], "github", None
+    )
+    assert(outside.error?)
+    let visible = Tey.Plugin.visibleBinding(
+      [local], "github", Just("app")
+    ).try
+    assert(Tey.Plugin.generator(visible, "workflow").try.operationEntrypoint ==
+           "workflow.kex")
+  end
+end

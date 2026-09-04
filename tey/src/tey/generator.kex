@@ -1,0 +1,117 @@
+module Tey.Generator
+
+using JSON
+
+type Operation = WriteFile(String, String) | DeleteFile(String)
+
+# Decodes the child-to-host half of the separately versioned protocol. Plugin
+# stdout is data, never Kex source evaluated in Tey's process.
+let decode(text: String) -> [Operation] or! String do
+  let root = match JSON.parse(text) do
+    Error(_) => return Error("plugin returned invalid generator protocol JSON")
+    Ok(value) => value
+  end
+  return Error("generator protocol root must be an object") if Kex.Intrinsic.Kex.kind(root) != :map
+  let version = root["version"].or(None)
+  return Error("unsupported generator protocol version") if Kex.Intrinsic.Kex.kind(version) != :integer || "${version}" != "1"
+  let values = match root["operations"] do
+    None => return Error("generator protocol has no operations")
+    Just(items) => items
+  end
+  return Error("generator protocol operations must be a list") if Kex.Intrinsic.Kex.kind(values) != :list
+  return Tey.Generator.decodeOperations(values, [])
+end
+
+foul apply(operations: [Operation], workspaceRoot: String,
+           force?: Bool) -> Void or! String do
+  return Ok(()) if operations.empty?
+  let operation = operations.first.try
+  match operation do
+    WriteFile(path, content) => do
+      let target = Tey.Generator.safePath(workspaceRoot, path).try
+      let existing = FS.File.file?(target) || FS.Directory.directory?(target)
+      Tey.Generator.confirm("write", path, existing, force?).try
+      return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
+      return Error("could not write `${path}`") if !FS.File.write(target, content)
+      IO.printLine("write ${path}")
+    end
+    DeleteFile(path) => do
+      let target = Tey.Generator.safePath(workspaceRoot, path).try
+      let existing = FS.File.file?(target) || FS.Directory.directory?(target)
+      if existing
+        Tey.Generator.confirm("delete", path, true, force?).try
+        return Error("generator may only delete files: `${path}`") if FS.Directory.directory?(target)
+        return Error("could not delete `${path}`") if !FS.File.delete(target)
+      end
+      IO.printLine("delete ${path}")
+    end
+  end
+  return Tey.Generator.apply(operations.drop(1), workspaceRoot, force?)
+end
+
+foul safePath(workspaceRoot: String, path: String) -> String or! String do
+  return Error("generator path `${path}` must be relative to the workspace") if path == "" || FS.Path.absolute?(path)
+  return Error("generator path `${path}` may not contain `..`") if FS.Path.segments(path).contains?("..")
+  let root = Tey.Generator.realPath(workspaceRoot).try
+  let target = FS.Path.join(root, path)
+  let existing = Tey.Generator.existingAncestor(target)
+  let resolved = Tey.Generator.realPath(existing).try
+  if resolved != root && !resolved.startsWith?("${root}/")
+    return Error("generator path `${path}` escapes the workspace through a symlink")
+  end
+  if FS.File.file?(target) || FS.Directory.directory?(target)
+    let finalTarget = Tey.Generator.realPath(target).try
+    if finalTarget != root && !finalTarget.startsWith?("${root}/")
+      return Error("generator path `${path}` escapes the workspace through a symlink")
+    end
+  end
+  return Ok(target)
+end
+
+private do
+  let decodeOperations(values, decoded: [Operation]) -> [Operation] or! String do
+    return Ok(decoded) if values.empty?
+    let value = values.first.try
+    return Error("generator operation must be an object") if Kex.Intrinsic.Kex.kind(value) != :map
+    let kind = "${value["kind"].or("")}"
+    let rawPath = value["path"].or(None)
+    return Error("generator operation requires a string path") if Kex.Intrinsic.Kex.kind(rawPath) != :string || "${rawPath}" == ""
+    let path = "${rawPath}"
+    let operation = if kind == "write"
+      let content = value["content"].or(None)
+      return Error("generator write `${path}` requires string content") if Kex.Intrinsic.Kex.kind(content) != :string
+      WriteFile(path, "${content}")
+    elif kind == "delete"
+      DeleteFile(path)
+    else
+      return Error("unknown generator operation `${kind}`")
+    end
+    return Tey.Generator.decodeOperations(values.drop(1), [...decoded, operation])
+  end
+
+  foul confirm(kind: String, path: String, existing?: Bool,
+               force?: Bool) -> Void or! String do
+    return Ok(()) if !existing? || force?
+    IO.print("Generator wants to ${kind} existing `${path}`. Continue? [y/N] ")
+    let answer = IO.getLine.or("").trim.lowerCase
+    return Ok(()) if answer == "y" || answer == "yes"
+    return Error("generator ${kind} of `${path}` was not confirmed")
+  end
+
+  foul existingAncestor(path: String) -> String do
+    return path if FS.File.file?(path) || FS.Directory.directory?(path)
+    let parent = FS.Path.dirname(path)
+    return path if parent == path
+    return Tey.Generator.existingAncestor(parent)
+  end
+
+  foul realPath(path: String) -> String or! String do
+    match Process.run("realpath", ["--", path]) do
+      Error(error) => return Error(error)
+      Ok(result) => do
+        return Ok(result.stdout.trim) if result.exitCode == 0
+        return Error("could not resolve `${path}`")
+      end
+    end
+  end
+end
