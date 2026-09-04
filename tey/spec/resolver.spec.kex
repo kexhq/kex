@@ -259,12 +259,17 @@ describe("Tey.Resolver Git monorepo dependencies") do
   it("resolves an explicit subdir and records the member manifest") do
     FS.Directory.deleteAll(cache)
     let repository = FS.Directory.current
-    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    # "HEAD" resolves through `git ls-remote` (what `Tey.Git.pinRef` uses)
+    # regardless of whether HEAD is on a branch or detached, which a real
+    # commit SHA does not — `ls-remote` only matches named refs. A CI
+    # checkout of a pull request lands in detached HEAD, where the branch
+    # name `git symbolic-ref --short HEAD` used to report is empty.
+    let commit = "HEAD"
     let app = ManifestPackage {
       name: "app", packageKexRequirement: ">= 0.3.0",
       manifestDependencies: [Dependency {
         manifestName: "tey",
-        manifestSource: Tey.Manifest.GitSource(repository, "branch", branch,
+        manifestSource: Tey.Manifest.GitSource(repository, "ref", commit,
                                                "tey")
       }]
     }
@@ -290,12 +295,17 @@ describe("Tey.Resolver Git monorepo dependencies") do
   it("discovers a monorepo package by name when subdir is omitted") do
     FS.Directory.deleteAll(cache)
     let repository = FS.Directory.current
-    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    # "HEAD" resolves through `git ls-remote` (what `Tey.Git.pinRef` uses)
+    # regardless of whether HEAD is on a branch or detached, which a real
+    # commit SHA does not — `ls-remote` only matches named refs. A CI
+    # checkout of a pull request lands in detached HEAD, where the branch
+    # name `git symbolic-ref --short HEAD` used to report is empty.
+    let commit = "HEAD"
     let app = ManifestPackage {
       name: "app", packageKexRequirement: ">= 0.3.0",
       manifestDependencies: [Dependency {
         manifestName: "tey",
-        manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, "")
+        manifestSource: Tey.Manifest.GitSource(repository, "ref", commit, "")
       }]
     }
     let context = Context {
@@ -317,14 +327,19 @@ describe("Tey.Resolver Git monorepo dependencies") do
   it("uses one checkout for two packages from the same repository commit") do
     FS.Directory.deleteAll(cache)
     let repository = FS.Directory.current
-    let branch = Process.run("git", ["symbolic-ref", "--short", "HEAD"]).try.stdout.trim
+    # "HEAD" resolves through `git ls-remote` (what `Tey.Git.pinRef` uses)
+    # regardless of whether HEAD is on a branch or detached, which a real
+    # commit SHA does not — `ls-remote` only matches named refs. A CI
+    # checkout of a pull request lands in detached HEAD, where the branch
+    # name `git symbolic-ref --short HEAD` used to report is empty.
+    let commit = "HEAD"
     let app = ManifestPackage {
       name: "app", packageKexRequirement: ">= 0.3.0",
       manifestDependencies: [
         Dependency { manifestName: "kex",
-          manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, ".") },
+          manifestSource: Tey.Manifest.GitSource(repository, "ref", commit, ".") },
         Dependency { manifestName: "tey",
-          manifestSource: Tey.Manifest.GitSource(repository, "branch", branch, "tey") }
+          manifestSource: Tey.Manifest.GitSource(repository, "ref", commit, "tey") }
       ]
     }
     let context = Context {
