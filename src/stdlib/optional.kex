@@ -6,6 +6,7 @@
 # empty. Most of the time that is a single +.or(default)+ at the end of a
 # chain.
 #
+# @example
 #   let names = ["ada", "grace"]
 #   names.first.or("nobody")        # => "ada"
 #   names.at(9).or("nobody")        # => "nobody"
@@ -13,6 +14,7 @@
 #
 # Pattern matching handles the cases that need more than a default:
 #
+# @example
 #   match config.get("port") do
 #     Just(port) => IO.printLine("listening on ${port}")
 #     None       => IO.printLine("no port configured")
@@ -25,7 +27,7 @@ type Optional<X> = Just(X) | None
 # Use +Result+ over +Optional+ when the *reason* for failure matters to the
 # caller. Parsing is the standard example: +"12x".to(Integer)+ answers +None+,
 # while +Integer.parse("12x")+ answers an +Error+ that says where it stopped.
-#
+# @example
 #   Integer.parse("42").or(0)     # => 42
 #   Integer.parse("4x").or(0)     # => 0
 #
@@ -40,6 +42,7 @@ type Result<X, E> = Ok(X) | Error(E)
 # Unlike +Result+, neither side means failure: +Either+ is for a value that is
 # legitimately one of two shapes.
 #
+# @example
 #   type Id = Either<Integer, String>
 #
 #   let describe(id: Id) -> String do
@@ -50,19 +53,85 @@ type Result<X, E> = Ok(X) | Error(E)
 #   end
 type Either<L, R> = Left(L) | Right(R)
 
-# Marker trait for +Optional+. Constrain a generic parameter with it when a
+# A value that may be absent. Constrain a generic parameter with it when a
 # function accepts any optional value.
+#
+# The two operations below are what make the constraint worth having: an
+# empty trait would accept a value and then let you do nothing with it, since
+# there would be no method to call. +map+ is deliberately NOT required — its
+# result type differs per implementer (+Y?+ here, +Result<Y, E>+ for
+# +Resultable+), which needs a higher-kinded parameter Kex does not have.
 trait Optionable do
+  # Answers +true+ when a value is present.
+  #
+  # The one operation an +Optionable+ type must define; +none?+ is its
+  # negation.
+  #
+  # @return [Bool] +true+ for a present value
+  #
+  # @example
+  #   Just(1).set?   # => true
+  #   None.set?      # => false
+  set? :> Bool
+
+  # Returns the wrapped value, or +default+ when there is none.
+  #
+  # The way out of the optional world, and the reason a constrained parameter
+  # is usable at all.
+  #
+  # @param default [X] the value to use when absent
+  # @return [X] the wrapped value, or +default+
+  #
+  # @example
+  #   Just(42).or(0)   # => 42
+  #   None.or(0)       # => 0
+  or :> X -> X
 end
 
-# Marker trait for +Result+. Constrain a generic parameter with it when a
-# function accepts any result value.
+# A value that either succeeded or failed with a reason. Constrain a generic
+# parameter with it when a function accepts any result value.
 trait Resultable do
+  # Answers +true+ for a success.
+  #
+  # The one operation a +Resultable+ type must define; +error?+ is its
+  # negation.
+  #
+  # @return [Bool] +true+ for +Ok+
+  #
+  # @example
+  #   Ok(1).ok?         # => true
+  #   Error("!").ok?    # => false
+  ok? :> Bool
+
+  # Returns the success value, or +default+ on failure.
+  #
+  # @param default [X] the value to use on failure
+  # @return [X] the +Ok+ value, or +default+
+  #
+  # @example
+  #   Ok(42).or(0)       # => 42
+  #   Error("!").or(0)   # => 0
+  or :> X -> X
 end
 
-# Marker trait for +Either+. Constrain a generic parameter with it when a
-# function accepts any either value.
+# One of two values, neither meaning failure. Constrain a generic parameter
+# with it when a function accepts any either value.
 trait Eitherable do
+  # Case analysis: applies +onLeft+ to a +Left+ and +onRight+ to a +Right+.
+  #
+  # The one operation an +Eitherable+ type must define — +left?+ and +right?+
+  # are both written in terms of it. A discriminator alone would let you ask
+  # which side a value is on without being able to reach it, which is why this
+  # is the requirement rather than those.
+  #
+  # @param onLeft [L -> A] applied to a +Left+
+  # @param onRight [R -> A] applied to a +Right+
+  # @return [A] whichever branch ran
+  #
+  # @example
+  #   Left(2).either(~toString, ~upperCase)      # => "2"
+  #   Right("ok").either(~toString, ~upperCase)  # => "OK"
+  either :> (L -> A) -> (R -> A) -> A
 end
 
 make Optional<X>, implement: Optionable do
@@ -309,4 +378,47 @@ let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 
 make Either<L, R>, implement: Eitherable do
+  # Case analysis: applies +onLeft+ to a +Left+ and +onRight+ to a +Right+.
+  #
+  # The way an +Either+ is consumed without a +match+, and the operation
+  # +Eitherable+ requires. Both branches answer the same type, so the result
+  # is a plain value rather than another +Either+.
+  #
+  # @param onLeft [L -> A] applied to a +Left+
+  # @param onRight [R -> A] applied to a +Right+
+  # @return [A] whichever branch ran
+  #
+  # @example
+  #   Left(2).either(~toString, ~upperCase)       # => "2"
+  #   Right("ok").either(~toString, ~upperCase)   # => "OK"
+  #
+  # @example Collapsing an id to text
+  #   let render(id: Either<Integer, String>) -> String do
+  #     id.either({ |n| "#${n}" }, { |slug| slug })
+  #   end
+  either :> (L -> A) -> (R -> A) -> A
+  let either(@Left(l), onLeft, _) = onLeft(l)
+  let either(@Right(r), _, onRight) = onRight(r)
+
+  # Returns +true+ for a +Left+.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Left(1).left?    # => true
+  #   Right(1).left?   # => false
+  left? :> Bool
+  let left?(@Left(_)) = true
+  let left?(@Right(_)) = false
+
+  # Returns +true+ for a +Right+. The opposite of +left?+.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Right(1).right?   # => true
+  #   Left(1).right?    # => false
+  right? :> Bool
+  let right?(@Left(_)) = false
+  let right?(@Right(_)) = true
 end
