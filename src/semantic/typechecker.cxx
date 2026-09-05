@@ -268,7 +268,8 @@ auto TypeChecker::check(const ast::Program& program,
     m_mainImports.clear();
     pushScope();
 
-    auto selectionFor = [](const ast::UsingBlock& block) {
+    m_importedModulePaths.clear();
+    auto selectionFor = [this](const ast::UsingBlock& block) {
         ImportSelection selection;
         for (size_t i = 0; i < block.module.parts.size(); ++i) {
             if (i) selection.module += ".";
@@ -276,6 +277,7 @@ auto TypeChecker::check(const ast::Program& program,
         }
         selection.onlyNames = block.onlyNames;
         selection.exceptNames = block.exceptNames;
+        m_importedModulePaths.insert(selection.module);
         return selection;
     };
     // A `private do ... end` / `visible do ... end` block is a plain
@@ -696,6 +698,28 @@ auto TypeChecker::reportUnknownMethods() -> void {
         m_unresolvedMethods.clear();
         return;
     }
+    // Is this module named by some `using` in the program — directly, as a
+    // parent of one, or as a child? `using Data.Set` brings its siblings and
+    // children within reach too (see `registerModuleAliases`), and being
+    // generous here only costs a diagnostic, never a false error.
+    auto importedHere = [&](const std::string& moduleName) {
+        if (m_importedModulePaths.count(moduleName)) return true;
+        for (const auto& path : m_importedModulePaths)
+            if (moduleName.rfind(path + ".", 0) == 0 ||
+                path.rfind(moduleName + ".", 0) == 0)
+                return true;
+        return false;
+    };
+    // A module is in reach when the file imports it, or when it is one of the
+    // automatically imported (prelude) ones that need no import at all.
+    auto moduleInReach = [&](const std::string& moduleName) {
+        if (moduleName.empty()) return true;
+        if (auto module = m_importedInterfaces->modules.find(moduleName);
+            module != m_importedInterfaces->modules.end() &&
+            module->second.automaticImport)
+            return true;
+        return importedHere(moduleName);
+    };
     auto knownSomewhere = [&](const std::string& name) {
         if (m_methodSignatures.count(name) || m_userSignatures.count(name) ||
             m_annotatedMethods.count(name) || m_makeMethodNames.count(name))
@@ -712,9 +736,32 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 if (defaulted == name) return true;
         }
         if (m_importedInterfaces) {
-            if (m_importedInterfaces->receiverFunctions.count(name)) return true;
-            for (const auto& [moduleName, module] : m_importedInterfaces->modules) {
-                (void)moduleName;
+            // `receiverFunctions` is a flat, name-indexed copy of every
+            // module member that can be reached through a receiver, opt-in
+            // modules included — `ImportedFunction::sourceModule` is kept
+            // precisely so lexical `using` policy still applies to it. It was
+            // not applied here, so ANY member name of ANY known module passed
+            // as a method on ANY receiver: `box.sha256`, `box.shiftLeft(1)`,
+            // `Headers.empty.set("a", "b")` all checked clean and then died at
+            // runtime with "Undefined method" (rodolfo docs/kex-issues.md #5).
+            if (auto providers = m_importedInterfaces->receiverFunctions.find(name);
+                providers != m_importedInterfaces->receiverFunctions.end() &&
+                std::any_of(providers->second.begin(), providers->second.end(),
+                            [&](const ImportedFunction& provider) {
+                                return moduleInReach(provider.sourceModule);
+                            }))
+                return true;
+            for (const auto& [moduleName, module] :
+                 m_importedInterfaces->modules) {
+                // Only a module whose members COULD be in scope may suppress
+                // the diagnostic. Every known module used to, imported or not,
+                // so any member name of any opt-in stdlib module passed as a
+                // method on any receiver: `box.sha256`, `box.shiftLeft(1)`,
+                // `headers.set("a", "b")` all checked clean and then died at
+                // runtime with "Undefined method" (rodolfo docs/kex-issues.md
+                // #5). A module the file actually imports still suppresses —
+                // and so does a prelude one, which needs no import.
+                if (!moduleInReach(moduleName)) continue;
                 if (module.exports.count(name)) return true;
             }
             for (const auto& [record, fields] :

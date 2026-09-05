@@ -548,6 +548,12 @@ struct Lowering {
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
+    // The emitted symbol of the function being lowered right now. A module
+    // constant must not resolve to ITSELF from inside its own body: `let
+    // Monday = Monday` in `module Days` aliases the OUTER `Monday`, and
+    // resolving the right-hand side to `Days.Monday/0` makes it read itself
+    // forever (spec/module_self_alias.kex).
+    std::string currentFunctionSymbol;
     // Declared types of the parameters in scope, by source name — the
     // annotation a call site cannot see. Saved and restored per clause.
     std::unordered_map<std::string, std::string> declaredParamTypes;
@@ -1157,7 +1163,8 @@ struct Lowering {
             if (moduleZeroArgFns.count(qualified))
                 if (auto emitted = moduleFunctions.find(qualified);
                     emitted != moduleFunctions.end())
-                    return emitted->second;
+                    return emitted->second == currentFunctionSymbol
+                        ? std::string{} : emitted->second;
             const auto dot = scope.rfind('.');
             if (dot == std::string::npos) break;
             scope.resize(dot);
@@ -1213,12 +1220,25 @@ struct Lowering {
                 return lit(LitKind::None, "none");
             } else if constexpr (std::is_same_v<T, ast::Identifier>) {
                 // A bare reference to a top-level `let` constant (not shadowed
-                // by a local) is a call to its 0-arity function.
-                if (!subst.count(n.name) &&
-                    (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
-                    auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(n.name, {});
-                    return ex;
+                // by a local) is a call to its 0-arity function. A MODULE's own
+                // constant counts: `let EARLIEST_YEAR = 1450` inside `module
+                // Draft` is `Draft.EARLIEST_YEAR/0`, and a sibling function
+                // referring to it unqualified must reach that, not the
+                // constructor fallback below (rodolfo docs/kex-issues.md #14,
+                // kexhq/kex#282).
+                if (!subst.count(n.name)) {
+                    if (topLevelConstants.count(n.name) ||
+                        zeroArgFns.count(n.name)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(n.name, {});
+                        return ex;
+                    }
+                    if (auto symbol = moduleConstantSymbol(n.name);
+                        !symbol.empty()) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(symbol, {});
+                        return ex;
+                    }
                 }
                 // Uppercase bare name not a known constant → nullary ADT
                 // constructor (matching the UpperIdentifier path). Without
@@ -1247,12 +1267,25 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
                 // An all-caps top-level constant (e.g. DEFAULT_LEVEL, defined
                 // via `let NAME = value` → a 0-arity function) is a call, not a
-                // nullary ADT constructor.
-                if (!subst.count(n.name) &&
-                    (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
-                    auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(n.name, {});
-                    return ex;
+                // nullary ADT constructor. A MODULE's own constant is the same
+                // thing one scope in: without this, `"${EARLIEST_YEAR}"` inside
+                // `module Draft` became the atom 'EARLIEST_YEAR' and died with
+                // `Undefined function: EARLIEST_YEAR.showValue`, while the
+                // walker read the binding (rodolfo docs/kex-issues.md #14,
+                // kexhq/kex#282).
+                if (!subst.count(n.name)) {
+                    if (topLevelConstants.count(n.name) ||
+                        zeroArgFns.count(n.name)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(n.name, {});
+                        return ex;
+                    }
+                    if (auto symbol = moduleConstantSymbol(n.name);
+                        !symbol.empty()) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(symbol, {});
+                        return ex;
+                    }
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
@@ -3640,8 +3673,15 @@ struct Lowering {
             // Every module and variant lookup above has already missed by the
             // time we get here, so a name that is a known local value can only
             // be the value.
+            // A MODULE's own constant is the same thing one scope in:
+            // `"${EARLIEST_YEAR}"` inside `module Draft` is a `showValue`
+            // call on the binding, and reading the receiver as a module name
+            // reported `Undefined function: EARLIEST_YEAR.showValue`
+            // (rodolfo docs/kex-issues.md #14, kexhq/kex#282).
             const bool topLevelBindingReceiver =
-                zeroArgFns.count(uid->name) || topLevelConstants.count(uid->name);
+                zeroArgFns.count(uid->name) ||
+                topLevelConstants.count(uid->name) ||
+                !moduleConstantSymbol(uid->name).empty();
             if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
@@ -6035,6 +6075,8 @@ struct Lowering {
         def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
+        auto savedFunctionSymbol = currentFunctionSymbol;
+        currentFunctionSymbol = def.name;
         // Do the clauses in this group differ in their declared parameter
         // types? Only then is a guard wanted — a plain multi-clause function
         // discriminates with patterns and must be left alone.
@@ -6210,6 +6252,7 @@ struct Lowering {
         }
         traitDictionaries = std::move(savedTraitDictionaries);
         currentModulePath = std::move(savedModulePath);
+        currentFunctionSymbol = std::move(savedFunctionSymbol);
         return def;
     }
     auto lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName = "")

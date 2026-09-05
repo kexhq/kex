@@ -1,0 +1,56 @@
+# A module's own capitalized constant, referenced unqualified from inside that
+# module.
+#
+# `let EARLIEST_YEAR = 1450` is a 0-arity function, exactly as a top-level
+# constant is — but only the TOP-LEVEL case was recognised. Inside a module the
+# bare name fell through to the nullary-ADT-constructor path and became the
+# atom 'EARLIEST_YEAR', so an interpolation died with `Undefined function:
+# EARLIEST_YEAR.showValue` and arithmetic with `Cannot add Variant and Integer`
+# — while the tree walker read the binding (kexhq/kex#282).
+#
+# The qualified spelling always worked, which is why the workaround everywhere
+# was to write `Draft.EARLIEST_YEAR` even inside `Draft`.
+module Draft do
+  let EARLIEST_YEAR = 1450
+  let LATEST_YEAR = 2030
+  let label = "draft"
+
+  # Interpolation — the shape that raised `showValue` on a Variant.
+  let describe() = "years ${EARLIEST_YEAR}..${LATEST_YEAR}"
+
+  # Arithmetic — the shape that raised `Cannot add Variant and Integer`.
+  let span() = LATEST_YEAR - EARLIEST_YEAR
+
+  # Comparison, and a lower-case sibling for contrast: that one already worked.
+  let plausible?(year: Integer) = year >= EARLIEST_YEAR && year <= LATEST_YEAR
+  let tagged() = "${label}:${EARLIEST_YEAR}"
+
+  # Qualified from inside the module too — still the same value.
+  let qualified() = Draft.EARLIEST_YEAR
+
+  # Declared BELOW its first use: a constant is a 0-arity function, so
+  # declaration order does not bind it.
+  let LATEST_LABEL = "latest"
+  let latest() = "${LATEST_LABEL} ${LATEST_YEAR}"
+
+  module Inner do
+    # An inner module reads its OWN constant first, and the enclosing
+    # module's when it has none of that name — the same scope walk
+    # `moduleConstantSymbol` does for lower-case bindings.
+    let EARLIEST_YEAR = 1900
+    let describe() = "inner ${EARLIEST_YEAR}"
+  end
+end
+
+main do
+  IO.printLine(Draft.describe())
+  IO.printLine("${Draft.span()}")
+  IO.printLine("${Draft.plausible?(1500)}")
+  IO.printLine("${Draft.plausible?(1200)}")
+  IO.printLine(Draft.tagged())
+  IO.printLine("${Draft.qualified()}")
+  # And from outside, which is the spelling that never broke.
+  IO.printLine("${Draft.EARLIEST_YEAR}")
+  IO.printLine(Draft.latest())
+  IO.printLine(Draft.Inner.describe())
+end

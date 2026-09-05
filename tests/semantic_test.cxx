@@ -1015,7 +1015,13 @@ int main() {
             interfaces.receiverFunctions["doubled"].push_back(
                 std::move(doubled));
 
-            assertFalse(hasErrorWithInterfaces(
+            // Not imported: the call cannot reach `Opt.doubled` at all, so the
+            // checker says so rather than leaving it to the runtime. Silence
+            // here is what let any member name of any opt-in module pass as a
+            // method on any receiver — `"hello".sha256` without `using Digest`
+            // checked clean and then died with "Undefined method: sha256 for
+            // String" (rodolfo docs/kex-issues.md #5).
+            assertTrue(hasErrorWithInterfaces(
                 "main do \"wrong\".doubled end\n", interfaces, "doubled"));
             assertTrue(hasErrorWithInterfaces(
                 "using Opt\nmain do \"wrong\".doubled end\n",

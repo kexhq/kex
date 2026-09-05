@@ -316,6 +316,11 @@ private:
         m_makeImports;
     std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
         m_mainImports;
+    // Every module path any `using` in this program names, wherever it sits.
+    // `reportUnknownMethods` is a whole-program pass, so a file-wide union is
+    // the right granularity: it only ever decides whether a module's members
+    // COULD be in scope, and a union can only make that answer more generous.
+    std::unordered_set<std::string> m_importedModulePaths;
     int m_nextTypeVar = 0;
     // `m_nextTypeVar` as it stood when the clause being checked started, so a
     // variable can be told apart from one an enclosing — or an already
