@@ -444,14 +444,15 @@ foul librarySourcesAt(packageRoot: String) -> [String] do
 end
 
 # What `tey build` produces is what ships, so what `tey run` and `tey test`
-# exercise has to be the same thing. `-R` compiles and runs on the BEAM;
-# without it the toolchain tree-walks the source, and processes, `Erlang.*`
-# interop and the String/Char representation differ enough between the two
-# that a green interpreter run says nothing about the built package.
+# exercise has to be the same thing — which is what `kex` does with no backend
+# flag at all: it compiles and runs on the BEAM. `-R` tree-walks the source
+# instead, and processes, `Erlang.*` interop and the String/Char representation
+# differ enough between the two that a green interpreter run says nothing about
+# the built package.
 #
 # `--interpret` is the way back, for a backend gap or a debugging session.
 let backendFlags(interpret?: Bool) -> [String] do
-  return interpret? then [] else ["-R"]
+  return interpret? then ["-R"] else []
 end
 
 foul runPackage(extra: [String], interpret?: Bool,

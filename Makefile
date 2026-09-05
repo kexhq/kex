@@ -54,7 +54,7 @@ help:
 	@echo "  make test-wasm    Build the wasm target + run its test suite via Node"
 	@echo "  make web-demo     Build the wasm target and serve web/index.html locally"
 	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
-	@echo "  make spec-beam    Run the spec suite through the BEAM backend (-R) and"
+	@echo "  make spec-beam    Run the spec suite through the BEAM backend and"
 	@echo "                    check it against the tree-walker's golden output."
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
@@ -114,7 +114,7 @@ test-wasm: build-wasm
 # from inside web/. Ctrl-C to stop.
 web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
-	@$(KEX) -R tools/serve.kex 8743
+	@$(KEX) --run tools/serve.kex 8743
 
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
@@ -151,19 +151,19 @@ spec: build
 	for f in spec/*.kex; do \
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
-		kex_flags="--no-colors"; \
+		kex_flags="--run-walker --no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then kex_flags="-C -t --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then \
-			kex_flags="-R --no-colors"; \
+			kex_flags="--run --no-colors"; \
 			if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		fi; \
 		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
 			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
 			$(KEX) -c --no-colors -o "$$tmpdir" "$$f" > /dev/null 2>&1; \
 			beamfile="$$tmpdir/kex_$$(basename "$${f%.kex}").beam"; \
-			actual=$$($(KEX) "$$beamfile" 2>&1); \
+			actual=$$($(KEX) --run "$$beamfile" 2>&1); \
 			rm -rf "$$tmpdir"; \
 		else \
 		actual=$$($(KEX) $$kex_flags "$$f" 2>&1); \
@@ -190,7 +190,7 @@ spec-prelude: build
 	@echo "Running prelude spec suite..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
-		output=$$($(KEX) --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(KEX) --run-walker --no-check --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -214,11 +214,11 @@ spec-prelude: build
 # spec/backend_predicates_beam.kex) marks itself `# kex: interpreter-only` and
 # is skipped here rather than counted as a difference.
 spec-prelude-beam: build
-	@echo "Running prelude spec suite through BEAM (-R)..."
+	@echo "Running prelude spec suite through BEAM..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
 		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
-		output=$$($(TIMEOUT_SUITE) $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(TIMEOUT_SUITE) $(KEX) --run --no-check --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -236,7 +236,7 @@ spec-prelude-beam: build
 	echo "  $$passed passed, $$failed failed"; \
 	[ $$failed -eq 0 ]
 
-# Runs the whole spec suite through -R (BEAM) instead of the per-file tag
+# Runs the whole spec suite through the BEAM instead of the per-file tag
 # system `spec` uses, and diffs against the SAME .expected golden files —
 # any mismatch means the two backends produce different output for that
 # program. Skips check-only specs (those are about semantic checking, not
@@ -260,7 +260,7 @@ spec-prelude-beam: build
 # such reordering, so the goldens all end with whatever went to stderr, and
 # every spec in this suite matches under the separated capture.
 spec-beam: build
-	@echo "Running spec suite through BEAM (-R)..."
+	@echo "Running spec suite through BEAM..."
 	@failed=0; passed=0; \
 	beam_out=$$(mktemp); beam_err=$$(mktemp); \
 	trap 'rm -f "$$beam_out" "$$beam_err"' EXIT INT TERM; \
@@ -270,7 +270,7 @@ spec-beam: build
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: skip-beam" "$$f" 2>/dev/null; then continue; fi; \
-		$(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
+		$(TIMEOUT_SPEC) $(KEX) --run --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
 		actual=$$(cat "$$beam_out" "$$beam_err"); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
@@ -297,7 +297,7 @@ spec-wasm: build-wasm
 	for f in spec/*.kex; do \
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
-		kex_flags="--no-colors"; \
+		kex_flags="--run-walker --no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then kex_flags="-C -t --no-colors"; fi; \
@@ -337,8 +337,8 @@ spec-test-json: build
 	            "only:--test-json --test-only 'reporting > nested'"; do \
 		name=$${case%%:*}; flags=$${case#*:}; \
 		golden="spec/test_explorer/reporting.$$name.expected"; \
-		walker=$$(eval $(TIMEOUT_SPEC) $(KEX) --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
-		beam=$$(eval $(TIMEOUT_SPEC) $(KEX) -R --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
+		walker=$$(eval $(TIMEOUT_SPEC) $(KEX) --run-walker --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
+		beam=$$(eval $(TIMEOUT_SPEC) $(KEX) --run --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
 		expected=$$(cat "$$golden"); \
 		for backend in walker beam; do \
 			actual=$$(if [ "$$backend" = walker ]; then echo "$$walker"; else echo "$$beam"; fi); \
@@ -358,7 +358,7 @@ spec-stdlib: build
 	@echo "Running opt-in stdlib spec suite..."
 	@failed=0; passed=0; \
 	for f in spec/stdlib/*.kex; do \
-		kex_flags="--no-colors"; \
+		kex_flags="--run-walker --no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		output=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		rc=$$?; \
@@ -376,12 +376,12 @@ spec-stdlib: build
 	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
 
 spec-stdlib-beam: build
-	@echo "Running opt-in stdlib spec suite through BEAM (-R)..."
+	@echo "Running opt-in stdlib spec suite through BEAM..."
 	@failed=0; passed=0; \
 	for f in spec/stdlib/*.kex; do \
 		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: skip-beam" "$$f" 2>/dev/null; then continue; fi; \
-		kex_flags="-R --no-colors"; \
+		kex_flags="--run --no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		output=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		rc=$$?; \
@@ -446,7 +446,7 @@ uninstall:
 clean:
 	@rm -rf "$(BUILD_DIR)" "$(WASM_BUILD_DIR)" packages/kex/dist
 
-# Tey's own suites. Run through the BEAM backend (-R) because that is how Tey
+# Tey's own suites. Run through the BEAM backend because that is how Tey
 # actually runs — `tey` is compiled to .beam by the release — and because the
 # tree-walker cannot currently resolve a prelude module (FS) from inside a
 # `foul module` loaded via --source-root, which is a walker gap rather than
@@ -458,10 +458,10 @@ clean:
 # Not folded into `test-all`: Tey needs erlc, and `make test` is expected to
 # work on a machine that only builds the compiler.
 spec-tey: build
-	@echo "Running Tey spec suite through BEAM (-R)..."
+	@echo "Running Tey spec suite through BEAM..."
 	@failed=0; passed=0; \
 	for f in tey/spec/*.spec.kex; do \
-		output=$$($(KEX) -R --no-colors --source-root tey/src "$$f" 2>&1); \
+		output=$$($(KEX) --run --no-colors --source-root tey/src "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \

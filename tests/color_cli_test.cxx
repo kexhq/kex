@@ -122,20 +122,20 @@ const std::string CRASHING_VALIDATION_SRC =
 int main() {
     describe("Color CLI — value rendering palette (REPL)", []() {
         it("colors an integer yellow and its type cyan", []() {
-            auto out = runKex({}, "42\n");
+            auto out = runKex({"-i"}, "42\n");
             assertTrue(contains(out, "\x1b[33m42"), "integer value not yellow: " + out);
             assertTrue(contains(out, "\x1b[36mInt"), "type name not cyan: " + out);
             assertTrue(contains(out, "\x1b[90m=> "), "prompt not gray: " + out);
         });
 
         it("colors a string green and its type cyan", []() {
-            auto out = runKex({}, "\"hi\"\n");
+            auto out = runKex({"-i"}, "\"hi\"\n");
             assertTrue(contains(out, "\x1b[32m\"hi\""), "string value not green: " + out);
             assertTrue(contains(out, "\x1b[36mString"), "type name not cyan: " + out);
         });
 
         it("colors a positional constructor name cyan", []() {
-            auto out = runKex({}, "Just(42)\n");
+            auto out = runKex({"-i"}, "Just(42)\n");
             assertTrue(contains(out, "\x1b[36mJust"), "constructor name not cyan: " + out);
         });
     });
@@ -147,7 +147,7 @@ int main() {
                 "  IO.inspect(42)\n"
                 "  IO.inspect(\"hi\")\n"
                 "end\n");
-            auto out = runKex({path}, "");
+            auto out = runKex({"--run-walker", path}, "");
             std::remove(path.c_str());
             // Same palette as the REPL tests above — this is the consistency guarantee.
             assertTrue(contains(out, "\x1b[33m42"), "integer value not yellow: " + out);
@@ -169,8 +169,8 @@ int main() {
                 "  IO.inspect(\"hi\")\n"
                 "  IO.inspect([1, 2, 3])\n"
                 "end\n");
-            auto walker = runKex({path}, "");
-            auto beam = runKex({"-R", path}, "");
+            auto walker = runKex({"--run-walker", path}, "");
+            auto beam = runKex({"--run", path}, "");
             std::remove(path.c_str());
             assertTrue(hasAnsi(walker), "expected colored output: " + walker);
             assertEqual(beam, walker);
@@ -182,8 +182,8 @@ int main() {
                 "  IO.printLine(\"printed\")\n"
                 "  IO.inspect(42)\n"
                 "end\n");
-            for (const auto& backend : {std::vector<std::string>{"--no-colors", path},
-                                        std::vector<std::string>{"-R", "--no-colors", path}}) {
+            for (const auto& backend : {std::vector<std::string>{"--run-walker", "--no-colors", path},
+                                        std::vector<std::string>{"--run", "--no-colors", path}}) {
                 auto captured = runKexStreams(backend);
                 assertEqual(captured.out, std::string("printed\n"));
                 assertEqual(captured.err, std::string("42 : Integer\n"));
@@ -286,7 +286,7 @@ int main() {
 
     describe("Color CLI --no-colors flag", []() {
         it("renders the REPL result with no ANSI escapes", []() {
-            auto out = runKex({"--no-colors"}, "42\n");
+            auto out = runKex({"-i", "--no-colors"}, "42\n");
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
             assertTrue(contains(out, "=> 42 : Integer"), "missing plain result line: " + out);
         });
@@ -296,8 +296,8 @@ int main() {
                 "main do\n"
                 "  IO.inspect(42)\n"
                 "end\n");
-            auto walker = runKex({"--no-colors", path}, "");
-            auto beam = runKex({"-R", "--no-colors", path}, "");
+            auto walker = runKex({"--run-walker", "--no-colors", path}, "");
+            auto beam = runKex({"--run", "--no-colors", path}, "");
             std::remove(path.c_str());
             assertEqual(walker, std::string("42 : Integer\n"));
             assertEqual(beam, walker);
@@ -317,14 +317,14 @@ int main() {
                 "main do\n"
                 "  IO.inspect(ColorProbe { value: 1 })\n"
                 "end\n");
-            for (const auto& backend : {std::vector<std::string>{path},
-                                        std::vector<std::string>{"-R", path}}) {
+            for (const auto& backend : {std::vector<std::string>{"--run-walker", path},
+                                        std::vector<std::string>{"--run", path}}) {
                 auto out = runKex(backend, "");
                 assertTrue(contains(out, "colors-on"), out);
             }
             for (const auto& backend : {
-                     std::vector<std::string>{"--no-colors", path},
-                     std::vector<std::string>{"-R", "--no-colors", path}}) {
+                     std::vector<std::string>{"--run-walker", "--no-colors", path},
+                     std::vector<std::string>{"--run", "--no-colors", path}}) {
                 auto out = runKex(backend, "");
                 assertTrue(contains(out, "colors-off"), out);
                 assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
@@ -344,7 +344,7 @@ int main() {
 
         it("renders passing ticks green and failing crosses red", [source]() {
             auto path = writeTempSource(source);
-            auto out = runKex({path}, "");
+            auto out = runKex({"--run-walker", path}, "");
             std::remove(path.c_str());
             assertTrue(contains(out, "\x1b[32m\xE2\x9C\x93\x1b[0m passes"),
                        "passing tick not green: " + out);
@@ -354,7 +354,7 @@ int main() {
 
         it("keeps spec output plain with --no-colors", [source]() {
             auto path = writeTempSource(source);
-            auto out = runKex({"--no-colors", path}, "");
+            auto out = runKex({"--run-walker", "--no-colors", path}, "");
             std::remove(path.c_str());
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
             assertTrue(contains(out, "✓ passes"), "missing passing tick: " + out);

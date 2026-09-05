@@ -590,7 +590,7 @@ Lexer -> Parser -> AST -> Analyzer -> ┬─ Evaluator (tree-walk interpreter, d
                                       └─ IR -> Core Erlang -> BEAM
 ```
 
-The default runner is a tree-walk interpreter. There is also a lowering IR
+The default runner is the BEAM: `kex file.kex` compiles through the lowering IR
 (`src/ir/`) that emits Core Erlang for the BEAM backend (`kex -c` / `-R` /
 `-e`); it matches the interpreter at full spec parity.
 

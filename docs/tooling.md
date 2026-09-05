@@ -2,11 +2,11 @@
 
 ## REPL
 
-Built-in interactive REPL, foul by default. Both `kex -i` and `kex -R` with no
-file launch the same BEAM-backed REPL:
+Built-in interactive REPL, foul by default. `kex` with no file launches the
+BEAM-backed REPL; `kex -i` launches the tree-walk one:
 
 ```
-$ kex -i
+$ kex
 
 Kex Interactive 0.3.0 (beam) — press Ctrl+C to exit (type /help ENTER for commands)
 
@@ -55,11 +55,12 @@ kex> /exit                # exit (also: /quit, /q, Ctrl+C)
 ## CLI
 
 ```
-kex <file.kex>              # type-check and run (default)
+kex <file.kex>              # type-check and run on the BEAM (default)
 kex <file.kex> --no-check   # skip type checking and run directly
-kex -i                      # start the interactive BEAM REPL (same as `kex -R` with no file)
+kex                         # start the interactive BEAM REPL (no file)
 kex -c <file.kex>           # compile to BEAM via Core Erlang
-kex -R <file.kex>           # run on BEAM
+kex -R <file.kex>           # run with the tree-walk interpreter
+kex -i                      # start the interactive tree-walk REPL
 kex -C <file.kex>           # run semantic analysis only
 kex -e <file.kex>           # emit Core Erlang (.core) without invoking erlc
 kex --test-json <spec.kex>  # report describe/it as JSON records, with locations

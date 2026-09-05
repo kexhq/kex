@@ -2,7 +2,7 @@
 #
 # The HTTP server and the pooled HTTP client against each other, over a real
 # socket on an ephemeral port. Both are BEAM-only (the tree-walker answers
-# UnsupportedBackend for either), so this spec runs through `-R` only.
+# UnsupportedBackend for either), so this spec runs on the BEAM only.
 #
 # `client.request` rather than `client.get`: a make-block method of a
 # `using`-imported module is not in the checker's receiver-function interface,

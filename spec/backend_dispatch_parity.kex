@@ -1,6 +1,6 @@
 # Cases where the BEAM backend used to resolve a call differently from the
 # tree-walker. All of these are ordinary programs; the point of the spec is
-# that `kex file` and `kex -R file` agree on every line.
+# that `kex file` (BEAM) and `kex -R file` (tree-walker) agree on every line.
 
 using Regex
 

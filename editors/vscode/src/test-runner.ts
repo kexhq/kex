@@ -105,10 +105,10 @@ export function kexTestArgs(
   filters: readonly string[],
   backend: TestBackend,
 ): string[] {
-  // The compiler tree-walks unless asked for the BEAM, which is what `auto`
-  // takes here: nothing in a bare directory says the suite must run as it
-  // ships, and the walker starts in milliseconds where a BEAM node does not.
-  const args = backend === 'beam' ? ['-R'] : [];
+  // The compiler compiles and runs on the BEAM unless asked to tree-walk, so
+  // `auto` here is whatever `kex` defaults to — the same backend the suite
+  // ships on. Only `walker` needs a flag.
+  const args = backend === 'walker' ? ['-R'] : [];
   args.push('--no-colors', mode === 'list' ? '--test-list' : '--test-json');
   for (const filter of filters) args.push('--test-only', filter);
   args.push(spec);

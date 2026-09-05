@@ -63,7 +63,7 @@ auto runRepl(const std::string& input) -> std::string {
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " --no-colors < " + tmpPath + " 2>&1";
+    std::string cmd = std::string(KEX_BINARY_PATH) + " -i --no-colors < " + tmpPath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
@@ -88,7 +88,7 @@ auto runBeamRepl(const std::string& input) -> std::string {
     close(fd);
 
     std::string cmd = std::string(KEX_BINARY_PATH) +
-        " -i --no-colors < " + tmpPath + " 2>&1";
+        " --no-colors < " + tmpPath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
@@ -112,7 +112,7 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " " +
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --run-walker " +
         (noCheck ? "--no-check " : "") + "--no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -189,7 +189,7 @@ auto runBeamFile(const std::string& source, const std::string& argument,
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " -R " +
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --run " +
         (noCheck ? "--no-check " : "") + sourcePath + " " + argument + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -229,7 +229,7 @@ int main() {
                    "end\n";
 
             const auto output = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             const auto directOut = root / "direct-out";
             fs::create_directories(directOut);
@@ -273,7 +273,7 @@ int main() {
                    "end\n";
 
             const auto output = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(output, std::string("ok\n"));
@@ -311,10 +311,10 @@ int main() {
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
                 entry.string() + " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             const std::string expected = "manifest\nrepo@abc\n";
@@ -352,10 +352,10 @@ int main() {
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
                 entry.string() + " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("api:3000\n"));
@@ -391,10 +391,10 @@ int main() {
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
                 entry.string() + " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("200 0\n"));
@@ -428,10 +428,10 @@ int main() {
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
                 entry.string() + " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("[escaped <script>]\n"));
@@ -469,10 +469,10 @@ int main() {
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
                 entry.string() + " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
                 entry.string() + " 2>&1");
             fs::remove_all(root);
             const std::string expected =
@@ -521,7 +521,7 @@ int main() {
                 " --no-check --no-colors " + program.string() + " 2>&1");
             const auto beamOutput = runCommand(
                 "env -u KEX_STDLIB_DIR -u KEX_RUNTIME_DIR " +
-                (binDir / "kex").string() + " -R --no-check --no-colors " +
+                (binDir / "kex").string() + " --run --no-check --no-colors " +
                 program.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(interpreterOutput, std::string("[1, 2]\n"));

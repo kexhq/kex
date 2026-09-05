@@ -1999,12 +1999,13 @@ auto printUsage(const char *progName) -> void {
       << "Usage: " << progName << " [options] <file.kex>\n"
       << "\n"
       << "Options:\n"
-      << "  -r, --run         Interpret the program (default)\n"
+      << "  -r, --run         Run on BEAM (default; .kex or existing .beam — "
+         "temp dir,\n"
+      << "                    auto-clean). With no file: the BEAM REPL, also "
+         "the default\n"
       << "  -c, --compile     Compile to BEAM via Core Erlang\n"
-      << "  -R, --run-beam    Run on BEAM (.kex or existing .beam; temp dir, "
-         "auto-clean)\n"
-      << "  -i, --interactive Interactive REPL on BEAM (also: kex -R with no "
-         "file)\n"
+      << "  -R, --run-walker  Run with the tree-walk interpreter\n"
+      << "  -i, --interactive Interactive tree-walk REPL\n"
       << "  -C, --check       Run semantic analysis only\n"
       << "  -n, --no-check    Skip semantic check when running\n"
       << "  -l, --lex         Print token stream\n"
@@ -2097,7 +2098,11 @@ int main(int argc, char *argv[]) {
       {"parse", no_argument, nullptr, 'p'},
       {"check", no_argument, nullptr, 'C'},
       {"compile", no_argument, nullptr, 'c'},
-      {"run-beam", no_argument, nullptr, 'R'},
+      {"run-walker", no_argument, nullptr, 'R'},
+      // A second name for the same thing. `--run-beam` is deliberately NOT
+      // accepted any more: it used to mean this flag's opposite, and a name
+      // that silently reverses is worse than one that errors.
+      {"run-interpreter", no_argument, nullptr, 'R'},
       {"interactive", no_argument, nullptr, 'i'},
       {"json", no_argument, nullptr, 'j'},
       {"summary", no_argument, nullptr, 's'},
@@ -2145,7 +2150,10 @@ int main(int argc, char *argv[]) {
       {"build-prelude", required_argument, nullptr, 1001},
       {nullptr, 0, nullptr, 0}};
 
-  std::string mode = "run";
+  // Empty until a flag picks a mode; whatever is still empty after option
+  // parsing gets the default, which is BEAM ("compile" + compileRun). The
+  // tree-walk interpreter is opt-in: -R for a script, -i for a REPL.
+  std::string mode;
   bool skipCheck = false;
   bool dumpTypes = false;
   bool jsonOutput = false;
@@ -2276,7 +2284,8 @@ int main(int argc, char *argv[]) {
       return 0;
     }
     case 'r':
-      mode = "run";
+      mode = "compile";
+      compileRun = true;
       break;
     case 'n':
       skipCheck = true;
@@ -2294,11 +2303,11 @@ int main(int argc, char *argv[]) {
       mode = "compile";
       break;
     case 'R':
-      mode = "compile";
-      compileRun = true;
+      mode = "run";
+      compileRun = false;
       break;
     case 'i':
-      mode = "beam-repl";
+      mode = "repl";
       break;
     case 'j':
       jsonOutput = true;
@@ -2338,6 +2347,19 @@ int main(int argc, char *argv[]) {
       printUsage(argv[0]);
       return 1;
     }
+  }
+
+  // No mode flag: BEAM. A file runs on the BEAM, and no file opens the BEAM
+  // REPL (the `mode == "compile" && compileRun` branch below). A wasm build
+  // has no BEAM to run on — no erl, no runtime beams — so there the default
+  // stays the tree-walk interpreter.
+  if (mode.empty()) {
+#ifdef __EMSCRIPTEN__
+    mode = "run";
+#else
+    mode = "compile";
+    compileRun = true;
+#endif
   }
 
 #ifndef __EMSCRIPTEN__
@@ -2381,8 +2403,8 @@ int main(int argc, char *argv[]) {
   }
 
   if (optind >= argc && mode != "repl") {
-    // No file — enter REPL mode (BEAM REPL if -R was given, tree-walker
-    // otherwise)
+    // No file — enter REPL mode (the BEAM REPL by default, the tree-walk
+    // REPL for -i and for the other non-BEAM modes)
     if (mode == "compile" && compileRun)
       mode = "beam-repl";
     else if (mode != "beam-repl")

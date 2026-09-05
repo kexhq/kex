@@ -110,7 +110,7 @@ int main() {
         it("aspirational/compiled_router.kex", []() { assertTrue(parseFile("examples/aspirational/compiled_router.kex")); });
         it("aspirational/chat_server_genserver.kex", []() { assertTrue(parseFile("examples/aspirational/chat_server_genserver.kex")); });
         // Process examples — parse (and, below, run) on both the
-        // tree-walking interpreter and the BEAM backend (`kex -R`).
+        // tree-walking interpreter and the BEAM backend (`kex --run`).
         it("proc_ping.kex", []() { assertTrue(parseFile("examples/proc_ping.kex")); });
         it("proc_link.kex", []() { assertTrue(parseFile("examples/proc_link.kex")); });
         it("proc_supervisor.kex", []() { assertTrue(parseFile("examples/proc_supervisor.kex")); });

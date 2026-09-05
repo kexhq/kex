@@ -62,7 +62,7 @@ is a test:
 | Where | Mocks |
 | --- | --- |
 | `kex foo.spec.kex`, `kex -R foo.spec.kex` | allowed — the entry file is a spec |
-| `kex -i` / `kex -R` REPL, the browser REPL | allowed — nothing else is present to deceive |
+| the `kex` and `kex -i` REPLs, the browser REPL | allowed — nothing else is present to deceive |
 | `kex --allow-mocks foo.kex` | allowed — explicitly asked for |
 | anything else, including a compiled `.beam` run straight from `erl` | **denied**, with an error naming the call |
 

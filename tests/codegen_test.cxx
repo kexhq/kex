@@ -74,7 +74,7 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
 }
 
-// Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
+// Exercise the current AST -> IR -> Core Erlang pipeline used by `kex --run`.
 auto emitIr(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
