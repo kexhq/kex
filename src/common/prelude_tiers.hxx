@@ -14,9 +14,9 @@ namespace kex {
 // feed.kex sits beside stream.kex: the two types name each other (`toFeed`
 // answers a Feed, `toStream` answers a Stream), so they have to resolve
 // together rather than one before the other.
-inline constexpr std::array<std::string_view, 14> kPreludeTier0 = {
-    "algebra.kex", "console.kex", "errorable.kex", "io.kex",
-    "kex.kex", "math.kex", "optional.kex", "process.kex",
+inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
+    "algebra.kex", "comparable.kex", "console.kex", "errorable.kex",
+    "io.kex", "kex.kex", "math.kex", "optional.kex", "process.kex",
     "range.kex", "stream.kex", "feed.kex", "system.kex", "test.kex",
     "taggedvalidation.kex",
 };
