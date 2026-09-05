@@ -1,0 +1,7 @@
+shape point
+shape line 3
+colour red
+colour blue
+name kex
+tuple 1 2
+list 3

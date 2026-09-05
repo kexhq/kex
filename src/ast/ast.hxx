@@ -561,6 +561,16 @@ struct Param {
     std::optional<std::string> name;
     std::optional<TypeExprPtr> type;
     std::optional<ExprPtr> defaultValue;
+    // The type this parameter gets from a preceding standalone signature line
+    // (`speak : Cat -> String` above `let speak(c) = ...`), when the parameter
+    // itself is unannotated. NON-OWNING: the `TypeAnnotation` item in the same
+    // body owns the node, and both live as long as the Program.
+    //
+    // Kept apart from `type` on purpose. `type` feeds trait-dictionary
+    // insertion and arity computation in lowering; back-filling it from a
+    // signature would silently change a function's BEAM arity. Only the
+    // dispatch sites — which overload is this call — read this one.
+    const TypeExpr* signatureType = nullptr;
 };
 
 struct FunctionClause {

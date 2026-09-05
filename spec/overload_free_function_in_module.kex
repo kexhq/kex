@@ -1,0 +1,38 @@
+# The same overload set inside a `module`, reached three ways: qualified, via
+# `using`, and from a sibling function in the module's own body.
+#
+# The dispatch machinery is keyed per declaration body, so a module's members
+# have to be walked the same way the top level is
+# (docs/issue-free-function-overloads.md).
+module Shapes do
+  record Circle do
+    radius : Float
+  end
+
+  record Square do
+    side : Float
+  end
+
+  area : Circle -> Float
+  let area(c) = 3.0 * c.radius * c.radius
+
+  area : Square -> Float
+  let area(s) = s.side * s.side
+
+  report : Circle -> String
+  let report(c) = "circle ${area(c)}"
+
+  report : Square -> String
+  let report(s) = "square ${area(s)}"
+end
+
+using Shapes
+
+main do
+  IO.printLine("${Shapes.area(Shapes.Circle { radius: 2.0 })}")
+  IO.printLine("${Shapes.area(Shapes.Square { side: 3.0 })}")
+  IO.printLine("${area(Circle { radius: 1.0 })}")
+  IO.printLine("${area(Square { side: 4.0 })}")
+  IO.printLine(Shapes.report(Circle { radius: 2.0 }))
+  IO.printLine(Shapes.report(Square { side: 3.0 }))
+end

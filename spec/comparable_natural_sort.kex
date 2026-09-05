@@ -1,0 +1,52 @@
+# `sort` with no comparator means the type's OWN `Comparable`, not Erlang term
+# order over the record tuple (kexhq/kex#283).
+#
+# The old BEAM answer was `lists:sort/1` — term order — which even looks right
+# whenever the first field happens to be the one being sorted by. Here it is
+# not: ordering by `year` disagrees with ordering by `title`, so a term-order
+# sort produces a visibly different list.
+record Book do
+  title : String
+  year : Integer
+end
+
+make Book, implement: Comparable do
+  compare :> Book -> Ordering
+  let compare(other) = @year.compare(other.year)
+end
+
+type Priority =
+  | Low
+  | Medium
+  | High
+
+make Priority, implement: Comparable do
+  compare :> Priority -> Ordering
+  let compare(other) = rank(this).compare(rank(other))
+end
+
+let rank(p: Priority) = match p do
+  Low => 0
+  Medium => 1
+  High => 2
+end
+
+main do
+  let books = [
+    Book { title: "Zeta", year: 1990 },
+    Book { title: "Alpha", year: 1950 },
+    Book { title: "B", year: 1900 },
+  ]
+  IO.printLine("${books.sort.map({ |b| b.title })}")
+  IO.printLine("${books.sort({ |a, b| a.compare(b) == Less }).map({ |b| b.title })}")
+  IO.printLine("${books.sort({ |a, b| a.title < b.title }).map({ |b| b.title })}")
+  # A nullary ADT variant is a bare atom with no tuple to read a type off;
+  # its ordering has to come from the ADT's own implementation, not from
+  # alphabetical atom order.
+  IO.printLine("${[Medium, High, Low].sort}")
+  # Primitives keep the order they always had.
+  IO.printLine("${[3, 1, 2].sort}")
+  IO.printLine("${["pear", "apple"].sort}")
+  IO.printLine("${"hello".sort}")
+  IO.printLine("${[1.5, 0.5].sort}")
+end

@@ -44,10 +44,40 @@ repack_chars(L) when is_list(L) ->
     end;
 repack_chars(X) -> X.
 
-sort(L)    -> repack(L, lists:sort(as_list(L))).
+%% sort/1 — ascending NATURAL order, which for a type with a `Comparable`
+%% implementation means that type's own `compare`, not Erlang term order over
+%% the record tuple (kexhq/kex#283). See kex_compare.
+%%
+%% Only a tagged value can declare an order of its own — a record or an ADT
+%% variant, so a tuple or a bare atom. A list with none of those cannot
+%% dispatch anywhere, and takes the BIF straight, which is what keeps sorting
+%% numbers and strings as fast as it was.
+sort(L) ->
+    Items = as_list(L),
+    repack(L, case lists:any(fun taggable/1, Items) of
+        false -> lists:sort(Items);
+        true  -> lists:sort(fun kex_compare:less_or_equal/2, Items)
+    end).
+
+taggable(X) -> is_tuple(X) orelse is_atom(X).
+
 %% sort/2 — custom comparator. Kex passes (list, fun), Erlang's lists:sort/2
 %% takes (fun, list), so swap the argument order.
-sort(L, Fun) -> repack(L, lists:sort(Fun, as_list(L))).
+%%
+%% The comparator Kex hands over answers "does A come strictly BEFORE B",
+%% which is exactly the shape `lists:sort/2` must not be given: it wants an
+%% `=<`, and with a strict `<` it swaps every pair it considers equal. So
+%% `[{second, 2000}, {first, 2000}].sort { |a, b| a.year < b.year }` came back
+%% reversed on BEAM while the walker's stable_sort left it alone. Asking the
+%% comparator both ways recovers the `=<`: equal when neither side comes first.
+sort(L, Fun) ->
+    LessOrEqual = fun(A, B) ->
+        case Fun(A, B) of
+            true -> true;
+            _ -> Fun(B, A) =/= true
+        end
+    end,
+    repack(L, lists:sort(LessOrEqual, as_list(L))).
 %% Order-preserving, keeping the FIRST occurrence — `uniq` is a filter, not a
 %% sort, so lists:usort/1 is the wrong primitive here.
 uniq(L)    -> repack(L, uniq_seen(as_list(L), #{}, [])).
@@ -106,10 +136,10 @@ last(L)        -> {'Just', lists:last(L)}.
 %% recursive impl was non-tail and returned this same Just/None form).
 min(B) when is_binary(B) -> min(as_list(B));
 min([]) -> 'None';
-min(L)  -> {'Just', lists:min(L)}.
+min([H | T])  -> {'Just', lists:foldl(fun kex_compare:min/2, H, T)}.
 max(B) when is_binary(B) -> max(as_list(B));
 max([]) -> 'None';
-max(L)  -> {'Just', lists:max(L)}.
+max([H | T])  -> {'Just', lists:foldl(fun kex_compare:max/2, H, T)}.
 
 %% length/1 — element count, backing List.count (was a non-tail `1 + xs.count`
 %% recursion in the prelude). Also backs String.count (codepoint count) —
@@ -183,8 +213,11 @@ find(L, Fun)   ->
     end.
 count(L, Fun)  -> erlang:length(lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L))).
 
-minBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A < B end).
-maxBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A > B end).
+%% The KEY a `minBy`/`maxBy` block answers is compared the same way `sort` and
+%% `min` compare elements: through the key type's own `compare` when it
+%% declares one.
+minBy(L, F) -> extreme_by(as_list(L), F, fun kex_compare:less/2).
+maxBy(L, F) -> extreme_by(as_list(L), F, fun kex_compare:greater/2).
 
 extreme_by([], _F, _Wins) -> 'None';
 extreme_by([H | T], F, Wins) ->

@@ -1,0 +1,31 @@
+# A free function overloaded on PRIMITIVE argument types, with the types on
+# standalone signature lines rather than on the parameters.
+#
+# Every one of these once reached `render(String)` — the first declaration —
+# and printed "s:..." for all six calls (docs/issue-free-function-overloads.md).
+render : String -> String
+let render(v) = "s:${v}"
+
+render : Integer -> String
+let render(v) = "i:${v}"
+
+render : Float -> String
+let render(v) = "f:${v}"
+
+render : Bool -> String
+let render(v) = "b:${v}"
+
+render : [Integer] -> String
+let render(v) = "l:${v.length}"
+
+render : {String: Integer} -> String
+let render(v) = "m:${v.count}"
+
+main do
+  IO.printLine(render("x"))
+  IO.printLine(render(7))
+  IO.printLine(render(2.5))
+  IO.printLine(render(true))
+  IO.printLine(render([1, 2, 3]))
+  IO.printLine(render({"a": 1}))
+end

@@ -1,0 +1,39 @@
+# Selection is by ARGUMENT TYPE, not by declaration order.
+#
+# The tell for the original bug (docs/issue-free-function-overloads.md) was
+# that swapping two overloads moved the wrong answer to the other call: every
+# call reached whichever `let` came first. So this is the same overload set as
+# `overload_free_function_same_arity.kex`, declared the other way round, and
+# `overload_block_vs_function.kex`'s pair likewise.
+record Cat do
+  name : String
+end
+
+record Dog do
+  name : String
+end
+
+speak : Dog -> String
+let speak(d) = "woof ${d.name}"
+
+speak : Cat -> String
+let speak(c) = "meow ${c.name}"
+
+record Env do
+  name : String
+end
+
+type Handler = Env -> String
+
+describe : Block<String> -> String
+let describe(body) = "block ${body()}"
+
+describe : Handler -> String
+let describe(handler) = "handler ${handler(Env { name: "e" })}"
+
+main do
+  IO.printLine(speak(Cat { name: "a" }))
+  IO.printLine(speak(Dog { name: "b" }))
+  IO.printLine(describe(do "plain" end))
+  IO.printLine(describe(do |env| "of ${env.name}" end))
+end

@@ -1,0 +1,49 @@
+# Argument types that are not records: ADT types, a transparent alias, and a
+# structural tuple/list spelling.
+#
+# Each of these has to reach its OWN clause, and — just as importantly — a
+# type the dispatcher cannot tell apart at runtime must not be guarded into
+# unreachability (docs/issue-free-function-overloads.md).
+type Shape =
+  | Point
+  | Line(Integer)
+
+type Colour =
+  | Red
+  | Blue
+
+type Name = String
+
+label : Shape -> String
+let label(s) = match s do
+  Point => "shape point"
+  Line(n) => "shape line ${n}"
+end
+
+label : Colour -> String
+let label(c) = match c do
+  Red => "colour red"
+  Blue => "colour blue"
+end
+
+label : Name -> String
+let label(n) = "name ${n}"
+
+pair : (Integer, Integer) -> String
+let pair(t) do
+  let (a, b) = t
+  "tuple ${a} ${b}"
+end
+
+pair : [Integer] -> String
+let pair(l) = "list ${l.length}"
+
+main do
+  IO.printLine(label(Point))
+  IO.printLine(label(Line(3)))
+  IO.printLine(label(Red))
+  IO.printLine(label(Blue))
+  IO.printLine(label("kex"))
+  IO.printLine(pair((1, 2)))
+  IO.printLine(pair([1, 2, 3]))
+end

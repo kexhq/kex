@@ -1,0 +1,43 @@
+# The shapes that LOOK like an overload set but are not, and must keep working
+# after `docs/issue-free-function-overloads.md`.
+#
+# 1. One signature line over several `let` clauses is ONE function whose
+#    clauses discriminate by PATTERN. Turning its parameter types into a
+#    dispatch guard would reject the literal clauses outright.
+# 2. Same name, different arity, one signature line each: dispatch is by
+#    argument count and always was.
+# 3. Several signature lines over a SINGLE definition are a CONTRACT, not an
+#    overload set — `FS.File.open` writes one per mode over one `open(path,
+#    mode)`. Taking the last of them as the parameter's type made every other
+#    mode fail to match, which is how the interpreter suite caught it.
+type Mode = | Read
+type Slug = String
+
+count : Integer -> String
+let count(0) = "none"
+let count(1) = "one"
+let count(n) = "many ${n}"
+
+join : String -> String
+let join(a) = a
+
+join : String -> String -> String
+let join(a, b) = "${a}+${b}"
+
+join : String -> String -> String -> String
+let join(a, b, c) = "${a}+${b}+${c}"
+
+open : Slug -> Mode -> String
+open : Slug -> Integer -> String
+let open(path, mode) = "open ${path} ${mode}"
+
+main do
+  IO.printLine(count(0))
+  IO.printLine(count(1))
+  IO.printLine(count(4))
+  IO.printLine(join("a"))
+  IO.printLine(join("a", "b"))
+  IO.printLine(join("a", "b", "c"))
+  IO.printLine(open("f", Read))
+  IO.printLine(open("f", 2))
+end

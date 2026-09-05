@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
@@ -232,6 +233,10 @@ auto Parser::parseProgram() -> ast::Program {
     skipNewlines();
   }
 
+  // A standalone `f : A -> B` line is the other way to give a free
+  // function its parameter types; point the parameters at it so overload
+  // dispatch sees them (docs/issue-free-function-overloads.md).
+  attachSignatureParamTypes(program.items);
   return program;
 }
 

@@ -1,0 +1,37 @@
+# A `Block<A>` parameter and a function parameter of the same arity are not
+# distinguished when picking an overload — dispatch falls back to declaration
+# order, and the losing form dies with `badarity` at runtime.
+#
+# The two types are different and both are written out, so the checker has what
+# it needs; only overload selection ignores it. Declared this way round the
+# zero-argument call misdispatches:
+#
+#   Internal error: {badarity,{#Fun<...>,[{'Env',<<"e">>}]}}
+#
+# Swapping the two declarations moves the failure to the other call instead.
+#
+# This is why a web framework's route block must always name a parameter it may
+# not want: `get "/" do |_| "home" end`. A paramless `do ... end` is a perfectly
+# good zero-arg lambda on its own — `let f = do "x" end` works — but a DSL
+# cannot offer both spellings of a route until this resolves.
+record Env do
+  name : String
+end
+
+record Route do
+  path : String
+  body : String
+end
+
+type Handler = Env -> String
+
+get : String -> Handler -> Route
+let get(path, handler) = Route { path: path, body: handler(Env { name: "e" }) }
+
+get : String -> Block<String> -> Route
+let get(path, body) = Route { path: path, body: body() }
+
+main do
+  IO.printLine(get("/a", do |env| "with env ${env.name}" end).body)
+  IO.printLine(get("/b", do "no env" end).body)
+end

@@ -1,6 +1,7 @@
 #include "lower.hxx"
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/signature_params.hxx"
 #include "../lexer/token.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -51,6 +52,24 @@ auto mangleModulePath(const std::string& path) -> std::string {
 auto mangleModuleMember(const std::string& path,
                         const std::string& member) -> std::string {
     return mangleQualifiedMember(mangleModulePath(path), member);
+}
+
+// How many parameters the rendered spelling of a function type takes: the
+// number of TOP-LEVEL arrows, so `(Env) -> String` is 1 and `(A) -> (B) -> C`
+// is 2. A Kex lambda is a fun of exactly that arity at runtime, which is what
+// separates `Env -> String` from the parameterless `Block<String>`.
+auto functionTypeArity(const std::string& written) -> int64_t {
+    int depth = 0;
+    int64_t arrows = 0;
+    for (size_t i = 0; i < written.size(); ++i) {
+        const char c = written[i];
+        if (c == '(' || c == '[' || c == '{' || c == '<') ++depth;
+        else if (c == ')' || c == ']' || c == '}') --depth;
+        else if (c == '>' && !(i && written[i - 1] == '-')) --depth;
+        else if (depth == 0 && c == '-' && i + 1 < written.size() &&
+                 written[i + 1] == '>') { ++arrows; ++i; }
+    }
+    return arrows;
 }
 
 auto renderDispatchType(const ast::TypeExpr& type) -> std::string {
@@ -448,6 +467,13 @@ struct Lowering {
     // arities line up (the method builds its own value from the args and never
     // touches `this` — see examples/json_parser.kex's `Parser.parse(input)`).
     std::unordered_set<std::string> implicitThisMethods;
+    // `type Handler = Env -> String` names a SHAPE, not a tag: no value ever
+    // carries 'Handler', so a dispatch guard has to test what the alias
+    // stands for. Alias name -> the rendered dispatch type of its single
+    // right-hand side. Only structural right-hand sides are recorded — a
+    // single NAMED variant is an ADT tag (or the existing transparent alias),
+    // which `variantTagSet` and `records` already speak for.
+    std::unordered_map<std::string, std::string> structuralTypeAliases;
     // Record/make type names (so a namespace call can be recognized as a
     // static method dispatch, not an unknown module).
     std::unordered_set<std::string> knownTypes;
@@ -4162,41 +4188,60 @@ struct Lowering {
             t->node = MakeTuple{two(atomLit(tag), std::move(metadata))};
             varPairs.push_back(std::move(t));
         }
-        // Which module implements the methods of the records defined here.
-        // A capability's override branch cannot name a local function — the
-        // value replacing it is implemented in another unit — so it dispatches
-        // through this registry instead (kexhq/kex#181).
-        if (!moduleName.empty() && !records.empty()) {
+        // Which module implements the methods of the records and ADTs defined
+        // here. A capability's override branch cannot name a local function —
+        // the value replacing it is implemented in another unit — so it
+        // dispatches through this registry instead (kexhq/kex#181). The
+        // natural-order comparison behind `sort`/`min`/`max` reads the same
+        // registry to reach a type's own `compare` (kexhq/kex#283).
+        //
+        // A type whose methods live in ANOTHER module of this build must name
+        // that module: claiming it here sent the dispatch to a function this
+        // one never defined, and a capability replaced by a stand-in from an
+        // opt-in module died `undef` (kexhq/kex#143). `localTypeModules` is
+        // keyed by the make target as written, which inside a module is the
+        // bare name.
+        auto ownerModuleFor = [&](const std::string& name) {
+            auto declaring = localTypeModules.find(name);
+            if (declaring == localTypeModules.end())
+                if (auto dot = name.rfind('.'); dot != std::string::npos) {
+                    // A tail lookup can answer for a DIFFERENT module's
+                    // same-named record. Accept it only when the module it
+                    // names actually reconstructs this record's qualified
+                    // identity, or `Web.Response` gets registered as owned by
+                    // whichever module declared the last `Response`
+                    // (kexhq/kex#143).
+                    auto tail = localTypeModules.find(name.substr(dot + 1));
+                    if (tail != localTypeModules.end() &&
+                        tail->second + "." + name.substr(dot + 1) == name)
+                        declaring = tail;
+                }
+            return declaring != localTypeModules.end()
+                ? "Kex." + declaring->second : moduleName;
+        };
+        if (!moduleName.empty() && (!records.empty() || anyVariant)) {
             std::vector<ExprPtr> ownerPairs;
             for (const auto& [name, info] : records) {
                 (void)info;
-                // A record whose methods live in ANOTHER module of this build
-                // must name that module: claiming it here sent the dispatch to
-                // a function this one never defined, and a capability replaced
-                // by a stand-in from an opt-in module died `undef`
-                // (kexhq/kex#143). `localTypeModules` is keyed by the make
-                // target as written, which inside a module is the bare name.
-                std::string owner = moduleName;
-                auto declaring = localTypeModules.find(name);
-                if (declaring == localTypeModules.end())
-                    if (auto dot = name.rfind('.'); dot != std::string::npos) {
-                        // `localTypeModules` is keyed by the make target as
-                        // written, which inside a module is the BARE name — so
-                        // a tail lookup can answer for a DIFFERENT module's
-                        // same-named record. Accept it only when the module it
-                        // names actually reconstructs this record's qualified
-                        // identity, or `Web.Response` gets registered as owned
-                        // by whichever module declared the last `Response`
-                        // (kexhq/kex#143).
-                        auto tail = localTypeModules.find(name.substr(dot + 1));
-                        if (tail != localTypeModules.end() &&
-                            tail->second + "." + name.substr(dot + 1) == name)
-                            declaring = tail;
-                    }
-                if (declaring != localTypeModules.end())
-                    owner = "Kex." + declaring->second;
                 auto t = std::make_unique<Expr>();
-                t->node = MakeTuple{two(atomLit(name), atomLit(owner))};
+                t->node = MakeTuple{two(atomLit(name),
+                                        atomLit(ownerModuleFor(name)))};
+                ownerPairs.push_back(std::move(t));
+            }
+            // An ADT's methods hang off the TYPE, but a value carries the
+            // VARIANT's tag — a nullary one is a bare atom, with no tuple to
+            // read a type off. Registering each tag against its type's module
+            // is what lets a runtime dispatch find `compare` for a `Priority`.
+            // A tag that is also a record name keeps the record's entry.
+            for (const auto& [tag, ar] : variantArity) {
+                (void)ar;
+                if (records.count(tag)) continue;
+                auto owner = variantOwner.find(tag);
+                auto t = std::make_unique<Expr>();
+                t->node = MakeTuple{
+                    two(atomLit(tag),
+                        atomLit(ownerModuleFor(owner == variantOwner.end()
+                                                   ? tag : owner->second)))};
                 ownerPairs.push_back(std::move(t));
             }
             body = makeLet(fresh("Own"),
@@ -5909,7 +5954,12 @@ struct Lowering {
     auto discriminatingType(const std::string& written) const -> bool {
         if (written.empty() || written == "Any") return false;
         if (traitMethods.count(written)) return false;
+        if (auto alias = structuralTypeAliases.find(written);
+            alias != structuralTypeAliases.end() && alias->second != written)
+            return discriminatingType(alias->second);
         if (written.find("->") != std::string::npos) return true;
+        if (written.rfind("Block<", 0) == 0 && written.back() == '>')
+            return true;
         const char first = written.front(), last = written.back();
         if ((first == '[' && last == ']') || (first == '{' && last == '}') ||
             (first == '(' && last == ')'))
@@ -5920,10 +5970,16 @@ struct Lowering {
             base.resize(angle);
         if (base.size() == 1) return false;  // a type PARAMETER, not a type
         if (primGuardBifs().count(base) || base == "Char") return true;
-        // NOT an ADT: a nullary variant is a bare atom (`'Equal'`), and
-        // typeGuard's tagged fallback tests `element(1, V)`, which no atom
-        // satisfies. Guarding on one rejected every call.
-        if (typeVariantTags.count(base)) return false;
+        // An ADT TYPE discriminates through `adtGuard`, which tests each of
+        // its variant tags — the nullary ones as bare atoms. Before that
+        // existed, typeGuard's tagged fallback asked `element(1, V)`, which no
+        // atom satisfies, so guarding on an ADT rejected every call and such a
+        // clause had to be left unguarded. That is how a free function
+        // overloaded on two ADTs answered from its first clause on BEAM while
+        // the walker dispatched it (docs/issue-free-function-overloads.md).
+        if (auto tags = typeVariantTags.find(base);
+            tags != typeVariantTags.end())
+            return !tags->second.empty();
         if (records.count(canonicalRecordName(base))) return true;
         return localTypeModules.count(base) > 0 ||
                moduleDeclaredTypes.count(base) > 0;
@@ -5998,8 +6054,9 @@ struct Lowering {
                         // Guarding the first then rejected `Equal.combine(Less)`
                         // and the whole clause set fell through to
                         // function_clause.
-                        if (!p.name || !p.type || !*p.type) return false;
-                        current.push_back(renderDispatchType(**p.type));
+                        const auto* declared = dispatchParamType(p);
+                        if (!p.name || !declared) return false;
+                        current.push_back(renderDispatchType(*declared));
                     }
                     if (signature.empty()) signature = current;
                     else if (signature != current) differs = true;
@@ -6119,8 +6176,9 @@ struct Lowering {
                 if (overloadedByParamType && !isLastInGroup) {
                     ExprPtr guard;
                     for (const auto& p : clause.params) {
-                        if (!p.name || !p.type || !*p.type) continue;
-                        const auto written = renderDispatchType(**p.type);
+                        const auto* declared = dispatchParamType(p);
+                        if (!p.name || !declared) continue;
+                        const auto written = renderDispatchType(*declared);
                         if (!discriminatingType(written)) continue;
                         auto test = typeGuard(written, var(*p.name));
                         guard = guard ? intrin(Op::And, two(std::move(guard),
@@ -7032,8 +7090,50 @@ struct Lowering {
                            litInt(slot.tupleSize)));
     }
 
+    // An ADT names its VARIANTS, never a tag of its own: a `Shape` value is
+    // either the atom 'Point' or the tuple {'Line', N}. Guarding on the type
+    // NAME therefore matched nothing at all, which is why an ADT-typed
+    // parameter used to contribute no dispatch guard
+    // (docs/issue-free-function-overloads.md).
+    auto adtGuard(const std::vector<std::string>& tags, ExprPtr v) -> ExprPtr {
+        auto vRef = snap(v);
+        ExprPtr guard;
+        for (const auto& tag : tags) {
+            ExprPtr test;
+            if (nullaryVariantTags.count(tag))
+                test = intrin(Op::Eq,
+                              two(vRef.get(), lit(LitKind::Atom, tag)));
+            else
+                // `element/2` is strict, so it may only run once the value is
+                // known to be a tuple — see the note on typeGuard's tagged
+                // fallback for why this is a `case` and not `erlang:and`.
+                test = matchBool(
+                    callE("erlang", "is_tuple", 1, one(vRef.get())),
+                    intrin(Op::Eq,
+                           two(callE("erlang", "element", 2,
+                                     two(litInt(1), vRef.get())),
+                               lit(LitKind::Atom, tag))),
+                    litBool(false));
+            // `orelse`, spelled as a case for the same strictness reason.
+            guard = guard ? matchBool(std::move(guard), litBool(true),
+                                      std::move(test))
+                          : std::move(test);
+        }
+        return guard ? std::move(guard) : litBool(false);
+    }
+
+
     auto typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
         if (traitMethods.count(written)) return litBool(true);
+        // `type Handler = Env -> String` names a SHAPE. No value carries a
+        // 'Handler' tag, so the tagged fallback below could never match one
+        // and a `Handler` parameter contributed no guard at all — which is
+        // half of why a `Block<A>` overload beside it misdispatched
+        // (docs/issue-free-function-overloads.md). A structural right-hand
+        // side is never a bare name, so this recurses at most once.
+        if (auto alias = structuralTypeAliases.find(written);
+            alias != structuralTypeAliases.end() && alias->second != written)
+            return typeGuard(alias->second, std::move(v));
         auto it = primGuardBifs().find(written);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
@@ -7044,8 +7144,19 @@ struct Lowering {
         // `function_clause` on BEAM while the walker dispatched it
         // (kexhq/kex#205). A function type is checked first because it is
         // parenthesized too.
+        // Arity matters: a `Block<A>` is a fun too, and `is_function/1`
+        // accepts both, so an overload set holding a handler AND a
+        // parameterless block picked whichever clause came first and died
+        // `badarity` (docs/issue-free-function-overloads.md).
         if (written.find("->") != std::string::npos)
-            return callE("erlang", "is_function", 1, one(std::move(v)));
+            return callE("erlang", "is_function", 2,
+                         two(std::move(v), litInt(functionTypeArity(written))));
+        // `Block<A>` is a PARAMETERLESS lambda — `do "x" end`. It carries no
+        // tag, so the base-name path below would have guarded on 'Block',
+        // which nothing is.
+        if (written.rfind("Block<", 0) == 0 && written.back() == '>')
+            return callE("erlang", "is_function", 2,
+                         two(std::move(v), litInt(0)));
         if (written.size() >= 2 && written.front() == '[' &&
             written.back() == ']') {
             // A Kex String IS `[Char]`, and it is a binary at runtime, so
@@ -7071,6 +7182,9 @@ struct Lowering {
         if (auto angle = written.find('<');
             angle != std::string::npos && angle > 0 && written.back() == '>')
             return typeGuard(written.substr(0, angle), std::move(v));
+        if (auto tags = typeVariantTags.find(written);
+            tags != typeVariantTags.end() && !tags->second.empty())
+            return adtGuard(tags->second, std::move(v));
         // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
         // (the source-level is_record/2 form is a compiler macro).
         // The guard tests the value's TAG, so it is the record's canonical
@@ -7799,6 +7913,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
+        // What an alias STANDS FOR, for the dispatch guards: a structural
+        // right-hand side (`type Handler = Env -> String`), or the plain name
+        // a transparent alias renames (`type Slug = String`). Either way no
+        // value carries the alias's own name as a tag.
+        if (!td.isDistinct && !td.leadingPipe && td.variants->size() == 1 &&
+            (*td.variants)[0] &&
+            (kex::isTransparentTypeAlias(td) ||
+             Lowering::simpleTypeName((*td.variants)[0]).empty()))
+            L.structuralTypeAliases[td.name] =
+                renderDispatchType(*(*td.variants)[0]);
         if (kex::isTransparentTypeAlias(td)) return;
         for (const auto& v : *td.variants) {
             auto t = Lowering::simpleTypeName(v);
@@ -8162,6 +8286,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             fnGroup.push_back(fdp->get());
             continue;
         }
+        // A standalone signature line between two overloads is erased at this
+        // level, and it must not BREAK the group either: split apart, the two
+        // `speak` definitions each became a whole `speak/1`, the duplicate
+        // merge kept one, and `speak(Dog { … })` printed "meow"
+        // (docs/issue-free-function-overloads.md).
+        if (std::holds_alternative<std::unique_ptr<ast::TypeAnnotation>>(item))
+            continue;
         flushGroup();
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
