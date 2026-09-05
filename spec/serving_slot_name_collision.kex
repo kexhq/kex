@@ -1,0 +1,49 @@
+# kex: run-beam
+# A serving slot whose name is also exported by an imported module.
+#
+# A serving process dispatches slots BY NAME at runtime: it holds `['add']`
+# and applies `Module:add(State, Args...)` against the module that declared
+# the block. But `lowerModules` routes each function to whichever module owns
+# its NAME, and a slot's name is ordinary — `add` is also
+# `Net.HTTP.Headers`'s. So merely importing Net.HTTP moved this program's
+# `add` slot into Net.HTTP's compiled module, and the first call died
+#
+#   {'function not exported', {…, add, 3}}
+#
+# the 3 being the runtime's retry at the capability-context arity. Nothing
+# here touches HTTP; the import alone was enough
+# (rodolfo docs/kex-issues.md #1).
+#
+# BEAM-only: the tree walker resolves slots dynamically and never had this.
+using Net.HTTP
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  slot add(by: Integer) -> Reply<Integer> do
+    new.count = new.count + by
+    return { new, reply: new.count }
+  end
+
+  # `parse` collides with several imported names too.
+  slot parse(text: String) -> Reply<Integer> do
+    new.count = text.count
+    return { new, reply: new.count }
+  end
+end
+
+foul bump(server: Server<Counter>) -> String do
+  match server.add(2) do
+    Ok(n) => "now ${n}"
+    Error(e) => "failed ${e}"
+  end
+end
+
+main do
+  let c = Process.spawn(Counter { count: 0 })
+  IO.printLine(bump(c))
+  IO.printLine("${c.add(3)}")
+  IO.printLine("${c.parse("abcd")}")
+end

@@ -2700,14 +2700,39 @@ struct Lowering {
                 std::vector<Binding> binds;
                 auto state = atomize(n.args[0], binds);
                 std::vector<ExprPtr> slotAtoms;
+                // The module holding the slot dispatchers. A serving block at
+                // the top level compiles into the entry module; one inside
+                // `module Store` compiles into `Kex.Store`, and naming the
+                // entry module there sent every call to a module that defines
+                // no slots (rodolfo docs/kex-issues.md #2).
+                std::string servingModule = outputModule;
                 if (expressionTypes) {
                     auto found = expressionTypes->find(n.args[0].get());
                     if (found != expressionTypes->end() && found->second) {
-                        const auto stateType = semantic::typeToString(found->second);
-                        if (auto slots = servingSlotsByType.find(stateType);
+                        auto stateType = semantic::typeToString(found->second);
+                        if (auto angle = stateType.find('<');
+                            angle != std::string::npos)
+                            stateType.resize(angle);
+                        // The slot registry is keyed by the make target AS
+                        // WRITTEN, which inside a module is the bare name,
+                        // while the checker types the spawned state by its
+                        // qualified identity — so `Store.Counter` found
+                        // nothing and the server started with an EMPTY slot
+                        // list, answering `{unknown_serving_slot, get}` to
+                        // its first call.
+                        auto key = stateType;
+                        if (!servingSlotsByType.count(key))
+                            if (auto dot = stateType.rfind('.');
+                                dot != std::string::npos)
+                                key = stateType.substr(dot + 1);
+                        if (auto slots = servingSlotsByType.find(key);
                             slots != servingSlotsByType.end())
                             for (const auto& slot : slots->second)
                                 slotAtoms.push_back(lit(LitKind::Atom, slot));
+                        if (auto declaring = localTypeModules.find(key);
+                            declaring != localTypeModules.end())
+                            servingModule =
+                                mangleModulePath("Kex." + declaring->second);
                     }
                 }
                 auto allowedSlots = std::make_unique<Expr>();
@@ -2716,7 +2741,7 @@ struct Lowering {
                     binds,
                     callE("kex_intrinsic_process", "spawnServing", 3,
                           three(std::move(state),
-                                lit(LitKind::Atom, outputModule),
+                                lit(LitKind::Atom, servingModule),
                                 std::move(allowedSlots))));
             }
         }
@@ -9616,12 +9641,30 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
                             def.sourceName};
 
+    // Serving slots stay in the module that declares them. The distribution
+    // below routes a function to whichever module `definitions` says owns its
+    // NAME, and a slot's name is ordinary — `add` is also `Net.HTTP.Headers`'s.
+    // So compiling a program that merely imports Net.HTTP moved the top-level
+    // `add` slot into Net.HTTP's module, and the serving process, which
+    // applies `Module:add(State, …)` against its OWN module, got
+    // `{'function not exported', {…, add, 3}}` (rodolfo docs/kex-issues.md #1).
+    std::unordered_set<std::string> topLevelServingSlots;
+    for (const auto& item : prog.items)
+        if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+            make && *make && (*make)->isServing)
+            for (const auto& member : (*make)->body)
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
+                    fn && *fn && (*fn)->isSlot)
+                    topLevelServingSlots.insert((*fn)->name);
+
     std::vector<Module> result;
     std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;
     std::vector<FunDef> globalFunctions;
     for (auto& fn : flat.functions) {
         auto found = definitions.find(fn.name);
-        if (found == definitions.end()) {
+        if (found == definitions.end() ||
+            topLevelServingSlots.count(fn.name)) {
             globalFunctions.push_back(std::move(fn));
             continue;
         }
