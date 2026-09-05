@@ -1,0 +1,52 @@
+# The rest of the Comparable surface a natural `sort` has to agree with:
+# `min`/`max` keyed by a block, a sort that leaves elements equal under the
+# comparator in source order, and two Comparable types in one program — the
+# runtime finds each one's `compare` through the record tag, so neither may
+# answer for the other (kexhq/kex#283).
+record Book do
+  title : String
+  year : Integer
+end
+
+record Shelf do
+  label : String
+  capacity : Integer
+end
+
+make Book, implement: Comparable do
+  compare :> Book -> Ordering
+  let compare(other) = @year.compare(other.year)
+end
+
+make Shelf, implement: Comparable do
+  compare :> Shelf -> Ordering
+  let compare(other) = other.capacity.compare(@capacity)
+end
+
+main do
+  let books = [
+    Book { title: "C", year: 1900 },
+    Book { title: "A", year: 1950 },
+    Book { title: "B", year: 1850 },
+  ]
+  IO.printLine("${books.sort.map({ |b| b.title })}")
+  IO.printLine("${books.min({ |b| b.year }).map({ |b| b.title })}")
+  IO.printLine("${books.max({ |b| b.year }).map({ |b| b.title })}")
+
+  # Descending, because Shelf's own compare is written that way — proof the
+  # order comes from the type and not from the tuple.
+  let shelves = [
+    Shelf { label: "small", capacity: 10 },
+    Shelf { label: "big", capacity: 90 },
+    Shelf { label: "mid", capacity: 50 },
+  ]
+  IO.printLine("${shelves.sort.map({ |s| s.label })}")
+
+  # Equal under the comparator — the sort must not reorder them.
+  let ties = [
+    Book { title: "second", year: 2000 },
+    Book { title: "first", year: 2000 },
+  ]
+  IO.printLine("${ties.sort.map({ |b| b.title })}")
+  IO.printLine("${ties.sort({ |a, b| a.year < b.year }).map({ |b| b.title })}")
+end

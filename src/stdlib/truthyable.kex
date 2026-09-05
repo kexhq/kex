@@ -52,6 +52,24 @@ make Bool, implement: Truthyable do
   truthy? :> Bool
   let truthy? = this
 
+  # Returns the negation of this boolean.
+  #
+  # +!flag+ says the same thing, and is the spelling to reach for when the
+  # value is already to hand. This one exists for the position +!+ cannot
+  # take: the end of a chain, where what is being negated is whatever the
+  # chain just produced. +falsy?+ answers the same question for any
+  # +Truthyable+ value; +not+ is the one that both takes and answers a +Bool+.
+  #
+  # @return [Bool] +false+ for +true+, and +true+ for +false+
+  #
+  # @example
+  #   true.not    # => false
+  #   false.not   # => true
+  #
+  # @example At the end of a chain
+  #   book.borrowed?.not
+  not :> Bool
+  let not = !this
 end
 
 make Integer, implement: Truthyable do

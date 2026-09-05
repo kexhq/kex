@@ -4188,41 +4188,60 @@ struct Lowering {
             t->node = MakeTuple{two(atomLit(tag), std::move(metadata))};
             varPairs.push_back(std::move(t));
         }
-        // Which module implements the methods of the records defined here.
-        // A capability's override branch cannot name a local function — the
-        // value replacing it is implemented in another unit — so it dispatches
-        // through this registry instead (kexhq/kex#181).
-        if (!moduleName.empty() && !records.empty()) {
+        // Which module implements the methods of the records and ADTs defined
+        // here. A capability's override branch cannot name a local function —
+        // the value replacing it is implemented in another unit — so it
+        // dispatches through this registry instead (kexhq/kex#181). The
+        // natural-order comparison behind `sort`/`min`/`max` reads the same
+        // registry to reach a type's own `compare` (kexhq/kex#283).
+        //
+        // A type whose methods live in ANOTHER module of this build must name
+        // that module: claiming it here sent the dispatch to a function this
+        // one never defined, and a capability replaced by a stand-in from an
+        // opt-in module died `undef` (kexhq/kex#143). `localTypeModules` is
+        // keyed by the make target as written, which inside a module is the
+        // bare name.
+        auto ownerModuleFor = [&](const std::string& name) {
+            auto declaring = localTypeModules.find(name);
+            if (declaring == localTypeModules.end())
+                if (auto dot = name.rfind('.'); dot != std::string::npos) {
+                    // A tail lookup can answer for a DIFFERENT module's
+                    // same-named record. Accept it only when the module it
+                    // names actually reconstructs this record's qualified
+                    // identity, or `Web.Response` gets registered as owned by
+                    // whichever module declared the last `Response`
+                    // (kexhq/kex#143).
+                    auto tail = localTypeModules.find(name.substr(dot + 1));
+                    if (tail != localTypeModules.end() &&
+                        tail->second + "." + name.substr(dot + 1) == name)
+                        declaring = tail;
+                }
+            return declaring != localTypeModules.end()
+                ? "Kex." + declaring->second : moduleName;
+        };
+        if (!moduleName.empty() && (!records.empty() || anyVariant)) {
             std::vector<ExprPtr> ownerPairs;
             for (const auto& [name, info] : records) {
                 (void)info;
-                // A record whose methods live in ANOTHER module of this build
-                // must name that module: claiming it here sent the dispatch to
-                // a function this one never defined, and a capability replaced
-                // by a stand-in from an opt-in module died `undef`
-                // (kexhq/kex#143). `localTypeModules` is keyed by the make
-                // target as written, which inside a module is the bare name.
-                std::string owner = moduleName;
-                auto declaring = localTypeModules.find(name);
-                if (declaring == localTypeModules.end())
-                    if (auto dot = name.rfind('.'); dot != std::string::npos) {
-                        // `localTypeModules` is keyed by the make target as
-                        // written, which inside a module is the BARE name — so
-                        // a tail lookup can answer for a DIFFERENT module's
-                        // same-named record. Accept it only when the module it
-                        // names actually reconstructs this record's qualified
-                        // identity, or `Web.Response` gets registered as owned
-                        // by whichever module declared the last `Response`
-                        // (kexhq/kex#143).
-                        auto tail = localTypeModules.find(name.substr(dot + 1));
-                        if (tail != localTypeModules.end() &&
-                            tail->second + "." + name.substr(dot + 1) == name)
-                            declaring = tail;
-                    }
-                if (declaring != localTypeModules.end())
-                    owner = "Kex." + declaring->second;
                 auto t = std::make_unique<Expr>();
-                t->node = MakeTuple{two(atomLit(name), atomLit(owner))};
+                t->node = MakeTuple{two(atomLit(name),
+                                        atomLit(ownerModuleFor(name)))};
+                ownerPairs.push_back(std::move(t));
+            }
+            // An ADT's methods hang off the TYPE, but a value carries the
+            // VARIANT's tag — a nullary one is a bare atom, with no tuple to
+            // read a type off. Registering each tag against its type's module
+            // is what lets a runtime dispatch find `compare` for a `Priority`.
+            // A tag that is also a record name keeps the record's entry.
+            for (const auto& [tag, ar] : variantArity) {
+                (void)ar;
+                if (records.count(tag)) continue;
+                auto owner = variantOwner.find(tag);
+                auto t = std::make_unique<Expr>();
+                t->node = MakeTuple{
+                    two(atomLit(tag),
+                        atomLit(ownerModuleFor(owner == variantOwner.end()
+                                                   ? tag : owner->second)))};
                 ownerPairs.push_back(std::move(t));
             }
             body = makeLet(fresh("Own"),

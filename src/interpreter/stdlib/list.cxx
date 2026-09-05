@@ -463,6 +463,15 @@ auto Evaluator::registerListBuiltins() -> void {
         };
         if (auto* var = std::get_if<VariantValue>(&a->data)) {
             auto r = dispatchCompare(var->tag);
+            // A `make Priority, implement: Comparable` registers its method
+            // under the ADT's name, not under each constructor's — so a
+            // variant has to ask its OWNING type. Without this every ADT
+            // compared Equal and `.sort` silently left the list alone, while
+            // BEAM used atom order (kexhq/kex#283).
+            if (r.empty())
+                if (auto parent = m_variantParent.find(var->tag);
+                    parent != m_variantParent.end())
+                    r = dispatchCompare(parent->second);
             if (!r.empty()) return r;
         }
         if (auto* rec = std::get_if<RecordValue>(&a->data)) {

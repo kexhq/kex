@@ -1,0 +1,34 @@
+# `Bool#not` — negation in the one position the prefix `!` cannot take.
+#
+# `!flag` was the only spelling, so anything that ended in a boolean had to be
+# wrapped from the front: `!FS.File.exists?(path)` rather than
+# `FS.File.exists?(path).not`. `Truthyable`'s `falsy?` and `Option`'s `set?`
+# covered the cases around it, but negating a plain `Bool` had no direct
+# spelling (rodolfo docs/kex-issues.md #9).
+record Book do
+  title : String
+  borrowed : Bool
+end
+
+main do
+  IO.printLine("${true.not}")
+  IO.printLine("${false.not}")
+  IO.printLine("${true.not.not}")
+
+  # The position that motivated it: the end of a chain.
+  let book = Book { title: "Dune", borrowed: false }
+  IO.printLine("${book.borrowed.not}")
+  IO.printLine("${(1 == 2).not}")
+  IO.printLine("${[1, 2].empty?.not}")
+
+  # Agrees with the prefix operator and with `falsy?`, which answers the same
+  # question for any Truthyable value rather than only for a Bool.
+  IO.printLine("${false.not == !false}")
+  IO.printLine("${false.not == false.falsy?}")
+
+  # Usable as a condition, and as a value.
+  if book.borrowed.not
+    IO.printLine("on the shelf")
+  end
+  IO.printLine("${[true, false, true].map({ |b| b.not })}")
+end
