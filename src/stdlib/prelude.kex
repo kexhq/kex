@@ -32,6 +32,7 @@
 using Algebra
 using Binary
 using Blankable
+using Comparable
 using Console
 using Enumerable
 using Env
