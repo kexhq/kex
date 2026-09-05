@@ -1,0 +1,61 @@
+# kexhq/kex#288 — a declared return type that IS a function type must not be
+# folded into the enclosing function's own signature. `mk()` is nullary and
+# returns a `String -> String`; it is not a unary `String -> String`.
+
+type Formatter = (String -> String)
+
+foul wrap(text: String) -> String do
+  return "<${text}>"
+end
+
+# Nullary, function-typed return, spelled inline.
+foul inlineReturn() -> (String -> String) do
+  return { |name| wrap(name) }
+end
+
+# The same through a type alias — the alias resolved identically before the
+# fix, so it is the second half of the regression, not a duplicate.
+foul aliasReturn() -> Formatter do
+  return { |name| wrap(name) }
+end
+
+# With a real parameter, so an absorbed arrow would show up as a type
+# mismatch on the argument rather than an arity error.
+foul repeatText(text: String, times: Integer) -> String do
+  return "" if times <= 0
+  return text + repeatText(text, times - 1)
+end
+
+foul withParam(times: Integer) -> Formatter do
+  return { |name| repeatText(name, times) }
+end
+
+# Taking one as a parameter has always worked; kept so the two directions are
+# checked together.
+foul applyTo(format: Formatter, text: String) -> String do
+  return format(text)
+end
+
+# Recursion still resolves the function's own name.
+foul countdown(n: Integer) -> String do
+  return "done" if n <= 0
+  return "${n} ${countdown(n - 1)}"
+end
+
+main do
+  let inline = inlineReturn()
+  IO.printLine(inline("direct"))
+
+  let aliased = aliasReturn()
+  IO.printLine(aliased("alias"))
+
+  let twice = withParam(2)
+  IO.printLine(twice("ab"))
+
+  IO.printLine(applyTo(inline, "param"))
+
+  # Called inside a nested lambda — the shape tey's docgen uses.
+  IO.printLine(["a", "b"].map { |item| inline(item) }.join(","))
+
+  IO.printLine(countdown(3))
+end

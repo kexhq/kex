@@ -1,0 +1,559 @@
+# Markdown → typed blocks → HTML.
+#
+# Docgen already had a Markdown *emitter* (Tey.Docgen.Markdown, model → md for
+# LLMs) and an RDoc parser for doc comments; neither reads a Markdown
+# document. This does, so hand-written prose can go through the same chrome as
+# the generated reference.
+#
+# The subset is what the kex.run guide pages actually use: YAML-ish
+# frontmatter, ATX headings, paragraphs, fenced code (```kex runs through the
+# highlighter), blockquotes, ordered and unordered lists with nesting, GFM
+# tables, thematic breaks, and inline code / bold / italics / links. It is
+# deliberately not CommonMark — there is no HTML passthrough, no reference
+# links, no setext headings — and anything it does not recognise stays a
+# paragraph rather than becoming an error.
+#
+# Nothing here knows about guides, books, or the kexhq site.
+
+module Tey.Docgen.Md do
+
+  # A document's frontmatter: the keys the prose pipeline reads. Unknown keys
+  # are parsed and ignored rather than rejected, so a page can carry metadata
+  # a later renderer will use.
+  record Frontmatter do
+    title : String = ""
+    description : String = ""
+    order : Integer = 0
+  end
+
+  # One item of a list: its own inline text, plus any blocks nested under it.
+  record ListItem do
+    text : String
+    children : [MdBlock]
+  end
+
+  type MdBlock =
+    | Heading(Integer, String)
+    | Paragraph(String)
+    | Code(String, String)
+    | Quote([MdBlock])
+    | Bullets([ListItem])
+    | Numbers([ListItem])
+    | Table([String], [[String]])
+    | Rule
+
+  record Document do
+    frontmatter : Frontmatter
+    blocks : [MdBlock]
+  end
+
+  # The whole job: text in, document out.
+  foul parse(text: String) -> Document do
+    let (front, body) = splitFrontmatter(text.replace("\r\n", "\n").split("\n"))
+    return Document { frontmatter: front, blocks: blocks(body) }
+  end
+
+  # Text in, HTML out — `parse` then `render`, which is all a caller wanting a
+  # page body needs.
+  foul toHtml(text: String) -> String do
+    return render(parse(text).blocks)
+  end
+
+  # --- frontmatter -------------------------------------------------------
+
+  # A leading `---` fence delimits frontmatter. Without one the document is
+  # all body, and every field takes its default.
+  foul splitFrontmatter(lines: [String]) -> (Frontmatter, [String]) do
+    if lines.first.or("").trim != "---"
+      return (Frontmatter {}, lines)
+    end
+    let rest = lines.drop(1)
+    match closingFence(rest, 0) do
+      None => (Frontmatter {}, lines)
+      Just(at) => do
+        let front = frontmatterOf(rest.take(at), Frontmatter {})
+        return (front, rest.drop(at + 1))
+      end
+    end
+  end
+
+  foul closingFence(lines: [String], index: Integer) -> Integer? do
+    return None if index >= lines.count
+    return Just(index) if lines.at(index).or("").trim == "---"
+    return closingFence(lines, index + 1)
+  end
+
+  foul frontmatterOf(lines: [String], accum: Frontmatter) -> Frontmatter do
+    if lines.empty?
+      return accum
+    end
+    let line = lines.first.or("")
+    let rest = lines.drop(1)
+    match line.indexOf(':') do
+      None => frontmatterOf(rest, accum)
+      Just(at) => do
+        let key = line.take(at).trim
+        let value = unquote(line.drop(at + 1).trim)
+        return frontmatterOf(rest, assign(accum, key, value))
+      end
+    end
+  end
+
+  foul assign(front: Frontmatter, key: String, value: String) -> Frontmatter do
+    return Frontmatter { ...front, title: value } if key == "title"
+    return Frontmatter { ...front, description: value } if key == "description"
+    return Frontmatter { ...front, order: Integer.parse(value).or(0) } if key == "order"
+    return front
+  end
+
+  foul unquote(value: String) -> String do
+    return value.drop(1).dropLast(1) if quoted?(value, "\"")
+    return value.drop(1).dropLast(1) if quoted?(value, "'")
+    return value
+  end
+
+  foul quoted?(value: String, mark: String) -> Bool do
+    return value.count >= 2 && value.startsWith?(mark) && value.endsWith?(mark)
+  end
+
+  # --- block structure ---------------------------------------------------
+
+  foul blocks(lines: [String]) -> [MdBlock] do
+    return blockLoop(lines, [])
+  end
+
+  # One pass over the lines, each branch consuming the whole construct it
+  # recognises and returning the lines it did not take.
+  foul blockLoop(lines: [String], accum: [MdBlock]) -> [MdBlock] do
+    if lines.empty?
+      return accum
+    end
+    let line = lines.first.or("")
+    if line.trim.empty?
+      return blockLoop(lines.drop(1), accum)
+    end
+    if fence?(line)
+      let (codeBlock, afterCode) = takeCode(lines)
+      return blockLoop(afterCode, accum + [codeBlock])
+    end
+    if rule?(line)
+      return blockLoop(lines.drop(1), accum + [Rule])
+    end
+    if headingLevel(line) > 0
+      let level = headingLevel(line)
+      return blockLoop(lines.drop(1), accum + [Heading(level, line.trim.drop(level).trim)])
+    end
+    if line.trim.startsWith?("> ") || line.trim == ">"
+      let (quoteBlock, afterQuote) = takeQuote(lines)
+      return blockLoop(afterQuote, accum + [quoteBlock])
+    end
+    if tableStart?(lines)
+      let (tableBlock, afterTable) = takeTable(lines)
+      return blockLoop(afterTable, accum + [tableBlock])
+    end
+    if bulletMarker(line) != "" || numberMarker(line) != ""
+      let (listBlock, afterList) = takeList(lines)
+      return blockLoop(afterList, accum + [listBlock])
+    end
+    let (paragraph, afterParagraph) = takeParagraph(lines)
+    return blockLoop(afterParagraph, accum + [paragraph])
+  end
+
+  foul fence?(line: String) -> Bool do
+    return line.trim.startsWith?("```")
+  end
+
+  # `---`, `***` or `___`, three or more, nothing else on the line. Checked
+  # after frontmatter is gone, so a stray `---` here really is a break.
+  foul rule?(line: String) -> Bool do
+    let t = line.trim
+    return false if t.count < 3
+    return ruleOf?(t, "-") || ruleOf?(t, "*") || ruleOf?(t, "_")
+  end
+
+  foul ruleOf?(text: String, mark: String) -> Bool do
+    return text.chars.all? { |c| c.to(String) == mark }
+  end
+
+  # `##` → 2. Zero when the line is not a heading; `#hashtag` is not one.
+  foul headingLevel(line: String) -> Integer do
+    let t = line.trim
+    let hashes = countHashes(t, 0)
+    return 0 if hashes == 0 || hashes > 6
+    return 0 if !t.drop(hashes).startsWith?(" ")
+    return hashes
+  end
+
+  foul countHashes(text: String, seen: Integer) -> Integer do
+    return seen if !text.startsWith?("#")
+    return countHashes(text.drop(1), seen + 1)
+  end
+
+  # --- fenced code -------------------------------------------------------
+
+  # The info string is the language. An unterminated fence runs to the end of
+  # the document rather than failing — a truncated page still renders.
+  foul takeCode(lines: [String]) -> (MdBlock, [String]) do
+    let language = lines.first.or("").trim.drop(3).trim
+    let rest = lines.drop(1)
+    let end? = closingCodeFence(rest, 0)
+    let body = rest.take(end?)
+    return (Code(language, body.join("\n")), rest.drop(end? + 1))
+  end
+
+  foul closingCodeFence(lines: [String], index: Integer) -> Integer do
+    return index if index >= lines.count
+    return index if fence?(lines.at(index).or(""))
+    return closingCodeFence(lines, index + 1)
+  end
+
+  # --- blockquotes -------------------------------------------------------
+
+  # `>` is stripped from each line and what remains is parsed as blocks, so a
+  # quote can hold anything a document can, nesting included.
+  foul takeQuote(lines: [String]) -> (MdBlock, [String]) do
+    let taken = lines.takeWhile { |line| quoteLine?(line) }
+    let inner = taken.map { |line| stripQuote(line) }
+    return (Quote(blocks(inner)), lines.drop(taken.count))
+  end
+
+  foul quoteLine?(line: String) -> Bool do
+    let t = line.trim
+    return t.startsWith?("> ") || t == ">"
+  end
+
+  foul stripQuote(line: String) -> String do
+    let t = line.trim
+    return "" if t == ">"
+    return t.drop(2)
+  end
+
+  # --- lists -------------------------------------------------------------
+
+  # Nesting is by indentation: a line indented past the first item's marker
+  # belongs to that item and is parsed as blocks in its own right, so a list
+  # can hold paragraphs, code and deeper lists.
+  foul takeList(lines: [String]) -> (MdBlock, [String]) do
+    let ordered? = numberMarker(lines.first.or("")) != ""
+    let taken = lines.takeWhile { |line| listLine?(line) }
+    let items = listItems(taken, indentOf(lines.first.or("")), [], [])
+    return (ordered? then Numbers(items) else Bullets(items), lines.drop(taken.count))
+  end
+
+  # A list continues through its own items, indented continuation lines, and
+  # blank lines — but a blank line followed by unindented text ends it, which
+  # is why the run is cut at the first line that is neither.
+  foul listLine?(line: String) -> Bool do
+    return true if line.trim.empty?
+    return true if bulletMarker(line) != "" || numberMarker(line) != ""
+    return indentOf(line) > 0
+  end
+
+  foul listItems(lines: [String], indent: Integer, current: [String],
+                 accum: [ListItem]) -> [ListItem] do
+    if lines.empty?
+      return flushItem(current, accum)
+    end
+    let line = lines.first.or("")
+    let rest = lines.drop(1)
+    let marker = itemMarker(line)
+    if marker != "" && indentOf(line) <= indent
+      let body = line.trim.drop(marker.count).trim
+      return listItems(rest, indent, [body], flushItem(current, accum))
+    end
+    return listItems(rest, indent, current + [line], accum)
+  end
+
+  # The first line is the item's own text; anything below it is nested
+  # content, dedented so it parses as a document of its own.
+  foul flushItem(current: [String], accum: [ListItem]) -> [ListItem] do
+    if current.empty?
+      return accum
+    end
+    let text = current.first.or("")
+    let nested = dedent(current.drop(1))
+    let trimmed = dropTrailingBlanks(nested)
+    return accum + [ListItem { text: text, children: blocks(trimmed) }]
+  end
+
+  foul dropTrailingBlanks(lines: [String]) -> [String] do
+    return lines if lines.empty?
+    return lines if !lines.last.or("").trim.empty?
+    return dropTrailingBlanks(lines.dropLast(1))
+  end
+
+  # Removes the common indent, so nested content is parsed at column zero.
+  foul dedent(lines: [String]) -> [String] do
+    let content = lines.reject { |line| line.trim.empty? }
+    return lines if content.empty?
+    let least = content.map { |line| indentOf(line) }.reduce(9999, { |a, b| a < b then a else b })
+    return lines.map { |line| line.trim.empty? then "" else line.drop(least) }
+  end
+
+  foul indentOf(line: String) -> Integer do
+    return line.count - line.trimStart.count
+  end
+
+  foul itemMarker(line: String) -> String do
+    let bullet = bulletMarker(line)
+    return bullet if bullet != ""
+    return numberMarker(line)
+  end
+
+  foul bulletMarker(line: String) -> String do
+    let t = line.trim
+    return "-" if t.startsWith?("- ")
+    return "*" if t.startsWith?("* ")
+    return "+" if t.startsWith?("+ ")
+    return ""
+  end
+
+  # "12. " → "12." ; anything else → "".
+  foul numberMarker(line: String) -> String do
+    let t = line.trim
+    let digits = t.chars.takeWhile { |c| c.digit? }.map { |c| c.to(String) }.join("")
+    return "" if digits.empty?
+    return "" if !t.drop(digits.count).startsWith?(". ")
+    return digits + "."
+  end
+
+  # --- tables ------------------------------------------------------------
+
+  # A GFM table is a header row and a delimiter row of dashes; without the
+  # delimiter the lines are ordinary paragraphs.
+  foul tableStart?(lines: [String]) -> Bool do
+    return false if lines.count < 2
+    return false if !lines.first.or("").contains?("|")
+    return delimiterRow?(lines.at(1).or(""))
+  end
+
+  foul delimiterRow?(line: String) -> Bool do
+    let t = line.trim
+    return false if !t.contains?("-")
+    return t.chars.all? { |c| delimiterChar?(c.to(String)) }
+  end
+
+  foul delimiterChar?(c: String) -> Bool do
+    return c == "-" || c == "|" || c == ":" || c == " "
+  end
+
+  foul takeTable(lines: [String]) -> (MdBlock, [String]) do
+    let header = cellsOf(lines.first.or(""))
+    let rest = lines.drop(2)
+    let bodyLines = rest.takeWhile { |line| line.contains?("|") && !line.trim.empty? }
+    let rows = bodyLines.map { |line| cellsOf(line) }
+    return (Table(header, rows), rest.drop(bodyLines.count))
+  end
+
+  # Leading and trailing pipes are optional, so the split is trimmed of the
+  # empty cells they produce.
+  foul cellsOf(line: String) -> [String] do
+    let t = line.trim
+    let inner = t.startsWith?("|") then t.drop(1) else t
+    let core = inner.endsWith?("|") then inner.dropLast(1) else inner
+    return core.split("|").map { |cell| cell.trim }
+  end
+
+  # --- paragraphs --------------------------------------------------------
+
+  # Runs to a blank line or to the start of any other construct, so a list or
+  # fence directly under prose is not swallowed into it.
+  foul takeParagraph(lines: [String]) -> (MdBlock, [String]) do
+    let taken = lines.takeWhile { |line| paragraphLine?(line) }
+    let body = taken.map { |line| line.trim }.join(" ")
+    return (Paragraph(body), lines.drop(taken.count))
+  end
+
+  foul paragraphLine?(line: String) -> Bool do
+    return false if line.trim.empty?
+    return false if fence?(line) || rule?(line)
+    return false if headingLevel(line) > 0
+    return false if quoteLine?(line)
+    return false if bulletMarker(line) != "" || numberMarker(line) != ""
+    return true
+  end
+
+  # --- rendering ---------------------------------------------------------
+
+  foul render(items: [MdBlock]) -> String do
+    return items.map { |block| renderBlock(block) }.join("\n")
+  end
+
+  foul renderBlock(block: MdBlock) -> String do
+    match block do
+      Heading(level, text) => do
+        let tag = "h${level}"
+        return "<${tag} id=\"${anchor(text)}\">${inline(text)}</${tag}>"
+      end
+      Paragraph(text) => "<p>${inline(text)}</p>"
+      Code(language, body) => renderCode(language, body)
+      Quote(inner) => "<blockquote>\n${render(inner)}\n</blockquote>"
+      Bullets(items) => "<ul>\n${renderItems(items)}\n</ul>"
+      Numbers(items) => "<ol>\n${renderItems(items)}\n</ol>"
+      Table(header, rows) => renderTable(header, rows)
+      Rule => "<hr>"
+    end
+  end
+
+  # Kex code goes through the same highlighter the reference pages use, so a
+  # snippet in the guide looks like a signature in the reference. Everything
+  # else is escaped and left plain.
+  foul renderCode(language: String, body: String) -> String do
+    if language == "kex" || language == ""
+      return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
+    end
+    return "<pre class=\"code\"><code class=\"language-${esc(language)}\">${esc(body)}</code></pre>"
+  end
+
+  foul renderItems(items: [ListItem]) -> String do
+    return items.map { |item| renderItem(item) }.join("\n")
+  end
+
+  foul renderItem(item: ListItem) -> String do
+    if item.children.empty?
+      return "<li>${inline(item.text)}</li>"
+    end
+    return "<li>${inline(item.text)}\n${render(item.children)}\n</li>"
+  end
+
+  foul renderTable(header: [String], rows: [[String]]) -> String do
+    let head = header.map { |cell| "<th>${inline(cell)}</th>" }.join("")
+    let body = rows.map { |row| renderRow(row) }.join("\n")
+    return "<div class=\"table-scroll\">\n<table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody>\n</table>\n</div>"
+  end
+
+  foul renderRow(row: [String]) -> String do
+    let cells = row.map { |cell| "<td>${inline(cell)}</td>" }.join("")
+    return "<tr>${cells}</tr>"
+  end
+
+  # A heading's id: lowercase, non-alphanumerics folded to single dashes.
+  foul anchor(text: String) -> String do
+    let lowered = stripInline(text).lowerCase
+    let mapped = lowered.chars.map { |c| anchorChar(c) }.join("")
+    return squeezeDashes(mapped, "").trim("-")
+  end
+
+  foul anchorChar(c: Char) -> String do
+    return c.to(String) if c.alphanumeric?
+    return "-"
+  end
+
+  foul squeezeDashes(text: String, accum: String) -> String do
+    return accum if text.empty?
+    let head = text.take(1)
+    if head == "-" && accum.endsWith?("-")
+      return squeezeDashes(text.drop(1), accum)
+    end
+    return squeezeDashes(text.drop(1), accum + head)
+  end
+
+  # Inline markers removed, for anchors and any other plain-text use.
+  foul stripInline(text: String) -> String do
+    return text.replace("`", "").replace("**", "").replace("*", "").replace("_", "")
+  end
+
+  # --- inline ------------------------------------------------------------
+
+  # Code spans first and separately: their content is escaped but never
+  # scanned for emphasis, so `a*b*c` inside backticks stays literal.
+  foul inline(text: String) -> String do
+    return inlineLoop(text, "")
+  end
+
+  foul inlineLoop(text: String, accum: String) -> String do
+    return accum if text.empty?
+    match text.indexOf('`') do
+      None => accum + emphasis(text)
+      Just(start) => do
+        let before = text.take(start)
+        let rest = text.drop(start + 1)
+        match rest.indexOf('`') do
+          None => accum + emphasis(text)
+          Just(stop) => do
+            let code = rest.take(stop)
+            return inlineLoop(rest.drop(stop + 1),
+                              accum + emphasis(before) + "<code>${esc(code)}</code>")
+          end
+        end
+      end
+    end
+  end
+
+  # Links before emphasis, so a `*` inside a URL is not read as a marker.
+  foul emphasis(text: String) -> String do
+    return links(text, "")
+  end
+
+  foul links(text: String, accum: String) -> String do
+    return accum if text.empty?
+    match text.indexOf('[') do
+      None => accum + marks(text)
+      Just(start) => do
+        let before = text.take(start)
+        let rest = text.drop(start + 1)
+        match linkParts(rest) do
+          None => accum + marks(text)
+          Just(parts) => do
+            let (label, href, tail) = parts
+            return links(tail, accum + marks(before) +
+                         "<a href=\"${esc(href)}\">${marks(label)}</a>")
+          end
+        end
+      end
+    end
+  end
+
+  # `label](href)` → (label, href, what follows). None when the shape is not
+  # a link after all, in which case the `[` is literal text.
+  foul linkParts(rest: String) -> (String, String, String)? do
+    match rest.indexOf(']') do
+      None => None
+      Just(close) => do
+        let label = rest.take(close)
+        let after = rest.drop(close + 1)
+        return None if !after.startsWith?("(")
+        match after.indexOf(')') do
+          None => None
+          Just(paren) => Just((label, after.drop(1).take(paren - 1), after.drop(paren + 1)))
+        end
+      end
+    end
+  end
+
+  # `**bold**` before `*italic*`, or the opening `**` would parse as an empty
+  # emphasis. Escaping happens here, on the text that is left.
+  foul marks(text: String) -> String do
+    return wrap(esc(text), "**", "strong", "*", "em")
+  end
+
+  foul wrap(text: String, strongMark: String, strongTag: String,
+            emMark: String, emTag: String) -> String do
+    let bolded = pairs(text, strongMark, strongTag, "")
+    return pairs(bolded, emMark, emTag, "")
+  end
+
+  # Replaces each surviving pair of markers with a tag. An unpaired marker is
+  # left as written rather than swallowing the rest of the line.
+  foul pairs(text: String, mark: String, tag: String, accum: String) -> String do
+    match text.indexOf(mark) do
+      None => accum + text
+      Just(start) => do
+        let before = text.take(start)
+        let rest = text.drop(start + mark.count)
+        match rest.indexOf(mark) do
+          None => accum + text
+          Just(stop) => do
+            let inner = rest.take(stop)
+            let tail = rest.drop(stop + mark.count)
+            return pairs(tail, mark, tag, accum + before + "<${tag}>${inner}</${tag}>")
+          end
+        end
+      end
+    end
+  end
+
+  foul esc(s: String) -> String do
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+  end
+end

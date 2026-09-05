@@ -87,12 +87,16 @@ foul parser -> OptionConfig do
     end
     # Docgen is part of Tey rather than a package: `tey test` and `tey docs`
     # are the same kind of thing — commands that must mean the same thing in
-    # every checkout, run against whatever toolchain is selected. What follows
-    # the command word is docgen's own vocabulary (build / serve and the
-    # options they take): OptionParser passes a command's own options through,
-    # so no `--` is needed — though the `--` spelling still works.
-    .command("docs", "<build|serve> [options]",
-             "generate or serve documentation for a source tree") do |options|
+    # every checkout, run against whatever toolchain is selected.
+    #
+    # `passthroughCommand` because everything after the command word is
+    # docgen's own vocabulary, parsed by its own OptionConfig. Without it
+    # only the names Tey does NOT declare reach docgen: `--package` is one
+    # Tey declares itself, so `tey docs build --package prelude` was eaten
+    # here and the stdlib published under the wrong name (kexhq/kex#287).
+    # No `--` is needed, though the `--` spelling still works.
+    .passthroughCommand("docs", "<build|serve> [options]",
+                        "generate or serve documentation for a source tree") do |options|
       Tey.Docgen.Cli.dispatch(options.arguments)
     end
     .command("clean", "[--cache]", "inspect or remove the global cache") do |options|

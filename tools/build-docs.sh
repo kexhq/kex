@@ -37,33 +37,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# build_docs <source-dir> <package> <label> [version]
+# Failures of the UNRELEASED builds are fatal (see the end of this script).
+# Old tags are not: they are parsed by the CURRENT compiler, so a release
+# whose sources no longer parse is expected and only skipped.
+unreleased_failed=0
+
+# build_docs <source-dir> <package> <label> <version>
 #
-# The version passed is the PACKAGE's own version story: prelude versions are
-# Kex releases (the stdlib ships with the compiler), tey versions are read
-# from that tag's tey/package.kex. The unreleased tey build passes no version
-# and lets docgen default it from tey/package.kex in the CWD.
+# The version is the PACKAGE's own version story, and is always passed: prelude
+# versions are Kex releases (the stdlib ships with the compiler), tey versions
+# come from that checkout's tey/package.kex. Docgen can read a name and version
+# out of a package.kex in the CWD, but this script never leans on that — the
+# stdlib is not a package, and a driver that states the identity cannot file
+# pages under the wrong one when it is run from somewhere unexpected.
 build_docs() {
-  local source="$1" package="$2" label="$3" version="${4:-}"
+  local source="$1" package="$2" label="$3" version="$4"
   if [ ! -d "$source" ]; then
     echo "build-docs: skip $package (no $source)"
     return 0
   fi
-  local args=(docs build --source "$source" --out "$OUT" --package "$package" --label "$label")
+  local args=(docs build --source "$source" --out "$OUT" --package "$package" \
+              --label "$label" --release "$version")
   if [ -n "${BASE_URL:-}" ]; then
     args+=(--base-url "$BASE_URL")
   fi
-  if [ -n "$version" ]; then
-    args+=(--release "$version")
-  fi
   echo "build-docs: $package $version"
-  "$TEY_RUN" "${args[@]}" || \
-    echo "build-docs: WARNING $package $version failed — keeping previous output" >&2
+  "$TEY_RUN" "${args[@]}"
+}
+
+# A released tag that no longer parses is skipped with a warning; the site
+# keeps whatever that version's pages already were.
+build_tag_docs() {
+  build_docs "$@" || \
+    echo "build-docs: WARNING $2 $4 failed — keeping previous output" >&2
 }
 
 # tey's own version as declared by a checkout's tey/package.kex.
 tey_version() {
   sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/tey/package.kex" | head -1
+}
+
+# The compiler's version, which is what a prelude/stdlib "release" means.
+kex_version() {
+  sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/package.kex" | head -1
 }
 
 if [ -z "${SKIP_TAGS:-}" ]; then
@@ -74,28 +90,37 @@ if [ -z "${SKIP_TAGS:-}" ]; then
       echo "build-docs: WARNING cannot worktree $tag — skipped" >&2
       continue
     }
-    build_docs "$wt/src/stdlib" prelude "Standard Library" "$version"
-    build_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
+    build_tag_docs "$wt/src/stdlib" prelude "Standard Library" "$version"
+    build_tag_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
     git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
   done
 fi
 
-# The unreleased builds. Prelude's version is the compiler's (the working
-# tree's package.kex tracks it). Tey's comes from its own manifest via
-# docgen's default, so that build runs from inside tey/ — but as a distinct
-# "-dev" release, so an unreleased build cannot overwrite the released docs
-# of the same version number.
-build_docs "$ROOT/src/stdlib" prelude "Standard Library"
-(cd "$ROOT/tey" && "$TEY_RUN" docs build --out "$OUT" \
-  ${BASE_URL:+--base-url "$BASE_URL"} \
-  --release "$(tey_version "$ROOT")-dev") || \
-  echo "build-docs: WARNING tey unreleased failed — keeping previous output" >&2
+# The unreleased builds, from the working tree as it stands. Both carry a
+# "-dev" release so an unreleased build can never overwrite the published
+# pages of the same version number.
+#
+# These two are FATAL. They are the ones that break when docgen or the
+# sources they read regress, and the previous version of this script masked
+# every failure behind a warning — which is how a crash on startup, a
+# swallowed --package and a broken HTML emitter all shipped unnoticed
+# (kexhq/kex#287, #288, #289). A tag that no longer parses is still tolerated
+# above; this is not.
+build_docs "$ROOT/src/stdlib" prelude "Standard Library" \
+  "$(kex_version "$ROOT")-dev" || unreleased_failed=1
+build_docs "$ROOT/tey/src" tey "Tey" "$(tey_version "$ROOT")-dev" || \
+  unreleased_failed=1
 
 # Static site assets docgen does not own — the favicon, the kexhq GitHub org
 # icon. Copied here rather than generated, so docgen stays a documentation
 # generator and the branding lives in the output.
 if [ -f "$ROOT/tools/docs-assets/icon.png" ]; then
   cp "$ROOT/tools/docs-assets/icon.png" "$OUT/icon.png"
+fi
+
+if [ "$unreleased_failed" -ne 0 ]; then
+  echo "build-docs: FAILED — the unreleased build did not complete" >&2
+  exit 1
 fi
 
 echo "build-docs: done -> $OUT"

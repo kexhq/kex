@@ -1,3 +1,4 @@
+.PHONY: docs
 .PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
@@ -41,6 +42,7 @@ help:
 	@echo "  make build-tey    Compile Tey with the freshly built kex"
 	@echo "  make tey-run      Write ./tey-run, a Tey launcher for this checkout"
 	@echo "  make spec-tey     Run Tey own spec suite (requires erlc)"
+	@echo "  make docs         Build the docs site for this checkout into ../kdocs"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
@@ -533,3 +535,15 @@ tey-run: tey/bin/tey Makefile
 	  'exec "$$ROOT/tey/bin/tey" "$$@"' > $@
 	@chmod +x $@
 	@echo "Wrote ./tey-run (TEY_EBIN=tey/ebin, TEY_KEX=$(KEX), TEY_ERL=$(ERL))"
+
+# The documentation site for THIS checkout, unreleased versions only — the
+# every-tag rebuild is what CI runs (.github/workflows/docs.yml), and that
+# needs a full git history plus a worktree per tag. Output defaults to
+# ../kdocs; pass a directory as O= to put it elsewhere.
+#
+# Both the stdlib and Tey are built. Neither is discovered: the stdlib is not
+# a Tey package at all, so tools/build-docs.sh states each one's name and
+# version explicitly rather than letting docgen read a package.kex that
+# happens to be in the current directory (see the comments there).
+docs: build-tey
+	@SKIP_TAGS=1 tools/build-docs.sh $(O)

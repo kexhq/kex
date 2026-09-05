@@ -2842,7 +2842,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     auto returnType = declared    ? declared->result
                     : inlineReturnType ? inlineReturnType
                     : freshTypeVar();
-    defineVar(def.name, returnType);
+    // The function name is deliberately NOT bound as a variable here. It used
+    // to be defined as its own RETURN type, which made a function that
+    // returns a function indistinguishable from that returned function: the
+    // call-resolution path below looks a name up as a local FuncType binding
+    // before consulting registered signatures, so `foul mk() -> (String ->
+    // String)` resolved `mk()` against the CLOSURE's arity and reported
+    // "`mk` expects 1 argument(s), got 0" (kexhq/kex#288). Calls resolve
+    // through m_functionSignatures, so nothing needs the binding.
 
     // A concrete annotation on one clause is the public parameter contract
     // for sibling pattern clauses too (`factorial(0)` beside
