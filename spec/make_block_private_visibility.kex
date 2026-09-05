@@ -1,0 +1,42 @@
+# `private` inside a `make` block means "only callable within that make"
+# (docs/modules.md). Nothing enforced it: the module-level `private do ... end`
+# stamped its symbols unexported, the identical branch inside a `make` block
+# collected the functions and dropped the visibility — and both backends erase
+# visibility entirely, so a private method was an ordinary function to them.
+# It travelled with the type into every importer, which is the OTHER half of
+# the inversion the report describes (kexhq/kex#281).
+module Shelf do
+  record Book do
+    title : String
+  end
+
+  make Book do
+    # Reaches the private sibling — that direction has to keep working.
+    let display() = decorate(@title)
+    let alsoDisplay() = this.decorate(@title)
+
+    private do
+      let decorate(text: String) = "<<${text}>>"
+    end
+
+    let public?() = true
+  end
+end
+
+module Reader do
+  using Shelf
+
+  # A public method of another module's type is reachable.
+  let show(b: Shelf.Book) = b.display
+
+  # ...and so is one declared outside any visibility block.
+  let ok?(b: Shelf.Book) = b.public?
+end
+
+main do
+  let b = Shelf.Book { title: "Dune" }
+  IO.printLine(b.display)
+  IO.printLine(b.alsoDisplay)
+  IO.printLine(Reader.show(b))
+  IO.printLine("${Reader.ok?(b)}")
+end

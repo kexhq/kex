@@ -147,6 +147,7 @@ private:
     auto registerMakeSignature(const ast::MakeDef& def,
                                const std::string& modulePath) -> void;
     auto makeModuleVisible(const std::string& module) const -> bool;
+    auto withinModule(const std::string& module) const -> bool;
     auto reportUnknownMethods() -> void;
     auto publishQualifiedSignatures(const std::string& name,
                                     const std::vector<Signature>& signatures) -> void;
@@ -316,6 +317,17 @@ private:
         m_makeImports;
     std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
         m_mainImports;
+    // Every module path any `using` in this program names, wherever it sits.
+    // `reportUnknownMethods` is a whole-program pass, so a file-wide union is
+    // the right granularity: it only ever decides whether a module's members
+    // COULD be in scope, and a union can only make that answer more generous.
+    std::unordered_set<std::string> m_importedModulePaths;
+    // `"Receiver#method"` -> the module whose `make` block declared it inside a
+    // `private do ... end`. Such a method is callable only from within that
+    // module; `docs/modules.md` says so, and nothing enforced it — a private
+    // make method travelled with the type into every importer
+    // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+    std::unordered_map<std::string, std::string> m_privateMakeMethods;
     int m_nextTypeVar = 0;
     // `m_nextTypeVar` as it stood when the clause being checked started, so a
     // variable can be told apart from one an enclosing — or an already

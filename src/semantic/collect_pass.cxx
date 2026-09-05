@@ -430,6 +430,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                 collectMakeAnnotation(*ptr);
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
                 for (const auto& vitem : ptr->items) {
+                    const auto firstNewSymbol = m_state->symbols.size();
                     std::visit([&](const auto& vptr) {
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
@@ -440,6 +441,15 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                             collectMakeAnnotation(*vptr);
                         }
                     }, vitem);
+                    // `private` in a `make` block means "only callable within
+                    // that make" (docs/modules.md), and nothing recorded it:
+                    // the module-level visibility block set `isExported`, this
+                    // one did not, so a private method travelled with the type
+                    // and any other module could call it
+                    // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+                    for (size_t i = firstNewSymbol;
+                         i < m_state->symbols.size(); ++i)
+                        m_state->symbols[i].isExported = ptr->isPublic;
                 }
             }
         }, item);

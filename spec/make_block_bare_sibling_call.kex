@@ -1,0 +1,72 @@
+# A bare call inside a `make` block naming one of that block's own methods.
+#
+# The receiver is implicit at the CALL SITE exactly as it is in the
+# definition, so `decorate(@name)` means `this.decorate(@name)`. Without it a
+# method could not reach a sibling — or itself recursively — without spelling
+# `this.`, and the attempt failed late and opaquely: "Undefined function:
+# decorate" in the walker, `undefined function decorate/1 in shouted/1` from
+# erlc on BEAM, with the type checker raising nothing either way
+# (kexhq/kex#281).
+#
+# The `private do ... end` framing in the original report was a red herring:
+# a public sibling failed identically.
+record Thing do
+  name : String
+end
+
+record Counter do
+  n : Integer
+end
+
+record Tag do
+  label : String
+end
+
+record Note do
+  body : String
+end
+
+make Thing do
+  let shouted() = decorate(@name)
+  let quiet() = this.decorate(@name)
+
+  private do
+    let decorate(text: String) = "<<${text}>>"
+  end
+end
+
+make Counter do
+  # Recursion through the bare name, which is the shape most likely to be
+  # written without thinking about receivers at all.
+  let countdown(k: Integer) = k <= 0 then "done ${@n}" else countdown(k - 1)
+end
+
+make Tag do
+  # A method written with an EXPLICIT `@` receiver takes it as an ordinary
+  # first argument, so a bare call supplies it positionally. That always
+  # worked and must keep working.
+  let shout(@t) = "${t.label}!"
+  let twice() = "${shout(this)} ${shout(this)}"
+end
+
+# A free function that a method's bare call could also mean. It wins: this
+# resolution only fills in where the bare name previously reached NOTHING, so
+# no existing call changes meaning.
+let wrap(text: String) = "[${text}]"
+
+make Note do
+  let wrap(text: String) = "{${text}}"
+  let framed() = wrap(@body)
+  let framedByMethod() = this.wrap(@body)
+end
+
+main do
+  IO.printLine(Thing { name: "a" }.shouted)
+  IO.printLine(Thing { name: "b" }.quiet)
+  IO.printLine(Counter { n: 7 }.countdown(3))
+  IO.printLine(shout(Tag { label: "hi" }))
+  IO.printLine(Tag { label: "x" }.twice)
+  IO.printLine(Note { body: "n" }.framed)
+  IO.printLine(Note { body: "n" }.framedByMethod)
+  IO.printLine(wrap("free"))
+end

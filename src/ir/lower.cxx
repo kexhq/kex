@@ -528,6 +528,11 @@ struct Lowering {
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
     std::unordered_set<std::string> knownFns;
+    // "name/arity" for every function DEFINED in this unit, at the arity it is
+    // emitted with — a make method's counts its receiver. `knownFns` is
+    // name-only, so it cannot tell a bare call that matches no definition's
+    // arity from one that does.
+    std::unordered_set<std::string> definedFnArities;
     // Qualified Kex module function (`Util.Math.double`) -> local BEAM name.
     // Modules in a single source file still flatten into one BEAM module, so
     // this preserves qualification without a cross-module call.
@@ -548,6 +553,12 @@ struct Lowering {
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
+    // The emitted symbol of the function being lowered right now. A module
+    // constant must not resolve to ITSELF from inside its own body: `let
+    // Monday = Monday` in `module Days` aliases the OUTER `Monday`, and
+    // resolving the right-hand side to `Days.Monday/0` makes it read itself
+    // forever (spec/module_self_alias.kex).
+    std::string currentFunctionSymbol;
     // Declared types of the parameters in scope, by source name — the
     // annotation a call site cannot see. Saved and restored per clause.
     std::unordered_map<std::string, std::string> declaredParamTypes;
@@ -823,6 +834,15 @@ struct Lowering {
         e->node = localCall(name, std::move(args));
         return e;
     }
+    // Does `typeName`'s make block define `method` in this compilation unit?
+    auto ownsMethod(const std::string& typeName,
+                    const std::string& method) const -> bool {
+        auto owners = methodOwners.find(method);
+        if (owners == methodOwners.end()) return false;
+        return std::find(owners->second.begin(), owners->second.end(),
+                         typeName) != owners->second.end();
+    }
+
     auto localCall(const std::string& name, std::vector<ExprPtr> args)
         -> Call {
         if (callNeedsContext(name, static_cast<int>(args.size())))
@@ -1157,7 +1177,8 @@ struct Lowering {
             if (moduleZeroArgFns.count(qualified))
                 if (auto emitted = moduleFunctions.find(qualified);
                     emitted != moduleFunctions.end())
-                    return emitted->second;
+                    return emitted->second == currentFunctionSymbol
+                        ? std::string{} : emitted->second;
             const auto dot = scope.rfind('.');
             if (dot == std::string::npos) break;
             scope.resize(dot);
@@ -1213,12 +1234,25 @@ struct Lowering {
                 return lit(LitKind::None, "none");
             } else if constexpr (std::is_same_v<T, ast::Identifier>) {
                 // A bare reference to a top-level `let` constant (not shadowed
-                // by a local) is a call to its 0-arity function.
-                if (!subst.count(n.name) &&
-                    (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
-                    auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(n.name, {});
-                    return ex;
+                // by a local) is a call to its 0-arity function. A MODULE's own
+                // constant counts: `let EARLIEST_YEAR = 1450` inside `module
+                // Draft` is `Draft.EARLIEST_YEAR/0`, and a sibling function
+                // referring to it unqualified must reach that, not the
+                // constructor fallback below (rodolfo docs/kex-issues.md #14,
+                // kexhq/kex#282).
+                if (!subst.count(n.name)) {
+                    if (topLevelConstants.count(n.name) ||
+                        zeroArgFns.count(n.name)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(n.name, {});
+                        return ex;
+                    }
+                    if (auto symbol = moduleConstantSymbol(n.name);
+                        !symbol.empty()) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(symbol, {});
+                        return ex;
+                    }
                 }
                 // Uppercase bare name not a known constant → nullary ADT
                 // constructor (matching the UpperIdentifier path). Without
@@ -1247,12 +1281,25 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
                 // An all-caps top-level constant (e.g. DEFAULT_LEVEL, defined
                 // via `let NAME = value` → a 0-arity function) is a call, not a
-                // nullary ADT constructor.
-                if (!subst.count(n.name) &&
-                    (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
-                    auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(n.name, {});
-                    return ex;
+                // nullary ADT constructor. A MODULE's own constant is the same
+                // thing one scope in: without this, `"${EARLIEST_YEAR}"` inside
+                // `module Draft` became the atom 'EARLIEST_YEAR' and died with
+                // `Undefined function: EARLIEST_YEAR.showValue`, while the
+                // walker read the binding (rodolfo docs/kex-issues.md #14,
+                // kexhq/kex#282).
+                if (!subst.count(n.name)) {
+                    if (topLevelConstants.count(n.name) ||
+                        zeroArgFns.count(n.name)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(n.name, {});
+                        return ex;
+                    }
+                    if (auto symbol = moduleConstantSymbol(n.name);
+                        !symbol.empty()) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(symbol, {});
+                        return ex;
+                    }
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
@@ -2295,6 +2342,25 @@ struct Lowering {
         // named prelude methods; see lowerMethodCall.
         else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
             ex->node = localCall(imp->second, std::move(args));
+        // A bare call inside a `make` block naming one of its own methods.
+        // The receiver is implicit at the call site exactly as it is in the
+        // definition, so `decorate(@name)` means `this.decorate(name)` — which
+        // is what lets a method call a sibling, or itself recursively, without
+        // spelling `this.` (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+        //
+        // Ahead of `knownFns` because that set is name-only and already holds
+        // every make method: `decorate` looked defined, so the call was
+        // emitted as `decorate/1`, which nothing defines and erlc rejected.
+        // Only when NO definition answers at the written arity, so an ordinary
+        // function of the same name still wins.
+        else if (!currentMakeType.empty() && subst.count("this") &&
+                 !definedFnArities.count(n.name + "/" + std::to_string(arity)) &&
+                 definedFnArities.count(n.name + "/" +
+                                        std::to_string(arity + 1)) &&
+                 ownsMethod(currentMakeType, n.name)) {
+            args.insert(args.begin(), var(currentName("this")));
+            ex->node = localCall(n.name, std::move(args));
+        }
         else if (knownFns.count(n.name))
             ex->node = localCall(n.name, std::move(args));
         else if (subst.count(n.name))
@@ -2634,14 +2700,39 @@ struct Lowering {
                 std::vector<Binding> binds;
                 auto state = atomize(n.args[0], binds);
                 std::vector<ExprPtr> slotAtoms;
+                // The module holding the slot dispatchers. A serving block at
+                // the top level compiles into the entry module; one inside
+                // `module Store` compiles into `Kex.Store`, and naming the
+                // entry module there sent every call to a module that defines
+                // no slots (rodolfo docs/kex-issues.md #2).
+                std::string servingModule = outputModule;
                 if (expressionTypes) {
                     auto found = expressionTypes->find(n.args[0].get());
                     if (found != expressionTypes->end() && found->second) {
-                        const auto stateType = semantic::typeToString(found->second);
-                        if (auto slots = servingSlotsByType.find(stateType);
+                        auto stateType = semantic::typeToString(found->second);
+                        if (auto angle = stateType.find('<');
+                            angle != std::string::npos)
+                            stateType.resize(angle);
+                        // The slot registry is keyed by the make target AS
+                        // WRITTEN, which inside a module is the bare name,
+                        // while the checker types the spawned state by its
+                        // qualified identity — so `Store.Counter` found
+                        // nothing and the server started with an EMPTY slot
+                        // list, answering `{unknown_serving_slot, get}` to
+                        // its first call.
+                        auto key = stateType;
+                        if (!servingSlotsByType.count(key))
+                            if (auto dot = stateType.rfind('.');
+                                dot != std::string::npos)
+                                key = stateType.substr(dot + 1);
+                        if (auto slots = servingSlotsByType.find(key);
                             slots != servingSlotsByType.end())
                             for (const auto& slot : slots->second)
                                 slotAtoms.push_back(lit(LitKind::Atom, slot));
+                        if (auto declaring = localTypeModules.find(key);
+                            declaring != localTypeModules.end())
+                            servingModule =
+                                mangleModulePath("Kex." + declaring->second);
                     }
                 }
                 auto allowedSlots = std::make_unique<Expr>();
@@ -2650,7 +2741,7 @@ struct Lowering {
                     binds,
                     callE("kex_intrinsic_process", "spawnServing", 3,
                           three(std::move(state),
-                                lit(LitKind::Atom, outputModule),
+                                lit(LitKind::Atom, servingModule),
                                 std::move(allowedSlots))));
             }
         }
@@ -3640,8 +3731,15 @@ struct Lowering {
             // Every module and variant lookup above has already missed by the
             // time we get here, so a name that is a known local value can only
             // be the value.
+            // A MODULE's own constant is the same thing one scope in:
+            // `"${EARLIEST_YEAR}"` inside `module Draft` is a `showValue`
+            // call on the binding, and reading the receiver as a module name
+            // reported `Undefined function: EARLIEST_YEAR.showValue`
+            // (rodolfo docs/kex-issues.md #14, kexhq/kex#282).
             const bool topLevelBindingReceiver =
-                zeroArgFns.count(uid->name) || topLevelConstants.count(uid->name);
+                zeroArgFns.count(uid->name) ||
+                topLevelConstants.count(uid->name) ||
+                !moduleConstantSymbol(uid->name).empty();
             if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
@@ -6035,6 +6133,8 @@ struct Lowering {
         def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
+        auto savedFunctionSymbol = currentFunctionSymbol;
+        currentFunctionSymbol = def.name;
         // Do the clauses in this group differ in their declared parameter
         // types? Only then is a guard wanted — a plain multi-clause function
         // discriminates with patterns and must be left alone.
@@ -6210,6 +6310,7 @@ struct Lowering {
         }
         traitDictionaries = std::move(savedTraitDictionaries);
         currentModulePath = std::move(savedModulePath);
+        currentFunctionSymbol = std::move(savedFunctionSymbol);
         return def;
     }
     auto lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName = "")
@@ -7883,6 +7984,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             const auto arity = std::to_string(fd.clauses[0].params.size());
             if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
             definedFnArities.insert(fd.name + "/" + arity);
+            L.definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
         if (!fd.clauses.empty()) {
@@ -7979,6 +8081,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // routes through (kexhq/kex#181).
             if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
+                fd->name + "/" + std::to_string(beamArity(fd)));
+            L.definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->isFoul)
                 L.pureFnArities.insert(
@@ -9537,12 +9641,30 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
                             def.sourceName};
 
+    // Serving slots stay in the module that declares them. The distribution
+    // below routes a function to whichever module `definitions` says owns its
+    // NAME, and a slot's name is ordinary — `add` is also `Net.HTTP.Headers`'s.
+    // So compiling a program that merely imports Net.HTTP moved the top-level
+    // `add` slot into Net.HTTP's module, and the serving process, which
+    // applies `Module:add(State, …)` against its OWN module, got
+    // `{'function not exported', {…, add, 3}}` (rodolfo docs/kex-issues.md #1).
+    std::unordered_set<std::string> topLevelServingSlots;
+    for (const auto& item : prog.items)
+        if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+            make && *make && (*make)->isServing)
+            for (const auto& member : (*make)->body)
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
+                    fn && *fn && (*fn)->isSlot)
+                    topLevelServingSlots.insert((*fn)->name);
+
     std::vector<Module> result;
     std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;
     std::vector<FunDef> globalFunctions;
     for (auto& fn : flat.functions) {
         auto found = definitions.find(fn.name);
-        if (found == definitions.end()) {
+        if (found == definitions.end() ||
+            topLevelServingSlots.count(fn.name)) {
             globalFunctions.push_back(std::move(fn));
             continue;
         }
