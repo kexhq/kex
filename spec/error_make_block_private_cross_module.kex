@@ -1,0 +1,24 @@
+# A `private` method of a `make` block, called from ANOTHER module.
+#
+# `docs/modules.md`: "`private` in a `make` block — only callable within that
+# `make`". Both backends erase visibility — a private method is an ordinary
+# function to them — so the checker is the only place this can be caught, and
+# it was not catching it: the call compiled and ran (kexhq/kex#281).
+module Shelf do
+  record Book do
+    title : String
+  end
+
+  make Book do
+    let display() = decorate(@title)
+
+    private do
+      let decorate(text: String) = "<<${text}>>"
+    end
+  end
+end
+
+main do
+  let b = Shelf.Book { title: "Dune" }
+  IO.printLine(b.decorate("direct"))
+end

@@ -1733,6 +1733,19 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     } pathRestore{m_currentModulePath, previousModulePath};
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
+    // Record which of these methods a `private do ... end` block hides, now
+    // that the receiver type has a name to key them by.
+    if (auto* named = std::get_if<NamedType>(&receiver->kind))
+        for (const auto& item : def.body)
+            if (const auto* visibility =
+                    std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                visibility && *visibility && !(*visibility)->isPublic)
+                for (const auto& inner : (*visibility)->items)
+                    if (const auto* vfn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner);
+                        vfn && *vfn)
+                        m_privateMakeMethods.emplace(
+                            named->name + "#" + (*vfn)->name, modulePath);
     std::unordered_set<std::string> slotNames;
     if (def.isServing)
         for (const auto& item : def.body)
@@ -3269,6 +3282,14 @@ auto TypeChecker::publishQualifiedSignatures(
 // Before this, a `make` inside a module was visible everywhere with no `using`
 // at all — the one module member that was not import-gated
 // (docs/ufcs-dispatch-plan.md "Follow-up", case 1).
+// Is the code being checked inside `module`, or inside one nested within it?
+// An empty owner is the top level, which everything in the file shares.
+auto TypeChecker::withinModule(const std::string& module) const -> bool {
+    if (module.empty()) return true;
+    return m_currentModulePath == module ||
+           m_currentModulePath.rfind(module + ".", 0) == 0;
+}
+
 auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
     if (module.empty()) return true;
     // Inside the defining module, or one nested within it.
@@ -7365,6 +7386,27 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
                 m_resolvedCalls[methodCall] = std::move(target);
             } else if (winnerIsMakeMethod) {
+                // `private do ... end` inside a `make` block means "only
+                // callable within that make" (docs/modules.md). Enforced here
+                // because visibility is erased by both backends: a private
+                // method is an ordinary function to them, so nothing stopped
+                // another module from calling one
+                // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+                if (!matched.params.empty())
+                    if (auto* owner = std::get_if<NamedType>(
+                            &resolve(matched.params.front())->kind)) {
+                        auto hidden =
+                            m_privateMakeMethods.find(owner->name + "#" + name);
+                        if (hidden != m_privateMakeMethods.end() &&
+                            !withinModule(hidden->second))
+                            error(methodCall->receiver->location,
+                                  "`" + name + "` is private to `make " +
+                                  owner->name + "`" +
+                                  (hidden->second.empty()
+                                       ? std::string{}
+                                       : " in `" + hidden->second + "`") +
+                                  " — it is only callable inside that block");
+                    }
                 ResolvedCallTarget target;
                 target.backendFunction = name;
                 target.backendArity = static_cast<int>(matched.params.size());
