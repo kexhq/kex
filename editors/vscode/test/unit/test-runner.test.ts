@@ -58,12 +58,12 @@ describe('kexTestArgs', () => {
       ['--no-colors', '--test-list', SPEC]);
   });
 
-  // The compiler tree-walks by default, so here `auto` is the walker — the
-  // opposite of Tey's default, and the reason `auto` is not a single flag.
-  test('tree-walks unless the BEAM was asked for', () => {
+  // The compiler runs on the BEAM by default, so here `auto` is the BEAM —
+  // the same as Tey's default. Only the walker needs a flag.
+  test('runs on the BEAM unless the walker was asked for', () => {
     expect(kexTestArgs(SPEC, 'json', [], 'auto')).not.toContain('-R');
-    expect(kexTestArgs(SPEC, 'json', [], 'walker')).not.toContain('-R');
-    expect(kexTestArgs(SPEC, 'json', [], 'beam')[0]).toBe('-R');
+    expect(kexTestArgs(SPEC, 'json', [], 'beam')).not.toContain('-R');
+    expect(kexTestArgs(SPEC, 'json', [], 'walker')[0]).toBe('-R');
   });
 
   test('repeats --test-only, which takes as many as asked', () => {

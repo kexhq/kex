@@ -5,7 +5,7 @@
 # a declared type bought nothing — `let n: Integer = M.lines("x")` passed with
 # `lines : String -> [String]?` in plain sight.
 #
-# This is also why `-c`/`-R` used to miss type errors `-C`/run caught: those
+# This is also why `-c` and the BEAM run used to miss type errors `-C` caught: those
 # paths merge dependency module SOURCES into the program, and the merged
 # functions lost their declared results.
 module M do

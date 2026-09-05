@@ -1544,7 +1544,7 @@ end
 
 > **Backend note:** the interpreter supports only `restart: :only_crashed`. The
 > `:all` and `:crashed_and_newer` strategies require the BEAM backend
-> (`kex -R`) and produce an `Error` on the interpreter.
+> (the default runner) and produce an `Error` on the interpreter.
 
 ---
 
@@ -2245,9 +2245,10 @@ end
 
 Kex targets two backends:
 
-- **Tree-walking interpreter** (default) — runs directly: `kex file.kex`
-- **BEAM (Core Erlang)** — compiles to `.core` then `.beam`:
-  `kex -c file.kex` (compile) or `kex -R file.kex` (compile + run on BEAM)
+- **BEAM (Core Erlang)** (default) — compiles to `.core`, then to `.beam`, and
+  runs it: `kex file.kex`, or `kex -c file.kex` to compile without running
+- **Tree-walking interpreter** — `kex -R file.kex` runs a program on it, and
+  `kex -i` opens a REPL on it
 
 Both backends support the full language. The BEAM backend provides real
 Erlang-level concurrency, distribution, and all supervisor restart strategies;
@@ -2256,10 +2257,11 @@ the interpreter supports `restart: :only_crashed` only.
 ### CLI
 
 ```
-kex file.kex            # run on interpreter (default)
+kex file.kex            # run on BEAM (default)
+kex                     # interactive BEAM REPL
 kex -c file.kex         # compile to BEAM (.beam)
-kex -R file.kex         # run on BEAM
-kex -i                  # interactive REPL
+kex -R file.kex         # run on the tree-walk interpreter
+kex -i                  # interactive tree-walk REPL
 kex -C file.kex         # semantic check only
 kex -n file.kex         # skip semantic check
 kex -p file.kex         # print AST

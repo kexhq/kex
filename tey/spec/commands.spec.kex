@@ -9,14 +9,14 @@ using Tey.Commands
 # the artifact that ships.
 describe("Tey.Commands.backendFlags") do
   it("compiles and runs on the BEAM by default") do
-    assert(Tey.Commands.backendFlags(false) == ["-R"])
+    # `kex` with no backend flag IS the BEAM, so the default adds nothing.
+    assert(Tey.Commands.backendFlags(false) == [])
   end
 
-  it("passes nothing extra under --interpret") do
-    # The escape hatch, for a backend gap or a debugging session: without a
-    # flag the toolchain tree-walks the source, which is what it did for
-    # everything before this.
-    assert(Tey.Commands.backendFlags(true) == [])
+  it("asks for the tree-walker under --interpret") do
+    # The escape hatch, for a backend gap or a debugging session: `-R` is what
+    # tree-walks the source instead of compiling it.
+    assert(Tey.Commands.backendFlags(true) == ["-R"])
   end
 end
 

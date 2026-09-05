@@ -43,7 +43,7 @@ describe("Tey plugin update transaction integration") do
 
   it("leaves the old lock untouched when changed resources are declined") do
     let install = Process.run("sh", ["-c",
-      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" -R --no-colors --source-root \"$4\" install.kex < yes",
+      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" --no-colors --source-root \"$4\" install.kex < yes",
       "tey-plugin-update-spec", root, compiler, "${root}/cache", sources]).try
     assert(install.exitCode == 0, install.stderr)
     let before = FS.File.read("${root}/tey.lock").try
@@ -57,7 +57,7 @@ describe("Tey plugin update transaction integration") do
       end
     `)
     let update = Process.run("sh", ["-c",
-      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" -R --no-colors --source-root \"$4\" update.kex < no",
+      "cd \"$1\" && TEY_KEX=\"$2\" TEY_CACHE=\"$3\" exec \"$2\" --no-colors --source-root \"$4\" update.kex < no",
       "tey-plugin-update-spec", root, compiler, "${root}/cache", sources]).try
     assert(update.exitCode != 0, "declined plugin update succeeded")
     assert(FS.File.read("${root}/tey.lock").try == before,

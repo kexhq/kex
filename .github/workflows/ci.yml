@@ -254,7 +254,7 @@ jobs:
           printf 'main do\n  IO.printLine("ok")\nend\n' > /tmp/smoke.kex
           docker run --rm kex:alpine --version
           [ "$(docker run --rm -v /tmp:/work kex:alpine smoke.kex)" = "ok" ]
-          [ "$(docker run --rm -v /tmp:/work kex:alpine -R smoke.kex)" = "ok" ]
+          [ "$(docker run --rm -v /tmp:/work kex:alpine --run-walker smoke.kex)" = "ok" ]
 
       # Tey ships in the image too, and that is the whole reason a CI system
       # without a GitHub Action can use it. Three things can break and none
@@ -282,7 +282,7 @@ jobs:
           set -euo pipefail
           docker build -f docker/Dockerfile.slim --build-arg BUILD_JOBS=4 -t kex:slim .
           [ "$(docker run --rm -v /tmp:/work kex:slim smoke.kex)" = "ok" ]
-          [ "$(docker run --rm -v /tmp:/work kex:slim -R smoke.kex)" = "ok" ]
+          [ "$(docker run --rm -v /tmp:/work kex:slim --run-walker smoke.kex)" = "ok" ]
 
   # Tey, which nothing in CI used to touch. It is written in Kex and lives in
   # this repository, so a compiler change can break it — and until this job

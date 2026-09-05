@@ -4,11 +4,11 @@
 
 Kex runs two ways today:
 
-- **Tree-walk interpreter** (default) — `kex file.kex`.
-- **BEAM** — a lowering IR (`src/ir/`) emits Core Erlang, which `erlc` turns
-  into `.beam`. `kex -c` compiles, `kex -R` runs on BEAM, `kex -e` emits
-  `.core` without invoking `erlc`. This backend is at full spec parity with the
-  interpreter.
+- **BEAM** (default) — a lowering IR (`src/ir/`) emits Core Erlang, which
+  `erlc` turns into `.beam`. `kex file.kex` compiles and runs it, `kex -c`
+  compiles only, `kex -e` emits `.core` without invoking `erlc`.
+- **Tree-walk interpreter** — `kex -R file.kex`. At full spec parity with the
+  BEAM backend.
 
 The interpreter is *also* compiled to WebAssembly via Emscripten to power the
 in-browser REPL (`web/index.html`) — note that this is the interpreter running

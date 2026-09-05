@@ -2,7 +2,81 @@
 #include "../../common/color.hxx"
 #include <iostream>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include <optional>
+#endif
+
 namespace kex::interpreter {
+
+#ifdef __EMSCRIPTEN__
+namespace {
+
+// Console input in a browser, one line per ask.
+//
+// stdin is not usable here. Emscripten's TTY read() loops its get_char over
+// the WHOLE requested length, and get_char re-prompts whenever its buffer
+// runs dry — so a single `std::getline`, which asks libc++ for a buffer's
+// worth, reopens the `prompt()` dialog line after line and only stops when
+// the user cancels it (EOF). Every line after the first then sits in libc++'s
+// buffer and comes back out of a LATER IO.getLine, so the input also arrives
+// stale. Reading a line straight from JS keeps one ask to one line.
+//
+// A page can answer the ask itself by defining `Module.kexReadLine` (or a
+// global `kexReadLine`): a function returning the line, or null at EOF. That
+// is the hook a REPL with its own terminal should use rather than leaving
+// the reader on the browser's modal. Without one, this falls back to a single
+// `window.prompt` per line, which is what the plain page gets.
+//
+// Outside a browser — the wasm CLI under Node — there is no dialog to reopen
+// and no hook, and Emscripten reads fd 0 like any other program. That case
+// answers `NoReader` and the caller stays on plain stdin.
+enum class ReadKind { Line, Eof, NoReader };
+struct ReadResult {
+    ReadKind kind = ReadKind::Eof;
+    std::string text;
+};
+
+// The reply is prefixed by one character because the JS boundary is a C
+// string: "0" is EOF, "2" is "no browser reader here", and "1<line>" is a
+// line — so an empty line stays distinct from end of input.
+auto browserReadLine() -> ReadResult {
+    char* raw = emscripten_run_script_string(
+        "(function () {"
+        "  var read = (typeof Module !== 'undefined' && Module.kexReadLine)"
+        "    || (typeof globalThis !== 'undefined' && globalThis.kexReadLine);"
+        "  if (!read) {"
+        "    if (typeof window === 'undefined' || !window.prompt) return '2';"
+        "    read = function () { return window.prompt('Input: '); };"
+        "  }"
+        "  var line = read();"
+        "  return (line === null || line === undefined) ? '0' : '1' + line;"
+        "})()");
+    if (!raw || raw[0] == '0') return {ReadKind::Eof, {}};
+    if (raw[0] == '2') return {ReadKind::NoReader, {}};
+    return {ReadKind::Line, std::string(raw + 1)};
+}
+
+// What `browserReadLine` handed over and `IO.get` has not consumed yet. A
+// line arrives whole, so a per-character read has to keep the rest of it —
+// asking JS again would drop everything after the first character.
+std::string& browserInputBuffer() {
+    static std::string buffer;
+    return buffer;
+}
+
+// Fills the buffer if it is empty, and says what happened: a buffered line,
+// end of input, or no browser reader at all (leaving the caller on stdin).
+auto browserBufferLine() -> ReadKind {
+    if (!browserInputBuffer().empty()) return ReadKind::Line;
+    auto result = browserReadLine();
+    if (result.kind != ReadKind::Line) return result.kind;
+    browserInputBuffer() = result.text + "\n";
+    return ReadKind::Line;
+}
+
+} // namespace
+#endif
 
 auto Evaluator::registerIOBuiltins() -> void {
     // Renders a value through a presentation protocol. Which implementation
@@ -227,6 +301,21 @@ auto Evaluator::registerIOBuiltins() -> void {
             m_mockIOInputLines.pop_front();
             return Value::just(Value::string(line));
         }
+#ifdef __EMSCRIPTEN__
+        // A previous IO.get may have left part of a line behind; that is this
+        // line's beginning, not a reason to ask for a new one.
+        if (!browserInputBuffer().empty()) {
+            auto rest = browserInputBuffer();
+            browserInputBuffer().clear();
+            if (!rest.empty() && rest.back() == '\n') rest.pop_back();
+            return Value::just(Value::string(rest));
+        }
+        auto result = browserReadLine();
+        if (result.kind == ReadKind::Eof) return Value::none();
+        if (result.kind == ReadKind::Line)
+            return Value::just(Value::string(result.text));
+        // ReadKind::NoReader — Node, where stdin works as it always has.
+#endif
         std::string line;
         if (!std::getline(std::cin, line)) {
             return Value::none();
@@ -248,6 +337,19 @@ auto Evaluator::registerIOBuiltins() -> void {
             front.erase(0, 1);
             return Value::just(Value::string(std::string(1, c)));
         }
+#ifdef __EMSCRIPTEN__
+        switch (browserBufferLine()) {
+        case ReadKind::Eof:
+            return Value::none();
+        case ReadKind::Line: {
+            auto character = browserInputBuffer().substr(0, 1);
+            browserInputBuffer().erase(0, 1);
+            return Value::just(Value::string(character));
+        }
+        case ReadKind::NoReader:
+            break; // Node, where stdin works as it always has.
+        }
+#endif
         int c = std::cin.get();
         if (c == EOF) return Value::none();
         return Value::just(Value::string(std::string(1, static_cast<char>(c))));

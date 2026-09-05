@@ -38,7 +38,7 @@ foul servePath(root: String, requested: String) -> Response<Binary> do
 
   let path = normalizePath(candidate)
   let body = FS.File.readBytes(path).try
-  Response.binary(200, body, Headers.empty.set("Content-Type", contentTypeFor(path)))
+  Response.binary(200, body, Headers.empty.add("Content-Type", contentTypeFor(path)).try)
 rescue
   _ => Response.text(404, "not found")
 end
