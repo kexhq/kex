@@ -528,6 +528,11 @@ struct Lowering {
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
     std::unordered_set<std::string> knownFns;
+    // "name/arity" for every function DEFINED in this unit, at the arity it is
+    // emitted with — a make method's counts its receiver. `knownFns` is
+    // name-only, so it cannot tell a bare call that matches no definition's
+    // arity from one that does.
+    std::unordered_set<std::string> definedFnArities;
     // Qualified Kex module function (`Util.Math.double`) -> local BEAM name.
     // Modules in a single source file still flatten into one BEAM module, so
     // this preserves qualification without a cross-module call.
@@ -829,6 +834,15 @@ struct Lowering {
         e->node = localCall(name, std::move(args));
         return e;
     }
+    // Does `typeName`'s make block define `method` in this compilation unit?
+    auto ownsMethod(const std::string& typeName,
+                    const std::string& method) const -> bool {
+        auto owners = methodOwners.find(method);
+        if (owners == methodOwners.end()) return false;
+        return std::find(owners->second.begin(), owners->second.end(),
+                         typeName) != owners->second.end();
+    }
+
     auto localCall(const std::string& name, std::vector<ExprPtr> args)
         -> Call {
         if (callNeedsContext(name, static_cast<int>(args.size())))
@@ -2328,6 +2342,25 @@ struct Lowering {
         // named prelude methods; see lowerMethodCall.
         else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
             ex->node = localCall(imp->second, std::move(args));
+        // A bare call inside a `make` block naming one of its own methods.
+        // The receiver is implicit at the call site exactly as it is in the
+        // definition, so `decorate(@name)` means `this.decorate(name)` — which
+        // is what lets a method call a sibling, or itself recursively, without
+        // spelling `this.` (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+        //
+        // Ahead of `knownFns` because that set is name-only and already holds
+        // every make method: `decorate` looked defined, so the call was
+        // emitted as `decorate/1`, which nothing defines and erlc rejected.
+        // Only when NO definition answers at the written arity, so an ordinary
+        // function of the same name still wins.
+        else if (!currentMakeType.empty() && subst.count("this") &&
+                 !definedFnArities.count(n.name + "/" + std::to_string(arity)) &&
+                 definedFnArities.count(n.name + "/" +
+                                        std::to_string(arity + 1)) &&
+                 ownsMethod(currentMakeType, n.name)) {
+            args.insert(args.begin(), var(currentName("this")));
+            ex->node = localCall(n.name, std::move(args));
+        }
         else if (knownFns.count(n.name))
             ex->node = localCall(n.name, std::move(args));
         else if (subst.count(n.name))
@@ -7926,6 +7959,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             const auto arity = std::to_string(fd.clauses[0].params.size());
             if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
             definedFnArities.insert(fd.name + "/" + arity);
+            L.definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
         if (!fd.clauses.empty()) {
@@ -8022,6 +8056,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // routes through (kexhq/kex#181).
             if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
+                fd->name + "/" + std::to_string(beamArity(fd)));
+            L.definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->isFoul)
                 L.pureFnArities.insert(

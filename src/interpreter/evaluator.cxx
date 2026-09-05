@@ -3445,6 +3445,25 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
             val = m_env->get(lookupName);
         }
     }
+    // A bare call inside a `make` block naming one of its own methods: the
+    // receiver is implicit at the call site exactly as it is in the
+    // definition, so `decorate(@name)` means `this.decorate(@name)`. Without
+    // it a method could not call a sibling — or itself recursively — without
+    // spelling `this.`, and the attempt died here as "Undefined function"
+    // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+    if (!val && name.find("::") == std::string::npos) {
+        if (auto receiver = m_env->get("this")) {
+            std::vector<ValuePtr> withReceiver{receiver};
+            withReceiver.insert(withReceiver.end(), args.begin(), args.end());
+            auto methodName = resolveMethodName(receiver, name, &withReceiver);
+            if (methodName != name)
+                if (auto method = m_env->get(methodName)) {
+                    lookupName = std::move(methodName);
+                    val = method;
+                    args = std::move(withReceiver);
+                }
+        }
+    }
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
     }
