@@ -1,0 +1,28 @@
+# Same-arity overloads of a FREE function are not selected by argument type —
+# every call reaches the first declaration, silently.
+#
+# `foul_overload_same_arity.kex` covers the same shape on a `make` method,
+# where it works. The machinery behind that (`argumentOverloadedMethods`,
+# built in `src/ir/lower.cxx`) is keyed by receiver type and populated from
+# `make` bodies only, so a free function never enters it.
+#
+# This one is quiet, which makes it the more dangerous half: no badarity, no
+# diagnostic, just the wrong function.
+record Cat do
+  name : String
+end
+
+record Dog do
+  name : String
+end
+
+speak : Cat -> String
+let speak(c) = "meow ${c.name}"
+
+speak : Dog -> String
+let speak(d) = "woof ${d.name}"
+
+main do
+  IO.printLine(speak(Cat { name: "a" }))
+  IO.printLine(speak(Dog { name: "b" }))
+end

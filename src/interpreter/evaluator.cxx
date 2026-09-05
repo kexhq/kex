@@ -3,6 +3,7 @@
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/signature_params.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -1194,8 +1195,8 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 std::string signature;
                 for (const auto& param : candidateClause.params) {
                     signature += "|";
-                    signature += param.type && *param.type
-                        ? runtimeTypeKey(**param.type) : "*";
+                    const auto* declared = dispatchParamType(param);
+                    signature += declared ? runtimeTypeKey(*declared) : "*";
                 }
                 typedSignatures.insert(std::move(signature));
             }
@@ -1308,9 +1309,10 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 for (size_t i = 0; i < clause.params.size(); i++) {
                     const auto& param = clause.params[i];
                     if ((i + argOffset) < args.size()) {
-                        if (dispatchByParamType && param.type && *param.type &&
+                        const auto* dispatchType = dispatchParamType(param);
+                        if (dispatchByParamType && dispatchType &&
                             !runtimeTypeMatches(
-                                args[i + argOffset], **param.type)) {
+                                args[i + argOffset], *dispatchType)) {
                             matched = false;
                             break;
                         }
@@ -3652,6 +3654,22 @@ auto Evaluator::registerRuntimeSignature(
     m_runtimeSignatures[name].push_back(std::move(signature));
 }
 
+// How many parameters a written function type declares: `Env -> String` is
+// one, `A -> B -> C` two — the same chain a Kex lambda's parameter list
+// spells. Used to tell a handler from a parameterless `Block<A>`, which is
+// otherwise the same runtime shape.
+auto declaredFunctionArity(const ast::FunctionType& type) -> int {
+    int arity = 1;
+    const ast::TypeExpr* result = type.result ? type.result.get() : nullptr;
+    while (result) {
+        const auto* next = std::get_if<ast::FunctionType>(&result->kind);
+        if (!next) break;
+        ++arity;
+        result = next->result ? next->result.get() : nullptr;
+    }
+    return arity;
+}
+
 auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                                    const ast::TypeExpr& type) const -> bool {
     // A `make X<A> do ... end` sitting directly in a file-header module
@@ -3698,12 +3716,35 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return actual == "None" || actual == "Just" ||
                        (m_variantParent.contains(actual) &&
                         m_variantParent.at(actual) == "Optional");
-            return matchesName(actual, expected) ||
+            if (matchesName(actual, expected) ||
                 (m_variantParent.contains(actual) &&
-                 m_variantParent.at(actual) == expected);
+                 m_variantParent.at(actual) == expected))
+                return true;
+            // An APPLIED alias stands for its right-hand side just as a bare
+            // one does: `type Predicate<E> = E -> Bool` has to accept a
+            // closure. Without this a `predicate: Predicate<E>` parameter
+            // rejected every argument, which only surfaced once signature
+            // lines began feeding overload dispatch
+            // (docs/issue-free-function-overloads.md).
+            if (auto alias = m_typeAliases.find(expected);
+                alias != m_typeAliases.end() && alias->second)
+                return runtimeTypeMatches(value, *alias->second);
+            return false;
         } else if constexpr (std::is_same_v<T, ast::FunctionType> ||
                              std::is_same_v<T, ast::BlockType>) {
-            return value && std::holds_alternative<FunctionValue>(value->data);
+            if (!value) return false;
+            const auto* function = std::get_if<FunctionValue>(&value->data);
+            if (!function) return false;
+            // ARITY is what separates `Block<A>` from `A -> B` — both are
+            // funs, and calling them interchangeable is how a paramless
+            // `do ... end` reached a handler clause expecting an argument
+            // (docs/issue-free-function-overloads.md). An unknown arity
+            // (-1: builtins, function references) stays permissive.
+            if (function->arity < 0) return true;
+            if constexpr (std::is_same_v<T, ast::BlockType>)
+                return function->arity == 0;
+            else
+                return function->arity == declaredFunctionArity(node);
         } else if constexpr (std::is_same_v<T, ast::ListType>) {
             if (!value) return false;
             if (std::holds_alternative<ListValue>(value->data)) return true;
@@ -3896,9 +3937,10 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                     bool allMatch = true;
                     for (size_t i = 0; i < clause.params.size(); ++i) {
                         const auto& param = clause.params[i];
-                        if (!param.type || !*param.type) continue;
+                        const auto* declared = dispatchParamType(param);
+                        if (!declared) continue;
                         if (!runtimeTypeMatches((*args)[i + receiverOffset],
-                                                **param.type)) {
+                                                *declared)) {
                             allMatch = false;
                             break;
                         }

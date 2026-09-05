@@ -1,0 +1,29 @@
+# Callable parameters are separated by ARITY, not merely by "is a function".
+#
+# `Block<A>` is a parameterless lambda and `A -> B` takes one; both are funs at
+# runtime, so a guard that only asks `is_function` cannot tell them apart. That
+# is the loud half of docs/issue-free-function-overloads.md — the losing call
+# died `badarity` on BEAM instead of reaching its own clause.
+#
+# An alias for a function type has to resolve to that shape too: no value ever
+# carries a 'Formatter' tag, so guarding on the NAME matched nothing and the
+# parameter contributed no guard at all.
+type Formatter = Integer -> String
+type Combiner = Integer -> Integer -> String
+
+apply : Block<String> -> String
+let apply(body) = "0:${body()}"
+
+apply : Formatter -> String
+let apply(f) = "1:${f(7)}"
+
+apply : Combiner -> String
+let apply(f) = "2:${f(1, 2)}"
+
+main do
+  IO.printLine(apply(do "none" end))
+  IO.printLine(apply(do |n| "got ${n}" end))
+  IO.printLine(apply(do |a, b| "got ${a} ${b}" end))
+  IO.printLine(apply({ "brace" }))
+  IO.printLine(apply({ |n| "brace ${n}" }))
+end

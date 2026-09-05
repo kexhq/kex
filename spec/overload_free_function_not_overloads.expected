@@ -1,0 +1,8 @@
+none
+one
+many 4
+a
+a+b
+a+b+c
+open f Read
+open f 2
