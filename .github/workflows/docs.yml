@@ -47,11 +47,22 @@ jobs:
       - name: Build Tey
         run: make build-tey
 
+      # The hand-written book source (kexhq/docs, guide/<version>/). Public,
+      # so the default token reads it; absent content skips silently in
+      # build-docs.sh via GUIDE_SOURCE's dir-exists convention.
+      - name: Check out guide source
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/docs
+          path: guide-src
+
       # The site base URL for sitemap/robots/llms. Canonical URL is the
       # custom domain; kexhq.github.io/docs redirects to it.
       - name: Generate docs
         env:
           BASE_URL: https://docs.kex.run
+          # Versioned per release in kexhq/docs — bump alongside the release.
+          GUIDE_SOURCE: guide-src/guide/0.4.0-alpha
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             tools/build-docs.sh docs-out

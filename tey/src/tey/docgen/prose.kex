@@ -75,12 +75,15 @@ module Tey.Docgen.Prose do
     return 0
   end
 
-  # A page and the two things only its frontmatter knows: where it sorts, and
-  # the HTML its Markdown became.
+  # A page and the things only its frontmatter knows: where it sorts, the
+  # HTML its Markdown became, the description its index entry shows, and the
+  # Markdown (minus frontmatter) its raw `.md` rendering serves.
   record ProsePage do
     page : SourcePage
     order : Integer
     body : String
+    description : String
+    markdown : String
   end
 
   foul readPages(files: [String], source: String, accum: [ProsePage]) -> [ProsePage] do
@@ -107,10 +110,15 @@ module Tey.Docgen.Prose do
     # A page with no `title:` is titled by its file, so an untitled draft
     # still appears in the sidebar under something a reader can recognise.
     let title = document.frontmatter.title.empty? then urlPath else document.frontmatter.title
+    # The raw `.md` rendering is the source as authored, minus its
+    # frontmatter — the same split the parser read, rejoined.
+    let (_, bodyLines) = Tey.Docgen.Md.splitFrontmatter(text.replace("\r\n", "\n").split("\n"))
     return ProsePage {
       page: SourcePage { source: fileName, urlPath: urlPath, title: title, entities: [] },
       order: document.frontmatter.order,
-      body: Tey.Docgen.Md.render(document.blocks)
+      body: Tey.Docgen.Md.render(document.blocks),
+      description: document.frontmatter.description,
+      markdown: bodyLines.join("\n") + "\n"
     }
   end
 
@@ -120,25 +128,90 @@ module Tey.Docgen.Prose do
   end
 
   # Both renderings, from the same parsed page: HTML for readers, Markdown
-  # for the crawlers and LLMs that `build` also writes .md for. The Markdown
-  # written back out is the source as authored, minus its frontmatter.
+  # for crawlers, LLMs, and the "Markdown" link every page carries — the same
+  # `.md`-next-to-`.html` pairing reference builds write.
   foul writeProse(pages: [ProsePage], versionDir: String, out: String,
                   model: PackageModel) -> () do
-    let _ = pages.reduce(0, { |n, prose|
-      let page = prose.page
-      Tey.Docgen.Index.ensureDirectory(
-        FS.Path.join(versionDir, Tey.Docgen.Index.dirNameOf(page.urlPath)))
-      let heading = "<h1>${Tey.Docgen.Html.esc(page.title)}</h1>"
-      let html = Tey.Docgen.Html.layout(page.title, page.urlPath,
-                                        "${heading}\n${prose.body}", model)
-      let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".html"), html)
-      n + 1
-    })
+    writeProseLoop(pages, 0, versionDir, model)
     let _ = FS.File.write(FS.Path.join(versionDir, "index.html"),
-                          Tey.Docgen.Html.versionIndexHtml(model))
+                          proseIndexHtml(pages, model))
     Tey.Docgen.Index.ensureDirectory(FS.Path.join(out, "assets"))
     let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
     let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())
     return ()
+  end
+
+  foul writeProseLoop(pages: [ProsePage], index: Integer, versionDir: String,
+                      model: PackageModel) -> () do
+    match pages.at(index) do
+      None => ()
+      Just(prose) => do
+        let page = prose.page
+        Tey.Docgen.Index.ensureDirectory(
+          FS.Path.join(versionDir, Tey.Docgen.Index.dirNameOf(page.urlPath)))
+        let heading = "<h1>${Tey.Docgen.Html.esc(page.title)}</h1>"
+        let html = Tey.Docgen.Html.layout(page.title, page.urlPath,
+          "${heading}\n${prose.body}\n${prevNextHtml(pages, index)}", model)
+        let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".html"), html)
+        let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".md"), prose.markdown)
+        writeProseLoop(pages, index + 1, versionDir, model)
+      end
+    end
+  end
+
+  # The book's own spine: chapters in author order with their descriptions,
+  # not the module grid reference builds get. Deliberately separate from
+  # `versionIndexHtml` — `tey docs build` keeps documenting any package, and
+  # nothing about a book leaks into it.
+  foul proseIndexHtml(pages: [ProsePage], model: PackageModel) -> String do
+    let label = Tey.Docgen.Index.labelOrPackage(model)
+    let heading = "<h1>${Tey.Docgen.Html.esc(label)} <span class=\"ver\">${Tey.Docgen.Html.esc(model.version)}</span></h1>"
+    let lede = "<p class=\"lede\">${Tey.Docgen.Html.esc(label)} — read cover to cover, or jump in anywhere.</p>"
+    let items = pages.map { |prose| chapterItem(prose) }.join("\n")
+    return Tey.Docgen.Html.layout(label, "", "${heading}\n${lede}\n<ol class=\"chapters\">\n${items}\n</ol>", model)
+  end
+
+  foul chapterItem(prose: ProsePage) -> String do
+    let title = "<a href=\"${prose.page.urlPath}.html\">${Tey.Docgen.Html.esc(prose.page.title)}</a>"
+    if prose.description.empty?
+      return "<li>${title}</li>"
+    end
+    return "<li>${title}<br><span class=\"prelude-note\">${Tey.Docgen.Html.esc(prose.description)}</span></li>"
+  end
+
+  # Chapter footer: the siblings around this one, so the book reads forward
+  # as well as sideways. First and last chapters link one way only.
+  foul prevNextHtml(pages: [ProsePage], index: Integer) -> String do
+    match pages.at(index) do
+      None => ""
+      Just(prose) => do
+        let up = Tey.Docgen.Nav.upsToVersionDir(prose.page.urlPath)
+        return chapterNav(prevLink(pages, index, up), nextLink(pages, index, up))
+      end
+    end
+  end
+
+  foul prevLink(pages: [ProsePage], index: Integer, up: String) -> String do
+    return "" if index <= 0
+    match pages.at(index - 1) do
+      None => ""
+      Just(sibling) => "<a class=\"prev\" href=\"${up}${sibling.page.urlPath}.html\">← ${Tey.Docgen.Html.esc(sibling.page.title)}</a>"
+    end
+  end
+
+  foul nextLink(pages: [ProsePage], index: Integer, up: String) -> String do
+    match pages.at(index + 1) do
+      None => ""
+      Just(sibling) => "<a class=\"next\" href=\"${up}${sibling.page.urlPath}.html\">${Tey.Docgen.Html.esc(sibling.page.title)} →</a>"
+    end
+  end
+
+  foul chapterNav(prev: String, nextHtml: String) -> String do
+    if prev.empty?
+      return "" if nextHtml.empty?
+      return "<nav class=\"prevnext\">${nextHtml}</nav>"
+    end
+    return "<nav class=\"prevnext\">${prev}</nav>" if nextHtml.empty?
+    return "<nav class=\"prevnext\">${prev} <span class=\"sep\">·</span> ${nextHtml}</nav>"
   end
 end
