@@ -2361,13 +2361,19 @@ struct Lowering {
             args.insert(args.begin(), var(currentName("this")));
             ex->node = localCall(n.name, std::move(args));
         }
+        // A lexical binding (a `block` parameter, or any local holding a
+        // callable) outranks a global function of the same name: innermost
+        // wins, as it does for every other local. Ahead of `knownFns` because
+        // the reverse order silently DISCARDED the binding and called the
+        // global — `foul f(link: (String -> String))` calling `link(x)`
+        // compiled to `call kex_main:link(x)` whenever a global `link` was in
+        // scope, which the prelude provides (kexhq/kex#289). Keep this
+        // indirect apply distinct from a truly unknown free function, which
+        // must fail only if executed.
+        else if (subst.count(n.name))
+            ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
         else if (knownFns.count(n.name))
             ex->node = localCall(n.name, std::move(args));
-        else if (subst.count(n.name))
-            // A lexical binding (for example a `block` parameter) can hold a
-            // callable value. Keep this indirect apply distinct from a truly
-            // unknown free function, which must fail only if executed.
-            ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
         else if (auto external = externalPrefixCall(n.name, arity); !external.empty())
             // UFCS runs both ways: `xs.length` and `length(xs)` are the same
             // call, and the walker resolves the prefix spelling against the

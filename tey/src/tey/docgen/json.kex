@@ -226,7 +226,11 @@ module Tey.Docgen.Json do
     match e do
       TraitDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
       MakeDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
-      ModuleDecl(entry) => (entry.children.map { |c| entitySearchEntries(c, page) }).reduce([], { |accum, entries| accum + entries })
+      # `flatMap`, not `map(...).reduce([], +)`: the bare `[]` seed left the
+      # element type open, and what it unified with depended on the rest of
+      # the program — adding an unrelated module was enough to infer
+      # `[Unknown] + Char` and fail the build here.
+      ModuleDecl(entry) => entry.children.flatMap { |c| entitySearchEntries(c, page) }
       _ => []
     end
   end

@@ -1,0 +1,8 @@
+package "docsite" do
+  description("Assembles the docs.kex.run site out of what docgen wrote.")
+  version("0.1.0")
+  kex(">= 0.3.0")
+  license("MIT")
+  entrypoint("src/main.kex")
+  target("docsite")
+end

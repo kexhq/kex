@@ -1,0 +1,39 @@
+# kexhq/kex#289 — a lexical binding that holds a function outranks a global
+# function of the same name. The inner binding wins, as it does for every
+# other local; the reverse order silently called the global instead.
+
+foul link(what: String) -> String do
+  return "GLOBAL:${what}"
+end
+
+foul esc(text: String) -> String do
+  return "[${text}]"
+end
+
+module Demo do
+  # A function-typed PARAMETER whose name collides with the global above.
+  foul linkTypeText(link: (String -> String), text: String) -> String do
+    return text.split(",").map { |seg|
+      if seg.take(1) != "!"
+        link(seg)
+      else
+        esc(seg)
+      end
+    }.join("")
+  end
+
+  # A `let` binding colliding with the same global.
+  foul viaBinding(text: String) -> String do
+    let link = { |name| "<${name}>" }
+    return link(text)
+  end
+end
+
+main do
+  let angle = { |name| "<${name}>" }
+  IO.printLine(Demo.linkTypeText(angle, "a,!b,c"))
+  IO.printLine(Demo.viaBinding("bound"))
+
+  # With no binding in scope the global is still what a bare call means.
+  IO.printLine(link("global"))
+end

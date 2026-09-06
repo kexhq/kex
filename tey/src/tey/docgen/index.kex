@@ -11,16 +11,24 @@ module Tey.Docgen.Index do
       IO.printError("docgen: --out is required")
       return 1
     end
-    # Source, package and version default to THIS directory's package:
-    # `tey docs build --out <site>` inside any package documents its own
-    # src/, under its own name, at its own version. The explicit flags stay
-    # for the one case the defaults cannot know — the compiler's own
-    # checkout documenting src/stdlib as "prelude" (where the versions ARE
-    # Kex releases, which is why the compiler's own package.kex carries the
-    # compiler version and the default still holds).
+    # What docgen documents is a NAMED, VERSIONED unit. A package.kex in the
+    # CWD answers both, which is why `tey docs build --out <site>` inside a
+    # package needs nothing else. Nothing here guesses beyond that: a source
+    # tree that is not a package — the compiler's own src/stdlib is the
+    # standing example — says who it is with --package and --release, and a
+    # missing answer is an error rather than a default that files the output
+    # under the wrong name.
     let source = defaultSource(optString(parsed.values.get("source")))
     let pkg = defaultPackage(optString(parsed.values.get("package")))
     let version = defaultVersion(optString(parsed.values.get("release")))
+    if pkg.empty?
+      IO.printError("docgen: --package is required (no package.kex in ${FS.Directory.current} to take a name from)")
+      return 1
+    end
+    if version.empty?
+      IO.printError("docgen: --release is required (no package.kex in ${FS.Directory.current} to take a version from)")
+      return 1
+    end
     let files = Tey.Docgen.Scan.sourceFiles(source)
     if files.empty?
       IO.printError("docgen: no .kex files found in ${source}")
@@ -109,38 +117,40 @@ module Tey.Docgen.Index do
   end
 
   # The manifest's name when the CWD is a package — the identity docgen
-  # should not have to be told. Outside one, "prelude": the compiler's own
-  # stdlib documenting without a manifest of its own is the original use.
+  # should not have to be told. Outside one, "": the caller has to say, and
+  # buildCommand refuses rather than inventing a name. Docgen used to answer
+  # "prelude" here, which meant a build with a swallowed or forgotten
+  # --package filed its pages under whatever the CWD's package.kex said (the
+  # stdlib was published as "kex" for exactly that reason, kexhq/kex#287).
   foul defaultPackage(given: String) -> String do
     return given if !given.empty?
     match manifestVersion() do
       Just(pair) => do
         let (name, _) = pair
-        return name.or("prelude")
+        return name
       end
-      None => "prelude"
+      None => ""
     end
   end
 
   # The version of the thing being documented: a package's own release when
-  # standing in one, the compiler's release otherwise. What a package's
-  # versions ARE differs from the stdlib — its own releases against Kex
-  # releases — and the default follows that distinction automatically
-  # because the compiler's own package.kex carries the compiler version.
+  # standing in one. What a package's versions ARE differs per package — a
+  # library's own releases, the stdlib's Kex releases — so outside a package
+  # this is the caller's to state (--release) rather than docgen's to guess.
   foul defaultVersion(given: String) -> String do
     return given if !given.empty?
     match manifestVersion() do
       Just(pair) => do
         let (_, version) = pair
-        return version.or(Kex.Kernel.VERSION.release)
+        return version
       end
-      None => Kex.Kernel.VERSION.release
+      None => ""
     end
   end
 
   # (name, version) of the package.kex in the CWD, if there is a readable
   # one. Both defaults read it; one read, one parse.
-  foul manifestVersion() -> (String?, String?)? do
+  foul manifestVersion() -> (String, String)? do
     match FS.File.read("package.kex") do
       Error(_) => None
       Ok(text) => match Tey.Manifest.read(text) do
@@ -220,6 +230,14 @@ module Tey.Docgen.Index do
   foul writeIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
     let versions = accumulateVersions(out, model)
     let _ = FS.File.write(FS.Path.join(out, "manifest.json"), manifestJson(pages))
+    # The same listing, but inside the version's own directory and carrying
+    # the identity the root copy cannot: the root manifest describes only
+    # whichever build ran last, so anything assembling a whole site out of
+    # several units reads these instead.
+    let versionDir = FS.Path.join(FS.Path.join(out, model.package), model.version)
+    ensureDirectory(versionDir)
+    let _ = FS.File.write(FS.Path.join(versionDir, "manifest.json"),
+                          versionManifestJson(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(versions))
     # The browsing spine: the site root lists packages, each package's
     # directory lists its versions. What a version IS differs per package —
@@ -236,6 +254,20 @@ module Tey.Docgen.Index do
     let _ = FS.File.write(FS.Path.join(out, "sitemap.xml"), sitemapXml(pages, model))
     IO.printLine("docgen: wrote index files")
     return ()
+  end
+
+  # One version's pages, with the package and version they belong to, so a
+  # reader of the file needs nothing but the file. Page paths stay relative
+  # to the version directory — the URL prefix is `<package>/<version>/`, and
+  # whoever assembles the site is the one that knows the site root.
+  foul versionManifestJson(pages: [SourcePage], model: PackageModel) -> String do
+    return JSON.stringify({
+      package: model.package,
+      version: model.version,
+      label: labelOrPackage(model),
+      generatedAt: model.generatedAt,
+      pages: pages.map { |p| { path: p.urlPath, title: p.title, source: p.source } }
+    })
   end
 
   foul manifestJson(pages: [SourcePage]) -> String do
