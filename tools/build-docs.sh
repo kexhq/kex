@@ -20,6 +20,12 @@ set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 OUT="${1:-$(cd "$ROOT/.." && pwd)/kdocs}"
+# Absolute, so later steps can change directory (the docsite assembler runs
+# from its own package) without re-resolving a caller-relative path.
+case "$OUT" in
+  /*) ;;
+  *) OUT="$ROOT/$OUT" ;;
+esac
 TEY_RUN="$ROOT/tey-run"
 WORKTREES="$ROOT/.cache/docgen-tags"
 
