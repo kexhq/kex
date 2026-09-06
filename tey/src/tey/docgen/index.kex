@@ -230,6 +230,14 @@ module Tey.Docgen.Index do
   foul writeIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
     let versions = accumulateVersions(out, model)
     let _ = FS.File.write(FS.Path.join(out, "manifest.json"), manifestJson(pages))
+    # The same listing, but inside the version's own directory and carrying
+    # the identity the root copy cannot: the root manifest describes only
+    # whichever build ran last, so anything assembling a whole site out of
+    # several units reads these instead.
+    let versionDir = FS.Path.join(FS.Path.join(out, model.package), model.version)
+    ensureDirectory(versionDir)
+    let _ = FS.File.write(FS.Path.join(versionDir, "manifest.json"),
+                          versionManifestJson(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(versions))
     # The browsing spine: the site root lists packages, each package's
     # directory lists its versions. What a version IS differs per package —
@@ -246,6 +254,20 @@ module Tey.Docgen.Index do
     let _ = FS.File.write(FS.Path.join(out, "sitemap.xml"), sitemapXml(pages, model))
     IO.printLine("docgen: wrote index files")
     return ()
+  end
+
+  # One version's pages, with the package and version they belong to, so a
+  # reader of the file needs nothing but the file. Page paths stay relative
+  # to the version directory — the URL prefix is `<package>/<version>/`, and
+  # whoever assembles the site is the one that knows the site root.
+  foul versionManifestJson(pages: [SourcePage], model: PackageModel) -> String do
+    return JSON.stringify({
+      package: model.package,
+      version: model.version,
+      label: labelOrPackage(model),
+      generatedAt: model.generatedAt,
+      pages: pages.map { |p| { path: p.urlPath, title: p.title, source: p.source } }
+    })
   end
 
   foul manifestJson(pages: [SourcePage]) -> String do

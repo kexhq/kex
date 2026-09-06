@@ -1,0 +1,152 @@
+using Tey.Docgen.Md, only: [parseDocument, toHtml, indexOfText, anchor]
+
+# The Markdown parser: the block grammar and the inline grammar, checked
+# separately. Prose pages are hand-written, so the failure mode that matters
+# is a construct silently degrading to a paragraph rather than an error —
+# every case below asserts on the rendered HTML for that reason.
+
+describe("Tey.Docgen.Md frontmatter") do
+  it("reads title, description and order") do
+    let doc = parseDocument("---\ntitle: Syntax\ndescription: The shapes\norder: 3\n---\n\nBody.")
+    assert(doc.frontmatter.title == "Syntax")
+    assert(doc.frontmatter.description == "The shapes")
+    assert(doc.frontmatter.order == 3)
+  end
+
+  it("strips surrounding quotes from a value") do
+    let doc = parseDocument("---\ntitle: \"Pattern Matching\"\n---\n")
+    assert(doc.frontmatter.title == "Pattern Matching")
+  end
+
+  it("keeps the body out of the frontmatter") do
+    let doc = parseDocument("---\ntitle: A\n---\n\nHello.")
+    assert(toHtml("---\ntitle: A\n---\n\nHello.") == "<p>Hello.</p>")
+  end
+
+  it("treats a document with no fence as all body") do
+    let doc = parseDocument("Just prose.")
+    assert(doc.frontmatter.title == "")
+    assert(doc.blocks.count == 1)
+  end
+
+  it("ignores keys it does not know rather than failing") do
+    let doc = parseDocument("---\ntitle: A\nauthor: someone\n---\n")
+    assert(doc.frontmatter.title == "A")
+  end
+end
+
+describe("Tey.Docgen.Md blocks") do
+  it("renders ATX headings with anchors") do
+    assert(toHtml("## Pattern Matching") ==
+           "<h2 id=\"pattern-matching\">Pattern Matching</h2>")
+  end
+
+  it("does not treat a hash without a space as a heading") do
+    assert(toHtml("#hashtag") == "<p>#hashtag</p>")
+  end
+
+  it("joins wrapped lines into one paragraph") do
+    assert(toHtml("one\ntwo") == "<p>one two</p>")
+  end
+
+  it("separates paragraphs on a blank line") do
+    assert(toHtml("one\n\ntwo") == "<p>one</p>\n<p>two</p>")
+  end
+
+  it("highlights a kex fence and escapes any other language") do
+    assert(toHtml("```text\na < b\n```") ==
+           "<pre class=\"code\"><code class=\"language-text\">a &lt; b</code></pre>")
+  end
+
+  it("renders a thematic break") do
+    assert(toHtml("---") == "<hr>")
+  end
+
+  it("renders a blockquote, parsing its contents as blocks") do
+    assert(toHtml("> ## Note\n> Careful.") ==
+           "<blockquote>\n<h2 id=\"note\">Note</h2>\n<p>Careful.</p>\n</blockquote>")
+  end
+
+  it("does not swallow a list into the paragraph above it") do
+    assert(toHtml("Intro:\n- one") ==
+           "<p>Intro:</p>\n<ul>\n<li>one</li>\n</ul>")
+  end
+end
+
+describe("Tey.Docgen.Md lists") do
+  it("renders an unordered list") do
+    assert(toHtml("- one\n- two") ==
+           "<ul>\n<li>one</li>\n<li>two</li>\n</ul>")
+  end
+
+  it("renders an ordered list") do
+    assert(toHtml("1. one\n2. two") ==
+           "<ol>\n<li>one</li>\n<li>two</li>\n</ol>")
+  end
+
+  it("nests an indented list inside its item") do
+    assert(toHtml("- one\n  - deep\n- two") ==
+           "<ul>\n<li>one\n<ul>\n<li>deep</li>\n</ul>\n</li>\n<li>two</li>\n</ul>")
+  end
+end
+
+describe("Tey.Docgen.Md tables") do
+  it("renders a GFM table") do
+    let md = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+    assert(toHtml(md).contains?("<th>a</th><th>b</th>"))
+    assert(toHtml(md).contains?("<td>1</td><td>2</td>"))
+  end
+
+  it("scrolls a wide table rather than overflowing the page") do
+    let md = "| a |\n| --- |\n| 1 |"
+    assert(toHtml(md).startsWith?("<div class=\"table-scroll\">"))
+  end
+
+  it("needs the delimiter row, or the lines are prose") do
+    assert(toHtml("| a | b |") == "<p>| a | b |</p>")
+  end
+end
+
+describe("Tey.Docgen.Md inline") do
+  it("renders code spans, escaping their contents") do
+    assert(toHtml("a `x < y` b") == "<p>a <code>x &lt; y</code> b</p>")
+  end
+
+  it("does not read emphasis markers inside a code span") do
+    assert(toHtml("`a*b*c`") == "<p><code>a*b*c</code></p>")
+  end
+
+  it("renders bold before italics") do
+    assert(toHtml("**strong** and *soft*") ==
+           "<p><strong>strong</strong> and <em>soft</em></p>")
+  end
+
+  it("leaves an unpaired marker as written") do
+    assert(toHtml("2 * 3") == "<p>2 * 3</p>")
+  end
+
+  it("renders links") do
+    assert(toHtml("see [the guide](/guide/)") ==
+           "<p>see <a href=\"/guide/\">the guide</a></p>")
+  end
+
+  it("leaves a bracket that is not a link as text") do
+    assert(toHtml("[not a link]") == "<p>[not a link]</p>")
+  end
+
+  it("escapes HTML in ordinary prose") do
+    assert(toHtml("a <b> c") == "<p>a &lt;b&gt; c</p>")
+  end
+end
+
+describe("Tey.Docgen.Md helpers") do
+  it("finds a multi-character needle") do
+    assert(indexOfText("a**b", "**", 0) == Just(1))
+    assert(indexOfText("ab", "**", 0) == None)
+  end
+
+  it("folds a heading into an anchor") do
+    assert(anchor("Pattern Matching") == "pattern-matching")
+    assert(anchor("`try` / `rescue`") == "try-rescue")
+  end
+end

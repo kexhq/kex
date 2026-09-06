@@ -1,0 +1,144 @@
+# `tey docs prose`: a tree of Markdown files rendered into the same chrome as
+# the generated reference.
+#
+# The unit is the same one `build` documents — a named, versioned thing — so
+# the two land side by side in one site and share `versions.json`, the
+# stylesheet and the layout. What differs is only where the pages come from:
+# `build` parses .kex and derives them, `prose` reads .md and renders it.
+#
+# Nothing here knows what the prose IS. A guide, a book, a package's own
+# handbook are all "long-form pages for a versioned unit"; the naming and the
+# assembly of a site out of several such units belong to whoever runs this,
+# not to docgen.
+
+module Tey.Docgen.Prose do
+  using Tey.Docgen.Model, only: [PackageModel, SourcePage]
+
+  foul proseCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+    let out = Tey.Docgen.Index.optString(parsed.values.get("out"))
+    if out.empty?
+      IO.printError("docgen: --out is required")
+      return 1
+    end
+    let source = Tey.Docgen.Index.optString(parsed.values.get("source"))
+    if source.empty?
+      IO.printError("docgen: --source is required (the directory of .md files)")
+      return 1
+    end
+    # A prose tree is never a package, so neither identity can be discovered
+    # the way `build` discovers a package.kex — both are required here.
+    let pkg = Tey.Docgen.Index.optString(parsed.values.get("package"))
+    let version = Tey.Docgen.Index.optString(parsed.values.get("release"))
+    if pkg.empty?
+      IO.printError("docgen: --package is required")
+      return 1
+    end
+    if version.empty?
+      IO.printError("docgen: --release is required")
+      return 1
+    end
+
+    let files = Tey.Docgen.Scan.proseFiles(source)
+    if files.empty?
+      IO.printError("docgen: no .md files found in ${source}")
+      return 1
+    end
+    let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
+    Tey.Docgen.Index.ensureDirectory(versionDir)
+    IO.printLine("docgen: ${files.count} prose file(s) => ${versionDir}")
+
+    let read = readPages(files, source, [])
+    if read.empty?
+      IO.printError("docgen: no .md files could be read")
+      return 1
+    end
+    # Frontmatter `order` is the author's running order; ties keep the
+    # scan's alphabetical order, so a tree with no `order` at all is still
+    # deterministic rather than arbitrary.
+    let ordered = read.sort { |a, b| a.order < b.order }
+    let model = PackageModel {
+      package: pkg,
+      version: version,
+      label: Tey.Docgen.Index.optString(parsed.values.get("label")),
+      baseUrl: Tey.Docgen.Index.optString(parsed.values.get("base-url")),
+      generatedAt: DateTime.now().iso,
+      pages: ordered.map { |p| p.page },
+      modules: [],
+      links: [],
+      preludeModules: [],
+      preludeSource: "",
+      preludeDoc: ""
+    }
+    writeProse(ordered, versionDir, out, model)
+    Tey.Docgen.Index.writeIndexFiles(model.pages, model, out)
+    IO.printLine("docgen: wrote ${ordered.count} prose page(s)")
+    return 0
+  end
+
+  # A page and the two things only its frontmatter knows: where it sorts, and
+  # the HTML its Markdown became.
+  record ProsePage do
+    page : SourcePage
+    order : Integer
+    body : String
+  end
+
+  foul readPages(files: [String], source: String, accum: [ProsePage]) -> [ProsePage] do
+    if files.empty?
+      return accum
+    end
+    let fileName = files.first.or("")
+    let rest = files.drop(1)
+    match FS.File.read(FS.Path.join(source, fileName)) do
+      Error(_) => do
+        IO.printError("  fail ${fileName}: cannot read")
+        return readPages(rest, source, accum)
+      end
+      Ok(text) => do
+        IO.printLine("  ok ${fileName}")
+        return readPages(rest, source, accum + [pageOf(fileName, text)])
+      end
+    end
+  end
+
+  foul pageOf(fileName: String, text: String) -> ProsePage do
+    let document = Tey.Docgen.Md.parseDocument(text)
+    let urlPath = stripSuffix(fileName, ".md")
+    # A page with no `title:` is titled by its file, so an untitled draft
+    # still appears in the sidebar under something a reader can recognise.
+    let title = document.frontmatter.title.empty? then urlPath else document.frontmatter.title
+    return ProsePage {
+      page: SourcePage { source: fileName, urlPath: urlPath, title: title, entities: [] },
+      order: document.frontmatter.order,
+      body: Tey.Docgen.Md.render(document.blocks)
+    }
+  end
+
+  foul stripSuffix(name: String, suffix: String) -> String do
+    return name.take(name.count - suffix.count) if name.endsWith?(suffix)
+    return name
+  end
+
+  # Both renderings, from the same parsed page: HTML for readers, Markdown
+  # for the crawlers and LLMs that `build` also writes .md for. The Markdown
+  # written back out is the source as authored, minus its frontmatter.
+  foul writeProse(pages: [ProsePage], versionDir: String, out: String,
+                  model: PackageModel) -> () do
+    let _ = pages.reduce(0, { |n, prose|
+      let page = prose.page
+      Tey.Docgen.Index.ensureDirectory(
+        FS.Path.join(versionDir, Tey.Docgen.Index.dirNameOf(page.urlPath)))
+      let heading = "<h1>${Tey.Docgen.Html.esc(page.title)}</h1>"
+      let html = Tey.Docgen.Html.layout(page.title, page.urlPath,
+                                        "${heading}\n${prose.body}", model)
+      let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".html"), html)
+      n + 1
+    })
+    let _ = FS.File.write(FS.Path.join(versionDir, "index.html"),
+                          Tey.Docgen.Html.versionIndexHtml(model))
+    Tey.Docgen.Index.ensureDirectory(FS.Path.join(out, "assets"))
+    let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
+    let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())
+    return ()
+  end
+end

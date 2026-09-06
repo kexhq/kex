@@ -1,16 +1,26 @@
-# Source discovery: walk a package tree, collect .kex files recursively.
+# Source discovery: walk a tree and collect the files a build reads.
 #
 # `spec/` directories are skipped: specs document the same declarations as
 # their base file, so a second page for them would duplicate every entry.
 
 module Tey.Docgen.Scan do
   foul sourceFiles(sourceDir: String) -> [String] do
+    return filesWithSuffix(sourceDir, ".kex")
+  end
+
+  # The prose half of the same walk: `tey docs prose` reads .md rather than
+  # .kex, and wants the same recursion, the same sorting and the same skip.
+  foul proseFiles(sourceDir: String) -> [String] do
+    return filesWithSuffix(sourceDir, ".md")
+  end
+
+  foul filesWithSuffix(sourceDir: String, suffix: String) -> [String] do
     match FS.Directory.files(sourceDir) do
       Just(names) => do
-        let kex = names.filter { |n| n.endsWith?(".kex") && !n.endsWith?(".spec.kex") }
-        let sorted = kex.sort
+        let matched = names.filter { |n| n.endsWith?(suffix) && !n.endsWith?(".spec.kex") }
+        let sorted = matched.sort
         let nestedDirs = subdirectories(sourceDir)
-        return sorted + nested(nestedDirs, sourceDir)
+        return sorted + nested(nestedDirs, sourceDir, suffix)
       end
       None => []
     end
@@ -20,13 +30,13 @@ module Tey.Docgen.Scan do
     return (FS.Directory.directories(sourceDir).or([])).filter { |d| d != "spec" }.sort
   end
 
-  foul nested(dirs: [String], sourceDir: String) -> [String] do
+  foul nested(dirs: [String], sourceDir: String, suffix: String) -> [String] do
     if dirs.empty?
       return []
     end
     let head = dirs.first.or("")
     let rest = dirs.drop(1)
-    let inner = sourceFiles(FS.Path.join(sourceDir, head))
-    return inner.map { |name| FS.Path.join(head, name) } + nested(rest, sourceDir)
+    let inner = filesWithSuffix(FS.Path.join(sourceDir, head), suffix)
+    return inner.map { |name| FS.Path.join(head, name) } + nested(rest, sourceDir, suffix)
   end
 end

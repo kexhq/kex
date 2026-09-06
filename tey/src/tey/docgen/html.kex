@@ -475,7 +475,10 @@ module Tey.Docgen.Html do
     let href = "${vpre}${page.urlPath}.html"
     let active = page.urlPath == current
     let klass = active then " class=\"active\"" else ""
-    let entityLinks = if active
+    # The active page expands to its own declarations — but only when it HAS
+    # any. A prose page declares nothing, and an empty <ul> is not markup
+    # worth emitting.
+    let entityLinks = if active && !page.entities.empty?
       "<ul class=\"side-sub\">\n" + page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n") + "\n</ul>"
     else
       ""

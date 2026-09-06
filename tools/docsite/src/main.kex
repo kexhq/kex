@@ -1,0 +1,222 @@
+# The docs.kex.run assembler.
+#
+# docgen documents ONE unit per run — a package, the stdlib, a prose tree —
+# and writes that unit's pages plus a few site-wide files. Those site-wide
+# files are the problem this fixes: `llms.txt`, `llms-full.txt` and
+# `sitemap.xml` are rewritten by every build with only that build's pages, so
+# the last unit to run wins and everything else disappears from them.
+# `versions.json` is the exception; it accumulates.
+#
+# So this reads what is on disk after every build has run — one
+# `manifest.json` per `<package>/<version>/` — and rewrites the three
+# site-wide files from all of them together. It also writes the CNAME, which
+# is deployment, not documentation.
+#
+# It composes with docgen through files, never imports: docgen stays a
+# documentation generator that knows nothing about this site, and everything
+# specific to kexhq lives here.
+#
+#   tey run --package docsite -- <site-dir> [base-url]
+
+using Net.HTTP
+
+main(args) do
+  let site = args.first.or("")
+  if site.empty?
+    IO.printError("docsite: usage: docsite <site-dir> [base-url]")
+    return System.exit(1)
+  end
+  if !FS.File.directory?(site)
+    IO.printError("docsite: ${site} is not a directory")
+    return System.exit(1)
+  end
+  let baseUrl = normalizeBase(args.second.or("https://docs.kex.run"))
+
+  let units = readUnits(site)
+  if units.empty?
+    IO.printError("docsite: no <package>/<version>/manifest.json under ${site} — did the docgen builds run?")
+    return System.exit(1)
+  end
+  IO.printLine("docsite: ${units.count} unit(s), ${pageCount(units)} page(s)")
+
+  writeLlms(site, units, baseUrl)
+  writeLlmsFull(site, units)
+  writeSitemap(site, units, baseUrl)
+  writeRobots(site, baseUrl)
+  writeCname(site, baseUrl)
+  IO.printLine("docsite: wrote llms.txt, llms-full.txt, sitemap.xml, robots.txt, CNAME")
+  return System.exit(0)
+end
+
+# One documented unit, as its own manifest describes it.
+record Unit do
+  package : String
+  version : String
+  label : String
+  generatedAt : String
+  pages : [Page]
+end
+
+record Page do
+  path : String
+  title : String
+end
+
+# --- reading what docgen left -------------------------------------------
+
+# `<site>/<package>/<version>/manifest.json`, for every package and version
+# present. A directory without one is skipped rather than reported: the site
+# root also holds assets/ and the odd stray file.
+foul readUnits(site: String) -> [Unit] do
+  let packages = FS.Directory.directories(site).or([]).filter { |d| d != "assets" }.sort
+  return packages.flatMap { |package| unitsOf(site, package) }
+end
+
+foul unitsOf(site: String, package: String) -> [Unit] do
+  let packageDir = FS.Path.join(site, package)
+  let versions = FS.Directory.directories(packageDir).or([]).sort
+  return versions.flatMap { |version| unitOf(packageDir, package, version) }
+end
+
+# A list of nought or one, so the caller can flatMap the misses away.
+foul unitOf(packageDir: String, package: String, version: String) -> [Unit] do
+  let path = FS.Path.join(FS.Path.join(packageDir, version), "manifest.json")
+  match FS.File.read(path) do
+    Error(_) => []
+    Ok(text) => match JSON.parse(text) do
+      Error(_) => do
+        IO.printError("docsite: skip ${package}/${version} (unreadable manifest.json)")
+        return []
+      end
+      Ok(value) => [unitOfJson(value, package, version)]
+    end
+  end
+end
+
+# Parsed JSON arrives as ordinary Kex values — an object is a Map, an array a
+# List — so the fields are read positionally with `[...]` and defaulted, the
+# same way docgen reads versions.json.
+foul unitOfJson(value: Any, package: String, version: String) -> Unit do
+  return Unit {
+    package: jsonText(value["package"], package),
+    version: jsonText(value["version"], version),
+    label: jsonText(value["label"], package),
+    generatedAt: jsonText(value["generatedAt"], ""),
+    pages: pagesOf(value)
+  }
+end
+
+foul pagesOf(value: Any) -> [Page] do
+  match value["pages"] do
+    None => []
+    Just(items) => items.map { |item|
+      Page { path: jsonText(item["path"], ""), title: jsonText(item["title"], "") }
+    }
+  end
+end
+
+foul jsonText(value: Any?, fallback: String) -> String do
+  match value do
+    None => fallback
+    Just(v) => "${v}"
+  end
+end
+
+# --- the site-wide files -------------------------------------------------
+
+# The full URL of a page: the unit's prefix is what the per-unit files cannot
+# know, and leaving it off is what made the old site-wide sitemap point at
+# `/list` rather than `/prelude/0.4.0/list`.
+foul pageUrl(baseUrl: String, unit: Unit, page: Page) -> String do
+  return "${baseUrl}/${unit.package}/${unit.version}/${page.path}"
+end
+
+foul writeLlms(site: String, units: [Unit], baseUrl: String) -> () do
+  let sections = units.map { |unit| llmsSection(unit, baseUrl) }.join("\n\n")
+  let header = "# Kex documentation\n\nEverything published at ${baseUrl}, one section per documented unit.\n\n"
+  let _ = FS.File.write(FS.Path.join(site, "llms.txt"), header + sections + "\n")
+  return ()
+end
+
+foul llmsSection(unit: Unit, baseUrl: String) -> String do
+  let heading = "## ${unit.label} ${unit.version}\n\n"
+  let links = unit.pages.map { |page|
+    "- [${page.title}](${pageUrl(baseUrl, unit, page)})"
+  }.join("\n")
+  return heading + links
+end
+
+# The whole corpus in one file, for a model that wants it in a single shot.
+# The .md docgen already wrote per page IS the corpus; this concatenates it
+# rather than re-rendering anything.
+foul writeLlmsFull(site: String, units: [Unit]) -> () do
+  let bodies = units.flatMap { |unit| unitMarkdown(site, unit) }
+  let _ = FS.File.write(FS.Path.join(site, "llms-full.txt"),
+                        bodies.join("\n\n---\n\n") + "\n")
+  return ()
+end
+
+foul unitMarkdown(site: String, unit: Unit) -> [String] do
+  let versionDir = FS.Path.join(FS.Path.join(site, unit.package), unit.version)
+  return unit.pages.flatMap { |page| pageMarkdown(versionDir, page) }
+end
+
+# Prose units render HTML only, so a missing .md is expected, not an error.
+foul pageMarkdown(versionDir: String, page: Page) -> [String] do
+  match FS.File.read(FS.Path.join(versionDir, page.path + ".md")) do
+    Error(_) => []
+    Ok(text) => [text]
+  end
+end
+
+foul writeSitemap(site: String, units: [Unit], baseUrl: String) -> () do
+  let entries = units.flatMap { |unit| sitemapEntries(unit, baseUrl) }.join("\n")
+  let body = [
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+    entries,
+    "\n</urlset>\n"
+  ].join("")
+  let _ = FS.File.write(FS.Path.join(site, "sitemap.xml"), body)
+  return ()
+end
+
+foul sitemapEntries(unit: Unit, baseUrl: String) -> [String] do
+  return unit.pages.map { |page|
+    "  <url>\n    <loc>${pageUrl(baseUrl, unit, page)}</loc>\n    <lastmod>${unit.generatedAt}</lastmod>\n  </url>"
+  }
+end
+
+foul writeRobots(site: String, baseUrl: String) -> () do
+  let _ = FS.File.write(FS.Path.join(site, "robots.txt"),
+                        "User-agent: *\nAllow: /\nSitemap: ${baseUrl}/sitemap.xml\n")
+  return ()
+end
+
+# GitHub Pages reads the custom domain out of this file, so it has to be in
+# the published tree. It is deployment configuration, which is why it is here
+# and not in docgen.
+foul writeCname(site: String, baseUrl: String) -> () do
+  let host = hostOf(baseUrl)
+  if host.empty?
+    return ()
+  end
+  let _ = FS.File.write(FS.Path.join(site, "CNAME"), host + "\n")
+  return ()
+end
+
+foul hostOf(baseUrl: String) -> String do
+  match URI.URL.parse(baseUrl) do
+    Error(_) => ""
+    Ok(url) => url.host
+  end
+end
+
+foul normalizeBase(url: String) -> String do
+  return url.take(url.count - 1) if url.endsWith?("/")
+  return url
+end
+
+foul pageCount(units: [Unit]) -> Integer do
+  return units.map { |unit| unit.pages.count }.reduce(0, { |a, b| a + b })
+end

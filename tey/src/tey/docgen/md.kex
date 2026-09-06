@@ -48,15 +48,15 @@ module Tey.Docgen.Md do
   end
 
   # The whole job: text in, document out.
-  foul parse(text: String) -> Document do
+  foul parseDocument(text: String) -> Document do
     let (front, body) = splitFrontmatter(text.replace("\r\n", "\n").split("\n"))
-    return Document { frontmatter: front, blocks: blocks(body) }
+    return Document { frontmatter: front, blocks: parseBlocks(body) }
   end
 
   # Text in, HTML out — `parse` then `render`, which is all a caller wanting a
   # page body needs.
   foul toHtml(text: String) -> String do
-    return render(parse(text).blocks)
+    return render(parseDocument(text).blocks)
   end
 
   # --- frontmatter -------------------------------------------------------
@@ -107,9 +107,14 @@ module Tey.Docgen.Md do
   end
 
   foul unquote(value: String) -> String do
-    return value.drop(1).dropLast(1) if quoted?(value, "\"")
-    return value.drop(1).dropLast(1) if quoted?(value, "'")
+    return trimEnds(value) if quoted?(value, "\"")
+    return trimEnds(value) if quoted?(value, "'")
     return value
+  end
+
+  # Drops the first and last character — the quotes `quoted?` just matched.
+  foul trimEnds(value: String) -> String do
+    return value.drop(1).take(value.count - 2)
   end
 
   foul quoted?(value: String, mark: String) -> Bool do
@@ -118,7 +123,7 @@ module Tey.Docgen.Md do
 
   # --- block structure ---------------------------------------------------
 
-  foul blocks(lines: [String]) -> [MdBlock] do
+  foul parseBlocks(lines: [String]) -> [MdBlock] do
     return blockLoop(lines, [])
   end
 
@@ -172,7 +177,7 @@ module Tey.Docgen.Md do
   end
 
   foul ruleOf?(text: String, mark: String) -> Bool do
-    return text.chars.all? { |c| c.to(String) == mark }
+    return text.chars.all? { |c| c.string == mark }
   end
 
   # `##` → 2. Zero when the line is not a heading; `#hashtag` is not one.
@@ -214,7 +219,7 @@ module Tey.Docgen.Md do
   foul takeQuote(lines: [String]) -> (MdBlock, [String]) do
     let taken = lines.takeWhile { |line| quoteLine?(line) }
     let inner = taken.map { |line| stripQuote(line) }
-    return (Quote(blocks(inner)), lines.drop(taken.count))
+    return (Quote(parseBlocks(inner)), lines.drop(taken.count))
   end
 
   foul quoteLine?(line: String) -> Bool do
@@ -273,13 +278,13 @@ module Tey.Docgen.Md do
     let text = current.first.or("")
     let nested = dedent(current.drop(1))
     let trimmed = dropTrailingBlanks(nested)
-    return accum + [ListItem { text: text, children: blocks(trimmed) }]
+    return accum + [ListItem { text: text, children: parseBlocks(trimmed) }]
   end
 
   foul dropTrailingBlanks(lines: [String]) -> [String] do
     return lines if lines.empty?
     return lines if !lines.last.or("").trim.empty?
-    return dropTrailingBlanks(lines.dropLast(1))
+    return dropTrailingBlanks(lines.take(lines.count - 1))
   end
 
   # Removes the common indent, so nested content is parsed at column zero.
@@ -291,7 +296,7 @@ module Tey.Docgen.Md do
   end
 
   foul indentOf(line: String) -> Integer do
-    return line.count - line.trimStart.count
+    return line.chars.takeWhile { |c| c == ' ' || c == '\t' }.count
   end
 
   foul itemMarker(line: String) -> String do
@@ -311,7 +316,7 @@ module Tey.Docgen.Md do
   # "12. " → "12." ; anything else → "".
   foul numberMarker(line: String) -> String do
     let t = line.trim
-    let digits = t.chars.takeWhile { |c| c.digit? }.map { |c| c.to(String) }.join("")
+    let digits = t.chars.takeWhile { |c| c.digit? }.map { |c| c.string }.join("")
     return "" if digits.empty?
     return "" if !t.drop(digits.count).startsWith?(". ")
     return digits + "."
@@ -330,7 +335,7 @@ module Tey.Docgen.Md do
   foul delimiterRow?(line: String) -> Bool do
     let t = line.trim
     return false if !t.contains?("-")
-    return t.chars.all? { |c| delimiterChar?(c.to(String)) }
+    return t.chars.all? { |c| delimiterChar?(c.string) }
   end
 
   foul delimiterChar?(c: String) -> Bool do
@@ -350,7 +355,7 @@ module Tey.Docgen.Md do
   foul cellsOf(line: String) -> [String] do
     let t = line.trim
     let inner = t.startsWith?("|") then t.drop(1) else t
-    let core = inner.endsWith?("|") then inner.dropLast(1) else inner
+    let core = inner.endsWith?("|") then inner.take(inner.count - 1) else inner
     return core.split("|").map { |cell| cell.trim }
   end
 
@@ -431,11 +436,20 @@ module Tey.Docgen.Md do
   foul anchor(text: String) -> String do
     let lowered = stripInline(text).lowerCase
     let mapped = lowered.chars.map { |c| anchorChar(c) }.join("")
-    return squeezeDashes(mapped, "").trim("-")
+    return trimDashes(squeezeDashes(mapped, ""))
+  end
+
+  # `String.trim` takes no argument, and the folding above can leave a dash at
+  # either end (`## \`try\`` → `-try-`).
+  foul trimDashes(text: String) -> String do
+    return text if text.empty?
+    return trimDashes(text.drop(1)) if text.startsWith?("-")
+    return trimDashes(text.take(text.count - 1)) if text.endsWith?("-")
+    return text
   end
 
   foul anchorChar(c: Char) -> String do
-    return c.to(String) if c.alphanumeric?
+    return c.string if c.letter? || c.digit?
     return "-"
   end
 
@@ -515,7 +529,10 @@ module Tey.Docgen.Md do
         return None if !after.startsWith?("(")
         match after.indexOf(')') do
           None => None
-          Just(paren) => Just((label, after.drop(1).take(paren - 1), after.drop(paren + 1)))
+          Just(paren) => do
+            let stop: Integer = paren
+            return Just((label, after.drop(1).take(stop - 1), after.drop(stop + 1)))
+          end
         end
       end
     end
@@ -536,12 +553,12 @@ module Tey.Docgen.Md do
   # Replaces each surviving pair of markers with a tag. An unpaired marker is
   # left as written rather than swallowing the rest of the line.
   foul pairs(text: String, mark: String, tag: String, accum: String) -> String do
-    match text.indexOf(mark) do
+    match indexOfText(text, mark, 0) do
       None => accum + text
       Just(start) => do
         let before = text.take(start)
         let rest = text.drop(start + mark.count)
-        match rest.indexOf(mark) do
+        match indexOfText(rest, mark, 0) do
           None => accum + text
           Just(stop) => do
             let inner = rest.take(stop)
@@ -551,6 +568,15 @@ module Tey.Docgen.Md do
         end
       end
     end
+  end
+
+  # Where `needle` first occurs in `haystack`, or None. String.indexOf takes a
+  # Char, and the markers here are two characters wide ("**"), so the search
+  # is spelled out.
+  foul indexOfText(haystack: String, needle: String, at: Integer) -> Integer? do
+    return None if at + needle.count > haystack.count
+    return Just(at) if haystack.drop(at).startsWith?(needle)
+    return indexOfText(haystack, needle, at + 1)
   end
 
   foul esc(s: String) -> String do
