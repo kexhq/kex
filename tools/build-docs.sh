@@ -78,11 +78,16 @@ build_tag_docs() {
     echo "build-docs: WARNING $2 $4 failed — keeping previous output" >&2
 }
 
+# Static book content lives in kexhq/docs, versioned per release as
+# guide/<version>/. CI checks that repo out and points GUIDE_SOURCE at the
+# version being built; locally it defaults to this checkout's scratch tree.
+# Whatever it names must be a flat tree of .md files — skipped when absent.
+GUIDE_SOURCE="${GUIDE_SOURCE:-$ROOT/docs-src/guide}"
+
 # build_prose <md-dir> <package> <label> <version>
 #
 # Hand-written Markdown rendered into the same chrome as the reference (see
-# `tey docs prose`). A tree that is not there is skipped: old tags predate
-# docs-src/guide, so for them this is a no-op rather than a failure.
+# `tey docs prose`). A tree that is not there is skipped.
 build_prose() {
   local source="$1" package="$2" label="$3" version="$4"
   if [ ! -d "$source" ]; then
@@ -96,11 +101,6 @@ build_prose() {
   fi
   echo "build-docs: $package prose $version"
   "$TEY_RUN" "${args[@]}"
-}
-
-build_tag_prose() {
-  build_prose "$@" || \
-    echo "build-docs: WARNING $2 prose $4 failed — keeping previous output" >&2
 }
 
 # tey's own version as declared by a checkout's tey/package.kex.
@@ -123,7 +123,9 @@ if [ -z "${SKIP_TAGS:-}" ]; then
     }
     build_tag_docs "$wt/src/stdlib" prelude "Standard Library" "$version"
     build_tag_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
-    build_tag_prose "$wt/docs-src/guide" guide "Guide" "$version"
+    # No guide for old tags: the book is versioned per release in kexhq/docs,
+    # and a tag's guide is whatever that repo held when the tag shipped — a
+    # backfill loop over its version dirs, not this script's worktree walk.
     git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
   done
 fi
@@ -142,7 +144,7 @@ build_docs "$ROOT/src/stdlib" prelude "Standard Library" \
   "$(kex_version "$ROOT")-dev" || unreleased_failed=1
 build_docs "$ROOT/tey/src" tey "Tey" "$(tey_version "$ROOT")-dev" || \
   unreleased_failed=1
-build_prose "$ROOT/docs-src/guide" guide "Guide" \
+build_prose "$GUIDE_SOURCE" guide "Guide" \
   "$(kex_version "$ROOT")-dev" || unreleased_failed=1
 
 # Static site assets docgen does not own — the favicon, the kexhq GitHub org

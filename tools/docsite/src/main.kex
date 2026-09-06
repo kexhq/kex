@@ -132,18 +132,124 @@ foul pageUrl(baseUrl: String, unit: Unit, page: Page) -> String do
 end
 
 foul writeLlms(site: String, units: [Unit], baseUrl: String) -> () do
-  let sections = units.map { |unit| llmsSection(unit, baseUrl) }.join("\n\n")
-  let header = "# Kex documentation\n\nEverything published at ${baseUrl}, one section per documented unit.\n\n"
+  let latest = latestStableVersions(units)
+  let sections = units.map { |unit| llmsSection(unit, baseUrl, latest) }.join("\n\n")
+  let header = [
+    "# Kex documentation",
+    "",
+    "Everything published at ${baseUrl}, one section per documented unit.",
+    "Sections list alphabetically, which reads as a curriculum: the Guide",
+    "first, then the Standard Library, then Tey.",
+    "",
+    "How to read this with an LLM: start with the Guide, then the prelude",
+    "tour, then the reference sections. A section marked (latest) is the",
+    "release to cite; versions ending in `-dev` are unreleased snapshots.",
+    "`versions.json` enumerates every published (package, version), and each",
+    "one carries its own `model.json` and `search.json`. Every page below",
+    "also exists as raw Markdown — the same address with `.html` swapped",
+    "for `.md` — and the whole corpus concatenated is `llms-full.txt`.",
+    ""
+  ].join("\n")
   let _ = FS.File.write(FS.Path.join(site, "llms.txt"), header + sections + "\n")
   return ()
 end
 
-foul llmsSection(unit: Unit, baseUrl: String) -> String do
-  let heading = "## ${unit.label} ${unit.version}\n\n"
+foul llmsSection(unit: Unit, baseUrl: String, latest: [Latest]) -> String do
+  let mark = match latest.find { |l| l.package == unit.package } do
+    Just(found) => found.version == unit.version then " (latest)" else ""
+    None => ""
+  end
+  let heading = "## ${unit.label} ${unit.version}${mark}\n\n"
   let links = unit.pages.map { |page|
-    "- [${page.title}](${pageUrl(baseUrl, unit, page)})"
+    "- [${page.title}](${pageUrl(baseUrl, unit, page)}.html)"
   }.join("\n")
   return heading + links
+end
+
+# What readers should cite, per package: its highest released version.
+# Snapshots (`-dev`) and versions that do not parse never outrank a release.
+record Latest do
+  package : String
+  version : String
+end
+
+record SemVer do
+  major : Integer
+  minor : Integer
+  patch : Integer
+  pre : String
+end
+
+foul latestStableVersions(units: [Unit]) -> [Latest] do
+  return latestLoop(units, [])
+end
+
+foul latestLoop(units: [Unit], found: [Latest]) -> [Latest] do
+  match units.first do
+    None => found
+    Just(unit) => do
+      let rest = units.drop(1)
+      if found.map { |l| l.package }.contains?(unit.package)
+        return latestLoop(rest, found)
+      end
+      return latestLoop(rest, found + latestFor(units, unit.package))
+    end
+  end
+end
+
+foul latestFor(units: [Unit], package: String) -> [Latest] do
+  let releases = units
+    .filter { |unit| unit.package == package }
+    .map { |unit| unit.version }
+    .reject { |version| version.endsWith?("-dev") }
+  match releases.reduce(None, { |best, version| newerRelease(best, version) }) do
+    None => []
+    Just(version) => [Latest { package: package, version: version }]
+  end
+end
+
+foul newerRelease(best: String?, version: String) -> String? do
+  match parseRelease(version) do
+    None => best
+    Just(v) => match best do
+      None => Just(version)
+      Just(current) => match parseRelease(current) do
+        None => Just(version)
+        Just(c) => greaterSemVer(v, c) then Just(version) else best
+      end
+    end
+  end
+end
+
+foul parseRelease(text: String) -> SemVer? do
+  let core = text.split("-").first.or("")
+  let pre = text.split("-").drop(1).join("-")
+  let parts = core.split(".")
+  match Integer.parse(parts.at(0).or("")) do
+    Error(_) => None
+    Ok(major) => match Integer.parse(parts.at(1).or("0")) do
+      Error(_) => None
+      Ok(minor) => match Integer.parse(parts.at(2).or("0")) do
+        Error(_) => None
+        Ok(patch) => Just(SemVer { major: major, minor: minor, patch: patch, pre: pre })
+      end
+    end
+  end
+end
+
+foul greaterSemVer(a: SemVer, b: SemVer) -> Bool do
+  return true if a.major > b.major
+  return false if a.major < b.major
+  return true if a.minor > b.minor
+  return false if a.minor < b.minor
+  return true if a.patch > b.patch
+  return false if a.patch < b.patch
+  # Same numbers: a release beats any pre-release of it. Two different
+  # pre-releases keep whatever came first — precise pre-release ordering is
+  # a version-solver's job, not a docs assembler's.
+  return false if a.pre == b.pre
+  return true if a.pre == ""
+  return false
 end
 
 # The whole corpus in one file, for a model that wants it in a single shot.
