@@ -69,7 +69,7 @@ module Tey.Docgen.Cli do
     IO.printLine("  --source <dir>     source directory with .kex files (default: src/)")
     IO.printLine("  --out <dir>        site root; pages land at <out>/<package>/<version>")
     IO.printLine("  --release <v>      release being documented (default: package.kex's)")
-    IO.printLine("  --package <name>   package name (default: package.kex's, else prelude)")
+    IO.printLine("  --package <name>   package name (default: package.kex's, else required)")
     IO.printLine("  --label <text>     human-readable package label (default: the name)")
     IO.printLine("  --base-url <url>   site base URL for sitemap")
     IO.printLine("")

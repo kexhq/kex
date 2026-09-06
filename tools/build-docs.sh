@@ -72,6 +72,31 @@ build_tag_docs() {
     echo "build-docs: WARNING $2 $4 failed — keeping previous output" >&2
 }
 
+# build_prose <md-dir> <package> <label> <version>
+#
+# Hand-written Markdown rendered into the same chrome as the reference (see
+# `tey docs prose`). A tree that is not there is skipped: old tags predate
+# docs-src/guide, so for them this is a no-op rather than a failure.
+build_prose() {
+  local source="$1" package="$2" label="$3" version="$4"
+  if [ ! -d "$source" ]; then
+    echo "build-docs: skip $package prose (no $source)"
+    return 0
+  fi
+  local args=(docs prose --source "$source" --out "$OUT" --package "$package" \
+              --label "$label" --release "$version")
+  if [ -n "${BASE_URL:-}" ]; then
+    args+=(--base-url "$BASE_URL")
+  fi
+  echo "build-docs: $package prose $version"
+  "$TEY_RUN" "${args[@]}"
+}
+
+build_tag_prose() {
+  build_prose "$@" || \
+    echo "build-docs: WARNING $2 prose $4 failed — keeping previous output" >&2
+}
+
 # tey's own version as declared by a checkout's tey/package.kex.
 tey_version() {
   sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/tey/package.kex" | head -1
@@ -92,6 +117,7 @@ if [ -z "${SKIP_TAGS:-}" ]; then
     }
     build_tag_docs "$wt/src/stdlib" prelude "Standard Library" "$version"
     build_tag_docs "$wt/tey/src" tey "Tey" "$(tey_version "$wt")"
+    build_tag_prose "$wt/docs-src/guide" guide "Guide" "$version"
     git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
   done
 fi
@@ -100,7 +126,7 @@ fi
 # "-dev" release so an unreleased build can never overwrite the published
 # pages of the same version number.
 #
-# These two are FATAL. They are the ones that break when docgen or the
+# These are FATAL. They are the ones that break when docgen or the
 # sources they read regress, and the previous version of this script masked
 # every failure behind a warning — which is how a crash on startup, a
 # swallowed --package and a broken HTML emitter all shipped unnoticed
@@ -110,12 +136,26 @@ build_docs "$ROOT/src/stdlib" prelude "Standard Library" \
   "$(kex_version "$ROOT")-dev" || unreleased_failed=1
 build_docs "$ROOT/tey/src" tey "Tey" "$(tey_version "$ROOT")-dev" || \
   unreleased_failed=1
+build_prose "$ROOT/docs-src/guide" guide "Guide" \
+  "$(kex_version "$ROOT")-dev" || unreleased_failed=1
 
 # Static site assets docgen does not own — the favicon, the kexhq GitHub org
 # icon. Copied here rather than generated, so docgen stays a documentation
 # generator and the branding lives in the output.
 if [ -f "$ROOT/tools/docs-assets/icon.png" ]; then
   cp "$ROOT/tools/docs-assets/icon.png" "$OUT/icon.png"
+fi
+
+# The final step: assemble the site-wide files (landing page, aggregated
+# llms.txt/llms-full.txt/sitemap.xml, CNAME) out of every unit docgen wrote.
+# Docgen documents one unit per run and stays free of site concepts; this
+# package owns the site. Fatal like the unreleased builds above.
+if [ -n "${BASE_URL:-}" ]; then
+  (cd "$ROOT/tools/docsite" && "$TEY_RUN" run -- "$OUT" "$BASE_URL") || \
+    unreleased_failed=1
+else
+  (cd "$ROOT/tools/docsite" && "$TEY_RUN" run -- "$OUT") || \
+    unreleased_failed=1
 fi
 
 if [ "$unreleased_failed" -ne 0 ]; then

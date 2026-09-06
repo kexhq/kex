@@ -12,6 +12,14 @@ let COMMAND_PARSER = OptionParser.define("testcli", "A test CLI with commands")
     0
   end
 
+# A command that parses its own options: everything after its words belongs
+# to the handler, even names the outer tool also declares (`--package`).
+let passthroughParser = OptionParser.define("outer", "Outer tool")
+  .string("package", None, "Select one workspace package", None, false)
+  .passthroughCommand("docs", "<build|serve>", "generate documentation") do |options|
+    0
+  end
+
 describe("OptionParser") do
   it("parses long, short, typed, and flag options") do
     match OPTION_PARSER.parse(["--name", "Alice", "-p", "8080", "-v"]) do
@@ -74,6 +82,26 @@ describe("OptionParser") do
 
   it("still rejects unknown options before a command word") do
     assert(COMMAND_PARSER.parse(["--source", "src", "docs"]) == Error(UnknownOption("--source")))
+  end
+
+  it("forwards an option the outer tool also declares to a passthrough command") do
+    match passthroughParser.parse(["docs", "build", "--package", "prelude"]) do
+      Ok(parsed) => do
+        assert(parsed.arguments == ["docs", "build", "--package", "prelude"])
+        assert(parsed.value("package", "") == "")
+      end
+      Error(_) => assert(false)
+    end
+  end
+
+  it("still claims the outer tool's own options before a passthrough command") do
+    match passthroughParser.parse(["--package", "outer", "docs", "build", "--package", "inner"]) do
+      Ok(parsed) => do
+        assert(parsed.value("package", "") == "outer")
+        assert(parsed.arguments == ["docs", "build", "--package", "inner"])
+      end
+      Error(_) => assert(false)
+    end
   end
 
   it("renders options in declaration order") do

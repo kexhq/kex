@@ -208,7 +208,7 @@ end
 foul hostOf(baseUrl: String) -> String do
   match URI.URL.parse(baseUrl) do
     Error(_) => ""
-    Ok(url) => url.host
+    Ok(url) => url.host.ascii
   end
 end
 

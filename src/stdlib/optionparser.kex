@@ -75,6 +75,15 @@ record CommandSpec do
   # What to run when this command is named.
   handler : CommandHandler
 
+  # Whether the command parses its own options. A passthrough command owns
+  # every token after its name: the outer parser stops matching options
+  # against its OWN declarations and forwards them verbatim in `arguments`,
+  # the way everything after `--` is forwarded. Without this a subcommand
+  # that runs its own OptionParser can only receive the option names the
+  # outer tool does not itself declare, and a collision is silent — the
+  # outer tool consumes the value and the subcommand sees nothing.
+  passthrough : Bool = false
+
   # The help heading this command is listed under. "" is the tool's own
   # `Commands:` block; anything else gets its own heading, in the order the
   # sections were first declared. Commands a tool discovers at runtime: a
@@ -324,6 +333,31 @@ make OptionConfig do
     New { commands: [...@commands, spec] }
   end
 
+  # Declares a command that parses its own options.
+  #
+  # Everything after the command's name is handed to the handler in
+  # +arguments+ untouched, including options this tool also declares. Use it
+  # for a subcommand backed by its own +OptionConfig+: without it, an option
+  # the outer tool happens to declare too is consumed here and never reaches
+  # the subcommand, with no error to say so.
+  #
+  # @param name [String] the command's name, one or more words
+  # @param usage [String] the argument shape shown in the help text
+  # @param description [String] the help-text description
+  # @param handler [CommandHandler] what to run
+  # @return [OptionConfig] the config, with the command added
+  #
+  # @example
+  #   config.passthroughCommand("docs", "<build|serve>",
+  #                             "generate documentation", ~docs)
+  let passthroughCommand(name: String, usage: String, description: String,
+                         handler: CommandHandler) -> OptionConfig do
+    let spec = CommandSpec { name: name, description: description,
+                             usage: usage, handler: handler,
+                             passthrough: true }
+    New { commands: [...@commands, spec] }
+  end
+
   # Parses +args+ into option values and leftover words, without dispatching
   # to a command.
   #
@@ -519,6 +553,28 @@ module OptionParser do
     end
   end
 
+  # Whether the command +arguments+ names parses its own options.
+  #
+  # +false+ when no command matches yet, so options before any command word
+  # are still this parser's to claim.
+  #
+  # @param commands [[CommandSpec]] the declared commands
+  # @param arguments [[String]] the positional words seen so far
+  # @return [Bool] +true+ when a matched command is passthrough
+  #
+  # @example
+  #   OptionParser.passthrough?(commands, ["docs", "build"])   # => true
+  #   OptionParser.passthrough?(commands, [])                  # => false
+  let passthrough?(commands: [CommandSpec], arguments: [String]) -> Bool do
+    match OptionParser.commandFor(commands, arguments) do
+      None => false
+      Just(pair) => do
+        let (command, _) = pair
+        return command.passthrough
+      end
+    end
+  end
+
   # Returns +true+ when +arguments+ begins with the words of +name+.
   #
   # The word-wise prefix test +commandFor+ matches with: +"docs build"+ opens
@@ -610,6 +666,15 @@ module OptionParser do
         return OptionParser.walk(options, commands, rest, values, arguments, true)
       end
       if !argument.startsWith?("-") || argument == "-"
+        return OptionParser.walk(options, commands, rest, values, [...arguments, argument], false)
+      end
+
+      # A passthrough command owns the rest of the line. Once its words are
+      # in `arguments`, every option belongs to ITS vocabulary, so none is
+      # matched against this tool's declarations — otherwise a name both
+      # parsers declare (`tey --package` and `tey docs --package`) is eaten
+      # here and the subcommand silently never sees it.
+      if OptionParser.passthrough?(commands, arguments)
         return OptionParser.walk(options, commands, rest, values, [...arguments, argument], false)
       end
 
