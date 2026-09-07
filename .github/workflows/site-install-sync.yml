@@ -37,14 +37,32 @@ jobs:
       contents: read
     # A pull request only rehearses; only main (or a manual dispatch) syncs.
     if: github.event_name != 'pull_request'
+    # Every run force-pushes the same `sync/install-sh` branch, so two
+    # overlapping runs race on `--force-with-lease` and the loser goes red.
+    # Serialise instead: a queued run waits, and usually finds the mirror
+    # already matches and exits at the check below.
+    concurrency:
+      group: site-install-sync
+      cancel-in-progress: false
     steps:
       - name: Check site sync credentials
         env:
           SITE_SYNC_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
+          GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${SITE_SYNC_TOKEN:-}" ]; then
             echo "::error::SITE_SYNC_TOKEN is empty. Create a fine-grained PAT with Contents and Pull requests read/write on kexhq/site and store it as a repository Actions secret in kexhq/kex."
+            exit 1
+          fi
+          # Fail fast on a token that cannot push. A read-scoped token clears
+          # the check above, clones the site fine, and then goes red halfway
+          # through the mirror below — after pushing nothing — which reads as
+          # a broken workflow rather than a broken secret. `push` is the
+          # token's effective repository permission, so this needs Contents
+          # read/write on kexhq/site.
+          if [ "$(gh api repos/kexhq/site --jq .permissions.push)" != "true" ]; then
+            echo "::error::SITE_SYNC_TOKEN cannot push to kexhq/site. Give the fine-grained PAT Contents read/write (and Pull requests read/write for the pull-request step) on kexhq/site."
             exit 1
           fi
 
