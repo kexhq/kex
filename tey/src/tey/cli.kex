@@ -632,13 +632,15 @@ private do
 
   foul dispatchParsed(args: [String], options: ParsedOptions) -> Integer do
     return Tey.Cli.showVersion() if options.flagEnabled?("version")
+    Tey.Cli.announceToolchain
     # `--help`, and a line with no command at all, are both `run`'s job — but
     # its exits for them call `this.printHelp`, which the BEAM backend emits at
     # the wrong arity, so the compiled `tey` answers `undef` (kexhq/kex#192).
     # Call directly rather than going through `run`, whose help exit used to
-    # lower at the wrong arity on BEAM (kexhq/kex#192).
-    return Tey.Cli.parser.printHelp if options.flagEnabled?("help") || options.arguments.empty?
-    Tey.Cli.announceToolchain
+    # lower at the wrong arity on BEAM (kexhq/kex#192). This is the full `cli`,
+    # not the bare `parser`, so a package's own commands list here by default;
+    # the manifest read needs the compiler announced above to parse at all.
+    return Tey.Cli.cli.printHelp if options.flagEnabled?("help") || options.arguments.empty?
     # A built-in needs no manifest, and reading one costs a `kex --emit-ast`
     # per invocation — a price `bin/kex` would pay on every single `kex` call,
     # since it asks `tey kex which` where the compiler is. So a package's own

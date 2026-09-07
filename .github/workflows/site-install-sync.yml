@@ -1,0 +1,115 @@
+name: Site install sync
+
+# kex.run/install.sh is the installer people are told to curl, but this
+# repository cannot serve it: kex.run belongs to kexhq/site (Astro,
+# `public/` served at the root). So this workflow mirrors install.sh there
+# and opens a pull request on the site whenever the mirror drifts.
+#
+# Its own workflow rather than a job in ci.yml because `paths` filters are
+# workflow-level in Actions — same reason Formula bump has its own file.
+#
+# What it needs that this repository does not contain: a SITE_SYNC_TOKEN
+# secret (fine-grained PAT with Contents read/write and Pull requests
+# read/write on kexhq/site). Without it the sync job fails loudly and
+# install.sh simply stays as-is; nothing else breaks. The token is deliberately
+# NOT behind an environment: this runs unattended on every main push that
+# touches install.sh, and an approval gate would stall exactly the automation
+# it exists for — the safety is that it only ever opens a pull request, never
+# pushes to the site's default branch.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - ".github/workflows/site-install-sync.yml"
+  # Rehearsal: prove the copy-and-compare works without pushing anywhere.
+  pull_request:
+    paths:
+      - "install.sh"
+      - ".github/workflows/site-install-sync.yml"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # A pull request only rehearses; only main (or a manual dispatch) syncs.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the site
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/site
+          path: site
+          # A cross-repository push needs a token of its own; the job's
+          # default GITHUB_TOKEN is scoped to kexhq/kex.
+          token: ${{ secrets.SITE_SYNC_TOKEN }}
+
+      - name: Mirror install.sh and open a pull request
+        env:
+          GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::SITE_SYNC_TOKEN is empty. Create a fine-grained PAT with Contents and Pull requests read/write on kexhq/site and store it as a repository secret."
+            exit 1
+          fi
+
+          cp install.sh site/public/install.sh
+          cd site
+          # Re-running after a merged sync, or pushing an install.sh that only
+          # touched comments elsewhere, must not fail the job.
+          if git diff --quiet; then
+            echo "kex.run/install.sh already matches install.sh"
+            exit 0
+          fi
+
+          branch="sync/install-sh"
+          git config user.name "kex release"
+          git config user.email "noreply@kex.run"
+          # A previous sync's branch may still be on the remote (open PR):
+          # fetch it so the push below keeps its --force-with-lease base
+          # instead of failing as "stale info".
+          git fetch origin "$branch" || true
+          git checkout -B "$branch"
+          git commit -am "Sync install.sh from kexhq/kex"
+          git push --force-with-lease origin "$branch"
+
+          if [ "$(gh pr list --repo kexhq/site --head "$branch" --json number --jq length)" = "0" ]; then
+            sha=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)
+            gh pr create --repo kexhq/site --base main --head "$branch" \
+              --title "Sync install.sh from kexhq/kex@${sha}" \
+              --body "Mirrors install.sh from kexhq/kex@${sha}, which serves https://kex.run/install.sh. Opened by automation; safe to merge once the diff is only the installer."
+          else
+            echo "Updated the open sync pull request."
+          fi
+
+  rehearse:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the site (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/site
+          path: site
+
+      - name: Show what a sync would change
+        run: |
+          set -euo pipefail
+          cp install.sh site/public/install.sh
+          cd site
+          if git diff --quiet; then
+            echo "In sync: merging this would open no site pull request."
+          else
+            echo "Merging this would sync the following to kex.run/install.sh:"
+            git diff --stat
+          fi
