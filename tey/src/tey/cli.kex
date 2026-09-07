@@ -55,6 +55,9 @@ foul parser -> OptionConfig do
     .command("update", "[<name>]", "re-resolve dependencies transactionally") do |options|
       Tey.Commands.updateDependencies(options.arguments.first.or(""))
     end
+    .command("upgrade", "[<version> | latest] [--pre]", "upgrade Tey itself to the newest release") do |options|
+      Tey.Cli.upgradeSelf(options)
+    end
     .command("local", "[<name> [<path>]] [--list] [--remove]",
              "manage developer-only live path overrides") do |options|
       Tey.Cli.localOverride(options)
@@ -508,6 +511,63 @@ private do
       Error(error) => do
         IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
+      end
+    end
+  end
+
+  # Every `upgrade` spelling, told apart the same way as `kex install`: bare
+  # and `latest` track the newest release (`--pre` opts into pre-releases),
+  # and a version pins one — including an older one, which is the way back
+  # from a bad release.
+  foul upgradeSelf(options: ParsedOptions) -> Integer do
+    match options.arguments do
+      [] => Tey.Cli.upgradeToNewest(options.flagEnabled?("pre"))
+      ["latest"] => Tey.Cli.upgradeToNewest(options.flagEnabled?("pre"))
+      [version] => Tey.Cli.upgradeToPinned(version)
+      _ => Tey.Cli.unknown("upgrade")
+    end
+  end
+
+  foul upgradeToNewest(includePre: Bool) -> Integer do
+    match Tey.SelfUpdate.upgradeLatest(includePre) do
+      Error(error) => do
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        1
+      end
+      # Already announced inside `installFrom`, before the runtime swap made
+      # any further call unsafe — see the comment there. Nothing left to say.
+      Ok(outcome) => match outcome do
+        Upgraded(_, _) => 0
+        AlreadyNewest(version) => do
+          IO.printLine("Tey ${version} is already the newest version")
+          0
+        end
+        NewerThanRelease(version) => do
+          IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
+          0
+        end
+      end
+    end
+  end
+
+  foul upgradeToPinned(version: String) -> Integer do
+    match Tey.SelfUpdate.upgradePinned(version) do
+      Error(error) => do
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        1
+      end
+      # Already announced inside `installFrom`, before the runtime swap made
+      # any further call unsafe — see the comment there. Nothing left to say.
+      Ok(outcome) => match outcome do
+        Upgraded(_, _) => 0
+        AlreadyNewest(current) => do
+          IO.printLine("Tey ${current} is already the newest version")
+          0
+        end
+        NewerThanRelease(current) => do
+          IO.printLine("Tey ${current} is newer than the newest release; nothing to do")
+          0
+        end
       end
     end
   end

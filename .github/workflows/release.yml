@@ -689,6 +689,12 @@ jobs:
             echo "npm install @kexhq/kex@${VERSION}"
             echo '```'
             echo
+            echo "No Tey yet (and no Homebrew) — one line installs it with a Kex:"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://raw.githubusercontent.com/kexhq/kex/main/install.sh | sh -s -- --kex ${VERSION}"
+            echo '```'
+            echo
             echo "Or download the archive for your machine below; each has a \`.sha256\` beside it."
             if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
               echo "This is a pre-release: \`brew install tey\` and a bare \`tey kex install\`"

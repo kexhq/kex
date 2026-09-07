@@ -24,6 +24,13 @@ brew install kexhq/tey/tey
 kex --version
 ```
 
+Without Homebrew, the same install is one line — it fetches the published
+release, verifies its checksum, and runs `tey kex install` for the compiler:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kexhq/kex/main/install.sh | sh
+```
+
 The `kex` on your PATH is Tey's dispatcher: it runs whichever toolchain Tey has
 selected, so there is only ever one compiler command and Tey decides what it
 means.
@@ -32,6 +39,7 @@ means.
 tey kex list [--pre]        # released and installed versions
 tey kex install [<version>] # newest stable, or the one you name
 tey kex use <version>       # switch what `kex` runs
+tey upgrade [--pre] [<version>] # upgrade Tey itself (non-brew installs)
 ```
 
 The tap follows the stable line; `--HEAD` still works and builds from main.
