@@ -1,0 +1,404 @@
+module Tey.SelfUpdate
+
+# Upgrading Tey itself (`tey upgrade`), for installs that came from a release
+# archive rather than a package manager — see `install.sh` at the repository
+# root. A Homebrew-managed Tey is brew's to upgrade and is refused here.
+#
+# Tey has its own version and its own cadence (`tey/package.kex`), so it
+# cannot reuse the Kex tag list directly: the newest Tey is the one the
+# newest Kex release's manifest declares. That manifest is read over plain
+# HTTPS (raw.githubusercontent.com) with the same curl-then-wget idiom
+# `Tey.Toolchain.download` already uses — no GitHub API, no rate limits, no
+# clone. The archive itself is the `tey-<version>.tar.gz` the release
+# workflow publishes beside the Kex archives, under the same tag.
+
+# What `tey upgrade` found: either the version it installed and where, or
+# why there was nothing to install.
+type UpgradeOutcome =
+  | Upgraded(String, String)
+  | AlreadyNewest(String)
+  | NewerThanRelease(String)
+
+# Where this Tey is installed, or None when it cannot be told — outside an
+# installed launcher (a source checkout, `erl` by hand) there is nothing safe
+# to overwrite. `tey/bin/tey` exports TEY_EBIN before invoking the BEAM, so a
+# released install always knows.
+foul currentPrefix -> String? do
+  match ENV.get("TEY_EBIN") do
+    None => return None
+    Just(ebin) => return Tey.SelfUpdate.prefixOf(ebin)
+  end
+end
+
+# TEY_EBIN with the trailing `/lib/kex/tey/ebin` stripped. Anything else —
+# unset, empty, a checkout's `tey/ebin` — is None: there is no install prefix
+# to upgrade in place.
+let prefixOf(ebin: String) -> String? do
+  let suffix = "/lib/kex/tey/ebin"
+  return None if !ebin.endsWith?(suffix)
+  let prefix = ebin.take(ebin.count - suffix.count)
+  return prefix.empty? then None else Just(prefix)
+end
+
+# Whether this install belongs to Homebrew, whose keg bookkeeping Tey must
+# not fight: that Tey upgrades with `brew upgrade tey`.
+let homebrewManaged?(prefix: String) -> Bool do
+  return prefix.contains?("/Cellar/")
+end
+
+# The `version("...")` line of a `package.kex` manifest, read as plain text.
+# The manifest reader cannot be used here: it parses a LOCAL package through
+# the selected compiler, and this text was just downloaded, not installed.
+let manifestVersion(text: String) -> String? do
+  match text.lines.filter { |line| line.trim.startsWith?("version(") }.first do
+    None => return None
+    Just(line) => do
+      let version = line.split("\"").second.or("")
+      return None if Tey.Semver.parseVersion(version) == None
+      return Just(version)
+    end
+  end
+end
+
+# Ordering for two version strings, for the already-newest guard. Something
+# unparsable compares as older: a hand-edited development version must never
+# read as "newer than every release" and refuse its own upgrade.
+#
+# Written over `newer?` rather than `compare` on purpose: a trait method from
+# another module's `make ..., implement: Comparable` does not dispatch to a
+# custom record from outside that module on the BEAM backend, while a plain
+# `let` like `newer?` calls anywhere.
+let compareVersions(a: String, b: String) -> Ordering do
+  return Greater if Tey.Semver.newer?(a, b)
+  return Less if Tey.Semver.newer?(b, a)
+  return Equal
+end
+
+# A source install (`make -C tey install`) bakes an absolute `erl` into
+# `bin/tey`; release archives bake a bare `erl` resolved from PATH. Upgrading
+# must not silently move the former onto the latter, so the old absolute path
+# is carried into the new launcher. Anything else (no line, a relative `erl`,
+# the dev placeholder) leaves the new launcher exactly as published.
+let carryBakedErlText(oldLauncher: String, newLauncher: String) -> String do
+  match oldLauncher.lines.filter { |line| line.startsWith?("BAKED_ERL=") }.first do
+    None => return newLauncher
+    Just(line) => do
+      let path = line.split("'").second.or("")
+      return newLauncher if !path.startsWith?("/")
+      let patched = newLauncher.lines.map do |candidate|
+        candidate.startsWith?("BAKED_ERL=") then "BAKED_ERL='${path}'" else candidate
+      end
+      let text = patched.join("\n")
+      return newLauncher.endsWith?("\n") then "${text}\n" else text
+    end
+  end
+end
+
+# The tag naming a Kex version, resolved against a tag list read once —
+# `Tey.Toolchain.releaseTag` answers the same question but re-lists the tags
+# on every call, which a pinned-version scan cannot afford.
+let tagFor(tags: [String], version: String) -> String? do
+  return Just(version) if tags.contains?(version)
+  return Just("v${version}") if tags.contains?("v${version}")
+  return None
+end
+
+# `tey upgrade` — the newest released Tey: the one the newest Kex release's
+# manifest declares. Stable Kex releases unless `includePre` (`--pre`), which
+# is how a pre-release Tey is reached without knowing its number.
+foul upgradeLatest(includePre: Bool) -> UpgradeOutcome or! String do
+  match Tey.SelfUpdate.installPrefix do
+    Error(error) => return Error(error)
+    Ok(prefix) => match Tey.SelfUpdate.latestTey(includePre) do
+      Error(error) => return Error(error)
+      Ok(found) => do
+        let (tag, version) = found
+        let order = Tey.SelfUpdate.compareVersions(Tey.Version.number, version)
+        return Ok(AlreadyNewest(Tey.Version.number)) if order == Equal
+        return Ok(NewerThanRelease(Tey.Version.number)) if order == Greater
+        match Tey.SelfUpdate.installFrom(prefix, tag, version, "Upgraded") do
+          Error(error) => return Error(error)
+          Ok(_) => return Ok(Upgraded(version, prefix))
+        end
+      end
+    end
+  end
+end
+
+# `tey upgrade <version>` — exactly that Tey, from the newest release (stable
+# first, then pre-releases) whose manifest declares it. An older version is
+# allowed: pinning is explicit, and it is the way back from a bad release.
+foul upgradePinned(version: String) -> UpgradeOutcome or! String do
+  return Error("'${version}' is not a Tey version") if Tey.Semver.parseVersion(version) == None
+  match Tey.SelfUpdate.installPrefix do
+    Error(error) => return Error(error)
+    Ok(prefix) => do
+      return Ok(AlreadyNewest(Tey.Version.number)) if Tey.SelfUpdate.compareVersions(Tey.Version.number, version) == Equal
+      match Tey.SelfUpdate.tagCarrying(version) do
+        Error(error) => return Error(error)
+        Ok(tag) => match Tey.SelfUpdate.installFrom(prefix, tag, version, "Installed") do
+          Error(error) => return Error(error)
+          Ok(_) => return Ok(Upgraded(version, prefix))
+        end
+      end
+    end
+  end
+end
+
+private do
+  # The prefix `tey upgrade` may write to, with the two refusals: nothing
+  # install-like is running, or Homebrew owns it.
+  foul installPrefix -> String or! String do
+    match ENV.get("TEY_EBIN") do
+      None => return Error("cannot tell where Tey is installed (TEY_EBIN is not set); `tey upgrade` works on a Tey installed from a release archive, not on a source checkout")
+      Just(ebin) => match Tey.SelfUpdate.prefixOf(ebin) do
+        None => return Error("cannot tell where Tey is installed (TEY_EBIN holds `${ebin}`, not a release install); `tey upgrade` works on an installed Tey, not on a source checkout")
+        Just(prefix) => do
+          return Error("this Tey is managed by Homebrew; upgrade it with `brew upgrade tey`") if Tey.SelfUpdate.homebrewManaged?(prefix)
+          return Ok(prefix)
+        end
+      end
+    end
+  end
+
+  # The newest released Tey and the Kex tag shipping it: the newest Kex
+  # release's manifest (stable only, unless `includePre`) names it.
+  foul latestTey(includePre: Bool) -> (String, String) or! String do
+    match Tey.Git.tags(Tey.Toolchain.repository) do
+      Error(error) => return Error("could not list released versions: ${error}")
+      Ok(tags) => do
+        let versions = tags.collect { |tag| Tey.Toolchain.versionOf(tag) }
+        let wanted = includePre then versions else versions.filter { |version| Tey.Semver.stable?(version) }
+        match wanted.first do
+          None => return Error("no released Kex version is available")
+          Just(kexVersion) => match Tey.SelfUpdate.tagFor(tags, kexVersion) do
+            None => return Error("Kex ${kexVersion} is not a released version")
+            Just(tag) => match Tey.SelfUpdate.teyVersionAt(tag) do
+              Error(error) => return Error(error)
+              Ok(version) => return Ok((tag, version))
+            end
+          end
+        end
+      end
+    end
+  end
+
+  # The Kex tag whose manifest declares this Tey version: stable releases
+  # newest-first, then pre-releases newest-first. The tags are listed once and
+  # the manifests read newest-down, so a recent version resolves after one or
+  # two small fetches.
+  #
+  # A failed manifest read skips that tag rather than failing: releases from
+  # before `tey/package.kex` existed publish no manifest to read. But when NO
+  # manifest could be read at all, the first failure is the answer — the
+  # network is down, not the version missing — and it is reported as such.
+  foul tagCarrying(version: String) -> String or! String do
+    match Tey.Git.tags(Tey.Toolchain.repository) do
+      Error(error) => return Error("could not list released versions: ${error}")
+      Ok(tags) => do
+        let versions = tags.collect { |tag| Tey.Toolchain.versionOf(tag) }
+        let stable = versions.filter { |candidate| Tey.Semver.stable?(candidate) }
+        let pre = versions.filter { |candidate| !Tey.Semver.stable?(candidate) }
+        return Tey.SelfUpdate.scanVersions(tags, [...stable, ...pre], version, false, "")
+      end
+    end
+  end
+
+  foul scanVersions(tags: [String], versions: [String], wanted: String, seenManifest: Bool, firstError: String) -> String or! String do
+    match versions.first do
+      None => do
+        return Error("Tey ${wanted} is not a released version") if seenManifest
+        return Error(firstError) if !firstError.empty?
+        return Error("Tey ${wanted} is not a released version")
+      end
+      Just(kexVersion) => match Tey.SelfUpdate.tagFor(tags, kexVersion) do
+        None => return Tey.SelfUpdate.scanVersions(tags, versions.drop(1), wanted, seenManifest, firstError)
+        Just(tag) => match Tey.SelfUpdate.teyVersionAt(tag) do
+          Error(error) => return Tey.SelfUpdate.scanVersions(tags, versions.drop(1), wanted, seenManifest, seenManifest then firstError else error)
+          Ok(teyVersion) => do
+            return Ok(tag) if teyVersion == wanted
+            return Tey.SelfUpdate.scanVersions(tags, versions.drop(1), wanted, true, firstError)
+          end
+        end
+      end
+    end
+  end
+
+  # The Tey version a Kex release ships, read out of that tag's manifest over
+  # plain HTTPS. Tags are immutable, so what this answers cannot go stale —
+  # but a failed download must never be answered from the previous file, which
+  # `download` leaves behind, so the old one is deleted first.
+  foul teyVersionAt(tag: String) -> String or! String do
+    match Tey.SelfUpdate.githubPath do
+      Error(error) => return Error(error)
+      Ok(slug) => do
+        let url = "https://raw.githubusercontent.com/${slug}/${tag}/tey/package.kex"
+        let downloads = "${Tey.Cache.root}/downloads"
+        return Error("could not create the download cache") if !FS.Directory.create(downloads)
+        let local = "${downloads}/tey-manifest.kex"
+        FS.File.delete(local)
+        match Tey.Toolchain.download(url, local) do
+          Error(error) => return Error("could not read the Tey manifest at ${url}: ${error}")
+          Ok(_) => match FS.File.read(local) do
+            Error(_) => return Error("could not read the downloaded Tey manifest for ${tag}")
+            Ok(text) => match Tey.SelfUpdate.manifestVersion(text) do
+              None => return Error("${url} does not declare a Tey version")
+              Just(version) => return Ok(version)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  # `owner/repo` out of the release repository, for the raw manifest URL —
+  # the same GitHub-shaped assumption `Tey.Toolchain.releaseBase` makes.
+  foul githubPath -> String or! String do
+    let repository = Tey.Toolchain.repository
+    let prefix = "https://github.com/"
+    return Error("`tey upgrade` needs a github.com repository (TEY_KEX_REPO holds `${repository}`)") if !repository.startsWith?(prefix)
+    let path = repository.drop(prefix.count)
+    return Ok(path.endsWith?(".git") then path.take(path.count - 4) else path)
+  end
+
+  # Downloads, verifies and swaps a Tey release into `prefix`: the two launcher
+  # files beside binaries Tey does not own, then the runtime directory it owns
+  # outright via the staged `publish`. Every `tey` invocation is a fresh
+  # short-lived `erl` process, so replacing these files under the running
+  # upgrade is safe — the new ones take effect on the next invocation.
+  #
+  # The ORDER is the whole correctness argument. Tey ships its own runtime,
+  # and its ABI moves between releases (0.2.0's `Kex.IO` has no `printLine/3`,
+  # which is what the `undef` after a naive swap was): once the new `ebin` is
+  # published, this process must make NO further runtime calls, since the
+  # beams on disk no longer match the code in memory. So the success message —
+  # and every error before the point of no return — is printed first, while
+  # the old runtime is still on disk; after the `publish` the only calls left
+  # are the swap itself and the silent return. (`publish` failing is still
+  # safe to report: it rolls the old tree back, so the runtime is intact.)
+  foul installFrom(prefix: String, tag: String, version: String, verb: String) -> String or! String do
+    let downloads = "${Tey.Cache.root}/downloads"
+    return Error("could not create the download cache") if !FS.Directory.create(downloads)
+    let name = "tey-${version}"
+    let archive = "${downloads}/${name}.tar.gz"
+    let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
+    match Tey.Toolchain.download(url, archive) do
+      Error(error) => return Error(error)
+      Ok(_) => ()
+    end
+    match Tey.Toolchain.verifyArchive(archive, "${url}.sha256") do
+      Error(error) => return Error(error)
+      Ok(_) => ()
+    end
+    let unpacked = "${downloads}/${name}.unpacked"
+    FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
+    return Error("could not create ${unpacked}") if !FS.Directory.create(unpacked)
+    let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
+      Error(error) => return Error(error)
+      Ok(value) => value
+    end
+    if extracted.exitCode != 0
+      FS.Directory.deleteAll(unpacked)
+      return Error("could not unpack ${archive}: ${extracted.stderr}")
+    end
+    let tree = "${unpacked}/${name}"
+    if !FS.File.file?("${tree}/bin/tey") || !FS.File.file?("${tree}/bin/kex") || !FS.Directory.directory?("${tree}/lib/kex/tey/ebin")
+      FS.Directory.deleteAll(unpacked)
+      return Error("${name}.tar.gz does not contain a Tey installation")
+    end
+    # The archive's launcher is baked for whoever built it; keep this
+    # machine's Erlang choice rather than silently switching it.
+    Tey.SelfUpdate.carryBakedErl(prefix, tree)
+    # The renames below need their parent directories; a released install
+    # always has them, and creating them is harmless when it does.
+    FS.Directory.create("${prefix}/bin")
+    FS.Directory.create("${prefix}/lib")
+    FS.Directory.create("${prefix}/lib/kex")
+    FS.Directory.create("${prefix}/lib/kex/tey")
+    # Staged beside each target (not in the download cache) so the final swaps
+    # stay on one filesystem and atomic; copied rather than moved because the
+    # cache may live on another one. The extracted tree already carries the
+    # installed modes, which `cp` keeps.
+    let currentEbin = "${prefix}/lib/kex/tey/ebin"
+    let stagedEbin = "${currentEbin}.partial"
+    let stagedTey = "${prefix}/bin/tey.partial"
+    let stagedKex = "${prefix}/bin/kex.partial"
+    FS.Directory.deleteAll(stagedEbin) if FS.Directory.directory?(stagedEbin)
+    FS.File.delete(stagedTey)
+    FS.File.delete(stagedKex)
+    match Tey.SelfUpdate.copyInto("${tree}/lib/kex/tey/ebin", stagedEbin, true) do
+      Error(error) => do
+        Tey.SelfUpdate.dropStaging(unpacked, stagedEbin, stagedTey, stagedKex)
+        return Error(error)
+      end
+      Ok(_) => ()
+    end
+    match Tey.SelfUpdate.copyInto("${tree}/bin/tey", stagedTey, false) do
+      Error(error) => do
+        Tey.SelfUpdate.dropStaging(unpacked, stagedEbin, stagedTey, stagedKex)
+        return Error(error)
+      end
+      Ok(_) => ()
+    end
+    match Tey.SelfUpdate.copyInto("${tree}/bin/kex", stagedKex, false) do
+      Error(error) => do
+        Tey.SelfUpdate.dropStaging(unpacked, stagedEbin, stagedTey, stagedKex)
+        return Error(error)
+      end
+      Ok(_) => ()
+    end
+    FS.Directory.deleteAll(unpacked)
+    # The launchers sit beside binaries Tey does not own, so only the two
+    # files move — never their directory. A rename overwrites atomically.
+    return Error("could not write ${prefix}/bin/tey (check that its directory is writable)") if !FS.File.rename(stagedTey, "${prefix}/bin/tey")
+    return Error("could not write ${prefix}/bin/kex (check that its directory is writable)") if !FS.File.rename(stagedKex, "${prefix}/bin/kex")
+    # Last word while the old runtime is still on disk — see above. Touching
+    # `System` first loads `Kex.System` from that same old runtime: the process
+    # ends in `System.exit`, and a module loads from disk on first use, which
+    # would otherwise be the new ABI (0.2.0's `exit/1` vs today's `exit/2`).
+    let _os = System.OS
+    IO.printLine("${Console.GREEN}${verb}${Console.RESET} Tey ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
+    match Tey.Toolchain.publish(stagedEbin, currentEbin) do
+      Error(error) => return Error(error)
+      Ok(_) => return Ok(version)
+    end
+  end
+
+  # Copies one staged tree into place for the swap above, reporting what went
+  # wrong. Directories need `-R`; single files must not get it.
+  foul copyInto(source: String, staging: String, recursive: Bool) -> Void or! String do
+    let args = recursive then ["-R", source, staging] else [source, staging]
+    match Process.run("cp", args) do
+      Error(error) => return Error(error)
+      Ok(result) => do
+        return Error("could not stage the new Tey files: ${result.stderr}") if result.exitCode != 0
+        return Ok(())
+      end
+    end
+  end
+
+  # Removes every staging leftover after a failed swap. Best effort throughout:
+  # this runs on an error path that already has something to say.
+  foul dropStaging(unpacked: String, stagedEbin: String, stagedTey: String, stagedKex: String) -> Void do
+    FS.Directory.deleteAll(unpacked)
+    FS.Directory.deleteAll(stagedEbin)
+    FS.File.delete(stagedTey)
+    FS.File.delete(stagedKex)
+    return ()
+  end
+
+  # Best effort: when either launcher cannot be read the new one is left
+  # alone, and a write failure surfaces anyway at the file's swap below.
+  foul carryBakedErl(prefix: String, tree: String) -> Void do
+    match FS.File.read("${prefix}/bin/tey") do
+      Error(_) => return ()
+      Ok(old) => match FS.File.read("${tree}/bin/tey") do
+        Error(_) => return ()
+        Ok(new) => do
+          FS.File.write("${tree}/bin/tey", Tey.SelfUpdate.carryBakedErlText(old, new))
+          return ()
+        end
+      end
+    end
+  end
+end

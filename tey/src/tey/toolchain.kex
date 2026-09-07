@@ -453,6 +453,98 @@ foul use(version: String) -> Bool do
   return true
 end
 
+# The archive download/verify/hash/tag/publish helpers below are public because
+# `Tey.SelfUpdate` (`tey upgrade`) reuses the exact same release mechanics for
+# Tey's own archives that Kex toolchains already trust — same URLs, same
+# checksums, same staged swaps. No behavior change; only visibility.
+#
+# curl, then wget: one of the two is on essentially every machine that can
+# reach a release, and this way Tey needs neither an HTTP library nor a
+# compiler to fetch one.
+foul download(url: String, path: String) -> Void or! String do
+  let partial = "${path}.partial"
+  FS.File.delete(partial)
+  let fetched = match Process.run("curl", ["-fsSL", "-o", partial, url]) do
+    Ok(result) => result.exitCode == 0
+    Error(_) => match Process.run("wget", ["-q", "-O", partial, url]) do
+      Ok(result) => result.exitCode == 0
+      Error(_) => return Error("neither curl nor wget is available to download ${url}")
+    end
+  end
+  if !fetched
+    FS.File.delete(partial)
+    return Error("could not download ${url}")
+  end
+  return FS.File.rename(partial, path) then Ok(()) else Error("could not move the download into ${path}")
+end
+
+# The published `.sha256` is `<hash>  <filename>`, the format both
+# sha256sum and shasum write and read.
+foul verifyArchive(archive: String, checksumUrl: String) -> Void or! String do
+  let checksums = "${archive}.sha256"
+  Tey.Toolchain.download(checksumUrl, checksums).try
+  let expected = match FS.File.read(checksums) do
+    Error(_) => return Error("could not read ${checksums}")
+    Ok(text) => text.trim.split(" ").first.or("")
+  end
+  return Error("${checksumUrl} does not contain a checksum") if expected.empty?
+  let actual = Tey.Toolchain.checksumOf(archive).try
+  return Error("checksum mismatch for ${archive}: expected ${expected}, got ${actual}") if actual != expected
+  return Ok(())
+end
+
+# Hashed with an external tool rather than read in: the archive is tens of
+# megabytes of binary, and this keeps all of it out of the process.
+foul checksumOf(path: String) -> String or! String do
+  let output = match Process.run("sha256sum", [path]) do
+    Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
+    Error(_) => match Process.run("shasum", ["-a", "256", path]) do
+      Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
+      Error(_) => return Error("neither sha256sum nor shasum is available to verify ${path}")
+    end
+  end
+  match output do
+    None => return Error("could not hash ${path}")
+    Just(text) => return Ok(text.trim.split(" ").first.or(""))
+  end
+end
+
+# The tag naming this version in the repository — `0.3.0` or `v0.3.0`.
+foul releaseTag(version: String) -> String or! String do
+  let tags = Tey.Git.tags(Tey.Toolchain.repository).try
+  return Ok(version) if tags.contains?(version)
+  return Ok("v${version}") if tags.contains?("v${version}")
+  return Error("Kex ${version} is not a released version")
+end
+
+# `v0.3.0` → Just("0.3.0"). A tag that is not a version is None, which
+# `collect` drops: a toolchain is named by its version, not by a label.
+let versionOf(tag: String) -> String? do
+  let version = tag.startsWith?("v") then tag.drop(1) else tag
+  return None if Tey.Semver.parseVersion(version) == None
+  return Just(version)
+end
+
+# Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
+# tree until the new one is in place and puts it back if the move fails, so
+# a failed upgrade leaves the previous toolchain working rather than none.
+foul publish(staging: String, prefix: String) -> String or! String do
+  let previous = "${prefix}.previous"
+  FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
+  let replacing = FS.Directory.directory?(prefix)
+  if replacing && !FS.File.rename(prefix, previous)
+    FS.Directory.deleteAll(staging)
+    return Error("could not move the installed toolchain at ${prefix} aside")
+  end
+  if !FS.File.rename(staging, prefix)
+    FS.File.rename(previous, prefix) if replacing
+    FS.Directory.deleteAll(staging)
+    return Error("could not move the new toolchain into ${prefix}")
+  end
+  FS.Directory.deleteAll(previous)
+  return Ok(prefix)
+end
+
 private do
   # The two shapes a selectable Kex has: an installation in the Tey home,
   # named by its version, and the seed, run where it lies.
@@ -531,57 +623,6 @@ private do
     return Error(Unavailable("installed Kex ${version} but could not select it")) if !FS.File.write("${home}/current", "${version}\n")
     Tey.Toolchain.link(version)
     return Ok(installedPrefix)
-  end
-
-  # curl, then wget: one of the two is on essentially every machine that can
-  # reach a release, and this way Tey needs neither an HTTP library nor a
-  # compiler to fetch one.
-  foul download(url: String, path: String) -> Void or! String do
-    let partial = "${path}.partial"
-    FS.File.delete(partial)
-    let fetched = match Process.run("curl", ["-fsSL", "-o", partial, url]) do
-      Ok(result) => result.exitCode == 0
-      Error(_) => match Process.run("wget", ["-q", "-O", partial, url]) do
-        Ok(result) => result.exitCode == 0
-        Error(_) => return Error("neither curl nor wget is available to download ${url}")
-      end
-    end
-    if !fetched
-      FS.File.delete(partial)
-      return Error("could not download ${url}")
-    end
-    return FS.File.rename(partial, path) then Ok(()) else Error("could not move the download into ${path}")
-  end
-
-  # The published `.sha256` is `<hash>  <filename>`, the format both
-  # sha256sum and shasum write and read.
-  foul verifyArchive(archive: String, checksumUrl: String) -> Void or! String do
-    let checksums = "${archive}.sha256"
-    Tey.Toolchain.download(checksumUrl, checksums).try
-    let expected = match FS.File.read(checksums) do
-      Error(_) => return Error("could not read ${checksums}")
-      Ok(text) => text.trim.split(" ").first.or("")
-    end
-    return Error("${checksumUrl} does not contain a checksum") if expected.empty?
-    let actual = Tey.Toolchain.checksumOf(archive).try
-    return Error("checksum mismatch for ${archive}: expected ${expected}, got ${actual}") if actual != expected
-    return Ok(())
-  end
-
-  # Hashed with an external tool rather than read in: the archive is tens of
-  # megabytes of binary, and this keeps all of it out of the process.
-  foul checksumOf(path: String) -> String or! String do
-    let output = match Process.run("sha256sum", [path]) do
-      Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
-      Error(_) => match Process.run("shasum", ["-a", "256", path]) do
-        Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
-        Error(_) => return Error("neither sha256sum nor shasum is available to verify ${path}")
-      end
-    end
-    match output do
-      None => return Error("could not hash ${path}")
-      Just(text) => return Ok(text.trim.split(" ").first.or(""))
-    end
   end
 
   # `arm64` and `x86_64` are the spellings the release archives use; uname
@@ -675,14 +716,6 @@ private do
     end
   end
 
-  # The tag naming this version in the repository — `0.3.0` or `v0.3.0`.
-  foul releaseTag(version: String) -> String or! String do
-    let tags = Tey.Git.tags(Tey.Toolchain.repository).try
-    return Ok(version) if tags.contains?(version)
-    return Ok("v${version}") if tags.contains?("v${version}")
-    return Error("Kex ${version} is not a released version")
-  end
-
   # Points the shim at a version's binary, creating the bin directory the
   # first time. A symlink rather than a copy: `kex` finds its stdlib and
   # runtime relative to the REAL path, which the link preserves.
@@ -696,31 +729,4 @@ private do
     end
   end
 
-  # `v0.3.0` → Just("0.3.0"). A tag that is not a version is None, which
-  # `collect` drops: a toolchain is named by its version, not by a label.
-  let versionOf(tag: String) -> String? do
-    let version = tag.startsWith?("v") then tag.drop(1) else tag
-    return None if Tey.Semver.parseVersion(version) == None
-    return Just(version)
-  end
-
-  # Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
-  # tree until the new one is in place and puts it back if the move fails, so
-  # a failed upgrade leaves the previous toolchain working rather than none.
-  foul publish(staging: String, prefix: String) -> String or! String do
-    let previous = "${prefix}.previous"
-    FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
-    let replacing = FS.Directory.directory?(prefix)
-    if replacing && !FS.File.rename(prefix, previous)
-      FS.Directory.deleteAll(staging)
-      return Error("could not move the installed toolchain at ${prefix} aside")
-    end
-    if !FS.File.rename(staging, prefix)
-      FS.File.rename(previous, prefix) if replacing
-      FS.Directory.deleteAll(staging)
-      return Error("could not move the new toolchain into ${prefix}")
-    end
-    FS.Directory.deleteAll(previous)
-    return Ok(prefix)
-  end
 end

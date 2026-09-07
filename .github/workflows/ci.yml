@@ -340,6 +340,39 @@ jobs:
             echo "::error::tey kex use latest should fail when no Kex is installed"
             exit 1
           fi
+          # `upgrade` is advertised in the help alongside the commands above.
+          stage/bin/tey --help | grep -q "upgrade Tey itself"
+          # A staged install is not Homebrew-managed and — while the tree is
+          # ahead of (or level with) the newest release — there is nothing to
+          # download, so this resolves the release list and stops. Either
+          # message proves discovery ran; a failure here means the release
+          # contract `tey upgrade` reads (tags, manifest, archive names) broke.
+          stage/bin/tey upgrade | grep -Eq "already the newest version|newer than the newest release"
+          # A keg-shaped install is Homebrew's to upgrade: Tey must refuse,
+          # name `brew upgrade tey`, and touch nothing. Installed under a
+          # Cellar path so the refusal reads the real layout, not an
+          # environment override (which would also move the BEAM path the
+          # launcher starts from).
+          make -C tey install PREFIX="$(pwd)/stage-cellar/Cellar/tey/0.3.0" KEX="$(pwd)/build/kex" ERL=erl INSTALL_NONINTERACTIVE=1
+          if homebrew_output=$(stage-cellar/Cellar/tey/0.3.0/bin/tey upgrade 2>&1); then
+            echo "::error::tey upgrade should refuse a Homebrew-managed install"
+            exit 1
+          fi
+          printf '%s\n' "$homebrew_output" | grep -q "brew upgrade tey"
+
+      # install.sh is the non-brew path: syntax-checked every run, and
+      # installed for real — latest stable release into a scratch prefix,
+      # with its Kex — so a broken downloader, checksum or layout surfaces
+      # here rather than on a user's machine.
+      - name: Smoke-test install.sh
+        run: |
+          set -euo pipefail
+          sh -n install.sh
+          export TEY_HOME="$(mktemp -d)/home"
+          export PREFIX="$(mktemp -d)/dist"
+          sh install.sh
+          "$PREFIX/bin/tey" --version
+          "$PREFIX/bin/kex" --version
 
   wasm:
     needs: changes

@@ -1,0 +1,110 @@
+using Tey.SelfUpdate
+
+# `tey upgrade`'s decisions that do not touch the network or the filesystem:
+# where this Tey lives, whether Homebrew owns it, which version a manifest
+# names, how two versions compare, which tag names a Kex version, and what an
+# upgrade does to the launcher's baked Erlang path. The download-and-swap half
+# is untestable here the same way `Tey.Toolchain`'s archive install is — it
+# needs releases, checksums and a prefix to write to.
+
+describe("Tey.SelfUpdate.currentPrefix") do
+  it("finds the prefix behind an installed launcher") do
+    Mock.ENV.set("TEY_EBIN", "/usr/local/lib/kex/tey/ebin")
+    assert(Tey.SelfUpdate.currentPrefix == Just("/usr/local"))
+  end
+
+  it("finds a user-local prefix too") do
+    Mock.ENV.set("TEY_EBIN", "/home/ada/.local/share/tey/dist/lib/kex/tey/ebin")
+    assert(Tey.SelfUpdate.currentPrefix == Just("/home/ada/.local/share/tey/dist"))
+  end
+
+  it("refuses a source checkout, whose ebin is not under lib/kex/tey") do
+    Mock.ENV.set("TEY_EBIN", "/home/ada/kex/tey/ebin")
+    assert(Tey.SelfUpdate.currentPrefix == None)
+  end
+
+  it("refuses an unset TEY_EBIN") do
+    Mock.ENV.unset("TEY_EBIN")
+    assert(Tey.SelfUpdate.currentPrefix == None)
+  end
+end
+
+describe("Tey.SelfUpdate.prefixOf") do
+  it("strips the ebin suffix") do
+    assert(Tey.SelfUpdate.prefixOf("/opt/tey/lib/kex/tey/ebin") == Just("/opt/tey"))
+  end
+
+  it("is None without the suffix, or with nothing before it") do
+    assert(Tey.SelfUpdate.prefixOf("/opt/tey/ebin") == None)
+    assert(Tey.SelfUpdate.prefixOf("") == None)
+    assert(Tey.SelfUpdate.prefixOf("/lib/kex/tey/ebin") == None)
+  end
+end
+
+describe("Tey.SelfUpdate.homebrewManaged?") do
+  it("recognizes both Homebrew cellar layouts") do
+    assert(Tey.SelfUpdate.homebrewManaged?("/opt/homebrew/Cellar/tey/0.2.0"))
+    assert(Tey.SelfUpdate.homebrewManaged?("/usr/local/Cellar/tey/0.2.0"))
+  end
+
+  it("leaves installs it may touch alone") do
+    assert(!Tey.SelfUpdate.homebrewManaged?("/usr/local"))
+    assert(!Tey.SelfUpdate.homebrewManaged?("/home/ada/.local/share/tey/dist"))
+  end
+end
+
+describe("Tey.SelfUpdate.manifestVersion") do
+  it("reads the version out of a package.kex") do
+    let manifest = "package \"tey\" do\n  description(\"Yet another manager.\")\n  version(\"0.2.0\")\n  kex(\">= 0.3.0\")\nend\n"
+    assert(Tey.SelfUpdate.manifestVersion(manifest) == Just("0.2.0"))
+  end
+
+  it("reads a pre-release version too") do
+    assert(Tey.SelfUpdate.manifestVersion("package \"tey\" do\n  version(\"0.3.0-rc.1\")\nend\n") == Just("0.3.0-rc.1"))
+  end
+
+  it("is None when no version line declares one") do
+    assert(Tey.SelfUpdate.manifestVersion("package \"tey\" do\nend\n") == None)
+    assert(Tey.SelfUpdate.manifestVersion("") == None)
+    # A dependency line names a version range, not Tey's own version.
+    assert(Tey.SelfUpdate.manifestVersion("package \"tey\" do\n  kex(\">= 0.3.0\")\nend\n") == None)
+  end
+end
+
+describe("Tey.SelfUpdate.compareVersions") do
+  it("orders releases and channels") do
+    assert(Tey.SelfUpdate.compareVersions("0.2.0", "0.3.0") == Less)
+    assert(Tey.SelfUpdate.compareVersions("0.3.0", "0.2.0") == Greater)
+    assert(Tey.SelfUpdate.compareVersions("0.2.0", "0.2.0") == Equal)
+    assert(Tey.SelfUpdate.compareVersions("0.3.0-rc.1", "0.3.0") == Less)
+  end
+
+  it("treats the unparsable as older, never as newer") do
+    assert(Tey.SelfUpdate.compareVersions("dev", "0.2.0") == Less)
+  end
+end
+
+describe("Tey.SelfUpdate.tagFor") do
+  it("prefers the tag as written, then the v-prefixed one") do
+    assert(Tey.SelfUpdate.tagFor(["v0.3.0", "0.3.0"], "0.3.0") == Just("0.3.0"))
+    assert(Tey.SelfUpdate.tagFor(["v0.3.0"], "0.3.0") == Just("v0.3.0"))
+  end
+
+  it("is None for a version with no tag") do
+    assert(Tey.SelfUpdate.tagFor(["v0.3.0"], "0.4.0") == None)
+  end
+end
+
+describe("Tey.SelfUpdate.carryBakedErlText") do
+  it("carries an absolute baked erl into the new launcher") do
+    let old = "#!/bin/sh\nBAKED_ERL='/opt/homebrew/bin/erl'\nERL=erl\n"
+    let new = "#!/bin/sh\nBAKED_ERL='erl'\nERL=erl\n"
+    assert(Tey.SelfUpdate.carryBakedErlText(old, new) == "#!/bin/sh\nBAKED_ERL='/opt/homebrew/bin/erl'\nERL=erl\n")
+  end
+
+  it("leaves the new launcher alone without an absolute path to carry") do
+    let new = "#!/bin/sh\nBAKED_ERL='erl'\nERL=erl\n"
+    assert(Tey.SelfUpdate.carryBakedErlText("#!/bin/sh\nBAKED_ERL='erl'\nERL=erl\n", new) == new)
+    assert(Tey.SelfUpdate.carryBakedErlText("#!/bin/sh\nERL=erl\n", new) == new)
+  end
+end

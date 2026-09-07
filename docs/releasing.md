@@ -154,6 +154,13 @@ Without it, only the `formula` job fails, and only on a stable release.
    one archive serves every platform — that is what lets Homebrew install Tey
    without being able to build Kex at all.
 
+   That filename is a contract, not a convenience: `install.sh` (the
+   curl-installed path) and `tey upgrade` both consume
+   `tey-<tey-version>.tar.gz` plus its `.sha256` under the Kex tag, and find
+   the version by reading `tey/package.kex` at that tag. Renaming the asset,
+   dropping the checksum, or moving the manifest breaks both — keep all three
+   where they are.
+
    Both halves of the Homebrew formula come from these four archives: the keg
    installs Tey from the `tey-` one and the compiler for the installing machine
    from the matching `kex-` one. A platform whose archive is missing is a
