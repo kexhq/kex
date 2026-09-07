@@ -9,14 +9,10 @@ STDLIBDIR ?= $(PREFIX)/share/kex/stdlib
 
 WASM_BUILD_DIR = build-wasm
 
-# Every `cmake --build` below is parallel. The tree is ~56 translation units
-# and was compiling them one at a time, which is most of what a CI run spent
-# its time on — the wasm job's build step alone was 10.6 of its 17 minutes,
-# with the GMP and PCRE2 builds beside it already using -j"$(nproc)".
-# `--parallel` with no number lets CMake use every core it finds, which is
-# what a developer machine and a runner both want. Override to serialize when
-# a compiler error's output is interleaved past reading: make JOBS=1.
-JOBS ?=
+# Bound concurrency to the available CPUs. With Unix Makefiles, bare
+# `--parallel` means unlimited jobs, which can exhaust memory compiling the
+# larger translation units. Override with make JOBS=2 on memory-limited hosts.
+JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 CMAKE_BUILD_JOBS = --parallel $(JOBS)
 
 # GNU `timeout` bounds a backend that hangs, but macOS ships without it
