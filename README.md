@@ -28,7 +28,7 @@ Without Homebrew, the same install is one line — it fetches the published
 release, verifies its checksum, and runs `tey kex install` for the compiler:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kexhq/kex/main/install.sh | sh
+curl -fsSL https://kex.run/install.sh | sh
 ```
 
 The `kex` on your PATH is Tey's dispatcher: it runs whichever toolchain Tey has

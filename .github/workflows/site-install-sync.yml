@@ -66,9 +66,10 @@ jobs:
           set -euo pipefail
           cp install.sh site/public/install.sh
           cd site
-          # Re-running after a merged sync, or pushing an install.sh that only
-          # touched comments elsewhere, must not fail the job.
-          if git diff --quiet; then
+          # Re-running after a merged sync must not fail the job. Include the
+          # status check because a first sync creates an untracked file, which
+          # `git diff --quiet` alone does not see.
+          if git diff --quiet -- public/install.sh && [ -z "$(git status --porcelain -- public/install.sh)" ]; then
             echo "kex.run/install.sh already matches install.sh"
             exit 0
           fi
@@ -81,7 +82,8 @@ jobs:
           # instead of failing as "stale info".
           git fetch origin "$branch" || true
           git checkout -B "$branch"
-          git commit -am "Sync install.sh from kexhq/kex"
+          git add public/install.sh
+          git commit -m "Sync install.sh from kexhq/kex"
           git push --force-with-lease origin "$branch"
 
           if [ "$(gh pr list --repo kexhq/site --head "$branch" --json number --jq length)" = "0" ]; then
