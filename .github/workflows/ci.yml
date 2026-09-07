@@ -354,11 +354,11 @@ jobs:
           # environment override (which would also move the BEAM path the
           # launcher starts from).
           make -C tey install PREFIX="$(pwd)/stage-cellar/Cellar/tey/0.3.0" KEX="$(pwd)/build/kex" ERL=erl INSTALL_NONINTERACTIVE=1
-          if stage-cellar/Cellar/tey/0.3.0/bin/tey upgrade; then
+          if homebrew_output=$(stage-cellar/Cellar/tey/0.3.0/bin/tey upgrade 2>&1); then
             echo "::error::tey upgrade should refuse a Homebrew-managed install"
             exit 1
           fi
-          stage-cellar/Cellar/tey/0.3.0/bin/tey upgrade 2>&1 | grep -q "brew upgrade tey"
+          printf '%s\n' "$homebrew_output" | grep -q "brew upgrade tey"
 
       # install.sh is the non-brew path: syntax-checked every run, and
       # installed for real — latest stable release into a scratch prefix,
