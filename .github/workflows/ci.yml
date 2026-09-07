@@ -200,8 +200,10 @@ jobs:
       # Boost.Context statically (see CMakeLists.txt), and a static link that
       # only ever happens during a release is a link nobody finds out about
       # until the release is the thing that breaks.
+      # Use the optimized compiler for the suites: they repeatedly run its
+      # checker and interpreter, so the default unoptimized build is costly.
       - name: Build
-        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
+        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       - name: Unit tests
         run: make test
@@ -305,7 +307,7 @@ jobs:
             libssl-dev erlang-base libboost-context-dev
 
       - name: Build kex
-        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
+        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       # Compiling Tey is the first assertion: it either builds with this
       # compiler or it does not.
@@ -504,7 +506,7 @@ jobs:
       - name: Build native kex (for the compiled stdlib unit)
         run: |
           cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam --parallel
+          cmake --build build --target kex_prelude_beam --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       - name: Configure and build wasm target
         run: |

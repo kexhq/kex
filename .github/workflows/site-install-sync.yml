@@ -38,6 +38,16 @@ jobs:
     # A pull request only rehearses; only main (or a manual dispatch) syncs.
     if: github.event_name != 'pull_request'
     steps:
+      - name: Check site sync credentials
+        env:
+          SITE_SYNC_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SITE_SYNC_TOKEN:-}" ]; then
+            echo "::error::SITE_SYNC_TOKEN is empty. Create a fine-grained PAT with Contents and Pull requests read/write on kexhq/site and store it as a repository Actions secret in kexhq/kex."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Check out the site
@@ -54,11 +64,6 @@ jobs:
           GH_TOKEN: ${{ secrets.SITE_SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::SITE_SYNC_TOKEN is empty. Create a fine-grained PAT with Contents and Pull requests read/write on kexhq/site and store it as a repository secret."
-            exit 1
-          fi
-
           cp install.sh site/public/install.sh
           cd site
           # Re-running after a merged sync, or pushing an install.sh that only
