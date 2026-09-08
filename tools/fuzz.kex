@@ -2,8 +2,9 @@
 #
 # Generates small, correct-by-construction Kex programs (integer, float,
 # string and boolean expressions over literals, arithmetic, comparisons,
-# `!`/`&&`/`||`, `let` bindings that later expressions can reuse, and `if`)
-# and runs each under both backends with a time budget.
+# `!`/`&&`/`||`, atoms, tuples, lists, maps, string interpolation, `let`
+# bindings that later expressions can reuse, `if`, and statement-level
+# `match`) and runs each under both backends with a time budget.
 # Correct-by-construction means: no division by zero, no partial operations,
 # no loops, no way to hang — so anything but identical, successful output is
 # a finding: a crash, a timeout, or output that differs.
@@ -273,28 +274,163 @@ end
 
 let genString(ctx: Ctx, depth: Integer) -> (String, Ctx) do
   if depth == 0 then return genStringLit(ctx) end
-  let (op, ctx2) = draw(ctx, 3)
+  let (op, ctx2) = draw(ctx, 5)
   if op <= 1
     let (l, ctx3) = genString(ctx2, depth - 1)
     let (r, ctx4) = genString(ctx3, depth - 1)
     return ("(${l} + ${r})", ctx4)
   else
+    if op == 2
+      return genInterp(ctx2, depth)
+    else
+      return genStringLit(ctx2)
+    end
+  end
+end
+
+# Holes stay int/bool (never strings), so no quote or newline can break the
+# hole. A literal `${` never appears in source: the lexer reads it as a hole
+# opener even escaped, so the dollar is emitted via concatenation instead.
+let pickHoleTag(ctx: Ctx) do
+  let (n, ctx2) = draw(ctx, 2)
+  if n == 0 then return (:int, ctx2) else return (:bool, ctx2) end
+end
+
+let genInterp(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  let (n0, ctx2) = draw(ctx, 5)
+  let (s0, ctx3) = genChars(ctx2, n0, "")
+  let (htag, ctx4) = pickHoleTag(ctx3)
+  let (h0, ctx5) = genTyped(ctx4, htag, depth - 1)
+  let (n1, ctx6) = draw(ctx5, 5)
+  let (s1, ctx7) = genChars(ctx6, n1, "")
+  let (two, ctx8) = draw(ctx7, 2)
+  if two == 0
+    return ("\"${s0}\$" + "{${h0}}${s1}\"", ctx8)
+  else
+    let (htag2, ctx9) = pickHoleTag(ctx8)
+    let (h1, ctx10) = genTyped(ctx9, htag2, depth - 1)
+    let (n2, ctx11) = draw(ctx10, 5)
+    let (s2, ctx12) = genChars(ctx11, n2, "")
+    return ("\"${s0}\$" + "{${h0}}${s1}\$" + "{${h1}}${s2}\"", ctx12)
+  end
+end
+
+# Collection literals: two-element tuples of any scalar tags, non-empty
+# homogeneous lists, and single-entry maps with simple string keys. Mixed-type
+# == is valid (and agreed-upon), so comparisons need no tag plumbing.
+let genElems(ctx: Ctx, tag, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (e, ctx2) = genTyped(ctx, tag, 1)
+    if acc == ""
+      return genElems(ctx2, tag, n - 1, e)
+    else
+      return genElems(ctx2, tag, n - 1, "${acc}, ${e}")
+    end
+  end
+end
+
+let genListLit(ctx: Ctx, tag, count: Integer) -> (String, Ctx) do
+  let (elems, ctx2) = genElems(ctx, tag, count, "")
+  return ("[${elems}]", ctx2)
+end
+
+# Map keys stay simple — a fresh literal or a bare live binding. A
+# parenthesized key mangles the parse, so computed keys are out.
+let genMapKey(ctx: Ctx) -> (String, Ctx) do
+  let names = namesFor(ctx.env, :string)
+  let (useVar, ctx2) = draw(ctx, 2)
+  if useVar == 0 && names.length > 0
+    let (i, ctx3) = draw(ctx2, names.length)
+    return (names.at(i).or("\"k\""), ctx3)
+  else
     return genStringLit(ctx2)
   end
 end
 
-let genComparison(ctx: Ctx, depth: Integer) -> (String, Ctx) do
-  let (which, ctx2) = draw(ctx, 3)
-  if which == 2
-    let (l, ctx3) = genString(ctx2, depth)
-    let (r, ctx4) = genString(ctx3, depth)
-    let (op, ctx5) = draw(ctx4, 2)
-    if op == 0 then return ("(${l} == ${r})", ctx5) else return ("(${l} != ${r})", ctx5) end
+let genMapEntries(ctx: Ctx, vtag, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
   else
-    let numKind = if which == 0 then :int else :float end
-    let (ln, ctx6) = genTyped(ctx2, numKind, depth)
-    let (rn, ctx7) = genTyped(ctx6, numKind, depth)
-    let (opn, ctx8) = draw(ctx7, 6)
+    let (k, ctx2) = genMapKey(ctx)
+    let (v, ctx3) = genTyped(ctx2, vtag, 1)
+    let entry = "${k}: ${v}"
+    if acc == ""
+      return genMapEntries(ctx3, vtag, n - 1, entry)
+    else
+      return genMapEntries(ctx3, vtag, n - 1, "${acc}, ${entry}")
+    end
+  end
+end
+
+let genMapLit(ctx: Ctx, vtag, count: Integer) -> (String, Ctx) do
+  let (entries, ctx2) = genMapEntries(ctx, vtag, count, "")
+  return ("{ ${entries} }", ctx2)
+end
+
+let genCollLit(ctx: Ctx) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 3)
+  if kind == 0
+    let (t1, ctx3) = pickType(ctx2)
+    let (t2, ctx4) = pickType(ctx3)
+    let (a, ctx5) = genTyped(ctx4, t1, 1)
+    let (b, ctx6) = genTyped(ctx5, t2, 1)
+    return ("(${a}, ${b})", ctx6)
+  else
+    if kind == 1
+      let (tag, ctx7) = pickType(ctx2)
+      let (n, ctx8) = draw(ctx7, 3)
+      return genListLit(ctx8, tag, n + 1)
+    else
+      # Single-entry only: multi-entry maps print in backend-dependent order,
+      # which is an oracle gap, not a backend bug the fuzzer can judge.
+      let (vtag, ctx9) = pickType(ctx2)
+      return genMapLit(ctx9, vtag, 1)
+    end
+  end
+end
+
+let atomFor(k: Integer) -> String do
+  match k do
+    0 => "ok"
+    1 => "err"
+    2 => "empty"
+    3 => "yes"
+    _ => "no"
+  end
+end
+
+let genAtomCmp(ctx: Ctx) -> (String, Ctx) do
+  let (a, ctx2) = draw(ctx, 5)
+  let (b, ctx3) = draw(ctx2, 5)
+  let (op, ctx4) = draw(ctx3, 2)
+  if op == 0
+    return ("(:${atomFor(a)} == :${atomFor(b)})", ctx4)
+  else
+    return ("(:${atomFor(a)} != :${atomFor(b)})", ctx4)
+  end
+end
+
+let genCollCmp(ctx: Ctx) -> (String, Ctx) do
+  let (l, ctx2) = genCollLit(ctx)
+  let (same, ctx3) = draw(ctx2, 2)
+  let (op, ctx4) = draw(ctx3, 2)
+  let symbol = if op == 0 then "==" else "!=" end
+  if same == 0
+    return ("(${l} ${symbol} ${l})", ctx4)
+  else
+    let (m, ctx5) = genCollLit(ctx4)
+    return ("(${l} ${symbol} ${m})", ctx5)
+  end
+end
+
+let genComparison(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  let (which, ctx2) = draw(ctx, 10)
+  if which <= 2
+    let (ln, ctx3) = genTyped(ctx2, :int, depth)
+    let (rn, ctx4) = genTyped(ctx3, :int, depth)
+    let (opn, ctx5) = draw(ctx4, 6)
     let symbol = match opn do
       0 => "=="
       1 => "!="
@@ -303,7 +439,35 @@ let genComparison(ctx: Ctx, depth: Integer) -> (String, Ctx) do
       4 => "<="
       _ => ">="
     end
-    return ("(${ln} ${symbol} ${rn})", ctx8)
+    return ("(${ln} ${symbol} ${rn})", ctx5)
+  else
+    if which <= 4
+      let (lf, ctx6) = genTyped(ctx2, :float, depth)
+      let (rf, ctx7) = genTyped(ctx6, :float, depth)
+      let (opf, ctx8) = draw(ctx7, 6)
+      let fsymbol = match opf do
+        0 => "=="
+        1 => "!="
+        2 => "<"
+        3 => ">"
+        4 => "<="
+        _ => ">="
+      end
+      return ("(${lf} ${fsymbol} ${rf})", ctx8)
+    else
+      if which <= 6
+        let (l, ctx9) = genString(ctx2, depth)
+        let (r, ctx10) = genString(ctx9, depth)
+        let (op, ctx11) = draw(ctx10, 2)
+        if op == 0 then return ("(${l} == ${r})", ctx11) else return ("(${l} != ${r})", ctx11) end
+      else
+        if which <= 7
+          return genAtomCmp(ctx2)
+        else
+          return genCollCmp(ctx2)
+        end
+      end
+    end
   end
 end
 
@@ -367,13 +531,74 @@ let genIf(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
   return ("if ${cond}\n  ${thenBranch}\nelse\n  ${elseBranch}\nend", ctx4)
 end
 
-let genExpr(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+# Int arms use small positive literals: always valid patterns, and duplicate
+# arms are harmless (first wins on both backends).
+let genIntArms(ctx: Ctx, tag, depth: Integer, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (v, ctx2) = draw(ctx, 100)
+    let (body, ctx3) = genTyped(ctx2, tag, depth)
+    return genIntArms(ctx3, tag, depth, n - 1, "${acc}  ${v} => ${body}\n")
+  end
+end
+
+# A match at statement position (a let right-hand side): arms on their own
+# lines, like genIf, every list ending in `_`. Bodies never reference pattern
+# bindings, so nothing can be unbound.
+let genMatch(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 4)
+  if kind == 0
+    let (scrut, ctx3) = genTyped(ctx2, :int, depth)
+    let (n, ctx4) = draw(ctx3, 3)
+    let (arms, ctx5) = genIntArms(ctx4, tag, depth, n, "")
+    let (fb, ctx6) = genTyped(ctx5, tag, depth)
+    return ("match ${scrut} do\n${arms}  _ => ${fb}\nend", ctx6)
+  else
+    if kind == 1
+      let (cond, ctx7) = genTyped(ctx2, :bool, depth)
+      let (b1, ctx8) = genTyped(ctx7, tag, depth)
+      let (b2, ctx9) = genTyped(ctx8, tag, depth)
+      return ("match ${cond} do\n  true => ${b1}\n  false => ${b2}\nend", ctx9)
+    else
+      if kind == 2
+        let (text, ctx10) = genTyped(ctx2, :string, depth)
+        let (one, ctx11) = draw(ctx10, 2)
+        if one == 0
+          let (fb2, ctx12) = genTyped(ctx11, tag, depth)
+          return ("match ${text} do\n  _ => ${fb2}\nend", ctx12)
+        else
+          let (lit, ctx13) = genStringLit(ctx11)
+          let (b3, ctx14) = genTyped(ctx13, tag, depth)
+          let (fb3, ctx15) = genTyped(ctx14, tag, depth)
+          return ("match ${text} do\n  ${lit} => ${b3}\n  _ => ${fb3}\nend", ctx15)
+        end
+      else
+        let (c, ctx16) = draw(ctx2, 3)
+        let (items, ctx17) = genListLit(ctx16, :int, c + 1)
+        let (e0, ctx18) = genTyped(ctx17, tag, depth)
+        let (e1, ctx19) = genTyped(ctx18, tag, depth)
+        let (e2, ctx20) = genTyped(ctx19, tag, depth)
+        let (fb4, ctx21) = genTyped(ctx20, tag, depth)
+        return ("match ${items} do\n  [] => ${e0}\n  [_] => ${e1}\n  [_ | _] => ${e2}\n  _ => ${fb4}\nend", ctx21)
+      end
+    end
+  end
+end
+
+# allowMatch is statement position only (a let right-hand side): inside call
+# parens a `[`-arm would read as indexing the previous arm's body.
+let genExpr(ctx: Ctx, tag, depth: Integer, allowMatch: Bool) -> (String, Ctx) do
   if depth == 0 then return genTyped(ctx, tag, 0) end
-  let (shape, ctx2) = draw(ctx, 4)
+  let (shape, ctx2) = draw(ctx, 6)
   if shape == 0
     return genIf(ctx2, tag, depth - 1)
   else
-    return genTyped(ctx2, tag, depth)
+    if shape == 1 && allowMatch
+      return genMatch(ctx2, tag, depth - 1)
+    else
+      return genTyped(ctx2, tag, depth)
+    end
   end
 end
 
@@ -386,10 +611,23 @@ let genLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
     return (acc, ctx)
   else
     let (tag, ctx2) = pickType(ctx)
-    let (rhs, ctx3) = genExpr(ctx2, tag, 2)
+    let (rhs, ctx3) = genExpr(ctx2, tag, 2, true)
     let (name, ctx4) = fresh(ctx3)
     let ctx5 = remember(ctx4, tag, name)
     return genLets(ctx5, n - 1, "${acc}let ${name} = ${rhs}\n")
+  end
+end
+
+# 0-2 collection lets after the scalar ones: tuples, non-empty lists and
+# single-entry maps over scalar expressions (which may read the lets above).
+# Unreferenced for now — construction and printing is the coverage.
+let genCollLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (rhs, ctx2) = genCollLit(ctx)
+    let (name, ctx3) = fresh(ctx2)
+    return genCollLets(ctx3, n - 1, "${acc}let ${name} = ${rhs}\n")
   end
 end
 
@@ -406,16 +644,18 @@ let genProgram(seed: Integer) -> String do
   let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0, env: empty }
   let (nlets, ctx2) = draw(ctx, 4)
   let (lets, ctx3) = genLets(ctx2, nlets, "")
-  let (tag, ctx4) = pickType(ctx3)
-  let (last, ctx5) = genExpr(ctx4, tag, 3)
-  let (mode, ctx6) = draw(ctx5, 2)
+  let (ncols, ctx4) = draw(ctx3, 3)
+  let (cols, ctx5) = genCollLets(ctx4, ncols, "")
+  let (tag, ctx6) = pickType(ctx5)
+  let (last, ctx7) = genExpr(ctx6, tag, 3, false)
+  let (mode, ctx8) = draw(ctx7, 2)
   let prints = if mode == 0
-    let (printed, ignored) = genPrints(ctx6, 0, ctx6.counter, "")
+    let (printed, ignored) = genPrints(ctx8, 0, ctx8.counter, "")
     printed
   else
     ""
   end
-  return "main do\n${lets}${prints}IO.printLine(${last})\nend\n"
+  return "main do\n${lets}${cols}${prints}IO.printLine(${last})\nend\n"
 end
 
 # Both backends' answers, rendered comparable. Only exit code and stdout
