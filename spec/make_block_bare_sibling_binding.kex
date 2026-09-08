@@ -1,0 +1,58 @@
+# A bare IDENTIFIER inside a `make` block naming one of that block's own
+# PARAMETERLESS methods.
+#
+# The identifier form of the implicit-receiver call rule (see
+# make_block_bare_sibling_call.kex): `seed` means `this.seed` exactly as
+# `decorate(x)` means `this.decorate(x)`. Nothing implemented the identifier
+# form — the analyzer had no pre-declare pass for make members, so a
+# parameterless helper standing BELOW its caller read as "Undefined
+# identifier: seed", and both backends died on the bare name as an unbound
+# variable. A `private do` member is callable from a sibling, which is the
+# exact case docs/modules.md promises (kexhq/kex#292).
+#
+# Also pinned here: a LOCAL binding of the same name wins over the method —
+# the first cut of this fix read `kind` in `product`'s body as the
+# parameterless `Measure#kind` method instead of the local `let kind = …`
+# sitting right there, and the units suite went with it.
+module Shelf do
+  record Book do
+    title : String
+  end
+
+  make Book do
+    let shown() = seed + 1
+
+    private do
+      let seed = 41
+    end
+  end
+
+  make [Book] do
+    let tally() = seed * this.count
+    let seed = 2
+  end
+end
+
+# A parameterless method of a record the module declares, shadowed by a local
+# inside a sibling method's body. The local must win.
+record Measure do
+  kind : String
+end
+
+make Measure do
+  let unitKind = @kind
+
+  let described() do
+    let kind = "local"
+    return kind + "/" + unitKind
+  end
+end
+
+using Shelf, only: [Book]
+
+main do
+  IO.printLine(Shelf.Book { title: "Dune" }.shown)
+  let books = [Shelf.Book { title: "a" }, Shelf.Book { title: "b" }]
+  IO.printLine(books.tally())
+  IO.printLine(Measure { kind: "unit" }.described)
+end

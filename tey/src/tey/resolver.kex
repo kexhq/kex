@@ -89,7 +89,7 @@ foul resolveWorkspaceWithInfo(context: Context,
   end
   let requirements = context.members.map do |member|
     member.memberManifest.packageKexRequirement
-  end
+  end.uniq
   let requirement = requirements.reduce("") do |combined, wanted|
     Tey.Semver.intersect(combined, wanted)
   end

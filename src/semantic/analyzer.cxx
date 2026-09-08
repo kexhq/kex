@@ -294,6 +294,31 @@ auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
     const bool previousMake = m_inMakeBlock;
     m_inMakeBlock = true;
 
+    // Declare every member's NAME up front — `private do` blocks included —
+    // so a method can reference a sibling defined later in the block: the
+    // same rule analyzeModule applies to module members. Without it a
+    // parameterless helper standing below its caller read as "Undefined
+    // identifier" purely for being lower in the block (kexhq/kex#292).
+    const auto declare = [this](const ast::FunctionDef& fn) {
+        Symbol symbol{fn.name, SymbolKind::Function, fn.isFoul, false, true,
+                      fn.location};
+        symbol.clauseCount = static_cast<int>(fn.clauses.size());
+        m_symbols.define(std::move(symbol));
+    };
+    for (const auto& item : def.body) {
+        if (const auto* fn =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*fn) declare(**fn);
+        } else if (const auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+            if (!*visibility) continue;
+            for (const auto& inner : (*visibility)->items)
+                if (const auto* vfn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                    if (*vfn) declare(**vfn);
+        }
+    }
+
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;

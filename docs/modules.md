@@ -42,6 +42,12 @@ Visibility scoping:
 - `private` in a `make` block — only callable within that `make`
 - Nested modules don't see parent's privates
 
+Inside a `make` block, a method reaches its block's siblings (and itself) by
+their bare name, with the receiver implicit: `decorate(text)` means
+`this.decorate(text)`, and a bare `seed` naming a parameterless sibling means
+`this.seed`. A local binding of the same name wins over the method, and so
+does an ordinary zero-argument function.
+
 ## Using (Scoped Imports)
 
 `using` brings public names from a module into scope. Bare, it takes everything

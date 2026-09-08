@@ -1740,6 +1740,46 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 scope.resize(dot);
             }
             if (!val) {
+                // A bare reference to one of the enclosing `make` block's own
+                // PARAMETERLESS methods — the identifier form of the
+                // implicit-receiver call rule: `seed` means `this.seed`
+                // exactly as `decorate(x)` means `this.decorate(x)`
+                // (kexhq/kex#292). Only a method whose every argument is the
+                // receiver qualifies; one taking explicit arguments keeps
+                // reading as undefined here, as it does on BEAM.
+                if (auto receiver = m_env->get("this")) {
+                    std::vector<ValuePtr> withReceiver{receiver};
+                    auto methodName = resolveMethodName(receiver, node.name,
+                                                        &withReceiver);
+                    if (methodName != node.name &&
+                        (m_env->get(methodName) ||
+                         m_functionValues.count(methodName))) {
+                        auto parameterless = [&](const std::string& resolved) {
+                            auto defs = m_functionDefs.find(resolved);
+                            if (defs == m_functionDefs.end()) return false;
+                            for (const auto* d : defs->second) {
+                                if (!d) continue;
+                                for (const auto& c : d->clauses) {
+                                    if (c.params.empty()) return true;
+                                    const auto& p0 = c.params[0];
+                                    if (!p0.name && p0.pattern && *p0.pattern &&
+                                        (std::holds_alternative<ast::ThisPattern>(
+                                             (*p0.pattern)->kind) ||
+                                         std::holds_alternative<ast::RecordPattern>(
+                                             (*p0.pattern)->kind) ||
+                                         std::holds_alternative<ast::RangePattern>(
+                                             (*p0.pattern)->kind)))
+                                        return true;
+                                }
+                            }
+                            return false;
+                        };
+                        if (parameterless(methodName))
+                            return callFunction(methodName,
+                                                std::move(withReceiver), {},
+                                                expr.location);
+                    }
+                }
                 throw RuntimeError("Undefined variable: " + node.name, expr.location);
             }
             return autoCallZeroArgConstant(node.name, val);
@@ -4059,6 +4099,17 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
         if (dot == std::string::npos) break;
         scope.resize(dot);
     }
+    // An IMPORTED zero-arg member lives in m_functionDefs under its owning
+    // module, not under the bare or current-module key — so `using Limits`
+    // followed by a bare `LIMIT` printed `<function:LIMIT>` instead of the
+    // value. The import scopes say which module the name came from
+    // (kexhq/kex#282).
+    if (defIt == m_functionDefs.end())
+        for (auto scope = m_importScopes.rbegin();
+             defIt == m_functionDefs.end() && scope != m_importScopes.rend();
+             ++scope)
+            if (auto found = scope->find(name); found != scope->end())
+                defIt = m_functionDefs.find(found->second.module + "::" + name);
     if (defIt == m_functionDefs.end() || defIt->second.empty()) return val;
     if (!defIt->second[0]->clauses[0].params.empty()) return val;
 

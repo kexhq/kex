@@ -5539,6 +5539,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
             // Inside a make block, `this` / `@field` has the record type.
             if (m_currentMakeType) return m_currentMakeType;
+            // Anywhere else there is no receiver to bind. A module-level
+            // `let` mentioning `this` used to pass here as Unknown and fail
+            // only in the backends — erlc rejecting it as an unbound
+            // variable, the walker misreporting a sibling member — so the
+            // checker says it where it is written (kexhq/kex#293).
+            error(expr.location,
+                  "'this' has no receiver here — it is only bound inside a "
+                  "`make` block method");
             return Type::unknown();
         }
         else {
@@ -6524,6 +6532,56 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (record != m_importedInterfaces->recordFieldNames.end() &&
                     record->second.count(name))
                     return Type::unknown();
+            }
+        } else if (auto* optional = std::get_if<OptionalType>(&receiver->kind)) {
+            // `.field` on an optional used to pass here and then break three
+            // different ways at run time — a crash on BEAM, "Undefined
+            // method" in the interpreter, or (worst) the whole record
+            // silently interpolated where the field was asked for. Neither
+            // backend maps a field over an optional, so the checker says it:
+            // unwrap first. Only when the inner type really has the field —
+            // `.or`/`.map` are method calls that must keep resolving
+            // normally (kexhq/kex#294).
+            auto inner = resolve(optional->inner);
+            if (auto* innerNamed = std::get_if<NamedType>(&inner->kind)) {
+                if (auto record = m_recordFields.find(
+                        resolveRecordName(innerNamed->name));
+                    record != m_recordFields.end() &&
+                    record->second.count(name))
+                    error(loc,
+                          "`" + name + "` is a field of " +
+                              typeToString(inner) + ", but the receiver is " +
+                              typeToString(receiver) +
+                              " — the value may be None. Map over the "
+                              "optional first: `.map { |v| v." + name +
+                              " }`");
+                else if (m_importedInterfaces) {
+                    auto record =
+                        m_importedInterfaces->recordFieldNames.find(
+                            innerNamed->name);
+                    if (record != m_importedInterfaces->recordFieldNames.end() &&
+                        record->second.count(name))
+                        error(loc,
+                              "`" + name + "` is a field of " +
+                                  typeToString(inner) +
+                                  ", but the receiver is " +
+                                  typeToString(receiver) +
+                                  " — the value may be None. Map over the "
+                                  "optional first: `.map { |v| v." + name +
+                                  " }`");
+                }
+            } else if (auto* innerRecord =
+                           std::get_if<RecordType>(&inner->kind)) {
+                if (std::any_of(innerRecord->fields.begin(),
+                                innerRecord->fields.end(),
+                                [&](const auto& field) {
+                                    return field.first == name;
+                                }))
+                    error(loc,
+                          "`" + name + "` is a field of " + typeToString(inner) +
+                              ", but the receiver is " + typeToString(receiver) +
+                              " — the value may be None. Map over the "
+                              "optional first: `.map { |v| v." + name + " }`");
             }
         }
     }

@@ -1,0 +1,2 @@
+spec/error_field_on_optional.kex:17:54: error: `id` is a field of M.Book, but the receiver is M.Book? — the value may be None. Map over the optional first: `.map { |v| v.id }`
+Aborted: 1 type error — fix before running (use --no-check to skip).
