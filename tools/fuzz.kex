@@ -1,0 +1,455 @@
+# fuzz — differential fuzzer: the tree-walk interpreter vs the BEAM backend.
+#
+# Generates small, correct-by-construction Kex programs (integer, float,
+# string and boolean expressions over literals, arithmetic, comparisons,
+# `!`/`&&`/`||`, `let` bindings and `if`) and runs each under both backends
+# with a time budget. Correct-by-construction means: no division by zero, no
+# partial operations, no loops, no way to hang — so anything but identical,
+# successful output is a finding: a crash, a timeout, or output that differs.
+#
+#   kex --run-walker tools/fuzz.kex 42 200 ./build/kex /tmp/kex-fuzz 15000
+#
+# Arguments, all positional and all optional: seed, case count, path to the
+# kex binary, output directory, per-case timeout in milliseconds.
+#
+# Every case reproduces from its seed: case i uses seed + i. A failure saves
+# <out>/fail_<i>.kex (the program) plus <out>/fail_<i>.txt (what each backend
+# answered). Both backends timing out identically counts as inconclusive
+# ("slow"), not a failure; anything else asymmetric is a failure.
+#
+# Run the fuzzer itself on the walker: it stays on the interpreter, far from
+# the lowering bugs it hunts. One case at a time, so the log reads in order.
+# Generation stays shallow (expression depth 3, short literals) and the case
+# loop is a `while`, never recursion: the walker segfaults past very deep
+# recursion, and the fuzzer must not trip over that itself.
+
+using FS
+
+record Rng do
+  seed : Integer
+end
+
+record Ctx do
+  rng : Rng
+  counter : Integer
+end
+
+# Any integer into a live Park-Miller state. 0 is dead (0 maps to 0), and a
+# non-positive seed just means 1: seeds are labels, not entropy.
+let normalizeSeed(seed: Integer) -> Integer do
+  if seed < 1 then 1 else 1 + (seed % 2147483646) end
+end
+
+let stepRng(rng: Rng) -> Rng do
+  let state = (rng.seed * 48271) % 2147483647
+  Rng { seed: if state == 0 then 1 else state end }
+end
+
+# One uniform draw in [0, bound). Answers (value, next context).
+let draw(ctx: Ctx, bound: Integer) -> (Integer, Ctx) do
+  let advanced = stepRng(ctx.rng)
+  return (advanced.seed % bound, Ctx { rng: advanced, counter: ctx.counter })
+end
+
+let fresh(ctx: Ctx) -> (String, Ctx) do
+  let name = "v${ctx.counter}"
+  return (name, Ctx { rng: ctx.rng, counter: ctx.counter + 1 })
+end
+
+# A type tag for the generator: :int, :float, :string or :bool.
+let pickType(ctx: Ctx) do
+  let (n, ctx2) = draw(ctx, 4)
+  let tag = match n do
+    0 => :int
+    1 => :float
+    2 => :string
+    _ => :bool
+  end
+  return (tag, ctx2)
+end
+
+let genIntLit(ctx: Ctx) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 10)
+  if kind <= 5
+    let (n, ctx3) = draw(ctx2, 1000)
+    let (neg, ctx4) = draw(ctx3, 2)
+    if neg == 0 then return ("-${n}", ctx4) else return ("${n}", ctx4) end
+  else
+    if kind <= 7
+      return genBigInt(ctx2)
+    else
+      if kind == 8 then return ("0", ctx2) else return ("-0", ctx2) end
+    end
+  end
+end
+
+# 18-27 digits: three unconstrained chunks concatenated. No padding needed;
+# fewer digits are still a big integer, just a smaller one.
+let genBigInt(ctx: Ctx) -> (String, Ctx) do
+  let (a, ctx2) = draw(ctx, 999999999)
+  let (b, ctx3) = draw(ctx2, 999999999)
+  let (c, ctx4) = draw(ctx3, 999999999)
+  return ("${1 + a}${b}${c}", ctx4)
+end
+
+let genNonZeroLit(ctx: Ctx) -> (String, Ctx) do
+  let (n, ctx2) = draw(ctx, 999)
+  let lit = "${1 + n}"
+  let (neg, ctx3) = draw(ctx2, 2)
+  if neg == 0 then return ("-${lit}", ctx3) else return (lit, ctx3) end
+end
+
+let genIntBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
+  let (l, ctx2) = genInt(ctx, depth - 1)
+  let (r, ctx3) = genInt(ctx2, depth - 1)
+  return ("(${l} ${op} ${r})", ctx3)
+end
+
+let genInt(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genIntLit(ctx) end
+  let (op, ctx2) = draw(ctx, 10)
+  if op <= 1
+    return genIntBin(ctx2, depth, "+")
+  else
+    if op <= 3
+      return genIntBin(ctx2, depth, "-")
+    else
+      if op <= 5
+        return genIntBin(ctx2, depth, "*")
+      else
+        if op == 6
+          let (num, ctx3) = genInt(ctx2, depth - 1)
+          let (den, ctx4) = genNonZeroLit(ctx3)
+          return ("(${num} / ${den})", ctx4)
+        else
+          if op == 7
+            let (num2, ctx5) = genInt(ctx2, depth - 1)
+            let (den2, ctx6) = genNonZeroLit(ctx5)
+            return ("(${num2} % ${den2})", ctx6)
+          else
+            if op == 8
+              let (e, ctx7) = genInt(ctx2, depth - 1)
+              return ("(-${e})", ctx7)
+            else
+              return genIntLit(ctx2)
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+let genFloatLit(ctx: Ctx) -> (String, Ctx) do
+  let (whole, ctx2) = draw(ctx, 100)
+  let (frac, ctx3) = draw(ctx2, 1000)
+  let (neg, ctx4) = draw(ctx3, 4)
+  if neg == 0 then return ("-${whole}.${frac}", ctx4) else return ("${whole}.${frac}", ctx4) end
+end
+
+let genFloatBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
+  let (l, ctx2) = genFloat(ctx, depth - 1)
+  let (r, ctx3) = genFloat(ctx2, depth - 1)
+  return ("(${l} ${op} ${r})", ctx3)
+end
+
+let genFloat(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genFloatLit(ctx) end
+  let (op, ctx2) = draw(ctx, 6)
+  if op <= 1
+    return genFloatBin(ctx2, depth, "+")
+  else
+    if op <= 3
+      return genFloatBin(ctx2, depth, "-")
+    else
+      if op == 4
+        return genFloatBin(ctx2, depth, "*")
+      else
+        let (num, ctx3) = genFloat(ctx2, depth - 1)
+        let (whole, ctx4) = draw(ctx3, 99)
+        let (frac, ctx5) = draw(ctx4, 1000)
+        return ("(${num} / ${1 + whole}.${frac})", ctx5)
+      end
+    end
+  end
+end
+
+# One source-level character: letters, digits, a space, a punctuation mark,
+# an escape, or — rarely — non-ASCII, since UTF-8 stdout agreement is itself
+# worth fuzzing.
+let specialChar(k: Integer) -> String do
+  match k do
+    0 => " "
+    1 => "!"
+    2 => "\\\\"
+    3 => "\\\""
+    4 => "\\n"
+    5 => "\\t"
+    6 => "é"
+    _ => "?"
+  end
+end
+
+let genChar(ctx: Ctx) -> (String, Ctx) do
+  let (n, ctx2) = draw(ctx, 70)
+  if n <= 25
+    return (String.fromCodepoint(97 + n).or(""), ctx2)
+  else
+    if n <= 51
+      return (String.fromCodepoint(65 + n - 26).or(""), ctx2)
+    else
+      if n <= 61
+        return (String.fromCodepoint(48 + n - 52).or(""), ctx2)
+      else
+        return (specialChar(n - 62), ctx2)
+      end
+    end
+  end
+end
+
+let genChars(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (ch, ctx2) = genChar(ctx)
+    return genChars(ctx2, n - 1, "${acc}${ch}")
+  end
+end
+
+let genStringLit(ctx: Ctx) -> (String, Ctx) do
+  let (len, ctx2) = draw(ctx, 13)
+  let (body, ctx3) = genChars(ctx2, len, "")
+  return ("\"${body}\"", ctx3)
+end
+
+let genString(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genStringLit(ctx) end
+  let (op, ctx2) = draw(ctx, 3)
+  if op <= 1
+    let (l, ctx3) = genString(ctx2, depth - 1)
+    let (r, ctx4) = genString(ctx3, depth - 1)
+    return ("(${l} + ${r})", ctx4)
+  else
+    return genStringLit(ctx2)
+  end
+end
+
+let genComparison(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  let (which, ctx2) = draw(ctx, 3)
+  if which == 2
+    let (l, ctx3) = genString(ctx2, depth)
+    let (r, ctx4) = genString(ctx3, depth)
+    let (op, ctx5) = draw(ctx4, 2)
+    if op == 0 then return ("(${l} == ${r})", ctx5) else return ("(${l} != ${r})", ctx5) end
+  else
+    let numKind = if which == 0 then :int else :float end
+    let (ln, ctx6) = genTyped(ctx2, numKind, depth)
+    let (rn, ctx7) = genTyped(ctx6, numKind, depth)
+    let (opn, ctx8) = draw(ctx7, 6)
+    let symbol = match opn do
+      0 => "=="
+      1 => "!="
+      2 => "<"
+      3 => ">"
+      4 => "<="
+      _ => ">="
+    end
+    return ("(${ln} ${symbol} ${rn})", ctx8)
+  end
+end
+
+let genBool(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0
+    let (b, ctx2) = draw(ctx, 2)
+    if b == 0 then return ("true", ctx2) else return ("false", ctx2) end
+  else
+    let (op, ctx9) = draw(ctx, 6)
+    if op <= 2
+      return genComparison(ctx9, depth - 1)
+    else
+      if op == 3
+        let (e, ctx10) = genBool(ctx9, depth - 1)
+        return ("(!${e})", ctx10)
+      else
+        if op == 4
+          let (l, ctx11) = genBool(ctx9, depth - 1)
+          let (r, ctx12) = genBool(ctx11, depth - 1)
+          return ("(${l} && ${r})", ctx12)
+        else
+          let (a, ctx13) = genBool(ctx9, depth - 1)
+          let (c, ctx14) = genBool(ctx13, depth - 1)
+          return ("(${a} || ${c})", ctx14)
+        end
+      end
+    end
+  end
+end
+
+let genTyped(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  if tag == :int
+    return genInt(ctx, depth)
+  else
+    if tag == :float
+      return genFloat(ctx, depth)
+    else
+      if tag == :string
+        return genString(ctx, depth)
+      else
+        return genBool(ctx, depth)
+      end
+    end
+  end
+end
+
+let genIf(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let (cond, ctx2) = genBool(ctx, depth)
+  let (thenBranch, ctx3) = genTyped(ctx2, tag, depth)
+  let (elseBranch, ctx4) = genTyped(ctx3, tag, depth)
+  return ("if ${cond}\n  ${thenBranch}\nelse\n  ${elseBranch}\nend", ctx4)
+end
+
+let genExpr(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genTyped(ctx, tag, 0) end
+  let (shape, ctx2) = draw(ctx, 4)
+  if shape == 0
+    return genIf(ctx2, tag, depth - 1)
+  else
+    return genTyped(ctx2, tag, depth)
+  end
+end
+
+# 0-3 lets, then prints. Half the programs print every binding; the other
+# half print only the final expression, leaving dead lets behind — dead
+# bindings lower differently, so both shapes are worth covering.
+let genLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (tag, ctx2) = pickType(ctx)
+    let (rhs, ctx3) = genExpr(ctx2, tag, 2)
+    let (name, ctx4) = fresh(ctx3)
+    return genLets(ctx4, n - 1, "${acc}let ${name} = ${rhs}\n")
+  end
+end
+
+let genPrints(ctx: Ctx, first: Integer, last: Integer, acc: String) -> (String, Ctx) do
+  if first == last
+    return (acc, ctx)
+  else
+    return genPrints(ctx, first + 1, last, "${acc}IO.printLine(v${first})\n")
+  end
+end
+
+let genProgram(seed: Integer) -> String do
+  let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0 }
+  let (nlets, ctx2) = draw(ctx, 4)
+  let (lets, ctx3) = genLets(ctx2, nlets, "")
+  let (tag, ctx4) = pickType(ctx3)
+  let (last, ctx5) = genExpr(ctx4, tag, 3)
+  let (mode, ctx6) = draw(ctx5, 2)
+  let prints = if mode == 0
+    let (printed, ignored) = genPrints(ctx6, 0, ctx6.counter, "")
+    printed
+  else
+    ""
+  end
+  return "main do\n${lets}${prints}IO.printLine(${last})\nend\n"
+end
+
+# Both backends' answers, rendered comparable. Only exit code and stdout
+# participate: stderr carries warnings whose wording the backends are free
+# to disagree on, and that is not what this fuzzer hunts.
+let describeOutcome(outcome) -> String do
+  match outcome do
+    Ok(result) => "exit=${result.exitCode}\n${result.stdout}"
+    Error(problem) => "error=${problem}"
+  end
+end
+
+foul saveFinding(outDir: String, index: Integer, source: String, walker: String, beam: String) do
+  FS.File.write("${outDir}/fail_${index}.kex", source)
+  FS.File.write("${outDir}/fail_${index}.txt",
+    "walker:\n${walker}\n\nbeam:\n${beam}\n")
+end
+
+# One case: generate, write, run both, compare. Answers pass, invalid, slow
+# or fail. "invalid" is a generator bug (both backends reject the program
+# before running anything); "slow" is both backends timing out identically.
+foul runCase(kex: String, outDir: String, index: Integer, seed: Integer, budgetMs: Integer) do
+  let source = genProgram(seed)
+  let file = "${outDir}/case_${index}.kex"
+  if !FS.File.write(file, source) then return "invalid" end
+  let walker = Process.run(kex, ["--run-walker", "--no-colors", file], budgetMs)
+  let beam = Process.run(kex, ["--run", "--no-colors", file], budgetMs)
+  match walker do
+    Ok(w) => do
+      match beam do
+        Ok(b) => do
+          if w.exitCode == 0 && b.exitCode == 0 && w.stdout == b.stdout
+            return "pass"
+          else
+            saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+            return "fail"
+          end
+        end
+        Error(_) => do
+          saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+          return "fail"
+        end
+      end
+    end
+    Error(ew) => do
+      match beam do
+        Ok(_) => do
+          saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+          return "fail"
+        end
+        Error(eb) => do
+          if ew == eb
+            return "slow"
+          else
+            saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+            return "fail"
+          end
+        end
+      end
+    end
+  end
+end
+
+foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs: Integer) do
+  if !FS.Directory.exists?(outDir) then FS.Directory.create(outDir) end
+  var fails = 0
+  var invalid = 0
+  var slow = 0
+  var i = 0
+  while i < total do
+    let verdict = runCase(kex, outDir, i, seed + i, budgetMs)
+    if verdict == "fail"
+      fails = fails + 1
+      IO.printLine("case ${i}: FAIL (seed ${seed + i})")
+    else
+      if verdict == "invalid"
+        invalid = invalid + 1
+      else
+        if verdict == "slow"
+          slow = slow + 1
+        end
+      end
+    end
+    i = i + 1
+  end
+  var summary = "${total} cases: ${total - fails - invalid - slow} pass"
+  summary = "${summary}, ${fails} FAIL, ${invalid} invalid, ${slow} slow"
+  IO.printLine(summary)
+  return fails
+end
+
+main(args) do
+  let seed = Integer.parse(args.at(0).or("42")).or(42)
+  let total = Integer.parse(args.at(1).or("50")).or(50)
+  let kex = args.at(2).or("./build/kex")
+  let outDir = args.at(3).or("/tmp/kex-fuzz")
+  let budgetMs = Integer.parse(args.at(4).or("15000")).or(15000)
+  return System.exit(drive(kex, outDir, seed, total, budgetMs))
+end

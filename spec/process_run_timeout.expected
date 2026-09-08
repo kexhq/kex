@@ -1,0 +1,4 @@
+ok 0 [hello]
+missing: executable not found
+timeout: timed out after 300ms
+kill: timed out after 300ms

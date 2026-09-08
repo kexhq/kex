@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 -export(['send'/2, 'sendFrom'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1, run/2, stream/2,
+          self/0, exit/2, register/2, whereis/1, run/2, run/3, stream/2,
           spawn/1, 'spawnServing'/3, server_call/4, server_cast/3, reply/1, cast/0,
           replyFrom/2, fromPid/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -27,25 +27,40 @@
 %% Without `mkfifo` or `sh` (Windows) the old merged capture stands in: one
 %% combined stream in `stdout` beats losing stderr.
 run(Command, Args) ->
+    run_with(Command, Args, infinity).
+
+%% Time-budgeted run: the child is killed when `TimeoutMs` milliseconds pass
+%% with it still running, and the call answers a timeout Error rather than
+%% the child's output. The budget bounds the whole call.
+run(Command, Args, TimeoutMs) ->
+    case normalize_timeout(TimeoutMs) of
+        {ok, Timeout} -> run_with(Command, Args, Timeout);
+        {error, Message} -> {'Error', Message}
+    end.
+
+normalize_timeout(N) when is_integer(N), N >= 0 -> {ok, N};
+normalize_timeout(N) when is_integer(N) -> {ok, 0};
+normalize_timeout(_) ->
+    {error, <<"Process.run timeout must be an integer number of milliseconds">>}.
+
+run_with(Command, Args, Timeout) ->
     case os:find_executable(unicode:characters_to_list(Command)) of
         false -> {'Error', <<"executable not found">>};
         Executable ->
             Arguments = [unicode:characters_to_list(A) || A <- Args],
             case {os:find_executable("sh"), os:find_executable("mkfifo")} of
-                {false, _} -> run_merged(Executable, Arguments);
-                {_, false} -> run_merged(Executable, Arguments);
+                {false, _} -> run_merged(Executable, Arguments, Timeout);
+                {_, false} -> run_merged(Executable, Arguments, Timeout);
                 {Shell, Mkfifo} ->
                     case make_fifo(Mkfifo) of
-                        error -> run_merged(Executable, Arguments);
+                        error -> run_merged(Executable, Arguments, Timeout);
                         {ok, Fifo} ->
-                            Result = run_split(Shell, Executable, Arguments, Fifo),
-                            file:delete(Fifo),
-                            Result
+                            run_split(Shell, Executable, Arguments, Fifo, Timeout)
                     end
             end
     end.
 
-run_split(Shell, Executable, Arguments, Fifo) ->
+run_split(Shell, Executable, Arguments, Fifo, Timeout) ->
     %% The reader blocks opening the fifo until a writer appears, and the
     %% shell's `2>fifo` blocks until a reader appears: they release each
     %% other. Reading happens in its own process so the port's stdout is
@@ -58,10 +73,105 @@ run_split(Shell, Executable, Arguments, Fifo) ->
                      [binary, exit_status, use_stdio, hide,
                       {args, ["-c", Script, Executable | Arguments]}]),
     Guard = kex_child_guard:protect(Port),
-    {Status, Out} = collect_port(Port, []),
+    Result = case collect_port(Port, [], deadline(Timeout)) of
+        {ok, {Status, Out}} ->
+            kex_child_guard:release(Guard),
+            Err = await_stderr(Reader, Fifo),
+            file:delete(Fifo),
+            {'Ok', {'ProcessResult', Status, Out, Err}};
+        timeout ->
+            kill_runaway(Port, Reader, Fifo, Guard),
+            {'Error', timeout_message(Timeout)}
+    end,
+    Result.
+
+%% The budget is spent with the child still running: stop it, reclaim the
+%% port, and leave no stray process behind. TERM first so a server gets to
+%% close up; KILL after a short grace for anything ignoring TERM. There is
+%% no BIF for signalling an arbitrary OS process (see kex_child_guard), so
+%% this goes through `kill` the same way.
+%%
+%% The signal goes to the whole PROCESS GROUP, not just the direct child:
+%% `erl_child_setup` puts every spawned child in its own group, and a child
+%% that already forked (a shell running `sleep`, say) leaves the grandchild
+%% holding the port's stdout open — which holds back EOF, which holds back
+%% the exit_status this waits for. Killing only the direct child would stall
+%% here until the grandchild exits on its own.
+kill_runaway(Port, Reader, Fifo, Guard) ->
+    OsPid = case erlang:port_info(Port, os_pid) of
+        {os_pid, P} when is_integer(P) -> P;
+        _ -> undefined
+    end,
+    signal_group(OsPid, "-TERM"),
+    case wait_port_exit(Port, 100) of
+        exited -> ok;
+        running ->
+            signal_group(OsPid, "-KILL"),
+            wait_port_exit(Port, 2000)
+    end,
+    close_port(Port),
+    flush_port(Port),
+    case Reader of
+        undefined -> ok;
+        _ -> erlang:exit(Reader, kill)
+    end,
+    flush_stderr(),
+    case Fifo of
+        undefined -> ok;
+        _ -> file:delete(Fifo)
+    end,
     kex_child_guard:release(Guard),
-    Err = await_stderr(Reader, Fifo),
-    {'Ok', {'ProcessResult', Status, Out, Err}}.
+    ok.
+
+%% Signal the child's process group: `-Pid` names the group led by `Pid`.
+%% The `--` keeps a negative id from being read as an option.
+signal_group(OsPid, Signal) when is_integer(OsPid), OsPid > 0 ->
+    try os:cmd("kill " ++ Signal ++ " -- -" ++ erlang:integer_to_list(OsPid)) of
+        _ -> ok
+    catch
+        _:_ -> ok
+    end;
+signal_group(_, _) -> ok.
+
+wait_port_exit(Port, Ms) ->
+    receive
+        {Port, {exit_status, _}} -> exited
+    after Ms -> running
+    end.
+
+%% A port whose child has exited may already have closed itself — closing
+%% twice raises badarg — so only close what is still open.
+close_port(Port) ->
+    case erlang:port_info(Port) of
+        undefined -> ok;
+        _ ->
+            try erlang:port_close(Port) of
+                _ -> ok
+            catch
+                _:_ -> ok
+            end
+    end.
+
+%% The port is closed: nothing new can arrive, so drain what is left without
+%% waiting. Stale port and stderr messages must not leak into this process's
+%% mailbox and confuse a later receive.
+flush_port(Port) ->
+    receive
+        {Port, _} -> flush_port(Port)
+    after 0 -> ok
+    end.
+
+flush_stderr() ->
+    receive
+        {kex_stderr, _, _} -> flush_stderr()
+    after 0 -> ok
+    end.
+
+deadline(infinity) -> infinity;
+deadline(Ms) -> erlang:monotonic_time(millisecond) + Ms.
+
+timeout_message(Ms) ->
+    list_to_binary(["timed out after ", integer_to_list(Ms), "ms"]).
 
 %% Process.stream — run a program and let its output through AS IT ARRIVES,
 %% answering only the exit code.
@@ -166,22 +276,28 @@ emit(Chunk) ->
             <<>>
     end.
 
-run_merged(Executable, Arguments) ->
+run_merged(Executable, Arguments, Timeout) ->
     Port = open_port({spawn_executable, Executable},
                      [binary, exit_status, use_stdio, stderr_to_stdout,
                       hide, {args, Arguments}]),
     Guard = kex_child_guard:protect(Port),
-    {Status, Out} = collect_port(Port, []),
-    kex_child_guard:release(Guard),
-    {'Ok', {'ProcessResult', Status, Out, <<>>}}.
+    Result = case collect_port(Port, [], deadline(Timeout)) of
+        {ok, {Status, Out}} ->
+            kex_child_guard:release(Guard),
+            {'Ok', {'ProcessResult', Status, Out, <<>>}};
+        timeout ->
+            kill_runaway(Port, undefined, undefined, Guard),
+            {'Error', timeout_message(Timeout)}
+    end,
+    Result.
 
 make_fifo(Mkfifo) ->
     Path = fifo_path(),
     Port = open_port({spawn_executable, Mkfifo},
                      [binary, exit_status, use_stdio, hide, {args, [Path]}]),
     case collect_port(Port, []) of
-        {0, _} -> {ok, Path};
-        _      -> error
+        {ok, {0, _}} -> {ok, Path};
+        _            -> error
     end.
 
 %% Unique per call: two runs at once must not read each other's stderr. No
@@ -235,10 +351,27 @@ await_stderr(Reader, Fifo) ->
     end.
 
 collect_port(Port, Chunks) ->
+    collect_port(Port, Chunks, infinity).
+
+%% Deadline-bounded collect: `infinity` waits for the child the way the
+%% untimed run always has; an integer deadline answers `timeout` instead.
+%% The deadline is absolute — each loop waits only for what is left of the
+%% budget, so a child that keeps trickling output still runs out of time.
+collect_port(Port, Chunks, infinity) ->
     receive
-        {Port, {data, Data}} -> collect_port(Port, [Data | Chunks]);
+        {Port, {data, Data}} -> collect_port(Port, [Data | Chunks], infinity);
         {Port, {exit_status, Status}} ->
-            {Status, iolist_to_binary(lists:reverse(Chunks))}
+            {ok, {Status, iolist_to_binary(lists:reverse(Chunks))}}
+    end;
+collect_port(Port, Chunks, Deadline) ->
+    Timeout = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    receive
+        {Port, {data, Data}} ->
+            collect_port(Port, [Data | Chunks], Deadline);
+        {Port, {exit_status, Status}} ->
+            {ok, {Status, iolist_to_binary(lists:reverse(Chunks))}}
+    after Timeout ->
+        timeout
     end.
 
 %% Raw BEAM messaging, plus the conventional sender-bearing {Pid, Payload} form.
