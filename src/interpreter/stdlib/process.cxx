@@ -29,10 +29,15 @@ extern "C" void forwardSignalToStreamedChild(int sig) {
 // lives, restoring the previous dispositions afterwards. Without it a signal
 // that takes the interpreter down leaves the grandchild running: `tey run`
 // exited on Ctrl+C while the server it started kept serving and kept its port.
+//
+// With `group`, the target is the child's whole process group (`-child`):
+// timed `Process.run` children lead their own group (see below), and a
+// terminal signal reaches only the interpreter's group, so the subtree
+// would otherwise miss the Ctrl+C it used to receive directly.
 class SignalForwarder {
 public:
-    explicit SignalForwarder(pid_t child) {
-        g_streamedChild = child;
+    explicit SignalForwarder(pid_t child, bool group = false) {
+        g_streamedChild = group ? -child : child;
         struct sigaction forward {};
         forward.sa_handler = forwardSignalToStreamedChild;
         sigemptyset(&forward.sa_mask);
@@ -153,7 +158,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
 #ifdef __EMSCRIPTEN__
         return Value::error(Value::string("process execution is unavailable in wasm"));
 #else
-        if (args.size() != 2)
+        if (args.size() != 2 && args.size() != 3)
             return Value::error(Value::string("Process.run expects a command and argument list"));
         const auto* command = std::get_if<StringValue>(&args[0]->data);
         const auto* list = std::get_if<ListValue>(&args[1]->data);
@@ -168,6 +173,16 @@ auto Evaluator::registerProcessBuiltins() -> void {
             if (!string)
                 return Value::error(Value::string("Process.run arguments must be strings"));
             strings.push_back(string->value);
+        }
+
+        // Optional third argument: milliseconds before the child is killed.
+        std::optional<int64_t> timeoutMs;
+        if (args.size() == 3) {
+            const auto* limit = std::get_if<IntValue>(&args[2]->data);
+            if (!limit)
+                return Value::error(Value::string(
+                    "Process.run timeout must be an integer number of milliseconds"));
+            timeoutMs = limit->value < 0 ? 0 : limit->value;
         }
 
         if (!executableExists(strings.front()))
@@ -197,6 +212,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
             close(outPipe[1]);
             close(errPipe[0]);
             close(errPipe[1]);
+            if (timeoutMs) {
+                // Lead a fresh process group, so the timeout kill below can
+                // take the whole subtree: a child that already forked (a
+                // shell running `sleep`) would otherwise leave the
+                // grandchild holding the pipes open, and the EOF the drain
+                // waits for would never arrive. Untimed runs keep the
+                // historical behaviour of sharing the interpreter's group.
+                setpgid(0, 0);
+            }
             std::vector<char*> argv;
             argv.reserve(strings.size() + 1);
             for (auto& string : strings) argv.push_back(string.data());
@@ -211,6 +235,13 @@ auto Evaluator::registerProcessBuiltins() -> void {
             close(errPipe[0]);
             return Value::error(Value::string("could not start process"));
         }
+        if (timeoutMs) {
+            // The parent-side half of the setpgid above: whichever runs
+            // first wins, and a group kill later can only name this child's
+            // own group — never the interpreter's. Ignored on failure; the
+            // child's own pre-exec call is the one that counts.
+            setpgid(child, child);
+        }
 
         std::string stdoutText;
         std::string stderrText;
@@ -219,12 +250,122 @@ auto Evaluator::registerProcessBuiltins() -> void {
             // Installed BEFORE the drain: a Ctrl+C while the child is still
             // writing has to reach it too, not only one that arrives during
             // the wait.
-            SignalForwarder forwarding(child);
-            drainPipes(outPipe[0], stdoutText, errPipe[0], stderrText);
-            while (waitpid(child, &status, 0) < 0) {
-                if (errno == EINTR) continue;
-                kill(child, SIGTERM);
-                break;
+            SignalForwarder forwarding(child, timeoutMs.has_value());
+            if (!timeoutMs) {
+                drainPipes(outPipe[0], stdoutText, errPipe[0], stderrText);
+                while (waitpid(child, &status, 0) < 0) {
+                    if (errno == EINTR) continue;
+                    kill(child, SIGTERM);
+                    break;
+                }
+            } else {
+                // Bounded wait: the pipes are polled until the deadline while
+                // the child is watched with WNOHANG alongside. The deadline
+                // bounds the WHOLE call — a child that already exited but
+                // left its pipes held open (a grandchild inheriting them)
+                // still reports a timeout rather than hanging the caller.
+                using Clock = std::chrono::steady_clock;
+                const auto deadline = Clock::now() +
+                    std::chrono::milliseconds(*timeoutMs);
+                struct pollfd fds[2] = {
+                    {outPipe[0], POLLIN, 0}, {errPipe[0], POLLIN, 0}};
+                std::string* targets[2] = {&stdoutText, &stderrText};
+                char buffer[4096];
+                bool exited = false;
+                bool expired = false;
+                while (fds[0].fd >= 0 || fds[1].fd >= 0 || !exited) {
+                    if (Clock::now() >= deadline) {
+                        expired = true;
+                        break;
+                    }
+                    const auto remain = std::chrono::duration_cast<
+                        std::chrono::milliseconds>(
+                        deadline - Clock::now()).count();
+                    int waitMs =
+                        remain > 5000 ? 5000 : static_cast<int>(remain);
+                    if (fds[0].fd < 0 && fds[1].fd < 0) {
+                        // Both pipes are EOF but the child is not reaped yet:
+                        // the reap races with the EOF by a hair, and a poll
+                        // on two dead descriptors can only sleep, never
+                        // report. Wait briefly and re-check the child.
+                        waitMs = waitMs > 10 ? 10 : waitMs;
+                    }
+                    const int ready = poll(fds, 2, waitMs);
+                    if (ready < 0) {
+                        if (errno == EINTR) continue;
+                        break;
+                    }
+                    if (ready > 0) {
+                        for (int i = 0; i < 2; ++i) {
+                            if (fds[i].fd < 0 || !fds[i].revents) continue;
+                            const auto got =
+                                read(fds[i].fd, buffer, sizeof(buffer));
+                            if (got > 0) {
+                                targets[i]->append(
+                                    buffer, static_cast<std::size_t>(got));
+                                continue;
+                            }
+                            if (got < 0 && errno == EINTR) continue;
+                            // EOF, or an error there is no way to report
+                            // per-stream.
+                            close(fds[i].fd);
+                            fds[i].fd = -1;
+                        }
+                    }
+                    int statusNow = 0;
+                    const pid_t watched = waitpid(child, &statusNow, WNOHANG);
+                    if (watched == child) {
+                        status = statusNow;
+                        exited = true;
+                    } else if (watched < 0 && errno != EINTR) {
+                        break;
+                    }
+                }
+                if (!exited) {
+                    // Expired, or the child could no longer be watched: stop
+                    // it either way so no stray process outlives the call.
+                    // TERM first, KILL after a short grace for anything that
+                    // ignores TERM. The negative pid names the child's own
+                    // process group (see the setpgid above), so forked
+                    // grandchildren die with it instead of holding the pipes
+                    // open. The output gathered so far is discarded: a
+                    // timeout answers an Error, never a partial result.
+                    kill(-child, SIGTERM);
+                    const auto graceEnd = Clock::now() +
+                        std::chrono::milliseconds(100);
+                    while (!exited && Clock::now() < graceEnd) {
+                        const auto graceRemain = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                            graceEnd - Clock::now()).count();
+                        struct pollfd graceFds[2] = {
+                            {fds[0].fd, POLLIN, 0}, {fds[1].fd, POLLIN, 0}};
+                        if (poll(graceFds, 2,
+                                 static_cast<int>(graceRemain)) < 0 &&
+                            errno != EINTR)
+                            break;
+                        int graceStatus = 0;
+                        const pid_t reaped =
+                            waitpid(child, &graceStatus, WNOHANG);
+                        if (reaped == child) {
+                            status = graceStatus;
+                            exited = true;
+                        } else if (reaped < 0 && errno != EINTR) {
+                            break;
+                        }
+                    }
+                    if (!exited) {
+                        kill(-child, SIGKILL);
+                        while (waitpid(child, &status, 0) < 0) {
+                            if (errno == EINTR) continue;
+                            break;
+                        }
+                    }
+                }
+                for (auto& descriptor : fds)
+                    if (descriptor.fd >= 0) close(descriptor.fd);
+                if (expired)
+                    return Value::error(Value::string("timed out after " +
+                        std::to_string(*timeoutMs) + "ms"));
             }
         }
         const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)

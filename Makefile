@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -56,6 +56,9 @@ help:
 	@echo "                    check it against the tree-walker's golden output."
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
+	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
+	@echo "                    programs (tools/fuzz.kex). Override with"
+	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
@@ -118,6 +121,16 @@ web-demo: build-wasm
 # failure, not a note.
 test-all: test spec-orphans spec spec-prelude spec-stdlib \
           spec-beam spec-prelude-beam spec-stdlib-beam spec-test-json
+
+# Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
+# programs and requires the walker and BEAM backends to agree on every one.
+# Fixed seed by default, so a failure replays with the same invocation.
+FUZZ_SEED ?= 42
+FUZZ_CASES ?= 200
+FUZZ_OUTDIR ?= /tmp/kex-fuzz
+FUZZ_BUDGET_MS ?= 15000
+fuzz: build
+	@$(KEX) --run-walker --no-colors tools/fuzz.kex $(FUZZ_SEED) $(FUZZ_CASES) $(KEX) $(FUZZ_OUTDIR) $(FUZZ_BUDGET_MS)
 
 SHELL := /bin/bash
 

@@ -1,0 +1,32 @@
+# kex: skip-wasm
+# Process.run with a time budget: a child that finishes in time answers like
+# run/2, and one that outlives the budget is killed and reported.
+#
+# Skipped under wasm: there are no child processes there, so every call
+# answers `process execution is unavailable in wasm` and neither path below
+# can be exercised.
+
+main do
+  match Process.run("echo", ["hello"], 10000) do
+    Error(error) => IO.printLine("error: ${error}")
+    Ok(result) => IO.printLine("ok ${result.exitCode} [${result.stdout.trim}]")
+  end
+
+  match Process.run("definitely-not-a-real-program", [], 10000) do
+    Error(error) => IO.printLine("missing: ${error}")
+    Ok(_) => IO.printLine("missing: unexpectedly ran")
+  end
+
+  match Process.run("sleep", ["30"], 300) do
+    Error(error) => IO.printLine("timeout: ${error}")
+    Ok(result) => IO.printLine("timeout: unexpectedly exited ${result.exitCode}")
+  end
+
+  # A child that ignores SIGTERM is escalated to SIGKILL, grandchildren
+  # included: the trap below survives TERM in both the shell and the sleep
+  # it forked, so only a group kill brings the subtree down in time.
+  match Process.run("sh", ["-c", "trap '' TERM; sleep 30"], 300) do
+    Error(error) => IO.printLine("kill: ${error}")
+    Ok(result) => IO.printLine("kill: unexpectedly exited ${result.exitCode}")
+  end
+end

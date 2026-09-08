@@ -1,0 +1,769 @@
+# fuzz — differential fuzzer: the tree-walk interpreter vs the BEAM backend.
+#
+# Generates small, correct-by-construction Kex programs (integer, float,
+# string and boolean expressions over literals, arithmetic, comparisons,
+# `!`/`&&`/`||`, atoms, tuples, lists, maps, string interpolation, `let`
+# bindings that later expressions can reuse, `if`, and statement-level
+# `match`) and runs each under both backends with a time budget.
+# Correct-by-construction means: no division by zero, no partial operations,
+# no loops, no way to hang — so anything but identical, successful output is
+# a finding: a crash, a timeout, or output that differs.
+#
+#   kex --run-walker tools/fuzz.kex 42 200 ./build/kex /tmp/kex-fuzz 15000
+#
+# Arguments, all positional and all optional: seed, case count, path to the
+# kex binary, output directory, per-case timeout in milliseconds. With no
+# seed the wall clock picks one, printed first so the run still replays.
+#
+# Every case reproduces from its seed: case i uses seed + i. A failure saves
+# <out>/fail_<seed>.kex (the program) plus <out>/fail_<seed>.txt (what each
+# backend answered). Both backends timing out identically counts as
+# inconclusive ("slow"), and both rejecting a program identically counts as a
+# generator bug ("invalid") — neither is a failure; anything else asymmetric
+# is.
+#
+# Run the fuzzer itself on the walker: it stays on the interpreter, far from
+# the lowering bugs it hunts. One case at a time, so the log reads in order.
+# Generation stays shallow (expression depth 3, short literals) and the case
+# loop is a `while`, never recursion: the walker segfaults past very deep
+# recursion, and the fuzzer must not trip over that itself.
+
+using FS
+
+record Rng do
+  seed : Integer
+end
+
+# Names bound so far, grouped by the generator's type tag. Threaded through
+# Ctx so a later expression can reuse an earlier binding of the same type —
+# exercising environment reads, not just fresh computation.
+record Env do
+  ints : [String]
+  floats : [String]
+  strings : [String]
+  bools : [String]
+end
+
+record Ctx do
+  rng : Rng
+  counter : Integer
+  env : Env
+end
+
+# Any integer into a live Park-Miller state. 0 is dead (0 maps to 0), and a
+# non-positive seed just means 1: seeds are labels, not entropy.
+let normalizeSeed(seed: Integer) -> Integer do
+  if seed < 1 then 1 else 1 + (seed % 2147483646) end
+end
+
+let stepRng(rng: Rng) -> Rng do
+  let state = (rng.seed * 48271) % 2147483647
+  Rng { seed: if state == 0 then 1 else state end }
+end
+
+# One uniform draw in [0, bound). Reads the top of the LCG state: the low
+# bits cycle quickly (bit 0 flips every step), so `seed % bound` with a small
+# bound barely varies. Answers (value, next context).
+let draw(ctx: Ctx, bound: Integer) -> (Integer, Ctx) do
+  let advanced = stepRng(ctx.rng)
+  let value = (advanced.seed / 256) % bound
+  return (value, Ctx { rng: advanced, counter: ctx.counter, env: ctx.env })
+end
+
+let fresh(ctx: Ctx) -> (String, Ctx) do
+  let name = "v${ctx.counter}"
+  return (name, Ctx { rng: ctx.rng, counter: ctx.counter + 1, env: ctx.env })
+end
+
+# The live bindings of one type tag.
+let namesFor(env: Env, tag) -> [String] do
+  if tag == :int
+    return env.ints
+  else
+    if tag == :float
+      return env.floats
+    else
+      if tag == :string
+        return env.strings
+      else
+        return env.bools
+      end
+    end
+  end
+end
+
+# Recording a fresh binding under its tag.
+let remember(ctx: Ctx, tag, name: String) -> Ctx do
+  let env = ctx.env
+  let ints = if tag == :int then [...env.ints, name] else env.ints end
+  let floats = if tag == :float then [...env.floats, name] else env.floats end
+  let strings = if tag == :string then [...env.strings, name] else env.strings end
+  let bools = if tag == :bool then [...env.bools, name] else env.bools end
+  return Ctx { rng: ctx.rng, counter: ctx.counter,
+    env: Env { ints: ints, floats: floats, strings: strings, bools: bools } }
+end
+
+# A type tag for the generator: :int, :float, :string or :bool.
+let pickType(ctx: Ctx) do
+  let (n, ctx2) = draw(ctx, 4)
+  let tag = match n do
+    0 => :int
+    1 => :float
+    2 => :string
+    _ => :bool
+  end
+  return (tag, ctx2)
+end
+
+# Negative literals stay parenthesized: a bare `-16` opening an `if` branch
+# mistypes (the shared frontend reads the branch as Void), while `(-16)`
+# means the same everywhere it can appear.
+let genIntLit(ctx: Ctx) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 10)
+  if kind <= 5
+    let (n, ctx3) = draw(ctx2, 1000)
+    let (neg, ctx4) = draw(ctx3, 2)
+    if neg == 0 then return ("(-${n})", ctx4) else return ("${n}", ctx4) end
+  else
+    if kind <= 7
+      return genBigInt(ctx2)
+    else
+      if kind == 8 then return ("0", ctx2) else return ("(-0)", ctx2) end
+    end
+  end
+end
+
+# Up to ~21 digits: three unconstrained chunks concatenated. No padding
+# needed; fewer digits are still a big integer, just a smaller one.
+let genBigInt(ctx: Ctx) -> (String, Ctx) do
+  let (a, ctx2) = draw(ctx, 999999999)
+  let (b, ctx3) = draw(ctx2, 999999999)
+  let (c, ctx4) = draw(ctx3, 999999999)
+  return ("${1 + a}${b}${c}", ctx4)
+end
+
+let genNonZeroLit(ctx: Ctx) -> (String, Ctx) do
+  let (n, ctx2) = draw(ctx, 999)
+  let lit = "${1 + n}"
+  let (neg, ctx3) = draw(ctx2, 2)
+  if neg == 0 then return ("(-${lit})", ctx3) else return (lit, ctx3) end
+end
+
+let genIntBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
+  let (l, ctx2) = genInt(ctx, depth - 1)
+  let (r, ctx3) = genInt(ctx2, depth - 1)
+  return ("(${l} ${op} ${r})", ctx3)
+end
+
+let genInt(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genIntLit(ctx) end
+  let (op, ctx2) = draw(ctx, 10)
+  if op <= 1
+    return genIntBin(ctx2, depth, "+")
+  else
+    if op <= 3
+      return genIntBin(ctx2, depth, "-")
+    else
+      if op <= 5
+        return genIntBin(ctx2, depth, "*")
+      else
+        if op == 6
+          let (num, ctx3) = genInt(ctx2, depth - 1)
+          let (den, ctx4) = genNonZeroLit(ctx3)
+          return ("(${num} / ${den})", ctx4)
+        else
+          if op == 7
+            let (num2, ctx5) = genInt(ctx2, depth - 1)
+            let (den2, ctx6) = genNonZeroLit(ctx5)
+            return ("(${num2} % ${den2})", ctx6)
+          else
+            if op == 8
+              let (e, ctx7) = genInt(ctx2, depth - 1)
+              return ("(-${e})", ctx7)
+            else
+              return genIntLit(ctx2)
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+let genFloatLit(ctx: Ctx) -> (String, Ctx) do
+  let (whole, ctx2) = draw(ctx, 100)
+  let (frac, ctx3) = draw(ctx2, 1000)
+  let (neg, ctx4) = draw(ctx3, 4)
+  if neg == 0 then return ("(-${whole}.${frac})", ctx4) else return ("${whole}.${frac}", ctx4) end
+end
+
+let genFloatBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
+  let (l, ctx2) = genFloat(ctx, depth - 1)
+  let (r, ctx3) = genFloat(ctx2, depth - 1)
+  return ("(${l} ${op} ${r})", ctx3)
+end
+
+let genFloat(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genFloatLit(ctx) end
+  let (op, ctx2) = draw(ctx, 6)
+  if op <= 1
+    return genFloatBin(ctx2, depth, "+")
+  else
+    if op <= 3
+      return genFloatBin(ctx2, depth, "-")
+    else
+      if op == 4
+        return genFloatBin(ctx2, depth, "*")
+      else
+        let (num, ctx3) = genFloat(ctx2, depth - 1)
+        let (whole, ctx4) = draw(ctx3, 99)
+        let (frac, ctx5) = draw(ctx4, 1000)
+        return ("(${num} / ${1 + whole}.${frac})", ctx5)
+      end
+    end
+  end
+end
+
+# One source-level character: letters, digits, a space, a punctuation mark,
+# an escape, or — rarely — non-ASCII, since UTF-8 stdout agreement is itself
+# worth fuzzing.
+let specialChar(k: Integer) -> String do
+  match k do
+    0 => " "
+    1 => "!"
+    2 => "\\\\"
+    3 => "\\\""
+    4 => "\\n"
+    5 => "\\t"
+    6 => "é"
+    _ => "?"
+  end
+end
+
+let genChar(ctx: Ctx) -> (String, Ctx) do
+  let (n, ctx2) = draw(ctx, 70)
+  if n <= 25
+    return (String.fromCodepoint(97 + n).or(""), ctx2)
+  else
+    if n <= 51
+      return (String.fromCodepoint(65 + n - 26).or(""), ctx2)
+    else
+      if n <= 61
+        return (String.fromCodepoint(48 + n - 52).or(""), ctx2)
+      else
+        return (specialChar(n - 62), ctx2)
+      end
+    end
+  end
+end
+
+let genChars(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (ch, ctx2) = genChar(ctx)
+    return genChars(ctx2, n - 1, "${acc}${ch}")
+  end
+end
+
+let genStringLit(ctx: Ctx) -> (String, Ctx) do
+  let (len, ctx2) = draw(ctx, 13)
+  let (body, ctx3) = genChars(ctx2, len, "")
+  return ("\"${body}\"", ctx3)
+end
+
+let genString(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0 then return genStringLit(ctx) end
+  let (op, ctx2) = draw(ctx, 5)
+  if op <= 1
+    let (l, ctx3) = genString(ctx2, depth - 1)
+    let (r, ctx4) = genString(ctx3, depth - 1)
+    return ("(${l} + ${r})", ctx4)
+  else
+    if op == 2
+      return genInterp(ctx2, depth)
+    else
+      return genStringLit(ctx2)
+    end
+  end
+end
+
+# Holes stay int/bool (never strings), so no quote or newline can break the
+# hole. A literal `${` never appears in source: the lexer reads it as a hole
+# opener even escaped, so the dollar is emitted via concatenation instead.
+let pickHoleTag(ctx: Ctx) do
+  let (n, ctx2) = draw(ctx, 2)
+  if n == 0 then return (:int, ctx2) else return (:bool, ctx2) end
+end
+
+let genInterp(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  let (n0, ctx2) = draw(ctx, 5)
+  let (s0, ctx3) = genChars(ctx2, n0, "")
+  let (htag, ctx4) = pickHoleTag(ctx3)
+  let (h0, ctx5) = genTyped(ctx4, htag, depth - 1)
+  let (n1, ctx6) = draw(ctx5, 5)
+  let (s1, ctx7) = genChars(ctx6, n1, "")
+  let (two, ctx8) = draw(ctx7, 2)
+  if two == 0
+    return ("\"${s0}\$" + "{${h0}}${s1}\"", ctx8)
+  else
+    let (htag2, ctx9) = pickHoleTag(ctx8)
+    let (h1, ctx10) = genTyped(ctx9, htag2, depth - 1)
+    let (n2, ctx11) = draw(ctx10, 5)
+    let (s2, ctx12) = genChars(ctx11, n2, "")
+    return ("\"${s0}\$" + "{${h0}}${s1}\$" + "{${h1}}${s2}\"", ctx12)
+  end
+end
+
+# Collection literals: two-element tuples of any scalar tags, non-empty
+# homogeneous lists, and single-entry maps with simple string keys. Mixed-type
+# == is valid (and agreed-upon), so comparisons need no tag plumbing.
+let genElems(ctx: Ctx, tag, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (e, ctx2) = genTyped(ctx, tag, 1)
+    if acc == ""
+      return genElems(ctx2, tag, n - 1, e)
+    else
+      return genElems(ctx2, tag, n - 1, "${acc}, ${e}")
+    end
+  end
+end
+
+let genListLit(ctx: Ctx, tag, count: Integer) -> (String, Ctx) do
+  let (elems, ctx2) = genElems(ctx, tag, count, "")
+  return ("[${elems}]", ctx2)
+end
+
+# Map keys stay simple — a fresh literal or a bare live binding. A
+# parenthesized key mangles the parse, so computed keys are out.
+let genMapKey(ctx: Ctx) -> (String, Ctx) do
+  let names = namesFor(ctx.env, :string)
+  let (useVar, ctx2) = draw(ctx, 2)
+  if useVar == 0 && names.length > 0
+    let (i, ctx3) = draw(ctx2, names.length)
+    return (names.at(i).or("\"k\""), ctx3)
+  else
+    return genStringLit(ctx2)
+  end
+end
+
+let genMapEntries(ctx: Ctx, vtag, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (k, ctx2) = genMapKey(ctx)
+    let (v, ctx3) = genTyped(ctx2, vtag, 1)
+    let entry = "${k}: ${v}"
+    if acc == ""
+      return genMapEntries(ctx3, vtag, n - 1, entry)
+    else
+      return genMapEntries(ctx3, vtag, n - 1, "${acc}, ${entry}")
+    end
+  end
+end
+
+let genMapLit(ctx: Ctx, vtag, count: Integer) -> (String, Ctx) do
+  let (entries, ctx2) = genMapEntries(ctx, vtag, count, "")
+  return ("{ ${entries} }", ctx2)
+end
+
+let genCollLit(ctx: Ctx) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 3)
+  if kind == 0
+    let (t1, ctx3) = pickType(ctx2)
+    let (t2, ctx4) = pickType(ctx3)
+    let (a, ctx5) = genTyped(ctx4, t1, 1)
+    let (b, ctx6) = genTyped(ctx5, t2, 1)
+    return ("(${a}, ${b})", ctx6)
+  else
+    if kind == 1
+      let (tag, ctx7) = pickType(ctx2)
+      let (n, ctx8) = draw(ctx7, 3)
+      return genListLit(ctx8, tag, n + 1)
+    else
+      # Single-entry only: multi-entry maps print in backend-dependent order,
+      # which is an oracle gap, not a backend bug the fuzzer can judge.
+      let (vtag, ctx9) = pickType(ctx2)
+      return genMapLit(ctx9, vtag, 1)
+    end
+  end
+end
+
+let atomFor(k: Integer) -> String do
+  match k do
+    0 => "ok"
+    1 => "err"
+    2 => "empty"
+    3 => "yes"
+    _ => "no"
+  end
+end
+
+let genAtomCmp(ctx: Ctx) -> (String, Ctx) do
+  let (a, ctx2) = draw(ctx, 5)
+  let (b, ctx3) = draw(ctx2, 5)
+  let (op, ctx4) = draw(ctx3, 2)
+  if op == 0
+    return ("(:${atomFor(a)} == :${atomFor(b)})", ctx4)
+  else
+    return ("(:${atomFor(a)} != :${atomFor(b)})", ctx4)
+  end
+end
+
+let genCollCmp(ctx: Ctx) -> (String, Ctx) do
+  let (l, ctx2) = genCollLit(ctx)
+  let (same, ctx3) = draw(ctx2, 2)
+  let (op, ctx4) = draw(ctx3, 2)
+  let symbol = if op == 0 then "==" else "!=" end
+  if same == 0
+    return ("(${l} ${symbol} ${l})", ctx4)
+  else
+    let (m, ctx5) = genCollLit(ctx4)
+    return ("(${l} ${symbol} ${m})", ctx5)
+  end
+end
+
+let genComparison(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  let (which, ctx2) = draw(ctx, 10)
+  if which <= 2
+    let (ln, ctx3) = genTyped(ctx2, :int, depth)
+    let (rn, ctx4) = genTyped(ctx3, :int, depth)
+    let (opn, ctx5) = draw(ctx4, 6)
+    let symbol = match opn do
+      0 => "=="
+      1 => "!="
+      2 => "<"
+      3 => ">"
+      4 => "<="
+      _ => ">="
+    end
+    return ("(${ln} ${symbol} ${rn})", ctx5)
+  else
+    if which <= 4
+      let (lf, ctx6) = genTyped(ctx2, :float, depth)
+      let (rf, ctx7) = genTyped(ctx6, :float, depth)
+      let (opf, ctx8) = draw(ctx7, 6)
+      let fsymbol = match opf do
+        0 => "=="
+        1 => "!="
+        2 => "<"
+        3 => ">"
+        4 => "<="
+        _ => ">="
+      end
+      return ("(${lf} ${fsymbol} ${rf})", ctx8)
+    else
+      if which <= 6
+        let (l, ctx9) = genString(ctx2, depth)
+        let (r, ctx10) = genString(ctx9, depth)
+        let (op, ctx11) = draw(ctx10, 2)
+        if op == 0 then return ("(${l} == ${r})", ctx11) else return ("(${l} != ${r})", ctx11) end
+      else
+        if which <= 7
+          return genAtomCmp(ctx2)
+        else
+          return genCollCmp(ctx2)
+        end
+      end
+    end
+  end
+end
+
+let genBool(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+  if depth == 0
+    let (b, ctx2) = draw(ctx, 2)
+    if b == 0 then return ("true", ctx2) else return ("false", ctx2) end
+  else
+    let (op, ctx9) = draw(ctx, 6)
+    if op <= 2
+      return genComparison(ctx9, depth - 1)
+    else
+      if op == 3
+        let (e, ctx10) = genBool(ctx9, depth - 1)
+        return ("(!${e})", ctx10)
+      else
+        if op == 4
+          let (l, ctx11) = genBool(ctx9, depth - 1)
+          let (r, ctx12) = genBool(ctx11, depth - 1)
+          return ("(${l} && ${r})", ctx12)
+        else
+          let (a, ctx13) = genBool(ctx9, depth - 1)
+          let (c, ctx14) = genBool(ctx13, depth - 1)
+          return ("(${a} || ${c})", ctx14)
+        end
+      end
+    end
+  end
+end
+
+# One expression of the tagged type: usually a fresh computation, but one
+# draw in four reuses a live binding instead — so later lets read earlier
+# ones, and the final print can name a binding outright.
+let genTyped(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let (roll, ctx2) = draw(ctx, 4)
+  let names = namesFor(ctx2.env, tag)
+  if roll == 0 && names.length > 0
+    let (i, ctx3) = draw(ctx2, names.length)
+    return (names.at(i).or(""), ctx3)
+  else
+    if tag == :int
+      return genInt(ctx2, depth)
+    else
+      if tag == :float
+        return genFloat(ctx2, depth)
+      else
+        if tag == :string
+          return genString(ctx2, depth)
+        else
+          return genBool(ctx2, depth)
+        end
+      end
+    end
+  end
+end
+
+let genIf(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let (cond, ctx2) = genBool(ctx, depth)
+  let (thenBranch, ctx3) = genTyped(ctx2, tag, depth)
+  let (elseBranch, ctx4) = genTyped(ctx3, tag, depth)
+  return ("if ${cond}\n  ${thenBranch}\nelse\n  ${elseBranch}\nend", ctx4)
+end
+
+# Int arms use small positive literals: always valid patterns, and duplicate
+# arms are harmless (first wins on both backends).
+let genIntArms(ctx: Ctx, tag, depth: Integer, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (v, ctx2) = draw(ctx, 100)
+    let (body, ctx3) = genTyped(ctx2, tag, depth)
+    return genIntArms(ctx3, tag, depth, n - 1, "${acc}  ${v} => ${body}\n")
+  end
+end
+
+# A match at statement position (a let right-hand side): arms on their own
+# lines, like genIf, every list ending in `_`. Bodies never reference pattern
+# bindings, so nothing can be unbound.
+let genMatch(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let (kind, ctx2) = draw(ctx, 4)
+  if kind == 0
+    let (scrut, ctx3) = genTyped(ctx2, :int, depth)
+    let (n, ctx4) = draw(ctx3, 3)
+    let (arms, ctx5) = genIntArms(ctx4, tag, depth, n, "")
+    let (fb, ctx6) = genTyped(ctx5, tag, depth)
+    return ("match ${scrut} do\n${arms}  _ => ${fb}\nend", ctx6)
+  else
+    if kind == 1
+      let (cond, ctx7) = genTyped(ctx2, :bool, depth)
+      let (b1, ctx8) = genTyped(ctx7, tag, depth)
+      let (b2, ctx9) = genTyped(ctx8, tag, depth)
+      return ("match ${cond} do\n  true => ${b1}\n  false => ${b2}\nend", ctx9)
+    else
+      if kind == 2
+        let (text, ctx10) = genTyped(ctx2, :string, depth)
+        let (one, ctx11) = draw(ctx10, 2)
+        if one == 0
+          let (fb2, ctx12) = genTyped(ctx11, tag, depth)
+          return ("match ${text} do\n  _ => ${fb2}\nend", ctx12)
+        else
+          let (lit, ctx13) = genStringLit(ctx11)
+          let (b3, ctx14) = genTyped(ctx13, tag, depth)
+          let (fb3, ctx15) = genTyped(ctx14, tag, depth)
+          return ("match ${text} do\n  ${lit} => ${b3}\n  _ => ${fb3}\nend", ctx15)
+        end
+      else
+        let (c, ctx16) = draw(ctx2, 3)
+        let (items, ctx17) = genListLit(ctx16, :int, c + 1)
+        let (e0, ctx18) = genTyped(ctx17, tag, depth)
+        let (e1, ctx19) = genTyped(ctx18, tag, depth)
+        let (e2, ctx20) = genTyped(ctx19, tag, depth)
+        let (fb4, ctx21) = genTyped(ctx20, tag, depth)
+        return ("match ${items} do\n  [] => ${e0}\n  [_] => ${e1}\n  [_ | _] => ${e2}\n  _ => ${fb4}\nend", ctx21)
+      end
+    end
+  end
+end
+
+# allowMatch is statement position only (a let right-hand side): inside call
+# parens a `[`-arm would read as indexing the previous arm's body.
+let genExpr(ctx: Ctx, tag, depth: Integer, allowMatch: Bool) -> (String, Ctx) do
+  if depth == 0 then return genTyped(ctx, tag, 0) end
+  let (shape, ctx2) = draw(ctx, 6)
+  if shape == 0
+    return genIf(ctx2, tag, depth - 1)
+  else
+    if shape == 1 && allowMatch
+      return genMatch(ctx2, tag, depth - 1)
+    else
+      return genTyped(ctx2, tag, depth)
+    end
+  end
+end
+
+# 0-3 lets, then prints. Half the programs print every binding; the other
+# half print only the final expression, leaving dead lets behind — dead
+# bindings lower differently, so both shapes are worth covering. Each binding
+# joins the env under its tag, so later right-hand sides can read it.
+let genLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (tag, ctx2) = pickType(ctx)
+    let (rhs, ctx3) = genExpr(ctx2, tag, 2, true)
+    let (name, ctx4) = fresh(ctx3)
+    let ctx5 = remember(ctx4, tag, name)
+    return genLets(ctx5, n - 1, "${acc}let ${name} = ${rhs}\n")
+  end
+end
+
+# 0-2 collection lets after the scalar ones: tuples, non-empty lists and
+# single-entry maps over scalar expressions (which may read the lets above).
+# Unreferenced for now — construction and printing is the coverage.
+let genCollLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
+  if n == 0
+    return (acc, ctx)
+  else
+    let (rhs, ctx2) = genCollLit(ctx)
+    let (name, ctx3) = fresh(ctx2)
+    return genCollLets(ctx3, n - 1, "${acc}let ${name} = ${rhs}\n")
+  end
+end
+
+let genPrints(ctx: Ctx, first: Integer, last: Integer, acc: String) -> (String, Ctx) do
+  if first == last
+    return (acc, ctx)
+  else
+    return genPrints(ctx, first + 1, last, "${acc}IO.printLine(v${first})\n")
+  end
+end
+
+let genProgram(seed: Integer) -> String do
+  let empty = Env { ints: [], floats: [], strings: [], bools: [] }
+  let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0, env: empty }
+  let (nlets, ctx2) = draw(ctx, 4)
+  let (lets, ctx3) = genLets(ctx2, nlets, "")
+  let (ncols, ctx4) = draw(ctx3, 3)
+  let (cols, ctx5) = genCollLets(ctx4, ncols, "")
+  let (tag, ctx6) = pickType(ctx5)
+  let (last, ctx7) = genExpr(ctx6, tag, 3, false)
+  let (mode, ctx8) = draw(ctx7, 2)
+  let prints = if mode == 0
+    let (printed, ignored) = genPrints(ctx8, 0, ctx8.counter, "")
+    printed
+  else
+    ""
+  end
+  return "main do\n${lets}${cols}${prints}IO.printLine(${last})\nend\n"
+end
+
+# Both backends' answers, rendered comparable. Only exit code and stdout
+# participate: stderr carries warnings whose wording the backends are free
+# to disagree on, and that is not what this fuzzer hunts.
+let describeOutcome(outcome) -> String do
+  match outcome do
+    Ok(result) => "exit=${result.exitCode}\n${result.stdout}"
+    Error(problem) => "error=${problem}"
+  end
+end
+
+# Findings are named by case seed, so a rerun with the same base seed
+# overwrites the same files instead of accumulating stale ones.
+foul saveFinding(outDir: String, seed: Integer, source: String, walker: String, beam: String) do
+  FS.File.write("${outDir}/fail_${seed}.kex", source)
+  FS.File.write("${outDir}/fail_${seed}.txt",
+    "walker:\n${walker}\n\nbeam:\n${beam}\n")
+end
+
+# One case: generate, write, run both, compare. Answers pass, invalid, slow
+# or fail. "invalid" is a generator bug: the write failed, or both backends
+# rejected the program identically before running anything. "slow" is both
+# backends timing out identically.
+foul runCase(kex: String, outDir: String, index: Integer, seed: Integer, budgetMs: Integer) do
+  let source = genProgram(seed)
+  let file = "${outDir}/case_${index}.kex"
+  if !FS.File.write(file, source) then return "invalid" end
+  let walker = Process.run(kex, ["--run-walker", "--no-colors", file], budgetMs)
+  let beam = Process.run(kex, ["--run", "--no-colors", file], budgetMs)
+  match walker do
+    Ok(w) => do
+      match beam do
+        Ok(b) => do
+          if w.exitCode == 0 && b.exitCode == 0 && w.stdout == b.stdout
+            return "pass"
+          else
+            if w.exitCode != 0 && b.exitCode != 0 && w.stdout == b.stdout
+              return "invalid"
+            else
+              saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
+              return "fail"
+            end
+          end
+        end
+        Error(_) => do
+          saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
+          return "fail"
+        end
+      end
+    end
+    Error(ew) => do
+      match beam do
+        Ok(_) => do
+          saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
+          return "fail"
+        end
+        Error(eb) => do
+          if ew == eb
+            return "slow"
+          else
+            saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
+            return "fail"
+          end
+        end
+      end
+    end
+  end
+end
+
+foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs: Integer) do
+  if !FS.Directory.exists?(outDir) then FS.Directory.create(outDir) end
+  IO.printLine("fuzzing from seed ${seed}")
+  var fails = 0
+  var invalid = 0
+  var slow = 0
+  var i = 0
+  while i < total do
+    let verdict = runCase(kex, outDir, i, seed + i, budgetMs)
+    if verdict == "fail"
+      fails = fails + 1
+      IO.printLine("case ${i}: FAIL (seed ${seed + i})")
+    else
+      if verdict == "invalid"
+        invalid = invalid + 1
+        IO.printLine("case ${i}: INVALID (seed ${seed + i})")
+      else
+        if verdict == "slow"
+          slow = slow + 1
+        end
+      end
+    end
+    i = i + 1
+  end
+  var summary = "${total} cases: ${total - fails - invalid - slow} pass"
+  summary = "${summary}, ${fails} FAIL, ${invalid} invalid, ${slow} slow"
+  IO.printLine(summary)
+  return fails
+end
+
+main(args) do
+  let seed = match args.at(0) do
+    Just(text) => Integer.parse(text).or(42)
+    None => DateTime.now().epochSeconds % 2147483646 + 1
+  end
+  let total = Integer.parse(args.at(1).or("50")).or(50)
+  let kex = args.at(2).or("./build/kex")
+  let outDir = args.at(3).or("/tmp/kex-fuzz")
+  let budgetMs = Integer.parse(args.at(4).or("15000")).or(15000)
+  return System.exit(drive(kex, outDir, seed, total, budgetMs))
+end

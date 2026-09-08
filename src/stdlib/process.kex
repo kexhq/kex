@@ -161,6 +161,32 @@ module Process do
   run : String -> [String] -> Result<ProcessResult, String>
   foul run(command, args) = Kex.Intrinsic.Process.run(command, args)
 
+  # Runs an executable with a time budget, and kills it if it overruns.
+  #
+  # Everything +run+ does, plus a deadline: when +timeoutMs+ milliseconds
+  # pass with the child still running, the child's process group is sent
+  # SIGTERM (then SIGKILL after a short grace) and reaped, and the call
+  # answers a timeout Error rather than the child's output. Signalling the
+  # group means forked grandchildren die with it. The budget bounds the
+  # whole call, so a hung child cannot hang the caller.
+  #
+  # A child that finishes in time answers exactly as +run+ would; a missing
+  # program still reports +executable not found+ without waiting.
+  #
+  # @param command [String] the executable to run
+  # @param args [[String]] its arguments, one per element
+  # @param timeoutMs [Integer] milliseconds before the child is killed
+  # @return [Result<ProcessResult, String>] the captured result, or why it
+  #   could not start — or that the budget ran out
+  #
+  # @example
+  #   match Process.run("sleep", ["30"], 300) do
+  #     Error(error) => IO.printLine(error)   # prints: timed out after 300ms
+  #     Ok(result) => IO.printLine(result.exitCode)
+  #   end
+  run : String -> [String] -> Integer -> Result<ProcessResult, String>
+  foul run(command, args, timeoutMs) = Kex.Intrinsic.Process.run(command, args, timeoutMs)
+
   # Runs an executable with the CALLER's stdout and stderr, so its output
   # appears as it is produced rather than in one block when it exits.
   #
