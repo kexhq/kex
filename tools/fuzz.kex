@@ -2,20 +2,24 @@
 #
 # Generates small, correct-by-construction Kex programs (integer, float,
 # string and boolean expressions over literals, arithmetic, comparisons,
-# `!`/`&&`/`||`, `let` bindings and `if`) and runs each under both backends
-# with a time budget. Correct-by-construction means: no division by zero, no
-# partial operations, no loops, no way to hang — so anything but identical,
-# successful output is a finding: a crash, a timeout, or output that differs.
+# `!`/`&&`/`||`, `let` bindings that later expressions can reuse, and `if`)
+# and runs each under both backends with a time budget.
+# Correct-by-construction means: no division by zero, no partial operations,
+# no loops, no way to hang — so anything but identical, successful output is
+# a finding: a crash, a timeout, or output that differs.
 #
 #   kex --run-walker tools/fuzz.kex 42 200 ./build/kex /tmp/kex-fuzz 15000
 #
 # Arguments, all positional and all optional: seed, case count, path to the
-# kex binary, output directory, per-case timeout in milliseconds.
+# kex binary, output directory, per-case timeout in milliseconds. With no
+# seed the wall clock picks one, printed first so the run still replays.
 #
 # Every case reproduces from its seed: case i uses seed + i. A failure saves
-# <out>/fail_<i>.kex (the program) plus <out>/fail_<i>.txt (what each backend
-# answered). Both backends timing out identically counts as inconclusive
-# ("slow"), not a failure; anything else asymmetric is a failure.
+# <out>/fail_<seed>.kex (the program) plus <out>/fail_<seed>.txt (what each
+# backend answered). Both backends timing out identically counts as
+# inconclusive ("slow"), and both rejecting a program identically counts as a
+# generator bug ("invalid") — neither is a failure; anything else asymmetric
+# is.
 #
 # Run the fuzzer itself on the walker: it stays on the interpreter, far from
 # the lowering bugs it hunts. One case at a time, so the log reads in order.
@@ -29,9 +33,20 @@ record Rng do
   seed : Integer
 end
 
+# Names bound so far, grouped by the generator's type tag. Threaded through
+# Ctx so a later expression can reuse an earlier binding of the same type —
+# exercising environment reads, not just fresh computation.
+record Env do
+  ints : [String]
+  floats : [String]
+  strings : [String]
+  bools : [String]
+end
+
 record Ctx do
   rng : Rng
   counter : Integer
+  env : Env
 end
 
 # Any integer into a live Park-Miller state. 0 is dead (0 maps to 0), and a
@@ -45,15 +60,46 @@ let stepRng(rng: Rng) -> Rng do
   Rng { seed: if state == 0 then 1 else state end }
 end
 
-# One uniform draw in [0, bound). Answers (value, next context).
+# One uniform draw in [0, bound). Reads the top of the LCG state: the low
+# bits cycle quickly (bit 0 flips every step), so `seed % bound` with a small
+# bound barely varies. Answers (value, next context).
 let draw(ctx: Ctx, bound: Integer) -> (Integer, Ctx) do
   let advanced = stepRng(ctx.rng)
-  return (advanced.seed % bound, Ctx { rng: advanced, counter: ctx.counter })
+  let value = (advanced.seed / 256) % bound
+  return (value, Ctx { rng: advanced, counter: ctx.counter, env: ctx.env })
 end
 
 let fresh(ctx: Ctx) -> (String, Ctx) do
   let name = "v${ctx.counter}"
-  return (name, Ctx { rng: ctx.rng, counter: ctx.counter + 1 })
+  return (name, Ctx { rng: ctx.rng, counter: ctx.counter + 1, env: ctx.env })
+end
+
+# The live bindings of one type tag.
+let namesFor(env: Env, tag) -> [String] do
+  if tag == :int
+    return env.ints
+  else
+    if tag == :float
+      return env.floats
+    else
+      if tag == :string
+        return env.strings
+      else
+        return env.bools
+      end
+    end
+  end
+end
+
+# Recording a fresh binding under its tag.
+let remember(ctx: Ctx, tag, name: String) -> Ctx do
+  let env = ctx.env
+  let ints = if tag == :int then [...env.ints, name] else env.ints end
+  let floats = if tag == :float then [...env.floats, name] else env.floats end
+  let strings = if tag == :string then [...env.strings, name] else env.strings end
+  let bools = if tag == :bool then [...env.bools, name] else env.bools end
+  return Ctx { rng: ctx.rng, counter: ctx.counter,
+    env: Env { ints: ints, floats: floats, strings: strings, bools: bools } }
 end
 
 # A type tag for the generator: :int, :float, :string or :bool.
@@ -68,23 +114,26 @@ let pickType(ctx: Ctx) do
   return (tag, ctx2)
 end
 
+# Negative literals stay parenthesized: a bare `-16` opening an `if` branch
+# mistypes (the shared frontend reads the branch as Void), while `(-16)`
+# means the same everywhere it can appear.
 let genIntLit(ctx: Ctx) -> (String, Ctx) do
   let (kind, ctx2) = draw(ctx, 10)
   if kind <= 5
     let (n, ctx3) = draw(ctx2, 1000)
     let (neg, ctx4) = draw(ctx3, 2)
-    if neg == 0 then return ("-${n}", ctx4) else return ("${n}", ctx4) end
+    if neg == 0 then return ("(-${n})", ctx4) else return ("${n}", ctx4) end
   else
     if kind <= 7
       return genBigInt(ctx2)
     else
-      if kind == 8 then return ("0", ctx2) else return ("-0", ctx2) end
+      if kind == 8 then return ("0", ctx2) else return ("(-0)", ctx2) end
     end
   end
 end
 
-# 18-27 digits: three unconstrained chunks concatenated. No padding needed;
-# fewer digits are still a big integer, just a smaller one.
+# Up to ~21 digits: three unconstrained chunks concatenated. No padding
+# needed; fewer digits are still a big integer, just a smaller one.
 let genBigInt(ctx: Ctx) -> (String, Ctx) do
   let (a, ctx2) = draw(ctx, 999999999)
   let (b, ctx3) = draw(ctx2, 999999999)
@@ -96,7 +145,7 @@ let genNonZeroLit(ctx: Ctx) -> (String, Ctx) do
   let (n, ctx2) = draw(ctx, 999)
   let lit = "${1 + n}"
   let (neg, ctx3) = draw(ctx2, 2)
-  if neg == 0 then return ("-${lit}", ctx3) else return (lit, ctx3) end
+  if neg == 0 then return ("(-${lit})", ctx3) else return (lit, ctx3) end
 end
 
 let genIntBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
@@ -144,7 +193,7 @@ let genFloatLit(ctx: Ctx) -> (String, Ctx) do
   let (whole, ctx2) = draw(ctx, 100)
   let (frac, ctx3) = draw(ctx2, 1000)
   let (neg, ctx4) = draw(ctx3, 4)
-  if neg == 0 then return ("-${whole}.${frac}", ctx4) else return ("${whole}.${frac}", ctx4) end
+  if neg == 0 then return ("(-${whole}.${frac})", ctx4) else return ("${whole}.${frac}", ctx4) end
 end
 
 let genFloatBin(ctx: Ctx, depth: Integer, op: String) -> (String, Ctx) do
@@ -285,17 +334,27 @@ let genBool(ctx: Ctx, depth: Integer) -> (String, Ctx) do
   end
 end
 
+# One expression of the tagged type: usually a fresh computation, but one
+# draw in four reuses a live binding instead — so later lets read earlier
+# ones, and the final print can name a binding outright.
 let genTyped(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
-  if tag == :int
-    return genInt(ctx, depth)
+  let (roll, ctx2) = draw(ctx, 4)
+  let names = namesFor(ctx2.env, tag)
+  if roll == 0 && names.length > 0
+    let (i, ctx3) = draw(ctx2, names.length)
+    return (names.at(i).or(""), ctx3)
   else
-    if tag == :float
-      return genFloat(ctx, depth)
+    if tag == :int
+      return genInt(ctx2, depth)
     else
-      if tag == :string
-        return genString(ctx, depth)
+      if tag == :float
+        return genFloat(ctx2, depth)
       else
-        return genBool(ctx, depth)
+        if tag == :string
+          return genString(ctx2, depth)
+        else
+          return genBool(ctx2, depth)
+        end
       end
     end
   end
@@ -320,7 +379,8 @@ end
 
 # 0-3 lets, then prints. Half the programs print every binding; the other
 # half print only the final expression, leaving dead lets behind — dead
-# bindings lower differently, so both shapes are worth covering.
+# bindings lower differently, so both shapes are worth covering. Each binding
+# joins the env under its tag, so later right-hand sides can read it.
 let genLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
   if n == 0
     return (acc, ctx)
@@ -328,7 +388,8 @@ let genLets(ctx: Ctx, n: Integer, acc: String) -> (String, Ctx) do
     let (tag, ctx2) = pickType(ctx)
     let (rhs, ctx3) = genExpr(ctx2, tag, 2)
     let (name, ctx4) = fresh(ctx3)
-    return genLets(ctx4, n - 1, "${acc}let ${name} = ${rhs}\n")
+    let ctx5 = remember(ctx4, tag, name)
+    return genLets(ctx5, n - 1, "${acc}let ${name} = ${rhs}\n")
   end
 end
 
@@ -341,7 +402,8 @@ let genPrints(ctx: Ctx, first: Integer, last: Integer, acc: String) -> (String, 
 end
 
 let genProgram(seed: Integer) -> String do
-  let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0 }
+  let empty = Env { ints: [], floats: [], strings: [], bools: [] }
+  let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0, env: empty }
   let (nlets, ctx2) = draw(ctx, 4)
   let (lets, ctx3) = genLets(ctx2, nlets, "")
   let (tag, ctx4) = pickType(ctx3)
@@ -366,15 +428,18 @@ let describeOutcome(outcome) -> String do
   end
 end
 
-foul saveFinding(outDir: String, index: Integer, source: String, walker: String, beam: String) do
-  FS.File.write("${outDir}/fail_${index}.kex", source)
-  FS.File.write("${outDir}/fail_${index}.txt",
+# Findings are named by case seed, so a rerun with the same base seed
+# overwrites the same files instead of accumulating stale ones.
+foul saveFinding(outDir: String, seed: Integer, source: String, walker: String, beam: String) do
+  FS.File.write("${outDir}/fail_${seed}.kex", source)
+  FS.File.write("${outDir}/fail_${seed}.txt",
     "walker:\n${walker}\n\nbeam:\n${beam}\n")
 end
 
 # One case: generate, write, run both, compare. Answers pass, invalid, slow
-# or fail. "invalid" is a generator bug (both backends reject the program
-# before running anything); "slow" is both backends timing out identically.
+# or fail. "invalid" is a generator bug: the write failed, or both backends
+# rejected the program identically before running anything. "slow" is both
+# backends timing out identically.
 foul runCase(kex: String, outDir: String, index: Integer, seed: Integer, budgetMs: Integer) do
   let source = genProgram(seed)
   let file = "${outDir}/case_${index}.kex"
@@ -388,12 +453,16 @@ foul runCase(kex: String, outDir: String, index: Integer, seed: Integer, budgetM
           if w.exitCode == 0 && b.exitCode == 0 && w.stdout == b.stdout
             return "pass"
           else
-            saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
-            return "fail"
+            if w.exitCode != 0 && b.exitCode != 0 && w.stdout == b.stdout
+              return "invalid"
+            else
+              saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
+              return "fail"
+            end
           end
         end
         Error(_) => do
-          saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+          saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
           return "fail"
         end
       end
@@ -401,14 +470,14 @@ foul runCase(kex: String, outDir: String, index: Integer, seed: Integer, budgetM
     Error(ew) => do
       match beam do
         Ok(_) => do
-          saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+          saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
           return "fail"
         end
         Error(eb) => do
           if ew == eb
             return "slow"
           else
-            saveFinding(outDir, index, source, describeOutcome(walker), describeOutcome(beam))
+            saveFinding(outDir, seed, source, describeOutcome(walker), describeOutcome(beam))
             return "fail"
           end
         end
@@ -419,6 +488,7 @@ end
 
 foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs: Integer) do
   if !FS.Directory.exists?(outDir) then FS.Directory.create(outDir) end
+  IO.printLine("fuzzing from seed ${seed}")
   var fails = 0
   var invalid = 0
   var slow = 0
@@ -431,6 +501,7 @@ foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs:
     else
       if verdict == "invalid"
         invalid = invalid + 1
+        IO.printLine("case ${i}: INVALID (seed ${seed + i})")
       else
         if verdict == "slow"
           slow = slow + 1
@@ -446,7 +517,10 @@ foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs:
 end
 
 main(args) do
-  let seed = Integer.parse(args.at(0).or("42")).or(42)
+  let seed = match args.at(0) do
+    Just(text) => Integer.parse(text).or(42)
+    None => DateTime.now().epochSeconds % 2147483646 + 1
+  end
   let total = Integer.parse(args.at(1).or("50")).or(50)
   let kex = args.at(2).or("./build/kex")
   let outDir = args.at(3).or("/tmp/kex-fuzz")
