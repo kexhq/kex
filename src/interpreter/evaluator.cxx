@@ -1201,6 +1201,73 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 typedSignatures.insert(std::move(signature));
             }
         const bool dispatchByParamType = typedSignatures.size() > 1;
+        // With several declared signatures sharing this name, argument types
+        // are supposed to pick the clause — but a clause declaring NO types
+        // passed that filter untouched, and the prelude's definitions load
+        // before a user module's. So an untyped prelude clause answered
+        // first and swallowed the call meant for the user's typed overload
+        // registered under the same mangled name: `this.sum(this)` inside
+        // `make [Book]` ran the prelude's `sum` and returned 0 instead of
+        // the block's own method (kexhq/kex#292). When some clause's
+        // declared parameter types match the arguments, clauses that do not
+        // fully declare (or do not match) step aside — untyped clauses stay
+        // the fallback they always were.
+        const auto clauseArgOffset = [&](const ast::FunctionClause& clause) {
+            const bool firstIsThis =
+                !clause.params.empty() && clause.params[0].pattern &&
+                *clause.params[0].pattern &&
+                std::holds_alternative<ast::ThisPattern>(
+                    (*clause.params[0].pattern)->kind);
+            size_t required = 0;
+            for (const auto& param : clause.params)
+                if (!param.defaultValue) required++;
+            if (!firstIsThis && isMethod && !args.empty() &&
+                (args.size() == required + 1 ||
+                 args.size() > clause.params.size()))
+                return static_cast<size_t>(1);
+            return static_cast<size_t>(0);
+        };
+        const auto fullyTypeMatches = [&](const ast::FunctionClause& clause) {
+            const auto offset = clauseArgOffset(clause);
+            if (clause.params.empty()) return false;
+            if (args.size() != offset + clause.params.size()) return false;
+            // Stricter than runtimeTypeMatches for LIST parameters, which
+            // deliberately ignores the element type: preferring a typed
+            // clause must not let `sum(books: [Book])` claim `[1, 2, 3]`.
+            // An empty list answers to any element type.
+            std::function<bool(const ValuePtr&, const ast::TypeExpr&)> strict =
+                [&](const ValuePtr& value, const ast::TypeExpr& type) -> bool {
+                if (auto* list = std::get_if<ast::ListType>(&type.kind)) {
+                    if (!value ||
+                        !std::holds_alternative<ListValue>(value->data))
+                        return false;
+                    if (!list->element) return true;
+                    const auto& elements =
+                        std::get<ListValue>(value->data).elements;
+                    for (const auto& element : elements)
+                        if (!strict(element, *list->element)) return false;
+                    return true;
+                }
+                return runtimeTypeMatches(value, type);
+            };
+            for (size_t i = 0; i < clause.params.size(); ++i) {
+                const auto* declared = dispatchParamType(clause.params[i]);
+                if (!declared) return false;
+                if (!strict(args[i + offset], *declared)) return false;
+            }
+            return true;
+        };
+        bool preferTypeMatched = false;
+        if (dispatchByParamType)
+            for (const auto* funcDef : m_functionDefs.at(regName)) {
+                if (!funcDef) continue;
+                for (const auto& clause : funcDef->clauses)
+                    if (fullyTypeMatches(clause)) {
+                        preferTypeMatched = true;
+                        break;
+                    }
+                if (preferTypeMatched) break;
+            }
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
                 const bool firstParamIsThisPattern = !clause.params.empty()
@@ -1216,6 +1283,24 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     (args.size() == requiredParams + 1 ||
                      args.size() > clause.params.size()))
                     argOffset = 1;
+                // See preferTypeMatched above: a fully type-matched clause
+                // somewhere in this name's definition set answers the call.
+                // Only clauses carrying NO dispatch information of their own
+                // step aside — every param a plain binder with no declared
+                // type. A clause with a pattern parameter (`let repeat(0)`)
+                // discriminates by pattern and keeps its place, or the typed
+                // sibling shadows it and `repeat(0)` runs the general
+                // clause's negative-count guard.
+                if (preferTypeMatched) {
+                    bool uninformative = true;
+                    for (const auto& param : clause.params)
+                        if ((param.pattern && *param.pattern) ||
+                            dispatchParamType(param)) {
+                            uninformative = false;
+                            break;
+                        }
+                    if (uninformative) continue;
+                }
 
                 std::vector<std::pair<std::string, ValuePtr>> dictionaries;
                 for (std::size_t i = 0; i < clause.params.size() &&

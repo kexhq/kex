@@ -162,6 +162,11 @@ private:
     std::vector<UnresolvedMethod> m_unresolvedMethods;
     // Every name any `make` block defines, private methods included.
     std::unordered_set<std::string> m_makeMethodNames;
+    // The receiver types each of those names answers on, recorded when the
+    // block is registered — before the method's own signature exists. Call
+    // sites inside the block reach siblings defined lower in it through this
+    // (kexhq/kex#292).
+    std::unordered_map<std::string, std::vector<TypePtr>> m_makeMethodReceivers;
 
     // Pre-register provisional signatures (param types from inline annotations,
     // TypeVar result) for all non-annotation-declared FunctionDefs before any

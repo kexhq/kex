@@ -248,6 +248,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_methodSignatures.clear();
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
+    m_makeMethodReceivers.clear();
     m_qualifiedPublished.clear();
     m_overloadPurity.clear();
     m_scopedDeclaredSignatures.clear();
@@ -1733,6 +1734,38 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     } pathRestore{m_currentModulePath, previousModulePath};
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
+    // Every method this block defines, keyed by the RECEIVER it answers on —
+    // needed before the body is checked, when the method's own signature is
+    // not registered yet. A sibling defined lower in the block (a `private
+    // do` helper especially) is then missing from the call-site candidate
+    // list, and a same-named import's mismatch read as this call's error
+    // (kexhq/kex#292).
+    {
+        auto record = [&](const ast::FunctionDef& fn) {
+            auto& owners = m_makeMethodReceivers[fn.name];
+            auto resolvedReceiver = resolve(receiver);
+            if (std::none_of(owners.begin(), owners.end(),
+                             [&](const TypePtr& existing) {
+                                 return typesEqual(existing, resolvedReceiver);
+                             }))
+                owners.push_back(std::move(resolvedReceiver));
+        };
+        for (const auto& item : def.body) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) record(**fn);
+            } else if (const auto* visibility =
+                           std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                               &item)) {
+                if (!*visibility) continue;
+                for (const auto& inner : (*visibility)->items)
+                    if (const auto* vfn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(
+                                &inner))
+                        if (*vfn) record(**vfn);
+            }
+        }
+    }
     // Record which of these methods a `private do ... end` block hides, now
     // that the receiver type has a name to key them by.
     if (auto* named = std::get_if<NamedType>(&receiver->kind))
@@ -7742,6 +7775,24 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // the headline message, then list every candidate signature tried,
     // Elm-style. Prefer a concrete sig that agrees on the receiver over a
     // vacuous or foreign-receiver one for error reporting.
+    //
+    // Before any of that: a make-block method of this name whose receiver
+    // accepts the call's first argument answers this call on both backends,
+    // even though its signature is only registered once its definition is
+    // reached — a sibling defined lower in the block (a `private do` helper
+    // is the usual shape) is missing from the candidates above, and the
+    // mismatch would be reported against an unrelated import that happens
+    // to own the name. The runtime dispatches to the block's own method;
+    // the checker must not reject what the backends run (kexhq/kex#292).
+    if (!argTypes.empty()) {
+        if (auto owners = m_makeMethodReceivers.find(name);
+            owners != m_makeMethodReceivers.end()) {
+            auto receiverArg = resolve(argTypes.front());
+            for (const auto& owner : owners->second)
+                if (argMatchesParam(receiverArg, resolve(owner)))
+                    return Type::unknown();
+        }
+    }
     auto isVacuousSig = [](const Signature* sig) {
         for (const auto& p : sig->params)
             if (!std::holds_alternative<TypeVar>(p->kind) &&
