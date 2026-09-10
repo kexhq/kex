@@ -31,7 +31,9 @@ and an Elixir-style process model. Try the language in your browser at [kex.run]
   produced it.
 - **Package commands as tasks** — whatever this package's `package.kex`
   declares, offered where VS Code offers tasks.
-- **Syntax highlighting** for Kex's full grammar.
+- **Syntax highlighting** for Kex's full grammar, and for `.ket` templates
+  over their host language — `page.html.ket` is highlighted as HTML, and
+  `README.md.ket` as Markdown, with the `<% %>` tags as Kex on top.
 
 ## Requirements
 

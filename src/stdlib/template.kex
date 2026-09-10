@@ -25,7 +25,10 @@
 #   <% ... %>       a Kex control region: `if`/`match` arms, block bodies, `let`
 #   <%# ... %>      comment, emits nothing
 #   <%- ... -%>     whitespace control: trims the line's leading indent before
-#                   the tag, and the newline right after it
+#                   the tag, and the newline right after it. A `<% %>` or
+#                   `<%# %>` tag standing alone on its line does this on its
+#                   own, so the markers are for a tag sharing its line with
+#                   real content
 #   <%%             a literal `<%`, for a template that generates ERB-shaped
 #                   output itself
 #
@@ -368,6 +371,58 @@ private do
     chars.join("")
   end
 
+  # A tag that emits nothing of its own. Only these can have their whole
+  # line disappear: a tag that produces output stands in real content, so
+  # the whitespace around it is content too.
+  let silent?(node: Node) -> Bool do
+    match node do
+      Control(_) => true
+      Comment(_) => true
+      _          => false
+    end
+  end
+
+  # Whether the text scanned before a tag leaves the cursor at the start of
+  # a line — nothing but spaces and tabs since the last newline. `prior`
+  # answers it for text that holds no newline at all, carrying forward what
+  # was true before that text: two tags separated by spaces alone are both
+  # still at the start of their line.
+  let atLineStart?(text: String, prior: Bool) -> Bool do
+    let after = text.split("\n").last
+    match after do
+      Just(tail) => text.contains?("\n") then blank?(tail) else prior && blank?(text)
+      None       => prior
+    end
+  end
+
+  # True for text of spaces and tabs alone, the empty string included.
+  let blank?(text: String) -> Bool do
+    text.chars.all? { |ch| ch == ' ' || ch == '\t' }
+  end
+
+  # True when nothing but spaces and tabs stands between `cursor` and the end
+  # of its line. The right half of what makes a tag stand alone; end of input
+  # counts, since there is no trailing content there either.
+  let blankToLineEnd?(cursor: Input) -> Bool do
+    var cur = cursor
+    loop do
+      break if cur.peek != Just(' ') && cur.peek != Just('\t')
+      cur.advance!
+    end
+    cur.peek == None || cur.peek == Just('\n') || cur.peek == Just('\r')
+  end
+
+  # A cursor advanced past the rest of a blank line, its newline included.
+  # What a standalone tag's own line needs once the tag itself is scanned.
+  let skipBlankLineRest(cursor: Input) -> Input do
+    var cur = cursor
+    loop do
+      break if cur.peek != Just(' ') && cur.peek != Just('\t')
+      cur.advance!
+    end
+    skipOneNewline(cur)
+  end
+
   # `<%=`, `<%==`, `<%#`, or plain `<%`, which kind of region this is, and
   # the cursor past the marker.
   let classifyTag(cursor: Input) -> (String, Input) do
@@ -423,9 +478,16 @@ private do
   end
 
   # Scans the template body (everything after any frontmatter) into nodes.
+  #
+  # A tag that emits nothing and stands alone on its line takes that line
+  # with it, without being asked: `<% end %>` on a line of its own leaves no
+  # blank line behind, the same as `<%- end -%>`. That is what a template
+  # author means every time, so the trim markers are for the other case — a
+  # tag with real content beside it on the line.
   let scanBody(cursor: Input) -> Result<([Node], Input), TemplateError> do
     var cur = cursor
     var nodes: [Node] = []
+    var lineStart = true
     loop do
       let (text, afterText) = scanText(cur)
       if afterText.peek == None
@@ -435,12 +497,20 @@ private do
         return Ok((nodes, afterText))
       end
       let (tag, afterTag) = scanTag(afterText).try
-      let keptText = tag.leftTrim then trimTrailingIndent(text) else text
+      let alone = silent?(tag.node) && atLineStart?(text, lineStart) && blankToLineEnd?(afterTag)
+      let keptText = (tag.leftTrim || alone) then trimTrailingIndent(text) else text
       if !keptText.empty?
         nodes.push!(Text(keptText))
       end
       nodes.push!(tag.node)
-      cur = tag.rightTrim then skipOneNewline(afterTag) else afterTag
+      cur = if alone
+        skipBlankLineRest(afterTag)
+      elif tag.rightTrim
+        skipOneNewline(afterTag)
+      else
+        afterTag
+      end
+      lineStart = alone || tag.rightTrim
     end
   end
 end

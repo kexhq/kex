@@ -63,14 +63,14 @@ end
 
 describe("Template.scan: whitespace control") do
   it("trims the preceding indent for `<%-` and the trailing newline for `-%>`") do
-    let source = "line\n  <%- if x -%>\nbody\n<% end %>\n"
+    let source = "line\n  <%- if x -%>\nbody\n<% end %>rest"
     let parsed = Template.scan(source).try
     assert(parsed.nodes == [
       Text("line\n"),
       Control("if x"),
       Text("body\n"),
       Control("end"),
-      Text("\n")
+      Text("rest")
     ])
   end
 
@@ -97,6 +97,74 @@ describe("Template.scan: whitespace control") do
   it("combines `<%-` and `-%>` on the same tag") do
     let parsed = Template.scan("a\n  <%- if y -%>\nb").try
     assert(parsed.nodes == [Text("a\n"), Control("if y"), Text("b")])
+  end
+end
+
+# A control tag whose line holds nothing else takes that line with it, with no
+# trim markers asked for: that is what an author means every time they put one
+# on a line of its own, and the markers are left for the case this does not
+# cover — a tag with real content beside it.
+describe("Template.scan: a tag standing alone on its line") do
+  it("takes its own line with it, indent and newline both") do
+    let parsed = Template.scan("a\n  <% if y %>  \nb").try
+    assert(parsed.nodes == [Text("a\n"), Control("if y"), Text("b")])
+  end
+
+  it("reads the same as the fully marked-up form") do
+    let source = "line\n<% if x %>\nbody\n<% end %>\nrest"
+    let marked = "line\n<%- if x -%>\nbody\n<%- end -%>\nrest"
+    assert(Template.scan(source).try.nodes == Template.scan(marked).try.nodes)
+  end
+
+  it("applies to a comment tag, which emits nothing either") do
+    let parsed = Template.scan("a\n<%# note %>\nb").try
+    assert(parsed.nodes == [Text("a\n"), Comment("note"), Text("b")])
+  end
+
+  it("leaves an interpolation alone: its line is content, not scaffolding") do
+    let parsed = Template.scan("a\n<%= name %>\nb").try
+    assert(parsed.nodes == [Text("a\n"), Interpolate("name"), Text("\nb")])
+  end
+
+  it("leaves a tag with text beside it alone") do
+    let parsed = Template.scan("a\n<% if y %>x\nb").try
+    assert(parsed.nodes == [Text("a\n"), Control("if y"), Text("x\nb")])
+  end
+
+  it("leaves a tag alone when text precedes it on the line") do
+    let parsed = Template.scan("a\nx <% if y %>\nb").try
+    assert(parsed.nodes == [Text("a\nx "), Control("if y"), Text("\nb")])
+  end
+
+  it("holds on the template's very first line, which starts a line too") do
+    let parsed = Template.scan("<% if y %>\nbody").try
+    assert(parsed.nodes == [Control("if y"), Text("body")])
+  end
+
+  it("holds on the last line, where the newline is missing rather than trimmed") do
+    let parsed = Template.scan("body\n<% end %>").try
+    assert(parsed.nodes == [Text("body\n"), Control("end")])
+  end
+
+  it("trims a CRLF line ending as a single unit") do
+    let parsed = Template.scan("a\r\n<% if y %>\r\nb").try
+    assert(parsed.nodes == [Text("a\r\n"), Control("if y"), Text("b")])
+  end
+
+  it("trims each of two stacked tag lines") do
+    let parsed = Template.scan("<% if y %>\n<% if z %>\nb\n<% end %>\n<% end %>\n").try
+    assert(parsed.nodes == [
+      Control("if y"),
+      Control("if z"),
+      Text("b\n"),
+      Control("end"),
+      Control("end")
+    ])
+  end
+
+  it("leaves two tags sharing one line alone, since neither owns it") do
+    let parsed = Template.scan("<% if y %><% end %>\nb").try
+    assert(parsed.nodes == [Control("if y"), Control("end"), Text("\nb")])
   end
 end
 

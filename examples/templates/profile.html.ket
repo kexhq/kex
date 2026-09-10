@@ -1,10 +1,10 @@
 <!doctype html>
 <html>
-<body>
-<h1><%= name %></h1>
-<%# The bio comes from user input, so it is auto-escaped; the badge is
-    rendered by us, so it opts out and stays real HTML (no escaping). %>
-<p><%= bio %></p>
-<p><%== badge %></p>
-</body>
+  <body>
+    <h1><%= name %></h1>
+    <%# The bio comes from user input, so it is auto-escaped; the badge is
+        rendered by us, so it opts out and stays real HTML (no escaping). %>
+    <p><%= bio %></p>
+    <p><%== badge %></p>
+  </body>
 </html>
