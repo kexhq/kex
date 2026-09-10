@@ -10,10 +10,10 @@ Kex is a functional programming language with Ruby-like syntax, immutable data b
 
 It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
-> **Kex is before 1.0.0, so no backward compatibility is attempted.** The
-> language, the standard library, the package format and the on-disk layouts
-> change between releases without deprecation cycles. Pin a version, and expect
-> to edit code when you move off it.
+> [!WARNING]
+> **No backward compatibility is attempted before version 1.0.0.**
+> The language, the standard library, the package format and the on-disk layouts
+> change between releases without deprecation cycles.
 
 Kex ships with **Tey**, its package, compiler, runtime, and standard-library
 manager. Installing Tey installs a working `kex`:
