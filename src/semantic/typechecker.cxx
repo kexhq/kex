@@ -7788,9 +7788,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         if (auto owners = m_makeMethodReceivers.find(name);
             owners != m_makeMethodReceivers.end()) {
             auto receiverArg = resolve(argTypes.front());
-            for (const auto& owner : owners->second)
-                if (argMatchesParam(receiverArg, resolve(owner)))
-                    return Type::unknown();
+            // Only when the block's own signature is genuinely missing from
+            // `arityMatches` — the registration-order gap this exists for.
+            // Once it IS registered, it is already one of the candidates
+            // just rejected on the merits, and must report the same
+            // argument-type error it always did rather than being waved
+            // through by receiver alone (`5.describe(42)` on
+            // `make Int do describe :> String -> String ... end`).
+            bool receiverAlreadyCandidate = std::any_of(
+                arityMatches.begin(), arityMatches.end(),
+                [&](const Signature* sig) {
+                    return !sig->params.empty() &&
+                           typesEqual(resolve(sig->params.front()), receiverArg);
+                });
+            if (!receiverAlreadyCandidate)
+                for (const auto& owner : owners->second)
+                    if (argMatchesParam(receiverArg, resolve(owner)))
+                        return Type::unknown();
         }
     }
     auto isVacuousSig = [](const Signature* sig) {
