@@ -278,6 +278,9 @@ jobs:
 
       - uses: ./.github/actions/restore-native
 
+      - name: Fuzzer regression checks
+        run: make -o build test-fuzz
+
       # Fresh programs each workflow run; reruns keep the seed for replay.
       # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
       # includes failing seeds in artifact filenames (kexhq/kex#306).
@@ -291,7 +294,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kex-fuzz-findings
-          path: /tmp/kex-fuzz/fail_*
+          path: |
+            /tmp/kex-fuzz/fail_*
+            /tmp/kex-fuzz/run.txt
 
   # musl is a supported platform, and glibc passing says nothing about it:
   # the spec suite pins float formatting, and that is exactly where libm

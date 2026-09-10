@@ -56,6 +56,7 @@ help:
 	@echo "                    check it against the tree-walker's golden output."
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
+	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
 	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
 	@echo "                    programs (tools/fuzz.kex). Override with"
 	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
@@ -122,6 +123,12 @@ web-demo: build-wasm
 test-all: test spec-orphans spec spec-prelude spec-stdlib \
           spec-beam spec-prelude-beam spec-stdlib-beam spec-test-json
 
+# Harness and generator regressions, including simulated crashes/timeouts.
+.PHONY: test-fuzz
+test-fuzz: build
+	@"$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
+	@python3 tools/test-fuzz.py "$(KEX)"
+
 # Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
 # programs and requires the walker and BEAM backends to agree on every one.
 # Fixed seed by default, so a failure replays with the same invocation.
@@ -130,7 +137,7 @@ FUZZ_CASES ?= 200
 FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
 fuzz: build
-	@$(KEX) --run-walker --no-colors tools/fuzz.kex $(FUZZ_SEED) $(FUZZ_CASES) $(KEX) $(FUZZ_OUTDIR) $(FUZZ_BUDGET_MS)
+	@"$(KEX)" --run-walker --no-colors -- tools/fuzz.kex "$(FUZZ_SEED)" "$(FUZZ_CASES)" "$(KEX)" "$(FUZZ_OUTDIR)" "$(FUZZ_BUDGET_MS)"
 
 SHELL := /bin/bash
 
