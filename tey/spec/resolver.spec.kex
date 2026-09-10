@@ -35,6 +35,30 @@ describe("Tey.Resolver.resolveWorkspace") do
     end
   end
 
+  it("dedupes identical kex requirements when locking the workspace") do
+    let members = [
+      Member { memberRoot: "/work", memberManifest: ManifestPackage {
+        name: "root", packageKexRequirement: ">= 0.4.0-beta.2"
+      } },
+      Member { memberRoot: "/work/a", memberManifest: ManifestPackage {
+        name: "a", packageKexRequirement: ">= 0.4.0-beta"
+      } },
+      Member { memberRoot: "/work/b", memberManifest: ManifestPackage {
+        name: "b", packageKexRequirement: ">= 0.4.0-beta"
+      } },
+      Member { memberRoot: "/work/c", memberManifest: ManifestPackage {
+        name: "c", packageKexRequirement: ">= 0.4.0-beta"
+      } }
+    ]
+    let context = Context { workspaceRoot: "/work", members: members }
+    let binary = FS.Path.join(FS.Directory.current, "build/kex")
+    with ENV = Mock.Env { vars: { "TEY_KEX": binary } } do
+      let lock = Tey.Resolver.resolveWorkspace(context).try
+      assert(lock.kexRequirement == ">= 0.4.0-beta.2 >= 0.4.0-beta",
+             "requirement was ${lock.kexRequirement}")
+    end
+  end
+
   it("reports every member incompatible with the selected compiler") do
     let context = Context {
       workspaceRoot: "/work",

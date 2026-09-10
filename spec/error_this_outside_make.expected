@@ -1,0 +1,2 @@
+spec/error_this_outside_make.kex:20:19: error: 'this' has no receiver here — it is only bound inside a `make` block method
+Aborted: 1 type error — fix before running (use --no-check to skip).

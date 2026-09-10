@@ -248,6 +248,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_methodSignatures.clear();
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
+    m_makeMethodReceivers.clear();
     m_qualifiedPublished.clear();
     m_overloadPurity.clear();
     m_scopedDeclaredSignatures.clear();
@@ -1733,6 +1734,38 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     } pathRestore{m_currentModulePath, previousModulePath};
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
+    // Every method this block defines, keyed by the RECEIVER it answers on —
+    // needed before the body is checked, when the method's own signature is
+    // not registered yet. A sibling defined lower in the block (a `private
+    // do` helper especially) is then missing from the call-site candidate
+    // list, and a same-named import's mismatch read as this call's error
+    // (kexhq/kex#292).
+    {
+        auto record = [&](const ast::FunctionDef& fn) {
+            auto& owners = m_makeMethodReceivers[fn.name];
+            auto resolvedReceiver = resolve(receiver);
+            if (std::none_of(owners.begin(), owners.end(),
+                             [&](const TypePtr& existing) {
+                                 return typesEqual(existing, resolvedReceiver);
+                             }))
+                owners.push_back(std::move(resolvedReceiver));
+        };
+        for (const auto& item : def.body) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) record(**fn);
+            } else if (const auto* visibility =
+                           std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                               &item)) {
+                if (!*visibility) continue;
+                for (const auto& inner : (*visibility)->items)
+                    if (const auto* vfn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(
+                                &inner))
+                        if (*vfn) record(**vfn);
+            }
+        }
+    }
     // Record which of these methods a `private do ... end` block hides, now
     // that the receiver type has a name to key them by.
     if (auto* named = std::get_if<NamedType>(&receiver->kind))
@@ -5539,6 +5572,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
             // Inside a make block, `this` / `@field` has the record type.
             if (m_currentMakeType) return m_currentMakeType;
+            // Anywhere else there is no receiver to bind. A module-level
+            // `let` mentioning `this` used to pass here as Unknown and fail
+            // only in the backends — erlc rejecting it as an unbound
+            // variable, the walker misreporting a sibling member — so the
+            // checker says it where it is written (kexhq/kex#293).
+            error(expr.location,
+                  "'this' has no receiver here — it is only bound inside a "
+                  "`make` block method");
             return Type::unknown();
         }
         else {
@@ -6524,6 +6565,56 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (record != m_importedInterfaces->recordFieldNames.end() &&
                     record->second.count(name))
                     return Type::unknown();
+            }
+        } else if (auto* optional = std::get_if<OptionalType>(&receiver->kind)) {
+            // `.field` on an optional used to pass here and then break three
+            // different ways at run time — a crash on BEAM, "Undefined
+            // method" in the interpreter, or (worst) the whole record
+            // silently interpolated where the field was asked for. Neither
+            // backend maps a field over an optional, so the checker says it:
+            // unwrap first. Only when the inner type really has the field —
+            // `.or`/`.map` are method calls that must keep resolving
+            // normally (kexhq/kex#294).
+            auto inner = resolve(optional->inner);
+            if (auto* innerNamed = std::get_if<NamedType>(&inner->kind)) {
+                if (auto record = m_recordFields.find(
+                        resolveRecordName(innerNamed->name));
+                    record != m_recordFields.end() &&
+                    record->second.count(name))
+                    error(loc,
+                          "`" + name + "` is a field of " +
+                              typeToString(inner) + ", but the receiver is " +
+                              typeToString(receiver) +
+                              " — the value may be None. Map over the "
+                              "optional first: `.map { |v| v." + name +
+                              " }`");
+                else if (m_importedInterfaces) {
+                    auto record =
+                        m_importedInterfaces->recordFieldNames.find(
+                            innerNamed->name);
+                    if (record != m_importedInterfaces->recordFieldNames.end() &&
+                        record->second.count(name))
+                        error(loc,
+                              "`" + name + "` is a field of " +
+                                  typeToString(inner) +
+                                  ", but the receiver is " +
+                                  typeToString(receiver) +
+                                  " — the value may be None. Map over the "
+                                  "optional first: `.map { |v| v." + name +
+                                  " }`");
+                }
+            } else if (auto* innerRecord =
+                           std::get_if<RecordType>(&inner->kind)) {
+                if (std::any_of(innerRecord->fields.begin(),
+                                innerRecord->fields.end(),
+                                [&](const auto& field) {
+                                    return field.first == name;
+                                }))
+                    error(loc,
+                          "`" + name + "` is a field of " + typeToString(inner) +
+                              ", but the receiver is " + typeToString(receiver) +
+                              " — the value may be None. Map over the "
+                              "optional first: `.map { |v| v." + name + " }`");
             }
         }
     }
@@ -7684,6 +7775,38 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // the headline message, then list every candidate signature tried,
     // Elm-style. Prefer a concrete sig that agrees on the receiver over a
     // vacuous or foreign-receiver one for error reporting.
+    //
+    // Before any of that: a make-block method of this name whose receiver
+    // accepts the call's first argument answers this call on both backends,
+    // even though its signature is only registered once its definition is
+    // reached — a sibling defined lower in the block (a `private do` helper
+    // is the usual shape) is missing from the candidates above, and the
+    // mismatch would be reported against an unrelated import that happens
+    // to own the name. The runtime dispatches to the block's own method;
+    // the checker must not reject what the backends run (kexhq/kex#292).
+    if (!argTypes.empty()) {
+        if (auto owners = m_makeMethodReceivers.find(name);
+            owners != m_makeMethodReceivers.end()) {
+            auto receiverArg = resolve(argTypes.front());
+            // Only when the block's own signature is genuinely missing from
+            // `arityMatches` — the registration-order gap this exists for.
+            // Once it IS registered, it is already one of the candidates
+            // just rejected on the merits, and must report the same
+            // argument-type error it always did rather than being waved
+            // through by receiver alone (`5.describe(42)` on
+            // `make Int do describe :> String -> String ... end`).
+            bool receiverAlreadyCandidate = std::any_of(
+                arityMatches.begin(), arityMatches.end(),
+                [&](const Signature* sig) {
+                    return !sig->params.empty() &&
+                           typesEqual(resolve(sig->params.front()), receiverArg);
+                });
+            if (!receiverAlreadyCandidate)
+                for (const auto& owner : owners->second)
+                    if (argMatchesParam(receiverArg, resolve(owner)))
+                        return Type::unknown();
+        }
+    }
     auto isVacuousSig = [](const Signature* sig) {
         for (const auto& p : sig->params)
             if (!std::holds_alternative<TypeVar>(p->kind) &&

@@ -1,0 +1,18 @@
+# `.field` on an optional — `xs.max { |b| b.id }.id` — used to pass the
+# checker and then break three different ways at run time: a crash on BEAM,
+# "Undefined method: id for Optional<M.Book>" in the interpreter, and (worst,
+# on 0.4.0-beta.2 BEAM) the whole record silently interpolated where the
+# field was asked for. A plain record literal does not coerce to `X?`, so
+# chaining off optional-returning methods is the spelling users reach for —
+# the checker has to say no before the backends disagree about it
+# (kexhq/kex#294). The message's suggested spelling is the one that runs.
+module M do
+  record Book do
+    id : Integer
+  end
+end
+
+main do
+  let books = [M.Book { id: 3 }, M.Book { id: 1 }]
+  IO.printLine("nonempty: ${books.max { |b| b.id }.id.or(0)}")
+end

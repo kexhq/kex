@@ -1,0 +1,27 @@
+# `this` (and `@field`, which desugars to it) is only bound inside a `make`
+# block method. A module-level `let` mentioning `this` used to pass the
+# checker and fail in the backends, differently on each: erlc rejected the
+# module outright as an unbound variable — even when the binding was never
+# called — while the interpreter misreported a sibling make member as an
+# undefined method (kexhq/kex#293). The checker says it at the definition
+# now.
+module M do
+  record Book do
+    id : Integer
+  end
+
+  make [Book] do
+    twiceCount :> Integer
+    let twiceCount = topId(this)
+  end
+
+  private do
+    let topId(books: [Book]) = books.count
+    let doubled = this.count * 100
+  end
+end
+
+main do
+  let books = [M.Book { id: 1 }, M.Book { id: 5 }]
+  IO.printLine("${books.twiceCount}")
+end

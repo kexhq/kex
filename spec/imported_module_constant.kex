@@ -1,0 +1,28 @@
+# An unqualified reference to an IMPORTED module constant.
+#
+# `let LIMIT = 100` inside `module Limits` exports a zero-arg member; after
+# `using Limits, only: [LIMIT]` the bare name is the constant's VALUE. It
+# used to resolve as a nullary ADT constructor instead — interpolation died
+# with `Undefined function: LIMIT.showValue` on BEAM while the walker printed
+# `<function:LIMIT>`, and arithmetic failed with "Cannot add Variant and
+# Integer" (kexhq/kex#282). A nullary variant that is NOT an imported
+# constant keeps reading as a constructor, pinned by `Low` below.
+module Limits do
+  let LIMIT = 100
+  let THRESHOLD = 7
+
+  own : String
+  let own = "limit is ${LIMIT}"
+end
+
+type Level = Low | High
+
+using Limits, only: [LIMIT, THRESHOLD, own]
+
+main do
+  IO.printLine("limit is ${LIMIT}")
+  IO.printLine("${LIMIT + 1}")
+  IO.printLine("${THRESHOLD * 2}")
+  IO.printLine(Limits.own)
+  IO.printLine("${Low}")
+end

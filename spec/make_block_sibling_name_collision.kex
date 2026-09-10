@@ -1,0 +1,41 @@
+# A make-block method whose name collides with a stdlib function.
+#
+# `sum(this)` inside `make [Book] do private do let sum(books) ... end` used
+# to resolve against the prelude's `sum`s — the block's own method is only
+# registered when its definition is reached, so the sibling call site above
+# it saw candidates the block did not contribute, and the mismatch was
+# reported against `sum : Range -> Any` (kexhq/kex#292). Both backends
+# dispatch to the block's own method; the checker now agrees, and the
+# prelude's `sum` keeps answering plain number lists.
+#
+# The explicit `this.` spelling had its own bug: the tree-walker ran the
+# prelude's untyped zero-argument `sum` clause (registered under the same
+# mangled name, loaded first) and printed 0 where BEAM printed the block's
+# answer — a declared-type clause now outranks an untyped one when both are
+# in scope.
+module Shelf do
+  record Book do
+    id : Integer
+  end
+
+  make [Book] do
+    total :> Integer
+    let total = sum(this)
+
+    qualified :> Integer
+    let qualified = this.sum(this)
+
+    private do
+      let sum(books: [Book]) = books.reduce(0) { |acc, book| acc + book.id }
+    end
+  end
+end
+
+using Shelf, only: [Book]
+
+main do
+  let books = [Shelf.Book { id: 1 }, Shelf.Book { id: 2 }]
+  IO.printLine("${books.total}")
+  IO.printLine("${books.qualified}")
+  IO.printLine("${[1, 2, 3].sum}")
+end

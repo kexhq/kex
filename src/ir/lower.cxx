@@ -487,6 +487,11 @@ struct Lowering {
     // from inside that module is a call to it — the only way to reach one
     // that `private do` keeps out of the module's exports.
     std::unordered_set<std::string> moduleZeroArgFns;
+    // The EMITTED (mangled) symbols of those same members, so an import site
+    // holding only the emitted name can tell a zero-arg constant from an
+    // ordinary function without unmangling. `using Limits` + a bare `LIMIT`
+    // is a call to the constant, not a nullary ADT constructor (kexhq/kex#282).
+    std::unordered_set<std::string> emittedModuleZeroArg;
     // Capability substitution threads one context — a map from capability
     // name to implementation — through foul functions instead of keeping
     // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
@@ -1253,6 +1258,39 @@ struct Lowering {
                         ex->node = localCall(symbol, {});
                         return ex;
                     }
+                    // A bare reference inside a `make` method to one of that
+                    // block's own PARAMETERLESS methods — the identifier form
+                    // of the implicit-receiver call rule: `seed` means
+                    // `this.seed` exactly as `decorate(x)` means
+                    // `this.decorate(x)`. A LOCAL binding of the same name
+                    // always wins (the guard above), as does a zero-arity
+                    // function — an ordinary `let seed = …` constant. Ahead of
+                    // the constructor fallback and `knownFns` (a name-only set
+                    // holding every make method) (kexhq/kex#292).
+                    if (!currentMakeType.empty() && subst.count("this") &&
+                        !definedFnArities.count(n.name + "/0") &&
+                        definedFnArities.count(n.name + "/1") &&
+                        ownsMethod(currentMakeType, n.name)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(n.name,
+                                             one(var(currentName("this"))));
+                        return ex;
+                    }
+                    // An IMPORTED module constant under its bare name: `using
+                    // Limits, only: [LIMIT]` then a bare `LIMIT` is a call to
+                    // the constant, not a constructor (kexhq/kex#282). The
+                    // currently-lowered function is excluded — a module
+                    // pre-imports its OWN members too, so `let Monday = Monday`
+                    // would otherwise read its own constant and recurse
+                    // forever (spec/module_self_alias.kex).
+                    if (auto imp = moduleImports.find(n.name);
+                        imp != moduleImports.end() &&
+                        imp->second != currentFunctionSymbol &&
+                        emittedModuleZeroArg.count(imp->second)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(imp->second, {});
+                        return ex;
+                    }
                 }
                 // Uppercase bare name not a known constant → nullary ADT
                 // constructor (matching the UpperIdentifier path). Without
@@ -1298,6 +1336,24 @@ struct Lowering {
                         !symbol.empty()) {
                         auto ex = std::make_unique<Expr>();
                         ex->node = localCall(symbol, {});
+                        return ex;
+                    }
+                    // An IMPORTED module constant under its bare name: `using
+                    // Limits, only: [LIMIT]` then a bare `LIMIT` is a call to
+                    // the constant, not a nullary ADT constructor — the
+                    // qualified spelling `Limits.LIMIT` always worked, and the
+                    // checker accepts the bare one, so both backends have to
+                    // agree with them (kexhq/kex#282). The currently-lowered
+                    // function is excluded: a module pre-imports its own
+                    // members, and `let Monday = Monday`'s right-hand side is
+                    // the outer variant, never the constant being defined
+                    // (spec/module_self_alias.kex).
+                    if (auto imp = moduleImports.find(n.name);
+                        imp != moduleImports.end() &&
+                        imp->second != currentFunctionSymbol &&
+                        emittedModuleZeroArg.count(imp->second)) {
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = localCall(imp->second, {});
                         return ex;
                     }
                 }
@@ -3745,7 +3801,16 @@ struct Lowering {
             const bool topLevelBindingReceiver =
                 zeroArgFns.count(uid->name) ||
                 topLevelConstants.count(uid->name) ||
-                !moduleConstantSymbol(uid->name).empty();
+                !moduleConstantSymbol(uid->name).empty() ||
+                // An IMPORTED zero-arg member is the same thing from another
+                // module: `using Limits` + `"${LIMIT}"` is a showValue on the
+                // constant's value, not a module member lookup
+                // (kexhq/kex#282).
+                [&]() {
+                    auto imp = moduleImports.find(uid->name);
+                    return imp != moduleImports.end() &&
+                        emittedModuleZeroArg.count(imp->second);
+                }();
             if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
@@ -8208,8 +8273,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     fd->name + "/" +
                     std::to_string(fd->clauses[0].params.size()));
             L.moduleFunctions[path + "." + fd->name] = emitted;
-            if (!fd->clauses.empty() && fd->clauses[0].params.empty())
+            if (!fd->clauses.empty() && fd->clauses[0].params.empty()) {
                 L.moduleZeroArgFns.insert(path + "." + fd->name);
+                L.emittedModuleZeroArg.insert(emitted);
+            }
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;
                 for (const auto& p : fd->clauses[0].params)
