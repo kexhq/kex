@@ -1,0 +1,25 @@
+name: Restore native Kex
+description: Restore this run's compiler and BEAM runtime for the runner OS and architecture
+runs:
+  using: composite
+  steps:
+    - name: Install runtime dependencies (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgmp-dev libpcre2-dev libreadline-dev libssl-dev erlang-base
+    - name: Install runtime dependencies (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install gmp pcre2 erlang readline
+    - uses: actions/download-artifact@v4
+      with:
+        name: kex-native-${{ runner.os }}-${{ runner.arch }}
+        path: ${{ runner.temp }}/kex-native
+    - name: Extract compiler and runtime
+      shell: bash
+      run: |
+        tar -xzf "${{ runner.temp }}/kex-native/kex-native.tar.gz"
+        test -x build/kex
+        test -f build/runtime/beam/kex_prelude.beam
