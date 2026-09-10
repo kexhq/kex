@@ -54,11 +54,19 @@
         "light": "./images/kex-file.png",
         "dark": "./images/kex-file.png"
       }
+    }, {
+      "id": "ket",
+      "aliases": ["Kex Template", "ket"],
+      "extensions": [".ket"]
     }],
     "grammars": [{
       "language": "kex",
       "scopeName": "source.kex",
       "path": "./syntaxes/kex.tmLanguage.json"
+    }, {
+      "language": "ket",
+      "scopeName": "source.ket",
+      "path": "./syntaxes/ket.tmLanguage.json"
     }],
     "configuration": {
       "title": "Kex",

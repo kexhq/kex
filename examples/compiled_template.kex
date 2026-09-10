@@ -1,0 +1,36 @@
+# Compiled templates — Kex.embed + Template.text/.html (kexhq/kex#171)
+#
+# `Kex.embed` reads a file at COMPILE time and folds it to a literal;
+# `Template.text`/`Template.html` then lower that literal — an ERB-shaped
+# template, scanned by the stdlib's own Template.scan — into a real,
+# type-checked Kex function. Nothing here is interpreted at runtime: by the
+# time this program runs, `readme` and `profile` below are ordinary
+# functions, indistinguishable from ones written by hand.
+#
+# `templates/readme.md.ket` declares its parameters explicitly via `params:`
+# frontmatter (name, and library/dependencies WITH types, enforced like any
+# other parameter's annotation); `templates/profile.html.ket` has no
+# frontmatter, so its parameters (name, bio, badge) are inferred from the
+# template's own free variables, in first-appearance order.
+#
+# Call the result POSITIONALLY, not with named arguments — see both .ket
+# files' driver calls below. kexhq/kex#309, found while building this
+# feature, makes a named-argument call through the `~name` reference
+# Template.text/.html lowers to resolve by the call site's written order
+# instead of by name.
+
+record Dependency do
+  name : String
+  version : String
+end
+
+main do
+  let readme = Template.text(Kex.embed("templates/readme.md.ket"))
+  IO.printLine(readme("widget", true, [
+    Dependency { name: "foo", version: "1.0" },
+    Dependency { name: "bar", version: "2.0" }
+  ]))
+
+  let profile = Template.html(Kex.embed("templates/profile.html.ket"))
+  IO.printLine(profile("Ada", "<script>alert(1)</script>", "<span class=\"badge\">admin</span>"))
+end

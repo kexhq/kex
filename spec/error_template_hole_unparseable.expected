@@ -1,0 +1,2 @@
+spec/error_template_hole_unparseable.kex:8:29: error: in a template hole `->->->`: Unexpected token: ->
+Aborted: compile-time expansion failed.

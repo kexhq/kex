@@ -1,0 +1,15 @@
+# kex: check-only
+# A `params:` entry whose type half is not parseable Kex is a clean compile
+# error at the Template.text call site — not a crash. (A genuinely
+# unparseable type once reached an uncaught exception from deep inside the
+# parser: Parser::error() records a diagnostic and then throws, which is
+# fine for parseProgram's own recovery loop and was not fine for a bare
+# parseTypeExpr() call with no such loop above it.)
+
+main do
+  let show = Template.text(`---
+params: [count: ->->->]
+---
+<%= count %>`)
+  IO.printLine(show(1))
+end

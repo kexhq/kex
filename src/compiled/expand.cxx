@@ -8,6 +8,7 @@
 #include "../parser/parser.hxx"
 
 #include <cctype>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -857,9 +858,8 @@ auto foldEmbeds(ast::Program& program, const std::string& sourcePath,
 // (`Mod.fn`) and UFCS (`x.fn`) references are unaffected, since neither
 // parses as a bare Identifier. A `params: [...]` frontmatter key (already
 // implemented by `Template.scan`/`Parsed#parameters`) overrides inference
-// when present, fixing both the name list and its order — but not yet the
-// declared TYPES it may also carry, which are dropped: relying on
-// inference for those is the accepted v1 gap.
+// when present, fixing the name list, its order, AND — parsed the same way
+// an ordinary parameter's own `: Type` is — the type each name carries.
 // ---------------------------------------------------------------------------
 
 // One node of a scanned template, read directly out of the Value
@@ -870,6 +870,16 @@ struct TemplateNode {
     std::string text;
 };
 
+// One `params: [...]` frontmatter entry: `name` alone, or `name: Type`.
+// `type` is raw text, same as `Template.kex`'s own `TemplateParam` — `""`
+// for a bare name, parsed into a real type only once a Param is built from
+// it (lowerTemplateFunction), the same stage that would report an error in
+// it.
+struct ExplicitParam {
+    std::string name;
+    std::string type;
+};
+
 auto templateNodeKind(const std::string& tag) -> std::optional<TemplateNode::Kind> {
     if (tag == "Text") return TemplateNode::Kind::Text;
     if (tag == "Interpolate") return TemplateNode::Kind::Interpolate;
@@ -877,6 +887,26 @@ auto templateNodeKind(const std::string& tag) -> std::optional<TemplateNode::Kin
     if (tag == "Control") return TemplateNode::Kind::Control;
     if (tag == "Comment") return TemplateNode::Kind::Comment;
     return std::nullopt;
+}
+
+// `Parser::error` records its message in `parser.diagnostics()` and then
+// THROWS (parser.cxx: `m_diagnostics.push_back(...); throw ParseError{...};`)
+// — fine for parseProgram's own top-level recovery loop, not for a bare
+// `parseExpr()`/`parseTypeExpr()` call on a standalone fragment, which has
+// no such loop above it. Parsing a template hole, control region, or
+// `params:` type this way is exactly that: without this, a genuinely
+// unparseable fragment (`<%= ->->-> %>`) crashed the whole compiler with an
+// uncaught exception ("Internal error: ...") instead of the intended
+// diagnostic — the exception is swallowed here so the caller's existing
+// `!result || !parser.diagnostics().empty()` check (already written for the
+// ordinary "parsed but empty" failure) also catches this one.
+template <typename Parse>
+auto parseOrDiagnose(Parse&& parse) -> decltype(parse()) {
+    try {
+        return parse();
+    } catch (const std::exception&) {
+        return nullptr;
+    }
 }
 
 auto trimmed(std::string text) -> std::string {
@@ -897,7 +927,7 @@ auto trimmed(std::string text) -> std::string {
 // are compile errors at the call site, never a silently empty template.
 auto scanTemplateSource(const std::string& source, std::chrono::milliseconds timeout,
                          std::vector<TemplateNode>& nodes,
-                         std::vector<std::string>& explicitParams,
+                         std::vector<ExplicitParam>& explicitParams,
                          std::string& error) -> bool {
     ast::Expr sourceLit;
     sourceLit.kind = ast::StringLiteral{source, false};
@@ -970,8 +1000,8 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
     }
 
     // Explicit `params: [...]` frontmatter, split the same way
-    // `Parsed#parameters` does: each entry on its first `:`. Only the name
-    // half is kept — see the file-level comment on the dropped-types gap.
+    // `Parsed#parameters` does: each entry on its first `:` into a name and
+    // an optional type.
     auto frontField = parsed->fields.find("frontmatter");
     if (frontField != parsed->fields.end() && frontField->second) {
         if (auto* map = std::get_if<interpreter::MapValue>(&frontField->second->data)) {
@@ -988,7 +1018,9 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
                     const auto colon = entryStr->value.find(':');
                     auto name = trimmed(colon == std::string::npos
                                             ? entryStr->value : entryStr->value.substr(0, colon));
-                    if (!name.empty()) explicitParams.push_back(name);
+                    auto type = colon == std::string::npos
+                        ? std::string{} : trimmed(entryStr->value.substr(colon + 1));
+                    if (!name.empty()) explicitParams.push_back({name, type});
                 }
             }
         }
@@ -1090,7 +1122,7 @@ struct Lowerer {
                                  toks.begin() + static_cast<std::ptrdiff_t>(to));
         slice.push_back(eof);
         Parser parser(std::move(slice), "<template>");
-        auto expr = parser.parseExpr();
+        auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
             addError(diagnostics, blame,
@@ -1105,7 +1137,7 @@ struct Lowerer {
     auto parseHole(const std::string& text) -> ast::ExprPtr {
         Lexer lexer(text, "<template>");
         Parser parser(lexer.tokenizeAll(), "<template>");
-        auto expr = parser.parseExpr();
+        auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
             addError(diagnostics, blame,
@@ -1472,6 +1504,25 @@ auto collectFreeNames(std::vector<ast::ExprPtr>& body) -> std::vector<std::strin
     return ordered;
 }
 
+// A `params:` entry's type half, parsed the same way an ordinary function
+// parameter's `: Type` annotation would be. Reports through `diagnostics`
+// and returns null on a malformed type — the same treatment a hole or a
+// control region's Kex gets elsewhere in this file.
+auto parseParamType(const std::string& text, const SourceLocation& blame,
+                    std::vector<semantic::Diagnostic>& diagnostics) -> ast::TypeExprPtr {
+    Lexer lexer(text, "<template>");
+    Parser parser(lexer.tokenizeAll(), "<template>");
+    auto type = parseOrDiagnose([&] { return parser.parseTypeExpr(); });
+    if (!type || !parser.diagnostics().empty()) {
+        addError(diagnostics, blame,
+                 "in a template's `params:` frontmatter, `" + text + "` is not a type: " +
+                     (parser.diagnostics().empty() ? std::string("expected a type")
+                                                    : parser.diagnostics().front().message));
+        return nullptr;
+    }
+    return type;
+}
+
 struct LoweredTemplate {
     std::unique_ptr<ast::FunctionDef> function;
     ast::ExprPtr reference;
@@ -1482,7 +1533,7 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
                            std::vector<semantic::Diagnostic>& diagnostics)
     -> std::optional<LoweredTemplate> {
     std::vector<TemplateNode> nodes;
-    std::vector<std::string> explicitParams;
+    std::vector<ExplicitParam> explicitParams;
     std::string error;
     if (!scanTemplateSource(source, timeout, nodes, explicitParams, error)) {
         addError(diagnostics, blame, error);
@@ -1504,19 +1555,35 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
         return std::nullopt;
     }
 
-    auto paramNames = explicitParams.empty() ? collectFreeNames(result.statements)
-                                             : explicitParams;
+    // Inference gives names only (untyped, left to unify from call sites);
+    // `params:` frontmatter gives both — see ExplicitParam.
+    std::vector<ExplicitParam> paramList = explicitParams;
+    if (paramList.empty())
+        for (auto& name : collectFreeNames(result.statements))
+            paramList.push_back({std::move(name), ""});
 
     auto fn = std::make_unique<ast::FunctionDef>();
     fn->location = blame;
     fn->name = "__kexTemplate" + std::to_string(counter++);
     ast::FunctionClause clause;
     clause.hasParamList = true;
-    for (const auto& p : paramNames) {
+    bool typesOk = true;
+    for (const auto& p : paramList) {
         ast::Param param;
-        param.name = p;
+        param.name = p.name;
+        if (!p.type.empty()) {
+            // NOT `param.type = parseParamType(...)`: assigning a null
+            // TypeExprPtr into the optional would leave it ENGAGED around a
+            // null pointer (`param.type.has_value()` true, `*param.type`
+            // a null-pointer dereference downstream) rather than empty —
+            // exactly backwards from what a failed parse should produce.
+            auto parsed = parseParamType(p.type, blame, diagnostics);
+            if (parsed) param.type = std::move(parsed);
+            else typesOk = false;
+        }
         clause.params.push_back(std::move(param));
     }
+    if (!typesOk) return std::nullopt;
     clause.body = std::move(result.statements);
     fn->clauses.push_back(std::move(clause));
 

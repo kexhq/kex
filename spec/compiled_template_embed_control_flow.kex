@@ -1,0 +1,9 @@
+# Kex.embed + Template.text together, exercising control flow (if/else)
+# and explicit `params:` frontmatter from a REAL FILE on disk, not a
+# backtick literal — the shape `examples/compiled_template.kex` uses.
+
+main do
+  let readme = Template.text(Kex.embed("lib/compiled/readme_template.ket"))
+  IO.printLine(readme("widget", true))
+  IO.printLine(readme("widget", false))
+end

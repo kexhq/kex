@@ -23,6 +23,11 @@ public:
     // `total = total + 1 if ready?` guards the assignment rather than the
     // value being assigned.
     auto parseExprWithoutGuard() -> ast::ExprPtr;
+    // Public alongside parseExpr for the same reason: a caller parsing a
+    // standalone fragment (kexhq/kex#171's template lowering parses a
+    // `params:` frontmatter entry's `: Type` half) needs an entry point
+    // that isn't the whole program.
+    auto parseTypeExpr() -> ast::TypeExprPtr;
     auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
 private:
@@ -88,7 +93,6 @@ private:
     static auto isOverloadableOperator(TokenType type) -> bool;
 
     // Type expressions
-    auto parseTypeExpr() -> ast::TypeExprPtr;
     auto parseTypeOr() -> ast::TypeExprPtr;
     auto parseTypeUnion() -> ast::TypeExprPtr;
     auto parseTypeFunction() -> ast::TypeExprPtr;
