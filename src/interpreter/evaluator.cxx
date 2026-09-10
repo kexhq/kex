@@ -389,7 +389,9 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         }
     }
     std::vector<semantic::Diagnostic> expandDiagnostics;
-    if (!compiled::expand(*program, expandDiagnostics)) {
+    compiled::ExpandOptions expandOptions;
+    expandOptions.sourcePath = *path;
+    if (!compiled::expand(*program, expandDiagnostics, expandOptions)) {
         const auto& diagnostic = expandDiagnostics.front();
         m_loadingModules.erase(canonicalName);
         throw RuntimeError("Failed to expand module " + canonicalName + ": " +

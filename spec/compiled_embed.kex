@@ -1,0 +1,15 @@
+# `Kex.embed("path")` (kexhq/kex#171 M2): a compile-time file read, resolved
+# relative to THIS file's own directory regardless of the process's working
+# directory, and folded to a plain string literal before anything downstream
+# — the type checker, the interpreter, IR lowering — ever sees it. Runs
+# unconditionally, with no `compiled do` block needed at all.
+
+main do
+  let text = Kex.embed("lib/compiled/embed_fixture.txt")
+  IO.printLine(text)
+  IO.printLine("count=${text.count}")
+
+  # Composes with an ordinary expression: nothing special about the result
+  # once folded, it is just a String.
+  IO.printLine(text.lines.count)
+end

@@ -56,13 +56,42 @@ jobs:
           repository: kexhq/docs
           path: guide-src
 
+      # GUIDE_SOURCE names guide-src's version directory. It used to be a
+      # literal here ("guide/0.4.0-alpha") with a comment asking whoever cuts
+      # a release to bump it by hand — nobody did, across three later tags
+      # (kexhq/kex#305), so the guide silently kept serving alpha content.
+      # Derived from VERSION instead, the same file CMake and release.yml
+      # build from, so it can't drift from what the rest of the site labels
+      # itself. If kexhq/docs has no guide/<version>/ yet for the version
+      # being built (expected right after a version bump, before the book is
+      # updated to match), this falls back to the newest guide directory that
+      # DOES exist and says so loudly — so the mismatch shows up as a visible
+      # warning on every run instead of nothing at all.
+      - name: Resolve guide source
+        id: guide
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          dir="guide-src/guide/${version}"
+          if [ -d "$dir" ]; then
+            echo "source=${dir}" >> "$GITHUB_OUTPUT"
+          else
+            fallback="$(ls guide-src/guide | sort -V | tail -1 || true)"
+            if [ -z "$fallback" ]; then
+              echo "::warning::No guide-src/guide/${version} and no other guide directory exists either — the guide will be skipped."
+              echo "source=guide-src/guide/${version}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::guide-src/guide/${version} does not exist yet (kexhq/docs has not been updated for this release) — falling back to guide/${fallback}, which is stale. Add guide/${version}/ to kexhq/docs."
+              echo "source=guide-src/guide/${fallback}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       # The site base URL for sitemap/robots/llms. Canonical URL is the
       # custom domain; kexhq.github.io/docs redirects to it.
       - name: Generate docs
         env:
           BASE_URL: https://docs.kex.run
-          # Versioned per release in kexhq/docs — bump alongside the release.
-          GUIDE_SOURCE: guide-src/guide/0.4.0-alpha
+          GUIDE_SOURCE: ${{ steps.guide.outputs.source }}
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             tools/build-docs.sh docs-out

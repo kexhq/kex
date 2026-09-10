@@ -1,0 +1,2 @@
+spec/error_kex_embed_dynamic_path.kex:8:25: error: Kex.embed's argument must be a plain string literal naming the file to embed — the path has to be knowable to the compiler, not just to the running program
+Aborted: compile-time expansion failed.

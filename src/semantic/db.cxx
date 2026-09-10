@@ -90,7 +90,9 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
     // the already-expanded declarations in through updateFile's signature.
     {
         std::vector<Diagnostic> expansionDiagnostics;
-        compiled::expand(state.ast, expansionDiagnostics);
+        compiled::ExpandOptions expandOptions;
+        expandOptions.sourcePath = state.path;
+        compiled::expand(state.ast, expansionDiagnostics, expandOptions);
         state.diagnostics.insert(
             state.diagnostics.end(),
             std::make_move_iterator(expansionDiagnostics.begin()),

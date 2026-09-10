@@ -237,12 +237,11 @@ jobs:
 
   # Differential fuzzer (tools/fuzz.kex via `make fuzz`): generates
   # correct-by-construction programs and fails on any walker/BEAM
-  # disagreement. PR-only: it is a probabilistic hunt with a fixed seed, not
-  # a deterministic suite, so it gates pull requests without also gating the
-  # post-merge record on main. A CI failure replays locally with the same
-  # `make fuzz` invocation; findings upload as artifacts. Linux-only: the
-  # oracle compares the backends to each other rather than to golden files,
-  # so a second platform adds minutes, not signal.
+  # disagreement. PR-only: it is a probabilistic hunt, not a deterministic
+  # suite, so it gates pull requests without also gating the post-merge
+  # record on main. Linux-only: the oracle compares the backends to each
+  # other rather than to golden files, so a second platform adds minutes,
+  # not signal.
   fuzz:
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.extension-only != 'true'
@@ -259,7 +258,19 @@ jobs:
       - name: Build
         run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 
+      # The Makefile default (FUZZ_SEED ?= 42) stays fixed, so a plain local
+      # `make fuzz` always reproduces the same run for debugging. CI
+      # overrides it with the run id instead: a fixed default here meant
+      # every PR fuzzed the identical 200 programs forever, since the seed
+      # never varied (kexhq/kex#306). `github.run_id` is unique per workflow
+      # run and stable across re-runs of that same run, so each new push
+      # explores fresh programs while re-running a red job still reproduces
+      # exactly — and `drive` logs "fuzzing from seed …" either way, so the
+      # seed for any failure is always in the job output, not just in
+      # FUZZ_SEED here.
       - name: Differential fuzz (walker vs BEAM)
+        env:
+          FUZZ_SEED: ${{ github.run_id }}
         run: make fuzz
 
       - name: Upload findings

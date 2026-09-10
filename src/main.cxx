@@ -4058,6 +4058,13 @@ int main(int argc, char *argv[]) {
       std::vector<kex::semantic::Diagnostic> expandDiagnostics;
       std::vector<kex::compiled::CollapseNote> collapseNotes;
       kex::compiled::ExpandOptions expandOptions;
+      // Kex.embed(...) resolves relative to the ENTRY file, even on the
+      // later calls below where dependency modules have been merged into
+      // `target` — a Kex.embed inside a dependency module's own source
+      // resolves against the wrong directory until per-declaration source
+      // provenance exists (the same gap this function's own comment notes
+      // for compiled blocks in merged-in modules).
+      expandOptions.sourcePath = filepath;
       if (reportCollapse) expandOptions.report = &collapseNotes;
       const bool expanded =
           kex::compiled::expand(target, expandDiagnostics, expandOptions);

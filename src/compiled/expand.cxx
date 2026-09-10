@@ -3,9 +3,14 @@
 #include "reify.hxx"
 #include "../ast/clone.hxx"
 #include "../interpreter/evaluator.hxx"
+#include "../interpreter/value.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -699,6 +704,835 @@ auto compiledNames(const ast::Program& program) -> CompiledNames {
     return names;
 }
 
+// Folds `Kex.embed("path")` into the literal text of that file, read at
+// compile time (kexhq/kex#171 M2). Unlike chain collapse below, this needs
+// no sandbox run: there is nothing to evaluate, only a syntactic shape to
+// recognize and a file to read, so `claim` does the whole job in place.
+//
+// The argument must be a PLAIN string literal — not interpolated, not a
+// runtime expression — because the path has to be knowable to the compiler.
+// `Template.embed("build/${target}.ket")` cannot mean anything at compile
+// time no matter how eagerly this walk runs.
+struct EmbedFolder {
+    // The directory `Kex.embed`'s relative paths resolve against: the
+    // enclosing source file's own directory, exactly like `#include` or
+    // Rust's `include_str!` — never the process's current directory, which
+    // would make the same program embed a different file depending on where
+    // it happened to be invoked from.
+    std::filesystem::path sourceDir;
+    std::vector<semantic::Diagnostic>& diagnostics;
+    bool ok = true;
+
+    static auto isKexReceiver(const ast::Expr& expr) -> bool {
+        const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind);
+        return upper && upper->name == "Kex";
+    }
+
+    auto fail(const SourceLocation& location, std::string message) -> bool {
+        addError(diagnostics, location, std::move(message));
+        ok = false;
+        return true; // claimed: still stop the walk here either way.
+    }
+
+    auto claim(ast::ExprPtr& slot) -> bool {
+        if (!slot) return false;
+        const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+        if (!call || call->method != "embed" || !call->receiver ||
+            !isKexReceiver(*call->receiver))
+            return false;
+        if (call->args.size() != 1 || !call->namedArgs.empty() || call->block)
+            return fail(slot->location,
+                        "Kex.embed takes exactly one argument: the path of "
+                        "the file to embed");
+        const auto* literal =
+            std::get_if<ast::StringLiteral>(&call->args[0]->kind);
+        // An ordinary `"..."` literal is ALWAYS parsed with interpolating =
+        // true and its text split into `parts`/`values` (parser.cxx), even
+        // when it holds no `${...}` at all — interpolating only means "this
+        // token could have held one", not "it does". What actually matters
+        // here is whether any runtime VALUE was interpolated: `values` is
+        // empty for both a raw string and a plain `"data.txt"`.
+        std::string path;
+        if (!literal) {
+            return fail(slot->location,
+                        "Kex.embed's argument must be a plain string "
+                        "literal naming the file to embed — the path has to "
+                        "be knowable to the compiler, not just to the "
+                        "running program");
+        } else if (!literal->interpolating) {
+            path = literal->value;
+        } else if (literal->values.empty()) {
+            path = literal->parts.empty() ? std::string{} : literal->parts.front();
+        } else {
+            return fail(slot->location,
+                        "Kex.embed's argument must be a plain string "
+                        "literal naming the file to embed, not an "
+                        "interpolated one — the path has to be knowable to "
+                        "the compiler, not just to the running program");
+        }
+        std::filesystem::path target = sourceDir / path;
+        std::ifstream file(target, std::ios::binary);
+        if (!file)
+            return fail(slot->location, "Kex.embed: cannot read '" +
+                                             target.string() + "'");
+        std::ostringstream contents;
+        contents << file.rdbuf();
+        slot->kind = ast::StringLiteral{contents.str(), false};
+        return true;
+    }
+};
+
+// Runs EmbedFolder over the whole program — every function, `make` method
+// and `main` body, inside a `compiled do` block or not. Deliberately NOT
+// gated behind whether the program has any `compiled` block at all: embed
+// folding is unconditional, unlike everything below it in this file.
+auto foldEmbeds(ast::Program& program, const std::string& sourcePath,
+                 std::vector<semantic::Diagnostic>& diagnostics) -> bool {
+    EmbedFolder folder{
+        std::filesystem::path(sourcePath).parent_path(), diagnostics};
+    Constants none;
+    Substituter walk{none, diagnostics, {}, {}, {}};
+    walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };
+    walkBodies(program.items, [&](auto& target) {
+        using T = std::decay_t<decltype(target)>;
+        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            walk.functionBody(target);
+        else
+            walk.substitute(target);
+    });
+    return folder.ok;
+}
+
+// ---------------------------------------------------------------------------
+// Template lowering (kexhq/kex#171 M3): `Template.text(source)` /
+// `Template.html(source)`, given a compile-time-known SOURCE STRING (almost
+// always `Kex.embed(...)`, already folded to a literal by foldEmbeds above),
+// become a brand-new top-level function — the holes compiled into real,
+// type-checked Kex, exactly as the design insists on ("the mechanism is
+// compilation, not interpretation"). The call site is replaced with `~name`,
+// a reference to that function, which a caller then invokes with named
+// arguments for whatever free names the template's holes turned out to need.
+//
+// The SCANNING half is not reimplemented here: M1's `Template.scan` (already
+// shipped, kexhq/kex#252) is the one source of truth for ERB syntax. This
+// runs it for real, through the same sandboxed Evaluator `compiled do`
+// blocks use, and reads the result straight out of the returned Value. Only
+// the STRUCTURE Template.scan deliberately leaves opaque — control regions,
+// nested `if`/`do |x| ... end` — is reconstructed here, and even that is
+// built as real AST via the real Parser on each opaque Control node's own
+// text, never by re-serializing a whole template back to source and
+// re-lexing it (which would need to re-escape every Text run for no reason —
+// building the AST directly needs no escaping at all).
+//
+// Supported control regions: `if`/`elif`/`else`, `let`/`var`, and any
+// block-taking call (`<%= expr do |params| %> ... <% end %>` — most
+// commonly `.map`/`.mapIndexed`/`.flatMap`), nested to any depth. Anything
+// else (`match`, `loop`, `while`, `receive`, `spawn`, `with`, `trying`) is
+// not specially recognized, and — because every one of those ALSO ends its
+// opening line in `do` — falls into the block-taking-call path, which wraps
+// it in `.join("")`. The real type checker then reports whatever error that
+// produces (`.join` on a process handle, say). Not a polished message, but a
+// safe, loud failure rather than a silently wrong template, and it needs no
+// rejection list kept in sync with the grammar.
+//
+// Free variables become the generated function's (unannotated) parameters,
+// found by a syntactic scan of the lowered body — every bare Identifier not
+// bound by an enclosing let/var/block-param within the template itself. This
+// does not attempt to exclude a bare reference to a prelude or module-scope
+// name the way a fully resolution-aware pass would (kexhq/kex#171's own
+// design doc flags exactly this nuance) — expand() runs before semantic
+// analysis, so no name resolution exists yet to lean on. A template whose
+// hole bare-references an unqualified top-level function by name, with no
+// arguments, will incorrectly treat it as a required parameter; qualified
+// (`Mod.fn`) and UFCS (`x.fn`) references are unaffected, since neither
+// parses as a bare Identifier. A `params: [...]` frontmatter key (already
+// implemented by `Template.scan`/`Parsed#parameters`) overrides inference
+// when present, fixing both the name list and its order — but not yet the
+// declared TYPES it may also carry, which are dropped: relying on
+// inference for those is the accepted v1 gap.
+// ---------------------------------------------------------------------------
+
+// One node of a scanned template, read directly out of the Value
+// Template.scan returned.
+struct TemplateNode {
+    enum class Kind { Text, Interpolate, InterpolateRaw, Control, Comment };
+    Kind kind;
+    std::string text;
+};
+
+auto templateNodeKind(const std::string& tag) -> std::optional<TemplateNode::Kind> {
+    if (tag == "Text") return TemplateNode::Kind::Text;
+    if (tag == "Interpolate") return TemplateNode::Kind::Interpolate;
+    if (tag == "InterpolateRaw") return TemplateNode::Kind::InterpolateRaw;
+    if (tag == "Control") return TemplateNode::Kind::Control;
+    if (tag == "Comment") return TemplateNode::Kind::Comment;
+    return std::nullopt;
+}
+
+auto trimmed(std::string text) -> std::string {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
+        text.erase(text.begin());
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
+        text.pop_back();
+    return text;
+}
+
+// Runs the REAL `Template.scan` at compile time (via the same sandboxed
+// Evaluator `compiled do` blocks use) and reads its `nodes` and frontmatter
+// `params` directly out of the returned Value — no scanning logic duplicated
+// here. `Template.scan` resolves fully qualified with no `using Template`
+// needed, so this asks for it directly against an otherwise empty program.
+//
+// Returns false and sets `error` on a scan failure or a sandbox crash; both
+// are compile errors at the call site, never a silently empty template.
+auto scanTemplateSource(const std::string& source, std::chrono::milliseconds timeout,
+                         std::vector<TemplateNode>& nodes,
+                         std::vector<std::string>& explicitParams,
+                         std::string& error) -> bool {
+    ast::Expr sourceLit;
+    sourceLit.kind = ast::StringLiteral{source, false};
+    ast::Expr receiver;
+    receiver.kind = ast::UpperIdentifier{"Template"};
+    ast::Expr callExpr;
+    {
+        ast::MethodCall call;
+        call.receiver = std::make_unique<ast::Expr>(std::move(receiver));
+        call.method = "scan";
+        call.args.push_back(std::make_unique<ast::Expr>(std::move(sourceLit)));
+        call.parenthesized = true;
+        callExpr.kind = std::move(call);
+    }
+
+    ast::Program empty;
+    std::vector<interpreter::ValuePtr> results;
+    std::vector<std::string> reasons;
+    try {
+        interpreter::Evaluator evaluator;
+        evaluator.loadPrelude();
+        interpreter::Evaluator::ExpressionRequest request{&callExpr, {}};
+        results = evaluator.evaluateExpressions(empty, {request}, timeout, &reasons);
+    } catch (const interpreter::EvaluationTimeout&) {
+        error = "template scan timed out after " + std::to_string(timeout.count()) + " ms";
+        return false;
+    } catch (const std::exception& crash) {
+        error = std::string("compile-time evaluation failed: ") + crash.what();
+        return false;
+    }
+    if (results.empty() || !results[0]) {
+        error = (reasons.empty() || reasons[0].empty())
+            ? "Template.scan could not be evaluated at compile time"
+            : reasons[0];
+        return false;
+    }
+    auto* outcome = std::get_if<interpreter::VariantValue>(&results[0]->data);
+    if (!outcome) { error = "Template.scan did not return a Result"; return false; }
+    if (outcome->tag != "Ok") {
+        std::string message = (outcome->args.empty() || !outcome->args[0])
+            ? "scan failed" : outcome->args[0]->inspect();
+        error = "template does not scan: " + message;
+        return false;
+    }
+    if (outcome->args.empty() || !outcome->args[0]) {
+        error = "Template.scan returned an unexpected Ok value";
+        return false;
+    }
+    auto* parsed = std::get_if<interpreter::RecordValue>(&outcome->args[0]->data);
+    if (!parsed) { error = "Template.scan's Ok value is not a Parsed record"; return false; }
+
+    auto nodesField = parsed->fields.find("nodes");
+    if (nodesField == parsed->fields.end() || !nodesField->second) {
+        error = "Parsed has no `nodes` field"; return false;
+    }
+    auto* list = std::get_if<interpreter::ListValue>(&nodesField->second->data);
+    if (!list) { error = "Parsed.nodes is not a list"; return false; }
+    for (const auto& elem : list->elements) {
+        if (!elem) continue;
+        auto* variant = std::get_if<interpreter::VariantValue>(&elem->data);
+        if (!variant || variant->args.size() != 1 || !variant->args[0]) {
+            error = "Parsed.nodes holds something other than a Node";
+            return false;
+        }
+        auto kind = templateNodeKind(variant->tag);
+        if (!kind) { error = "unknown template node: " + variant->tag; return false; }
+        auto* text = std::get_if<interpreter::StringValue>(&variant->args[0]->data);
+        if (!text) { error = "a template Node's payload is not a String"; return false; }
+        nodes.push_back({*kind, text->value});
+    }
+
+    // Explicit `params: [...]` frontmatter, split the same way
+    // `Parsed#parameters` does: each entry on its first `:`. Only the name
+    // half is kept — see the file-level comment on the dropped-types gap.
+    auto frontField = parsed->fields.find("frontmatter");
+    if (frontField != parsed->fields.end() && frontField->second) {
+        if (auto* map = std::get_if<interpreter::MapValue>(&frontField->second->data)) {
+            for (const auto& [key, value] : map->entries) {
+                const auto* keyStr = key ? std::get_if<interpreter::StringValue>(&key->data) : nullptr;
+                if (!keyStr || keyStr->value != "params" || !value) continue;
+                const auto* tag = std::get_if<interpreter::VariantValue>(&value->data);
+                if (!tag || tag->tag != "Tags" || tag->args.empty() || !tag->args[0]) continue;
+                const auto* entries = std::get_if<interpreter::ListValue>(&tag->args[0]->data);
+                if (!entries) continue;
+                for (const auto& entry : entries->elements) {
+                    const auto* entryStr = entry ? std::get_if<interpreter::StringValue>(&entry->data) : nullptr;
+                    if (!entryStr) continue;
+                    const auto colon = entryStr->value.find(':');
+                    auto name = trimmed(colon == std::string::npos
+                                            ? entryStr->value : entryStr->value.substr(0, colon));
+                    if (!name.empty()) explicitParams.push_back(name);
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// What one Control node's own text turns out to be, decided from its OWN
+// tokens alone (never from what comes before or after it in the node list —
+// that is `Lowerer::lowerScope`'s job).
+enum class ControlKind { End, Else, Elif, If, LetVar, BlockOpener, Plain };
+
+struct ControlShape {
+    ControlKind kind = ControlKind::Plain;
+    std::vector<Token> tokens; // this node's own tokens, EOF excluded
+    Token eof{TokenType::Eof, "", SourceLocation{}, -1, -1};
+    std::size_t keywordEnd = 0;    // If/Elif: condition tokens start here
+    std::size_t blockOpenAt = 0;   // BlockOpener: index of the `do` token
+    std::vector<std::string> blockParams; // BlockOpener: `|params|`, if any
+};
+
+auto classifyControl(const std::string& text) -> ControlShape {
+    ControlShape shape;
+    Lexer lexer(text, "<template>");
+    for (auto& tok : lexer.tokenizeAll()) {
+        if (tok.type == TokenType::Eof) { shape.eof = tok; break; }
+        shape.tokens.push_back(std::move(tok));
+    }
+    if (shape.tokens.empty()) return shape; // Plain, and lowerScope skips it
+
+    const auto& first = shape.tokens.front();
+    if (shape.tokens.size() == 1 && first.type == TokenType::End) {
+        shape.kind = ControlKind::End;
+        return shape;
+    }
+    if (first.type == TokenType::Else) { shape.kind = ControlKind::Else; return shape; }
+    if (first.type == TokenType::Elif) {
+        shape.kind = ControlKind::Elif;
+        shape.keywordEnd = 1;
+        return shape;
+    }
+    if (first.type == TokenType::If) {
+        shape.kind = ControlKind::If;
+        shape.keywordEnd = 1;
+        return shape;
+    }
+    if (first.type == TokenType::Let || first.type == TokenType::Var) {
+        shape.kind = ControlKind::LetVar;
+        return shape;
+    }
+
+    // A block opener: the token stream ends in `do`, or `do` followed by a
+    // `|param, param|` list and nothing else.
+    std::size_t doIdx = shape.tokens.size();
+    for (std::size_t i = shape.tokens.size(); i-- > 0;) {
+        if (shape.tokens[i].type == TokenType::Do) { doIdx = i; break; }
+        if (shape.tokens[i].type != TokenType::Pipe &&
+            shape.tokens[i].type != TokenType::LowerIdent &&
+            shape.tokens[i].type != TokenType::Underscore &&
+            shape.tokens[i].type != TokenType::Comma)
+            break;
+    }
+    if (doIdx < shape.tokens.size()) {
+        shape.kind = ControlKind::BlockOpener;
+        shape.blockOpenAt = doIdx;
+        if (doIdx + 1 < shape.tokens.size() && shape.tokens[doIdx + 1].type == TokenType::Pipe) {
+            std::size_t j = doIdx + 2;
+            while (j < shape.tokens.size() && shape.tokens[j].type != TokenType::Pipe) {
+                if (shape.tokens[j].type == TokenType::LowerIdent)
+                    shape.blockParams.push_back(shape.tokens[j].value);
+                else if (shape.tokens[j].type == TokenType::Underscore)
+                    shape.blockParams.push_back("_");
+                j++;
+            }
+        }
+        return shape;
+    }
+    return shape; // Plain
+}
+
+// Lowers a scanned template's flat node list into a Kex function body,
+// recursively reconstructing `if`/block-call nesting. See the file-level
+// comment above for the algorithm and its known gaps.
+struct Lowerer {
+    const std::vector<TemplateNode>& nodes;
+    bool htmlMode;
+    SourceLocation blame;
+    std::vector<semantic::Diagnostic>& diagnostics;
+    bool ok = true;
+
+    auto parseSlice(const std::vector<Token>& toks, std::size_t from, std::size_t to,
+                    const Token& eof, const char* what) -> ast::ExprPtr {
+        std::vector<Token> slice(toks.begin() + static_cast<std::ptrdiff_t>(from),
+                                 toks.begin() + static_cast<std::ptrdiff_t>(to));
+        slice.push_back(eof);
+        Parser parser(std::move(slice), "<template>");
+        auto expr = parser.parseExpr();
+        if (!expr || !parser.diagnostics().empty()) {
+            ok = false;
+            addError(diagnostics, blame,
+                     std::string("in a template ") + what + ": " +
+                         (parser.diagnostics().empty() ? std::string("expected an expression")
+                                                        : parser.diagnostics().front().message));
+            return nullptr;
+        }
+        return expr;
+    }
+
+    auto parseHole(const std::string& text) -> ast::ExprPtr {
+        Lexer lexer(text, "<template>");
+        Parser parser(lexer.tokenizeAll(), "<template>");
+        auto expr = parser.parseExpr();
+        if (!expr || !parser.diagnostics().empty()) {
+            ok = false;
+            addError(diagnostics, blame,
+                     "in a template hole `" + text + "`: " +
+                         (parser.diagnostics().empty() ? std::string("expected an expression")
+                                                        : parser.diagnostics().front().message));
+            return nullptr;
+        }
+        return expr;
+    }
+
+    auto stringLiteral(std::string text) const -> ast::ExprPtr {
+        auto e = std::make_unique<ast::Expr>();
+        e->location = blame;
+        e->kind = ast::StringLiteral{std::move(text), false};
+        return e;
+    }
+
+    // Ordinary Kex string interpolation already show-converts every
+    // splice — `wrapInShowCalls` in parser.cxx does exactly this for
+    // hand-written `"${expr}"` — so a hole gets the same treatment here.
+    auto showWrap(ast::ExprPtr expr) const -> ast::ExprPtr {
+        auto call = std::make_unique<ast::Expr>();
+        call->location = blame;
+        ast::MethodCall mc;
+        mc.receiver = std::move(expr);
+        mc.method = "showValue";
+        call->kind = std::move(mc);
+        return call;
+    }
+
+    auto htmlEscapeWrap(ast::ExprPtr expr) const -> ast::ExprPtr {
+        auto receiver = std::make_unique<ast::Expr>();
+        receiver->location = blame;
+        receiver->kind = ast::UpperIdentifier{"Template"};
+        auto call = std::make_unique<ast::Expr>();
+        call->location = blame;
+        ast::MethodCall mc;
+        mc.receiver = std::move(receiver);
+        mc.method = "escapeHtml";
+        mc.parenthesized = true;
+        mc.args.push_back(std::move(expr));
+        call->kind = std::move(mc);
+        return call;
+    }
+
+    // One fragment: a plain run of Text/Interpolate/InterpolateRaw becomes
+    // an interpolated-string AST node, built DIRECTLY — the Text portions
+    // are the runtime bytes verbatim, needing no escaping at all, since this
+    // never passes through source text.
+    auto buildRun(const std::vector<TemplateNode>& run) -> ast::ExprPtr {
+        ast::StringLiteral literal;
+        literal.interpolating = true;
+        std::string current;
+        for (const auto& node : run) {
+            if (node.kind == TemplateNode::Kind::Text) {
+                current += node.text;
+                continue;
+            }
+            literal.parts.push_back(current);
+            current.clear();
+            auto hole = parseHole(node.text);
+            if (!hole) hole = stringLiteral("");
+            auto wrapped = showWrap(std::move(hole));
+            if (htmlMode && node.kind == TemplateNode::Kind::Interpolate)
+                wrapped = htmlEscapeWrap(std::move(wrapped));
+            literal.values.push_back(std::move(wrapped));
+        }
+        literal.parts.push_back(current);
+        auto e = std::make_unique<ast::Expr>();
+        e->location = blame;
+        e->kind = std::move(literal);
+        return e;
+    }
+
+    // `Substituter::walkChildren` (used below by collectFreeNames) walks an
+    // if/lambda BRANCH body with a plain per-element loop, not its
+    // shadow-tracking `body()` — a `let` inside a branch never enters
+    // `shadowed` there. Naming each fragment (`let __fragN = ...`) hit
+    // exactly that gap: the name "used" itself, one line down, inside the
+    // very branch that bound it, so it looked free from outside. Rather
+    // than change a walk the rest of this file already depends on, nested
+    // scopes here never introduce a name at all — fragments are `+`-chained
+    // directly as one expression. This does accept one narrow trade: a
+    // hole referencing a name BEFORE a same-named `let` rebinds it, later
+    // in the SAME nested branch, resolves to the rebound value instead of
+    // the original — correct at the top level (summed immediately, before
+    // any later `let` in the same scope), and rare enough elsewhere to
+    // accept for v1.
+    auto sumOf(std::vector<ast::ExprPtr> fragments) const -> ast::ExprPtr {
+        if (fragments.empty()) return stringLiteral("");
+        ast::ExprPtr acc = std::move(fragments.front());
+        for (std::size_t i = 1; i < fragments.size(); i++) {
+            auto e = std::make_unique<ast::Expr>();
+            e->location = blame;
+            e->kind = ast::BinaryOp{std::move(acc), TokenType::Plus, std::move(fragments[i])};
+            acc = std::move(e);
+        }
+        return acc;
+    }
+
+    enum class Stop { End, Else, Elif, Eof };
+    struct ScopeResult {
+        std::vector<ast::ExprPtr> statements; // ends in the scope's summed value
+        Stop stop = Stop::Eof;
+        ast::ExprPtr elifCondition; // set only when stop == Elif
+        std::size_t next = 0;       // index just past what this scope consumed
+    };
+
+    // Lowers one scope: everything from `start` up to (not including) the
+    // Control node that closes it — its own "end", or an "else"/"elif" the
+    // if-branch loop below is watching for. `let`/`var` and other
+    // pass-through control regions stay their own statements, in source
+    // order; every value-producing piece (a plain run, a nested `if`, a
+    // nested block call) is collected and `+`-chained into ONE final
+    // statement — the scope's own value, purely, with nothing buffered or
+    // mutated.
+    auto lowerScope(std::size_t start) -> ScopeResult {
+        std::vector<ast::ExprPtr> statements;
+        std::vector<ast::ExprPtr> fragments;
+        std::vector<TemplateNode> run;
+
+        auto flushRun = [&]() {
+            if (run.empty()) return;
+            fragments.push_back(buildRun(run));
+            run.clear();
+        };
+
+        std::size_t i = start;
+        while (i < nodes.size()) {
+            const auto& node = nodes[i];
+            if (node.kind == TemplateNode::Kind::Comment) { i++; continue; }
+            if (node.kind != TemplateNode::Kind::Control) {
+                run.push_back(node);
+                i++;
+                continue;
+            }
+
+            auto shape = classifyControl(node.text);
+            switch (shape.kind) {
+            case ControlKind::End:
+                flushRun();
+                statements.push_back(sumOf(std::move(fragments)));
+                return {std::move(statements), Stop::End, nullptr, i + 1};
+
+            case ControlKind::Else:
+                flushRun();
+                statements.push_back(sumOf(std::move(fragments)));
+                return {std::move(statements), Stop::Else, nullptr, i + 1};
+
+            case ControlKind::Elif: {
+                flushRun();
+                statements.push_back(sumOf(std::move(fragments)));
+                auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
+                                       shape.eof, "elif condition");
+                return {std::move(statements), Stop::Elif, std::move(cond), i + 1};
+            }
+
+            case ControlKind::LetVar: {
+                flushRun();
+                auto stmt = parseSlice(shape.tokens, 0, shape.tokens.size(), shape.eof,
+                                       "let/var region");
+                if (stmt) statements.push_back(std::move(stmt));
+                i++;
+                break;
+            }
+
+            case ControlKind::If: {
+                flushRun();
+                auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
+                                       shape.eof, "if condition");
+                auto thenResult = lowerScope(i + 1);
+                ast::IfExpr ifExpr;
+                ifExpr.condition = cond ? std::move(cond) : stringLiteral("");
+                ifExpr.thenBody = std::move(thenResult.statements);
+
+                std::size_t cursor = thenResult.next;
+                Stop stop = thenResult.stop;
+                ast::ExprPtr elifCond = std::move(thenResult.elifCondition);
+                while (stop == Stop::Elif) {
+                    auto branch = lowerScope(cursor);
+                    ifExpr.elifs.emplace_back(std::move(elifCond), std::move(branch.statements));
+                    cursor = branch.next;
+                    stop = branch.stop;
+                    elifCond = std::move(branch.elifCondition);
+                }
+                bool hasElse = false;
+                if (stop == Stop::Else) {
+                    auto branch = lowerScope(cursor);
+                    ifExpr.elseBody = std::move(branch.statements);
+                    cursor = branch.next;
+                    stop = branch.stop;
+                    hasElse = true;
+                }
+                if (stop != Stop::End) {
+                    ok = false;
+                    addError(diagnostics, blame, "template `if` has no matching `end`");
+                }
+                // No else written: an if used as a value needs one on every
+                // arm, so an empty string stands in for "nothing here".
+                if (!hasElse) {
+                    std::vector<ast::ExprPtr> empty;
+                    empty.push_back(stringLiteral(""));
+                    ifExpr.elseBody = std::move(empty);
+                }
+
+                auto e = std::make_unique<ast::Expr>();
+                e->location = blame;
+                e->kind = std::move(ifExpr);
+                fragments.push_back(std::move(e));
+                i = cursor;
+                break;
+            }
+
+            case ControlKind::BlockOpener: {
+                flushRun();
+                auto prefix = parseSlice(shape.tokens, 0, shape.blockOpenAt, shape.eof,
+                                         "block call");
+                auto bodyResult = lowerScope(i + 1);
+                if (bodyResult.stop != Stop::End) {
+                    ok = false;
+                    addError(diagnostics, blame, "template block has no matching `end`");
+                }
+                ast::Lambda lambda;
+                for (const auto& p : shape.blockParams)
+                    lambda.params.push_back(ast::LambdaParam{p, std::nullopt});
+                lambda.body = std::move(bodyResult.statements);
+                auto lambdaExpr = std::make_unique<ast::Expr>();
+                lambdaExpr->location = blame;
+                lambdaExpr->kind = std::move(lambda);
+
+                bool attached = false;
+                if (prefix) {
+                    if (auto* mc = std::get_if<ast::MethodCall>(&prefix->kind)) {
+                        mc->block = std::move(lambdaExpr);
+                        attached = true;
+                    } else if (auto* fc = std::get_if<ast::FunctionCall>(&prefix->kind)) {
+                        fc->block = std::move(lambdaExpr);
+                        attached = true;
+                    }
+                }
+                if (!attached) {
+                    ok = false;
+                    addError(diagnostics, blame,
+                             "template block `" + node.text +
+                                 "` is not a call that can take a block");
+                    i = bodyResult.next;
+                    break;
+                }
+
+                auto join = std::make_unique<ast::Expr>();
+                join->location = blame;
+                ast::MethodCall joinCall;
+                joinCall.receiver = std::move(prefix);
+                joinCall.method = "join";
+                joinCall.parenthesized = true;
+                joinCall.args.push_back(stringLiteral(""));
+                join->kind = std::move(joinCall);
+
+                fragments.push_back(std::move(join));
+                i = bodyResult.next;
+                break;
+            }
+
+            case ControlKind::Plain: {
+                flushRun();
+                if (!shape.tokens.empty()) {
+                    auto stmt = parseSlice(shape.tokens, 0, shape.tokens.size(), shape.eof,
+                                           "control region");
+                    if (stmt) statements.push_back(std::move(stmt));
+                }
+                i++;
+                break;
+            }
+            }
+        }
+        flushRun();
+        statements.push_back(sumOf(std::move(fragments)));
+        return {std::move(statements), Stop::Eof, nullptr, i};
+    }
+};
+
+// Every bare Identifier the lowered body references that it does not itself
+// bind — see the file-level comment for what this does and does not catch.
+// Reuses Substituter purely for its traversal (empty constants map, onSlot
+// only records and never claims), so lambda-param and let-shadowing come
+// from the same, already-correct logic the rest of this file relies on.
+auto collectFreeNames(std::vector<ast::ExprPtr>& body) -> std::vector<std::string> {
+    std::vector<std::string> ordered;
+    std::unordered_set<std::string> seen;
+    Constants none;
+    std::vector<semantic::Diagnostic> unused;
+    Substituter walker{none, unused, {}, {}, {}};
+    walker.onSlot = [&](ast::ExprPtr& slot) -> bool {
+        if (slot) {
+            if (const auto* id = std::get_if<ast::Identifier>(&slot->kind)) {
+                if (!walker.shadowed.count(id->name) && seen.insert(id->name).second)
+                    ordered.push_back(id->name);
+            }
+        }
+        return false;
+    };
+    walker.body(body);
+    return ordered;
+}
+
+struct LoweredTemplate {
+    std::unique_ptr<ast::FunctionDef> function;
+    ast::ExprPtr reference;
+};
+
+auto lowerTemplateFunction(bool htmlMode, const std::string& source, const SourceLocation& blame,
+                           int& counter, std::chrono::milliseconds timeout,
+                           std::vector<semantic::Diagnostic>& diagnostics)
+    -> std::optional<LoweredTemplate> {
+    std::vector<TemplateNode> nodes;
+    std::vector<std::string> explicitParams;
+    std::string error;
+    if (!scanTemplateSource(source, timeout, nodes, explicitParams, error)) {
+        addError(diagnostics, blame, error);
+        return std::nullopt;
+    }
+
+    Lowerer lowerer{nodes, htmlMode, blame, diagnostics};
+    auto result = lowerer.lowerScope(0);
+    if (!lowerer.ok) return std::nullopt;
+    if (result.stop != Lowerer::Stop::Eof) {
+        // Template.scan only ever emits a bare Control("end") for one this
+        // pass itself opened (an if or a block), both of which consume
+        // their own "end" above — so reaching here means a stray
+        // "end"/"else"/"elif" the pass never opened, i.e. the template's
+        // control regions do not balance.
+        addError(diagnostics, blame,
+                 "template's control regions do not balance — an `end`, "
+                 "`else` or `elif` with no opener");
+        return std::nullopt;
+    }
+
+    auto paramNames = explicitParams.empty() ? collectFreeNames(result.statements)
+                                             : explicitParams;
+
+    auto fn = std::make_unique<ast::FunctionDef>();
+    fn->location = blame;
+    fn->name = "__kexTemplate" + std::to_string(counter++);
+    ast::FunctionClause clause;
+    clause.hasParamList = true;
+    for (const auto& p : paramNames) {
+        ast::Param param;
+        param.name = p;
+        clause.params.push_back(std::move(param));
+    }
+    clause.body = std::move(result.statements);
+    fn->clauses.push_back(std::move(clause));
+
+    auto reference = std::make_unique<ast::Expr>();
+    reference->location = blame;
+    reference->kind = ast::CurryExpr{fn->name, false, {}, ""};
+
+    return LoweredTemplate{std::move(fn), std::move(reference)};
+}
+
+struct TemplateCallFolder {
+    std::vector<semantic::Diagnostic>& diagnostics;
+    std::chrono::milliseconds timeout;
+    std::vector<std::unique_ptr<ast::FunctionDef>> generated;
+    int counter = 0;
+    bool ok = true;
+
+    static auto isTemplateReceiver(const ast::Expr& expr) -> bool {
+        const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind);
+        return upper && upper->name == "Template";
+    }
+
+    auto claim(ast::ExprPtr& slot) -> bool {
+        if (!slot) return false;
+        auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+        if (!call || !call->receiver || !isTemplateReceiver(*call->receiver)) return false;
+        bool htmlMode;
+        if (call->method == "text") htmlMode = false;
+        else if (call->method == "html") htmlMode = true;
+        else return false;
+
+        if (call->args.size() != 1 || !call->namedArgs.empty() || call->block) {
+            addError(diagnostics, slot->location,
+                     "Template." + call->method +
+                         " takes exactly one argument: the template's source text");
+            ok = false;
+            return true;
+        }
+        std::string source;
+        bool isLiteral = false;
+        if (const auto* literal = std::get_if<ast::StringLiteral>(&call->args[0]->kind)) {
+            if (!literal->interpolating) {
+                source = literal->value;
+                isLiteral = true;
+            } else if (literal->values.empty()) {
+                source = literal->parts.empty() ? std::string{} : literal->parts.front();
+                isLiteral = true;
+            }
+        }
+        if (!isLiteral) {
+            addError(diagnostics, slot->location,
+                     "Template." + call->method +
+                         "'s argument must be a compile-time-known string (a plain literal, "
+                         "or Kex.embed(...)) — the template's text has to be knowable to the "
+                         "compiler, not just to the running program");
+            ok = false;
+            return true;
+        }
+
+        auto lowered =
+            lowerTemplateFunction(htmlMode, source, slot->location, counter, timeout, diagnostics);
+        if (!lowered) {
+            ok = false;
+            return true;
+        }
+        generated.push_back(std::move(lowered->function));
+        slot = std::move(lowered->reference);
+        return true;
+    }
+};
+
+// Runs TemplateCallFolder over the whole program, exactly like foldEmbeds:
+// every function/`make` method/`main` body, `compiled do` or not,
+// unconditional on the program having any `compiled` block at all.
+auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& diagnostics,
+                    const ExpandOptions& options) -> bool {
+    TemplateCallFolder folder{diagnostics, options.timeout, {}, 0, true};
+    Constants none;
+    Substituter walk{none, diagnostics, {}, {}, {}};
+    walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };
+    walkBodies(program.items, [&](auto& target) {
+        using T = std::decay_t<decltype(target)>;
+        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            walk.functionBody(target);
+        else
+            walk.substitute(target);
+    });
+    for (auto& fn : folder.generated) program.items.push_back(std::move(fn));
+    return folder.ok;
+}
+
 struct ChainCollapser {
     const CompiledNames& compiled;
 
@@ -1035,6 +1869,15 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
 auto expand(ast::Program& program,
             std::vector<semantic::Diagnostic>& diagnostics,
             const ExpandOptions& options) -> bool {
+    // --- 0. Fold Kex.embed(...) and Template.text/.html(...) everywhere.
+    // Unconditional: a program using either has no `compiled do` block at
+    // all, so both must run before the hasBlock check below would otherwise
+    // skip the rest of this function. Embeds first, since
+    // `Template.text(Kex.embed(...))` needs the embed already folded to a
+    // literal before the template call's own argument-shape check runs.
+    if (!foldEmbeds(program, options.sourcePath, diagnostics)) return false;
+    if (!foldTemplates(program, diagnostics, options)) return false;
+
     // --- 1. Find the constants, in source order.
     std::vector<std::string> names;
     std::vector<SourceLocation> locations;
