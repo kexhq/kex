@@ -1,0 +1,52 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kex Template",
+  "_comment": "ERB-shaped templates (kexhq/kex#171): `<% %>`-delimited holes of real Kex, scanned by Template.scan and lowered to a real function by Template.text/.html. The true extension sits before .ket (README.md.ket), so everything outside a tag is left as plain content rather than guessed at. Ported to Vim syntax in editors/vim/syntax/ket.vim — keep the two in sync.",
+  "scopeName": "source.ket",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#interpolateRaw" },
+    { "include": "#interpolate" },
+    { "include": "#control" },
+    { "include": "#literal" }
+  ],
+  "repository": {
+    "comment": {
+      "comment": "<%# ... %> — never highlighted as code, unlike every other tag below.",
+      "name": "comment.block.ket",
+      "begin": "<%#",
+      "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.ket" } },
+      "end": "%>",
+      "endCaptures": { "0": { "name": "punctuation.definition.comment.end.ket" } }
+    },
+    "interpolateRaw": {
+      "comment": "<%== ... %> — interpolate without auto-escaping. Listed before #interpolate so the second `=` is never left dangling as code.",
+      "begin": "<%==",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.ket" } },
+      "end": "-?%>",
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.ket" } },
+      "patterns": [{ "include": "source.kex" }]
+    },
+    "interpolate": {
+      "comment": "<%= ... %> — interpolate, auto-escaped in Template.html.",
+      "begin": "<%=(?!=)",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.ket" } },
+      "end": "-?%>",
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.ket" } },
+      "patterns": [{ "include": "source.kex" }]
+    },
+    "control": {
+      "comment": "<% ... %> / <%- ... -%> — a Kex control region (if/match arms, block bodies, let); the leading `-` trims the tag's own indent, the trailing one the newline after it. The negative lookahead keeps this from swallowing the three tags above.",
+      "begin": "<%-?(?![#=%])",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.ket" } },
+      "end": "-?%>",
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.ket" } },
+      "patterns": [{ "include": "source.kex" }]
+    },
+    "literal": {
+      "comment": "<%% — a literal `<%` in the output, for a template that itself generates ERB-shaped text. Never a tag.",
+      "name": "constant.character.escape.ket",
+      "match": "<%%"
+    }
+  }
+}

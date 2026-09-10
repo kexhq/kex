@@ -1,0 +1,17 @@
+# A `params: [...]` frontmatter key (kexhq/kex#171 M3) fixes the generated
+# function's parameter names, order, AND types explicitly, overriding
+# free-variable inference — the same list `Template.scan`'s own
+# `Parsed#parameters` already parses (kexhq/kex#252, M1). The body's own
+# reading order is `count` then `title`; the frontmatter declares the
+# opposite, and the call below only works in the FRONTMATTER's order —
+# proving that order won, not inference's first-appearance one. `count`'s
+# declared `: Integer` is enforced too: swap the call's arguments and it is
+# a compile-time type mismatch, not a runtime surprise.
+
+main do
+  let show = Template.text(`---
+params: [title, count: Integer]
+---
+<%= count %> of <%= title %>`)
+  IO.printLine(show("Items", 3))
+end

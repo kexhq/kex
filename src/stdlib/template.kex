@@ -145,6 +145,27 @@ let scan(source: String) -> Result<Parsed, TemplateError> do
   Ok(Parsed { frontmatter: frontmatter, nodes: nodes })
 end
 
+# Escapes the five characters HTML gives special meaning: what `Template.html`
+# (kexhq/kex#171 M3) wraps every `<%= %>` hole in, so an interpolated value
+# can never inject markup or break out of an attribute. `<%== %>` opts out.
+#
+# `&` first, deliberately: escaping it after `<`/`>` would re-escape the
+# `&` those just introduced (`&lt;` -> `&amp;lt;`).
+#
+# @param text [String] the text to escape
+# @return [String] the same text, HTML-safe
+#
+# @example
+#   Template.escapeHtml("<b>Tom & Jerry</b>")
+#   # => "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
+let escapeHtml(text: String) -> String do
+  text.replace("&", "&amp;")
+      .replace("<", "&lt;")
+      .replace(">", "&gt;")
+      .replace("\"", "&quot;")
+      .replace("'", "&#39;")
+end
+
 private do
   # True when `cursor` sits at the very start of the input and that line is
   # exactly `---`: the only place a frontmatter block may open.

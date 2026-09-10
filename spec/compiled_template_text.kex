@@ -1,0 +1,30 @@
+# `Template.text(source)` (kexhq/kex#171 M3): a compile-time-known template
+# source becomes a real, type-checked Kex function — interpolation,
+# `if`/`else`, a block-taking call (`.map do |x| ... end`, `.join`-ed
+# automatically), nesting, and a `let` a template author wrote themselves,
+# all lowered to ordinary Kex, not interpreted.
+#
+# Called POSITIONALLY, in the parameters' first-appearance order (name,
+# library, dependencies — `count` is `let`-bound inside the template, not a
+# parameter) — not with named arguments. Named-argument calls through the
+# `~name` reference this lowers to are unsafe right now: they resolve by the
+# call site's written order instead of by name (kexhq/kex#309, found while
+# building this). Positional calls are unaffected and work on both backends.
+
+record Dependency do
+  name : String
+  version : String
+end
+
+main do
+  let readme = Template.text(`# <%= name %>
+<% if library %>A Kex library.<% else %>An application.<% end %>
+<% let count = dependencies.count %>Depends on <%= count %>:
+<% dependencies.map do |dep| %>- <%= dep.name %> (<%= dep.version %>)
+<% end %>`)
+
+  IO.printLine(readme("widget", true, [
+    Dependency { name: "foo", version: "1.0" },
+    Dependency { name: "bar", version: "2.0" }
+  ]))
+end

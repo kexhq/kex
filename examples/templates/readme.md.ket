@@ -1,0 +1,18 @@
+---
+params: [name, library: Bool, dependencies: [Dependency]]
+---
+# <%= name %>
+
+<%- if library -%>
+A Kex library.
+<%- else -%>
+A Kex application.
+<%- end -%>
+
+<%- if dependencies.count > 0 -%>
+## Dependencies
+
+<%- dependencies.map do |dep| -%>
+- `<%= dep.name %>` ~> <%= dep.version %>
+<%- end -%>
+<%- end -%>

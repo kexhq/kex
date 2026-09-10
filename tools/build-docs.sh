@@ -109,8 +109,14 @@ tey_version() {
 }
 
 # The compiler's version, which is what a prelude/stdlib "release" means.
+# The root VERSION file, not package.kex's own version(...) field: VERSION
+# is what CMake and release.yml actually cut releases from (release.yml
+# reads it, tags v$VERSION, and never touches package.kex), so it is the
+# only one that has agreed with every released tag so far — package.kex's
+# field drifts (kexhq/kex#305: it named 0.3.0 at the v0.3.4 tag, and
+# 0.4.0-alpha at both v0.4.0-alpha.2 and v0.4.0-beta).
 kex_version() {
-  sed -n 's/^ *version("\([^"]*\)").*/\1/p' "$1/package.kex" | head -1
+  tr -d "[:space:]" < "$1/VERSION"
 }
 
 if [ -z "${SKIP_TAGS:-}" ]; then

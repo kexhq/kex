@@ -1,0 +1,2 @@
+spec/error_template_params_bad_type.kex:10:27: error: in a template's `params:` frontmatter, `->->->` is not a type: Expected type expression
+Aborted: compile-time expansion failed.

@@ -1,0 +1,16 @@
+# kex: skip-beam
+# A template with no holes at all lowers to a genuinely zero-parameter
+# function (kexhq/kex#171 M3) — free-variable inference finds nothing, so
+# `params` stays empty and the call takes no arguments.
+#
+# skip-beam: a zero-arg function reached through `~name` auto-calls on
+# BEAM instead of yielding the function value (kexhq/kex#312, found while
+# writing this spec) — general breakage, unrelated to templates, that
+# happens to be exactly what a holeless template's generated reference is
+# shaped like. Works correctly on the tree-walker.
+
+main do
+  let banner = Template.text(`Kex.
+No holes here.`)
+  IO.printLine(banner())
+end

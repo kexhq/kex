@@ -1,0 +1,9 @@
+# kex: check-only
+# Kex.embed's path must be knowable to the compiler, not computed at
+# runtime — the whole point is that the file's text is visible to the
+# compiler (kexhq/kex#171 M2), which a variable path cannot give it.
+
+main do
+  let name = "lib/compiled/embed_fixture.txt"
+  IO.printLine(Kex.embed(name))
+end

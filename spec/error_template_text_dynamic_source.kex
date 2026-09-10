@@ -1,0 +1,9 @@
+# kex: check-only
+# Template.text's source has to be knowable to the compiler (kexhq/kex#171
+# M3) — a value computed at runtime, even one that happens to hold valid
+# template text, cannot be lowered, since lowering is a COMPILE-time step.
+
+main do
+  let source = `Hi <%= name %>!`
+  IO.printLine(Template.text(source))
+end

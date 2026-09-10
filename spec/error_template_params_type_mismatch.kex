@@ -1,0 +1,12 @@
+# kex: check-only
+# A `params: [name: Type]` frontmatter type (kexhq/kex#171 M3) is a real
+# parameter annotation, enforced the same as a hand-written one — not just
+# a name hint.
+
+main do
+  let show = Template.text(`---
+params: [count: Integer]
+---
+<%= count %>`)
+  IO.printLine(show("not a number"))
+end

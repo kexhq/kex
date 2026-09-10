@@ -1,0 +1,15 @@
+# `<%# %>` (comment, emits nothing) and `<%- -%>` (whitespace trim) are both
+# untested elsewhere in this spec suite's template coverage — M1's own
+# `Template.scan` specs cover the SCAN, this covers what M3's lowering does
+# with the resulting Comment nodes and trimmed Control nodes: a comment
+# contributes nothing to the output, and a trimmed tag's surrounding
+# newline/indent do not survive into it.
+
+main do
+  let page = Template.text(`<%# this explains the template, not part of it %>
+<%- if title.count > 0 -%>
+# <%= title %>
+<%- end -%>
+Body.`)
+  IO.printLine(page("Hello"))
+end

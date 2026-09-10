@@ -1,0 +1,2 @@
+spec/error_template_text_dynamic_source.kex:8:29: error: Template.text's argument must be a compile-time-known string (a plain literal, or Kex.embed(...)) — the template's text has to be knowable to the compiler, not just to the running program
+Aborted: compile-time expansion failed.

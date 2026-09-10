@@ -1,0 +1,11 @@
+# The flagship pattern from kexhq/kex#171's own design: a template file's
+# text, brought in with Kex.embed (M2) and lowered by Template.text (M3),
+# in one expression — `Template.text(Kex.embed("..."))`. Kex.embed folds to
+# a literal before Template.text's own argument-shape check ever runs (see
+# expand()'s step 0), so this composes with no special handling either side
+# needs to know about the other.
+
+main do
+  let greet = Template.text(Kex.embed("lib/compiled/embed_template.ket"))
+  IO.printLine(greet("world"))
+end

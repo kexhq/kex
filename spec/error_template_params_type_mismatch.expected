@@ -1,0 +1,1 @@
+spec/error_template_params_type_mismatch.kex:11:16: error: Type mismatch: expected Integer, got String

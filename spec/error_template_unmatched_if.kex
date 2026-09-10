@@ -1,0 +1,8 @@
+# kex: check-only
+# An `if` inside a template (kexhq/kex#171 M3) needs its own `end` — a
+# missing one is a compile error at the Template.text/.html call site, not
+# a silently truncated template.
+
+main do
+  IO.printLine(Template.text(`<% if x %>oops`))
+end

@@ -1,0 +1,9 @@
+# kex: check-only
+# A genuinely unparseable hole (not just an empty one) is a clean compile
+# error, not a crash — see error_template_params_bad_type.kex's comment for
+# why this needed its own fix (Parser::error() throws past a bare
+# parseExpr() call with no recovery loop above it).
+
+main do
+  IO.printLine(Template.text(`<%= ->->-> %>`))
+end
