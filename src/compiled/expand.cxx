@@ -810,9 +810,19 @@ auto foldEmbeds(ast::Program& program, const std::string& sourcePath,
 // become a brand-new top-level function — the holes compiled into real,
 // type-checked Kex, exactly as the design insists on ("the mechanism is
 // compilation, not interpretation"). The call site is replaced with `~name`,
-// a reference to that function, which a caller then invokes with named
-// arguments for whatever free names the template's holes turned out to need.
+// a reference to that function.
 //
+// CALL IT POSITIONALLY, not with named arguments, until kexhq/kex#309 is
+// fixed: `readme(name: ..., library: ..., ...)`, the calling convention the
+// design doc itself sketches, is NOT SAFE to use on a function reached
+// through `~name` right now — named-argument resolution through a curried
+// reference falls back to matching by the call site's WRITTEN ORDER instead
+// of by name, silently on the tree-walker and loudly (a lowering error) on
+// BEAM. Positional calls (`readme(name, library, ...)`, in the parameter
+// order below) are unaffected on both backends and are what every spec here
+// uses. #309 was filed and diagnosed while building this.
+//
+
 // The SCANNING half is not reimplemented here: M1's `Template.scan` (already
 // shipped, kexhq/kex#252) is the one source of truth for ERB syntax. This
 // runs it for real, through the same sandboxed Evaluator `compiled do`
@@ -1068,6 +1078,11 @@ struct Lowerer {
     SourceLocation blame;
     std::vector<semantic::Diagnostic>& diagnostics;
     bool ok = true;
+    // Only ever incremented at the TOP level (see lowerScope's `topLevel`) —
+    // nested scopes never name a fragment, so there is nothing to collide.
+    int fragmentCounter = 0;
+
+    auto freshFragName() -> std::string { return "__frag" + std::to_string(fragmentCounter++); }
 
     auto parseSlice(const std::vector<Token>& toks, std::size_t from, std::size_t to,
                     const Token& eof, const char* what) -> ast::ExprPtr {
@@ -1106,6 +1121,27 @@ struct Lowerer {
         auto e = std::make_unique<ast::Expr>();
         e->location = blame;
         e->kind = ast::StringLiteral{std::move(text), false};
+        return e;
+    }
+
+    auto identifier(const std::string& name) const -> ast::ExprPtr {
+        auto e = std::make_unique<ast::Expr>();
+        e->location = blame;
+        e->kind = ast::Identifier{name};
+        return e;
+    }
+
+    // Top-level only: a `let name = value` statement, so a fragment can be
+    // bound IN PLACE — preserving the template's own left-to-right order —
+    // rather than deferred to scope's end. See lowerScope's `topLevel` for
+    // why this is safe there and nowhere else.
+    auto letStatement(const std::string& name, ast::ExprPtr value) const -> ast::ExprPtr {
+        auto pattern = std::make_unique<ast::Pattern>();
+        pattern->location = blame;
+        pattern->kind = ast::VarPattern{name};
+        auto e = std::make_unique<ast::Expr>();
+        e->location = blame;
+        e->kind = ast::LetExpr{std::move(pattern), std::move(value), std::nullopt};
         return e;
     }
 
@@ -1204,18 +1240,57 @@ struct Lowerer {
     // Control node that closes it — its own "end", or an "else"/"elif" the
     // if-branch loop below is watching for. `let`/`var` and other
     // pass-through control regions stay their own statements, in source
-    // order; every value-producing piece (a plain run, a nested `if`, a
-    // nested block call) is collected and `+`-chained into ONE final
-    // statement — the scope's own value, purely, with nothing buffered or
-    // mutated.
-    auto lowerScope(std::size_t start) -> ScopeResult {
+    // order.
+    //
+    // `topLevel` (true ONLY for the outermost call, from
+    // lowerTemplateFunction) decides how value-producing pieces (a plain
+    // run, a nested `if`, a nested block call) are combined:
+    //
+    // - At the top level, each is bound to its own `let __fragN = ...`, IN
+    //   PLACE among the pass-through statements — so free-variable
+    //   discovery below (which walks in AST order) sees names in the same
+    //   left-to-right order the template itself does, matching what a
+    //   caller calling POSITIONALLY (kexhq/kex#309: named args are not
+    //   safe here yet) would expect. `collectFreeNames` calls
+    //   `Substituter::body()` directly on this scope's statement list,
+    //   which DOES track `let`-shadowing correctly, so this is safe here.
+    // - In a NESTED scope (an if-branch, a block body), the same pieces are
+    //   instead collected and `+`-chained into one final trailing
+    //   statement, never named. `Substituter::walkChildren` reaches a
+    //   nested if/lambda body through a plain `each()`, not `body()` — a
+    //   name bound inside one is never added to `shadowed` there, so a
+    //   `let __fragN` at this level would look free from outside the very
+    //   branch that bound it (this shipped once, then broke on `if`/`else`
+    //   in the same template: kexhq/kex#171). Never naming anything in a
+    //   nested scope sidesteps the gap entirely, at the cost of one narrow
+    //   trade documented on `sumOf`.
+    auto lowerScope(std::size_t start, bool topLevel) -> ScopeResult {
         std::vector<ast::ExprPtr> statements;
-        std::vector<ast::ExprPtr> fragments;
+        std::vector<ast::ExprPtr> fragments;      // used when !topLevel
+        std::vector<std::string> fragmentNames;   // used when topLevel
         std::vector<TemplateNode> run;
 
+        auto addFragment = [&](ast::ExprPtr value) {
+            if (topLevel) {
+                auto name = freshFragName();
+                statements.push_back(letStatement(name, std::move(value)));
+                fragmentNames.push_back(name);
+            } else {
+                fragments.push_back(std::move(value));
+            }
+        };
+        auto finalValue = [&]() -> ast::ExprPtr {
+            if (topLevel) {
+                std::vector<ast::ExprPtr> refs;
+                refs.reserve(fragmentNames.size());
+                for (const auto& name : fragmentNames) refs.push_back(identifier(name));
+                return sumOf(std::move(refs));
+            }
+            return sumOf(std::move(fragments));
+        };
         auto flushRun = [&]() {
             if (run.empty()) return;
-            fragments.push_back(buildRun(run));
+            addFragment(buildRun(run));
             run.clear();
         };
 
@@ -1233,17 +1308,17 @@ struct Lowerer {
             switch (shape.kind) {
             case ControlKind::End:
                 flushRun();
-                statements.push_back(sumOf(std::move(fragments)));
+                statements.push_back(finalValue());
                 return {std::move(statements), Stop::End, nullptr, i + 1};
 
             case ControlKind::Else:
                 flushRun();
-                statements.push_back(sumOf(std::move(fragments)));
+                statements.push_back(finalValue());
                 return {std::move(statements), Stop::Else, nullptr, i + 1};
 
             case ControlKind::Elif: {
                 flushRun();
-                statements.push_back(sumOf(std::move(fragments)));
+                statements.push_back(finalValue());
                 auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
                                        shape.eof, "elif condition");
                 return {std::move(statements), Stop::Elif, std::move(cond), i + 1};
@@ -1262,7 +1337,7 @@ struct Lowerer {
                 flushRun();
                 auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
                                        shape.eof, "if condition");
-                auto thenResult = lowerScope(i + 1);
+                auto thenResult = lowerScope(i + 1, false);
                 ast::IfExpr ifExpr;
                 ifExpr.condition = cond ? std::move(cond) : stringLiteral("");
                 ifExpr.thenBody = std::move(thenResult.statements);
@@ -1271,7 +1346,7 @@ struct Lowerer {
                 Stop stop = thenResult.stop;
                 ast::ExprPtr elifCond = std::move(thenResult.elifCondition);
                 while (stop == Stop::Elif) {
-                    auto branch = lowerScope(cursor);
+                    auto branch = lowerScope(cursor, false);
                     ifExpr.elifs.emplace_back(std::move(elifCond), std::move(branch.statements));
                     cursor = branch.next;
                     stop = branch.stop;
@@ -1279,7 +1354,7 @@ struct Lowerer {
                 }
                 bool hasElse = false;
                 if (stop == Stop::Else) {
-                    auto branch = lowerScope(cursor);
+                    auto branch = lowerScope(cursor, false);
                     ifExpr.elseBody = std::move(branch.statements);
                     cursor = branch.next;
                     stop = branch.stop;
@@ -1300,7 +1375,7 @@ struct Lowerer {
                 auto e = std::make_unique<ast::Expr>();
                 e->location = blame;
                 e->kind = std::move(ifExpr);
-                fragments.push_back(std::move(e));
+                addFragment(std::move(e));
                 i = cursor;
                 break;
             }
@@ -1309,7 +1384,7 @@ struct Lowerer {
                 flushRun();
                 auto prefix = parseSlice(shape.tokens, 0, shape.blockOpenAt, shape.eof,
                                          "block call");
-                auto bodyResult = lowerScope(i + 1);
+                auto bodyResult = lowerScope(i + 1, false);
                 if (bodyResult.stop != Stop::End) {
                     ok = false;
                     addError(diagnostics, blame, "template block has no matching `end`");
@@ -1350,7 +1425,7 @@ struct Lowerer {
                 joinCall.args.push_back(stringLiteral(""));
                 join->kind = std::move(joinCall);
 
-                fragments.push_back(std::move(join));
+                addFragment(std::move(join));
                 i = bodyResult.next;
                 break;
             }
@@ -1368,7 +1443,7 @@ struct Lowerer {
             }
         }
         flushRun();
-        statements.push_back(sumOf(std::move(fragments)));
+        statements.push_back(finalValue());
         return {std::move(statements), Stop::Eof, nullptr, i};
     }
 };
@@ -1415,7 +1490,7 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
     }
 
     Lowerer lowerer{nodes, htmlMode, blame, diagnostics};
-    auto result = lowerer.lowerScope(0);
+    auto result = lowerer.lowerScope(0, true);
     if (!lowerer.ok) return std::nullopt;
     if (result.stop != Lowerer::Stop::Eof) {
         // Template.scan only ever emits a bare Control("end") for one this

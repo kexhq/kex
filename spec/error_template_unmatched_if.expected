@@ -1,0 +1,2 @@
+spec/error_template_unmatched_if.kex:7:29: error: template `if` has no matching `end`
+Aborted: compile-time expansion failed.

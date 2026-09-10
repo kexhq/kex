@@ -1,0 +1,6 @@
+# widget
+A Kex library.
+Depends on 2:
+- foo (1.0)
+- bar (2.0)
+

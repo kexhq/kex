@@ -1,0 +1,10 @@
+# `Template.html(source)` (kexhq/kex#171 M3): like Template.text, but every
+# `<%= %>` hole is HTML-escaped (`Template.escapeHtml`) and `<%== %>` opts
+# out — the same default-safe/explicit-opt-out shape ordinary web frameworks
+# use. Called positionally — see compiled_template_text.kex's header comment
+# for why (kexhq/kex#309).
+
+main do
+  let page = Template.html(`<p><%= body %></p><p><%== raw %></p>`)
+  IO.printLine(page("<b>Tom & Jerry</b>", "<i>already safe</i>"))
+end
