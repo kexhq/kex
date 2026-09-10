@@ -1,0 +1,50 @@
+describe("fuzzer regression checks") do
+  it("keeps failure status nonzero at process-status boundaries") do
+    assert(exitStatus(0) == 0)
+    assert(exitStatus(1) == 1)
+    assert(exitStatus(256) == 1)
+    assert(exitStatus(512) == 1)
+  end
+
+  it("draws across large bounds and keeps draws in range") do
+    let empty = Env { ints: [], floats: [], strings: [], bools: [] }
+    var ctx = Ctx { rng: Rng { seed: 42 }, counter: 0, env: empty }
+    var large = false
+    var i = 0
+    while i < 100 do
+      let (value, ctx2) = draw(ctx, 999999999)
+      assert(value >= 0 && value < 999999999)
+      if value > 8388607 then large = true end
+      ctx = ctx2
+      i = i + 1
+    end
+    assert(large)
+  end
+
+  it("replays generated source exactly from its seed") do
+    assert(genProgram(42) == genProgram(42))
+    assert(genProgram(42) != genProgram(43))
+  end
+
+  it("generates empty lists, bound heads and deliberate literal misses") do
+    let empty = Env { ints: [], floats: [], strings: [], bools: [] }
+    var emptyList = false
+    var boundHead = false
+    var intMiss = false
+    var stringMiss = false
+    var seed = 1
+    while seed <= 100 do
+      let ctx = Ctx { rng: Rng { seed: seed }, counter: 0, env: empty }
+      let (source, ignored) = genMatch(ctx, :int, 0)
+      if source.contains?("match [] do") then emptyList = true end
+      if source.contains?("+ head)") then boundHead = true end
+      if source.contains?("match (-1) do") then intMiss = true end
+      if source.contains?("\"miss\" =>") then stringMiss = true end
+      seed = seed + 1
+    end
+    assert(emptyList)
+    assert(boundHead)
+    assert(intMiss)
+    assert(stringMiss)
+  end
+end
