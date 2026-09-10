@@ -163,7 +163,9 @@ jobs:
   # display prints the shortest text that round-trips, so such a difference
   # reaches the golden files. Linux-only CI meant a macOS-passing spec could
   # still break on push (and vice versa), with nothing local able to catch it.
-  test:
+  # One native build per OS/architecture supplies all consumers in this run.
+  # Consumers use `make -o build` to skip the phony CMake prerequisite.
+  native-build:
     needs: changes
     if: needs.changes.outputs.extension-only != 'true'
     runs-on: ${{ matrix.os }}
@@ -182,7 +184,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev libssl-dev erlang-base libboost-context-dev
 
       # cmake ships with the macOS runner image. No OpenSSL here: CMakeLists
       # uses CommonCrypto for SHA-256 on Apple. PCRE2 is explicit because,
@@ -206,61 +208,83 @@ jobs:
         run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       - name: Unit tests
-        run: make test
+        run: ctest --test-dir build --output-on-failure
+
+      # Tar preserves the executable bit. Only runtime outputs cross jobs;
+      # CMake caches and object files contain build-machine paths.
+      - name: Package native compiler and runtime
+        run: tar -czf kex-native.tar.gz build/kex build/runtime/beam
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kex-native-${{ runner.os }}-${{ runner.arch }}
+          path: kex-native.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    needs: [changes, native-build]
+    if: needs.changes.outputs.extension-only != 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-native
 
       - name: Spec suite
-        run: make spec
+        run: make -o build spec
 
       - name: Prelude spec suite
-        run: make spec-prelude
+        run: make -o build spec-prelude
 
       - name: Stdlib spec suite
-        run: make spec-stdlib
+        run: make -o build spec-stdlib
 
       # The two backends are expected to agree on every spec, so a difference
       # fails the build. Known representation-level gaps (pid rendering, a
       # Range printing as its item list) are outside these suites by design.
       - name: Spec suite via BEAM
-        run: make spec-beam
+        run: make -o build spec-beam
 
       - name: Prelude spec suite via BEAM
-        run: make spec-prelude-beam
+        run: make -o build spec-prelude-beam
 
       - name: Stdlib spec suite via BEAM
-        run: make spec-stdlib-beam
+        run: make -o build spec-stdlib-beam
 
       # The JSON reporting an editor's test tree reads, on both backends
       # (kexhq/kex#199). Same reasoning as the suites above: the records are a
       # contract, and a tool cannot care which backend ran the suite.
       - name: Test-reporting modes
-        run: make spec-test-json
+        run: make -o build spec-test-json
 
   # Differential fuzzer (tools/fuzz.kex via `make fuzz`): generates
   # correct-by-construction programs and fails on any walker/BEAM
-  # disagreement. PR-only: it is a probabilistic hunt with a fixed seed, not
-  # a deterministic suite, so it gates pull requests without also gating the
-  # post-merge record on main. A CI failure replays locally with the same
-  # `make fuzz` invocation; findings upload as artifacts. Linux-only: the
+  # disagreement. PR-only: it is a probabilistic hunt, so it gates pull
+  # requests without also gating the post-merge record on main. Findings
+  # upload as artifacts, with their seed for local replay. Linux-only: the
   # oracle compares the backends to each other rather than to golden files,
   # so a second platform adds minutes, not signal.
   fuzz:
-    needs: changes
+    needs: [changes, native-build]
     if: github.event_name == 'pull_request' && needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+      - uses: ./.github/actions/restore-native
 
-      - name: Build
-        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
-
+      # Fresh programs each workflow run; reruns keep the seed for replay.
+      # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
+      # includes failing seeds in artifact filenames (kexhq/kex#306).
       - name: Differential fuzz (walker vs BEAM)
-        run: make fuzz
+        env:
+          FUZZ_SEED: ${{ github.run_id }}
+        run: make -o build fuzz
 
       - name: Upload findings
         if: failure()
@@ -326,30 +350,21 @@ jobs:
   # release.yml, which meant a Tey that did not build stopped a RELEASE rather
   # than a pull request. Its own suites run here too.
   tey:
-    needs: changes
+    needs: [changes, native-build]
     if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # erlang for erlc: Tey is compiled to .beam, and its suites run through
-      # the BEAM backend because that is how Tey itself runs.
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
-            libssl-dev erlang-base libboost-context-dev
-
-      - name: Build kex
-        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
+      - uses: ./.github/actions/restore-native
 
       # Compiling Tey is the first assertion: it either builds with this
       # compiler or it does not.
       - name: Build Tey
-        run: make build-tey
+        run: make -o build build-tey
 
       - name: Tey spec suite
-        run: make spec-tey
+        run: make -o build spec-tey
 
       # The suites cover the pure logic; this covers the wiring — that the
       # launcher starts, finds its modules, and answers. A Tey whose .beam
@@ -411,7 +426,7 @@ jobs:
           "$PREFIX/bin/kex" --version
 
   wasm:
-    needs: changes
+    needs: [changes, native-build]
     if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -419,15 +434,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      # erlang-base and libgmp-dev are for the NATIVE build below, not for
-      # the wasm one: the compiled stdlib unit the wasm checker reads can only
-      # be produced by running the native kex through erlc.
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev \
-            erlang-base libboost-context-dev
 
       # Pinned to 5.0.7 specifically — newer Emscripten (6.0.2 at the time
       # this was found) has a real regression where -sASYNCIFY combined with
@@ -534,13 +540,10 @@ jobs:
           emmake make -j"$(nproc)"
           emmake make install
 
-      # Produces build/runtime/beam/kex_prelude.beam plus its Kex.* companions.
+      # Restore kex_prelude.beam plus its Kex.* companions.
       # The wasm build reads their KexI metadata so its type checker sees the
       # same signatures the native one does; nothing here is executed by wasm.
-      - name: Build native kex (for the compiled stdlib unit)
-        run: |
-          cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam --parallel "$(getconf _NPROCESSORS_ONLN)"
+      - uses: ./.github/actions/restore-native
 
       - name: Configure and build wasm target
         run: |
