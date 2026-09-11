@@ -1,0 +1,117 @@
+using Random
+
+describe("Random") do
+  it("replays the SplitMix64 reference sequence") do
+    let (first, rng) = Rng.seeded(0).nextUint64
+    assert(first == 16294208416658607535)
+    let (second, rng2) = rng.nextUint64
+    assert(second == 7960286522194355700)
+    let (third, _) = rng2.nextUint64
+    assert(third == 487617019471545679)
+  end
+
+  it("answers the same words for the same seed on every entry point") do
+    let (a, _) = Rng.seeded(42).nextUint64
+    assert(a == 13679457532755275413)
+    let (b, _) = Random.seeded(42).nextUint64
+    assert(b == a)
+    let (c, _) = Rng.seeded(1).nextUint64
+    assert(c == 10451216379200822465)
+  end
+
+  it("reduces any integer seed into the 64-bit state") do
+    let (negative, _) = Rng.seeded(-1).nextUint64
+    let (wrapped, _) = Rng.seeded(18446744073709551615).nextUint64
+    assert(negative == wrapped)
+  end
+
+  it("draws bounded integers without bias toward small answers") do
+    let (roll, _) = Rng.seeded(42).nextBounded(6)
+    assert(roll == 1)
+    let (percent, _) = Rng.seeded(7).nextBounded(100)
+    assert(percent == 87)
+    let (coin, _) = Rng.seeded(0).nextBounded(2)
+    assert(coin == 1)
+    let (whole, _) = Rng.seeded(42).nextBounded(18446744073709551616)
+    assert(whole == 13679457532755275413)
+  end
+
+  it("draws floats in range, deterministically per seed") do
+    let (first, _) = Rng.seeded(42).nextFloat
+    let (replay, _) = Rng.seeded(42).nextFloat
+    assert(first == replay)
+    assert(first >= 0.0 && first < 1.0)
+  end
+
+  it("flips its coin from the top bit of each word") do
+    let (first, rng) = Rng.seeded(42).nextBoolean
+    assert(first)
+    let (second, _) = rng.nextBoolean
+    assert(!second)
+  end
+
+  it("shuffles deterministically per seed") do
+    let (order, _) = Rng.seeded(42).shuffle([1, 2, 3, 4, 5])
+    assert(order == [4, 5, 1, 2, 3])
+    let (other, _) = Rng.seeded(7).shuffle([1, 2, 3, 4, 5])
+    assert(other == [3, 1, 2, 5, 4])
+  end
+
+  it("shuffles into a permutation of the input") do
+    let (order, _) = Rng.seeded(9).shuffle([3, 1, 2])
+    assert(order.count == 3)
+    assert(order.sort == [1, 2, 3])
+    let (empty, _) = Rng.seeded(9).shuffle([])
+    assert(empty == [])
+  end
+
+  it("samples an ordered subset without replacement") do
+    let (hand, _) = Rng.seeded(42).sample(["a", "b", "c", "d", "e"], 2)
+    assert(hand == ["d", "e"])
+    let (all, _) = Rng.seeded(42).sample(["a", "b"], 9)
+    assert(all.count == 2)
+    assert(all.sort == ["a", "b"])
+    let (none, _) = Rng.seeded(42).sample(["a", "b"], 0)
+    assert(none == [])
+  end
+
+  it("chooses uniformly, or answers None when empty") do
+    let (pick, _) = Rng.seeded(42).choice(["a", "b", "c"])
+    assert(pick == Just("b"))
+    let empty: [String] = []
+    let (missing, _) = Rng.seeded(42).choice(empty)
+    assert(missing == None)
+  end
+
+  it("draws ambient integers inside their bounds") do
+    20.times { |_|
+      let roll = Random.integer(6)
+      assert(roll >= 0 && roll < 6)
+    }
+    let die = Random.between(1, 6)
+    assert(die >= 1 && die <= 6)
+  end
+
+  it("draws ambient floats, booleans, and chances") do
+    20.times { |_|
+      let unit = Random.float()
+      assert(unit >= 0.0 && unit < 1.0)
+    }
+    let flip = Random.boolean()
+    assert(flip == true || flip == false)
+    assert(Random.chance?(1.0))
+    assert(!Random.chance?(0.0))
+  end
+
+  it("draws ambient choices, samples, and shuffles") do
+    let pick = Random.choice(["a", "b", "c"])
+    assert(pick == Just("a") || pick == Just("b") || pick == Just("c"))
+    let empty: [String] = []
+    assert(Random.choice(empty) == None)
+    let hand = Random.sample(["a", "b", "c", "d"], 2)
+    assert(hand.count == 2)
+    let deck = Random.shuffle([1, 2, 3, 4])
+    assert(deck.count == 4)
+    assert(deck.sort == [1, 2, 3, 4])
+  end
+end
