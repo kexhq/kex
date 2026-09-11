@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kex Template (Markdown)",
+  "_comment": "The Markdown host of a .ket template (kexhq/kex#314) — see ket-html.tmLanguage.json for why the host needs its own grammar, and why the tags are an L-injection. Markdown makes that especially plain: a heading rule owns the whole line from its `#`, so `# <%= name %>` keeps its tag only because the injection outranks it.",
+  "scopeName": "text.markdown.ket",
+  "patterns": [{ "include": "text.html.markdown" }],
+  "injections": {
+    "L:text.markdown.ket": { "patterns": [{ "include": "source.ket" }] }
+  }
+}

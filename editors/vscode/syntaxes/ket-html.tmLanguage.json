@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kex Template (HTML)",
+  "_comment": "The HTML host of a .ket template (kexhq/kex#314). `source.ket` alone leaves everything outside a tag unscoped, because the host language is only knowable from the extension in front of .ket — so `foo.html.ket` gets this grammar instead: the same tag rules over `text.html.basic`. The tags are an L-injection rather than a leading entry in `patterns` because top-level order only settles ties at the same position: once the host has begun a multi-token region of its own (an attribute value, a tag's insides) its patterns are the only ones consulted, and `<a href=\"<%= url %>\">` would lose its tag. `L:` puts these ahead of the host's rules at every position instead. Shaped after `text.html.erb`; the Markdown twin is ket-markdown.tmLanguage.json.",
+  "scopeName": "text.html.ket",
+  "patterns": [{ "include": "text.html.basic" }],
+  "injections": {
+    "L:text.html.ket": { "patterns": [{ "include": "source.ket" }] }
+  }
+}

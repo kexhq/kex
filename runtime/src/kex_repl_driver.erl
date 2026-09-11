@@ -6,6 +6,7 @@
 %% 'kex_repl_driver:loop()'` process alive for the whole session and talks
 %% to it over stdin/stdout with a nonce-delimited protocol:
 %%
+%%   C++ -> driver:  "compile <nonce> <CoreFile>\n"
 %%   C++ -> driver:  "load <nonce> <Module> <BeamFile>\n"
 %%   C++ -> driver:  "eval <nonce> <Module>\n"
 %%   C++ -> driver:  "quit\n"
@@ -52,6 +53,8 @@ handle("info " ++ Nonce) ->
     sentinel(Nonce, ok);
 handle(Cmd) ->
     case string:tokens(Cmd, " ") of
+        ["compile", Nonce, CoreFile] ->
+            compile_module(Nonce, CoreFile);
         ["load", Nonce, Mod, BeamFile] ->
             load_module(Nonce, Mod, BeamFile);
         ["eval", Nonce, Mod] ->
@@ -62,6 +65,57 @@ handle(Cmd) ->
             io:format("bad driver command: ~ts~n", [Cmd]),
             halt(1)
     end.
+
+%% Compiles Core Erlang and loads the result, both inside THIS VM.
+%%
+%% The REPL used to shell out to `erlc +from_core` for every line it ran —
+%% a whole BEAM starting up to compile one small module, ~150 ms, which a
+%% sampling profile put at 93% of the REPL's wall time (kexhq/kex#318).
+%% The VM that compiles here is the one that will run the code anyway, so
+%% the fork bought nothing.
+%%
+%% `return_errors`/`return_warnings` are what keep this usable: without
+%% them the compiler prints its own diagnostics to stdout, which is the
+%% stream the C++ side reads program output from, so a warning would arrive
+%% in the middle of a value being printed. Warnings are dropped outright —
+%% they analyze GENERATED Core Erlang and cannot point back at Kex source,
+%% the same reason the erlc call passed -W0.
+compile_module(Nonce, CoreFile) ->
+    try compile:file(CoreFile, [from_core, binary, return_errors,
+                                return_warnings]) of
+        {ok, Mod, Bin} ->
+            load_binary(Nonce, Mod, CoreFile, Bin);
+        {ok, Mod, Bin, _Warnings} ->
+            load_binary(Nonce, Mod, CoreFile, Bin);
+        {error, Errors, _Warnings} ->
+            io:format("~ts", [format_errors(Errors)]),
+            sentinel(Nonce, error);
+        Else ->
+            io:format("compile failed: ~p~n", [Else]),
+            sentinel(Nonce, error)
+    catch
+        _:Reason ->
+            io:format("compile failed: ~p~n", [Reason]),
+            sentinel(Nonce, error)
+    end.
+
+load_binary(Nonce, Mod, From, Bin) ->
+    case code:load_binary(Mod, From, Bin) of
+        {module, _} ->
+            sentinel(Nonce, ok);
+        Else ->
+            io:format("load failed: ~p~n", [Else]),
+            sentinel(Nonce, error)
+    end.
+
+%% `compile:file` hands back errors as [{File, [{Location, Module, Desc}]}],
+%% where Desc is opaque until its reporting module formats it.
+format_errors(Errors) ->
+    [format_error(File, Location, Mod, Desc)
+     || {File, Descs} <- Errors, {Location, Mod, Desc} <- Descs].
+
+format_error(File, Location, Mod, Desc) ->
+    io_lib:format("~ts:~p: ~ts~n", [File, Location, Mod:format_error(Desc)]).
 
 load_module(Nonce, Mod, BeamFile) ->
     try begin

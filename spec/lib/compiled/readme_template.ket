@@ -2,8 +2,8 @@
 params: [name, library: Bool]
 ---
 # <%= name %>
-<%- if library -%>
+<% if library %>
 A library.
-<%- else -%>
+<% else %>
 An application.
-<%- end -%>
+<% end %>

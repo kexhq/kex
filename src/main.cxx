@@ -3172,48 +3172,40 @@ int main(int argc, char *argv[]) {
             results.push_back(kex::ir::emitCore(irModule));
           const auto& result = results.front();
 
-          bool compiled = true;
-          for (const auto& emitted : results) {
-            std::string corePath = beamDir + "/" + emitted.moduleName + ".core";
+          // Compile and hot-load each module in the persistent VM, which is
+          // the VM that will run the code anyway. This used to fork an
+          // `erlc` per module and load the .beam it wrote: a whole BEAM
+          // starting up to compile one small module, ~150 ms a line, which a
+          // sampling profile put at 93% of this REPL's wall time
+          // (kexhq/kex#318). The stable module name means each load is a new
+          // version superseding the previous — code:load_binary's native
+          // code-upgrade path.
+          //
+          // Companion modules go first, in reverse: the session entry can
+          // then call their functions the moment it is loaded itself.
+          bool loaded = true;
+          for (auto it = results.rbegin(); it != results.rend(); ++it) {
+            std::string corePath = beamDir + "/" + it->moduleName + ".core";
             std::ofstream cf(corePath);
             if (!cf) {
               std::cerr << "  error: cannot write " << corePath << "\n";
-              compiled = false;
+              loaded = false;
               break;
             }
-            cf << emitted.source;
+            cf << it->source;
             cf.close();
 
-            std::string erlCmd = erlcExecutable() + " +from_core -W0 -pa " +
-                                 beamDir + " -o " + beamDir + " " +
-                                 corePath + " 2>&1";
-            int erlcRet = runShellCommand(erlCmd);
-            std::filesystem::remove(corePath);
-            if (erlcRet != 0) {
-              compiled = false;
-              break;
-            }
-          }
-          if (!compiled) {
-            std::cerr << "  error: compilation failed\n";
-            continue;
-          }
-
-          // Hot-load the freshly compiled session module into the
-          // persistent VM, then evaluate it. The stable module name
-          // means each reload is a new version superseding the
-          // previous — code:load_binary's native code-upgrade path.
-          bool loaded = true;
-          // Load companion modules first; the session entry can then call
-          // imported module functions immediately after it is hot-loaded.
-          for (auto it = results.rbegin(); it != results.rend(); ++it) {
-            std::string beamPath = beamDir + "/" + it->moduleName + ".beam";
             std::string loadNonce = std::to_string(++iteration);
-            vm.writeLine("load " + loadNonce + " " + it->moduleName + " " +
-                         beamPath);
+            vm.writeLine("compile " + loadNonce + " " + corePath);
             std::string loadStatus;
-            vm.readUntilSentinel("KEX_REPL_DONE " + loadNonce + " ", loadStatus);
+            // Whatever the compiler had to say arrives above the sentinel;
+            // it is the only account of WHY a module did not build, so it
+            // reaches the terminal rather than being dropped.
+            std::string diagnostics = vm.readUntilSentinel(
+                "KEX_REPL_DONE " + loadNonce + " ", loadStatus);
+            std::filesystem::remove(corePath);
             if (loadStatus != "ok") {
+              if (!diagnostics.empty()) std::cerr << diagnostics;
               loaded = false;
               break;
             }
@@ -4318,19 +4310,23 @@ int main(int argc, char *argv[]) {
         return 1;
       }
 
-      int erlcRet = 0;
-      for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
-        // -W0: these warnings analyze the generated Core Erlang — locationless
-        // (`no_file:`) compiler-analysis noise the emitter's dead statement-
-        // value lets make inevitable ("a term is constructed, but never used",
-        // "this clause cannot match"). They cannot point back at Kex source,
-        // and the interpreter path below has always silenced them for exactly
-        // that reason. Real erlc failures still fail the exit-code check and
-        // are re-run loudly below.
-        std::string coreCmd = erlcExecutable() + " +from_core -W0 -pa " +
-                              outputDir + " -o " + outputDir + " " +
-                              corePaths[moduleIndex];
-        if (!tempDir.empty()) {
+      // ONE erlc for every module, not one per module. Each invocation
+      // starts a whole BEAM just to compile, ~90 ms before it reads a byte,
+      // so a spec file's three modules paid that three times over
+      // (kexhq/kex#318). erlc takes any number of files in a single run.
+      //
+      // -W0: these warnings analyze the generated Core Erlang — locationless
+      // (`no_file:`) compiler-analysis noise the emitter's dead statement-
+      // value lets make inevitable ("a term is constructed, but never used",
+      // "this clause cannot match"). They cannot point back at Kex source,
+      // and the interpreter path below has always silenced them for exactly
+      // that reason. Real erlc failures still fail the exit-code check and
+      // are re-run loudly below.
+      std::string coreCmd = erlcExecutable() + " +from_core -W0 -pa " +
+                            outputDir + " -o " + outputDir;
+      for (const auto& corePath : corePaths)
+        coreCmd += " " + corePath;
+      if (!tempDir.empty()) {
         // Suppress erlc noise in temp-dir (interpreter/-R) mode —
         // was `2>&1` (merging stderr into stdout), the OPPOSITE of
         // what this comment always said it should do. erlc prints
@@ -4343,24 +4339,32 @@ int main(int argc, char *argv[]) {
         // of the running program's own visible output. erlc
         // failures are still caught via the exit-code check below
         // regardless of where its diagnostic text went.
-          coreCmd += " > /dev/null 2>&1";
-        } else {
-          std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
+        coreCmd += " > /dev/null 2>&1";
+      } else {
+        for (const auto& moduleResult : moduleResults)
+          std::cerr << "  Compile: " << moduleResult.moduleName << "\n";
+      }
+      int erlcRet = runShellCommand(coreCmd);
+      if (erlcRet != 0) {
+        // The quiet mode above swallows erlc's own diagnostic — which is the
+        // only thing that says WHY. Re-run it loudly on failure so the
+        // message reaches the terminal (and CI) instead of a bare
+        // "erlc failed", which is all a failing spec could report. erlc names
+        // the file it choked on, so the loud re-run still points at the one
+        // module that failed even though every module is passed again.
+        if (!tempDir.empty()) {
+          std::string loudCmd = erlcExecutable() + " +from_core -pa " +
+                                outputDir + " -o " + outputDir;
+          for (const auto& corePath : corePaths)
+            loudCmd += " " + corePath;
+          runShellCommand(loudCmd);
         }
-        erlcRet = runShellCommand(coreCmd);
-        if (erlcRet != 0) {
-          // The quiet mode above swallows erlc's own diagnostic — which is the
-          // only thing that says WHY. Re-run it loudly on failure so the
-          // message reaches the terminal (and CI) instead of a bare
-          // "erlc failed", which is all a failing spec could report.
-          if (!tempDir.empty())
-            runShellCommand(erlcExecutable() + " +from_core -pa " + outputDir +
-                            " -o " + outputDir + " " + corePaths[moduleIndex]);
-          std::cerr << "error: erlc failed\n";
-          if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
-          return 1;
-        }
+        std::cerr << "error: erlc failed\n";
+        if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
+        return 1;
+      }
 
+      for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
         // Attach KexI chunk to the freshly compiled .beam file.
         if (!compileRun) {
           std::string beamPath = outputDir + "/" +

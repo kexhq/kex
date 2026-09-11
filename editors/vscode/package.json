@@ -21,7 +21,7 @@
   "categories": ["Programming Languages", "Linters"],
   "activationEvents": ["onLanguage:kex", "onTaskType:tey"],
   "main": "./out/extension.js",
-  "files": ["out/**", "syntaxes/**", "images/**", "language-configuration.json", "README.md", "LICENSE"],
+  "files": ["out/**", "syntaxes/**", "images/**", "language-configuration.json", "ket-language-configuration.json", "README.md", "LICENSE"],
   "contributes": {
     "taskDefinitions": [
       {
@@ -57,7 +57,18 @@
     }, {
       "id": "ket",
       "aliases": ["Kex Template", "ket"],
-      "extensions": [".ket"]
+      "extensions": [".ket"],
+      "configuration": "./ket-language-configuration.json"
+    }, {
+      "id": "ket-html",
+      "aliases": ["Kex Template (HTML)", "ket-html"],
+      "extensions": [".html.ket", ".htm.ket", ".xhtml.ket", ".svg.ket"],
+      "configuration": "./ket-language-configuration.json"
+    }, {
+      "id": "ket-markdown",
+      "aliases": ["Kex Template (Markdown)", "ket-markdown"],
+      "extensions": [".md.ket", ".markdown.ket"],
+      "configuration": "./ket-language-configuration.json"
     }],
     "grammars": [{
       "language": "kex",
@@ -67,6 +78,22 @@
       "language": "ket",
       "scopeName": "source.ket",
       "path": "./syntaxes/ket.tmLanguage.json"
+    }, {
+      "language": "ket-html",
+      "scopeName": "text.html.ket",
+      "path": "./syntaxes/ket-html.tmLanguage.json",
+      "embeddedLanguages": {
+        "source.kex": "kex",
+        "text.html.basic": "html"
+      }
+    }, {
+      "language": "ket-markdown",
+      "scopeName": "text.markdown.ket",
+      "path": "./syntaxes/ket-markdown.tmLanguage.json",
+      "embeddedLanguages": {
+        "source.kex": "kex",
+        "text.html.markdown": "markdown"
+      }
     }],
     "configuration": {
       "title": "Kex",
