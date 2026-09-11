@@ -18,6 +18,24 @@
 #                                       #     TemplateParam { name: "library", type: "Bool" }]
 #   parsed.nodes                       # => [Text("Hi "), Interpolate("name"), Text("!")]
 #
+# A template file carries its host's extension ahead of `.ket`, so an editor
+# can highlight it as what it is — `README.md.ket`, `profile.html.ket`:
+#
+#   ---
+#   params: [name, library: Bool, dependencies: [Dependency]]
+#   ---
+#   # <%= name %>
+#
+#   <% if library %>
+#   A Kex library.
+#   <% else %>
+#   A Kex application.
+#   <% end %>
+#
+#   <% dependencies.map do |dep| %>
+#   - `<%= dep.name %>` ~> <%= dep.version %>
+#   <% end %>
+#
 # ## Syntax
 #
 #   <%= expr %>     interpolate (escaping is a later stage's job)
@@ -31,6 +49,33 @@
 #                   real content
 #   <%%             a literal `<%`, for a template that generates ERB-shaped
 #                   output itself
+#
+# ## Whitespace
+#
+# A tag that emits nothing — `<% %>` and `<%# %>` — and stands alone on its
+# line takes that line with it. Only whitespace may share the line with it:
+# the indent before it and the newline after it are scaffolding, never
+# content, so a template reads the way its output does:
+#
+#   <% if dependencies.count > 0 %>
+#   ## Dependencies
+#   <% end %>
+#
+#   # => "## Dependencies\n"   — no blank line where the tags were
+#
+# The `<%- -%>` markers are for the case this does not cover: a tag sharing
+# its line with real content, where what to trim is a judgement call rather
+# than obvious.
+#
+#   Total: <%= total %> <%- if pending > 0 %>(<%= pending %> pending)<% end %>
+#
+# An interpolation is never trimmed, on its own line or not. It stands in for
+# content, so the whitespace around it is content too:
+#
+#   <%= greeting %>
+#   <%= name %>
+#
+#   # => "Hi\nAda\n"          — both newlines survive
 #
 # ## Frontmatter
 #
@@ -141,6 +186,14 @@ end
 # @example
 #   Template.scan("Hi <%= name %>!").map(~nodes)
 #   # => Ok([Text("Hi "), Interpolate("name"), Text("!")])
+#
+# @example A control tag on a line of its own leaves no blank line behind
+#   Template.scan("<% if admin %>\nWelcome back.\n<% end %>\n").try.nodes
+#   # => [Control("if admin"), Text("Welcome back.\n"), Control("end")]
+#
+# @example Where the template broke, as a position in the source
+#   Template.scan("Hi <%= name")
+#   # => Error(UnterminatedTag(6))
 let scan(source: String) -> Result<Parsed, TemplateError> do
   let cursor = Input { input: source }
   let (frontmatter, afterFrontmatter) = scanFrontmatter(cursor).try
