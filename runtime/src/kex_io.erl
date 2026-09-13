@@ -600,15 +600,17 @@ nullary_type_name(X) ->
                 'Equal' -> "Ordering";
                 'Greater' -> "Ordering";
                 _ ->
-                    %% Same first-letter-case rule `to_string` uses above: a
-                    %% Kex `:atom` is always lowercase-first, a constructor is
-                    %% capitalized. Without it a plain atom reported "Variant"
-                    %% where the walker said "Atom" — visible in any error that
-                    %% names the type ("Undefined method: count for Atom").
-                    case atom_to_list(X) of
-                        [C | _] when C >= $a, C =< $z -> "Atom";
-                        _ -> "Variant"
-                    end
+                    %% An uppercase atom with no registered owner ADT is not
+                    %% necessarily a constructor at all — a bare reference to
+                    %% a MODULE name (`Bits`, with no method call) lowers to
+                    %% exactly this shape too, and "Variant" used to be
+                    %% guessed here regardless. That is not a real Kex type:
+                    %% every actual variant's type is its owning ADT
+                    %% ("Ordering" for `Less`), never the word "Variant"
+                    %% itself. "Atom" is the honest answer — it claims
+                    %% nothing this code cannot back up — and is already
+                    %% what a genuinely lowercase atom reports.
+                    "Atom"
             end
     end.
 

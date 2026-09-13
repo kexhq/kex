@@ -2566,8 +2566,25 @@ auto TypeChecker::bindPatternVars(
             for (size_t i = 0; i < node.args.size(); ++i) {
                 if (!node.args[i]) continue;
                 TypePtr payload;
-                const int slot = declaration && i < declaration->slots.size()
+                int slot = declaration && i < declaration->slots.size()
                     ? declaration->slots[i] : -1;
+                // `Result`/`Optional` are built into the type system itself
+                // (a "Result" NamedType, a dedicated OptionalType) rather
+                // than ordinary ADTs collected into `m_constructorResult`,
+                // so `declaration` is always null for their constructors and
+                // the slot lookup above never fires — `let Ok(n) = getNum()`
+                // left `n` an unconstrained fresh type variable no matter
+                // what `getNum` returned, and a later `n + "oops"`
+                // typechecked although `n` was really an Integer. Their
+                // payload-to-type-argument mapping is fixed and well known,
+                // so it can be supplied directly for exactly the single-arg
+                // constructors that have one.
+                if (slot < 0 && i == 0 &&
+                    (node.name == "Ok" || node.name == "Just" ||
+                     node.name == "Some"))
+                    slot = 0;
+                else if (slot < 0 && i == 0 && node.name == "Error")
+                    slot = 1;
                 if (slot >= 0 && expected) {
                     // A payload that IS a type parameter takes its type from
                     // the scrutinee. The scrutinee's shape varies: `Result<A,
@@ -4197,7 +4214,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         }
                     }
                 }
-                bindPatternVars(*node.pattern);
+                // The scrutinee, so a constructor pattern's payload binds to
+                // its ACTUAL type argument (`let Ok(n) = getNum(): Result<
+                // Integer, String>` binds `n : Integer`) instead of the
+                // constructor's own generic declared payload type, which
+                // bindPatternVars falls back to when given no expected type
+                // at all — an unconstrained fresh type variable that let
+                // `n + "oops"` typecheck although `n` was really an Integer.
+                // `declared` wins when the pattern itself carries an
+                // annotation, same as the VarPattern branch above.
+                bindPatternVars(*node.pattern, declared ? declared : valueType);
             }
             return Type::unit();
         }

@@ -1539,6 +1539,47 @@ int main() {
                         std::string("hello\nhello"));
         });
 
+        it("reset rewinds a handle to the start of the file", []() {
+            auto result = runFSMocking(
+                "main do\n"
+                "  Mock.FS.File(\"resettable.txt\", \"hello world\")\n"
+                "  let handle = FS.File.open(\"resettable.txt\", FS.Read).try\n"
+                "  let first = handle.read.try\n"
+                "  handle.reset.try\n"
+                "  let second = handle.read.try\n"
+                "  first + \"|\" + second\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("hello world|hello world"));
+        });
+
+        it("seek moves a handle's cursor to an absolute offset", []() {
+            auto result = runFSMocking(
+                "main do\n"
+                "  Mock.FS.File(\"seekable.txt\", \"hello world\")\n"
+                "  let handle = FS.File.open(\"seekable.txt\", FS.Read).try\n"
+                "  handle.seek(6).try\n"
+                "  handle.read.try\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("world"));
+        });
+
+        it("seek and reset share the cursor readLine advances", []() {
+            auto result = runFSMocking(
+                "main do\n"
+                "  Mock.FS.File(\"lines.txt\", \"one\\ntwo\\nthree\")\n"
+                "  let handle = FS.File.open(\"lines.txt\", FS.Read).try\n"
+                "  let Ok(Just(a)) = handle.readLine\n"
+                "  let Ok(Just(b)) = handle.readLine\n"
+                "  handle.reset.try\n"
+                "  let Ok(Just(c)) = handle.readLine\n"
+                "  a + \"/\" + b + \"/\" + c\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("one/two/one"));
+        });
+
         it("deleting a nonexistent file returns false", []() {
             auto result = runFS("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
