@@ -3588,15 +3588,18 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
     if (!sigs && imported.empty() && methodIt == m_methodSignatures.end())
         return {};
 
-    bool matched = false;
-    auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
-        matched = false;
-        if (sig.params.size() != nonBlockArgTypes.size() + 1) return {};
+    struct Candidate {
+        std::vector<TypePtr> hints;
+        bool collection;
+    };
+    std::vector<Candidate> candidates;
+    auto hintsFrom = [&](const Signature& sig) -> void {
+        if (sig.params.size() != nonBlockArgTypes.size() + 1) return;
         auto* blockParam = std::get_if<FuncType>(&sig.params.back()->kind);
-        if (!blockParam) return {};
+        if (!blockParam) return;
 
         for (size_t i = 0; i < nonBlockArgTypes.size(); i++) {
-            if (!argMatchesParam(nonBlockArgTypes[i], sig.params[i])) return {};
+            if (!argMatchesParam(nonBlockArgTypes[i], sig.params[i])) return;
         }
 
         // Map negative-ID generic placeholders to concrete types from the actual args.
@@ -3622,30 +3625,36 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
 
         std::vector<TypePtr> hints;
         for (const auto& p : blockParam->params) hints.push_back(applySubst(p));
-        if (collection) {
-            auto result = resolve(blockParam->result);
-            *collection = blockParam->block &&
-                std::holds_alternative<ListType>(result->kind);
-        }
-        matched = true;
-        return hints;
+        auto result = resolve(blockParam->result);
+        bool isCollection = blockParam->block &&
+            std::holds_alternative<ListType>(result->kind);
+        candidates.push_back({std::move(hints), isCollection});
     };
 
     if (methodIt != m_methodSignatures.end())
-        for (const auto& sig : methodIt->second) {
-            auto hints = hintsFrom(sig);
-            if (matched) return hints;
-        }
-    for (const auto& sig : imported) {
-        auto hints = hintsFrom(sig);
-        if (matched) return hints;
-    }
+        for (const auto& sig : methodIt->second) hintsFrom(sig);
+    for (const auto& sig : imported) hintsFrom(sig);
     if (sigs)
-        for (const auto& sig : *sigs) {
-            auto hints = hintsFrom(sig);
-            if (matched) return hints;
+        for (const auto& sig : *sigs) hintsFrom(sig);
+
+    if (candidates.empty()) return {};
+    // UFCS lets a plain call like `times(3) do ... end` match both a local
+    // `times(n, block)` and an unrelated `Integer.times(block)` visible as a
+    // free function. When such same-arity candidates disagree on the
+    // block's shape (its declared arity, or whether it collects body
+    // expressions as a `Block<[X]>`), trusting whichever matched first can
+    // hand back a hint (and collection flag) for the WRONG candidate —
+    // reporting a bogus arity mismatch, or silently dropping the collection
+    // behavior the call actually needs (kexhq/kex#321). Stay permissive
+    // instead: no reliable single shape to hint from.
+    for (const auto& c : candidates)
+        if (c.hints.size() != candidates.front().hints.size() ||
+            c.collection != candidates.front().collection) {
+            if (collection) *collection = false;
+            return {};
         }
-    return {};
+    if (collection) *collection = candidates.front().collection;
+    return candidates.front().hints;
 }
 
 auto TypeChecker::resolveArgHints(const std::string& name,
@@ -3736,9 +3745,18 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
         if (lam->params.empty() && !lam->collection) {
-            // Zero-param lambda `{ }` / `do end` — infer body but stay permissive
-            // so it matches any FuncType param (the block ignores the passed arg).
-            inferExpr(blockExpr);
+            // Zero-param lambda `{ }` / `do end`. Non-empty hintParams means
+            // the call site's expected type is a known, concrete FuncType of
+            // nonzero arity (see resolveBlockHints/resolveArgHints — they
+            // only produce hints from an actual FuncType param), so a
+            // paramless block there is a genuine arity mismatch: return the
+            // block's real (zero-arg) FuncType and let the caller's normal
+            // FuncType comparison report it, the same way an explicit-params
+            // block with the wrong arity already is. Otherwise the expected
+            // type isn't a known function shape (a generic/inferred param,
+            // e.g. `retry do ... end`), so stay permissive and match anything.
+            auto bodyType = inferExpr(blockExpr);
+            if (!hintParams.empty()) return bodyType;
             return Type::unknown();
         }
         pushScope();

@@ -1,0 +1,13 @@
+# Regression for kexhq/kex#321: fixing the paramless-block arity hole must
+# not make legitimate paramless blocks stop working — a correct-arity block
+# still runs, and a block passed where the callback's own type carries no
+# concrete arity (fully generic/inferred parameter) stays permissive.
+let apply(f: Integer -> String) = f(42)
+let runGeneric(op) = op()
+
+main do
+  IO.printLine(apply do |x| "${x}" end)
+  runGeneric do
+    IO.printLine("ran")
+  end
+end

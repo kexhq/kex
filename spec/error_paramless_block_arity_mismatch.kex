@@ -1,0 +1,42 @@
+# kex: check-only
+#
+# Regression for kexhq/kex#321: a trailing `do ... end` block with NO
+# `|params|` list at all used to skip arity checking entirely — the checker
+# typed it `Unknown`, which unifies with any expected function type, so a
+# genuine arity mismatch compiled clean and only blew up at runtime with an
+# opaque `{badarity, ...}` crash.
+#
+# `apply` expects a callback of one Integer argument. Every one of these
+# should be rejected exactly like a mismatched, explicitly-typed argument
+# would be — the paramless case should be no more permissive than the rest.
+let apply(f: Integer -> String) = f(42)
+
+# A block param with no concrete declared function type (fully generic/
+# inferred) has no known arity to hold a paramless block to, so it must stay
+# permissive — this is the deliberate fallback the fix must not break.
+let runGeneric(op) = op()
+
+main do
+  # The exact repro: a paramless `do ... end` where `apply` expects a
+  # one-argument callback.
+  IO.printLine(apply do
+    "no args used"
+  end)
+
+  # Same mismatch, spelled as a named zero-arg lambda — already caught before
+  # this fix, kept here so the paramless case is checked against the same bar.
+  let cb = { "no args" }
+  IO.printLine(apply(cb))
+
+  # Too many explicit params — already caught before this fix.
+  IO.printLine(apply do |a, b| "${a} ${b}" end)
+
+  # Correct arity — must still compile and (if run) print 42.
+  IO.printLine(apply do |x| "${x}" end)
+
+  # Genuinely permissive: `op` carries no concrete function type, so a
+  # paramless block here is not a detectable arity mismatch.
+  runGeneric do
+    IO.printLine("ran")
+  end
+end
