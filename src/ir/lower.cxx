@@ -8338,10 +8338,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
             // A capability's own members stay at their declared arity.
             if (fd->isFoul) L.foulFns.insert(emitted);
-            if (!fd->isFoul && !fd->clauses.empty())
-                L.pureFnArities.insert(
-                    fd->name + "/" +
-                    std::to_string(fd->clauses[0].params.size()));
+            // Also under the MANGLED name: a `using`-imported call routes
+            // through moduleImports with the qualified designator
+            // ("Rodolfo.get"), and callNeedsContext checks pureFnArities
+            // under exactly the name it was given. Only the bare entry used
+            // to be recorded, so that qualified call never matched its own
+            // exemption and inherited "foul" from an unrelated same-named
+            // foul make-method merged in from elsewhere — Rodolfo's pure
+            // `get/2` next to Net.HTTP's foul Client.get lowered as `get/3`
+            // and erlc rejected it (kexhq/kex#272).
+            if (!fd->isFoul && !fd->clauses.empty()) {
+                const auto arity = std::to_string(fd->clauses[0].params.size());
+                L.pureFnArities.insert(fd->name + "/" + arity);
+                L.pureFnArities.insert(emitted + "/" + arity);
+            }
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty() && fd->clauses[0].params.empty()) {
                 L.moduleZeroArgFns.insert(path + "." + fd->name);

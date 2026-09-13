@@ -2,7 +2,7 @@
 -module(kex_intrinsic_filehandle).
 -export([getLine/1, get/1, printLine/2, print/2,
          readLine/1, writeLine/2, read/1, readBytes/1, write/2, writeBytes/2,
-         'eof?'/1, 'atEnd?'/1, feed/1, close/1]).
+         'eof?'/1, 'atEnd?'/1, feed/1, close/1, seek/2, reset/1]).
 
 getLine(Handle) -> kex_file:handle_getLine(Handle).
 get(Handle) -> kex_file:handle_get(Handle).
@@ -20,3 +20,5 @@ feed({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr; Std =:= stdin 
 feed({'FileHandle', Dev, _}) -> {'Just', kex_intrinsic_feed:of_handle(Dev)};
 feed(_) -> 'None'.
 close(Handle) -> kex_file:handle_close(Handle).
+seek(Handle, Offset) -> kex_file:handle_seek(Handle, Offset).
+reset(Handle) -> kex_file:handle_reset(Handle).

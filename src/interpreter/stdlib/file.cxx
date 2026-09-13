@@ -434,6 +434,45 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::unit();
     });
 
+    // handle.seek(offset) -> Result<Void, ReadError>
+    reg("FileHandle::seek", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return readError("ReadFailed");
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        auto* offset = std::get_if<IntValue>(&args[1]->data);
+        if (!h || !offset || offset->value < 0) return readError("ReadFailed");
+        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        const auto pos = static_cast<size_t>(offset->value);
+        if (m_mockFiles.count(h->path)) {
+            setMockCursor(h->path, pos);
+            return Value::ok(Value::unit());
+        }
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        // Read and write share one cursor on a real file, so both pointers
+        // move together; `clear()` first drops any eof/fail bit a prior
+        // read left behind, which would otherwise make the seek a no-op.
+        h->stream->clear();
+        h->stream->seekg(static_cast<std::streamoff>(pos));
+        h->stream->seekp(static_cast<std::streamoff>(pos));
+        return Value::ok(Value::unit());
+    });
+
+    // handle.reset -> Result<Void, ReadError>
+    reg("FileHandle::reset", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return readError("ReadFailed");
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) return readError("ReadFailed");
+        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        if (m_mockFiles.count(h->path)) {
+            setMockCursor(h->path, 0);
+            return Value::ok(Value::unit());
+        }
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        h->stream->clear();
+        h->stream->seekg(0);
+        h->stream->seekp(0);
+        return Value::ok(Value::unit());
+    });
+
     // Public FileHandle spellings are Kex methods; these aliases keep their
     // primitive ABI independent from the older internal IO-style names.
     for (const auto& [publicName, primitiveName] :

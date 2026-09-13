@@ -231,10 +231,18 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
 }
 
 auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string& module) -> void {
-    // Check if this function name is already in symbols (multi-clause)
+    // The parser already folds an adjacent same-name/arity declaration into
+    // ONE FunctionDef's own `clauses` when it safely can (kexhq/kex#262), so
+    // a single call here can now represent several clauses at once — a bare
+    // `+1` would undercount whenever that happened. A same-name FunctionDef
+    // that did NOT get folded (a different arity, or one the parser
+    // conservatively left separate) still arrives as its own call, so the
+    // "already in symbols" merge below is still needed for those.
+    const auto clauseCount = static_cast<int>(
+        def.clauses.empty() ? 1 : def.clauses.size());
     for (auto& sym : m_state->symbols) {
         if (sym.name == def.name && sym.module == module && sym.kind == SymbolKind::Function) {
-            sym.clauseCount++;
+            sym.clauseCount += clauseCount;
             return;
         }
     }
@@ -246,7 +254,7 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
     info.module = module;
     info.isFoul = def.isFoul;
     info.type = Type::unknown();
-    info.clauseCount = 1;
+    info.clauseCount = clauseCount;
 
     // Capture param names from the first clause if available
     if (!def.clauses.empty()) {

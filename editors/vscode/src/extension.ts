@@ -130,8 +130,12 @@ async function startLanguageServer(context: vscode.ExtensionContext): Promise<vo
   watchExecutable(resolved.command, context);
   showStarting();
 
-  // One watcher per client, disposed with it by `disposeClient`.
-  sourceWatcher = vscode.workspace.createFileSystemWatcher('**/*.kex');
+  // One watcher per client, disposed with it by `disposeClient`. Covers
+  // `.ket` too: the server treats a template as a compilation unit of its
+  // own now (kexhq/kex#317), so a template edited outside the editor (a
+  // checkout switch, a generator run) needs to invalidate the same way a
+  // `.kex` file's does.
+  sourceWatcher = vscode.workspace.createFileSystemWatcher('**/*.{kex,ket}');
 
   const serverOptions: ServerOptions = {
     run: { command: resolved.command, args: ['--lsp'] },
@@ -146,7 +150,17 @@ async function startLanguageServer(context: vscode.ExtensionContext): Promise<vo
   const live = () => self !== undefined && client === self && self.isRunning();
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: 'file', language: 'kex' }],
+    // `ket`/`ket-html`/`ket-markdown` are the languages `.ket` templates
+    // register under (highlighting-only until kexhq/kex#317): the server
+    // now scans a template's `<% %>` holes into synthetic Kex it can run
+    // the ordinary diagnostics/hover pipeline against, so the client needs
+    // to actually send it those documents.
+    documentSelector: [
+      { scheme: 'file', language: 'kex' },
+      { scheme: 'file', language: 'ket' },
+      { scheme: 'file', language: 'ket-html' },
+      { scheme: 'file', language: 'ket-markdown' },
+    ],
     synchronize: { fileEvents: sourceWatcher },
     // Extra module roots, for the layouts no convention covers. A tey
     // package's dependencies need nothing here — the server reads those out

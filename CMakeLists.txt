@@ -459,7 +459,8 @@ add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    target_sources(kex PRIVATE src/lsp/server.cxx src/lsp/tey_roots.cxx)
+    target_sources(kex PRIVATE src/lsp/server.cxx src/lsp/tey_roots.cxx
+                                src/lsp/ket_template.cxx)
     target_compile_definitions(kex PRIVATE KEX_HAS_LSP=1)
     target_link_libraries(kex PRIVATE lsp)
 endif()
@@ -663,11 +664,16 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_executable(lsp_test
         tests/lsp_test.cxx
         src/lsp/server.cxx
-        src/lsp/tey_roots.cxx)
+        src/lsp/tey_roots.cxx
+        src/lsp/ket_template.cxx)
     target_link_libraries(lsp_test PRIVATE kex_lib lsp)
     target_include_directories(lsp_test PRIVATE tests)
     add_test(NAME lsp_test COMMAND lsp_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
+
+add_executable(ket_template_test tests/ket_template_test.cxx src/lsp/ket_template.cxx)
+target_include_directories(ket_template_test PRIVATE tests)
+add_test(NAME ket_template_test COMMAND ket_template_test)
 
 add_executable(examples_test tests/examples_test.cxx)
 target_link_libraries(examples_test PRIVATE kex_lib)

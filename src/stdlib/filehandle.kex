@@ -353,4 +353,34 @@ make FileHandle<R, W> do
   #   end
   close :> Void
   foul close = Kex.Intrinsic.FileHandle.close(this)
+
+  # Moves the handle's cursor to an absolute byte offset from the start of
+  # the file. Read and write share one cursor, so this repositions both —
+  # a `readLine` right after `seek(0)` starts over from the top, and a
+  # `write` right after does too, overwriting from that point.
+  #
+  # @param offset [Integer] the byte offset to seek to, from the start of
+  #   the file
+  # @return [Result<Void, ReadError>] +Ok+ on success, or why the seek
+  #   failed
+  #
+  # @example Reading a length-prefixed record, then rewinding past it
+  #   let length = handle.readLine.or("0").to(Integer).or(0)
+  #   let record = handle.readBytes.try
+  #   handle.seek(0)
+  seek : Integer -> Result<Void, ReadError>
+  foul seek(offset) = Kex.Intrinsic.FileHandle.seek(this, offset)
+
+  # Moves the handle's cursor back to the start of the file — the same as
+  # +seek(0)+, for the common case of re-reading a handle from the top.
+  #
+  # @return [Result<Void, ReadError>] +Ok+ on success, or why the reset
+  #   failed
+  #
+  # @example Reading a file twice
+  #   let firstPass = handle.read.or("")
+  #   handle.reset
+  #   let secondPass = handle.read.or("")
+  reset :> Result<Void, ReadError>
+  foul reset = Kex.Intrinsic.FileHandle.reset(this)
 end

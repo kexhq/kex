@@ -13,7 +13,7 @@
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
          handle_read/1, handle_read_bytes/1, handle_write/2, handle_write_bytes/2,
-         'handle_atEnd?'/1, handle_close/1,
+         'handle_atEnd?'/1, handle_close/1, handle_seek/2, handle_reset/1,
          dir_current/0, dir_home/0, dir_temporary/0, dir_create/1,
          dir_delete/1, dir_delete_all/1,
          dir_list/1, dir_files/1, dir_directories/1, 'dir_exists?'/1, 'dir_file?'/1,
@@ -413,6 +413,23 @@ handle_close({'FileHandle', Dev, _}) when Dev =/= mock ->
     ok;
 handle_close({'FileHandle', mock, _}) -> ok;
 handle_close(_) -> ok.
+
+%% seek(offset) → Result<Void, ReadError>.
+%% Read and write share one cursor on a real file, so both move together.
+handle_seek({'FileHandle', Std, _}, _) when Std =:= stdout; Std =:= stderr; Std =:= stdin ->
+    {'Error', 'ReadFailed'};
+handle_seek({'FileHandle', Dev, _}, Offset) when Dev =/= mock, is_integer(Offset), Offset >= 0 ->
+    case file:position(Dev, {bof, Offset}) of
+        {ok, _} -> {'Ok', 'Kex.Unit'};
+        {error, _} -> {'Error', 'ReadFailed'}
+    end;
+handle_seek({'FileHandle', mock, Path}, Offset) when is_integer(Offset), Offset >= 0 ->
+    set_mock_pos(Path, Offset),
+    {'Ok', 'Kex.Unit'};
+handle_seek(_, _) -> {'Error', 'ReadFailed'}.
+
+%% reset → Result<Void, ReadError>. The same as seek(0).
+handle_reset(Handle) -> handle_seek(Handle, 0).
 
 mock_pos(Path) ->
     case get({kex_mock_pos, pth(Path)}) of undefined -> 0; Pos -> Pos end.
