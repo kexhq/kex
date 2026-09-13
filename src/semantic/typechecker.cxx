@@ -4163,6 +4163,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     declared = declaredConstantType(varPat->name, valueType,
                                                     expr.location);
                 defineVar(varPat->name, declared ? declared : valueType);
+                // Record `f`'s origin when bound to a bare `~greet` capture
+                // (no partial application, no operator, no module prefix) so
+                // a later named-argument call through `f` can find `greet`'s
+                // real parameter names (kexhq/kex#309). Any other kind of
+                // binding for this name clears a stale entry.
+                if (const auto* curry = node.value
+                        ? std::get_if<ast::CurryExpr>(&node.value->kind)
+                        : nullptr;
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    m_curryOrigin[varPat->name] = curry->name;
+                else
+                    m_curryOrigin.erase(varPat->name);
             } else if (node.pattern) {
                 checkPatternArity(*node.pattern);
                 // Reject constructor mismatches early, e.g.
@@ -6487,15 +6500,68 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         auto resolvedLocal = local ? resolve(local) : nullptr;
         if (resolvedLocal)
             if (auto* function = std::get_if<FuncType>(&resolvedLocal->kind)) {
-                if (function->params.size() != argTypes.size()) {
+                // A call through a local bound by a bare `~name` capture
+                // (`let f = ~greet`) carries only positional param TYPES in
+                // `function` — no names. `argTypes` here is positional args
+                // followed by named-arg types in the call site's WRITTEN
+                // order, which is not necessarily `greet`'s declared order.
+                // Reorder by `greet`'s real parameter names before comparing
+                // positionally, so `f(loud: true, name: "Ada")` doesn't
+                // silently check `loud` against `greet`'s first param and
+                // vice versa (kexhq/kex#309).
+                std::vector<TypePtr> reordered;
+                const std::vector<TypePtr>* effective = &argTypes;
+                const auto* call = callExpr
+                    ? std::get_if<ast::FunctionCall>(&callExpr->kind) : nullptr;
+                if (call && !call->namedArgs.empty()) {
+                    const std::vector<std::string>* paramNames = nullptr;
+                    if (auto origin = m_curryOrigin.find(name);
+                        origin != m_curryOrigin.end())
+                        if (auto sigs = m_userSignatures.find(origin->second);
+                            sigs != m_userSignatures.end())
+                            for (const auto& sig : sigs->second)
+                                if (sig.params.size() == function->params.size() &&
+                                    sig.paramNames.size() == sig.params.size()) {
+                                    paramNames = &sig.paramNames;
+                                    break;
+                                }
+                    if (paramNames) {
+                        reordered.assign(function->params.size(), nullptr);
+                        std::vector<bool> filled(function->params.size(), false);
+                        for (size_t i = 0; i < call->namedArgs.size(); ++i) {
+                            const auto& label = call->namedArgs[i].first;
+                            for (size_t p = 0; p < paramNames->size(); ++p)
+                                if ((*paramNames)[p] == label &&
+                                    call->args.size() + i < argTypes.size()) {
+                                    reordered[p] = argTypes[call->args.size() + i];
+                                    filled[p] = true;
+                                    break;
+                                }
+                        }
+                        size_t next = 0;
+                        for (size_t i = 0; i < call->args.size() &&
+                                           i < argTypes.size(); ++i) {
+                            while (next < reordered.size() && filled[next]) next++;
+                            if (next >= reordered.size()) break;
+                            reordered[next] = argTypes[i];
+                            filled[next] = true;
+                            next++;
+                        }
+                        if (std::all_of(filled.begin(), filled.end(),
+                                        [](bool b) { return b; }))
+                            effective = &reordered;
+                    }
+                }
+                if (function->params.size() != effective->size()) {
                     error(loc, "`" + name + "` expects " +
                         std::to_string(function->params.size()) +
-                        " argument(s), got " + std::to_string(argTypes.size()));
+                        " argument(s), got " + std::to_string(effective->size()));
                     return function->result;
                 }
-                for (size_t i = 0; i < argTypes.size(); ++i)
-                    if (!argMatchesParam(argTypes[i], function->params[i]))
-                        typeMismatch(loc, function->params[i], argTypes[i]);
+                for (size_t i = 0; i < effective->size(); ++i)
+                    if ((*effective)[i] &&
+                        !argMatchesParam((*effective)[i], function->params[i]))
+                        typeMismatch(loc, function->params[i], (*effective)[i]);
                 return function->result;
             }
         // The binding's type is still an inference variable — an unannotated

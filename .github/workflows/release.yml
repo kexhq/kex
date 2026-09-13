@@ -1020,6 +1020,13 @@ jobs:
           # packing (see ci.yml and release.yml's `wasm` job). Kept in sync
           # here so it doesn't read as a stale, wrong number in between.
           (cd packages/kex && npm version "$next" --no-git-tag-version --allow-same-version)
+          # package.kex's own version(...) field is nobody's source of truth
+          # (docgen/build-docs.sh read root VERSION instead, and release.yml
+          # never validates this one) but was still going stale in between —
+          # it named 0.4.0-alpha at both v0.4.0-alpha.2 and v0.4.0-beta
+          # (kexhq/kex#305). Restamped here so it reads as "the next version"
+          # the same way VERSION does, instead of silently falling behind.
+          sed -i "s/^  version(\"[^\"]*\")/  version(\"${next}\")/" package.kex
           git config user.name "kex release"
           git config user.email "noreply@kex.run"
           git checkout -b "$branch"
