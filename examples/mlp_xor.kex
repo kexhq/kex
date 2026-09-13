@@ -1,0 +1,231 @@
+# A multi-layer perceptron that learns XOR by backpropagation.
+#
+# The network is a stack of tanh layers — 2 inputs, 4 hidden neurons, 1
+# output — trained by online gradient descent. Every neuron squashes
+# through tanh, so targets are -1 / +1 rather than 0 / 1, and a prediction
+# is 1 when the output is positive.
+#
+# Weight init draws from a tiny linear congruential generator instead of a
+# random builtin, so every run trains the same network.
+#
+# Run: kex examples/mlp_xor.kex
+
+record Rng do
+  seed : Integer
+end
+
+make Rng do
+  # The next generator, paired with one uniform draw in [-1, 1].
+  draw :> (Rng, Float)
+  let draw do
+    let seed = (@seed * 48271) % 2147483647
+    let unit = seed / 2147483647.0
+    return (Rng { seed: seed }, unit * 2.0 - 1.0)
+  end
+
+  # The next generator, paired with n uniform draws in [-1, 1].
+  draws :> Integer -> (Rng, [Float])
+  let draws(n) do
+    let (nextRng, drawn) = (1..n).reduce((this, [])) do |state, _|
+      let (rng, acc) = state
+      let (stepped, x) = rng.draw
+      (stepped, [x | acc])
+    end
+    return (nextRng, drawn.reverse)
+  end
+end
+
+# One layer of tanh neurons: weights[j] holds the inputs of neuron j.
+record Layer do
+  weights : [[Float]]
+  biases  : [Float]
+end
+
+# A network is its layers, first to last.
+record Network do
+  layers : [Layer]
+end
+
+# One training example: an input vector and its target activations.
+record Sample do
+  input  : [Float]
+  target : [Float]
+end
+
+main do
+  # XOR in the -1 / +1 encoding tanh produces.
+  let samples = [
+    Sample { input: [0.0, 0.0], target: [-1.0] },
+    Sample { input: [0.0, 1.0], target: [1.0] },
+    Sample { input: [1.0, 0.0], target: [1.0] },
+    Sample { input: [1.0, 1.0], target: [-1.0] }
+  ]
+
+  let (afterHidden, hidden) = newLayer(2, 4, Rng { seed: 42 })
+  let (_, output) = newLayer(4, 1, afterHidden)
+
+  var net = Network { layers: [hidden, output] }
+  IO.printLine("training a 2-4-1 tanh network on xor")
+  IO.printLine("")
+
+  var epoch = 0
+  loop do
+    epoch = epoch + 1
+    net = trainEpoch(net, samples, 0.5)
+    if epoch % 500 == 0
+      IO.printLine("epoch ${epoch}   loss ${loss(net, samples)}")
+    end
+    break if epoch >= 20000 || loss(net, samples) < 0.0001
+  end
+
+  IO.printLine("")
+  IO.printLine("trained ${epoch} epochs, final loss ${loss(net, samples)}")
+  IO.printLine("")
+  IO.printLine("a   b   a xor b   network")
+  samples.each do |s|
+    let a = s.input.first.or(0.0).round
+    let b = s.input.drop(1).first.or(0.0).round
+    let expected = s.target.first.or(0.0) > 0.0 then 1 else 0
+    let y = predict(net, s.input).first.or(0.0)
+    let actual = y > 0.0 then 1 else 0
+    IO.printLine("${a}   ${b}       ${expected}       ${actual}   (${y})")
+  end
+end
+
+# The inner product of two equal-length vectors.
+dot : [Float] -> [Float] -> Float
+let dot(xs, ys) do
+  return xs.zip(ys).reduce(0.0) do |acc, pair|
+    let (x, y) = pair
+    acc + x * y
+  end
+end
+
+# Activations of one layer: each neuron sums its weighted inputs and bias,
+# then squashes through tanh.
+activate : Layer -> [Float] -> [Float]
+let activate(layer, input) do
+  return layer.weights.zip(layer.biases).map do |pair|
+    let (row, bias) = pair
+    Math.tanh(dot(row, input) + bias)
+  end
+end
+
+# Activations of every layer for an input, the input itself first: each
+# layer reads the activations of the one before it.
+forward : Network -> [Float] -> [[Float]]
+let forward(net, input) do
+  return net.layers.reduce([input]) do |acts, layer|
+    [...acts, activate(layer, acts.last.or([]))]
+  end
+end
+
+# The network's output activations for an input.
+predict : Network -> [Float] -> [Float]
+let predict(net, input) = forward(net, input).last.or([])
+
+# The error signal of every layer, output layer first: the output layer's
+# is the loss derivative through tanh, each hidden layer's is
+# backpropagated from the layer above it.
+deltas : Network -> [[Float]] -> [Float] -> [[Float]]
+let deltas(net, activations, target) do
+  let outDeltas = activations.last.or([0.0]).zip(target).map do |pair|
+    let (a, t) = pair
+    (a - t) * (1.0 - a * a)
+  end
+  let layersAbove = net.layers.drop(1).reverse
+  let actsBelow = activations.drop(1).take(activations.count - 2).reverse
+  let (down, _) = layersAbove.zip(actsBelow).reduce(([outDeltas], outDeltas)) do |state, pair|
+    let (ds, dUp) = state
+    let (above, acts) = pair
+    let d = propagate(acts, above, dUp)
+    ([d | ds], d)
+  end
+  return down.reverse
+end
+
+# The error signal of one hidden layer: the weighted sum of the deltas of
+# the layer above, through the derivative of tanh.
+propagate : [Float] -> Layer -> [Float] -> [Float]
+let propagate(acts, above, aboveDeltas) do
+  return acts.mapIndexed do |a, j|
+    let upstream = aboveDeltas.zip(above.weights).reduce(0.0) do |acc, pair|
+      let (d, row) = pair
+      acc + d * row.at(j).or(0.0)
+    end
+    upstream * (1.0 - a * a)
+  end
+end
+
+# One layer after a gradient step: every weight and bias moves against
+# its gradient, scaled by the learning rate.
+descend : Layer -> [Float] -> [Float] -> Float -> Layer
+let descend(layer, input, ds, rate) do
+  let weights = layer.weights.zip(ds).map do |pair|
+    let (row, d) = pair
+    row.zip(input).map do |pr|
+      let (w, x) = pr
+      w - rate * d * x
+    end
+  end
+  let biases = layer.biases.zip(ds).map do |pair|
+    let (b, d) = pair
+    b - rate * d
+  end
+  return Layer { weights: weights, biases: biases }
+end
+
+# One online gradient step on one sample.
+trainSample : Network -> Sample -> Float -> Network
+let trainSample(net, sample, rate) do
+  let activations = forward(net, sample.input)
+  let ds = deltas(net, activations, sample.target).reverse
+  let inputs = activations.take(activations.count - 1)
+  let layers = net.layers.zip(inputs).zip(ds).map do |pair|
+    let (rest, d) = pair
+    let (layer, input) = rest
+    descend(layer, input, d, rate)
+  end
+  return Network { layers: layers }
+end
+
+# One pass over every sample, in order.
+trainEpoch : Network -> [Sample] -> Float -> Network
+let trainEpoch(net, samples, rate) = samples.reduce(net) do |n, s|
+  trainSample(n, s, rate)
+end
+
+# The squared error of one sample.
+errorOf : Network -> Sample -> Float
+let errorOf(net, sample) do
+  let y = predict(net, sample.input).first.or(0.0)
+  let t = sample.target.first.or(0.0)
+  return (y - t) * (y - t)
+end
+
+# Mean squared error over a set of samples.
+loss : Network -> [Sample] -> Float
+let loss(net, samples) do
+  let total = samples.reduce(0.0) do |acc, s|
+    acc + errorOf(net, s)
+  end
+  return total / samples.count.to(Float).or(1.0)
+end
+
+# A layer of nOut neurons reading nIn inputs, weights and biases drawn
+# from the generator.
+newLayer : Integer -> Integer -> Rng -> (Rng, Layer)
+let newLayer(nIn, nOut, rng) do
+  let (spent, rows) = neuronRows(nIn, nOut, rng, [])
+  let weights = rows.map { |row| row.take(nIn) }
+  let biases = rows.map { |row| row.drop(nIn).first.or(0.0) }
+  return (spent, Layer { weights: weights, biases: biases })
+end
+
+# nOut rows of nIn + 1 draws each; the last draw of a row is its bias.
+neuronRows : Integer -> Integer -> Rng -> [[Float]] -> (Rng, [[Float]])
+let neuronRows(nIn, left, rng, acc) do
+  return (rng, acc.reverse) if left == 0
+  let (stepped, row) = rng.draws(nIn + 1)
+  return neuronRows(nIn, left - 1, stepped, [row | acc])
+end
