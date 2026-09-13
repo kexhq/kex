@@ -768,6 +768,48 @@ auto locationOfOffset(const std::string& source, size_t offset)
     return {line, static_cast<unsigned int>(offset - lineStart) + 1};
 }
 
+// Builds the `::lsp::Location` a go-to-definition answer points at, given
+// where the definition lives (`location`, `nameLength` bytes long) and
+// `source`, the already-resolved text for `location.file` (nullptr when
+// unavailable). When that file IS the currently open `.ket` document,
+// translates the range back through its hole map first — a `params:`
+// name's own declaration is exactly this case — since `location` is in the
+// SYNTHETIC coordinates the analyzer indexed, not the template's own
+// (kexhq/kex#317). A definition in any OTHER file needs no translation:
+// that file's coordinates are already real. Returns nullopt only when a
+// `.ket` location fails to map back (should not happen for a location the
+// analyzer itself reported, but a request answered "no definition" is
+// always safer than one pointing at the wrong place).
+auto definitionLocation(const Document& document, SourceLocation location,
+                        size_t nameLength, const std::string* source)
+    -> std::optional<::lsp::Location> {
+    auto endLocation = location;
+    endLocation.column += static_cast<int>(nameLength);
+    if (location.file == document.path && !document.ketOriginalText.empty()) {
+        location.startOffset =
+            static_cast<int>(offsetOfLocation(document.text, location));
+        endLocation.startOffset =
+            location.startOffset + static_cast<int>(nameLength);
+        const auto translatedStart = translateKetLocation(document, location);
+        const auto translatedEnd = translateKetLocation(document, endLocation);
+        if (!translatedStart || !translatedEnd) return std::nullopt;
+        return ::lsp::Location{
+            .uri = ::lsp::Uri::fileUriFromPath(document.path),
+            .range = {
+                .start = protocolPosition(*translatedStart, &document.ketOriginalText),
+                .end = protocolPosition(*translatedEnd, &document.ketOriginalText),
+            },
+        };
+    }
+    return ::lsp::Location{
+        .uri = ::lsp::Uri::fileUriFromPath(location.file),
+        .range = {
+            .start = protocolPosition(location, source),
+            .end = protocolPosition(endLocation, source),
+        },
+    };
+}
+
 auto identifierLengthAt(const std::string& source, const SourceLocation& location)
     -> unsigned int {
     if (location.line < 1 || location.column < 1) return 0;
@@ -4044,6 +4086,13 @@ private:
         const auto found = m_documents.find(key);
         if (found == m_documents.end()) return {};
         const auto& document = found->second;
+        // Same translation hover/completion do: the incoming position is in
+        // the `.ket` template's own coordinates (kexhq/kex#317).
+        if (!document.ketOriginalText.empty()) {
+            auto synthetic = translateKetPositionToSynthetic(document, params.position);
+            if (!synthetic) return {};
+            params.position = *synthetic;
+        }
         const auto word = wordAt(document.text, params.position.line,
                                  params.position.character);
         if (word.text.empty()) return {};
@@ -4075,16 +4124,10 @@ private:
             if (auto local = sourceLocalDefinition(
                     document.text, document.path, word.text,
                     referenceOffset ? referenceOffset - 1 : 0)) {
-                const auto start = protocolPosition(*local, &document.text);
-                auto endLocation = *local;
-                endLocation.column += static_cast<int>(word.text.size());
-                return ::lsp::Definition{::lsp::Location{
-                    .uri = ::lsp::Uri::fileUriFromPath(document.path),
-                    .range = {
-                        .start = start,
-                        .end = protocolPosition(endLocation, &document.text),
-                    },
-                }};
+                if (auto location = definitionLocation(
+                        document, *local, word.text.size(), &document.text))
+                    return ::lsp::Definition{std::move(*location)};
+                return {};
             }
             symbol = m_db.findSymbol(word.text, document.path);
         }
@@ -4092,14 +4135,10 @@ private:
         const auto* state = m_db.fileState(
             std::string(symbol->definition.file));
         const std::string* source = state ? &state->source : nullptr;
-        const auto start = protocolPosition(symbol->definition, source);
-        auto endLocation = symbol->definition;
-        endLocation.column += static_cast<int>(symbol->name.size());
-        const auto end = protocolPosition(endLocation, source);
-        return ::lsp::Definition{::lsp::Location{
-            .uri = ::lsp::Uri::fileUriFromPath(symbol->definition.file),
-            .range = {.start = start, .end = end},
-        }};
+        if (auto location = definitionLocation(
+                document, symbol->definition, symbol->name.size(), source))
+            return ::lsp::Definition{std::move(*location)};
+        return {};
     }
 
     auto references(::lsp::ReferenceParams&& params)

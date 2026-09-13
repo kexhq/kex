@@ -217,6 +217,40 @@ int main() {
                        "did not offer List methods: " + completion);
         });
 
+        it("navigates to a local let binding declared in an earlier .ket hole", []() {
+            // `doubled` is declared in the control hole on line 3 and used
+            // in the interpolation hole on line 4. Go-to-definition from
+            // the use must land back on line 3 in THIS SAME template, which
+            // needs both directions of translation: the incoming position
+            // (line 4) into synthetic coordinates to find the reference,
+            // and the found declaration's synthetic position back into the
+            // template's own coordinates for the reported range
+            // (kexhq/kex#317).
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-definition.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\n<% let doubled = count * 2 %>\n<%= doubled %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-definition.ket"},"position":{"line":4,"character":6}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto definition = responseForId(output.str(), 2);
+            assertTrue(definition.find("kex-lsp-definition.ket") != std::string::npos,
+                       "definition did not resolve to the .ket template itself: " + definition);
+            assertTrue(definition.find("\"line\":3") != std::string::npos,
+                       "definition range did not map back to the declaring hole's own "
+                       "line: " + definition);
+        });
+
         it("hovers a params: name inside a .ket hole with its declared type", []() {
             // Same translation the diagnostics test exercises, but for the
             // request/response direction: the incoming position (line 3,
