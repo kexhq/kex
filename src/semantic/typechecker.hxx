@@ -457,6 +457,18 @@ private:
     // today, just not yet improved; that's call-graph SCC ordering,
     // phase 5b, not attempted here).
     std::unordered_map<std::string, std::vector<Signature>> m_userSignatures;
+    // Local variable name -> the plain top-level function it was bound from
+    // via a bare `~name` capture (`let f = ~greet`). A curried reference's
+    // type is just a FuncType — positional parameter TYPES, no names — so
+    // without this, a named-argument call through such a local (`f(loud:
+    // true, name: "Ada")`) has no param names to match against and falls
+    // back to matching by the call site's written order, which silently
+    // swaps same-typed arguments (kexhq/kex#309). Best-effort: keyed by bare
+    // variable name, so a shadowing rebind in a nested scope can leave a
+    // stale entry for an outer same-named binding; harmless since the
+    // lookup is only consulted after confirming the CURRENT binding really
+    // is a FuncType.
+    std::unordered_map<std::string, std::string> m_curryOrigin;
     // Receiver-aware signatures declared inside `make T do` blocks. Their
     // first parameter is the implicit receiver, matching UFCS call checking.
     std::unordered_map<std::string, std::vector<Signature>> m_methodSignatures;

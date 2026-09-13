@@ -1024,6 +1024,14 @@ struct Lowering {
     // uppercases). This is the SSA construction the string emitter did via
     // m_varSubst, now done once in the lowering pass.
     std::unordered_map<std::string, std::string> subst;
+    // Local (Kex source) name -> the plain top-level function it was bound
+    // from via a bare `~name` capture (`let f = ~greet`), so a named-arg
+    // call through `f` can reorder by `greet`'s real parameter names instead
+    // of the call site's written order (kexhq/kex#309). Best-effort: not
+    // snapshotted alongside `subst` at branch points, so a stale entry can
+    // leak across sibling branches — harmless, since it is only consulted
+    // for a name that is ALSO still a lexical local at the call site.
+    std::unordered_map<std::string, std::string> curryOrigin;
 
     auto fresh(const std::string& hint = "T") -> std::string {
         return "_ir_" + hint + std::to_string(counter++);
@@ -2100,7 +2108,15 @@ struct Lowering {
 
         int openCount = 0;
         for (const auto& s : slots) if (s.open) openCount++;
-        bool full = openCount == 0 &&
+        // A bare `~name` with NO argument group written at all (`slots`
+        // built from zero groups) must yield the function VALUE, never call
+        // it — even when the callee happens to take zero arguments, where
+        // `slots.size() >= arity` (0 >= 0) would otherwise look "fully
+        // applied" and auto-call it here. That auto-call is only correct for
+        // an explicit application (`~greet()`, one written — if empty —
+        // argument group), the same distinction the tree-walker's
+        // `fullyApplied` already makes (kexhq/kex#312).
+        bool full = !n.argGroups.empty() && openCount == 0 &&
             (arity >= 0 ? static_cast<int>(slots.size()) >= arity : !slots.empty());
         if (full) {
             std::vector<ExprPtr> args;
@@ -2202,6 +2218,48 @@ struct Lowering {
         // slots in order, leftovers default to None. Mirrors the string
         // emitter / Evaluator::callFunction (spec/optional_parens_do.kex).
         if (!n.namedArgs.empty()) {
+            // A named-arg call through a local bound by a bare `~name`
+            // capture (`let f = ~greet; f(loud: true, name: "Ada")`): `f` is
+            // a lexical local, not a declared function, so `fnParamNames`
+            // has no entry for "f" — resolve through the capture's real
+            // origin instead of falling through to the "unknown function"
+            // error, and apply the local (a runtime fun value) via
+            // CallIndirect rather than a static call, matching how a
+            // positional call through the same local is already lowered
+            // (kexhq/kex#309).
+            if (subst.count(n.name)) {
+                if (auto origin = curryOrigin.find(n.name);
+                    origin != curryOrigin.end()) {
+                    if (auto oit = fnParamNames.find(origin->second);
+                        oit != fnParamNames.end()) {
+                        if (auto declared = fnAllParamNames.find(origin->second);
+                            declared != fnAllParamNames.end())
+                            for (const auto& [label, _] : n.namedArgs)
+                                if (!declared->second.count(label))
+                                    return unknownNamedArgument(origin->second, label);
+                        const auto& pnames = oit->second;
+                        std::vector<Binding> binds;
+                        std::vector<ExprPtr> slots(pnames.size());
+                        for (const auto& [an, av] : n.namedArgs)
+                            for (size_t i = 0; i < pnames.size(); i++)
+                                if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                        std::vector<ExprPtr> positional;
+                        for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                        if (n.block) positional.push_back(atomize(*n.block, binds));
+                        size_t next = 0;
+                        for (auto& p : positional) {
+                            while (next < slots.size() && slots[next]) next++;
+                            if (next >= slots.size()) break;
+                            slots[next] = std::move(p);
+                        }
+                        for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                        auto ex = std::make_unique<Expr>();
+                        ex->node = CallIndirect{var(currentName(n.name)),
+                                                std::move(slots), false};
+                        return wrapLets(binds, std::move(ex));
+                    }
+                }
+            }
             auto it = fnParamNames.find(n.name);
             std::string emittedName = n.name;
             if (it == fnParamNames.end()) {
@@ -5394,6 +5452,12 @@ struct Lowering {
                 auto val = lower(le->value);
                 std::string nv = fresh(vp->name); subst[vp->name] = nv;
                 immutableBindings.insert(vp->name);
+                if (const auto* curry = std::get_if<ast::CurryExpr>(&le->value->kind);
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    curryOrigin[vp->name] = curry->name;
+                else
+                    curryOrigin.erase(vp->name);
                 return makeLet(nv, std::move(val), cont());
             }
             auto val = lower(le->value); auto pat = lowerPattern(le->pattern);
@@ -5703,6 +5767,12 @@ struct Lowering {
                 std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
                 subst[vp->name] = ssa;
                 immutableBindings.insert(vp->name);
+                if (const auto* curry = std::get_if<ast::CurryExpr>(&le->value->kind);
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    curryOrigin[vp->name] = curry->name;
+                else
+                    curryOrigin.erase(vp->name);
                 auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
                 return makeLet(ssa, std::move(val), std::move(rest));
             }
@@ -8452,7 +8522,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // multi-clause FunDef (flushed on any other item / name change / end).
     std::vector<const ast::FunctionDef*> fnGroup;
     auto flushGroup = [&]() {
-        if (!fnGroup.empty()) { mod.functions.push_back(L.lowerFunctionGroup(fnGroup)); fnGroup.clear(); }
+        if (!fnGroup.empty()) {
+            auto def = L.lowerFunctionGroup(fnGroup);
+            def.isFreeFunction = true;
+            mod.functions.push_back(std::move(def));
+            fnGroup.clear();
+        }
     };
     // Bare top-level expressions (no explicit `main`) → one synthetic main/0.
     std::vector<const ast::ExprPtr*> bareExprs;
@@ -8612,8 +8687,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     auto flush = [&]{
                         if (!grp.empty()) {
                             auto it = L.moduleFunctions.find(L.currentModulePath + "." + grp.front()->name);
-                            mod.functions.push_back(L.lowerFunctionGroup(grp, "",
-                                it == L.moduleFunctions.end() ? grp.front()->name : it->second));
+                            auto def = L.lowerFunctionGroup(grp, "",
+                                it == L.moduleFunctions.end() ? grp.front()->name : it->second);
+                            def.isFreeFunction = true;
+                            mod.functions.push_back(std::move(def));
                             grp.clear();
                         }
                     };
@@ -9281,6 +9358,34 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 merged.emplace(key, std::move(fnc));
             } else {
                 auto& existing = it->second;
+                // A free function can never legitimately share a bare name +
+                // arity with a RECEIVER method: unlike two receiver methods
+                // (which may legitimately reappear across make blocks or
+                // traits for different types, and are meant to be merged
+                // below), there is no relationship between a free function
+                // and a method that would make combining their clauses
+                // correct. Concatenating or silently dropping clauses here
+                // previously did whichever happened by construction order: a
+                // same-shaped receiver method clause (no discriminating
+                // guard, since it's the type's sole owner) looked identical
+                // to a plain free function's own clause, so the free
+                // function's body vanished and its callers silently invoked
+                // the OTHER definition instead — worse than the "undefined
+                // function" this was originally reported as (kexhq/kex#250).
+                // Report the collision instead.
+                //
+                // Restricted to free-vs-method (not free-vs-free): the BEAM
+                // REPL legitimately re-lowers an already-defined free
+                // function again across reloads as the session's cumulative
+                // source grows, which reaches here as two isFreeFunction
+                // entries for the SAME declaration — a real duplicate there,
+                // not a collision, and merging is harmless for it.
+                if (existing.isFreeFunction != f.isFreeFunction)
+                    throw LowerError(
+                        "IR lower: `" + key.first + "/" +
+                        std::to_string(key.second) +
+                        "` names both a free function and a receiver method "
+                        "in this compilation unit — rename one of them");
                 // If the existing definition already ends with a catch-all
                 // but the incoming definition has specific patterns (e.g.
                 // ADT variant matches), insert the specific clauses BEFORE

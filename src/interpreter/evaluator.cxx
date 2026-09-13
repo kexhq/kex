@@ -3599,9 +3599,27 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         if (func->native) {
             // Reorder: place named args into correct positions based on param names
             if (!namedArgs.empty()) {
-                auto it = m_functionDefs.find(lookupName);
+                // `lookupName` is the call-site spelling — for a call through
+                // a local bound by `~name` (e.g. `let f = ~greet; f(x: ...)`)
+                // that's the LOCAL's name ("f"), which was never declared as
+                // a function and has no entry in `m_functionDefs`. The
+                // FunctionValue itself still remembers what it was captured
+                // from (`func->name`, "greet" or "~greet" for a partial
+                // capture) — fall back to that so named-arg matching resolves
+                // by the CAPTURED function's real parameter names instead of
+                // silently matching by the call site's written order
+                // (kexhq/kex#309).
+                std::string defLookupKey = lookupName;
+                if (!m_functionDefs.count(defLookupKey)) {
+                    auto captured = func->name;
+                    if (!captured.empty() && captured.front() == '~')
+                        captured.erase(0, 1);
+                    if (m_functionDefs.count(captured))
+                        defLookupKey = std::move(captured);
+                }
+                auto it = m_functionDefs.find(defLookupKey);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
-                    const auto* selected = findNamedClause(lookupName, namedArgs);
+                    const auto* selected = findNamedClause(defLookupKey, namedArgs);
                     // No clause declares one of these labels. Falling back to
                     // clause 0 would drop it, turning `m.to(String, in: kWh)`
                     // into a plain `to(String)` whose answer looks fine and
@@ -3609,15 +3627,15 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     // module that does define a matching clause if there is
                     // one — that is nearly always a missing `using`.
                     if (!selected)
-                        if (auto unknown = unknownNamedArgument(lookupName, namedArgs)) {
+                        if (auto unknown = unknownNamedArgument(defLookupKey, namedArgs)) {
                             auto message = "unknown named argument `" + *unknown
-                                + ":` for `" + lookupName + "`";
+                                + ":` for `" + defLookupKey + "`";
                             if (auto module =
-                                    moduleSupplyingNamedClause(lookupName, namedArgs)) {
-                                const auto separator = lookupName.rfind("::");
+                                    moduleSupplyingNamedClause(defLookupKey, namedArgs)) {
+                                const auto separator = defLookupKey.rfind("::");
                                 message += " — `" + *module + "` defines a matching `"
                                     + (separator == std::string::npos
-                                        ? lookupName : lookupName.substr(separator + 2))
+                                        ? defLookupKey : defLookupKey.substr(separator + 2))
                                     + "`; add `using " + *module + "`";
                             }
                             throw RuntimeError(message, loc);
@@ -3625,7 +3643,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     const auto& clause = selected
                         ? *selected : it->second[0]->clauses[0];
                     const auto receiverOffset =
-                        receiverArgumentOffset(lookupName, args);
+                        receiverArgumentOffset(defLookupKey, args);
                     // Build full arg list: place named args by matching
                     // param names first, then fill whatever slots remain
                     // (in order) from the positional args. Named-first

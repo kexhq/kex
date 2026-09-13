@@ -2,6 +2,13 @@ let add(a, b) = a + b
 let multiply(a, b) = a * b
 let greet(greeting, name) = "${greeting}, ${name}!"
 let triple(n) = n * 3
+let describe(name: String, loud: Bool) -> String do
+  return "HI ${name}!" if loud
+  return "hi ${name}"
+end
+let banner() -> String do
+  "hi"
+end
 
 module Outer do
   module Inner do
@@ -67,4 +74,15 @@ main do
   IO.printLine(["hi"].map(~Outer.Inner.Deep.shout))
   IO.printLine([1, 2].map(~Outer.Inner.Deep.add(10)))
   IO.printLine(~Outer.Inner.Deep.add(3)(4))
+
+  # named-arg call through a bare `~name` capture must match by NAME, not by
+  # the call site's written order (kexhq/kex#309)
+  let f = ~describe
+  IO.printLine(f(name: "Ada", loud: true))
+  IO.printLine(f(loud: false, name: "Bea"))
+
+  # a bare `~name` on a zero-arg function is the function VALUE, never an
+  # auto-call of it (kexhq/kex#312)
+  let thunk = ~banner
+  IO.printLine(thunk())
 end
