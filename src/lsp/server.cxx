@@ -11,6 +11,7 @@
 #include "../semantic/types.hxx"
 #include "../module/resolver.hxx"
 #include "../validation/tag_validator.hxx"
+#include "ket_template.hxx"
 #include "tey_roots.hxx"
 
 #include <lsp/connection.h>
@@ -62,6 +63,13 @@ struct Document {
     std::string path;
     std::string text;
     int version = 0;
+    // Non-empty exactly for a `.ket` template: `text` above is then the
+    // SYNTHETIC Kex source `ket::translate` produced (what the rest of this
+    // struct, and the analyzer, actually see), and `ketOriginalText` is the
+    // real `.ket` bytes the client is editing. `ketSegments` maps between
+    // them so diagnostics can point back at the template (kexhq/kex#317).
+    std::string ketOriginalText;
+    std::vector<kex::lsp::ket::Segment> ketSegments;
     std::vector<HoverEntry> hoverEntries;
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
@@ -384,6 +392,82 @@ auto protocolPosition(const SourceLocation& location,
 // source helpers.
 auto identifierLengthAt(const std::string& source, const SourceLocation& location)
     -> unsigned int;
+
+// Translates a SYNTHETIC location the analyzer reported for a `.ket`
+// document's generated Kex (see `Document::ketOriginalText`) back into the
+// original template's line/column, or nullopt when it falls in
+// synthetic-only scaffolding (the generated function signature, the
+// wrapping parens around an interpolation, `do`/`end`) with nothing in the
+// template to point at (kexhq/kex#317). Identity for an ordinary `.kex`
+// document (`ketOriginalText` empty).
+auto translateKetLocation(const Document& document, SourceLocation location)
+    -> std::optional<SourceLocation> {
+    if (document.ketOriginalText.empty()) return location;
+    if (location.startOffset < 0) return std::nullopt;
+    const auto origOffset =
+        kex::lsp::ket::mapOffset(document.ketSegments, location.startOffset);
+    if (origOffset < 0) return std::nullopt;
+    int line = 1, column = 1;
+    for (int i = 0; i < origOffset &&
+                    i < static_cast<int>(document.ketOriginalText.size());
+         i++) {
+        if (document.ketOriginalText[i] == '\n') {
+            line++;
+            column = 1;
+        } else {
+            column++;
+        }
+    }
+    location.line = line;
+    location.column = column;
+    return location;
+}
+
+// The reverse of `translateKetLocation`: an incoming request position, given
+// by the client in the ORIGINAL `.ket` file's coordinates, translated to the
+// SYNTHETIC coordinates `document.text` and the analyzer actually hold — so
+// hover (and any future position-based request) can look the document up
+// exactly as it does for an ordinary `.kex` file from here on. Returns
+// nullopt when the position falls outside every hole (the template's own
+// literal text, or its frontmatter): there is no Kex there to ask about.
+// Identity for an ordinary `.kex` document.
+auto translateKetPositionToSynthetic(const Document& document,
+                                     ::lsp::Position original)
+    -> std::optional<::lsp::Position> {
+    if (document.ketOriginalText.empty()) return original;
+    size_t lineStart = 0;
+    for (unsigned int current = 0; current < original.line; ++current) {
+        const auto newline = document.ketOriginalText.find('\n', lineStart);
+        if (newline == std::string::npos) return std::nullopt;
+        lineStart = newline + 1;
+    }
+    const auto newline = document.ketOriginalText.find('\n', lineStart);
+    const auto lineEnd = newline == std::string::npos
+        ? document.ketOriginalText.size() : newline;
+    const auto origOffset = byteOffsetForUtf16Column(
+        document.ketOriginalText, lineStart, lineEnd, original.character);
+    int synOffset = -1;
+    for (const auto& seg : document.ketSegments)
+        if (static_cast<int>(origOffset) >= seg.origStart &&
+            static_cast<int>(origOffset) < seg.origEnd) {
+            synOffset = seg.synStart +
+                        (static_cast<int>(origOffset) - seg.origStart);
+            break;
+        }
+    if (synOffset < 0) return std::nullopt;
+    int line = 1, column = 1;
+    for (int i = 0; i < synOffset && i < static_cast<int>(document.text.size());
+         i++) {
+        if (document.text[i] == '\n') {
+            line++;
+            column = 1;
+        } else {
+            column++;
+        }
+    }
+    return protocolPosition(SourceLocation{document.path, line, column},
+                            &document.text);
+}
 
 // Where a diagnostic's squiggle ends when the checker reported only a start.
 // One character was all it ever underlined, so an error about `parseValue`
@@ -2265,7 +2349,24 @@ private:
         auto path = uriPath(uri);
         auto& document = m_documents[key];
         auto previousReceiverTypes = std::move(document.localReceiverTypes);
+        // A `.ket` template (any host extension: `.html.ket`, `.md.ket`, ...)
+        // is not Kex source itself — feed the analyzer the synthetic Kex
+        // `ket::translate` extracts from its `<% %>` holes instead, so the
+        // rest of this pipeline needs no idea `.ket` exists (kexhq/kex#317).
+        // `ketOriginalText` stays empty for an ordinary `.kex` document,
+        // which is what every other read of it below treats as "not a ket
+        // document".
+        std::string ketOriginalText;
+        std::vector<kex::lsp::ket::Segment> ketSegments;
+        if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".ket") == 0) {
+            auto translation = kex::lsp::ket::translate(text);
+            ketOriginalText = std::move(text);
+            ketSegments = std::move(translation.segments);
+            text = std::move(translation.source);
+        }
         document = {path, std::move(text), version};
+        document.ketOriginalText = std::move(ketOriginalText);
+        document.ketSegments = std::move(ketSegments);
         document.recoveredReceivers.clear();
         // Keep the last valid receiver types while the user is typing syntax
         // that temporarily cannot be parsed, most notably the trailing dot
@@ -2560,14 +2661,43 @@ private:
                              std::to_string(diagnostic.location.column) + ":" +
                              diagnostic.message;
             if (!seen.insert(key).second) continue;
+            // For a `.ket` document, every location below is in SYNTHETIC
+            // coordinates (what the generated Kex the analyzer actually saw
+            // looks like) — translate back to the template's own bytes, or
+            // drop the diagnostic when it points at scaffolding with no
+            // template text behind it (kexhq/kex#317). Identity, and
+            // unreached, for an ordinary `.kex` document or a diagnostic
+            // about some OTHER file.
+            std::optional<SourceLocation> translatedLocation;
+            std::optional<SourceLocation> translatedEndLocation;
+            const bool isKetLocation =
+                !document.ketOriginalText.empty() &&
+                diagnostic.location.file == document.path;
+            if (isKetLocation) {
+                translatedLocation = translateKetLocation(document, diagnostic.location);
+                if (!translatedLocation) continue;
+                if (diagnostic.endLocation) {
+                    translatedEndLocation =
+                        translateKetLocation(document, *diagnostic.endLocation);
+                    if (!translatedEndLocation) translatedEndLocation = translatedLocation;
+                }
+            }
             const std::string* diagnosticSource =
-                diagnostic.location.file == document.path ? &document.text : nullptr;
+                diagnostic.location.file == document.path
+                    ? (isKetLocation ? &document.ketOriginalText : &document.text)
+                    : nullptr;
+            const SourceLocation& effectiveLocation =
+                translatedLocation ? *translatedLocation : diagnostic.location;
+            const SourceLocation* effectiveEndLocation =
+                isKetLocation
+                    ? (translatedEndLocation ? &*translatedEndLocation : nullptr)
+                    : (diagnostic.endLocation ? &*diagnostic.endLocation : nullptr);
             ::lsp::Diagnostic item{
                 .range = {
-                    .start = protocolPosition(diagnostic.location, diagnosticSource),
-                    .end = diagnostic.endLocation
-                               ? protocolPosition(*diagnostic.endLocation, diagnosticSource)
-                               : pointEnd(diagnostic.location, diagnosticSource),
+                    .start = protocolPosition(effectiveLocation, diagnosticSource),
+                    .end = effectiveEndLocation
+                               ? protocolPosition(*effectiveEndLocation, diagnosticSource)
+                               : pointEnd(effectiveLocation, diagnosticSource),
                 },
                 .message = diagnostic.message,
                 .severity = diagnostic.level == semantic::Diagnostic::Level::Error
@@ -2606,6 +2736,18 @@ private:
         const auto key = params.textDocument.uri.toString();
         const auto found = m_documents.find(key);
         if (found == m_documents.end()) return ::lsp::Array<::lsp::CompletionItem>{};
+        // A `.ket` template's positions arrive in the ORIGINAL file's
+        // coordinates; everything below reads `document.text`, the
+        // SYNTHETIC Kex the analyzer indexed (kexhq/kex#317). Translate
+        // once, here. Unlike hover/diagnostics there is no position to
+        // translate back afterward: a completion item never carries a
+        // `.textEdit` here, so the client's own word-range replacement is
+        // what inserts it, against the buffer it actually has open.
+        if (!found->second.ketOriginalText.empty()) {
+            auto synthetic = translateKetPositionToSynthetic(found->second, params.position);
+            if (!synthetic) return ::lsp::Array<::lsp::CompletionItem>{};
+            params.position = *synthetic;
+        }
         const auto prefix = completionPrefix(found->second.text,
                                              params.position.line,
                                              params.position.character);
@@ -3172,6 +3314,15 @@ private:
         const auto found = m_documents.find(key);
         if (found == m_documents.end()) return {};
         const auto& document = found->second;
+        // A `.ket` template's positions arrive in the ORIGINAL file's
+        // coordinates; everything below reads `document.text`, which is the
+        // SYNTHETIC Kex the analyzer indexed (kexhq/kex#317). Translate once,
+        // here, so the rest of this function needs no idea `.ket` exists.
+        if (!document.ketOriginalText.empty()) {
+            auto synthetic = translateKetPositionToSynthetic(document, params.position);
+            if (!synthetic) return {};
+            params.position = *synthetic;
+        }
         const auto word = wordAt(document.text, params.position.line,
                                  params.position.character);
         if (word.text.empty()) return {};
@@ -3675,20 +3826,34 @@ private:
             markdown += "\n\n`" + word.text + "` calls `" + lookupName +
                         "` and rebinds the receiver.";
         if (!documentation.empty()) markdown += "\n\n" + renderRdoc(documentation);
-        const SourceLocation start{document.path,
-                                   static_cast<int>(params.position.line + 1),
-                                   static_cast<int>(word.byteColumn)};
-        const SourceLocation end{document.path,
-                                 static_cast<int>(params.position.line + 1),
-                                 static_cast<int>(word.byteColumn + word.byteLength)};
+        SourceLocation start{document.path,
+                             static_cast<int>(params.position.line + 1),
+                             static_cast<int>(word.byteColumn)};
+        SourceLocation end{document.path,
+                          static_cast<int>(params.position.line + 1),
+                          static_cast<int>(word.byteColumn + word.byteLength)};
+        // Both carry their byte offset in the SYNTHETIC source (the same
+        // one `hoverWordOffset` was computed from above) so a `.ket`
+        // document's range can be translated back through its hole map,
+        // same as a diagnostic's (kexhq/kex#317). Identity for `.kex`.
+        start.startOffset = static_cast<int>(hoverWordOffset);
+        end.startOffset = static_cast<int>(hoverWordOffset + word.byteLength);
+        const auto translatedStart = translateKetLocation(document, start);
+        const auto translatedEnd = translateKetLocation(document, end);
+        if (!document.ketOriginalText.empty() &&
+            (!translatedStart || !translatedEnd))
+            return {};
+        const std::string* rangeSource = document.ketOriginalText.empty()
+            ? &document.text
+            : &document.ketOriginalText;
         return ::lsp::Hover{
             .contents = ::lsp::MarkupContent{
                 .kind = ::lsp::MarkupKind::Markdown,
                 .value = std::move(markdown),
             },
             .range = ::lsp::Range{
-                .start = protocolPosition(start, &document.text),
-                .end = protocolPosition(end, &document.text),
+                .start = protocolPosition(*translatedStart, rangeSource),
+                .end = protocolPosition(*translatedEnd, rangeSource),
             },
         };
     }

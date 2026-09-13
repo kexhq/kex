@@ -147,6 +147,162 @@ int main() {
                        "declaration-default diagnostics did not reach the LSP");
         });
 
+        it("publishes diagnostics for a .ket template, mapped back to its own lines", []() {
+            // kexhq/kex#317: the server treats a `.ket` file as the template
+            // it is, scanning its `<% %>` holes into a synthetic Kex
+            // function it can run the ordinary analyzer against, then
+            // translates any diagnostic's position back through the holes'
+            // byte ranges. `count` comes from the `params:` frontmatter;
+            // `missingVariable` does not exist anywhere, so this must
+            // surface as a real "Undefined" diagnostic — and specifically on
+            // line 3 (0-based), the actual `<%= %>` line, not some line
+            // inside the server's own generated wrapper function.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-template.html.ket","languageId":"ket-html","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count + missingVariable %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("publishDiagnostics") != std::string::npos,
+                       "missing diagnostics notification for .ket template");
+            assertTrue(result.find("missingVariable") != std::string::npos,
+                       "undefined name inside a .ket hole never reached the LSP: " + result);
+            assertTrue(result.find("\"line\":3") != std::string::npos,
+                       "diagnostic did not map back to the template's own line: " + result);
+            assertTrue(result.find("\"line\":0") == std::string::npos &&
+                           result.find("\"line\":4") == std::string::npos,
+                       "diagnostic pointed at the frontmatter or the synthetic wrapper "
+                       "instead of the hole: " + result);
+        });
+
+        it("completes a params: receiver's methods inside a .ket hole", []() {
+            // `items` comes from `params: [items: [Integer]]`; completing
+            // right after `items.` must offer real List methods, which
+            // means the incoming position (line 3, template coordinates)
+            // had to translate to where `items.` actually sits in the
+            // synthetic function before the ordinary completion logic ran
+            // (kexhq/kex#317). No range needs translating back here: a
+            // completion item never carries a `.textEdit` in this server.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-completion.ket","languageId":"ket","version":1,"text":"---\nparams: [items: [Integer]]\n---\n<%= items. %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-completion.ket"},"position":{"line":3,"character":10}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto completion = responseForId(output.str(), 2);
+            assertTrue(completion.find(R"("label":"map")") != std::string::npos &&
+                           completion.find(R"("label":"count")") != std::string::npos,
+                       "completion after a params: receiver's dot inside a .ket hole "
+                       "did not offer List methods: " + completion);
+        });
+
+        it("hovers a params: name inside a .ket hole with its declared type", []() {
+            // Same translation the diagnostics test exercises, but for the
+            // request/response direction: the incoming position (line 3,
+            // pointing at "count" inside `<%= count %>`) arrives in the
+            // template's own coordinates and must be translated to the
+            // synthetic function's before lookup, and the returned hover
+            // range translated back before it reaches the client.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover.ket"},"position":{"line":3,"character":13}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto hover = responseForId(output.str(), 2);
+            assertTrue(hover.find("count") != std::string::npos &&
+                           hover.find("Integer") != std::string::npos,
+                       "hover inside a .ket hole lost the params: declared type: " + hover);
+            assertTrue(hover.find("\"line\":3") != std::string::npos,
+                       "hover range did not map back to the template's own line: " + hover);
+        });
+
+        it("returns no hover for a position in a .ket template's literal text", []() {
+            // Line 3, character 0 sits in "Total: " — plain template text,
+            // never Kex. A position outside every hole has nothing to map
+            // to, and must answer with no hover rather than misattributing
+            // the request to whatever the nearest hole happens to be.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover-text.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover-text.ket"},"position":{"line":3,"character":0}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto hover = responseForId(output.str(), 2);
+            assertTrue(hover.find("\"contents\"") == std::string::npos,
+                       "hover over the template's own literal text should be empty: " + hover);
+        });
+
+        it("resolves the wrong number type as a real diagnostic in a .ket hole", []() {
+            // The synthetic function's own DECLARED parameter type
+            // (`count: Integer`, from `params:`) must be honored by the
+            // analyzer, not just parsed — passing a String where the
+            // template declared an Integer must fail exactly as it would in
+            // an ordinary .kex function.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-template2.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\n<% let doubled: Integer = count + \"oops\" %>\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("Integer") != std::string::npos &&
+                           result.find("String") != std::string::npos,
+                       "a declared params: type was not honored inside a .ket hole: " + result);
+        });
+
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(
