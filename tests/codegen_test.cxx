@@ -951,6 +951,35 @@ int main() {
                        "a field read cannot choose between identical tags and sizes");
         });
 
+        it("rejects a free function colliding with a receiver method's bare name+arity", []() {
+            // A plain free function and a make-block method can end up
+            // sharing the same bare BEAM name + arity when they're merged
+            // into one compilation unit (the way the whole stdlib is merged
+            // for kex_prelude_beam). Previously this silently dropped or
+            // mismerged one definition's clauses instead of erroring —
+            // `readLine(cursor: Input)` (free) vs `FileHandle`'s `readLine`
+            // method both compiled to a bare `readLine/1`, and calling the
+            // free function silently invoked the method's intrinsic instead
+            // (kexhq/kex#250). Must be reported at lowering, not merged.
+            bool rejected = false;
+            try {
+                (void)emitIr(
+                    "make Widget do\n"
+                    "  let foo(extra: Integer) -> Integer do extra end\n"
+                    "end\n"
+                    "let foo(x: Integer, y: Integer) -> Integer do x + y end\n"
+                    "main do foo(1, 2) end\n",
+                    "free_method_collision");
+            } catch (const kex::ir::LowerError& error) {
+                rejected = contains(error.what(), "foo/2") &&
+                    contains(error.what(), "free function") &&
+                    contains(error.what(), "receiver method");
+            }
+            assertTrue(rejected,
+                       "a free function and a receiver method sharing a bare "
+                       "name+arity must be reported, not silently merged");
+        });
+
         it("defers unknown free-function errors until the function is called", []() {
             auto output = runIrOnBeam(
                 "let unused() = missingFunction()\n"

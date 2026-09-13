@@ -224,6 +224,16 @@ struct FunDef {
     // otherwise swallow the context slot and pass the dictionary in its
     // place (kexhq/kex#181).
     bool hasCapabilityContext = false;
+    // True for a plain top-level (or module-scoped) free function — never a
+    // `make` block method, dispatcher, or other receiver-shaped definition.
+    // The final duplicate-function merge pass (same name + arity) needs this:
+    // merging/concatenating clauses is only ever correct when every
+    // definition being combined is a receiver method (the SAME conceptual
+    // method reappearing across make blocks or traits for different types).
+    // A free function sharing a bare name + arity with anything else is
+    // always an accidental collision, never a legitimate overload, and must
+    // be reported rather than silently merged or dropped (kexhq/kex#250).
+    bool isFreeFunction = false;
 };
 
 struct Module {

@@ -8522,7 +8522,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // multi-clause FunDef (flushed on any other item / name change / end).
     std::vector<const ast::FunctionDef*> fnGroup;
     auto flushGroup = [&]() {
-        if (!fnGroup.empty()) { mod.functions.push_back(L.lowerFunctionGroup(fnGroup)); fnGroup.clear(); }
+        if (!fnGroup.empty()) {
+            auto def = L.lowerFunctionGroup(fnGroup);
+            def.isFreeFunction = true;
+            mod.functions.push_back(std::move(def));
+            fnGroup.clear();
+        }
     };
     // Bare top-level expressions (no explicit `main`) → one synthetic main/0.
     std::vector<const ast::ExprPtr*> bareExprs;
@@ -8682,8 +8687,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     auto flush = [&]{
                         if (!grp.empty()) {
                             auto it = L.moduleFunctions.find(L.currentModulePath + "." + grp.front()->name);
-                            mod.functions.push_back(L.lowerFunctionGroup(grp, "",
-                                it == L.moduleFunctions.end() ? grp.front()->name : it->second));
+                            auto def = L.lowerFunctionGroup(grp, "",
+                                it == L.moduleFunctions.end() ? grp.front()->name : it->second);
+                            def.isFreeFunction = true;
+                            mod.functions.push_back(std::move(def));
                             grp.clear();
                         }
                     };
@@ -9351,6 +9358,34 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 merged.emplace(key, std::move(fnc));
             } else {
                 auto& existing = it->second;
+                // A free function can never legitimately share a bare name +
+                // arity with a RECEIVER method: unlike two receiver methods
+                // (which may legitimately reappear across make blocks or
+                // traits for different types, and are meant to be merged
+                // below), there is no relationship between a free function
+                // and a method that would make combining their clauses
+                // correct. Concatenating or silently dropping clauses here
+                // previously did whichever happened by construction order: a
+                // same-shaped receiver method clause (no discriminating
+                // guard, since it's the type's sole owner) looked identical
+                // to a plain free function's own clause, so the free
+                // function's body vanished and its callers silently invoked
+                // the OTHER definition instead — worse than the "undefined
+                // function" this was originally reported as (kexhq/kex#250).
+                // Report the collision instead.
+                //
+                // Restricted to free-vs-method (not free-vs-free): the BEAM
+                // REPL legitimately re-lowers an already-defined free
+                // function again across reloads as the session's cumulative
+                // source grows, which reaches here as two isFreeFunction
+                // entries for the SAME declaration — a real duplicate there,
+                // not a collision, and merging is harmless for it.
+                if (existing.isFreeFunction != f.isFreeFunction)
+                    throw LowerError(
+                        "IR lower: `" + key.first + "/" +
+                        std::to_string(key.second) +
+                        "` names both a free function and a receiver method "
+                        "in this compilation unit — rename one of them");
                 // If the existing definition already ends with a catch-all
                 // but the incoming definition has specific patterns (e.g.
                 // ADT variant matches), insert the specific clauses BEFORE
