@@ -1,0 +1,28 @@
+# Spec: FileHandle.seek/.reset (kexhq/kex#317's REPL session surfaced the
+# gap — a handle read past what it needed had no way back to the top short
+# of reopening the file).
+using FS
+
+main do
+  Mock.FS.File("greeting.txt", "hello world")
+  let handle = FS.File.open("greeting.txt", FS.Read).try
+
+  # reset rewinds to the start, so the same content reads twice.
+  let first = handle.read.try
+  handle.reset.try
+  let second = handle.read.try
+  IO.printLine(first == second)
+
+  # seek moves to an absolute byte offset — read and write share one
+  # cursor, so a later read starts exactly there.
+  handle.seek(6).try
+  IO.printLine(handle.read.try)
+
+  # readLine's own cursor is the SAME one reset/seek move.
+  handle.reset.try
+  let Ok(Just(line)) = handle.readLine
+  handle.seek(6).try
+  let Ok(Just(rest)) = handle.readLine
+  IO.printLine(line)
+  IO.printLine(rest)
+end

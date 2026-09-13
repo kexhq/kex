@@ -1,0 +1,19 @@
+# kex: run-beam
+# Spec: FileHandle.seek/.reset on BEAM specifically — the tree-walker and
+# BEAM implementations are two separate native backends (std::fstream vs
+# file:position/2), so this pins the same behavior spec/filehandle_seek_reset
+# .spec.kex checks on the walker to the BEAM runtime too.
+using FS
+
+main do
+  Mock.FS.File("greeting.txt", "hello world")
+  let handle = FS.File.open("greeting.txt", FS.Read).try
+
+  let first = handle.read.try
+  handle.reset.try
+  let second = handle.read.try
+  IO.printLine(first == second)
+
+  handle.seek(6).try
+  IO.printLine(handle.read.try)
+end
