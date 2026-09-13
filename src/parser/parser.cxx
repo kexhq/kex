@@ -72,19 +72,30 @@ auto canMergeFunctionClause(const ast::FunctionDef& existing,
 // Every list a FunctionDef can land in (Program::items, ModuleDef::body,
 // MakeDef::body, VisibilityBlock::items, ...) is a `std::vector` of some
 // `std::variant` that includes `std::unique_ptr<ast::FunctionDef>` as one
-// alternative — this works against any of them unchanged.
+// alternative — this works against any of them unchanged. Takes the item
+// already wrapped in its variant, for a caller (parseProgram, over
+// parseTopLevelItem's ast::TopLevelItem) that never has a bare
+// unique_ptr<FunctionDef> of its own to offer.
 template <typename ItemVariant>
-void pushFunctionDefOrMergeClause(std::vector<ItemVariant>& items,
-                                  std::unique_ptr<ast::FunctionDef> def) {
-  if (!items.empty()) {
+void pushItemOrMergeClause(std::vector<ItemVariant>& items, ItemVariant item) {
+  if (auto* incoming = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+      incoming && *incoming && !items.empty()) {
     if (auto* existing =
             std::get_if<std::unique_ptr<ast::FunctionDef>>(&items.back());
-        existing && *existing && canMergeFunctionClause(**existing, *def)) {
-      (*existing)->clauses.push_back(std::move(def->clauses.front()));
+        existing && *existing && canMergeFunctionClause(**existing, **incoming)) {
+      (*existing)->clauses.push_back(std::move((*incoming)->clauses.front()));
       return;
     }
   }
-  items.push_back(std::move(def));
+  items.push_back(std::move(item));
+}
+
+// The common case: a call site that just parsed a FunctionDef directly and
+// wants it pushed (or merged) as-is, without constructing the variant itself.
+template <typename ItemVariant>
+void pushFunctionDefOrMergeClause(std::vector<ItemVariant>& items,
+                                  std::unique_ptr<ast::FunctionDef> def) {
+  pushItemOrMergeClause(items, ItemVariant(std::move(def)));
 }
 
 } // namespace
@@ -292,7 +303,7 @@ auto Parser::parseProgram() -> ast::Program {
           program.items.empty()) {
         program.items.push_back(parseModuleDef(true));
       } else {
-        program.items.push_back(parseTopLevelItem());
+        pushItemOrMergeClause(program.items, parseTopLevelItem());
       }
       for (auto &deferred : m_deferredTopLevelItems)
         program.items.push_back(std::move(deferred));
