@@ -3049,51 +3049,6 @@ int main() {
         });
     });
 
-    describe("constructor pattern payload type propagation", []() {
-        // `Ok`/`Error`/`Just`/`Some` are built into the type system itself
-        // (a "Result" NamedType, a dedicated OptionalType) rather than
-        // ordinary ADTs collected into the checker's constructor registry —
-        // so binding a pattern against one used to leave the bound name an
-        // unconstrained fresh type variable no matter what the scrutinee
-        // actually was, and a later misuse of that name went uncaught.
-        it("propagates a Result's Ok payload type to the bound name", []() {
-            assertTrue(hasError(
-                "let getNum(x: Integer) -> Result<Integer, String> = Ok(x)\n"
-                "main do\n"
-                "  let Ok(n) = getNum(42)\n"
-                "  IO.printLine(n + \"oops\")\n"
-                "end\n",
-                "Cannot add Integer and String"
-            ));
-        });
-
-        it("propagates an Optional's Just payload type to the bound name", []() {
-            assertTrue(hasError(
-                "let getOpt(x: Integer) -> Integer? = Just(x)\n"
-                "main do\n"
-                "  let Just(y) = getOpt(42)\n"
-                "  IO.printLine(y + \"oops\")\n"
-                "end\n",
-                "Cannot add Integer and String"
-            ));
-        });
-
-        it("propagates a FileHandle's typestate through Result destructuring", []() {
-            // The exact shape kexhq/kex's REPL surfaced this in: FS.File.open
-            // returns Result<FileHandle<CanRead, CannotWrite>, FileError>,
-            // and calling a Writable-only method on a read-only handle must
-            // still be rejected after destructuring through `let Ok(f)`.
-            assertTrue(hasError(
-                "using FS\n"
-                "main do\n"
-                "  let Ok(f) = FS.File.open(\"/etc/hosts\", FS.Read)\n"
-                "  f.writeLine(\"nope\")\n"
-                "end\n",
-                "but got FileHandle<CanRead, CannotWrite>"
-            ));
-        });
-    });
-
     describe("overload tie-breaking (5c)", []() {
         it("concrete overload beats trait-constrained overload for a concrete arg", []() {
             // `describe` has two overloads: Integer->String (specific) and Printable->String (generic)

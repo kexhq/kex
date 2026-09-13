@@ -585,6 +585,11 @@ struct FunctionClause {
     // evaluates bindings at compile time and leaves functions alone. Same
     // distinction MethodCall::parenthesized draws on the call side.
     bool hasParamList = false;
+    // Where THIS clause's own `let`/`foul` starts. `FunctionDef::location` is
+    // only the FIRST clause's — a multi-clause function's later clauses
+    // (kexhq/kex#262) need their own so a diagnostic about one clause points
+    // at the `let` that wrote it, not always the first.
+    SourceLocation location;
 };
 
 struct FunctionDef {

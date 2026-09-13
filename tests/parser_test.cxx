@@ -207,6 +207,75 @@ int main() {
             assertEqual(program.items.size(), size_t(2));
         });
 
+        it("folds adjacent same-name pattern clauses into one FunctionDef", []() {
+            // kexhq/kex#262: a pattern-dispatched multi-clause function —
+            // no parameter anywhere carries an explicit `: Type` — is safe
+            // to fold at parse time, matching what `FunctionDef::clauses`
+            // already promises to hold. `factorial(n: Int)` right above
+            // stays two declarations for exactly the reason this one
+            // becomes one: it has a typed parameter, which is the case an
+            // argument-type overload could also be spelled as.
+            auto program = parse(
+                "let factorial(0) = 1\n"
+                "let factorial(n) = n * factorial(n - 1)\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertEqual(def->clauses.size(), size_t(2));
+        });
+
+        it("keeps a bare-name clause and a typed clause separate", []() {
+            // Mixed: one clause typed, one not — merging would risk folding
+            // a genuine argument-type overload, so this stays unmerged
+            // exactly like two fully typed clauses would.
+            auto program = parse(
+                "let describe(x) = \"value\"\n"
+                "let describe(x: Integer) = \"number\"\n"
+            );
+            assertEqual(program.items.size(), size_t(2));
+        });
+
+        it("gives each folded clause its own source location", []() {
+            auto program = parse(
+                "let factorial(0) = 1\n"
+                "let factorial(n) = n * factorial(n - 1)\n"
+            );
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertEqual(def->clauses.size(), size_t(2));
+            assertEqual(def->clauses[0].location.line, 1);
+            assertEqual(def->clauses[1].location.line, 2);
+        });
+
+        it("does not fold a foul clause into a pure one of the same name", []() {
+            auto program = parse(
+                "let step(0) = 1\n"
+                "foul step(n) = n\n"
+            );
+            assertEqual(program.items.size(), size_t(2));
+        });
+
+        it("does not fold clauses of different written arity", []() {
+            auto program = parse(
+                "let step(0) = 1\n"
+                "let step(n, extra) = n + extra\n"
+            );
+            assertEqual(program.items.size(), size_t(2));
+        });
+
+        it("folds pattern clauses inside a make block", []() {
+            auto program = parse(
+                "type Tree = Empty | Node(Integer, Tree, Tree)\n"
+                "make Tree do\n"
+                "  let insert(@Empty, value) = Node(value, Empty, Empty)\n"
+                "  let insert(@Node(c, l, r), value) = Node(c, l, r)\n"
+                "end\n"
+            );
+            auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[1]);
+            assertEqual(make->body.size(), size_t(1));
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(make->body[0]);
+            assertEqual(fn->clauses.size(), size_t(2));
+        });
+
         it("parses main block", []() {
             auto program = parse("main do\n  let x = 5\nend");
             assertEqual(program.items.size(), size_t(1));
