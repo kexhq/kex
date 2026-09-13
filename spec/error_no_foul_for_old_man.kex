@@ -3,7 +3,7 @@ let sayHello() = IO.printLine("Hello World!")
 foul actuallySayHello() = IO.printLine("Hello World!")
 
 main do
-  10.times { actuallySayHello }
+  10.times { |_| actuallySayHello }
 
-  10.times { sayHello }
+  10.times { |_| sayHello }
 end

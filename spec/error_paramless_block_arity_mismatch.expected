@@ -1,0 +1,9 @@
+spec/error_paramless_block_arity_mismatch.kex:22:16: error: `apply` expects argument 1 to be Integer -> String, but got () -> String
+
+apply : (Integer -> String) -> String
+spec/error_paramless_block_arity_mismatch.kex:29:16: error: `apply` expects argument 1 to be Integer -> String, but got () -> String
+
+apply : (Integer -> String) -> String
+spec/error_paramless_block_arity_mismatch.kex:32:16: error: `apply` expects argument 1 to be Integer -> String, but got Integer -> T7 -> String
+
+apply : (Integer -> String) -> String
