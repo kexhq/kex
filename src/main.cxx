@@ -1888,6 +1888,101 @@ auto erlcExecutable() -> std::string {
   return "erlc";
 }
 
+// ── Compiled-module cache (kexhq/kex#323) ───────────────────────────────────
+//
+// erlc is most of a build: every `--compile` re-ran it over every reachable
+// module, including opt-in stdlib modules that never change. A module's .beam
+// is a pure function of its Core Erlang text and the erlc that compiled it, so
+// the cache is content-addressed on exactly that and needs no dependency
+// tracking to stay correct: anything upstream that changes what a module
+// compiles to changes its .core text, and so its key. The KexI chunk is not
+// cached — it is attached afresh after every build from the program's own
+// analysis, exactly as for a freshly compiled module.
+
+// Where cached .beam files live: $KEX_CACHE, else $XDG_CACHE_HOME/kex, else
+// ~/.cache/kex. `KEX_CACHE=off` (or `0`, or empty) turns the cache off.
+auto beamCacheRoot() -> std::optional<std::filesystem::path> {
+  if (const char *configured = std::getenv("KEX_CACHE")) {
+    const std::string value = configured;
+    if (value.empty() || value == "off" || value == "0") return std::nullopt;
+    return std::filesystem::path{value} / "beam";
+  }
+  if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+    return std::filesystem::path{xdg} / "kex" / "beam";
+  if (const char *home = std::getenv("HOME"); home && *home)
+    return std::filesystem::path{home} / ".cache" / "kex" / "beam";
+  return std::nullopt;
+}
+
+// The erlc actually run, as a string that changes whenever it does: its
+// resolved path (an OTP upgrade lands in a new versioned directory) plus the
+// file's size and modification time. Asking erlc for its OTP release would
+// start a VM — the very cost the cache exists to avoid.
+auto erlcIdentity() -> std::string {
+  namespace fs = std::filesystem;
+  std::string command = erlcExecutable();
+  fs::path located{command};
+  if (!located.has_parent_path())
+    if (const char *path = std::getenv("PATH")) {
+      std::string directories = path;
+      size_t start = 0;
+      while (start <= directories.size()) {
+        const auto end = directories.find(':', start);
+        const auto directory = directories.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        std::error_code ec;
+        if (!directory.empty() && fs::exists(fs::path{directory} / command, ec)) {
+          located = fs::path{directory} / command;
+          break;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+      }
+    }
+  std::error_code ec;
+  const auto canonical = fs::canonical(located, ec);
+  if (ec) return command;
+  const auto size = fs::file_size(canonical, ec);
+  const auto modified = fs::last_write_time(canonical, ec).time_since_epoch().count();
+  return canonical.string() + "|" +
+         std::to_string(static_cast<unsigned long long>(size)) + "|" +
+         std::to_string(static_cast<long long>(modified));
+}
+
+// The cache key for one module: SHA-256 over everything its .beam depends on.
+auto beamCacheKey(const std::string &coreSource, const std::string &erlc,
+                  const std::string &flags) -> std::string {
+  std::string material = "kex-beam-cache-v1\n" + kex::versionNumber() + "\n" +
+                         kex::kGitRevision + "\n" + erlc + "\n" + flags + "\n" +
+                         coreSource;
+  const auto digest = kex::beam::computeSha256(
+      std::vector<uint8_t>(material.begin(), material.end()));
+  static const char *hex = "0123456789abcdef";
+  std::string key;
+  for (const auto byte : digest) {
+    key += hex[byte >> 4];
+    key += hex[byte & 0xF];
+  }
+  return key;
+}
+
+// Stores a freshly compiled .beam under its key. Written beside the final name
+// and renamed into place, so two builds sharing the cache never read half a
+// file; any failure only means the next build compiles that module again.
+auto storeCachedBeam(const std::filesystem::path &entry,
+                     const std::filesystem::path &beam) -> void {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::create_directories(entry.parent_path(), ec);
+  if (ec) return;
+  auto staging = entry;
+  staging += ".tmp." + std::to_string(::getpid());
+  fs::copy_file(beam, staging, fs::copy_options::overwrite_existing, ec);
+  if (ec) return;
+  fs::rename(staging, entry, ec);
+  if (ec) fs::remove(staging, ec);
+}
+
 #ifndef KEX_RUNTIME_OTP_FLOOR
 #define KEX_RUNTIME_OTP_FLOOR 0
 #endif
@@ -4322,10 +4417,37 @@ int main(int argc, char *argv[]) {
       // and the interpreter path below has always silenced them for exactly
       // that reason. Real erlc failures still fail the exit-code check and
       // are re-run loudly below.
-      std::string coreCmd = erlcExecutable() + " +from_core -W0 -pa " +
+      //
+      // Modules whose Core Erlang an earlier build already compiled with this
+      // erlc come straight from the cache (kexhq/kex#323); only the rest go
+      // to erlc, and those are stored for next time once it succeeds.
+      const auto cacheRoot = beamCacheRoot();
+      const std::string erlcFlags = "+from_core -W0";
+      const std::string erlc = cacheRoot ? erlcIdentity() : std::string{};
+      std::vector<size_t> toCompile;
+      std::vector<std::filesystem::path> cacheEntries(moduleResults.size());
+      for (size_t moduleIndex = 0; moduleIndex < moduleResults.size(); ++moduleIndex) {
+        if (cacheRoot) {
+          const auto key =
+              beamCacheKey(moduleResults[moduleIndex].source, erlc, erlcFlags);
+          cacheEntries[moduleIndex] = *cacheRoot / key.substr(0, 2) / (key + ".beam");
+          std::error_code ec;
+          const auto target = std::filesystem::path{outputDir} /
+                              (moduleResults[moduleIndex].moduleName + ".beam");
+          if (std::filesystem::is_regular_file(cacheEntries[moduleIndex], ec) &&
+              std::filesystem::copy_file(cacheEntries[moduleIndex], target,
+                                         std::filesystem::copy_options::overwrite_existing,
+                                         ec) &&
+              !ec)
+            continue;
+        }
+        toCompile.push_back(moduleIndex);
+      }
+
+      std::string coreCmd = erlcExecutable() + " " + erlcFlags + " -pa " +
                             outputDir + " -o " + outputDir;
-      for (const auto& corePath : corePaths)
-        coreCmd += " " + corePath;
+      for (const auto moduleIndex : toCompile)
+        coreCmd += " " + corePaths[moduleIndex];
       if (!tempDir.empty()) {
         // Suppress erlc noise in temp-dir (interpreter/-R) mode —
         // was `2>&1` (merging stderr into stdout), the OPPOSITE of
@@ -4341,10 +4463,15 @@ int main(int argc, char *argv[]) {
         // regardless of where its diagnostic text went.
         coreCmd += " > /dev/null 2>&1";
       } else {
-        for (const auto& moduleResult : moduleResults)
-          std::cerr << "  Compile: " << moduleResult.moduleName << "\n";
+        for (const auto moduleIndex : toCompile)
+          std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
       }
-      int erlcRet = runShellCommand(coreCmd);
+      int erlcRet = toCompile.empty() ? 0 : runShellCommand(coreCmd);
+      if (erlcRet == 0 && cacheRoot)
+        for (const auto moduleIndex : toCompile)
+          storeCachedBeam(cacheEntries[moduleIndex],
+                          std::filesystem::path{outputDir} /
+                              (moduleResults[moduleIndex].moduleName + ".beam"));
       if (erlcRet != 0) {
         // The quiet mode above swallows erlc's own diagnostic — which is the
         // only thing that says WHY. Re-run it loudly on failure so the
@@ -4355,8 +4482,8 @@ int main(int argc, char *argv[]) {
         if (!tempDir.empty()) {
           std::string loudCmd = erlcExecutable() + " +from_core -pa " +
                                 outputDir + " -o " + outputDir;
-          for (const auto& corePath : corePaths)
-            loudCmd += " " + corePath;
+          for (const auto moduleIndex : toCompile)
+            loudCmd += " " + corePaths[moduleIndex];
           runShellCommand(loudCmd);
         }
         std::cerr << "error: erlc failed\n";

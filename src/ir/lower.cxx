@@ -7976,6 +7976,34 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
     return receiverPat ? params.size() : params.size() + 1;
 }
 
+// Whether `next` continues the function group `first` opened — the ONE rule
+// every lowering site uses to turn adjacent declarations into a single BEAM
+// function (kexhq/kex#262). The parser already folds the untyped clauses of a
+// function into one FunctionDef; declarations it leaves separate (typed ones,
+// which may be overloads) still arrive here one by one. Four sites each spelled
+// this out by hand before, and #261 was what a drifting copy of the same rule
+// cost.
+static auto continuesFunctionGroup(const ast::FunctionDef& first,
+                                   const ast::FunctionDef& next) -> bool {
+    return first.name == next.name && beamArity(&first) == beamArity(&next);
+}
+
+// The same rule inside a `make` block, where one more thing separates groups:
+// a method overloaded by a non-receiver parameter's type becomes one BEAM
+// function per signature, so a declaration with different dispatch types starts
+// a new group (kexhq/kex#233).
+static auto continuesMethodGroup(
+    const ast::FunctionDef& first, const ast::FunctionDef& next,
+    const std::string& receiverType,
+    const std::unordered_set<std::string>& argumentOverloadedMethods) -> bool {
+    if (!continuesFunctionGroup(first, next)) return false;
+    if (!argumentOverloadedMethods.count(
+            localOverloadKey(next.name, receiverType, beamArity(&next))))
+        return true;
+    return methodDispatchTypes(first, receiverType) ==
+           methodDispatchTypes(next, receiverType);
+}
+
 } // namespace
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
@@ -8544,7 +8572,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
 
     for (const auto& item : prog.items) {
         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
-            if (!fnGroup.empty() && (fnGroup.front()->name != (*fdp)->name || beamArity(fnGroup.front()) != beamArity(fdp->get()))) flushGroup();
+            if (!fnGroup.empty() && !continuesFunctionGroup(*fnGroup.front(), **fdp)) flushGroup();
             fnGroup.push_back(fdp->get());
             continue;
         }
@@ -8573,18 +8601,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 auto flushM = [&]{ if (!mgrp.empty()) { mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName)); mgrp.clear(); } };
                 auto pushFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
-                    bool differentOverload = false;
                     if (!mgrp.empty() &&
-                        L.argumentOverloadedMethods.count(localOverloadKey(
-                            fd->name, typeName, beamArity(fd)))) {
-                        differentOverload =
-                            methodDispatchTypes(*mgrp.front(), typeName) !=
-                            methodDispatchTypes(*fd, typeName);
-                    }
-                    if (!mgrp.empty() &&
-                        (mgrp.front()->name != fd->name ||
-                         beamArity(mgrp.front()) != beamArity(fd) ||
-                         differentOverload))
+                        !continuesMethodGroup(*mgrp.front(), *fd, typeName,
+                                              L.argumentOverloadedMethods))
                         flushM();
                     mgrp.push_back(fd);
                 };
@@ -8706,7 +8725,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     };
                     auto push = [&](const ast::FunctionDef* fd) {
                         if (!fd) return;
-                        if (!grp.empty() && (grp.front()->name != fd->name || beamArity(grp.front()) != beamArity(fd))) flush();
+                        if (!grp.empty() && !continuesFunctionGroup(*grp.front(), *fd)) flush();
                         grp.push_back(fd);
                     };
                     auto emitMake = [&](const ast::MakeDef* mk) {
@@ -8734,16 +8753,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             // A module-nested `make` (any file-header module,
                             // not just an explicit `module X do ... end`)
                             // reaches this path instead of the top-level one.
-                            bool differentOverload = false;
                             if (!methods.empty() &&
-                                L.argumentOverloadedMethods.count(localOverloadKey(
-                                    fd->name, typeName, beamArity(fd))))
-                                differentOverload =
-                                    methodDispatchTypes(*methods.front(), typeName) !=
-                                    methodDispatchTypes(*fd, typeName);
-                            if (!methods.empty() && (methods.front()->name != fd->name ||
-                                beamArity(methods.front()) != beamArity(fd) ||
-                                differentOverload)) flushMethods();
+                                !continuesMethodGroup(*methods.front(), *fd, typeName,
+                                                      L.argumentOverloadedMethods))
+                                flushMethods();
                             methods.push_back(fd);
                         };
                         for (const auto& mi : mk->body) {
