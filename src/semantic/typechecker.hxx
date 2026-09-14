@@ -301,6 +301,9 @@ private:
     auto popScope() -> void;
     auto defineVar(const std::string& name, TypePtr type) -> void;
     auto lookupVar(const std::string& name) const -> TypePtr;
+    // The concrete declared result of a zero-parameter binding, which a bare
+    // reference to it auto-calls; nullptr when there is none (#329).
+    auto zeroArgBindingResult(const std::string& name) -> TypePtr;
 
     // Error reporting
     auto error(SourceLocation loc, const std::string& msg) -> void;

@@ -101,6 +101,14 @@ private do
     end
 
     let allowComments = Kex.Intrinsic.Map.getWithDefault(options, allowCommentsKey(), false)
+    # On BEAM, OTP's own decoder builds the same value in a fraction of the
+    # time (kexhq/kex#333). It answers None for anything it will not vouch
+    # for — invalid input, JSONC, the tree-walker — and this parser runs.
+    if !allowComments
+      if let Just(value) = Kex.Intrinsic.Json.decode(text)
+        return Ok(value)
+      end
+    end
     let cursor = skipIgnored(Input { input: text }, allowComments).try
     let (value, afterValue) = parseValue(cursor, allowComments).try
     let rest = skipIgnored(afterValue, allowComments).try
@@ -135,25 +143,40 @@ end
 #   JSON.parse(JSON.stringify({ a: 1 }))   # => Ok({ a: 1 })
 stringify : Any -> String
 let stringify(value: Any) -> String do
-  match Kex.Intrinsic.Kex.kind(value) do
-    :none => return "null"
-    :bool => return value then "true" else "false"
-    :integer => return "${value}"
-    :float => return "${value}"
-    :string => return encodeString(value)
-    :list => return "[${value.map(~stringify).join(",")}]"
-    :map => do
-      let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
-        let (key, item) = entry
-        "${encodeString(objectKey(key))}:${stringify(item)}"
-      end
-      return "{${fields.join(",")}}"
-    end
-    _ => return "null"
+  # The BEAM encoder follows `stringifyValue` rule for rule (kexhq/kex#333);
+  # the tree-walker has none and answers None.
+  if let Just(text) = Kex.Intrinsic.Json.encode(value)
+    return text
   end
+  return stringifyValue(value)
 end
 
 private do
+  let stringifyValue(value: Any) -> String do
+    # An optional is JSON's nullable: `Just(x)` is `x`, as `None` is `null`.
+    # Without this a caller had to unwrap first, and the only spelling that
+    # type-checked was the meaningless `.or(None)`.
+    if let Just(inner) = value
+      return stringifyValue(inner)
+    end
+    match Kex.Intrinsic.Kex.kind(value) do
+      :none => return "null"
+      :bool => return value then "true" else "false"
+      :integer => return "${value}"
+      :float => return "${value}"
+      :string => return encodeString(value)
+      :list => return "[${value.map(~stringifyValue).join(",")}]"
+      :map => do
+        let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
+          let (key, item) = entry
+          "${encodeString(objectKey(key))}:${stringifyValue(item)}"
+        end
+        return "{${fields.join(",")}}"
+      end
+      _ => return "null"
+    end
+  end
+
   # A JSON object key is a string, but a Kex map literal is written with ATOM
   # keys (`{ n: 1 }`): the shape most values being stringified actually have.
   # Rendering one gives `:n`, so drop the leading colon; anything else goes

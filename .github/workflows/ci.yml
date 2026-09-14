@@ -363,7 +363,13 @@ jobs:
 
       - uses: ./.github/actions/restore-native
 
-      # Compiling Tey is the first assertion: it either builds with this
+      # `--compile` does not surface every type error `-C` does, so a stdlib
+      # signature change once shipped a Tey that died at runtime on paths no
+      # spec exercised (#227). Type-check it first.
+      - name: Type-check Tey
+        run: make -C tey check KEX="$(pwd)/build/kex"
+
+      # Compiling Tey is the next assertion: it either builds with this
       # compiler or it does not.
       - name: Build Tey
         run: make -o build build-tey

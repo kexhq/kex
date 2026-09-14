@@ -1,0 +1,33 @@
+# A qualified call names its target exactly, even when that target is declared
+# further down its module and an imported function shares its name
+# (kexhq/kex#103). `Tool.sha256` above the private `sha256` it names used to
+# reach `Digest.sha256` instead: at run time in the first module, and in the
+# checker (a String where Integer is declared) in the nested one.
+using Digest
+
+module Tool do
+  using Digest
+
+  foul checksum(path: String) -> Integer = Tool.sha256(path)
+
+  private do
+    let sha256(path: String) -> Integer = path.count
+  end
+end
+
+module Tey do
+  module Toolchain do
+    using Digest
+
+    foul checksum(path: String) -> Integer = Tey.Toolchain.sha256(path)
+
+    private do
+      let sha256(path: String) -> Integer = path.count
+    end
+  end
+end
+
+main do
+  IO.printLine("${Tool.checksum("abc")}")
+  IO.printLine("${Tey.Toolchain.checksum("abcd")}")
+end

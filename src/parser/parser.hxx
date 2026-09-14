@@ -171,6 +171,9 @@ private:
     // would otherwise report only "Expected pattern". No-op unless the token
     // after `let` is a keyword in an unambiguous name position.
     auto rejectReservedBindingName() -> void;
+    // At `if` after `return`: the if expression (`then`, or a deeper-indented
+    // body) rather than the value-less `return if COND` guard (#332).
+    auto isReturnIfExpressionAhead(int returnColumn) const -> bool;
     [[noreturn]] auto error(const std::string& message) -> void;
     auto syncToTopLevel() -> void;
     auto syncToStatement() -> void;

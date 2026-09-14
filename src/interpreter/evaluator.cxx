@@ -1165,6 +1165,11 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     }
 
     m_functionDefs[regName].push_back(&def);
+    // The module's own definition, not an import of the same name: `using
+    // Digest` inside `module Tool` must not keep answering `Tool.sha256` once
+    // Tool defines its own `sha256` (kexhq/kex#103).
+    if (!hasImplicitReceiver && !typeScope.empty())
+        m_moduleImportOrigins.erase(regName);
 
     // Capture regName by value so the closure always looks up the current
     // vector from the map — avoids a dangling pointer when unordered_map
@@ -1351,7 +1356,11 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     }
                 }
                 pushEnv();
-                for (const auto& [name, value] : capturedImports) m_env->define(name, value);
+                // An import captured before the module defined its own function
+                // of that name (a `private do` below the caller) must not shadow
+                // it: the module's definition is what `Tool.sha256` names (#103).
+                for (const auto& [name, value] : capturedImports)
+                    if (!m_functionDefs.contains(name)) m_env->define(name, value);
                 for (const auto& [name, value] : dictionaries)
                     m_env->define(name, value);
                 if (funcDef->isSlot && m_servingFrom)

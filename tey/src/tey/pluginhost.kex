@@ -21,10 +21,6 @@ end
 # JSON rather than Kex source: a plugin receives data and cannot make Tey
 # evaluate declarations smuggled into its context.
 let encodeInvocation(invocation: Invocation) -> String do
-  let member = match invocation.currentMember do
-    Just(name) => name
-    None => None
-  end
   let graph = invocation.graph.map do |dependency|
     {
       name: dependency.name,
@@ -47,7 +43,7 @@ let encodeInvocation(invocation: Invocation) -> String do
     operation: invocation.invocationOperation,
     context: {
       workspaceRoot: invocation.workspaceRoot,
-      currentMember: member,
+      currentMember: invocation.currentMember,
       members: invocation.members,
       graph: graph,
       lock: {

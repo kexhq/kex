@@ -1,0 +1,15 @@
+# A bare call to a declared function is checked against THAT function, even
+# when the prelude has a same-named receiver function the arguments happen to
+# fit (`String.get : String -> Integer -> Char?`) (kexhq/kex#324).
+module MyMod do
+  type Handler = String -> String
+
+  get : String -> Handler -> String
+  let get(path, handler) = handler(path)
+end
+
+using MyMod
+
+main do
+  IO.printLine(get("hi", 42))
+end

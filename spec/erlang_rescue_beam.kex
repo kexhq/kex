@@ -1,0 +1,24 @@
+# kex: run-beam
+# An exception raised inside an Erlang call is rescuable, by `trying … rescue`
+# and by a function-level `rescue`, like any Kex failure (kexhq/kex#326).
+foul decode(text: String) -> String do
+  trying do
+    let value = Erlang.Json.decode(text)
+    return "decoded ${Type.of(value).name}"
+  rescue
+    _ => return "rescued"
+  end
+end
+
+foul decodeWithRescue(text: String) -> String do
+  let value = Erlang.Json.decode(text)
+  return "decoded ${Type.of(value).name}"
+rescue |error|
+  return "rescued ${error}"
+end
+
+main do
+  IO.printLine(decode("{\"a\":1}"))
+  IO.printLine(decodeWithRescue("{nope"))
+  IO.printLine(decode("{nope"))
+end

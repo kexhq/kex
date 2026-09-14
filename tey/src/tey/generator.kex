@@ -12,8 +12,8 @@ let decode(text: String) -> [Operation] or! String do
     Ok(value) => value
   end
   return Error("generator protocol root must be an object") if Kex.Intrinsic.Kex.kind(root) != :map
-  let version = root["version"].or(None)
-  return Error("unsupported generator protocol version") if Kex.Intrinsic.Kex.kind(version) != :integer || "${version}" != "1"
+  let supported = root["version"].map { |version| Kex.Intrinsic.Kex.kind(version) == :integer && version == 1 }
+  return Error("unsupported generator protocol version") if supported != Just(true)
   let values = match root["operations"] do
     None => return Error("generator protocol has no operations")
     Just(items) => items
@@ -74,13 +74,16 @@ private do
     let value = values.first.try
     return Error("generator operation must be an object") if Kex.Intrinsic.Kex.kind(value) != :map
     let kind = "${value["kind"].or("")}"
-    let rawPath = value["path"].or(None)
-    return Error("generator operation requires a string path") if Kex.Intrinsic.Kex.kind(rawPath) != :string || "${rawPath}" == ""
-    let path = "${rawPath}"
+    let path = match value["path"] do
+      Just(rawPath) when Kex.Intrinsic.Kex.kind(rawPath) == :string && "${rawPath}" != "" => "${rawPath}"
+      _ => return Error("generator operation requires a string path")
+    end
     let operation = if kind == "write"
-      let content = value["content"].or(None)
-      return Error("generator write `${path}` requires string content") if Kex.Intrinsic.Kex.kind(content) != :string
-      WriteFile(path, "${content}")
+      let content = match value["content"] do
+        Just(text) when Kex.Intrinsic.Kex.kind(text) == :string => "${text}"
+        _ => return Error("generator write `${path}` requires string content")
+      end
+      WriteFile(path, content)
     elif kind == "delete"
       DeleteFile(path)
     else

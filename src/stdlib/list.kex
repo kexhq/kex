@@ -78,6 +78,17 @@ make [Number] do
   let max = Kex.Intrinsic.List.max(this)
 end
 
+make [[Y]] do
+  # Flattens exactly one level of nesting.
+  #
+  # @return [[Y]]
+  #
+  # @example
+  #   [[1, 2], [3, 4]].flatten   # => [1, 2, 3, 4]
+  flatten :> [Y]
+  let flatten = Kex.Intrinsic.List.flatten(this)
+end
+
 make [X], implement: Enumerable, Foldable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
@@ -469,15 +480,6 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3].zip(["a", "b", "c"])   # => [(1, "a"), (2, "b"), (3, "c")]
   zip :> [Y] -> [(X, Y)]
   let zip(other) = Kex.Intrinsic.List.zip(this, other)
-
-  # Flattens exactly one level of nesting. Only valid on lists of lists.
-  #
-  # @return [[Y]]
-  #
-  # @example
-  #   [[1, 2], [3, 4]].flatten   # => [1, 2, 3, 4]
-  flatten :> [X]
-  let flatten = Kex.Intrinsic.List.flatten(this)
 
   # Returns the elements sorted in ascending natural order.
   #

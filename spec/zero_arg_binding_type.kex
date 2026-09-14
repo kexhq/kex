@@ -1,0 +1,21 @@
+# Naming a zero-parameter binding auto-calls it, so the name has the declared
+# result type. It used to be Unknown, and `ids.reduce(...)` picked String's
+# overload and typed each element as Char (kexhq/kex#329).
+module Pages do
+  let ids -> [String] = ["a", "b"]
+
+  let labelFor(id: String) -> String = "page ${id}"
+
+  let byId -> {String: String} do
+    return ids.reduce({}) do |values, id|
+      values.put(id, labelFor(id))
+    end
+  end
+end
+
+let counts -> [Integer] = [1, 2, 3]
+
+main do
+  IO.printLine("${Pages.byId}")
+  IO.printLine("${counts.reduce(0) { |total, n| total + n }}")
+end

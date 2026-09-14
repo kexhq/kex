@@ -1,0 +1,10 @@
+# Used by spec/module_qualified_forward_call_crossfile.kex (kexhq/kex#103).
+module Forward.Tool
+
+using Digest
+
+foul checksum(path: String) -> Integer = Forward.Tool.sha256(path)
+
+private do
+  let sha256(path: String) -> Integer = path.count
+end

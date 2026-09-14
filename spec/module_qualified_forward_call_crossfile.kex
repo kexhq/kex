@@ -1,0 +1,11 @@
+# The file-header form of spec/module_qualified_forward_call.kex: the module
+# comes from lib/forward/tool.kex, and `Digest` arrives merged from source
+# with its own `sha256 : String -> String` annotation. That annotation's bare
+# name used to hide the module's unannotated `sha256` from the checker's
+# pre-pass, so `Forward.Tool.sha256` above it still resolved to Digest's
+# (kexhq/kex#103).
+using Forward.Tool
+
+main do
+  IO.printLine("${Forward.Tool.checksum("abcde")}")
+end

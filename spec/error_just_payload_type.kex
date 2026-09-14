@@ -1,0 +1,18 @@
+# `Just(item)` binds the optional's inner type. The payload used to be an
+# untyped variable: a wrong use went unreported, and `item.path` on a record
+# resolved to an unrelated imported `path` function (kexhq/kex#328).
+record Page do
+  id : String
+  path : String
+end
+
+let wantsInteger(n: Integer) -> Integer = n
+
+let misuse(found: Page?) -> Integer = match found do
+  Just(item) => wantsInteger(item)
+  None => 0
+end
+
+main do
+  IO.printLine("${misuse(None)}")
+end

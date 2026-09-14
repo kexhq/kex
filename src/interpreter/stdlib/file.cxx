@@ -777,6 +777,27 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto canon = std::filesystem::weakly_canonical(abs, ec);
         return Value::just(Value::string(ec ? abs.string() : canon.string()));
     });
+
+    // File.canonical(path) -> Result<String, FileError>: realpath(3), so every
+    // symlink, `.` and `..` is resolved and a missing component is an error.
+    reg("File::canonical", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto path = args.empty() ? std::string{} : args[0]->toString();
+        std::error_code ec;
+        auto canon = std::filesystem::canonical(path, ec);
+        if (!ec) return Value::ok(Value::string(canon.string()));
+        auto fileError = std::make_shared<Value>();
+        fileError->data = VariantValue{
+            "ReadFailed", "FileError", {Value::string(path)}, {}, {}};
+        return Value::error(fileError);
+    });
+
+    // File.symlink?(path) -> Bool, without following the link (lstat).
+    reg("File::symlink?", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::boolean(false);
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(args[0]->toString(), ec);
+        return Value::boolean(!ec && std::filesystem::is_symlink(status));
+    });
 }
 
 auto Evaluator::registerDirectoryBuiltins() -> void {

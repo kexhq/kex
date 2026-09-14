@@ -1,0 +1,16 @@
+# `flatten` on `[[T]]` is `[T]` (kexhq/kex#330).
+record Item do
+  name : String
+end
+
+let items(groups: [[String]]) -> [Item] do
+  let nested = groups.map do |group|
+    group.map { |name| Item { name } }
+  end
+  return nested.flatten
+end
+
+main do
+  IO.printLine("${items([["a"], ["b", "c"]]).count}")
+  IO.printLine("${[[1, 2], [3]].flatten.sum}")
+end

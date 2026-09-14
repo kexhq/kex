@@ -3,7 +3,8 @@
 -export([open/2, read/1, readBytes/1, write/2, writeBytes/2, append/2,
          'exists?'/1, 'file?'/1, 'directory?'/1,
          delete/1, copy/2, rename/2, lines/1, feed/1, size/1,
-         basename/1, dirname/1, extension/1, join/2, absolute/1]).
+         basename/1, dirname/1, extension/1, join/2, absolute/1,
+         canonical/1, 'symlink?'/1]).
 
 open(Path, Mode) -> kex_file:open(Path, Mode).
 read(Path) -> kex_file:read(Path).
@@ -25,3 +26,5 @@ dirname(Path) -> kex_file:dirname(Path).
 extension(Path) -> kex_file:extension(Path).
 join(A, B) -> kex_file:join(A, B).
 absolute(Path) -> kex_file:absolute(Path).
+canonical(Path) -> kex_file:canonical(Path).
+'symlink?'(Path) -> kex_file:'symlink?'(Path).

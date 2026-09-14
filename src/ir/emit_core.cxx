@@ -429,13 +429,25 @@ struct Emitter {
                 }
                 catchBody += "\n    end";
 
+                // Rescuable: a Kex failure (`throw {kex_try_error, E}`) and an
+                // Erlang `error` — the reason a raising Erlang call (`json:decode`)
+                // or a runtime fault (`badarith`) carries (#326). Everything else
+                // (`kex_return`, exits) re-raises untouched.
+                std::string tryErr = uniq("_E"), erlErr = uniq("_E"), erlTrc = uniq("_TrcE");
+                std::string unrescuable = freshWild();
                 return "try\n    " + body + "\n"
                        "of <" + rv + "> -> " + rv + "\n"
                        "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
-                       "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
-                       "    <'throw', {'kex_try_error', " + errVar + "}, " + trcAlias + "> when 'true' ->\n"
+                       "  case case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+                       "      <'throw', {'kex_try_error', " + tryErr + "}, " + trcAlias + "> when 'true' ->\n"
+                       "        {'kex_rescuable', " + tryErr + "}\n"
+                       "      <'error', " + erlErr + ", " + erlTrc + "> when 'true' ->\n"
+                       "        {'kex_rescuable', " + erlErr + "}\n"
+                       "      <" + c2 + ", " + r2 + ", " + tr2 + "> when 'true' -> 'kex_unrescuable'\n"
+                       "    end of\n"
+                       "    {'kex_rescuable', " + errVar + "} when 'true' ->\n"
                        "    " + catchBody + "\n"
-                       "    <" + c2 + ", " + r2 + ", " + tr2 + "> when 'true' -> primop 'raise'(" +
+                       "    " + unrescuable + " when 'true' -> primop 'raise'(" +
                             trc + ", " + rsn + ")\n"
                        "  end";
             } else {
