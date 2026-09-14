@@ -6,6 +6,8 @@
 #include "beam/term_builder.hxx"
 #include "ast/convert.hxx"
 #include "ast/syntax.hxx"
+#include <atomic>
+#include <random>
 #include "common/artifact_versions.hxx"
 #include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
@@ -1235,6 +1237,115 @@ struct LoadedDep {
   std::unique_ptr<kex::ast::Program> program;
 };
 
+// A suffix no other writer of the same cache entry will pick, for the
+// staging file a cache write renames into place. `getpid()` is unavailable
+// under emscripten, and the wasm build compiles this file too; a random
+// per-process value plus a counter serves the same purpose everywhere.
+auto stagingSuffix() -> std::string {
+  static const auto process = [] {
+    std::random_device device;
+    return (static_cast<unsigned long long>(device()) << 32) ^ device();
+  }();
+  static std::atomic<unsigned long long> counter{0};
+  return ".tmp." + std::to_string(process) + "." +
+         std::to_string(counter.fetch_add(1));
+}
+
+// Where kex keeps what it can reuse across builds: $KEX_CACHE, else
+// $XDG_CACHE_HOME/kex, else ~/.cache/kex. `KEX_CACHE=off` (or `0`, or empty)
+// turns every cache off (kexhq/kex#323).
+auto kexCacheBase() -> std::optional<std::filesystem::path> {
+  if (const char *configured = std::getenv("KEX_CACHE")) {
+    const std::string value = configured;
+    if (value.empty() || value == "off" || value == "0") return std::nullopt;
+    return std::filesystem::path{value};
+  }
+  if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+    return std::filesystem::path{xdg} / "kex";
+  if (const char *home = std::getenv("HOME"); home && *home)
+    return std::filesystem::path{home} / ".cache" / "kex";
+  return std::nullopt;
+}
+
+// ── Dependency-discovery cache (kexhq/kex#323) ──────────────────────────────
+//
+// Which modules a dependency file refers to is found by analyzing that file on
+// its own, against the toolchain's prelude and stdlib interfaces; nothing else
+// feeds the answer. So it is a pure function of the file's bytes and the
+// toolchain, and a warm build reads it back instead of re-analyzing every
+// dependency — 0.4 s of a 2.3 s warm build of Tey. The toolchain part covers
+// the stdlib sources as well, which a checkout can change without a new
+// revision.
+auto toolchainFingerprint() -> const std::string & {
+  static const std::string fingerprint = [] {
+    std::string text = kex::versionNumber() + "\n" + kex::kGitRevision + "\n";
+    for (const auto &file : kex::standardLibrarySourceFiles()) {
+      std::error_code ec;
+      const auto size = std::filesystem::file_size(file, ec);
+      const auto modified =
+          std::filesystem::last_write_time(file, ec).time_since_epoch().count();
+      text += file + "|" +
+              std::to_string(static_cast<unsigned long long>(size)) + "|" +
+              std::to_string(static_cast<long long>(modified)) + "\n";
+    }
+    return text;
+  }();
+  return fingerprint;
+}
+
+auto discoveryCacheEntry(const std::string &source)
+    -> std::optional<std::filesystem::path> {
+  const auto base = kexCacheBase();
+  if (!base) return std::nullopt;
+  const std::string material =
+      "kex-deps-cache-v1\n" + toolchainFingerprint() + "\n" + source;
+  const auto digest = kex::beam::computeSha256(
+      std::vector<uint8_t>(material.begin(), material.end()));
+  static const char *hex = "0123456789abcdef";
+  std::string key;
+  for (const auto byte : digest) {
+    key += hex[byte >> 4];
+    key += hex[byte & 0xF];
+  }
+  return *base / "deps" / key.substr(0, 2) / (key + ".txt");
+}
+
+// A cached module list, or nullopt when there is no complete entry. The first
+// line marks a finished write, so no partial file ever reads as "refers to
+// nothing".
+auto readDiscoveryCache(const std::filesystem::path &entry)
+    -> std::optional<std::vector<std::string>> {
+  std::ifstream input(entry);
+  if (!input) return std::nullopt;
+  std::string line;
+  if (!std::getline(input, line) || line != "kex-deps") return std::nullopt;
+  std::vector<std::string> modules;
+  while (std::getline(input, line))
+    if (!line.empty()) modules.push_back(line);
+  return modules;
+}
+
+// Written beside the final name and renamed into place, so two builds sharing
+// the cache never see half an entry; a failed write only means the next build
+// analyzes that file again.
+auto writeDiscoveryCache(const std::filesystem::path &entry,
+                         const std::vector<std::string> &modules) -> void {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::create_directories(entry.parent_path(), ec);
+  if (ec) return;
+  auto staging = entry;
+  staging += stagingSuffix();
+  {
+    std::ofstream output(staging);
+    if (!output) return;
+    output << "kex-deps\n";
+    for (const auto &module : modules) output << module << "\n";
+  }
+  fs::rename(staging, entry, ec);
+  if (ec) fs::remove(staging, ec);
+}
+
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
                      const kex::semantic::ImportedInterfaces *interfaces,
@@ -1243,26 +1354,46 @@ auto resolveBeamDeps(kex::ast::Program &program,
   std::vector<LoadedDep> deps;
   std::unordered_set<std::string> loaded;
   kex::module::Resolver resolver(roots);
+  // KEX_TIMINGS=1 splits dependency loading into its two costs (kexhq/kex#323).
+  std::chrono::steady_clock::duration parseTime{};
+  std::chrono::steady_clock::duration analyzeTime{};
 
+  size_t discoveryHits = 0;
+
+  // `source` is a dependency file's own text, which keys the discovery cache;
+  // the entry program passes nullptr, since its AST is already expanded and
+  // may carry a merged `.spec.kex` base, so its bytes are not the whole input.
   std::function<void(const kex::ast::Program &,
-                     const std::unordered_set<std::string> &)> resolve =
+                     const std::unordered_set<std::string> &,
+                     const std::string *)> resolve =
       [&](const kex::ast::Program &prog,
-          const std::unordered_set<std::string> &seedModules) {
+          const std::unordered_set<std::string> &seedModules,
+          const std::string *source) {
     auto modules = collectUsingModules(prog);
     modules.insert(modules.end(), seedModules.begin(), seedModules.end());
 
     // Each newly parsed source file can introduce qualified-only dependency
     // edges of its own. Analyze it here rather than only analyzing the entry
     // program; otherwise discovery stops after one qualified-reference hop.
-    kex::semantic::Analyzer dependencyAnalysis(interfaces);
-    (void)dependencyAnalysis.analyze(prog);
     // Sorted: `referencedModules` is a hash set, and this list decides what
     // gets compiled and in what order. Iterating it directly made the build
     // depend on the host's hash order (kexhq/kex#143).
-    auto referenced = dependencyAnalysis.referencedModules();
-    std::vector<std::string> referencedOrdered(referenced.begin(),
-                                               referenced.end());
-    std::sort(referencedOrdered.begin(), referencedOrdered.end());
+    const auto analyzeStart = std::chrono::steady_clock::now();
+    const auto cacheEntry =
+        source ? discoveryCacheEntry(*source) : std::nullopt;
+    std::vector<std::string> referencedOrdered;
+    if (auto cached = cacheEntry ? readDiscoveryCache(*cacheEntry) : std::nullopt) {
+      referencedOrdered = std::move(*cached);
+      ++discoveryHits;
+    } else {
+      kex::semantic::Analyzer dependencyAnalysis(interfaces);
+      (void)dependencyAnalysis.analyze(prog);
+      const auto &referenced = dependencyAnalysis.referencedModules();
+      referencedOrdered.assign(referenced.begin(), referenced.end());
+      std::sort(referencedOrdered.begin(), referencedOrdered.end());
+      if (cacheEntry) writeDiscoveryCache(*cacheEntry, referencedOrdered);
+    }
+    analyzeTime += std::chrono::steady_clock::now() - analyzeStart;
     for (const auto &name : referencedOrdered) {
       const bool automatic = interfaces && [&] {
         const auto imported = interfaces->modules.find(name);
@@ -1278,10 +1409,12 @@ auto resolveBeamDeps(kex::ast::Program &program,
       if (!loaded.insert(resolved->path).second) continue;
 
       auto path = std::make_unique<std::string>(resolved->path);
+      const auto parseStart = std::chrono::steady_clock::now();
       auto src = std::make_unique<std::string>(readFile(*path));
       kex::Lexer lexer(std::string(*src), *path);
       kex::Parser parser(lexer.tokenizeAll(), *path);
       auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
+      parseTime += std::chrono::steady_clock::now() - parseStart;
       // A dependency that does not parse is a build failure, not a module to
       // skip. Silently dropping it produced no error anywhere: the module
       // simply did not exist, the program compiled, and the first call into
@@ -1300,11 +1433,11 @@ auto resolveBeamDeps(kex::ast::Program &program,
         std::cerr << "error: could not parse module " << modName << "\n";
         std::exit(1);
       }
-      resolve(*depProg, {});
+      resolve(*depProg, {}, src.get());
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
   };
-  resolve(program, qualifiedModules);
+  resolve(program, qualifiedModules, nullptr);
 
   if (!deps.empty()) {
     std::vector<kex::ast::TopLevelItem> merged;
@@ -1315,6 +1448,16 @@ auto resolveBeamDeps(kex::ast::Program &program,
     for (auto &item : program.items)
       merged.push_back(std::move(item));
     program.items = std::move(merged);
+  }
+  if (const char *timings = std::getenv("KEX_TIMINGS");
+      timings && *timings && std::string(timings) != "0") {
+    const auto ms = [](std::chrono::steady_clock::duration d) {
+      return std::chrono::duration<double, std::milli>(d).count();
+    };
+    std::fprintf(stderr,
+                 "    %zu dependency files: parse %.1f ms, analyze %.1f ms "
+                 "(%zu from the discovery cache)\n",
+                 deps.size(), ms(parseTime), ms(analyzeTime), discoveryHits);
   }
   return deps;
 }
@@ -1742,11 +1885,25 @@ auto runSemanticCheck(const kex::ast::Program &program,
   auto countError = [&](const kex::semantic::Diagnostic &diag) {
     if (diag.level == kex::semantic::Diagnostic::Level::Error) errors++;
   };
+  // KEX_TIMINGS=1 splits the type check into its passes (kexhq/kex#323).
+  const bool timed = [] {
+    const char *value = std::getenv("KEX_TIMINGS");
+    return value && *value && std::string(value) != "0";
+  }();
+  auto phaseStart = std::chrono::steady_clock::now();
+  auto phase = [&](const char *name) {
+    if (!timed) return;
+    const auto now = std::chrono::steady_clock::now();
+    std::fprintf(stderr, "    %-26s %8.1f ms\n", name,
+                 std::chrono::duration<double, std::milli>(now - phaseStart).count());
+    phaseStart = now;
+  };
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
   runDb.setModuleRoots(moduleRootsFor(filepath));
   loadPrelude(runDb);
+  phase("load prelude into db");
   // A `<name>.spec.kex`'s declarations come from its base `<name>.kex`, which
   // the Analyzer sees (they are merged into `program`) but the DB would not:
   // it re-reads `filepath` from disk. Pass the base as a companion so its
@@ -1762,6 +1919,8 @@ auto runSemanticCheck(const kex::ast::Program &program,
     printSemanticDiagnostic(diag);
   }
 
+  phase("semantic db (entry file)");
+
   // Pass 3+: existing Analyzer (purity, type checking)
   kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
@@ -1770,6 +1929,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
     countError(diag);
     printSemanticDiagnostic(diag);
   }
+  phase("analyzer (whole program)");
 
   bool validationOk = true;
   if (ok && dbOk) {
@@ -1889,6 +2049,30 @@ auto erlcExecutable() -> std::string {
   return "erlc";
 }
 
+// `KEX_TIMINGS=1`: where a compile spends its time, one stderr line per phase
+// (kexhq/kex#323). Measures before optimizing — the build cache work is only
+// worth aiming at phases that actually cost something.
+struct PhaseTimer {
+  using Clock = std::chrono::steady_clock;
+  bool enabled = [] {
+    const char *value = std::getenv("KEX_TIMINGS");
+    return value && *value && std::string(value) != "0";
+  }();
+  Clock::time_point start = Clock::now();
+  Clock::time_point last = start;
+
+  auto mark(const char *phase) -> void {
+    if (!enabled) return;
+    const auto now = Clock::now();
+    const auto ms = [](Clock::duration d) {
+      return std::chrono::duration<double, std::milli>(d).count();
+    };
+    std::fprintf(stderr, "  %-26s %8.1f ms  (%8.1f ms total)\n", phase,
+                 ms(now - last), ms(now - start));
+    last = now;
+  }
+};
+
 // ── Compiled-module cache (kexhq/kex#323) ───────────────────────────────────
 //
 // erlc is most of a build: every `--compile` re-ran it over every reachable
@@ -1903,15 +2087,7 @@ auto erlcExecutable() -> std::string {
 // Where cached .beam files live: $KEX_CACHE, else $XDG_CACHE_HOME/kex, else
 // ~/.cache/kex. `KEX_CACHE=off` (or `0`, or empty) turns the cache off.
 auto beamCacheRoot() -> std::optional<std::filesystem::path> {
-  if (const char *configured = std::getenv("KEX_CACHE")) {
-    const std::string value = configured;
-    if (value.empty() || value == "off" || value == "0") return std::nullopt;
-    return std::filesystem::path{value} / "beam";
-  }
-  if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
-    return std::filesystem::path{xdg} / "kex" / "beam";
-  if (const char *home = std::getenv("HOME"); home && *home)
-    return std::filesystem::path{home} / ".cache" / "kex" / "beam";
+  if (auto base = kexCacheBase()) return *base / "beam";
   return std::nullopt;
 }
 
@@ -1977,7 +2153,7 @@ auto storeCachedBeam(const std::filesystem::path &entry,
   fs::create_directories(entry.parent_path(), ec);
   if (ec) return;
   auto staging = entry;
-  staging += ".tmp." + std::to_string(::getpid());
+  staging += stagingSuffix();
   fs::copy_file(beam, staging, fs::copy_options::overwrite_existing, ec);
   if (ec) return;
   fs::rename(staging, entry, ec);
@@ -4218,6 +4394,11 @@ int main(int argc, char *argv[]) {
   // the `runSemanticCheck` call.
   std::string beamSpecBaseFile;
   if (mode == "compile" || mode == "emit-core") {
+      PhaseTimer timings;
+      // Loaded once per process and used by every phase below; timed on its
+      // own so it does not hide inside whichever phase touches it first.
+      (void)preludeSemanticInterfaces();
+      timings.mark("prelude interfaces");
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
       std::string tempDir;
@@ -4276,6 +4457,8 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+      timings.mark("spec base");
+
       // Cross-file dependency resolution: walk `using` statements,
       // and metadata-resolved qualified module references, parse their source
       // files, and merge them into the program so IR lowering sees every
@@ -4303,6 +4486,8 @@ int main(int argc, char *argv[]) {
             qualifiedModules);
       }
 
+      timings.mark("load dependencies");
+
       // An opt-in module merged in above may claim a prelude trait
       // (`implement: Enumerable`) purely through inherited defaults, with no
       // local override — lowering needs that trait's default-method bodies,
@@ -4314,6 +4499,8 @@ int main(int argc, char *argv[]) {
       // expansion. Expand the fully assembled compilation unit as well; the
       // pass is idempotent because an expanded block is removed.
       if (!expandParsedProgram(program, false)) return 1;
+
+      timings.mark("expand compiled blocks");
 
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
@@ -4347,6 +4534,8 @@ int main(int argc, char *argv[]) {
           return 1;
         }
       }
+
+      timings.mark("type check");
 
       // An explicit `main do ... end` is not required: IR lowering
       // synthesizes one from trailing bare top-level expressions, matching
@@ -4392,6 +4581,8 @@ int main(int argc, char *argv[]) {
         return 1;
       }
 
+      timings.mark("lower + emit core");
+
       std::vector<std::string> corePaths;
       for (const auto &emitted : moduleResults) {
         std::string path = outputDir + "/" + emitted.moduleName + ".core";
@@ -4408,6 +4599,8 @@ int main(int argc, char *argv[]) {
         for (const auto &path : corePaths) std::cerr << "wrote " << path << "\n";
         return 0;
       }
+
+      timings.mark("write core files");
 
       // --compile: also invoke erlc to produce a .beam file.
       // Place explicitly built Kex runtime beams into the output directory.
@@ -4427,6 +4620,8 @@ int main(int argc, char *argv[]) {
             fs::copy_file(e.path(), fs::path{outputDir} / e.path().filename(),
                           fs::copy_options::overwrite_existing, ec);
       }
+
+      timings.mark("copy runtime beams");
 
       // User compilation consumes the explicitly built stdlib artifact. A
       // missing installed/development artifact is a toolchain error; never
@@ -4528,6 +4723,8 @@ int main(int argc, char *argv[]) {
         return 1;
       }
 
+      timings.mark("module cache + erlc");
+
       for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
         // Attach KexI chunk to the freshly compiled .beam file.
         if (!compileRun) {
@@ -4574,6 +4771,8 @@ int main(int argc, char *argv[]) {
         }
       }
 
+      timings.mark("attach KexI");
+
       // Second pass: backfill companion hashes into the entry module's
       // KexI companion manifest now that all companions have been written.
       if (!compileRun && moduleResults.size() > 1) {
@@ -4604,6 +4803,8 @@ int main(int argc, char *argv[]) {
                     << e.what() << "\n";
         }
       }
+
+      timings.mark("backfill companion hashes");
 
       // The emitted file is named after the module inside it. Kex used to
       // rename `kex_<stem>.beam` to `<stem>.kx.beam` as a friendlier name,

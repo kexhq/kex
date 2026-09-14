@@ -1084,11 +1084,26 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
 inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
     static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
+        // KEX_TIMINGS=1 splits this one-time load in two (kexhq/kex#323).
+        const bool timed = [] {
+            const char* value = std::getenv("KEX_TIMINGS");
+            return value && *value && std::string(value) != "0";
+        }();
+        auto phaseStart = std::chrono::steady_clock::now();
+        auto phase = [&](const char* name) {
+            if (!timed) return;
+            const auto now = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "    %-26s %8.1f ms\n", name,
+                         std::chrono::duration<double, std::milli>(now - phaseStart).count());
+            phaseStart = now;
+        };
         auto interfaces = runtimeDir.empty()
             ? sourcePreludeSemanticInterfaces()
             : preludeRegistry(runtimeDir).buildSemanticInterfaces();
+        phase("prebuilt KexI interfaces");
         auto stdlib = sourceSemanticInterfaces(
             standardLibrarySourceFiles(), false, true);
+        phase("opt-in stdlib from source");
         return mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
     }();
     return cached;

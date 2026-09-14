@@ -18,7 +18,8 @@ const std::vector<SymbolInfo> SemanticDB::s_emptySymbols;
 const std::vector<std::string> SemanticDB::s_emptyPaths;
 
 auto SemanticDB::updateFile(const std::string& path, std::string source,
-                            const std::vector<std::string>& companionDeclFiles)
+                            const std::vector<std::string>& companionDeclFiles,
+                            bool resolveNames)
     -> void {
     // Re-entrancy: ResolvePass walks `m_files[path].ast.items` by reference,
     // and resolving a `using` can reach back here for the very file being
@@ -128,6 +129,13 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
     // Update cross-file module export index
     rebuildModuleExports(path);
 
+    // A module loaded for another file's `using` stops here: its exports are
+    // indexed, and its own undefined names are its own file's business. Running
+    // the resolve pass anyway re-checked every dependency — recursively, since
+    // resolving a `using` loads the next module — and those diagnostics were
+    // never read: 0.6 s of a 2.3 s warm build of Tey (kexhq/kex#323).
+    if (!resolveNames) return;
+
     // Pass 2: resolve name references, report undefined names
     m_resolvingFiles.insert(path);
     ResolvePass resolve(m_imports);
@@ -164,7 +172,7 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     std::ifstream input(resolution->path);
     std::string source((std::istreambuf_iterator<char>(input)),
                        std::istreambuf_iterator<char>());
-    updateFile(resolution->path, std::move(source));
+    updateFile(resolution->path, std::move(source), {}, /*resolveNames=*/false);
     m_loadingModules.erase(resolution->moduleName);
     if (hasModule(resolution->moduleName)) return resolution->moduleName;
 
@@ -188,7 +196,8 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
                 std::ifstream plainInput(plain->path);
                 std::string plainSource((std::istreambuf_iterator<char>(plainInput)),
                                         std::istreambuf_iterator<char>());
-                updateFile(plain->path, std::move(plainSource));
+                updateFile(plain->path, std::move(plainSource), {},
+                           /*resolveNames=*/false);
                 m_loadingModules.erase(plain->moduleName);
             }
             if (hasModule(plain->moduleName)) return plain->moduleName;

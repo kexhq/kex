@@ -1,24 +1,28 @@
 # kex: run-beam
 # An exception raised inside an Erlang call is rescuable, by `trying … rescue`
 # and by a function-level `rescue`, like any Kex failure (kexhq/kex#326).
-foul decode(text: String) -> String do
+#
+# `binary_to_integer` raises `badarg` on every OTP release. An Erlang function
+# that only exists on newer releases (`json:decode`, OTP 27+) would raise
+# `undef` on older ones instead, and the output would depend on the CI image.
+foul decodeNumber(text: String) -> String do
   trying do
-    let value = Erlang.Json.decode(text)
+    let value = Erlang.Erlang.binary_to_integer(text)
     return "decoded ${Type.of(value).name}"
   rescue
     _ => return "rescued"
   end
 end
 
-foul decodeWithRescue(text: String) -> String do
-  let value = Erlang.Json.decode(text)
+foul decodeNumberWithRescue(text: String) -> String do
+  let value = Erlang.Erlang.binary_to_integer(text)
   return "decoded ${Type.of(value).name}"
 rescue |error|
   return "rescued ${error}"
 end
 
 main do
-  IO.printLine(decode("{\"a\":1}"))
-  IO.printLine(decodeWithRescue("{nope"))
-  IO.printLine(decode("{nope"))
+  IO.printLine(decodeNumber("42"))
+  IO.printLine(decodeNumberWithRescue("nope"))
+  IO.printLine(decodeNumber("nope"))
 end
