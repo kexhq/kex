@@ -62,8 +62,15 @@ public:
     // Their declarations are merged into this file's AST before the passes
     // run; each node keeps its own source location, so diagnostics still
     // point into the file the code actually came from.
+    //
+    // `resolveNames` false indexes the file without resolving its references:
+    // parse, compile-time expansion, collected symbols and module exports, but
+    // no undefined-name pass. That is all another file needs from a module it
+    // `using`s, and a module loaded that way never reports its own diagnostics
+    // (kexhq/kex#323).
     auto updateFile(const std::string& path, std::string source,
-                    const std::vector<std::string>& companionDeclFiles = {})
+                    const std::vector<std::string>& companionDeclFiles = {},
+                    bool resolveNames = true)
         -> void;
     auto removeFile(const std::string& path) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;

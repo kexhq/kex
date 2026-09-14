@@ -3,6 +3,9 @@
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <cxxabi.h>
+#include <memory>
 #include <stdexcept>
 
 namespace kex {
@@ -248,6 +251,51 @@ auto Parser::rejectReservedBindingName() -> void {
     return;
   advance(); // let
   rejectReservedName("function");
+}
+
+// At `if` right after `return`: is this the if EXPRESSION (a returned value)
+// rather than the value-less `return if COND` guard? It is when the condition
+// is followed by `then`, or by a line indented deeper than `return` that is not
+// itself closing a branch. Scans tokens only; consumes nothing.
+auto Parser::isReturnIfExpressionAhead(int returnColumn) const -> bool {
+  int offset = 1; // past `if`
+  int depth = 0;
+  for (;; ++offset) {
+    const auto &token = peekAt(offset);
+    if (token.type == TokenType::Eof)
+      return false;
+    if (token.type == TokenType::LParen || token.type == TokenType::LBracket ||
+        token.type == TokenType::LBrace)
+      ++depth;
+    else if (token.type == TokenType::RParen ||
+             token.type == TokenType::RBracket ||
+             token.type == TokenType::RBrace)
+      --depth;
+    else if (depth <= 0 && token.type == TokenType::Then)
+      return true;
+    else if (depth <= 0 && token.type == TokenType::Newline)
+      break;
+  }
+  while (peekAt(offset).type == TokenType::Newline)
+    ++offset;
+  const auto &next = peekAt(offset);
+  if (next.type == TokenType::End || next.type == TokenType::Else ||
+      next.type == TokenType::Elif || next.type == TokenType::Eof)
+    return false;
+  return next.location.column > returnColumn;
+}
+
+// `kex::ast::FunctionDef` -> `FunctionDef`: the unqualified C++ type name is
+// the syntax kind, so a new node type needs no table entry to show up in the
+// syntax tree (kexhq/kex#136).
+auto Parser::syntaxKindName(const std::type_info &type) -> std::string {
+  int status = 0;
+  std::unique_ptr<char, void (*)(void *)> demangled(
+      abi::__cxa_demangle(type.name(), nullptr, nullptr, &status), std::free);
+  std::string name = status == 0 && demangled ? demangled.get() : type.name();
+  if (const auto colon = name.rfind("::"); colon != std::string::npos)
+    name = name.substr(colon + 2);
+  return name;
 }
 
 auto Parser::error(const std::string &message) -> void {
@@ -3404,6 +3452,17 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
   // `return EXPR if COND` (a value, then a trailing guard) doesn't need
   // special handling here — parseExpr() already produces
   // TrailingIf{EXPR, COND} for that on its own.
+  //
+  // `return if COND then a else b end` and a multi-line `return if COND` whose
+  // next line is indented deeper than `return` are the if EXPRESSION, the same
+  // one `let x = if … elif … end` accepts (#332). A guard's next line sits at
+  // `return`'s own column (or shallower, closing the block), so indentation
+  // tells the two apart without changing what any existing guard means.
+  if (check(TokenType::If) && isReturnIfExpressionAhead(expr->location.column)) {
+    auto value = parseIfExpr();
+    expr->kind = ast::ReturnExpr{std::move(value)};
+    return expr;
+  }
   if (check(TokenType::If)) {
     auto startOffset = currentLocation().startOffset;
     advance(); // if
@@ -4100,6 +4159,11 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     pattern->kind = ast::VarPattern{advance().value};
     return complete(std::move(pattern));
   }
+
+  // `let next = 1`, `let (previous, next) = pair` — a keyword where a binding
+  // name belongs. Name the keyword instead of the bare "Expected pattern".
+  if (isKeywordToken(peek().type))
+    rejectReservedName("variable");
 
   error("Expected pattern");
 }

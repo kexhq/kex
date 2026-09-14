@@ -1,11 +1,27 @@
 #pragma once
 
 #include "token.hxx"
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace kex {
+
+// One token's share of the source: the trivia before it (whitespace, comments,
+// newlines the scanner skipped) and its own spelling, both as written. Views
+// into the source the tokens were scanned from.
+struct TokenText {
+    std::string_view trivia;
+    std::string_view raw;
+};
+
+// Divides `source` among `tokens` so that concatenating every token's trivia
+// and raw text reproduces it byte for byte; trailing trivia belongs to Eof.
+// nullopt when the tokens' offsets cannot account for the source exactly
+// (kexhq/kex#136).
+auto tokenTexts(const std::vector<Token>& tokens, std::string_view source)
+    -> std::optional<std::vector<TokenText>>;
 
 // True for a token type a keyword spells — the parser uses it to say
 // "`compiled` is reserved" instead of "unexpected token" when a program

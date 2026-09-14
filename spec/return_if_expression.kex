@@ -1,0 +1,32 @@
+# `return` takes the if EXPRESSION, the same one `let x = if … end` does
+# (kexhq/kex#332): a multi-line form whose body is indented deeper than
+# `return`, or the inline `then` form. A bare `return if COND` whose next line
+# sits at `return`'s own column is still the value-less guard.
+let label(n: Integer) -> String do
+  return if n == 1
+    "one"
+  elif n == 2
+    "two"
+  else
+    "many"
+  end
+end
+
+let size(n: Integer) -> String do
+  return if n > 9 then "big" else "small" end
+end
+
+foul report(n: Integer) -> Void do
+  return if n > 1
+  IO.printLine("guard passed for ${n}")
+end
+
+main do
+  IO.printLine(label(1))
+  IO.printLine(label(2))
+  IO.printLine(label(7))
+  IO.printLine(size(10))
+  IO.printLine(size(3))
+  report(1)
+  report(5)
+end

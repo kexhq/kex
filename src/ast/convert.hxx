@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ast.hxx"
+#include "../lexer/lexer.hxx"
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -36,6 +38,69 @@ inline auto extractDocComments(const std::string& source)
                 while (!accumulated.empty() && accumulated.back() == '\n')
                     accumulated.pop_back();
                 result[lineNumber] = accumulated;
+                accumulated.clear();
+            }
+            inBlock = false;
+        }
+    }
+    return result;
+}
+
+// The same doc-comment table, read from the tokens instead of re-scanning the
+// source line by line (kexhq/kex#136). A line counts as comment-only when no
+// token of its own sits on it, so a `#` that begins a line INSIDE a multi-line
+// string is text, not a doc comment. The block rules are the line scanner's,
+// down to trimming only spaces and tabs. Falls back to it should the tokens
+// fail to account for the source.
+inline auto extractDocComments(const std::vector<Token>& tokens,
+                               std::string_view source)
+    -> std::unordered_map<int, std::string> {
+    const auto texts = tokenTexts(tokens, source);
+    if (!texts) return extractDocComments(std::string(source));
+
+    struct Line {
+        bool hasCode = false;
+        std::string trivia;
+    };
+    std::vector<Line> lines(1);
+    for (size_t index = 0; index < tokens.size(); ++index) {
+        for (const char c : (*texts)[index].trivia) {
+            if (c == '\n') lines.emplace_back();
+            else lines.back().trivia += c;
+        }
+        const auto raw = (*texts)[index].raw;
+        if (tokens[index].type == TokenType::Newline && raw == "\n") {
+            lines.emplace_back();
+            continue;
+        }
+        for (const char c : raw) {
+            if (c == '\n') lines.emplace_back();
+            lines.back().hasCode = true;
+        }
+    }
+
+    std::unordered_map<int, std::string> result;
+    std::string accumulated;
+    bool inBlock = false;
+    for (size_t index = 0; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        const auto first = line.trivia.find_first_not_of(" \t");
+        const std::string trimmed =
+            first == std::string::npos ? "" : line.trivia.substr(first);
+        if (!line.hasCode && !trimmed.empty() && trimmed[0] == '#') {
+            auto content = trimmed.size() > 1 && trimmed[1] == ' '
+                ? trimmed.substr(2) : trimmed.substr(1);
+            if (inBlock)
+                accumulated += "\n";
+            accumulated += content;
+            inBlock = true;
+        } else if (!line.hasCode && trimmed.empty() && inBlock) {
+            accumulated += "\n";
+        } else {
+            if (inBlock && !accumulated.empty()) {
+                while (!accumulated.empty() && accumulated.back() == '\n')
+                    accumulated.pop_back();
+                result[static_cast<int>(index + 1)] = accumulated;
                 accumulated.clear();
             }
             inBlock = false;

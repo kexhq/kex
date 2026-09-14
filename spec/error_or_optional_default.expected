@@ -1,0 +1,4 @@
+spec/error_or_optional_default.kex:7:55: error: `or` needs an Integer to fall back to, but got None — `or` is what leaves the optional; pass a plain default, keep the value as it is, or `match` on it
+spec/error_or_optional_default.kex:9:63: error: `or` needs an Integer to fall back to, but got `Just(…)` — `or` is what leaves the optional; pass a plain default, keep the value as it is, or `match` on it
+spec/error_or_optional_default.kex:11:58: error: `or` needs an Integer to fall back to, but got `Error(…)` — `or` is what leaves the result; pass a plain default, keep the value as it is, or `match` on it
+Aborted: 3 type errors — fix before running (use --no-check to skip).

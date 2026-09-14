@@ -123,8 +123,7 @@ module Tey.Docgen.Extract do
     if body.empty?
       return accum
     end
-    let head = body.first.or(None)
-    let rest = body.drop(1)
+    let [head | rest] = body
     match head do
       TypeDef(info) => bodyEntities(rest, prefix, accum + [Done(typeEntity(info, prefix))])
       RecordDef(info) => bodyEntities(rest, prefix, accum + [Done(recordEntity(info, prefix))])
@@ -413,8 +412,7 @@ module Tey.Docgen.Extract do
     if accum.empty?
       return None
     end
-    let head = accum.first.or(None)
-    let rest = accum.drop(1)
+    let [head | rest] = accum
     match head do
       PendingFn(fn) => if fn.name == name then Just(index) else indexedFind(rest, name, index + 1) end
       _ => indexedFind(rest, name, index + 1)

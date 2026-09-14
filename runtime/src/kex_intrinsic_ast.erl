@@ -3,7 +3,7 @@
 %% representation as ETF; no second schema decoder lives here.
 -module(kex_intrinsic_ast).
 -export([parse/1, parse/2, 'parseFile'/1, 'parseType'/1,
-         'parseExpression'/1]).
+         'parseExpression'/1, 'parseSyntax'/1]).
 
 %% parseType/parseExpression reach INTO the tree these functions return, so
 %% they are coupled to the record layouts in src/stdlib/kex/ast.kex. They read
@@ -76,13 +76,31 @@ parse(_, _) -> parse_error(<<"parse requires a source string">>).
 'parseExpression'(_) ->
     parse_error(<<"parseExpression requires a source string">>).
 
-run_kex(Path, Filename) ->
+%% parseSyntax(Source): the lossless syntax tree, produced by the compiler
+%% through `--emit-syntax` exactly as parse/1 goes through `--emit-ast`
+%% (kexhq/kex#136).
+'parseSyntax'(Source) when is_binary(Source) ->
+    Path = temporary_path(),
+    case file:write_file(Path, Source) of
+        ok ->
+            Result = run_kex(Path, <<"<string>">>, "--emit-syntax"),
+            file:delete(Path),
+            Result;
+        {error, Reason} ->
+            parse_error(iolist_to_binary(
+                io_lib:format("cannot create parser input: ~p", [Reason])))
+    end;
+'parseSyntax'(_) -> parse_error(<<"parseSyntax requires a source string">>).
+
+run_kex(Path, Filename) -> run_kex(Path, Filename, "--emit-ast").
+
+run_kex(Path, Filename, Mode) ->
     case executable() of
         {error, Message} -> parse_error(Message);
         {ok, Executable} ->
             Args = case Filename of
-                       none -> ["--emit-ast", "--no-colors", Path];
-                       _ -> ["--emit-ast", "--no-colors", "--ast-filename",
+                       none -> [Mode, "--no-colors", Path];
+                       _ -> [Mode, "--no-colors", "--ast-filename",
                              binary_to_list(Filename), Path]
                    end,
             Port = open_port({spawn_executable, Executable},

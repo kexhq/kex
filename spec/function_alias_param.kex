@@ -1,0 +1,18 @@
+# A parameter declared through a generic alias of a function type accepts a
+# lambda of the expanded type (kexhq/kex#337). `Pred<E>` stayed a named type,
+# so `check(n, { |e| true })` was rejected with "expects argument 2 to be
+# Pred<T1>, but got T3 -> Bool" — which is also what kept
+# spec/stdlib/retry.spec.kex from running at all.
+type Pred<E> = E -> Bool
+
+check : Integer -> Pred<Integer> -> Bool
+let check(n, predicate) = predicate(n)
+
+countWhere : [E] -> Pred<E> -> Integer
+let countWhere(items, predicate) = items.filter { |item| predicate(item) }.count
+
+main do
+  IO.printLine("${check(4, { |n| n > 3 })}")
+  IO.printLine("${check(2, { |n| n > 3 })}")
+  IO.printLine("${countWhere(["a", "bb", "ccc"], { |s| s.count > 1 })}")
+end

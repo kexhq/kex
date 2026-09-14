@@ -1,0 +1,6 @@
+# A keyword in a binding pattern names the keyword instead of the bare
+# "Expected pattern" (kexhq/kex#331).
+main do
+  let (previous, next) = (1, 2)
+  IO.printLine("${previous}")
+end

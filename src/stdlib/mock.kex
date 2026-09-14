@@ -377,6 +377,11 @@ module Mock do
     foul file?(path) = this.cannedRead(path) != None
     foul directory?(path) = false
     foul absolute(path) = Just(path)
+    foul canonical(path) = match this.cannedRead(path) do
+      Just(_) => Ok(path)
+      None => Error(ReadFailed(path))
+    end
+    foul symlink?(path) = false
 
     # A fake is a value, so there is nowhere for a write to go. Refusing is
     # the honest answer and the useful one: a test that did not expect a

@@ -1,0 +1,20 @@
+# kex: run-beam
+# `FS.File.writeBytes` takes the raw binary an Erlang call returns
+# (kexhq/kex#327), and `canonical` / `symlink?` inspect paths the way
+# realpath(3) and lstat do (kexhq/kex#334).
+using FS
+
+main do
+  let dir = FS.Path.join(FS.Directory.temporary, "kex_spec_fs_raw_binary")
+  FS.Directory.deleteAll(dir)
+  FS.Directory.create(dir)
+  let target = FS.Path.join(dir, "term.bin")
+  let bytes = Erlang.Erlang.term_to_binary({ "a": "b" })
+  IO.printLine("written: ${FS.File.writeBytes(target, bytes)}")
+  IO.printLine("same bytes: ${FS.File.readBytes(target).map { |read| read.length } == Ok(bytes.bytes.count)}")
+  let dotted = FS.Path.join(dir, "./../kex_spec_fs_raw_binary/term.bin")
+  IO.printLine("canonical: ${FS.File.canonical(dotted) == FS.File.canonical(target)}")
+  IO.printLine("missing: ${FS.File.canonical(FS.Path.join(dir, "nope")).ok?}")
+  IO.printLine("symlink?: ${FS.File.symlink?(target)}")
+  FS.Directory.deleteAll(dir)
+end

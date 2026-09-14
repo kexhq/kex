@@ -1,0 +1,13 @@
+# `JSON.stringify` writes an optional as JSON's nullable: `Just(x)` is `x` and
+# `None` is `null`. Callers used to unwrap first with `.or(None)`, which only
+# type-checked by accident — `or` takes a value of the unwrapped type, and
+# `None` is not one.
+using JSON
+
+main do
+  let selected: String? = Just("0.4.0")
+  let missing: String? = None
+  IO.printLine(JSON.stringify({ selected: selected, missing: missing }))
+  IO.printLine(JSON.stringify([Just(1), None, Just(Just(2))]))
+  IO.printLine(JSON.stringify(Just({ nested: Just([Just("a")]) })))
+end

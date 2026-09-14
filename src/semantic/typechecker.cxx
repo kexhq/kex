@@ -1137,11 +1137,17 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
 
 auto TypeChecker::typeDefToType(const ast::TypeDef& def) -> TypePtr {
     if (!def.variants || def.variants->empty()) return Type::unknown();
+    // A generic alias's parameters take the negative TypeVar slots -1, -2, …
+    // — the convention `substituteInterfaceGenerics` fills — so an applied
+    // alias (`Predicate<Integer>`) can be expanded by substituting its
+    // arguments, the way a distinct type's backing type already is (#337).
+    std::unordered_map<std::string, TypePtr> aliasParams;
+    for (size_t i = 0; i < def.typeParams.size(); ++i)
+        aliasParams[def.typeParams[i]] = Type::typeVar(-static_cast<int>(i + 1));
     // Build variant types, then fold into a union if more than one.
-    std::unordered_map<std::string, TypePtr> noGenerics;
     std::vector<TypePtr> parts;
     for (const auto& v : *def.variants) {
-        if (v) parts.push_back(resolveTypeExpr(*v, noGenerics));
+        if (v) parts.push_back(resolveTypeExpr(*v, aliasParams));
     }
     if (parts.empty()) return Type::unknown();
     if (parts.size() == 1) return parts[0];
@@ -1673,6 +1679,11 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
         const auto key = modulePath + "\n" + ann.name;
         m_annotationArities[key].insert(sig->params.size());
         m_scopedDeclaredSignatures[key].push_back(*sig);
+        // Reachable qualified before its definition is checked, so a call
+        // above the definition resolves to it (#103). Not marked published:
+        // the definition's own check still replaces this with what it checks.
+        if (!m_qualifiedPublished.contains(modulePath + "::" + ann.name))
+            m_userSignatures[modulePath + "::" + ann.name].push_back(*sig);
         if (exposeUnqualified)
             m_userSignatures[ann.name].insert(
                 m_userSignatures[ann.name].begin(), std::move(*sig));
@@ -2031,7 +2042,31 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // Skip annotation-declared functions — registerDeclaredSignatures already
     // populated m_userSignatures for these and checkFunctionDef will use the
     // annotation as ground truth.
-    if (m_annotationDeclared.count(def.name)) return;
+    if (m_annotationDeclared.count(def.name)) {
+        // `m_annotationDeclared` is keyed by the bare name, so an annotation in
+        // ANOTHER module (`Digest`'s `sha256 : String -> String`, merged in from
+        // source) also skipped this module's unannotated `sha256` — and with it
+        // the qualified `Tool::sha256` a call above the definition needs
+        // (#103). File that key here; the bare-name set stays untouched.
+        const auto qualified = m_currentModulePath + "::" + def.name;
+        if (!m_currentModulePath.empty() &&
+            !m_scopedDeclaredSignatures.count(m_currentModulePath + "\n" + def.name) &&
+            !m_qualifiedPublished.contains(qualified)) {
+            for (const auto& clause : def.clauses) {
+                std::unordered_map<std::string, TypePtr> genericVars;
+                std::vector<TypePtr> paramTypes;
+                for (const auto& param : clause.params)
+                    paramTypes.push_back(param.type
+                        ? resolveTypeExpr(**param.type, genericVars)
+                        : freshTypeVar());
+                std::size_t required = clause.params.size();
+                while (required > 0 && clause.params[required - 1].defaultValue) required--;
+                m_userSignatures[qualified].push_back(Signature{
+                    def.name, std::move(paramTypes), freshTypeVar(), false, required});
+            }
+        }
+        return;
+    }
     const auto previousImports = m_declarationImports;
     if (auto imports = m_functionImports.find(&def);
         imports != m_functionImports.end())
@@ -2088,6 +2123,17 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     if (provisional.empty()) {
         m_declarationImports = previousImports;
         return;
+    }
+    // A module function is reachable QUALIFIED before its definition is
+    // checked. Without this, `Tey.Toolchain.sha256(path)` above the `sha256`
+    // it names found no `Tey.Toolchain::sha256` yet, fell back to the bare
+    // name, and resolved to `Digest.sha256` (#103). Not marked published, so
+    // the definition's own check replaces these provisional signatures.
+    if (!m_currentModulePath.empty()) {
+        const auto qualified = m_currentModulePath + "::" + def.name;
+        if (!m_qualifiedPublished.contains(qualified))
+            for (const auto& signature : provisional)
+                m_userSignatures[qualified].push_back(signature);
     }
     if (alreadyRegistered)
         for (auto& signature : provisional)
@@ -2169,8 +2215,11 @@ auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
         if (!m_distinctTypes.count(resolveDistinctName(last)) &&
             !m_recordFields.count(named->name)) {
             if (auto alias = m_typeAliases.find(last);
-                alias != m_typeAliases.end() && args.empty())
-                return expandTypeAliases(alias->second, depth + 1);
+                alias != m_typeAliases.end())
+                return expandTypeAliases(
+                    args.empty() ? alias->second
+                                 : substituteInterfaceGenerics(alias->second, args),
+                    depth + 1);
         }
         if (args.empty()) return type;
         return Type::named(named->name, std::move(args));
@@ -2313,6 +2362,13 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (auto distinct = resolveDistinctName(name);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct, std::move(args));
+            // An applied generic alias is its body with the arguments put in:
+            // `Predicate<E>` for `type Predicate<E> = E -> Bool` is `E -> Bool`.
+            // Left as a named type, no lambda ever matched it (#337).
+            if (auto alias = m_typeAliases.find(name);
+                alias != m_typeAliases.end() &&
+                !m_recordFields.count(resolveRecordName(name)))
+                return substituteInterfaceGenerics(alias->second, args);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -2591,6 +2647,25 @@ auto TypeChecker::bindPatternVars(
                         payload = list->element;
                 } else if (declaration && i < declaration->payloadTypes.size()) {
                     payload = declaration->payloadTypes[i];
+                }
+                // The built-in carriers come from the prelude interface, not a
+                // local declaration, so they have no slot above. Left untyped,
+                // `Just(item)` bound a fresh variable that unified with anything:
+                // `wantsInteger(item)` on a `String?` passed, and `item.path`
+                // latched onto an imported `path` function instead of the
+                // record's field (#328).
+                if (!payload && expected) {
+                    const auto scrutinee = resolve(expected);
+                    if (const auto* optional =
+                            std::get_if<OptionalType>(&scrutinee->kind);
+                        optional && node.name == "Just" && i == 0)
+                        payload = optional->inner;
+                    else if (const auto* named =
+                                 std::get_if<NamedType>(&scrutinee->kind);
+                             named && named->name == "Result" &&
+                             named->typeArgs.size() == 2 && i == 0 &&
+                             (node.name == "Ok" || node.name == "Error"))
+                        payload = named->typeArgs[node.name == "Ok" ? 0 : 1];
                 }
                 bindPatternVars(*node.args[i], payload);
             }
@@ -3947,6 +4022,21 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return Type::unknown();
             }
             auto type = lookupVar(node.name);
+            // A local binding is never a zero-parameter function, even an
+            // Unknown-typed one: `let root = match JSON.parse(...)` must not
+            // take the type of some module's `let root -> String`.
+            const bool boundLocally = std::any_of(
+                m_scopeStack.begin(), m_scopeStack.end(),
+                [&](const auto& scope) { return scope.get(node.name) != nullptr; });
+            if (!boundLocally &&
+                (!type || std::holds_alternative<UnknownType>(resolve(type)->kind))) {
+                // `let ids -> [String] = [...]` is a zero-parameter function,
+                // and naming it auto-calls it — so the name has the declared
+                // result type. Left Unknown, `ids.reduce(...)` picked String's
+                // `reduce` overload and typed each element as Char (#329).
+                if (auto result = zeroArgBindingResult(node.name))
+                    return result;
+            }
             if (!type) {
                 if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
                     error(expr.location, "`new` requires a record receiver");
@@ -4914,6 +5004,65 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (invalid)
                             error(element->location, "Byte literal must be in 0..255");
                     }
+            }
+            // `or` is what leaves the optional (or result) world, so its default
+            // is the plain unwrapped value. `.or(None)` / `.or(Just(x))` passed
+            // anyway — `None` is accepted wherever an optional could go — and
+            // produced a value that is neither `X` nor `X?` (kexhq/kex#338;
+            // STYLE.md `or-optional-default`).
+            if (callName == "or" && argTypes.size() == 2) {
+                const auto receiver = resolve(argTypes[0]);
+                const auto fallback = resolve(argTypes[1]);
+                const auto* receiverNamed = std::get_if<NamedType>(&receiver->kind);
+                const bool optionalReceiver =
+                    std::holds_alternative<OptionalType>(receiver->kind);
+                const bool resultReceiver =
+                    receiverNamed && receiverNamed->name == "Result";
+                const auto* fallbackNamed = std::get_if<NamedType>(&fallback->kind);
+                // A bare `Just(8080)` / `Error("bad")` is typed gradually, so
+                // its spelling is the only thing that says it is wrapped.
+                const auto wrappingConstructor = [](const std::string& name) {
+                    return name == "Just" || name == "Ok" || name == "Error";
+                };
+                bool constructedWrapped = false;
+                if (const auto& argument = node.args.back()) {
+                    if (const auto* call = std::get_if<ast::FunctionCall>(&argument->kind))
+                        constructedWrapped = wrappingConstructor(call->name);
+                    else if (const auto* method = std::get_if<ast::MethodCall>(&argument->kind);
+                             method && !method->receiver)
+                        constructedWrapped = wrappingConstructor(method->method);
+                }
+                const bool wrappedFallback = constructedWrapped ||
+                    std::holds_alternative<OptionalType>(fallback->kind) ||
+                    (fallbackNamed && (fallbackNamed->name == "None" ||
+                                       fallbackNamed->name == "Result"));
+                if ((optionalReceiver || resultReceiver) && wrappedFallback) {
+                    const auto unwrapped = optionalReceiver
+                        ? std::get<OptionalType>(receiver->kind).inner
+                        : (receiverNamed->typeArgs.empty()
+                               ? Type::unknown()
+                               : receiverNamed->typeArgs.front());
+                    const auto unwrappedName = typeToString(unwrapped);
+                    const bool vowel = !unwrappedName.empty() &&
+                        std::string("AEIOUaeiou").find(unwrappedName.front()) !=
+                            std::string::npos;
+                    const auto wanted = containsOpenType(unwrapped)
+                        ? std::string("the unwrapped value")
+                        : (vowel ? "an " : "a ") + unwrappedName;
+                    error(node.args.back() ? node.args.back()->location : expr.location,
+                          "`or` needs " + wanted + " to fall back to, but got " +
+                              (constructedWrapped
+                                   ? "`" + std::string(
+                                         std::get_if<ast::FunctionCall>(&node.args.back()->kind)
+                                             ? std::get<ast::FunctionCall>(node.args.back()->kind).name
+                                             : std::get<ast::MethodCall>(node.args.back()->kind).method) +
+                                         "(…)`"
+                                   : typeToString(fallback)) +
+                              " — `or` is what leaves the " +
+                              (optionalReceiver ? "optional" : "result") +
+                              "; pass a plain default, keep the value as it is, "
+                              "or `match` on it");
+                }
             }
             return checkCall(callName, argTypes, expr.location,
                              /*isMethodCall=*/true, &node, &expr);
@@ -6746,8 +6895,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         importedFunctions.push_back(&function);
             }
             // Receiver functions are also callable as bare functions via
-            // UFCS (e.g. `even?(x)` instead of `x.even?`).
+            // UFCS (e.g. `even?(x)` instead of `x.even?`) — unless the program
+            // declares a function of that name and arity, which is what a bare
+            // call then runs: `get("hi", 42)` under `using MyMod` dispatches to
+            // `MyMod.get`. Offered too, `String.get : String -> Integer -> Char?`
+            // matched the call and hid its wrong argument until run time (#324).
+            const bool declaredShadowsReceiver = hasUser &&
+                std::any_of(userSignatures->begin(), userSignatures->end(),
+                            [&](const Signature& signature) {
+                                return signature.params.size() == argTypes.size();
+                            });
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
+                !declaredShadowsReceiver &&
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
                     if (importedFunctionVisible(function))
@@ -8043,6 +8202,47 @@ auto TypeChecker::lookupVar(const std::string& name) const -> TypePtr {
         if (auto type = it->get(name)) return type;
     }
     return m_globals.get(name);
+}
+
+// The declared result of a zero-parameter binding named `name` — what a bare
+// reference to it evaluates to, since naming one auto-calls it. Only a single,
+// fully concrete signature answers: a generic result (`A`, a type variable)
+// would need instantiating per use, which the call path does and this doesn't.
+auto TypeChecker::zeroArgBindingResult(const std::string& name) -> TypePtr {
+    const std::vector<Signature>* signatures = nullptr;
+    if (auto scoped = m_scopedDeclaredSignatures.find(
+            m_currentModulePath + "\n" + name);
+        scoped != m_scopedDeclaredSignatures.end())
+        signatures = &scoped->second;
+    else if (auto user = m_userSignatures.find(name); user != m_userSignatures.end())
+        signatures = &user->second;
+    if (!signatures || signatures->size() != 1) return nullptr;
+    const auto& signature = signatures->front();
+    if (!signature.params.empty() || !signature.result) return nullptr;
+    auto result = resolve(signature.result);
+    std::function<bool(const TypePtr&)> mentionsTypeParameter =
+        [&](const TypePtr& type) -> bool {
+        if (!type) return true;
+        const auto resolved = resolve(type);
+        if (const auto* named = std::get_if<NamedType>(&resolved->kind)) {
+            if (named->name.size() == 1 && std::isupper(static_cast<unsigned char>(named->name[0])))
+                return true;
+            return std::any_of(named->typeArgs.begin(), named->typeArgs.end(),
+                               mentionsTypeParameter);
+        }
+        if (const auto* list = std::get_if<ListType>(&resolved->kind))
+            return mentionsTypeParameter(list->element);
+        if (const auto* optional = std::get_if<OptionalType>(&resolved->kind))
+            return mentionsTypeParameter(optional->inner);
+        if (const auto* map = std::get_if<MapType>(&resolved->kind))
+            return mentionsTypeParameter(map->key) || mentionsTypeParameter(map->value);
+        if (const auto* tuple = std::get_if<TupleType>(&resolved->kind))
+            return std::any_of(tuple->elements.begin(), tuple->elements.end(),
+                               mentionsTypeParameter);
+        return false;
+    };
+    if (containsOpenType(result) || mentionsTypeParameter(result)) return nullptr;
+    return result;
 }
 
 auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {

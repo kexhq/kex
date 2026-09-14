@@ -114,10 +114,7 @@ module Tey.Docgen.Json do
   end
 
   foul variantsValue(variants: [VariantEntry]?) -> Any do
-    match variants do
-      Just(vs) => vs.map { |v| { name: v.name, fields: v.fields } }
-      None => None
-    end
+    variants.map { |vs| vs.map { |v| { name: v.name, fields: v.fields } } }
   end
 
   foul fieldValue(f: FieldEntry) -> Any do

@@ -1,0 +1,58 @@
+using Kex.AST
+using FS
+
+# The lossless syntax tree behind a formatter or a linter (kexhq/kex#136).
+
+let reprint(source: String) -> String = Kex.AST.parseSyntax(source).map { |tree| Kex.AST.toSource(tree) }.or("<not parsed>")
+
+# The position, among `children`, of the first nested node whose source starts
+# with `prefix` once its leading whitespace is trimmed; -1 when none does.
+let nodeIndex(children: [Kex.AST.SyntaxElement], prefix: String, index: Integer) -> Integer = match children do
+  [] => -1
+  [NodeElement(node) | _] when Kex.AST.toSource(node).trim.startsWith?(prefix) => index
+  [_ | rest] => nodeIndex(rest, prefix, index + 1)
+end
+
+describe("Kex.AST.parseSyntax") do
+  it("reprints source byte for byte") do
+    let sources = [
+      "",
+      "let x = 1\n",
+      "# lead\n\n\nlet x = 1   # trail\n\n",
+      "let s = \"a ${1 + 2} \\\"q\\\"\"\nlet n = 1_000\nlet c = 'x'\n",
+      "module M do\n  let f(a, b) = a + b\n\n  let g = [1, 2].map { |n| n * 2 }\nend\n# ends without a newline"
+    ]
+    sources.each do |source|
+      assert(reprint(source) == source, "not reprinted byte for byte: ${source}")
+    end
+  end
+
+  it("nests declarations under the Program root") do
+    let tree = Kex.AST.parseSyntax("let x = 1\nlet y = 2\n").try
+    assert(tree.kind == "Program")
+    assert(nodeIndex(tree.children, "let x", 0) >= 0, "no node for `let x`")
+    assert(nodeIndex(tree.children, "let y", 0) >= 0, "no node for `let y`")
+  end
+
+  it("finds the comments above a declaration, not the one trailing the line before") do
+    let tree = Kex.AST.parseSyntax("let x = 1  # about x\n# about y\nlet y = 2\n").try
+    let index = nodeIndex(tree.children, "let y", 0)
+    assert(Kex.AST.commentsBefore(tree, index) == ["# about y"])
+  end
+
+  it("counts the blank lines above a declaration") do
+    let tree = Kex.AST.parseSyntax("let x = 1\n\n\n# c\nlet y = 2\n").try
+    let index = nodeIndex(tree.children, "let y", 0)
+    assert(Kex.AST.blankLinesBefore(tree, index) == 2)
+    assert(Kex.AST.commentsBefore(tree, index) == ["# c"])
+  end
+
+  it("reprints real stdlib sources") do
+    ["optional.kex", "json.kex", "template.kex"].each do |file|
+      let path = FS.Path.join("src/stdlib", file)
+      let source = FS.File.read(path).or("")
+      assert(!source.empty?, "could not read ${path}")
+      assert(reprint(source) == source, "not reprinted byte for byte: ${path}")
+    end
+  end
+end

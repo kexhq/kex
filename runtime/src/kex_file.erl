@@ -9,6 +9,7 @@
 -export([exists/1, lines/1, read/1, read_bytes/1, write/2, write_bytes/2, append/2, size/1, delete/1, feed/1,
          open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
+         canonical/1, 'symlink?'/1,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
@@ -132,6 +133,11 @@ read_bytes(Path) ->
     end.
 
 write_bytes(Path, {'Binary', Bin}) ->
+    write_bytes(Path, Bin);
+%% A raw BEAM binary straight from an Erlang call (`term_to_binary`, a NIF)
+%% arrives untagged — it shares String's representation — so accept it as
+%% the bytes it is instead of crashing with function_clause (#327).
+write_bytes(Path, Bin) when is_binary(Bin) ->
     case mock_content(Path) of
         undefined -> file:write_file(pth(Path), Bin) =:= ok;
         _ -> put({kex_mock_file, pth(Path)}, Bin), true
@@ -482,6 +488,41 @@ dirname(P)   -> to_bin(filename:dirname(pth(P))).
 extension(P) -> to_bin(filename:extension(pth(P))).
 join(A, B)   -> to_bin(filename:join(pth(A), pth(B))).
 absolute(P)  -> {'Just', to_bin(filename:absname(pth(P)))}.
+
+%% FS.File.canonical(path) → Ok(canonical) | Error(ReadFailed(path)): the
+%% absolute path with every `.`, `..` and symlink resolved, like realpath(3).
+%% Fails when any component does not exist or a link chain loops (#334).
+canonical(P) ->
+    Path = pth(P),
+    case real_walk(filename:split(filename:absname(Path)), [], 0) of
+        {ok, Parts} -> {'Ok', to_bin(filename:join(Parts))};
+        error -> {'Error', {'ReadFailed', Path}}
+    end.
+
+%% Done holds the resolved components so far, innermost first.
+real_walk(_, _, Hops) when Hops > 40 -> error;
+real_walk([], Done, _) -> {ok, lists:reverse(Done)};
+real_walk([<<".">> | Rest], Done, Hops) -> real_walk(Rest, Done, Hops);
+real_walk([<<"..">> | Rest], [Root], Hops) -> real_walk(Rest, [Root], Hops);
+real_walk([<<"..">> | Rest], [_ | Done], Hops) -> real_walk(Rest, Done, Hops);
+real_walk([Part | Rest], Done, Hops) ->
+    Candidate = filename:join(lists:reverse([Part | Done])),
+    case file:read_link_info(Candidate) of
+        {ok, Info} when element(3, Info) =:= symlink ->
+            {ok, Target} = file:read_link_all(Candidate),
+            Parent = filename:join(lists:reverse(Done)),
+            Resolved = filename:split(to_bin(filename:absname(Target, Parent))),
+            real_walk(Resolved ++ Rest, [], Hops + 1);
+        {ok, _} -> real_walk(Rest, [Part | Done], Hops);
+        _ -> error
+    end.
+
+%% FS.File.symlink?(path): true for a symlink, dangling or not (lstat).
+'symlink?'(P) ->
+    case file:read_link_info(pth(P)) of
+        {ok, Info} -> element(3, Info) =:= symlink;
+        _ -> false
+    end.
 
 to_bin(X) when is_binary(X) -> X;
 to_bin(X) -> unicode:characters_to_binary(X).

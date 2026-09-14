@@ -133,6 +133,144 @@ module Kex.AST do
   parseExpression : String -> Result<Expression, ParseError>
   let parseExpression(source) = Kex.Intrinsic.AST.parseExpression(source)
 
+  # One token of a lossless syntax tree, exactly as written.
+  #
+  # Where +parse+ gives a program's meaning, +parseSyntax+ gives its text:
+  # nothing is normalised or dropped, so +toSource+ reprints the file byte for
+  # byte. It is the tree a formatter or a linter works on (kexhq/kex#136).
+  record SyntaxToken do
+    # The lexer's name for the token: +LowerIdent+, +Newline+, +Eof+, ...
+    kind : String
+
+    # The token exactly as written, quotes, escapes and underscores included.
+    text : String
+
+    # Everything between the previous token and this one: spaces, tabs and
+    # comments. A comment on a line of its own sits in front of the +Newline+
+    # that ends that line; whatever follows the last token belongs to +Eof+.
+    trivia : String
+  end
+
+  # One child of a +SyntaxNode+: a token, or a nested node.
+  type SyntaxElement = TokenElement(SyntaxToken) | NodeElement(SyntaxNode)
+
+  # A declaration, expression, pattern or type, holding its own tokens and
+  # nested nodes in source order.
+  #
+  #   let tree = Kex.AST.parseSyntax("# the answer\nlet x = 42\n").try
+  #   tree.kind                  # => "Program"
+  #   Kex.AST.toSource(tree)     # => "# the answer\nlet x = 42\n"
+  record SyntaxNode do
+    # What the parser built there: +FunctionDef+, +MethodCall+, +ListPattern+,
+    # ... The root is +Program+.
+    kind : String
+
+    # The node's tokens and nested nodes, in source order.
+    children : [SyntaxElement]
+  end
+
+  # Parses Kex source into its lossless syntax tree.
+  #
+  # @param source [String] the Kex source text
+  # @return [Result<SyntaxNode, ParseError>] the tree rooted at +Program+, or why it failed
+  #
+  # @example
+  #   Kex.AST.parseSyntax("let x = 1\n").map { |tree| tree.kind }   # => Ok("Program")
+  #   Kex.AST.parseSyntax("let x =").error?                         # => true
+  parseSyntax : String -> Result<SyntaxNode, ParseError>
+  let parseSyntax(source) = Kex.Intrinsic.AST.parseSyntax(source)
+
+  # Reprints a syntax tree as the source it was parsed from, byte for byte.
+  #
+  # Every node prints its own tokens and its nested nodes in order, never a
+  # slice of the original text, so a rearranged tree prints the rearranged
+  # program, its comments moving with it.
+  #
+  # @param node [SyntaxNode] a tree, or any node in one
+  # @return [String] the source the node covers, trivia included
+  #
+  # @example
+  #   let source = "let x = 1   # one\n"
+  #   Kex.AST.parseSyntax(source).map { |tree| Kex.AST.toSource(tree) }   # => Ok(source)
+  toSource : SyntaxNode -> String
+  let toSource(node) = node.children.map { |child| Kex.AST.elementSource(child) }.join("")
+
+  # The source of one child of a node: a token's trivia and text, or a nested
+  # node reprinted.
+  #
+  # @param element [SyntaxElement] the child
+  # @return [String] its source text
+  elementSource : SyntaxElement -> String
+  let elementSource(element) = match element do
+    TokenElement(token) => token.trivia + token.text
+    NodeElement(child) => Kex.AST.toSource(child)
+  end
+
+  # The comments written on their own lines directly above the child at
+  # +index+: the ones that belong to it, move with it when a formatter moves
+  # it, and hold a `# kex:disable-next-line` meant for it.
+  #
+  # A comment at the end of the previous line trails that line instead, and is
+  # not included.
+  #
+  # @param parent [SyntaxNode] the node holding the child
+  # @param index [Integer] the child's position in +parent.children+
+  # @return [[String]] the comment lines, top to bottom, each starting with +#+
+  #
+  # @example
+  #   let tree = Kex.AST.parseSyntax("let x = 1  # x\n# about y\nlet y = 2\n").try
+  #   Kex.AST.commentsBefore(tree, 3)   # => ["# about y"]
+  commentsBefore : SyntaxNode -> Integer -> [String]
+  let commentsBefore(parent, index) do
+    var comments: [String] = []
+    Kex.AST.linesBefore(parent, index).each do |line|
+      let text = line.trim
+      comments = comments + [text] if text.startsWith?("#")
+    end
+    return comments
+  end
+
+  # How many blank lines separate the child at +index+ from what precedes it.
+  #
+  # Kept as a count, not a flag: a formatter preserves one blank line between
+  # declarations and collapses longer runs, which needs to know how many there
+  # were.
+  #
+  # @param parent [SyntaxNode] the node holding the child
+  # @param index [Integer] the child's position in +parent.children+
+  # @return [Integer] the number of blank lines directly above the child
+  #
+  # @example
+  #   let tree = Kex.AST.parseSyntax("let x = 1\n\n\nlet y = 2\n").try
+  #   Kex.AST.blankLinesBefore(tree, 4)   # => 2
+  blankLinesBefore : SyntaxNode -> Integer -> Integer
+  let blankLinesBefore(parent, index) = Kex.AST.linesBefore(parent, index).filter { |line| line.trim.empty? }.count
+
+  # The whole lines between the child at +index+ and the code before it, as
+  # the trivia of the +Newline+ tokens that end them. The newline that ends the
+  # previous line of code is not one of them: what sits in front of it trails
+  # that code.
+  #
+  # @param parent [SyntaxNode] the node holding the child
+  # @param index [Integer] the child's position in +parent.children+
+  # @return [[String]] the lines, top to bottom, without their newlines
+  linesBefore : SyntaxNode -> Integer -> [String]
+  let linesBefore(parent, index) do
+    var position = index - 1
+    var lines: [String] = []
+    var scanning = true
+    while scanning && position >= 0 do
+      match parent.children.at(position) do
+        Just(TokenElement(token)) when token.kind == "Newline" => do
+          lines = [token.trivia] + lines
+          position = position - 1
+        end
+        _ => scanning = false
+      end
+    end
+    return position >= 0 then lines.drop(1) else lines
+  end
+
   # A type as it was written in source.
   #
   # +typeRefText+ renders one back to the source spelling.

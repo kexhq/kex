@@ -1,6 +1,7 @@
 #include "../evaluator.hxx"
 #include "../value_builder.hxx"
 #include "../../ast/convert.hxx"
+#include "../../ast/syntax.hxx"
 #include "../../lexer/lexer.hxx"
 #include "../../parser/parser.hxx"
 #include <fstream>
@@ -23,9 +24,11 @@ static auto makeLocation(SourceLocation loc, const std::string& filename) -> Val
     return converter.location(loc, filename);
 }
 
-static auto convertProgram(const ast::Program& program, const std::string& source,
+static auto convertProgram(const ast::Program& program,
+                            const std::vector<Token>& tokens,
+                            const std::string& source,
                             const std::string& filename) -> ValuePtr {
-    auto docs = ast::extractDocComments(source);
+    auto docs = ast::extractDocComments(tokens, source);
     ValueBuilder builder;
     ast::Converter converter(builder);
     return converter.program(program, filename, docs);
@@ -53,6 +56,9 @@ auto Evaluator::registerParserBuiltins() -> void {
                             "MapType", "UnionType", "NullableType", "TypeVar",
                             "AnyType", "NoneType"}) {
         m_variantParent[tag] = "Kex.AST.TypeRef";
+    }
+    for (const auto& tag : {"TokenElement", "NodeElement"}) {
+        m_variantParent[tag] = "Kex.AST.SyntaxElement";
     }
     for (const auto& tag : {"BindPattern", "LiteralPattern", "ConstructorPattern",
                             "TuplePattern", "ListPattern", "WildcardPattern",
@@ -94,7 +100,7 @@ auto Evaluator::registerParserBuiltins() -> void {
                 return Value::error(makeParseError(
                     diagnostic.message, diagnostic.location, filename));
             }
-            return Value::ok(convertProgram(program, source, filename));
+            return Value::ok(convertProgram(program, tokens, source, filename));
         } catch (const std::exception& e) {
             return Value::error(makeParseError(e.what(), std::nullopt, filename));
         }
@@ -126,9 +132,43 @@ auto Evaluator::registerParserBuiltins() -> void {
                 return Value::error(makeParseError(
                     diagnostic.message, diagnostic.location, path));
             }
-            return Value::ok(convertProgram(program, source, path));
+            return Value::ok(convertProgram(program, tokens, source, path));
         } catch (const std::exception& e) {
             return Value::error(makeParseError(e.what(), std::nullopt, path));
+        }
+    });
+
+    // Kex.AST.parseSyntax(source): the lossless syntax tree — every token as
+    // written, with the trivia in front of it, nested under the nodes the
+    // parser completed (kexhq/kex#136).
+    defineIntrinsic("AST::parseSyntax", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+        auto* srcVal = std::get_if<StringValue>(&args[0]->data);
+        if (!srcVal) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+
+        const std::string source = srcVal->value;
+        const std::string filename = "<string>";
+        try {
+            auto filenamePtr = std::make_shared<std::string>(filename);
+            Lexer lexer(source, *filenamePtr);
+            auto tokens = lexer.tokenizeAll();
+            Parser parser(tokens, *filenamePtr);
+            parser.parseProgram();
+            if (!parser.diagnostics().empty()) {
+                const auto& diagnostic = parser.diagnostics().front();
+                return Value::error(makeParseError(
+                    diagnostic.message, diagnostic.location, filename));
+            }
+            ValueBuilder builder;
+            auto tree = ast::buildSyntaxTree(builder, tokens, source,
+                                             parser.syntaxSpans());
+            if (!tree)
+                return Value::error(makeParseError(
+                    "the source could not be divided among its tokens",
+                    std::nullopt, filename));
+            return Value::ok(*tree);
+        } catch (const std::exception& e) {
+            return Value::error(makeParseError(e.what(), std::nullopt, filename));
         }
     });
 

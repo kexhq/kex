@@ -1,0 +1,4 @@
+spec/error_just_payload_type.kex:12:17: error: `wantsInteger` expects argument 1 to be Integer, but got Page
+
+wantsInteger : Integer -> Integer
+Aborted: 1 type error — fix before running (use --no-check to skip).

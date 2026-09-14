@@ -1,0 +1,66 @@
+# Adjacent declarations of one name become one function, and the four places
+# lowering decides that share one rule (kexhq/kex#262). Each case below is a
+# shape a drifting copy of the rule once got wrong.
+
+# A multi-clause trait default: every clause must come through, not just the
+# first (kexhq/kex#261).
+trait Repeatable do
+  combine : This -> This
+  identity : This
+  let repeat(0) = this.identity
+  let repeat(n: Integer) -> This do
+    this.combine(this.repeat(n - 1))
+  end
+end
+
+record Word do
+  text : String
+end
+
+make Word, implement: Repeatable do
+  let combine(other: Word) -> Word = Word { text: @text + other.text }
+  let identity -> Word = Word { text: "" }
+end
+
+# A method overloaded by a non-receiver parameter's type is one BEAM function
+# per signature, so the second never swallows the first (kexhq/kex#233).
+record Bag do
+  items : [Integer]
+end
+
+make Bag do
+  let add(other: Bag) -> Bag = Bag { items: @items + other.items }
+  let add(other: [Integer]) -> Bag = Bag { items: @items + other }
+end
+
+# A signature line between two typed overloads must not split their group.
+record Dog do
+  name : String
+end
+
+record Cat do
+  name : String
+end
+
+speak : Dog -> String
+let speak(animal: Dog) -> String = "woof from ${animal.name}"
+speak : Cat -> String
+let speak(animal: Cat) -> String = "meow from ${animal.name}"
+
+# A module function written as untyped clauses (folded by the parser) and a
+# module method group next to it.
+module Counting do
+  let describe(0) = "none"
+  let describe(1) = "one"
+  let describe(n) = "${n} of them"
+end
+
+main do
+  IO.printLine(Word { text: "ab" }.repeat(3).text)
+  IO.printLine("${Bag { items: [1] }.add(Bag { items: [2] }).add([3, 4]).items}")
+  IO.printLine(speak(Dog { name: "Rex" }))
+  IO.printLine(speak(Cat { name: "Tom" }))
+  IO.printLine(Counting.describe(0))
+  IO.printLine(Counting.describe(1))
+  IO.printLine(Counting.describe(5))
+end

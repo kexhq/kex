@@ -139,6 +139,13 @@ auto Evaluator::registerKexBuiltins() -> void {
         return makeVariant("Interpreter");
     });
 
+    // The BEAM's JSON fast path (kex_intrinsic_json.erl). The interpreter has
+    // none, so both answer None and json.kex runs its own parser/encoder.
+    for (const char* name : {"Json::decode", "Json::encode"})
+        defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
+            return Value::none();
+        });
+
     // Mirrors kex_intrinsic_kex:version/0 — see src/common/version.hxx for
     // why both sides read from one place.
     defineIntrinsic("Kex::version", [](std::vector<ValuePtr>) -> ValuePtr {

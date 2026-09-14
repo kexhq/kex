@@ -612,11 +612,15 @@ add_test(NAME codegen_test COMMAND codegen_test)
 add_executable(lexer_test tests/lexer_test.cxx)
 target_link_libraries(lexer_test PRIVATE kex_lib)
 target_include_directories(lexer_test PRIVATE tests)
+# The lossless-token round trip reads every .kex file in the checkout.
+target_compile_definitions(lexer_test PRIVATE KEX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME lexer_test COMMAND lexer_test)
 
 add_executable(parser_test tests/parser_test.cxx)
 target_link_libraries(parser_test PRIVATE kex_lib)
 target_include_directories(parser_test PRIVATE tests)
+# The lossless syntax tree round trip reads every .kex file in the checkout.
+target_compile_definitions(parser_test PRIVATE KEX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME parser_test COMMAND parser_test)
 
 add_executable(module_resolver_test tests/module_resolver_test.cxx)

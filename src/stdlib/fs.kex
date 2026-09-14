@@ -441,6 +441,33 @@ module FS do
     # because it is not lexical: it asks the process where it is.
     absolute : FilePath -> String?
     foul absolute(path) = Kex.Intrinsic.File.absolute(path)
+
+    # The canonical form of +path+: absolute, with every +.+, +..+ and
+    # symlink resolved, like +realpath(3)+.
+    #
+    # Unlike +absolute+ this reads the filesystem, so a path that does not
+    # exist (or a symlink loop) is an error. Use it to keep reads and writes
+    # inside a directory: compare the real path's prefix, and neither +../+
+    # nor a symlink can escape.
+    #
+    # @param path [FilePath] the path to resolve
+    # @return [Result<String, FileError>] the canonical path, or +ReadFailed+
+    #
+    # @example
+    #   FS.File.canonical("/tmp/../etc")   # => Ok("/private/etc") on macOS
+    canonical : FilePath -> Result<String, FileError>
+    foul canonical(path) = Kex.Intrinsic.File.canonical(path)
+
+    # Whether +path+ is itself a symlink, without following it. A dangling
+    # link is still a symlink.
+    #
+    # @param path [FilePath] the path to inspect
+    # @return [Bool] +true+ for a symlink
+    #
+    # @example
+    #   FS.File.symlink?("current")   # => true
+    symlink? : FilePath -> Bool
+    foul symlink?(path) = Kex.Intrinsic.File.symlink?(path)
   end
 
   # Path arithmetic: joining, splitting, normalising and comparing paths.

@@ -294,11 +294,7 @@ private do
     # Just(...) unwrapped rather than stringified: an optional prints as
     # `Just("0.4.0")`, and the document wants "0.4.0" — or null, for no
     # selection, which is what None already stringifies to.
-    let selectedText = match selected do
-      Just(version) => version
-      None => None
-    end
-    IO.printLine(JSON.stringify({ home: Tey.Toolchain.home, selected: selectedText, toolchains: toolchains }))
+    IO.printLine(JSON.stringify({ home: Tey.Toolchain.home, selected: selected, toolchains: toolchains }))
     0
   end
 
