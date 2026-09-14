@@ -3,6 +3,9 @@
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <cxxabi.h>
+#include <memory>
 #include <stdexcept>
 
 namespace kex {
@@ -280,6 +283,19 @@ auto Parser::isReturnIfExpressionAhead(int returnColumn) const -> bool {
       next.type == TokenType::Elif || next.type == TokenType::Eof)
     return false;
   return next.location.column > returnColumn;
+}
+
+// `kex::ast::FunctionDef` -> `FunctionDef`: the unqualified C++ type name is
+// the syntax kind, so a new node type needs no table entry to show up in the
+// syntax tree (kexhq/kex#136).
+auto Parser::syntaxKindName(const std::type_info &type) -> std::string {
+  int status = 0;
+  std::unique_ptr<char, void (*)(void *)> demangled(
+      abi::__cxa_demangle(type.name(), nullptr, nullptr, &status), std::free);
+  std::string name = status == 0 && demangled ? demangled.get() : type.name();
+  if (const auto colon = name.rfind("::"); colon != std::string::npos)
+    name = name.substr(colon + 2);
+  return name;
 }
 
 auto Parser::error(const std::string &message) -> void {

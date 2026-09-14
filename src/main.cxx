@@ -5,6 +5,7 @@
 #include "beam/kexi_registry.hxx"
 #include "beam/term_builder.hxx"
 #include "ast/convert.hxx"
+#include "ast/syntax.hxx"
 #include "common/artifact_versions.hxx"
 #include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
@@ -2111,6 +2112,7 @@ auto printUsage(const char *progName) -> void {
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
       << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
+      << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
       << "      --collapse-report\n"
       << "                    Report what `compiled do` chain collapse folded "
@@ -2230,6 +2232,7 @@ int main(int argc, char *argv[]) {
       {"test-json", no_argument, nullptr, 1013},
       {"test-list", no_argument, nullptr, 1014},
       {"test-only", required_argument, nullptr, 1015},
+      {"emit-syntax", no_argument, nullptr, 1016},
       {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
@@ -2291,6 +2294,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1011:
       mode = "emit-ast";
+      break;
+    case 1016:
+      mode = "emit-syntax";
       break;
     case 1012:
       astFilename = optarg;
@@ -3998,9 +4004,15 @@ int main(int argc, char *argv[]) {
   }
 
   auto source = readFile(filepath);
-  if (source.empty())
+  // An empty file is an empty program to the AST tools. The interpreter answers
+  // `Kex.AST.parse("")` and `parseSyntax("")` with an empty tree, and BEAM
+  // reaches both through a temporary file, so refusing it here made the two
+  // backends disagree. A file that could not be opened still stops here —
+  // readFile has already said why.
+  if (source.empty() &&
+      !((mode == "emit-ast" || mode == "emit-syntax") &&
+        std::filesystem::is_regular_file(filepath)))
     return 1;
-  auto astDocs = kex::ast::extractDocComments(source);
 
   // Honour `# kex: no-check` pragma in the first few lines — any file that
   // contains it is treated as if --no-check was passed on the command line.
@@ -4022,8 +4034,18 @@ int main(int argc, char *argv[]) {
     scriptArgs.push_back(argv[i]);
   }
 
+  // --emit-syntax reprints the source from its tokens, and --emit-ast reads
+  // doc comments out of their trivia, so both keep the text (and
+  // --emit-syntax the token list) that the lexer and parser below consume.
+  const std::string syntaxSource =
+      mode == "emit-syntax" || mode == "emit-ast" ? source : std::string{};
   kex::Lexer lexer(std::move(source), filepath);
   auto tokens = lexer.tokenizeAll();
+  const auto syntaxTokens =
+      mode == "emit-syntax" ? tokens : std::vector<kex::Token>{};
+  const auto astDocs = mode == "emit-ast"
+      ? kex::ast::extractDocComments(tokens, syntaxSource)
+      : std::unordered_map<int, std::string>{};
 
   if (mode == "lex") {
     for (const auto &token : tokens) {
@@ -4052,8 +4074,9 @@ int main(int argc, char *argv[]) {
     // itself; printing here would duplicate every message.
     if (!parser.diagnostics().empty() &&
         (mode == "run" || mode == "compile" || mode == "emit-ast" ||
+         mode == "emit-syntax" ||
          mode == "parse" || mode == "expand" || mode == "emit-core")) {
-      if (mode == "emit-ast") {
+      if (mode == "emit-ast" || mode == "emit-syntax") {
         const auto &diagnostic = parser.diagnostics().front();
         const auto logicalFilename =
             astFilename.empty() ? filepath : astFilename;
@@ -4106,6 +4129,20 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+    if (mode == "emit-syntax") {
+      kex::beam::TermBuilder builder;
+      auto tree = kex::ast::buildSyntaxTree(builder, syntaxTokens, syntaxSource,
+                                            parser.syntaxSpans());
+      if (!tree) {
+        std::cerr << "error: " << filepath
+                  << ": the source could not be divided among its tokens\n";
+        return 1;
+      }
+      auto bytes = kex::beam::encodeEtf(*tree);
+      std::cout.write(reinterpret_cast<const char *>(bytes.data()),
+                      static_cast<std::streamsize>(bytes.size()));
+      return 0;
+    }
     if (mode == "emit-ast") {
       kex::beam::TermBuilder builder;
       kex::ast::Converter converter(builder);

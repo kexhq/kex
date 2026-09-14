@@ -1,6 +1,12 @@
 #include "test.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
+#include "../src/ast/convert.hxx"
+#include "../src/ast/syntax.hxx"
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace kex;
 using namespace test;
@@ -1580,6 +1586,216 @@ int main() {
             assertTrue(parseFails(
                 "let f do\n  Error(\"x\").try\n"
                 "rescue do |error|\n  error\nend\nend\n"));
+        });
+    });
+
+    // kexhq/kex#136: the syntax tree `Kex.AST.parseSyntax` returns. These
+    // builders turn it straight into text instead of Kex values, so the test
+    // sees exactly what `toSource` would print.
+    struct ReprintBuilder {
+        using Value = std::string;
+        using Fields = std::vector<std::pair<std::string, Value>>;
+        auto variant(std::string, std::string, std::vector<Value> args) const -> Value {
+            return args.empty() ? Value{} : args.front();
+        }
+        auto record(std::string name, Fields fields) const -> Value {
+            if (name == "SyntaxToken") return fields[2].second + fields[1].second;
+            return fields[1].second;  // SyntaxNode: its children, in order
+        }
+        auto list(std::vector<Value> values) const -> Value {
+            std::string out;
+            for (const auto& value : values) out += value;
+            return out;
+        }
+        auto string(std::string value) const -> Value { return value; }
+    };
+    // The same tree as nested node kinds only: `(Program (FunctionDef ...))`.
+    struct ShapeBuilder {
+        using Value = std::string;
+        using Fields = std::vector<std::pair<std::string, Value>>;
+        auto variant(std::string, std::string, std::vector<Value> args) const -> Value {
+            return args.empty() ? Value{} : args.front();
+        }
+        auto record(std::string name, Fields fields) const -> Value {
+            if (name == "SyntaxToken") return "";
+            return "(" + fields[0].second + fields[1].second + ")";
+        }
+        auto list(std::vector<Value> values) const -> Value {
+            std::string out;
+            for (const auto& value : values) out += value;
+            return out;
+        }
+        auto string(std::string value) const -> Value { return value; }
+    };
+    auto buildWith = [](auto builder, const std::string& source)
+        -> std::optional<std::string> {
+        Lexer lexer(source);
+        auto tokens = lexer.tokenizeAll();
+        Parser parser(tokens);
+        parser.parseProgram();
+        if (!parser.diagnostics().empty()) return std::nullopt;
+        return ast::buildSyntaxTree(builder, tokens, source, parser.syntaxSpans());
+    };
+
+    describe("Parser — lossless syntax tree", [buildWith]() {
+        it("reprints comments, blank lines and spellings exactly", [buildWith]() {
+            const std::string source =
+                "# lead\n\n\nmodule M do\n  let f(a, b) = a + b   # sum\n\n"
+                "  let s = \"x ${f(1, 2)}\"\nend\n# ends without a newline";
+            auto out = buildWith(ReprintBuilder{}, source);
+            assertTrue(out.has_value());
+            if (out) assertEqual(*out, source);
+        });
+
+        it("nests nodes rather than flattening them under Program", [buildWith]() {
+            auto shape = buildWith(ShapeBuilder{}, "let f(a) = a + 1\n");
+            assertTrue(shape.has_value());
+            if (!shape) return;
+            assertTrue(shape->rfind("(Program", 0) == 0, *shape);
+            assertTrue(shape->find("(FunctionDef") != std::string::npos, *shape);
+            assertTrue(std::count(shape->begin(), shape->end(), '(') >= 3, *shape);
+        });
+
+        it("reprints every .kex file in examples/, spec/ and src/stdlib/", [buildWith]() {
+            namespace fs = std::filesystem;
+            const auto root = fs::path(KEX_SOURCE_DIR);
+            size_t files = 0;
+            size_t parsed = 0;
+            std::vector<std::string> failures;
+            for (const auto* dir : {"examples", "spec", "src/stdlib"}) {
+                if (!fs::exists(root / dir)) continue;
+                for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
+                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
+                        continue;
+                    std::ifstream in(entry.path(), std::ios::binary);
+                    std::stringstream buffer;
+                    buffer << in.rdbuf();
+                    const auto source = buffer.str();
+                    ++files;
+                    Lexer lexer(source);
+                    auto tokens = lexer.tokenizeAll();
+                    Parser parser(tokens);
+                    parser.parseProgram();
+                    // A file written to fail parsing (an error spec) has no
+                    // tree to reprint; it is not a losslessness failure.
+                    if (!parser.diagnostics().empty()) continue;
+                    ++parsed;
+                    auto out = ast::buildSyntaxTree(ReprintBuilder{}, tokens, source,
+                                                    parser.syntaxSpans());
+                    if (!out || *out != source)
+                        failures.push_back(entry.path().lexically_relative(root).string());
+                }
+            }
+            for (const auto& failure : failures)
+                std::cerr << "    not reprinted: " << failure << "\n";
+            assertTrue(parsed > 300);
+            assertEqual(failures.size(), size_t{0});
+        });
+    });
+
+    // kexhq/kex#136: doc comments come from the token trivia, not a second
+    // line scanner over the source.
+    describe("Parser — doc comments from tokens", []() {
+        auto fromTokens = [](const std::string& source) {
+            Lexer lexer(source);
+            auto tokens = lexer.tokenizeAll();
+            return ast::extractDocComments(tokens, source);
+        };
+
+        // The only difference allowed from the line scanner is the bug this
+        // fixes: it took a `#` line inside a multi-line string (a Markdown
+        // heading in a README template, `# <%= title %>` in a .ket) for a doc
+        // comment on the string's next line. Everything else must match.
+        it("finds the line scanner's doc comments in every .kex file, minus those inside strings", [fromTokens]() {
+            namespace fs = std::filesystem;
+            const auto root = fs::path(KEX_SOURCE_DIR);
+            size_t files = 0;
+            size_t insideStrings = 0;
+            std::vector<std::string> differences;
+            for (const auto* dir : {"examples", "spec", "src/stdlib", "tey/src"}) {
+                if (!fs::exists(root / dir)) continue;
+                for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
+                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
+                        continue;
+                    std::ifstream in(entry.path(), std::ios::binary);
+                    std::stringstream buffer;
+                    buffer << in.rdbuf();
+                    const auto source = buffer.str();
+                    ++files;
+                    const auto lines = ast::extractDocComments(source);
+                    const auto tokens = fromTokens(source);
+                    const auto name = entry.path().lexically_relative(root).string();
+
+                    // Lines that lie inside a token, past its first line: the
+                    // interior of a multi-line string.
+                    std::vector<bool> interior;
+                    {
+                        Lexer lexer(source);
+                        for (const auto& token : lexer.tokenizeAll()) {
+                            if (token.startOffset < 0 || token.endOffset <= token.startOffset)
+                                continue;
+                            const auto raw = std::string_view(source).substr(
+                                token.startOffset, token.endOffset - token.startOffset);
+                            const auto breaks = static_cast<int>(std::count(raw.begin(), raw.end(), '\n'));
+                            for (int line = token.location.line + 1;
+                                 line <= token.location.line + breaks; ++line) {
+                                if (static_cast<int>(interior.size()) <= line) interior.resize(line + 1, false);
+                                interior[line] = true;
+                            }
+                        }
+                    }
+                    std::vector<std::string_view> sourceLines;
+                    for (size_t start = 0; start <= source.size();) {
+                        const auto end = source.find('\n', start);
+                        sourceLines.push_back(std::string_view(source).substr(
+                            start, end == std::string::npos ? std::string::npos : end - start));
+                        if (end == std::string::npos) break;
+                        start = end + 1;
+                    }
+                    // The doc for `line` came from inside a string when the
+                    // closest non-blank line above it is a string's interior.
+                    auto fromInsideString = [&](int line) {
+                        for (int above = line - 1; above >= 1; --above) {
+                            const auto text = sourceLines[above - 1];
+                            if (text.find_first_not_of(" \t\r") == std::string_view::npos) continue;
+                            return above < static_cast<int>(interior.size()) && interior[above];
+                        }
+                        return false;
+                    };
+
+                    for (const auto& [line, doc] : lines) {
+                        const auto found = tokens.find(line);
+                        if (found != tokens.end() && found->second == doc) continue;
+                        if (found == tokens.end() && fromInsideString(line)) {
+                            ++insideStrings;
+                            continue;
+                        }
+                        differences.push_back(name + ":" + std::to_string(line));
+                    }
+                    for (const auto& [line, doc] : tokens)
+                        if (!lines.count(line))
+                            differences.push_back(name + ":" + std::to_string(line) + " (new)");
+                }
+            }
+            for (const auto& difference : differences)
+                std::cerr << "    doc comment differs: " << difference << "\n";
+            assertTrue(files > 300);
+            assertTrue(insideStrings > 0, "expected the string cases the line scanner got wrong");
+            assertEqual(differences.size(), size_t{0});
+        });
+
+        it("does not take a # line inside a multi-line string for a doc comment", [fromTokens]() {
+            const std::string source = "let text = `\n# not a comment\n`\nlet x = 1\n";
+            assertFalse(ast::extractDocComments(source).empty(),
+                        "the line scanner's mistake this replaces");
+            assertTrue(fromTokens(source).empty());
+        });
+
+        it("attaches a comment block, blank lines inside it kept, to the next code line", [fromTokens]() {
+            const auto docs = fromTokens("# first\n#\n# third\nlet x = 1\n");
+            const auto found = docs.find(4);
+            assertTrue(found != docs.end());
+            if (found != docs.end()) assertEqual(found->second, std::string("first\n\nthird"));
         });
     });
 

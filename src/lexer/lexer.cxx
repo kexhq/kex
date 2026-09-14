@@ -287,6 +287,37 @@ auto Lexer::tokenizeAll() -> std::vector<Token> {
     return tokens;
 }
 
+// Every byte of `source`, divided among the tokens: each token's own spelling
+// and the trivia (whitespace, comments, newlines the scanner skipped) between
+// the previous token and it. Trailing trivia belongs to Eof. The scanner keeps
+// no trivia of its own — it already records where each token starts and ends,
+// so the gaps ARE the trivia (kexhq/kex#136). Answers nullopt when the offsets
+// cannot account for the source exactly (a token outside it, or two
+// overlapping), so a caller never reprints a lossy text.
+auto tokenTexts(const std::vector<Token>& tokens, std::string_view source)
+    -> std::optional<std::vector<TokenText>> {
+    std::vector<TokenText> texts;
+    texts.reserve(tokens.size());
+    size_t previousEnd = 0;
+    for (const auto& token : tokens) {
+        // Eof is made after the final skipWhitespace without its own start
+        // being recorded, so its offsets are the previous token's. It spans
+        // nothing and sits at the end of the source.
+        const bool eof = token.type == TokenType::Eof;
+        const auto start = eof ? static_cast<long long>(source.size())
+                               : static_cast<long long>(token.startOffset);
+        const auto end = eof ? start : static_cast<long long>(token.endOffset);
+        if (start < static_cast<long long>(previousEnd) || end < start ||
+            end > static_cast<long long>(source.size()))
+            return std::nullopt;
+        texts.push_back({source.substr(previousEnd, start - previousEnd),
+                         source.substr(start, end - start)});
+        previousEnd = static_cast<size_t>(end);
+    }
+    if (previousEnd != source.size()) return std::nullopt;
+    return texts;
+}
+
 auto Lexer::peek() const -> char {
     if (atEnd()) return '\0';
     return m_source[m_pos];

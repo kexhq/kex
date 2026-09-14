@@ -4,6 +4,8 @@
 #include "../lexer/lexer.hxx"
 #include <functional>
 #include <string>
+#include <typeinfo>
+#include <variant>
 #include <vector>
 
 namespace kex {
@@ -30,6 +32,20 @@ public:
     auto parseTypeExpr() -> ast::TypeExprPtr;
     auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
+    // Every node the parser completed, as its kind and byte span, in the order
+    // completed: the skeleton `ast::buildSyntaxTree` nests into a lossless
+    // syntax tree (kexhq/kex#136). A fragment a nested parser handles, such as
+    // an interpolation's `${...}`, records into that parser instead, so it
+    // stays inside the string token that contains it.
+    struct SyntaxSpan {
+        std::string kind;
+        int startOffset = -1;
+        int endOffset = -1;
+    };
+    auto syntaxSpans() const -> const std::vector<SyntaxSpan>& {
+        return m_syntaxSpans;
+    }
+
 private:
     // Token navigation
     auto peek() const -> const Token&;
@@ -47,8 +63,24 @@ private:
     auto complete(std::unique_ptr<T> node) const -> std::unique_ptr<T> {
         if (node && m_pos > 0)
             node->location.endOffset = m_tokens[m_pos - 1].endOffset;
+        if (node)
+            m_syntaxSpans.push_back({syntaxKindOf(*node),
+                                     node->location.startOffset,
+                                     node->location.endOffset});
         return node;
     }
+    // A node's syntax kind: its type's name, or — for the variant-shaped
+    // Expr, Pattern and TypeExpr — the name of the alternative it holds.
+    template<typename T>
+    static auto syntaxKindOf(const T& node) -> std::string {
+        if constexpr (requires { node.kind.valueless_by_exception(); })
+            return std::visit([](const auto& alternative) {
+                return syntaxKindName(typeid(alternative));
+            }, node.kind);
+        return syntaxKindName(typeid(node));
+    }
+    static auto syntaxKindName(const std::type_info& type) -> std::string;
+    mutable std::vector<SyntaxSpan> m_syntaxSpans;
 
     // Top-level
     auto parseTopLevelItem() -> ast::TopLevelItem;

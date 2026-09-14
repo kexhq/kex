@@ -1,5 +1,9 @@
 #include "test.hxx"
 #include "../src/lexer/lexer.hxx"
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 
 using namespace kex;
 using namespace test;
@@ -523,6 +527,88 @@ int main() {
         it("reports unterminated string", []() {
             auto tok = firstToken("\"unterminated");
             assertEqual(tok.type, TokenType::Error);
+        });
+    });
+
+    // kexhq/kex#136: every byte of the source belongs to exactly one token,
+    // as its spelling or as the trivia in front of it.
+    describe("Lexer — lossless token texts", []() {
+        auto reprint = [](const std::string& source) -> std::optional<std::string> {
+            auto tokens = tokenize(source);
+            auto texts = tokenTexts(tokens, source);
+            if (!texts) return std::nullopt;
+            std::string out;
+            for (const auto& text : *texts) {
+                out += text.trivia;
+                out += text.raw;
+            }
+            return out;
+        };
+        auto roundTrips = [reprint](const std::string& source) {
+            auto out = reprint(source);
+            assertTrue(out.has_value());
+            if (out) assertEqual(*out, source);
+        };
+
+        it("keeps comments, blank lines and trailing trivia", [roundTrips]() {
+            roundTrips("# leading comment\n\n\nlet x = 1   # trailing\n\n");
+            roundTrips("let x = 1\n# comment with no newline at the end");
+            roundTrips("");
+            roundTrips("   \n\t\n");
+        });
+
+        it("keeps separators, CRLF and newlines inside parentheses", [roundTrips]() {
+            roundTrips("let a = 1; let b = 2\r\nlet c = (a\n  + b)\r\n");
+        });
+
+        it("keeps string, interpolation and number spellings as written", [roundTrips]() {
+            roundTrips("let s = \"a ${1 + 2} \\\"q\\\"\"\nlet n = 1_000\nlet r = `raw`\nlet c = 'x'\n");
+        });
+
+        // A comment on a line of its own is followed by that line's newline,
+        // which is itself a token, so the comment is trivia of the Newline in
+        // front of the declaration. Deciding it BELONGS to `let y` is node
+        // attachment, one level up.
+        it("puts an own-line comment in the trivia of the newline before the next line", []() {
+            const std::string source = "let x = 1\n# about y\nlet y = 2\n";
+            auto tokens = tokenize(source);
+            auto texts = tokenTexts(tokens, source);
+            assertTrue(texts.has_value());
+            if (!texts) return;
+            bool found = false;
+            for (size_t i = 0; i + 1 < tokens.size(); ++i)
+                if ((*texts)[i].trivia.find("# about y") != std::string_view::npos) {
+                    assertEqual(tokens[i].type, TokenType::Newline);
+                    assertEqual(tokens[i + 1].type, TokenType::Let);
+                    found = true;
+                }
+            assertTrue(found);
+        });
+
+        it("round-trips every .kex file in examples/, spec/ and src/stdlib/", [reprint]() {
+            namespace fs = std::filesystem;
+            const auto root = fs::path(KEX_SOURCE_DIR);
+            size_t files = 0;
+            std::vector<std::string> failures;
+            for (const auto* dir : {"examples", "spec", "src/stdlib"}) {
+                if (!fs::exists(root / dir)) continue;
+                for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
+                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
+                        continue;
+                    std::ifstream in(entry.path(), std::ios::binary);
+                    std::stringstream buffer;
+                    buffer << in.rdbuf();
+                    const auto source = buffer.str();
+                    ++files;
+                    auto out = reprint(source);
+                    if (!out || *out != source)
+                        failures.push_back(entry.path().lexically_relative(root).string());
+                }
+            }
+            for (const auto& failure : failures)
+                std::cerr << "    not lossless: " << failure << "\n";
+            assertTrue(files > 300);
+            assertEqual(failures.size(), size_t{0});
         });
     });
 

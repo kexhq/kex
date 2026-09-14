@@ -1137,11 +1137,17 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
 
 auto TypeChecker::typeDefToType(const ast::TypeDef& def) -> TypePtr {
     if (!def.variants || def.variants->empty()) return Type::unknown();
+    // A generic alias's parameters take the negative TypeVar slots -1, -2, …
+    // — the convention `substituteInterfaceGenerics` fills — so an applied
+    // alias (`Predicate<Integer>`) can be expanded by substituting its
+    // arguments, the way a distinct type's backing type already is (#337).
+    std::unordered_map<std::string, TypePtr> aliasParams;
+    for (size_t i = 0; i < def.typeParams.size(); ++i)
+        aliasParams[def.typeParams[i]] = Type::typeVar(-static_cast<int>(i + 1));
     // Build variant types, then fold into a union if more than one.
-    std::unordered_map<std::string, TypePtr> noGenerics;
     std::vector<TypePtr> parts;
     for (const auto& v : *def.variants) {
-        if (v) parts.push_back(resolveTypeExpr(*v, noGenerics));
+        if (v) parts.push_back(resolveTypeExpr(*v, aliasParams));
     }
     if (parts.empty()) return Type::unknown();
     if (parts.size() == 1) return parts[0];
@@ -2209,8 +2215,11 @@ auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
         if (!m_distinctTypes.count(resolveDistinctName(last)) &&
             !m_recordFields.count(named->name)) {
             if (auto alias = m_typeAliases.find(last);
-                alias != m_typeAliases.end() && args.empty())
-                return expandTypeAliases(alias->second, depth + 1);
+                alias != m_typeAliases.end())
+                return expandTypeAliases(
+                    args.empty() ? alias->second
+                                 : substituteInterfaceGenerics(alias->second, args),
+                    depth + 1);
         }
         if (args.empty()) return type;
         return Type::named(named->name, std::move(args));
@@ -2353,6 +2362,13 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (auto distinct = resolveDistinctName(name);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct, std::move(args));
+            // An applied generic alias is its body with the arguments put in:
+            // `Predicate<E>` for `type Predicate<E> = E -> Bool` is `E -> Bool`.
+            // Left as a named type, no lambda ever matched it (#337).
+            if (auto alias = m_typeAliases.find(name);
+                alias != m_typeAliases.end() &&
+                !m_recordFields.count(resolveRecordName(name)))
+                return substituteInterfaceGenerics(alias->second, args);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -4988,6 +5004,65 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (invalid)
                             error(element->location, "Byte literal must be in 0..255");
                     }
+            }
+            // `or` is what leaves the optional (or result) world, so its default
+            // is the plain unwrapped value. `.or(None)` / `.or(Just(x))` passed
+            // anyway — `None` is accepted wherever an optional could go — and
+            // produced a value that is neither `X` nor `X?` (kexhq/kex#338;
+            // STYLE.md `or-optional-default`).
+            if (callName == "or" && argTypes.size() == 2) {
+                const auto receiver = resolve(argTypes[0]);
+                const auto fallback = resolve(argTypes[1]);
+                const auto* receiverNamed = std::get_if<NamedType>(&receiver->kind);
+                const bool optionalReceiver =
+                    std::holds_alternative<OptionalType>(receiver->kind);
+                const bool resultReceiver =
+                    receiverNamed && receiverNamed->name == "Result";
+                const auto* fallbackNamed = std::get_if<NamedType>(&fallback->kind);
+                // A bare `Just(8080)` / `Error("bad")` is typed gradually, so
+                // its spelling is the only thing that says it is wrapped.
+                const auto wrappingConstructor = [](const std::string& name) {
+                    return name == "Just" || name == "Ok" || name == "Error";
+                };
+                bool constructedWrapped = false;
+                if (const auto& argument = node.args.back()) {
+                    if (const auto* call = std::get_if<ast::FunctionCall>(&argument->kind))
+                        constructedWrapped = wrappingConstructor(call->name);
+                    else if (const auto* method = std::get_if<ast::MethodCall>(&argument->kind);
+                             method && !method->receiver)
+                        constructedWrapped = wrappingConstructor(method->method);
+                }
+                const bool wrappedFallback = constructedWrapped ||
+                    std::holds_alternative<OptionalType>(fallback->kind) ||
+                    (fallbackNamed && (fallbackNamed->name == "None" ||
+                                       fallbackNamed->name == "Result"));
+                if ((optionalReceiver || resultReceiver) && wrappedFallback) {
+                    const auto unwrapped = optionalReceiver
+                        ? std::get<OptionalType>(receiver->kind).inner
+                        : (receiverNamed->typeArgs.empty()
+                               ? Type::unknown()
+                               : receiverNamed->typeArgs.front());
+                    const auto unwrappedName = typeToString(unwrapped);
+                    const bool vowel = !unwrappedName.empty() &&
+                        std::string("AEIOUaeiou").find(unwrappedName.front()) !=
+                            std::string::npos;
+                    const auto wanted = containsOpenType(unwrapped)
+                        ? std::string("the unwrapped value")
+                        : (vowel ? "an " : "a ") + unwrappedName;
+                    error(node.args.back() ? node.args.back()->location : expr.location,
+                          "`or` needs " + wanted + " to fall back to, but got " +
+                              (constructedWrapped
+                                   ? "`" + std::string(
+                                         std::get_if<ast::FunctionCall>(&node.args.back()->kind)
+                                             ? std::get<ast::FunctionCall>(node.args.back()->kind).name
+                                             : std::get<ast::MethodCall>(node.args.back()->kind).method) +
+                                         "(…)`"
+                                   : typeToString(fallback)) +
+                              " — `or` is what leaves the " +
+                              (optionalReceiver ? "optional" : "result") +
+                              "; pass a plain default, keep the value as it is, "
+                              "or `match` on it");
+                }
             }
             return checkCall(callName, argTypes, expr.location,
                              /*isMethodCall=*/true, &node, &expr);

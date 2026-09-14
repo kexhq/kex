@@ -1,0 +1,15 @@
+# `or` is what leaves the optional (or result) world, so its default is the
+# plain unwrapped value (kexhq/kex#338; STYLE.md `or-optional-default`).
+# `.or(None)` used to type-check because `None` is accepted wherever an
+# optional could go, and produced a value that is neither `X` nor `X?`.
+let port(configured: Integer?) -> Integer = configured.or(8080)
+
+let noOp(configured: Integer?) -> Any = configured.or(None)
+
+let stillWrapped(configured: Integer?) -> Any = configured.or(Just(8080))
+
+let parsed(text: String) -> Any = Integer.parse(text).or(Error("bad"))
+
+main do
+  IO.printLine("${port(None)}")
+end
