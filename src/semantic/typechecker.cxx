@@ -6960,11 +6960,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (left.backendModule != right.backendModule &&
                 matchesActual(left.signature) && matchesActual(right.signature) &&
                 sameParams(left.signature, right.signature)) {
+                // `importedFunctions` is built from `m_importedInterfaces`'s
+                // hash maps, so which of the two names ends up `left` vs
+                // `right` depends on the host's hash order, not source order
+                // — the exact trap kexhq/kex#143 already named. Sorting them
+                // here keeps the MESSAGE deterministic across platforms
+                // without changing which pair gets flagged.
+                const bool leftFirst = left.backendModule < right.backendModule;
+                const auto& first = leftFirst ? left.backendModule : right.backendModule;
+                const auto& second = leftFirst ? right.backendModule : left.backendModule;
                 error(loc, "ambiguous imported " +
                     std::string(isMethodCall && name.find("::") == std::string::npos
                         ? "receiver function '" : "function '") + name +
-                    "' is provided by both '" + left.backendModule + "' and '" +
-                    right.backendModule + "'");
+                    "' is provided by both '" + first + "' and '" +
+                    second + "'");
                 return Type::unknown();
             }
         }
