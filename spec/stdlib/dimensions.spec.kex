@@ -1,3 +1,5 @@
+using Dimensions
+
 module DimensionFixtures do
   record Length do
   end
@@ -102,6 +104,60 @@ describe("Dimensions") do
   it("removes explicit zero terms when importing a map") do
     let length = Type.of(DimensionFixtures.Length {})
     assert(Dimensions.fromPowers({}.put(length, 0)) == Dimensions.one)
+  end
+
+  it("combines repeated bases when importing powers") do
+    let length = Type.of(DimensionFixtures.Length {})
+    let time = Type.of(DimensionFixtures.Time {})
+    let dimension = Dimensions.fromPowers(
+      {}.put(length, 3).put(time, -2)
+    )
+    assert(dimension.exponentOf(DimensionFixtures.Length {}) == 3)
+    assert(dimension.exponentOf(DimensionFixtures.Time {}) == -2)
+    let lengthDimension = Dimensions.base(DimensionFixtures.Length {})
+    let timeDimension = Dimensions.base(DimensionFixtures.Time {})
+    let expected = (lengthDimension ^ 3) / (timeDimension ^ 2)
+    assert(dimension == expected)
+  end
+
+  it("cancels nested derived dimensions") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let speed = length / time
+    let acceleration = speed / time
+    let distance = acceleration * (time ^ 2)
+    assert(distance == length)
+    assert((distance / (time ^ 2)) == acceleration)
+  end
+
+  it("keeps unrelated information and physical dimensions separate") do
+    let information = Dimensions.base(DimensionFixtures.Information {})
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let dataRate = information / time
+    let speed = length / time
+    assert(dataRate != speed)
+    assert(dataRate * time == information)
+    assert(speed * time == length)
+  end
+
+  it("supports multiple occurrences of the same base") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let acceleration = length / time / time
+    assert(acceleration.exponentOf(DimensionFixtures.Length {}) == 1)
+    assert(acceleration.exponentOf(DimensionFixtures.Time {}) == -2)
+    assert(acceleration * time * time == length)
+  end
+
+  it("preserves the identity law for every derived dimension") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let mass = Dimensions.base(DimensionFixtures.Mass {})
+    let force = (mass * length) / (time ^ 2)
+    assert(force * Dimensions.one == force)
+    assert(Dimensions.one * force == force)
+    assert(force / Dimensions.one == force)
   end
 
   it("keeps arbitrary precision for exponent arithmetic") do

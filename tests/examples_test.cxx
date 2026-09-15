@@ -87,6 +87,7 @@ int main() {
         it("units_data.kex", []() { assertTrue(parseFile("examples/units_data.kex")); });
         it("units_si.kex", []() { assertTrue(parseFile("examples/units_si.kex")); });
         it("dimensions.kex", []() { assertTrue(parseFile("examples/dimensions.kex")); });
+        it("dimensions_advanced.kex", []() { assertTrue(parseFile("examples/dimensions_advanced.kex")); });
         it("vectors.kex", []() { assertTrue(parseFile("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
         it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
@@ -167,6 +168,10 @@ int main() {
         it("units_si.kex", []() { assertTrue(runFileOk("examples/units_si.kex")); });
         it("dimensions.kex", []() {
             assertEqual(runFile("examples/dimensions.kex"), "true\n-1\ntrue\n");
+        });
+        it("dimensions_advanced.kex", []() {
+            assertEqual(runFile("examples/dimensions_advanced.kex"),
+                         "true\n-1\n-2\n1\nfalse\n");
         });
         it("vectors.kex", []() { assertTrue(runFileOk("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(runFileOk("examples/vectors_advanced.kex")); });

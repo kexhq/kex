@@ -1,6 +1,8 @@
 # Base identities and dimensional arithmetic are ordinary Kex values.
 # This example exercises the algebra that the measure redesign builds on;
 # it does not yet construct a typed Measure.
+using Dimensions
+
 main do
   let length = Dimensions.base(LengthMarker {})
   let time = Dimensions.base(TimeMarker {})

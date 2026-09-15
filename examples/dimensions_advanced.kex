@@ -1,0 +1,34 @@
+# Reusable derived dimensions can be expressed once and composed everywhere.
+# This is still the runtime algebra foundation; Measure integration will use
+# these same operations for typed quantities.
+using Dimensions
+
+main do
+  let length = Dimensions.base(LengthMarker {})
+  let time = Dimensions.base(TimeMarker {})
+  let mass = Dimensions.base(MassMarker {})
+  let information = Dimensions.base(InformationMarker {})
+
+  let acceleration = length / (time ^ 2)
+  let force = mass * acceleration
+  let pressure = force / (length ^ 2)
+  let dataRate = information / time
+
+  IO.printLine((force * length) / time == force * (length / time))
+  IO.printLine(pressure.exponentOf(LengthMarker {}))
+  IO.printLine(pressure.exponentOf(TimeMarker {}))
+  IO.printLine(dataRate.exponentOf(InformationMarker {}))
+  IO.printLine((dataRate * time).dimensionless?)
+end
+
+record LengthMarker do
+end
+
+record TimeMarker do
+end
+
+record MassMarker do
+end
+
+record InformationMarker do
+end
