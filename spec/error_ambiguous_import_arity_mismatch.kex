@@ -1,8 +1,9 @@
 # Companion case for kexhq/kex#343's fix: a same-NAME declaration only
 # shadows the ambiguous imported pair when it also matches the call's
 # ARITY (`declaredShadowsImport` in typechecker.cxx). A two-argument `parse`
-# does not shadow a one-argument call, so `Integer.parse` and
-# `DateTime.parse` are still reported ambiguous.
+# does not shadow a one-argument call, so the collision (see
+# error_ambiguous_import_without_declaration.kex for which modules and why
+# the message names the pair it does) is still reported ambiguous.
 foul parse(a: String, b: String) -> String = "${a}${b}"
 
 main do

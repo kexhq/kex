@@ -6953,6 +6953,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!argMatchesParam(argTypes[i], signature.params[i])) return false;
         return true;
     };
+    // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
+    // so both which pair a nested loop meets FIRST and which name within a
+    // pair ends up `left` vs `right` depend on the host's hash order, not
+    // source order — the exact trap kexhq/kex#143 already named, and with
+    // three or more same-signature providers (native prelude vs the wasm
+    // build's source-derived one can disagree on how many that is) a
+    // short-circuiting first-found report picks a different pair per
+    // platform on top of that. Scanning every colliding pair and keeping the
+    // lexicographically smallest (by its own two names, sorted) makes the
+    // report a pure function of WHICH modules collide, never of the order
+    // anything happened to iterate them in.
+    std::optional<std::pair<std::string, std::string>> ambiguous;
     for (size_t i = 0; i < importedFunctions.size(); i++)
         for (size_t j = i + 1; j < importedFunctions.size(); j++) {
             const auto& left = *importedFunctions[i];
@@ -6960,23 +6972,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (left.backendModule != right.backendModule &&
                 matchesActual(left.signature) && matchesActual(right.signature) &&
                 sameParams(left.signature, right.signature)) {
-                // `importedFunctions` is built from `m_importedInterfaces`'s
-                // hash maps, so which of the two names ends up `left` vs
-                // `right` depends on the host's hash order, not source order
-                // — the exact trap kexhq/kex#143 already named. Sorting them
-                // here keeps the MESSAGE deterministic across platforms
-                // without changing which pair gets flagged.
-                const bool leftFirst = left.backendModule < right.backendModule;
-                const auto& first = leftFirst ? left.backendModule : right.backendModule;
-                const auto& second = leftFirst ? right.backendModule : left.backendModule;
-                error(loc, "ambiguous imported " +
-                    std::string(isMethodCall && name.find("::") == std::string::npos
-                        ? "receiver function '" : "function '") + name +
-                    "' is provided by both '" + first + "' and '" +
-                    second + "'");
-                return Type::unknown();
+                auto pair = left.backendModule < right.backendModule
+                    ? std::make_pair(left.backendModule, right.backendModule)
+                    : std::make_pair(right.backendModule, left.backendModule);
+                if (!ambiguous || pair < *ambiguous) ambiguous = std::move(pair);
             }
         }
+    if (ambiguous) {
+        error(loc, "ambiguous imported " +
+            std::string(isMethodCall && name.find("::") == std::string::npos
+                ? "receiver function '" : "function '") + name +
+            "' is provided by both '" + ambiguous->first + "' and '" +
+            ambiguous->second + "'");
+        return Type::unknown();
+    }
 
     std::vector<Signature> importedSigs;
     for (const auto* function : importedFunctions)

@@ -1,9 +1,19 @@
 # Companion/control case for kexhq/kex#343's fix
 # (declared_function_shadows_ambiguous_import.kex): with no program-declared
-# `parse` to shadow the pair, `Integer.parse` and `DateTime.parse` (both
-# String -> Result<_, _>) are still reported ambiguous. The fix must only
-# skip the ambiguity check when a declaration actually shadows it, never
-# suppress the diagnostic outright.
+# `parse` to shadow it, the collision is still reported ambiguous. The fix
+# must only skip the ambiguity check when a declaration actually shadows it,
+# never suppress the diagnostic outright.
+#
+# `Date.parse`, `DateTime.parse`, and `Integer.parse` (all String ->
+# Result<_, _>) collide; the two named in the message are always the
+# lexicographically smallest pair of the modules that actually do, a pure
+# function of which modules collide rather than of iteration order over a
+# hash map (the report used to name whichever pair a nested loop over that
+# map happened to meet first, which differed by platform and could silently
+# miss a third collider entirely — this file used to expect 'Kex.DateTime'
+# and 'Kex.Integer' until CI's wasm build, whose prelude interface is built
+# from source rather than a prebuilt registry, showed 'Kex.Date' colliding
+# too).
 main do
   IO.printLine(parse("x"))
 end
