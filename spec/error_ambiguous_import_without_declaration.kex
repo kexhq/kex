@@ -1,0 +1,9 @@
+# Companion/control case for kexhq/kex#343's fix
+# (declared_function_shadows_ambiguous_import.kex): with no program-declared
+# `parse` to shadow the pair, `Integer.parse` and `DateTime.parse` (both
+# String -> Result<_, _>) are still reported ambiguous. The fix must only
+# skip the ambiguity check when a declaration actually shadows it, never
+# suppress the diagnostic outright.
+main do
+  IO.printLine(parse("x"))
+end

@@ -1,0 +1,10 @@
+# Companion case for kexhq/kex#343's fix: a same-NAME declaration only
+# shadows the ambiguous imported pair when it also matches the call's
+# ARITY (`declaredShadowsImport` in typechecker.cxx). A two-argument `parse`
+# does not shadow a one-argument call, so `Integer.parse` and
+# `DateTime.parse` are still reported ambiguous.
+foul parse(a: String, b: String) -> String = "${a}${b}"
+
+main do
+  IO.printLine(parse("x"))
+end

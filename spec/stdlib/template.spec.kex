@@ -342,4 +342,24 @@ describe("Template.render / renderParsed") do
     assert(Template.render("<%= a %><%= b %>", { "b": "2" }) ==
       Error(UndefinedVariable("a")))
   end
+
+  it("renders an empty template") do
+    assert(Template.render("", {}) == Ok(""))
+  end
+
+  it("escapes every special character, not just the one other cases happen to use") do
+    assert(Template.render("<%= v %>", { "v": "<a href=\"x\">Tom & Jerry's</a>" }) ==
+      Ok("&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;"))
+  end
+
+  it("renders a template mixing text, an escaped hole, a comment, and a raw hole") do
+    let source = "Dear <%= name %>,\n<%# internal note, not rendered %>\nRaw: <%== html %>.\n"
+    assert(Template.render(source, { "name": "Ada", "html": "<i>hi</i>" }) ==
+      Ok("Dear Ada,\nRaw: <i>hi</i>.\n"))
+  end
+
+  it("resolves every hole when context covers all of them") do
+    assert(Template.render("<%= a %>-<%= b %>-<%== c %>", { "a": "1", "b": "2", "c": "<3>" }) ==
+      Ok("1-2-<3>"))
+  end
 end
