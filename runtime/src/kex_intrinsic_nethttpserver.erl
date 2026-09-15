@@ -405,7 +405,8 @@ valid_response(Status, Headers, Body) ->
          andalso byte_size(Body) =/= 0).
 reason(200) -> <<"OK">>; reason(204) -> <<"No Content">>; reason(400) -> <<"Bad Request">>;
 reason(404) -> <<"Not Found">>; reason(405) -> <<"Method Not Allowed">>;
-reason(413) -> <<"Payload Too Large">>; reason(500) -> <<"Internal Server Error">>;
+reason(413) -> <<"Payload Too Large">>; reason(426) -> <<"Upgrade Required">>;
+reason(500) -> <<"Internal Server Error">>;
 reason(_) -> <<"Response">>.
 join_methods(Methods) -> iolist_to_binary(lists:join(<<", ">>, Methods)).
 call(Pid, Message, Timeout) ->
