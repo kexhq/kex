@@ -1,0 +1,64 @@
+# kex: run-beam
+#
+# Server-side upgrade (kexhq/kex#345): a route handler decides whether to
+# accept a handshake, and Net.HTTP.Server hands the raw connection to the
+# accepted handler. Exercised against the real client in this same module,
+# over a real socket on an ephemeral port.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+# `Net.HTTP.ClientOptions` (pooled HTTP client) and `Net.HTTP.WebSocket.ClientOptions`
+# (this file's own handshake options) share a bare name; `except:` above
+# keeps the ambiguity out of the checker, but the record CONSTRUCTOR below
+# is still spelled out fully to sidestep it.
+
+foul echo(socket: Connection) -> Void do
+  match socket.receiveMessage.try do
+    Text(text) => socket.send(Text(text)).try
+    _ => Void
+  end
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|
+  if handshake.subprotocols.contains?("chat.v2")
+    let handler : Connection -> Void = { |socket| echo(socket) }
+    Accept(handler, Headers.empty, Just("chat.v2"))
+  else
+    Reject(Response.text(426, "chat.v2 required"))
+  end
+end
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute)
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router).try
+  let port = server.localAddress.port.value
+
+  # A plain GET to the same route, no upgrade headers: an ordinary 404/200-ish
+  # buffered response path stays reachable on the same router.
+  let client = Client.open().try
+  let plain = client.request("GET", "http://127.0.0.1:${port}/socket", Headers.empty, Binary.empty).try
+  assert(plain.status.code == 400, "a non-WebSocket GET to the same route is answered, not silently upgraded")
+
+  let accepted = WebSocket.connect(
+    "ws://127.0.0.1:${port}/socket",
+    Net.HTTP.WebSocket.ClientOptions { subprotocols: ["chat.v2"] }
+  ).try
+  assert(accepted.session.subprotocol == Just("chat.v2"), "the negotiated subprotocol should reach the client")
+  accepted.send(Text("hello")).try
+  match accepted.receiveMessage.try do
+    Text(text) => assert(text == "hello", "the accepted handler should echo the message back")
+    _ => assert(false, "expected a text echo")
+  end
+  accepted.close
+
+  let rejected = WebSocket.connect("ws://127.0.0.1:${port}/socket")
+  assert(rejected.error?, "omitting the required subprotocol should be rejected, not upgraded")
+
+  let report = client.close.try
+  let shutdown = server.stop.try
+  assert(!server.running?, "the server should be stopped")
+  IO.printLine("ok")
+end

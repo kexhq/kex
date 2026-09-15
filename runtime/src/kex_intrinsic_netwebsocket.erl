@@ -1,8 +1,11 @@
 -module(kex_intrinsic_netwebsocket).
--export([connect/2, send/2, receiveMessage/1, session/1, close/1, 'closed?'/1]).
+-export([connect/2, send/2, receiveMessage/1, session/1, close/1, 'closed?'/1,
+         upgrade/2, accept/4]).
 
 -define(TIMEOUT, 30000).
 -define(HEADER_LIMIT, 65536).
+-define(DEFAULT_MAX_MESSAGE, 16777216).
+-define(WS_GUID, <<"258EAFA5-E914-47DA-95CA-C5AB0DC85B11">>).
 
 connect(URL, {'Net.HTTP.WebSocket.ClientOptions', Protocols, Maximum})
   when is_binary(URL), is_list(Protocols), is_integer(Maximum), Maximum > 0 ->
@@ -27,6 +30,158 @@ close({'Net.HTTP.WebSocket.Connection', Pid}) ->
         false -> 'Kex.Unit'
     end.
 'closed?'({'Net.HTTP.WebSocket.Connection', Pid}) -> not is_process_alive(Pid).
+
+% Server-side upgrade. Called synchronously from the route handler, before
+% `Net.HTTP.Server` has sent any bytes: it only decides what the response
+% should be. `kex_intrinsic_nethttpserver` recognizes the
+% 'Net.HTTP.WebSocket.UpgradeResponse' wrapper an Accept produces, sends the
+% 101 response itself, then calls `accept/4` to hand the raw socket over.
+upgrade({'Net.HTTP.Request', Method, _URI, {'Net.HTTP.Headers', Headers}, _Body}, Decide)
+  when is_function(Decide, 1) ->
+    Lower = [{lower(Name), Value} || {Name, Value} <- Headers],
+    case validate_upgrade_request(Method, Lower) of
+        {ok, Key} ->
+            Subprotocols = split_protocols(header_values(<<"sec-websocket-protocol">>, Lower)),
+            decision_response(Decide({'Net.HTTP.WebSocket.Handshake', Subprotocols}), Key, Subprotocols);
+        {reject, Response} -> Response
+    end;
+upgrade(_, _) -> http_response(400, <<"Bad Request\n">>).
+
+decision_response({'Reject', Response = {'Net.HTTP.Response', _, _, _}}, _, _) -> Response;
+decision_response({'Accept', HandlerFun, {'Net.HTTP.Headers', ExtraHeaders}, SubprotocolOption}, Key, Subprotocols)
+  when is_function(HandlerFun, 1) ->
+    case selected_protocol(SubprotocolOption, Subprotocols) of
+        {ok, Selected} ->
+            {'Net.HTTP.WebSocket.UpgradeResponse',
+             accept_response(Key, Selected, ExtraHeaders), HandlerFun, Selected};
+        error -> http_response(500, <<"Internal Server Error\n">>)
+    end;
+decision_response(_, _, _) -> http_response(500, <<"Internal Server Error\n">>).
+
+% A GET with a syntactically valid handshake reaches the app's decision; an
+% unsupported version gets the RFC 6455 §4.4 required response; anything
+% else isn't a WebSocket attempt at all.
+validate_upgrade_request(<<"GET">>, Headers) ->
+    case headers_have_token(<<"upgrade">>, Headers, <<"websocket">>) andalso
+         headers_have_token(<<"connection">>, Headers, <<"upgrade">>) andalso
+         valid_key(header_values(<<"sec-websocket-key">>, Headers)) of
+        true ->
+            case header_values(<<"sec-websocket-version">>, Headers) of
+                [<<"13">>] -> {ok, hd(header_values(<<"sec-websocket-key">>, Headers))};
+                _ -> {reject, version_required_response()}
+            end;
+        false -> {reject, http_response(400, <<"Bad Request\n">>)}
+    end;
+validate_upgrade_request(_, _) -> {reject, http_response(400, <<"Bad Request\n">>)}.
+
+valid_key([Key]) -> try byte_size(base64:decode(Key)) =:= 16 catch _:_ -> false end;
+valid_key(_) -> false.
+
+version_required_response() ->
+    {'Net.HTTP.Response', {'Net.HTTP.Status', 426},
+     {'Net.HTTP.Headers', [{<<"Sec-WebSocket-Version">>, <<"13">>}]},
+     {'Binary', <<"Upgrade Required\n">>}}.
+
+split_protocols(Values) ->
+    [Part || Value <- Values,
+             Raw <- binary:split(Value, <<",">>, [global]),
+             Part <- [string:trim(Raw)],
+             Part =/= <<>>].
+
+selected_protocol('None', _) -> {ok, undefined};
+selected_protocol({'Just', Protocol}, Subprotocols) when is_binary(Protocol) ->
+    case valid_protocol(Protocol) andalso lists:member(Protocol, Subprotocols) of
+        true -> {ok, Protocol};
+        false -> error
+    end;
+selected_protocol(_, _) -> error.
+
+accept_response(Key, Selected, ExtraHeaders) ->
+    ProtocolHeader = case Selected of
+        undefined -> [];
+        _ -> [{<<"Sec-WebSocket-Protocol">>, Selected}]
+    end,
+    Filtered = [{Name, Value} || {Name, Value} <- ExtraHeaders, not reserved_header(Name)],
+    {'Net.HTTP.Response', {'Net.HTTP.Status', 101},
+     {'Net.HTTP.Headers', [{<<"Upgrade">>, <<"websocket">>},
+                           {<<"Connection">>, <<"Upgrade">>},
+                           {<<"Sec-WebSocket-Accept">>, accept_value(Key)}] ++
+                          ProtocolHeader ++ Filtered},
+     {'Binary', <<>>}}.
+
+reserved_header(Name) ->
+    lists:member(lower(Name), [<<"upgrade">>, <<"connection">>, <<"sec-websocket-accept">>,
+                               <<"sec-websocket-protocol">>, <<"content-length">>]).
+
+accept_value(Key) -> base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID/binary>>)).
+
+http_response(Status, Body) ->
+    {'Net.HTTP.Response', {'Net.HTTP.Status', Status},
+     {'Net.HTTP.Headers', [{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}]},
+     {'Binary', Body}}.
+
+% Called by `kex_intrinsic_nethttpserver` right after the 101 response bytes
+% are on the wire. This process — already the raw socket's reader/writer in
+% the HTTP server's per-connection worker — becomes the connection's message
+% loop, exactly as `loop/5` is for a client; a fresh process runs the
+% application's handler function so it can call back into this same loop via
+% `send`/`receiveMessage` without deadlocking on itself. Blocks until the
+% handler returns (or crashes), which is what lets the HTTP server's own
+% handler bookkeeping and graceful shutdown keep working unchanged.
+accept(Socket, Buffered, HandlerFun, Selected) ->
+    Transport = {tcp, Socket},
+    ConnPid = self(),
+    HandlerPid = spawn(fun() -> run_handler(HandlerFun, ConnPid) end),
+    Monitor = erlang:monitor(process, HandlerPid),
+    server_loop(Transport, Buffered, none, ?DEFAULT_MAX_MESSAGE, Selected, HandlerPid, Monitor, false).
+
+run_handler(HandlerFun, ConnPid) ->
+    _ = HandlerFun({'Net.HTTP.WebSocket.Connection', ConnPid}),
+    ok.
+
+server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed) ->
+    receive
+        {call, From, Ref, {send, _}} when Closed ->
+            From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+        {call, From, Ref, {send, Message}} ->
+            Reply = send_message(Transport, server, Message, Maximum),
+            From ! {Ref, Reply},
+            case Reply of
+                {'Error', _} ->
+                    transport_close(Transport),
+                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true);
+                _ -> server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed)
+            end;
+        {call, From, Ref, receive_message} when Closed ->
+            From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+        {call, From, Ref, receive_message} ->
+            case receive_message(Transport, server, Buffer, Fragment, Maximum) of
+                {Reply, NextBuffer, NextFragment, continue} ->
+                    From ! {Ref, Reply},
+                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+                {Reply, NextBuffer, _, stop} ->
+                    From ! {Ref, Reply},
+                    server_loop(Transport, NextBuffer, none, Maximum, Selected, HandlerPid, Monitor, true)
+            end;
+        {call, From, Ref, session} ->
+            From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+        {call, From, Ref, close} ->
+            case Closed of
+                false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
+                true -> ok
+            end,
+            From ! {Ref, 'Kex.Unit'},
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true);
+        {'DOWN', Monitor, process, HandlerPid, Reason} ->
+            case Closed of
+                false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
+                true -> ok
+            end,
+            case Reason of normal -> ok; _ -> error end
+    end.
 
 start(URL, Protocols, Maximum) ->
     Parent = self(), Ref = make_ref(),
@@ -58,14 +213,14 @@ init(Parent, Ref, URL, Protocols, Maximum) ->
 loop(Transport, Buffer, Fragment, Maximum, Selected) ->
     receive
         {call, From, Ref, {send, Message}} ->
-            Reply = send_message(Transport, Message, Maximum),
+            Reply = send_message(Transport, client, Message, Maximum),
             From ! {Ref, Reply},
             case Reply of
                 {'Error', _} -> transport_close(Transport);
                 _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
             end;
         {call, From, Ref, receive_message} ->
-            case receive_message(Transport, Buffer, Fragment, Maximum) of
+            case receive_message(Transport, client, Buffer, Fragment, Maximum) of
                 {Reply, NextBuffer, NextFragment, continue} ->
                     From ! {Ref, Reply},
                     loop(Transport, NextBuffer, NextFragment, Maximum, Selected);
@@ -76,64 +231,64 @@ loop(Transport, Buffer, Fragment, Maximum, Selected) ->
             From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
             loop(Transport, Buffer, Fragment, Maximum, Selected);
         {call, From, Ref, close} ->
-            _ = send_frame(Transport, 8, <<1000:16/big>>),
+            _ = send_frame(Transport, client, 8, <<1000:16/big>>),
             transport_close(Transport), From ! {Ref, 'Kex.Unit'};
         _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
     end.
 
-send_message(Transport, {'Text', Text}, Maximum) when is_binary(Text) ->
+send_message(Transport, Role, {'Text', Text}, Maximum) when is_binary(Text) ->
     case valid_utf8(Text) andalso byte_size(Text) =< Maximum of
-        true -> result(send_frame(Transport, 1, Text));
+        true -> result(send_frame(Transport, Role, 1, Text));
         false -> error_value('Protocol', <<"invalid or oversized WebSocket text">>)
     end;
-send_message(Transport, {'BinaryMessage', {'Binary', Data}}, Maximum)
-  when byte_size(Data) =< Maximum -> result(send_frame(Transport, 2, Data));
-send_message(Transport, {'CloseMessage', Code, Reason}, _)
+send_message(Transport, Role, {'BinaryMessage', {'Binary', Data}}, Maximum)
+  when byte_size(Data) =< Maximum -> result(send_frame(Transport, Role, 2, Data));
+send_message(Transport, Role, {'CloseMessage', Code, Reason}, _)
   when is_integer(Code), is_binary(Reason), byte_size(Reason) =< 123 ->
     case valid_close_code(Code) andalso valid_utf8(Reason) of
-        true -> result(send_frame(Transport, 8, <<Code:16/big, Reason/binary>>));
+        true -> result(send_frame(Transport, Role, 8, <<Code:16/big, Reason/binary>>));
         false -> error_value('Protocol', <<"invalid WebSocket close message">>)
     end;
-send_message(_, _, _) -> error_value('Protocol', <<"invalid or oversized WebSocket message">>).
+send_message(_, _, _, _) -> error_value('Protocol', <<"invalid or oversized WebSocket message">>).
 
-receive_message(Transport, Buffer, Fragment, Maximum) ->
-    case read_frame(Transport, Buffer, Maximum) of
+receive_message(Transport, Role, Buffer, Fragment, Maximum) ->
+    case read_frame(Transport, Role, Buffer, Maximum) of
         {ok, Fin, Opcode, Payload, Rest} ->
-            case handle_frame(Transport, Fin, Opcode, Payload, Rest, Fragment, Maximum) of
+            case handle_frame(Transport, Role, Fin, Opcode, Payload, Rest, Fragment, Maximum) of
                 {continue_receive, NextBuffer, NextFragment, continue} ->
-                    receive_message(Transport, NextBuffer, NextFragment, Maximum);
+                    receive_message(Transport, Role, NextBuffer, NextFragment, Maximum);
                 Result -> Result
             end;
         {error, Error} -> {Error, <<>>, none, stop}
     end.
 
-handle_frame(Transport, true, 9, Payload, Rest, Fragment, Maximum) ->
-    case send_frame(Transport, 10, Payload) of
-        ok -> receive_message(Transport, Rest, Fragment, Maximum);
+handle_frame(Transport, Role, true, 9, Payload, Rest, Fragment, Maximum) ->
+    case send_frame(Transport, Role, 10, Payload) of
+        ok -> receive_message(Transport, Role, Rest, Fragment, Maximum);
         {error, Reason} -> {native_error('Closed', Reason), Rest, Fragment, stop}
     end;
-handle_frame(Transport, true, 10, _, Rest, Fragment, Maximum) ->
-    receive_message(Transport, Rest, Fragment, Maximum);
-handle_frame(Transport, true, 8, Payload, Rest, _, _) ->
+handle_frame(Transport, Role, true, 10, _, Rest, Fragment, Maximum) ->
+    receive_message(Transport, Role, Rest, Fragment, Maximum);
+handle_frame(Transport, Role, true, 8, Payload, Rest, _, _) ->
     case close_payload(Payload) of
         {ok, Code, Reason} ->
-            _ = send_frame(Transport, 8, Payload),
+            _ = send_frame(Transport, Role, 8, Payload),
             {{'Ok', {'CloseMessage', Code, Reason}}, Rest, none, stop};
         error ->
-            _ = send_frame(Transport, 8, <<1002:16/big>>),
+            _ = send_frame(Transport, Role, 8, <<1002:16/big>>),
             {error_value('Protocol', <<"invalid WebSocket close frame">>), Rest, none, stop}
     end;
-handle_frame(_, true, 1, Payload, Rest, none, _) ->
+handle_frame(_, _, true, 1, Payload, Rest, none, _) ->
     case valid_utf8(Payload) of
         true -> {{'Ok', {'Text', Payload}}, Rest, none, continue};
         false -> {error_value('Protocol', <<"invalid WebSocket UTF-8">>), Rest, none, stop}
     end;
-handle_frame(_, true, 2, Payload, Rest, none, _) ->
+handle_frame(_, _, true, 2, Payload, Rest, none, _) ->
     {{'Ok', {'BinaryMessage', {'Binary', Payload}}}, Rest, none, continue};
-handle_frame(_, false, Opcode, Payload, Rest, none, _)
+handle_frame(_, _, false, Opcode, Payload, Rest, none, _)
   when Opcode =:= 1; Opcode =:= 2 ->
     {continue_receive, Rest, {Opcode, Payload}, continue};
-handle_frame(_, Fin, 0, Payload, Rest, {Opcode, Acc}, Maximum) ->
+handle_frame(_, _, Fin, 0, Payload, Rest, {Opcode, Acc}, Maximum) ->
     Joined = <<Acc/binary, Payload/binary>>,
     case byte_size(Joined) =< Maximum of
         false -> {error_value('Limit', <<"WebSocket message exceeds limit">>), Rest, none, stop};
@@ -147,19 +302,23 @@ handle_frame(_, Fin, 0, Payload, Rest, {Opcode, Acc}, Maximum) ->
             end;
         true -> {continue_receive, Rest, {Opcode, Joined}, continue}
     end;
-handle_frame(_, _, _, _, Rest, _, _) ->
+handle_frame(_, _, _, _, _, Rest, _, _) ->
     {error_value('Protocol', <<"invalid WebSocket fragmentation">>), Rest, none, stop}.
 
-read_frame(Transport, Buffer0, Maximum) ->
+% RFC 6455 masking is directional: a client MUST mask every frame it sends
+% and MUST reject an unmasked one from the server; a server does the exact
+% opposite. `Role` picks which side of that this process is playing.
+read_frame(Transport, Role, Buffer0, Maximum) ->
+    ExpectedMask = mask_bit(Role),
     case take(Transport, Buffer0, 2) of
         {ok, <<FinBit:1, Rsv:3, Opcode:4, Mask:1, LengthCode:7>>, Buffer1}
-          when Rsv =:= 0, Mask =:= 0,
+          when Rsv =:= 0, Mask =:= ExpectedMask,
                (Opcode =:= 0 orelse Opcode =:= 1 orelse Opcode =:= 2 orelse
                 Opcode =:= 8 orelse Opcode =:= 9 orelse Opcode =:= 10) ->
             case frame_length(Transport, Buffer1, LengthCode) of
                 {ok, Length, Buffer2} when Length =< Maximum,
                                            not (Opcode >= 8 andalso (FinBit =:= 0 orelse Length > 125)) ->
-                    case take(Transport, Buffer2, Length) of
+                    case read_payload(Transport, Role, Buffer2, Length) of
                         {ok, Payload, Rest} -> {ok, FinBit =:= 1, Opcode, Payload, Rest};
                         {error, Reason} -> {error, native_error('Closed', Reason)}
                     end;
@@ -168,6 +327,16 @@ read_frame(Transport, Buffer0, Maximum) ->
             end;
         {ok, _, _} -> {error, error_value('Protocol', <<"invalid WebSocket frame header">>)};
         {error, Reason} -> {error, native_error('Closed', Reason)}
+    end.
+
+mask_bit(client) -> 0;
+mask_bit(server) -> 1.
+
+read_payload(Transport, client, Buffer, Length) -> take(Transport, Buffer, Length);
+read_payload(Transport, server, Buffer, Length) ->
+    case take(Transport, Buffer, 4 + Length) of
+        {ok, <<MaskKey:4/binary, Masked/binary>>, Rest} -> {ok, mask(Masked, MaskKey), Rest};
+        Error -> Error
     end.
 
 frame_length(_, Buffer, Code) when Code < 126 -> {ok, Code, Buffer};
@@ -184,14 +353,15 @@ frame_length(Transport, Buffer, 127) ->
         Error -> Error
     end.
 
-send_frame(Transport, Opcode, Payload) ->
+send_frame(Transport, client, Opcode, Payload) ->
     Mask = crypto:strong_rand_bytes(4), Masked = mask(Payload, Mask),
-    Length = byte_size(Payload),
-    Header = if Length < 126 -> <<1:1, 0:3, Opcode:4, 1:1, Length:7>>;
-                Length =< 65535 -> <<1:1, 0:3, Opcode:4, 1:1, 126:7, Length:16/big>>;
-                true -> <<1:1, 0:3, Opcode:4, 1:1, 127:7, 0:1, Length:63/big>>
-             end,
-    transport_send(Transport, [Header, Mask, Masked]).
+    transport_send(Transport, [frame_header(Opcode, 1, byte_size(Payload)), Mask, Masked]);
+send_frame(Transport, server, Opcode, Payload) ->
+    transport_send(Transport, [frame_header(Opcode, 0, byte_size(Payload)), Payload]).
+
+frame_header(Opcode, MaskBit, Length) when Length < 126 -> <<1:1, 0:3, Opcode:4, MaskBit:1, Length:7>>;
+frame_header(Opcode, MaskBit, Length) when Length =< 65535 -> <<1:1, 0:3, Opcode:4, MaskBit:1, 126:7, Length:16/big>>;
+frame_header(Opcode, MaskBit, Length) -> <<1:1, 0:3, Opcode:4, MaskBit:1, 127:7, 0:1, Length:63/big>>.
 
 mask(Data, <<A, B, C, D>>) ->
     list_to_binary(mask_bytes(binary:bin_to_list(Data), [A,B,C,D], 0, [])).
@@ -230,7 +400,7 @@ validate_handshake(Block, Key, Protocols, Buffered) ->
     end.
 
 validate_handshake_values(Status, Headers, Key, Protocols, Buffered) ->
-    Expected = base64:encode(crypto:hash(sha, <<Key/binary, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11">>)),
+    Expected = accept_value(Key),
     Accepts = header_values(<<"sec-websocket-accept">>, Headers),
     SelectedValues = header_values(<<"sec-websocket-protocol">>, Headers),
     Selected = case SelectedValues of [Value] -> Value; [] -> <<>>; _ -> invalid end,
