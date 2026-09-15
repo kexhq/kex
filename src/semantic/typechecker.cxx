@@ -4036,6 +4036,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // `reduce` overload and typed each element as Char (#329).
                 if (auto result = zeroArgBindingResult(node.name))
                     return result;
+                if (auto result = functionValueType(node.name))
+                    return result;
             }
             if (!type) {
                 if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
@@ -6611,7 +6613,14 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
             text = "(" + text + ")";
         result += text + " -> ";
     }
-    result += displayType(sig.result);
+    // The result needs the same parenthesization as a function-typed
+    // parameter: `mk : String -> (String -> String)`, not
+    // `mk : String -> String -> String`, which reads as a flat 2-parameter
+    // function rather than a 1-parameter function returning one (#350).
+    auto resultText = displayType(sig.result);
+    if (sig.result && std::holds_alternative<FuncType>(sig.result->kind))
+        resultText = "(" + resultText + ")";
+    result += resultText;
     return result;
 }
 
@@ -8268,6 +8277,31 @@ auto TypeChecker::zeroArgBindingResult(const std::string& name) -> TypePtr {
     };
     if (containsOpenType(result) || mentionsTypeParameter(result)) return nullptr;
     return result;
+}
+
+// A bare reference to a function of one or more parameters, used as a VALUE
+// rather than called (`check(addPair)`, no `~`) — lowering eta-expands this
+// into an actual closure, so the checker must give it a real FuncType
+// instead of leaving it Unknown (permissive), which let a function whose
+// shape didn't actually match the expected parameter type through to
+// misbehave or crash at runtime instead of being rejected here (#350). Only
+// a single, fully concrete signature answers — an overloaded name is
+// ambiguous without a call's arguments to select by, and a generic
+// parameter/result would need instantiating fresh per use, which this
+// narrower path does not attempt (mirrors zeroArgBindingResult).
+auto TypeChecker::functionValueType(const std::string& name) -> TypePtr {
+    auto it = m_userSignatures.find(name);
+    if (it == m_userSignatures.end() || it->second.size() != 1) return nullptr;
+    const auto& signature = it->second.front();
+    if (signature.params.empty() || !signature.result) return nullptr;
+    std::vector<TypePtr> params;
+    for (const auto& param : signature.params) params.push_back(resolve(param));
+    auto result = resolve(signature.result);
+    if (containsOpenType(result) ||
+        std::any_of(params.begin(), params.end(),
+                    [](const TypePtr& p) { return containsOpenType(p); }))
+        return nullptr;
+    return Type::func(std::move(params), result);
 }
 
 auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {

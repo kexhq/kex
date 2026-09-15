@@ -1311,6 +1311,29 @@ struct Lowering {
                 }
                 if (auto it = subst.find(n.name); it != subst.end())
                     return var(it->second);
+                // A bare reference to a known function used as a VALUE, not a
+                // call (`check(addPair)`, no `~`) — there is no Core Erlang
+                // variable bound for a top-level function, only a callable
+                // symbol reachable via `apply`/`fun`. Eta-expand into an
+                // actual fun value the same way `~name`'s bare-capture
+                // partial-application branch (lowerCurry) already does for
+                // the `~` spelling. Without this, `var(n.name)` emitted a
+                // reference to a Core Erlang variable that was never bound in
+                // this scope and erlc rejected it (kexhq/kex#350).
+                if (auto pit = fnParamNames.find(n.name);
+                    knownFns.count(n.name) && pit != fnParamNames.end()) {
+                    Lambda lam;
+                    std::vector<ExprPtr> args;
+                    for (size_t i = 0; i < pit->second.size(); i++) {
+                        std::string p = fresh("P");
+                        lam.params.push_back(p);
+                        args.push_back(var(p));
+                    }
+                    lam.body = localCallExpr(n.name, std::move(args));
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = std::move(lam);
+                    return ex;
+                }
                 if (knownFns.count(n.name))
                     return var(n.name);
                 if (auto symbol = moduleConstantSymbol(n.name); !symbol.empty()) {

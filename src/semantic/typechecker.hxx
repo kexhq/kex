@@ -304,6 +304,10 @@ private:
     // The concrete declared result of a zero-parameter binding, which a bare
     // reference to it auto-calls; nullptr when there is none (#329).
     auto zeroArgBindingResult(const std::string& name) -> TypePtr;
+    // The FuncType of a bare reference to a one-or-more-parameter function
+    // used as a VALUE (`check(addPair)`, no `~`); nullptr when there is no
+    // single concrete signature to answer with (#350).
+    auto functionValueType(const std::string& name) -> TypePtr;
 
     // Error reporting
     auto error(SourceLocation loc, const std::string& msg) -> void;
