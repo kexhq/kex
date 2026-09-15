@@ -63,7 +63,13 @@ type_of(X) when is_atom(X) ->
     %% ADT it belongs to.
     case variant_metadata(X) of
         {0, Owner} -> named(atom_to_binary(Owner, utf8));
-        _ -> named(<<"Atom">>)
+        _ ->
+            %% Empty records also lower to bare atoms. Their nominal tag is
+            %% still their type, including its module qualification.
+            case record_fields(X) of
+                [] -> named(atom_to_binary(X, utf8));
+                _ -> named(<<"Atom">>)
+            end
     end;
 type_of(X) when is_function(X) -> named(<<"Function">>);
 type_of(X) when is_pid(X) -> named(<<"Process">>);

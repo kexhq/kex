@@ -1,0 +1,83 @@
+# Dimension algebra, implemented with ordinary Kex maps and integers.
+#
+# A base dimension is identified by the type of a marker value. Reuse that
+# marker type to share a dimension across modules. Its display name and the
+# marker's field values do not participate in dimensional arithmetic.
+#
+# Multiplication adds exponents, division subtracts them, and integer powers
+# multiply them. Zero exponents are removed so cancellation is structural.
+module Dimensions
+
+# A normalized map from base identities to integer exponents.
+#
+# Construct dimensions with +Dimensions.base+ and compose them with arithmetic.
+# If importing a map, use +Dimensions.fromPowers+ to remove zero exponents.
+# This runtime representation does not itself provide static measure typing.
+record Dimension do
+  powers : {Type: Integer}
+end
+
+# The dimension with no remaining base factors.
+#
+# @return [Dimension] the multiplicative identity
+let one -> Dimension = Dimension { powers: {} }
+
+# Defines a base dimension using the nominal type of a marker value.
+#
+# @param marker [A] a value of a dedicated marker type
+# @return [Dimension] that base dimension, raised to the first power
+let base(marker: A) -> Dimension = Dimension {
+  powers: {}.put(Type.of(marker), 1)
+}
+
+# Normalizes a map of base identities and powers.
+#
+# @param powers [Map<Type, Integer>] the dimension's exponents
+# @return [Dimension] the same dimension with zero exponents removed
+let fromPowers(powers: {Type: Integer}) -> Dimension = Dimension {
+  powers: powers.filter { |_, exponent| exponent != 0 }
+}
+
+make Dimension do
+  # Whether every base factor has cancelled.
+  #
+  # @return [Bool] true for a dimensionless quantity
+  dimensionless? :> Bool
+  let dimensionless? = @powers.values.all? { |exponent| exponent == 0 }
+
+  # The exponent of the supplied marker's dimension, or zero if absent.
+  #
+  # @param marker [A] a value of the base marker type
+  # @return [Integer] the base's exponent
+  exponentOf :> A -> Integer
+  let exponentOf(marker) = @powers.get(Type.of(marker), 0)
+
+  # Composes dimensions by adding their base exponents.
+  #
+  # @param other [Dimension] the other factor
+  # @return [Dimension] the normalized product
+  * :> Dimension -> Dimension
+  let *(other) do
+    let powers = other.powers.entries.reduce(@powers) do |result, entry|
+      let (base, exponent) = entry
+      result.put(base, result.get(base, 0) + exponent)
+    end
+    Dimensions.fromPowers(powers)
+  end
+
+  # Composes dimensions by subtracting the denominator's exponents.
+  #
+  # @param other [Dimension] the denominator's dimension
+  # @return [Dimension] the normalized quotient
+  / :> Dimension -> Dimension
+  let /(other) = this * (other ^ -1)
+
+  # Raises a dimension to an integer power, including zero and negatives.
+  #
+  # @param exponent [Integer] the power
+  # @return [Dimension] the normalized powered dimension
+  ^ :> Integer -> Dimension
+  let ^(exponent) = Dimensions.fromPowers(
+    @powers.mapValues { |power| power * exponent }
+  )
+end

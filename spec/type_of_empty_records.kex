@@ -1,0 +1,21 @@
+# Runtime reflection must preserve nominal identity for empty records too.
+# The Any annotation forces Type.of to inspect the value rather than use a
+# static answer from the caller's expression type.
+module FirstMarkers do
+  record Marker do
+  end
+end
+
+module SecondMarkers do
+  record Marker do
+  end
+end
+
+let reflected(value: Any) -> Type = Type.of(value)
+
+main do
+  IO.printLine(reflected(FirstMarkers.Marker {}).to(String))
+  IO.printLine(reflected(SecondMarkers.Marker {}).to(String))
+  IO.printLine(reflected(:marker).to(String))
+  IO.printLine(reflected(FirstMarkers.Marker {}) == reflected(SecondMarkers.Marker {}))
+end
