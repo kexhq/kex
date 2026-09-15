@@ -1,0 +1,11 @@
+# A bare call resolves to a function the program declares itself even when
+# two automatically-imported prelude modules export a same-arity function of
+# that name, which used to fail the ambiguity check before the program's own
+# declaration ever got a look (kexhq/kex#343). `Integer.parse` and
+# `DateTime.parse` both take a single String, so an undeclared `parse("x")`
+# would report them as ambiguous.
+foul parse(text: String) -> String = "mine ${text}"
+
+main do
+  IO.printLine(parse("x"))
+end

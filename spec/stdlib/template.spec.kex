@@ -294,3 +294,52 @@ describe("Template.scan: frontmatter") do
       Error(MalformedFrontmatterLine(": value")))
   end
 end
+
+describe("Template.render / renderParsed") do
+  it("interpolates a hole from context, HTML-escaped") do
+    assert(Template.render("Hi <%= name %>!", { "name": "<Ada>" }) ==
+      Ok("Hi &lt;Ada&gt;!"))
+  end
+
+  it("interpolates a raw hole unescaped") do
+    assert(Template.render("<%== html %>", { "html": "<b>x</b>" }) ==
+      Ok("<b>x</b>"))
+  end
+
+  it("passes plain text through unchanged") do
+    assert(Template.render("just text", {}) == Ok("just text"))
+  end
+
+  it("skips comments") do
+    assert(Template.render("a<%# note %>b", {}) == Ok("ab"))
+  end
+
+  it("looks holes up by their exact trimmed text") do
+    assert(Template.render("<%=   name   %>", { "name": "Ada" }) == Ok("Ada"))
+  end
+
+  it("reports a hole context does not cover") do
+    assert(Template.render("<%= missing %>", {}) ==
+      Error(UndefinedVariable("missing")))
+  end
+
+  it("reports a raw hole context does not cover") do
+    assert(Template.render("<%== missing %>", {}) ==
+      Error(UndefinedVariable("missing")))
+  end
+
+  it("refuses a control region rather than skipping it") do
+    assert(Template.render("<% if x %>y<% end %>", {}) ==
+      Error(UnsupportedControl("if x")))
+  end
+
+  it("renders from an already-scanned Parsed via renderParsed") do
+    let parsed = Template.scan("Hi <%= name %>!").try
+    assert(Template.renderParsed(parsed, { "name": "Ada" }) == Ok("Hi Ada!"))
+  end
+
+  it("stops at the first unresolved hole rather than collecting every error") do
+    assert(Template.render("<%= a %><%= b %>", { "b": "2" }) ==
+      Error(UndefinedVariable("a")))
+  end
+end

@@ -6887,26 +6887,33 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         importedFunctions.push_back(&function);
 
         } else {
-            for (const auto& [_, module] : m_importedInterfaces->modules) {
-                if (!module.automaticImport) continue;
-                if (auto functions = module.exports.find(name);
-                    functions != module.exports.end())
-                    for (const auto& function : functions->second)
-                        importedFunctions.push_back(&function);
-            }
-            // Receiver functions are also callable as bare functions via
-            // UFCS (e.g. `even?(x)` instead of `x.even?`) — unless the program
-            // declares a function of that name and arity, which is what a bare
-            // call then runs: `get("hi", 42)` under `using MyMod` dispatches to
-            // `MyMod.get`. Offered too, `String.get : String -> Integer -> Char?`
-            // matched the call and hid its wrong argument until run time (#324).
-            const bool declaredShadowsReceiver = hasUser &&
+            // Automatically-imported module exports and receiver functions
+            // (callable bare via UFCS, e.g. `even?(x)` instead of `x.even?`)
+            // both step aside for a same-arity function the program declares
+            // itself, which is what a bare call then runs: `get("hi", 42)`
+            // under `using MyMod` dispatches to `MyMod.get`, and
+            // `parse("x")` with its own `parse` declared runs that, not
+            // whichever prelude module(s) export a same-arity `parse`.
+            // Without this, an import pair sharing the name failed the
+            // ambiguity check below before the program's own declaration
+            // ever got a look (#343); `String.get : String -> Integer ->
+            // Char?` matched a call and hid its wrong argument until run
+            // time (#324).
+            const bool declaredShadowsImport = hasUser &&
                 std::any_of(userSignatures->begin(), userSignatures->end(),
                             [&](const Signature& signature) {
                                 return signature.params.size() == argTypes.size();
                             });
+            if (!declaredShadowsImport)
+                for (const auto& [_, module] : m_importedInterfaces->modules) {
+                    if (!module.automaticImport) continue;
+                    if (auto functions = module.exports.find(name);
+                        functions != module.exports.end())
+                        for (const auto& function : functions->second)
+                            importedFunctions.push_back(&function);
+                }
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
-                !declaredShadowsReceiver &&
+                !declaredShadowsImport &&
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
                     if (importedFunctionVisible(function))

@@ -2160,6 +2160,215 @@ auto storeCachedBeam(const std::filesystem::path &entry,
   if (ec) fs::remove(staging, ec);
 }
 
+// ── Run-result cache (kexhq/kex#323) ────────────────────────────────────────
+//
+// The compiled-module cache above skips erlc for a module whose Core Erlang
+// is unchanged, but kex's own frontend (parse the dependency closure,
+// type-check it, lower it, emit Core Erlang) still reruns from scratch on
+// every invocation — the cost `tey/spec/*.spec.kex` pays 18 times over for
+// the ~15-26 Tey/stdlib modules every file depends on identically. Measured
+// in isolation (KEX_TIMINGS=1, warm .beam cache): a single file's frontend
+// plus erlc costs ~2.1s even with nothing to recompile.
+//
+// True per-module reuse (skip typechecking a dependency at all, only that
+// dependency, only when IT changed) needs real separate compilation — the
+// whole program is still typechecked and lowered as one merged AST, so a
+// dependency's own cost isn't separable from the entry file's. That is
+// "module system and packaging" work, tracked in docs/module-sys-plan.md
+// rather than attempted here.
+//
+// What IS safe to cache without that: for `kex --run` (mode "compile",
+// compileRun — a throwaway compile-then-execute with no persistent .beam
+// artifact to keep in sync), the entire frontend+erlc result is a pure
+// function of the entry file's bytes, every resolved dependency's bytes, and
+// the toolchain — exactly like the caches above, just drawn one level
+// higher, and content-addressed the same way so a wrong hit is not possible.
+// A hit skips straight to running `erl` against the cached .beam files.
+//
+// The one input this can't see is a `compiled do` block's `Kex.embed(path)`,
+// which reads a file at expansion time that isn't any module's own source
+// (kexhq/kex#335 wants that to be inspectable at run time too, which would
+// make this worse, not better). Rather than track embed reads, this cache
+// simply refuses to apply — falls back to the normal, always-correct path —
+// whenever "compiled" appears anywhere in the entry file, the merged
+// `.spec.kex` base, or any resolved dependency's source text. A false
+// positive (the word appears in a comment or string) only costs a cache
+// miss; it can never cause a stale hit.
+auto runCacheRoot() -> std::optional<std::filesystem::path> {
+  if (auto base = kexCacheBase()) return *base / "run";
+  return std::nullopt;
+}
+
+// A conservative, lexer-free scan for the actual `compiled do ... end` block
+// syntax — not just the English word "compiled", which shows up constantly
+// in ordinary comments and doc text ("a compiled Kex module", "gets compiled
+// into a .beam"). Requires the KEYWORD "compiled" (word-bounded, so it
+// doesn't fire inside `precompiled` either) followed, after whitespace only,
+// by the keyword "do". A false positive here only costs a cache miss; a
+// false negative would let a stale hit through, so this stays deliberately
+// narrow rather than trying to also rule out e.g. a same-named identifier.
+auto sourceMentionsCompiledBlock(const std::string &src) -> bool {
+  auto isWordChar = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+           c == '?' || c == '!';
+  };
+  size_t pos = 0;
+  while ((pos = src.find("compiled", pos)) != std::string::npos) {
+    const bool leftBoundary = pos == 0 || !isWordChar(src[pos - 1]);
+    size_t after = pos + 8; // strlen("compiled")
+    const bool rightBoundary = after >= src.size() || !isWordChar(src[after]);
+    if (leftBoundary && rightBoundary) {
+      while (after < src.size() && std::isspace(static_cast<unsigned char>(src[after])))
+        ++after;
+      if (src.compare(after, 2, "do") == 0 &&
+          (after + 2 >= src.size() || !isWordChar(src[after + 2])))
+        return true;
+    }
+    pos += 8;
+  }
+  return false;
+}
+
+template <typename Digest>
+auto hexDigest(const Digest &digest) -> std::string {
+  static const char *hex = "0123456789abcdef";
+  std::string key;
+  key.reserve(digest.size() * 2);
+  for (const auto byte : digest) {
+    key += hex[byte >> 4];
+    key += hex[byte & 0xF];
+  }
+  return key;
+}
+
+auto hexSha256(const std::string &text) -> std::string {
+  return hexDigest(kex::beam::computeSha256(
+      std::vector<uint8_t>(text.begin(), text.end())));
+}
+
+// nullopt means "don't even try": the cache is off, or something in the
+// closure makes it unsafe (see the block comment above).
+// KEX_RUN_CACHE_DEBUG=1 says which of the three provably-safe checks kept
+// this run off the cache — same spirit as KEX_TIMINGS, just for "did it
+// apply" instead of "how long did it take".
+auto runCacheMiss(const char *why) -> std::optional<std::string> {
+  if (std::getenv("KEX_RUN_CACHE_DEBUG"))
+    std::fprintf(stderr, "run cache: miss (%s)\n", why);
+  return std::nullopt;
+}
+
+auto runCacheKeyFor(const std::string &filepath, bool skipCheck,
+                    const std::string &entryRawSource,
+                    const std::string &specBaseFile,
+                    const std::string &specBaseRawSource,
+                    const std::vector<LoadedDep> &deps)
+    -> std::optional<std::string> {
+  if (!runCacheRoot()) return runCacheMiss("KEX_CACHE is off");
+  if (sourceMentionsCompiledBlock(entryRawSource))
+    return runCacheMiss("entry file has a `compiled do` block");
+  if (!specBaseFile.empty() &&
+      sourceMentionsCompiledBlock(specBaseRawSource))
+    return runCacheMiss("its .spec.kex base has a `compiled do` block");
+  std::vector<const LoadedDep *> sorted;
+  for (const auto &dep : deps) sorted.push_back(&dep);
+  std::sort(sorted.begin(), sorted.end(), [](const auto *a, const auto *b) {
+    return *a->path < *b->path;
+  });
+  std::string material = "kex-run-cache-v1\n" + toolchainFingerprint() +
+                        "\n" + filepath + "\n" +
+                        (skipCheck ? "nocheck\n" : "check\n");
+  material += "entry:" + hexSha256(entryRawSource) + "\n";
+  if (!specBaseFile.empty())
+    material += "specbase:" + specBaseFile + ":" +
+                hexSha256(specBaseRawSource) + "\n";
+  for (const auto *dep : sorted) {
+    if (sourceMentionsCompiledBlock(*dep->source))
+      return runCacheMiss(("a dependency (" + *dep->path +
+                           ") has a `compiled do` block")
+                              .c_str());
+    material += "dep:" + *dep->path + ":" + hexSha256(*dep->source) + "\n";
+  }
+  return hexDigest(kex::beam::computeSha256(
+      std::vector<uint8_t>(material.begin(), material.end())));
+}
+
+auto runCacheDir(const std::string &key) -> std::filesystem::path {
+  return *runCacheRoot() / key.substr(0, 2) / key;
+}
+
+// A cache hit: every module the previous matching run produced, in the same
+// order (index 0 is the entry module — order matters for the BEAM load
+// expression and for `mainArity`, which is only meaningful on that one).
+auto tryLoadRunCache(const std::string &key, const std::string &outputDir)
+    -> std::optional<std::vector<kex::ir::EmitResult>> {
+  namespace fs = std::filesystem;
+  const auto dir = runCacheDir(key);
+  std::ifstream manifest(dir / "manifest.txt");
+  if (!manifest) return std::nullopt;
+  std::string line;
+  if (!std::getline(manifest, line) || line != "kex-run-cache-v1")
+    return std::nullopt;
+  std::vector<kex::ir::EmitResult> results;
+  while (std::getline(manifest, line)) {
+    if (line.empty()) continue;
+    const auto tab = line.find('\t');
+    if (tab == std::string::npos) return std::nullopt;
+    kex::ir::EmitResult result;
+    result.moduleName = line.substr(0, tab);
+    try {
+      result.mainArity = std::stoi(line.substr(tab + 1));
+    } catch (const std::exception &) {
+      return std::nullopt;
+    }
+    results.push_back(std::move(result));
+  }
+  if (results.empty()) return std::nullopt;
+  std::error_code ec;
+  for (const auto &result : results) {
+    const auto cached = dir / (result.moduleName + ".beam");
+    const auto target =
+        fs::path{outputDir} / (result.moduleName + ".beam");
+    if (!fs::is_regular_file(cached, ec)) return std::nullopt;
+    fs::copy_file(cached, target, fs::copy_options::overwrite_existing, ec);
+    if (ec) return std::nullopt;
+  }
+  return results;
+}
+
+// Written beside the final name and renamed into place, matching every other
+// cache in this file — a build reading it mid-write never sees a half-copied
+// entry, and a failed write only costs the next run a cache miss.
+auto storeRunCache(const std::string &key, const std::string &outputDir,
+                   const std::vector<kex::ir::EmitResult> &results) -> void {
+  namespace fs = std::filesystem;
+  const auto dir = runCacheDir(key);
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+  if (ec) return;
+  for (const auto &result : results) {
+    const auto source = fs::path{outputDir} / (result.moduleName + ".beam");
+    auto target = dir / (result.moduleName + ".beam");
+    auto staging = target;
+    staging += stagingSuffix();
+    fs::copy_file(source, staging, fs::copy_options::overwrite_existing, ec);
+    if (ec) return;
+    fs::rename(staging, target, ec);
+    if (ec) { fs::remove(staging, ec); return; }
+  }
+  auto manifestPath = dir / "manifest.txt";
+  auto staging = manifestPath;
+  staging += stagingSuffix();
+  {
+    std::ofstream out(staging);
+    if (!out) return;
+    out << "kex-run-cache-v1\n";
+    for (const auto &result : results)
+      out << result.moduleName << "\t" << result.mainArity << "\n";
+  }
+  fs::rename(staging, manifestPath, ec);
+  if (ec) fs::remove(staging, ec);
+}
+
 #ifndef KEX_RUNTIME_OTP_FLOOR
 #define KEX_RUNTIME_OTP_FLOOR 0
 #endif
@@ -4180,6 +4389,10 @@ int main(int argc, char *argv[]) {
   }
 
   auto source = readFile(filepath);
+  // Kept around (the lexer below consumes `source` with std::move) so the
+  // BEAM `--run` path can use the entry file's ORIGINAL bytes as part of a
+  // run-result cache key (kexhq/kex#323) — see `runCacheKeyFor`.
+  const std::string entryRawSourceForCache = source;
   // An empty file is an empty program to the AST tools. The interpreter answers
   // `Kex.AST.parse("")` and `parseSyntax("")` with an empty tree, and BEAM
   // reaches both through a temporary file, so refusing it here made the two
@@ -4393,6 +4606,13 @@ int main(int argc, char *argv[]) {
   // semantic check can pass it to SemanticDB as a companion — see its use at
   // the `runSemanticCheck` call.
   std::string beamSpecBaseFile;
+  std::string beamSpecBaseRawSource;
+  // Populated either by a run-cache hit or by the normal pipeline below
+  // (kexhq/kex#323) — needed by the `compileRun` invocation further down
+  // either way.
+  kex::ir::EmitResult result;
+  std::vector<kex::ir::EmitResult> moduleResults;
+  std::vector<std::string> corePaths;
   if (mode == "compile" || mode == "emit-core") {
       PhaseTimer timings;
       // Loaded once per process and used by every phase below; timed on its
@@ -4440,6 +4660,7 @@ int main(int argc, char *argv[]) {
         beamSpecBaseFile = candidate;
 
         auto baseSource = readFile(candidate);
+        beamSpecBaseRawSource = baseSource;
         kex::Lexer baseLexer(std::move(baseSource), candidate);
         auto baseTokens = baseLexer.tokenizeAll();
         kex::Parser baseParser(std::move(baseTokens), candidate);
@@ -4487,6 +4708,63 @@ int main(int argc, char *argv[]) {
       }
 
       timings.mark("load dependencies");
+
+      // Run-result cache (kexhq/kex#323): only for `kex --run`'s
+      // throwaway compile-then-execute, never for a persistent `--compile`
+      // artifact or `--emit-core`'s text output — see the cache's own doc
+      // comment above `runCacheRoot` for why compileRun is the safe scope
+      // and what makes a hit here provably correct rather than merely fast.
+      std::vector<kex::ir::EmitResult> moduleResultsFromCache;
+      bool haveCachedResult = false;
+      std::optional<std::string> runCacheKeyValue;
+      if (mode == "compile" && compileRun) {
+        runCacheKeyValue = runCacheKeyFor(
+            filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
+            beamSpecBaseRawSource, beamDeps);
+        if (runCacheKeyValue)
+          if (auto hit = tryLoadRunCache(*runCacheKeyValue, outputDir)) {
+            moduleResultsFromCache = std::move(*hit);
+            haveCachedResult = true;
+          }
+      }
+      timings.mark("run cache lookup");
+
+      // Needed either way (a run-cache hit still has to load and execute the
+      // cached .beam files) and independent of the closure below, so it runs
+      // once here rather than once per branch. `emit-core` returns before
+      // ever reaching a point that needs these, same as before this cache
+      // existed.
+      if (mode == "compile") {
+        namespace fs = std::filesystem;
+        std::string prebuilt = prebuiltRuntimeBeamDir();
+        if (prebuilt.empty()) {
+          std::cerr << "error: prebuilt runtime artifacts are missing; "
+                       "rebuild or reinstall the Kex toolchain\n";
+          if (compileRun && !outputDirExplicit && !tempDir.empty())
+            fs::remove_all(tempDir);
+          return 1;
+        }
+        std::error_code ec;
+        for (const auto &e : fs::directory_iterator(prebuilt))
+          if (e.path().extension() == ".beam")
+            fs::copy_file(e.path(), fs::path{outputDir} / e.path().filename(),
+                          fs::copy_options::overwrite_existing, ec);
+        if (!skipPrelude &&
+            !fs::exists(fs::path{outputDir} / "kex_prelude.beam")) {
+          std::cerr << "error: prebuilt standard library is missing; "
+                       "rebuild or reinstall the Kex toolchain\n";
+          if (compileRun && !outputDirExplicit && !tempDir.empty())
+            fs::remove_all(tempDir);
+          return 1;
+        }
+      }
+
+      timings.mark("copy runtime beams");
+
+      if (haveCachedResult) {
+        moduleResults = std::move(moduleResultsFromCache);
+        result = moduleResults.front();
+      } else {
 
       // An opt-in module merged in above may claim a prelude trait
       // (`implement: Enumerable`) purely through inherited defaults, with no
@@ -4552,8 +4830,6 @@ int main(int argc, char *argv[]) {
           std::filesystem::remove_all(tempDir);
         return 1;
       }
-      kex::ir::EmitResult result;
-      std::vector<kex::ir::EmitResult> moduleResults;
       try {
         auto preludeVariantTags = loadPreludeVariantTags();
         auto irModules = kex::ir::lowerModules(program, stem,
@@ -4583,7 +4859,6 @@ int main(int argc, char *argv[]) {
 
       timings.mark("lower + emit core");
 
-      std::vector<std::string> corePaths;
       for (const auto &emitted : moduleResults) {
         std::string path = outputDir + "/" + emitted.moduleName + ".core";
         std::ofstream outFile(path);
@@ -4602,41 +4877,9 @@ int main(int argc, char *argv[]) {
 
       timings.mark("write core files");
 
-      // --compile: also invoke erlc to produce a .beam file.
-      // Place explicitly built Kex runtime beams into the output directory.
-      {
-        namespace fs = std::filesystem;
-        std::string prebuilt = prebuiltRuntimeBeamDir();
-        if (prebuilt.empty()) {
-          std::cerr << "error: prebuilt runtime artifacts are missing; "
-                       "rebuild or reinstall the Kex toolchain\n";
-          if (compileRun && !outputDirExplicit && !tempDir.empty())
-            fs::remove_all(tempDir);
-          return 1;
-        }
-        std::error_code ec;
-        for (const auto &e : fs::directory_iterator(prebuilt))
-          if (e.path().extension() == ".beam")
-            fs::copy_file(e.path(), fs::path{outputDir} / e.path().filename(),
-                          fs::copy_options::overwrite_existing, ec);
-      }
-
-      timings.mark("copy runtime beams");
-
-      // User compilation consumes the explicitly built stdlib artifact. A
-      // missing installed/development artifact is a toolchain error; never
-      // rebuild stdlib source as an implicit side effect of compiling a user
-      // program.
-      if (!skipPrelude &&
-          !std::filesystem::exists(std::filesystem::path{outputDir} /
-                                   "kex_prelude.beam")) {
-        std::cerr << "error: prebuilt standard library is missing; "
-                     "rebuild or reinstall the Kex toolchain\n";
-        if (compileRun && !outputDirExplicit && !tempDir.empty())
-          std::filesystem::remove_all(tempDir);
-        return 1;
-      }
-
+      // --compile: also invoke erlc to produce a .beam file. (The runtime
+      // and prelude beams every run needs regardless of a cache hit or miss
+      // were already copied/checked above, before this branch split.)
       // ONE erlc for every module, not one per module. Each invocation
       // starts a whole BEAM just to compile, ~90 ms before it reads a byte,
       // so a spec file's three modules paid that three times over
@@ -4724,6 +4967,13 @@ int main(int argc, char *argv[]) {
       }
 
       timings.mark("module cache + erlc");
+
+      // A fresh, successful, compileRun result is exactly what the NEXT
+      // matching invocation should be able to reuse (kexhq/kex#323).
+      if (runCacheKeyValue)
+        storeRunCache(*runCacheKeyValue, outputDir, moduleResults);
+
+      } // haveCachedResult
 
       for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
         // Attach KexI chunk to the freshly compiled .beam file.
