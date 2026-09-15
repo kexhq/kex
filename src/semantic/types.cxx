@@ -263,8 +263,18 @@ auto typeToString(const TypePtr& type) -> std::string {
             // `A -> B -> R`, matching how they are written in source. A
             // parameter that is itself a function has to be parenthesised or
             // the arrows associate wrongly: `(A -> Bool) -> [A]` says
-            // something quite different from `A -> Bool -> [A]`.
-            if (t.params.empty()) return "() -> " + typeToString(t.result);
+            // something quite different from `A -> Bool -> [A]`. The RESULT
+            // needs the same treatment: a 1-parameter function returning
+            // ANOTHER function (`A -> (B -> C)`, e.g. a def whose own
+            // `-> (B -> C)` return annotation is itself an arrow type) must
+            // not print identically to a flat 2-parameter function
+            // (`A -> B -> C`) — those are different arities at the call
+            // site, and printing them the same way made mismatch diagnostics
+            // report the wrong arity entirely (#350).
+            auto resultText = typeToString(t.result);
+            if (t.result && std::holds_alternative<FuncType>(t.result->kind))
+                resultText = "(" + resultText + ")";
+            if (t.params.empty()) return "() -> " + resultText;
             std::string result;
             for (const auto& param : t.params) {
                 auto text = typeToString(param);
@@ -272,7 +282,7 @@ auto typeToString(const TypePtr& type) -> std::string {
                     text = "(" + text + ")";
                 result += text + " -> ";
             }
-            return result + typeToString(t.result);
+            return result + resultText;
         }
         else if constexpr (std::is_same_v<T, TupleType>) {
             std::string result = "(";
