@@ -1,0 +1,120 @@
+module DimensionFixtures do
+  record Length do
+  end
+
+  record Time do
+  end
+
+  record Mass do
+  end
+
+  record Information do
+  end
+
+  record Marker do
+    label : String
+  end
+end
+
+module OtherDimensionFixtures do
+  record Length do
+  end
+end
+
+compiled do
+  let COMPILED_TIME_SQUARED = Dimensions.base(DimensionFixtures.Time {}) ^ 2
+end
+
+describe("Dimensions") do
+  it("uses distinct nominal bases even when their short names match") do
+    let left = Dimensions.base(DimensionFixtures.Length {})
+    let right = Dimensions.base(OtherDimensionFixtures.Length {})
+    assert(left != right)
+    assert(!(left / right).dimensionless?)
+  end
+
+  it("shares a base when callers reuse the same marker type") do
+    let marker = DimensionFixtures.Length {}
+    assert(Dimensions.base(marker) == Dimensions.base(DimensionFixtures.Length {}))
+  end
+
+  it("uses the marker type rather than its field values") do
+    let first = DimensionFixtures.Marker { label: "first" }
+    let second = DimensionFixtures.Marker { label: "second" }
+    assert(Dimensions.base(first) == Dimensions.base(second))
+  end
+
+  it("normalizes commutative products and cancellation") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    assert(length * time == time * length)
+    assert((length / time) * time == length)
+    assert((length / length) == Dimensions.one)
+    assert((length / length).dimensionless?)
+  end
+
+  it("normalizes associative products") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let mass = Dimensions.base(DimensionFixtures.Mass {})
+    assert((length * time) * mass == length * (time * mass))
+  end
+
+  it("changes dimensions when squaring and supports inverse powers") do
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    assert(time ^ 2 != time)
+    assert((time ^ 2).exponentOf(DimensionFixtures.Time {}) == 2)
+    assert(time ^ 0 == Dimensions.one)
+    assert(time ^ 1 == time)
+    assert(time ^ -1 == Dimensions.one / time)
+    assert((time ^ -2) * (time ^ 2) == Dimensions.one)
+  end
+
+  it("derives pressure from force divided by area") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let mass = Dimensions.base(DimensionFixtures.Mass {})
+    let force = mass * length / (time ^ 2)
+    let pressure = force / (length ^ 2)
+    assert(pressure == mass / length / (time ^ 2))
+    assert(pressure != force / length)
+  end
+
+  it("derives energy through either force or power") do
+    let length = Dimensions.base(DimensionFixtures.Length {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let mass = Dimensions.base(DimensionFixtures.Mass {})
+    let energy = mass * (length ^ 2) / (time ^ 2)
+    let power = energy / time
+    let force = mass * length / (time ^ 2)
+    assert(power * time == force * length)
+  end
+
+  it("extends to information rates without changing arithmetic") do
+    let information = Dimensions.base(DimensionFixtures.Information {})
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let rate = information / time
+    assert(rate.exponentOf(DimensionFixtures.Information {}) == 1)
+    assert(rate.exponentOf(DimensionFixtures.Time {}) == -1)
+    assert(rate.exponentOf(DimensionFixtures.Length {}) == 0)
+  end
+
+  it("removes explicit zero terms when importing a map") do
+    let length = Type.of(DimensionFixtures.Length {})
+    assert(Dimensions.fromPowers({}.put(length, 0)) == Dimensions.one)
+  end
+
+  it("keeps arbitrary precision for exponent arithmetic") do
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    let huge = 9223372036854775808
+    let raised = (time ^ huge) ^ huge
+    assert(raised.exponentOf(DimensionFixtures.Time {}) == huge * huge)
+    assert(raised / raised == Dimensions.one)
+  end
+
+  it("evaluates the same Kex algebra at compile time") do
+    let time = Dimensions.base(DimensionFixtures.Time {})
+    assert(COMPILED_TIME_SQUARED == time ^ 2)
+    assert(COMPILED_TIME_SQUARED != time)
+  end
+end

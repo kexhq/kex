@@ -1,0 +1,27 @@
+# Base identities and dimensional arithmetic are ordinary Kex values.
+# This example exercises the algebra that the measure redesign builds on;
+# it does not yet construct a typed Measure.
+main do
+  let length = Dimensions.base(LengthMarker {})
+  let time = Dimensions.base(TimeMarker {})
+  let mass = Dimensions.base(MassMarker {})
+
+  let acceleration = length / (time ^ 2)
+  let force = mass * acceleration
+  let energy = force * length
+  let power = energy / time
+  let pressure = force / (length ^ 2)
+
+  IO.printLine(power * time == energy)
+  IO.printLine(pressure.exponentOf(LengthMarker {}))
+  IO.printLine((length / length).dimensionless?)
+end
+
+record LengthMarker do
+end
+
+record TimeMarker do
+end
+
+record MassMarker do
+end
