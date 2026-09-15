@@ -127,10 +127,13 @@ type Node = Text(String)
 type Tag = Scalar(String)
          | Tags([String])
 
-# Why a template's text could not be scanned, and where.
+# Why a template's text could not be scanned or rendered, and where (or,
+# for `render`/`renderParsed`, what stopped it).
 type TemplateError = UnterminatedTag(Integer)
                     | UnterminatedFrontmatter
                     | MalformedFrontmatterLine(String)
+                    | UndefinedVariable(String)
+                    | UnsupportedControl(String)
 
 # One entry from a `params: [...]` frontmatter list: a name, and its
 # optional `: Type` annotation. `type` is raw text: `""` for a bare name,
@@ -220,6 +223,86 @@ let escapeHtml(text: String) -> String do
       .replace(">", "&gt;")
       .replace("\"", "&quot;")
       .replace("'", "&#39;")
+end
+
+# Renders an already-scanned template's holes from a runtime `context`,
+# `<%= %>` HTML-escaped and `<%== %>` raw, same as `Template.html`/
+# `Template.text` do at compile time — but there is no runtime evaluator for
+# `<% ... %>` CONTROL regions here. Evaluating a `<% if … %>`/`<% match … %>`/
+# a block loop chosen at run time means evaluating arbitrary Kex source
+# picked at run time, which is its own design decision (kexhq/kex#335) and
+# not what this covers: a template using one reports `UnsupportedControl`
+# with the region's text rather than silently doing nothing with it, so the
+# gap is loud, not a template that quietly renders wrong.
+#
+# This is for what `Template.html(Kex.embed(path))` cannot do at all — a
+# template file chosen while the program is running, not baked in at compile
+# time — for the shape of template that does not need control flow: a
+# subject line, a notification body, a plain-text substitution. A template
+# with real control flow still needs compiling in (`Kex.embed`), or a hole
+# it does not have: turning `Parsed#nodes` into a fuller runtime evaluator is
+# further work this only lays the groundwork for.
+#
+# `<%= %>`/`<%== %>` names are looked up VERBATIM (trimmed of surrounding
+# whitespace) in `context` — `dep.name` in a template needs a `"dep.name"`
+# key, not field access into a `dep` key's value. Splitting a dotted hole
+# into a real field path is, again, further work.
+#
+# @param parsed [Parsed] a template already scanned by `Template.scan`
+# @param context [{String: String}] a value for every `<%= %>`/`<%== %>`
+#   hole the template uses, keyed by the hole's exact (trimmed) text
+# @return [Result<String, TemplateError>] the rendered text, or why not
+#
+# @example
+#   let parsed = Template.scan("Hi <%= name %>!").try
+#   Template.renderParsed(parsed, { "name": "<Ada>" })
+#   # => Ok("Hi &lt;Ada&gt;!")
+#
+# @example A hole `context` does not cover
+#   Template.renderParsed(Template.scan("<%= missing %>").try, {})
+#   # => Error(UndefinedVariable("missing"))
+#
+# @example Control flow is refused, not silently skipped
+#   Template.renderParsed(Template.scan("<% if x %>y<% end %>").try, {})
+#   # => Error(UnsupportedControl("if x"))
+let renderParsed(parsed: Parsed, context: {String: String}) -> Result<String, TemplateError> do
+  var out = ""
+  var i = 0
+  loop do
+    break if i >= parsed.nodes.count
+    match parsed.nodes.at(i).or(Text("")) do
+      Text(text) => out = "${out}${text}"
+      Interpolate(name) => do
+        let value = context.get(name.trim)
+        return Error(UndefinedVariable(name.trim)) if value == None
+        out = "${out}${escapeHtml(value.or(""))}"
+      end
+      InterpolateRaw(name) => do
+        let value = context.get(name.trim)
+        return Error(UndefinedVariable(name.trim)) if value == None
+        out = "${out}${value.or("")}"
+      end
+      Comment(_) => ()
+      Control(body) => return Error(UnsupportedControl(body))
+    end
+    i = i + 1
+  end
+  Ok(out)
+end
+
+# `Template.scan(source).try` then `renderParsed` — see its doc comment for
+# what this does and, as importantly, what it refuses to do.
+#
+# @param source [String] the template's full text, scanned fresh
+# @param context [{String: String}] see `renderParsed`
+# @return [Result<String, TemplateError>] the rendered text, or why not
+#
+# @example
+#   Template.render("Hi <%= name %>!", { "name": "Ada" })
+#   # => Ok("Hi Ada!")
+let render(source: String, context: {String: String}) -> Result<String, TemplateError> do
+  let parsed = scan(source).try
+  renderParsed(parsed, context)
 end
 
 private do

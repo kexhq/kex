@@ -6887,26 +6887,33 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         importedFunctions.push_back(&function);
 
         } else {
-            for (const auto& [_, module] : m_importedInterfaces->modules) {
-                if (!module.automaticImport) continue;
-                if (auto functions = module.exports.find(name);
-                    functions != module.exports.end())
-                    for (const auto& function : functions->second)
-                        importedFunctions.push_back(&function);
-            }
-            // Receiver functions are also callable as bare functions via
-            // UFCS (e.g. `even?(x)` instead of `x.even?`) — unless the program
-            // declares a function of that name and arity, which is what a bare
-            // call then runs: `get("hi", 42)` under `using MyMod` dispatches to
-            // `MyMod.get`. Offered too, `String.get : String -> Integer -> Char?`
-            // matched the call and hid its wrong argument until run time (#324).
-            const bool declaredShadowsReceiver = hasUser &&
+            // Automatically-imported module exports and receiver functions
+            // (callable bare via UFCS, e.g. `even?(x)` instead of `x.even?`)
+            // both step aside for a same-arity function the program declares
+            // itself, which is what a bare call then runs: `get("hi", 42)`
+            // under `using MyMod` dispatches to `MyMod.get`, and
+            // `parse("x")` with its own `parse` declared runs that, not
+            // whichever prelude module(s) export a same-arity `parse`.
+            // Without this, an import pair sharing the name failed the
+            // ambiguity check below before the program's own declaration
+            // ever got a look (#343); `String.get : String -> Integer ->
+            // Char?` matched a call and hid its wrong argument until run
+            // time (#324).
+            const bool declaredShadowsImport = hasUser &&
                 std::any_of(userSignatures->begin(), userSignatures->end(),
                             [&](const Signature& signature) {
                                 return signature.params.size() == argTypes.size();
                             });
+            if (!declaredShadowsImport)
+                for (const auto& [_, module] : m_importedInterfaces->modules) {
+                    if (!module.automaticImport) continue;
+                    if (auto functions = module.exports.find(name);
+                        functions != module.exports.end())
+                        for (const auto& function : functions->second)
+                            importedFunctions.push_back(&function);
+                }
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
-                !declaredShadowsReceiver &&
+                !declaredShadowsImport &&
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
                     if (importedFunctionVisible(function))
@@ -6946,6 +6953,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!argMatchesParam(argTypes[i], signature.params[i])) return false;
         return true;
     };
+    // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
+    // so both which pair a nested loop meets FIRST and which name within a
+    // pair ends up `left` vs `right` depend on the host's hash order, not
+    // source order — the exact trap kexhq/kex#143 already named, and with
+    // three or more same-signature providers (native prelude vs the wasm
+    // build's source-derived one can disagree on how many that is) a
+    // short-circuiting first-found report picks a different pair per
+    // platform on top of that. Scanning every colliding pair and keeping the
+    // lexicographically smallest (by its own two names, sorted) makes the
+    // report a pure function of WHICH modules collide, never of the order
+    // anything happened to iterate them in.
+    std::optional<std::pair<std::string, std::string>> ambiguous;
     for (size_t i = 0; i < importedFunctions.size(); i++)
         for (size_t j = i + 1; j < importedFunctions.size(); j++) {
             const auto& left = *importedFunctions[i];
@@ -6953,14 +6972,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (left.backendModule != right.backendModule &&
                 matchesActual(left.signature) && matchesActual(right.signature) &&
                 sameParams(left.signature, right.signature)) {
-                error(loc, "ambiguous imported " +
-                    std::string(isMethodCall && name.find("::") == std::string::npos
-                        ? "receiver function '" : "function '") + name +
-                    "' is provided by both '" + left.backendModule + "' and '" +
-                    right.backendModule + "'");
-                return Type::unknown();
+                auto pair = left.backendModule < right.backendModule
+                    ? std::make_pair(left.backendModule, right.backendModule)
+                    : std::make_pair(right.backendModule, left.backendModule);
+                if (!ambiguous || pair < *ambiguous) ambiguous = std::move(pair);
             }
         }
+    if (ambiguous) {
+        error(loc, "ambiguous imported " +
+            std::string(isMethodCall && name.find("::") == std::string::npos
+                ? "receiver function '" : "function '") + name +
+            "' is provided by both '" + ambiguous->first + "' and '" +
+            ambiguous->second + "'");
+        return Type::unknown();
+    }
 
     std::vector<Signature> importedSigs;
     for (const auto* function : importedFunctions)
