@@ -165,10 +165,18 @@ connection_wait() ->
 handle_connection(Socket, Router, Buffered) ->
     case read_request(Socket, Buffered) of
         {ok, Request, Method, Path, Rest, KeepAlive} ->
-            case send_response(Socket, dispatch(Request, Method, Path, Router), Method, KeepAlive) of
-                ok when KeepAlive -> handle_connection(Socket, Router, Rest);
-                ok -> ok;
-                _ -> error
+            case dispatch(Request, Method, Path, Router) of
+                {'Net.HTTP.WebSocket.UpgradeResponse', Response, HandlerFun, Selected} ->
+                    case send_upgrade_response(Socket, Response) of
+                        ok -> kex_intrinsic_netwebsocket:accept(Socket, Rest, HandlerFun, Selected);
+                        _ -> error
+                    end;
+                Response ->
+                    case send_response(Socket, Response, Method, KeepAlive) of
+                        ok when KeepAlive -> handle_connection(Socket, Router, Rest);
+                        ok -> ok;
+                        _ -> error
+                    end
             end;
         {error, closed} -> ok;
         {error, timeout} -> ok;
@@ -182,6 +190,7 @@ dispatch(Request, Method, Path, {'Net.HTTP.Router', Routes}) ->
             Context = {'Net.HTTP.Context', {'Net.HTTP.RouteContext', Parameters}},
             try Handler(Request, Context) of
                 Value = {'Net.HTTP.Response', _, _, _} -> Value;
+                Value = {'Net.HTTP.WebSocket.UpgradeResponse', _, _, _} -> Value;
                 _ -> response(500, <<"Internal Server Error\n">>)
             catch _:_ -> response(500, <<"Internal Server Error\n">>) end;
         {methods, Methods} when Method =:= <<"OPTIONS">> ->
@@ -361,6 +370,28 @@ send_response(Socket, {'Net.HTTP.Response', {'Net.HTTP.Status', Status},
 send_response(Socket, _, Method, KeepAlive) ->
     send_response(Socket, response(500, <<"Internal Server Error\n">>), Method, KeepAlive).
 
+% 101 has no body and no Content-Length/Connection framing — the connection
+% stops being HTTP the moment these bytes land, so `send_response`'s
+% keep-alive machinery doesn't apply. `valid_response` rejects 101 outright
+% (it's meaningless for an ordinary buffered response), so this checks
+% headers directly instead of reusing it.
+send_upgrade_response(Socket, {'Net.HTTP.Response', {'Net.HTTP.Status', 101},
+                        {'Net.HTTP.Headers', Headers}, {'Binary', <<>>}})
+  when length(Headers) =< ?HEADER_FIELDS_LIMIT ->
+    case lists:all(fun({Name, Value}) -> valid_token(Name) andalso valid_field_value(Value) end, Headers) of
+        true ->
+            Head = [<<"HTTP/1.1 101 Switching Protocols\r\n">>,
+                    [[K, <<": ">>, V, <<"\r\n">>] || {K, V} <- Headers],
+                    <<"\r\n">>],
+            gen_tcp:send(Socket, Head);
+        false ->
+            _ = send_response(Socket, response(500, <<"Internal Server Error\n">>), <<"GET">>, false),
+            {error, invalid_response}
+    end;
+send_upgrade_response(Socket, _) ->
+    _ = send_response(Socket, response(500, <<"Internal Server Error\n">>), <<"GET">>, false),
+    {error, invalid_response}.
+
 response(Status, Body) -> {'Net.HTTP.Response', {'Net.HTTP.Status', Status},
                            {'Net.HTTP.Headers', [{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}]},
                            {'Binary', Body}}.
@@ -374,7 +405,8 @@ valid_response(Status, Headers, Body) ->
          andalso byte_size(Body) =/= 0).
 reason(200) -> <<"OK">>; reason(204) -> <<"No Content">>; reason(400) -> <<"Bad Request">>;
 reason(404) -> <<"Not Found">>; reason(405) -> <<"Method Not Allowed">>;
-reason(413) -> <<"Payload Too Large">>; reason(500) -> <<"Internal Server Error">>;
+reason(413) -> <<"Payload Too Large">>; reason(426) -> <<"Upgrade Required">>;
+reason(500) -> <<"Internal Server Error">>;
 reason(_) -> <<"Response">>.
 join_methods(Methods) -> iolist_to_binary(lists:join(<<", ">>, Methods)).
 call(Pid, Message, Timeout) ->
