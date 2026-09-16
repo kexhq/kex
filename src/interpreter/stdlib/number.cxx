@@ -42,11 +42,21 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // n.times { |i| ... } — runs the block n times, passing the index 0..n-1.
+    // A parameterless `do ... end` block (a `Block<Void>` overload) takes no
+    // arguments — call it empty rather than routing an index into a callable
+    // (e.g. a named zero-arg function) that cannot accept one. Lambdas
+    // tolerate the extra argument either way; named callables do not.
     defineIntrinsic("Integer::times", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::none() : args[0];
         auto* n = std::get_if<IntValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!n || !fn || !fn->native) return args[0];
+        if (fn->arity == 0) {
+            for (int64_t i = 0; i < n->value; i++) {
+                fn->native({});
+            }
+            return args[0];
+        }
         for (int64_t i = 0; i < n->value; i++) {
             fn->native({Value::integer(i)});
         }

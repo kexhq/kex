@@ -14,8 +14,16 @@ modulo(A, B) when is_integer(A), is_integer(B) -> ((A rem B) + B) rem B;
 modulo(A, _B) ->
     erlang:error(iolist_to_binary(["runtime error: Undefined method: modulo for ",
                                    kex_io:value_type_name(A)])).
-%% n.times { |i| block(i) } — call block with 0..n-1.
-times(N, Fun) -> lists:foreach(Fun, lists:seq(0, N - 1)).
+%% n.times { |i| block(i) } — call block with 0..n-1. A parameterless
+%% `do ... end` block (a `Block<Void>` overload) ignores the index rather
+%% than raising badarity.
+times(N, Fun) ->
+    {arity, A} = erlang:fun_info(Fun, arity),
+    G = case A of
+        0 -> fun(_) -> Fun() end;
+        _ -> Fun
+    end,
+    lists:foreach(G, lists:seq(0, N - 1)).
 
 %% ParseError is the tagged tuple {'ParseError', Input, Position, Value, Message, Rest}
 %% (record lowered by src/ir/lower.cxx — element 2/3/4/5/6 = input/position/

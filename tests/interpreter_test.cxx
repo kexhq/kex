@@ -2335,6 +2335,30 @@ int main() {
         });
     });
 
+    describe("Interpreter — Integer#times", []() {
+        it("runs an arg-less block n times", []() {
+            auto output = runOutput(
+                "main do\n"
+                "  3.times do\n"
+                "    IO.printLine(\"hi\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(output, std::string("hi\nhi\nhi\n"));
+        });
+
+        it("still passes the index to a one-parameter block", []() {
+            auto output = runOutput(
+                "main do\n"
+                "  3.times do |i|\n"
+                "    IO.printLine(i)\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(output, std::string("0\n1\n2\n"));
+        });
+    });
+
     describe("Interpreter — top-level value binding scope", []() {
         it("top-level `let x = expr` is visible in subsequent top-level bindings", []() {
             // Regression: before the parser+evaluator fix each top-level `let`

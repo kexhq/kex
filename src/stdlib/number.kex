@@ -112,7 +112,13 @@ make Integer do
   #
   # @example Repeating an action
   #   retries.times { |_| attemptConnection }
+  #
+  # @example Repeating an action that needs no index
+  #   3.times do
+  #     IO.printLine("hi")
+  #   end
   times :> (Integer -> Void) -> Void
+  times :> Block<Void> -> Void
   let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
   # Returns the integer unchanged. Present so that code written against
