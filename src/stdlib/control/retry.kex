@@ -1,226 +1,251 @@
-# Bounded retries for operations whose failures can be classified by the
-# application.
+# Runs bounded retries with a reusable schedule.
 #
-# A retry is never automatically safe just because an error was temporary.
-# The caller owns the operation and, where necessary, a predicate that excludes
-# permanent failures and non-idempotent work. Policies bound attempts, delay,
-# and optionally total sleep so a dependency cannot stall the program forever.
+# +Retry.run+ executes the block immediately. An +Ok+ stops the run; an
+# +Error+ schedules another attempt. When attempts or total sleep run out,
+# the last error is returned unchanged. Runtime faults are not caught.
 #
+# @example Retry a request and handle the final result
 #   using Control.Retry
+#   using Net.HTTP
 #
-#   let policy = Retry.exponential(4, 100.milliseconds, 2.seconds)
-#     .withJitter(0.2)
-#   Retry.run(policy, ~retryable?) do
-#     client.get("https://api.example.com/inventory")
+#   let result = Retry.run(attempts: 5) do
+#     HTTP.get("https://api.example.com/inventory")
 #   end
+#   match result do
+#     Ok(response) => IO.printLine(response.status.code)
+#     Error(error) => IO.printLine(error.message)
+#   end
+#
+# HTTP responses, including 429 and 503, are +Ok(response)+. Automatic
+# retries handle request failures, not response statuses. Use +again+ and
+# +done+ to classify responses or stop on permanent errors. Repeat writes
+# only when the application makes them safe, for example with idempotency
+# keys. A schedule bounds retry sleep, not the operation's execution time;
+# configure request timeouts separately.
 module Control.Retry
 
-# A bounded retry schedule. Attempts includes the initial call.
-# Delays are immutable +Duration+ values and never exceed +maximumDelay+.
-record Policy do
-  maximumAttempts : Integer
-  initialDelay : Duration
-  multiplier : Float
-  maximumDelay : Duration
-  maximumElapsed : Duration? = None
-  jitterFraction : Float = 0.0
-end
-
-# Decides whether an application error is eligible for another attempt.
-type Predicate<E> = E -> Bool
-
-# Performs one scheduled delay. Supplying this callback makes retry tests
-# deterministic without sleeping.
-type Sleeper = Duration -> Void
-
-# Builds a constant-delay retry policy.
-#
-# Fixed delays are predictable and useful for a local resource expected to
-# become ready shortly. For many clients sharing a remote dependency, prefer
-# exponential backoff with jitter to avoid synchronized retry bursts.
-#
-# @param maximumAttempts [Integer] total calls including the first
-# @param delay [Duration] delay before each subsequent call
-# @return [Policy] the retry schedule
-#
-# @example Waiting briefly for a local test server to start
-#   let policy = Retry.fixed(5, 50.milliseconds)
-fixed : Integer -> Duration -> Policy
-let fixed(maximumAttempts, delay) = Policy {
-  maximumAttempts: maximumAttempts,
-  initialDelay: delay,
-  multiplier: 1.0,
-  maximumDelay: delay,
-  maximumElapsed: None,
-  jitterFraction: 0.0
-}
-
-# Builds a doubling backoff capped at +maximumDelay+.
-#
-# The first retry waits +initialDelay+; later delays double until they reach
-# the cap. Add jitter for production network traffic.
-#
-# @param maximumAttempts [Integer] total calls including the first
-# @param initialDelay [Duration] delay after the first failure
-# @param maximumDelay [Duration] upper bound for each delay
-# @return [Policy] the retry schedule
-#
-# @example Backing off calls to a busy upstream service
-#   Retry.exponential(5, 200.milliseconds, 5.seconds).withJitter(0.25)
-exponential : Integer -> Duration -> Duration -> Policy
-let exponential(maximumAttempts, initialDelay, maximumDelay) = Policy {
-  maximumAttempts: maximumAttempts,
-  initialDelay: initialDelay,
-  multiplier: 2.0,
-  maximumDelay: maximumDelay,
-  maximumElapsed: None,
-  jitterFraction: 0.0
-}
-
-make Policy do
-  # Returns the same schedule with a bound on total scheduled sleep time.
+# Provides automatic error retries and explicit retry decisions.
+module Retry do
+  # Describes the timing and limits of one execution of +run+.
   #
-  # The operation's own execution time is not counted; use operation-specific
-  # deadlines for that. A retry whose next delay would exceed this bound is
-  # not started.
+  # All fields are optional. Defaults allow three attempts with exponential
+  # backoff from 100 milliseconds, capped at 5 seconds, with 20% jitter.
+  # Creating a schedule performs no work. It is immutable configuration:
+  # each run starts a fresh attempt count and delay sequence.
   #
-  # @param maximumElapsed [Duration] maximum cumulative scheduled delay
-  # @return [Policy] a copied policy with the elapsed bound
-  # @example +Retry.fixed(5, 1.seconds).withMaximumElapsed(2.seconds)+.
-  let withMaximumElapsed(maximumElapsed: Duration) -> Policy = Policy {
-    maximumAttempts: @maximumAttempts,
-    initialDelay: @initialDelay,
-    multiplier: @multiplier,
-    maximumDelay: @maximumDelay,
-    maximumElapsed: Just(maximumElapsed),
-    jitterFraction: @jitterFraction
-  }
-
-  # Returns the same schedule with symmetric bounded jitter. A fraction of
-  # +0.25+ selects each actual delay from 75% through 125% of its scheduled
-  # value. Fractions are clamped to +0.0..1.0+.
+  # @example Fixed delays: three waits of 250 milliseconds
+  #   let schedule = Retry.Schedule {
+  #     attempts: 4, delay: 250.milliseconds, backoff: 1.0,
+  #     maximumDelay: 250.milliseconds, jitter: 0.0
+  #   }
+  #   Retry.run(schedule: schedule) do
+  #     Error("not ready")
+  #   end
+  #   # => Error("not ready"), after four calls and 750 ms of sleep
   #
-  # Jitter prevents many workers that failed together from retrying together.
-  # It changes delay timing, never the number of attempts or the backoff cap.
+  # @example Exponential delays: 200, 400, 800, 1600 milliseconds
+  #   let schedule = Retry.Schedule {
+  #     attempts: 5, delay: 200.milliseconds, backoff: 2.0,
+  #     maximumDelay: 5.seconds, jitter: 0.0
+  #   }
+  #   Retry.run(schedule: schedule) do
+  #     Ok("ready")
+  #   end
+  #   # => Ok("ready"), immediately, without sleeping
   #
-  # @param fraction [Float] maximum proportional variation on either side
-  # @return [Policy] a copied policy with bounded jitter
+  # @example Capped delays: 500 ms, 1 s, 2 s, 2 s, 2 s
+  #   Retry.Schedule {
+  #     attempts: 6, delay: 500.milliseconds, backoff: 2.0,
+  #     maximumDelay: 2.seconds, jitter: 0.0
+  #   }
   #
-  # @example Spreading retries by up to 20 percent
-  #   Retry.exponential(4, 1.seconds, 10.seconds).withJitter(0.2)
-  let withJitter(fraction: Float) -> Policy = Policy {
-    maximumAttempts: @maximumAttempts,
-    initialDelay: @initialDelay,
-    multiplier: @multiplier,
-    maximumDelay: @maximumDelay,
-    maximumElapsed: @maximumElapsed,
-    jitterFraction: if fraction < 0.0 then 0.0 else if fraction > 1.0 then 1.0 else fraction end end
-  }
-end
+  # @example Share settings, not an attempt budget
+  #   using Net.HTTP
+  #   let schedule = Retry.Schedule { attempts: 5 }
+  #   let inventory = Retry.run(schedule: schedule) do
+  #     HTTP.get("https://api.example.com/inventory")
+  #   end
+  #   let orders = Retry.run(schedule: schedule) do
+  #     HTTP.get("https://api.example.com/orders")
+  #   end
+  #   # Each request gets up to five attempts, independently.
+  record Schedule do
+    # Maximum executions including the initial call. Default: 3.
+    # Values below 1 are treated as 1: the initial call always happens.
+    attempts : Integer = 3
+    # Base wait before the second attempt. Default: 100 milliseconds.
+    # Negative durations are treated as zero; the delay cap applies here too.
+    delay : Duration = Duration.milliseconds(100)
+    # Base-delay multiplier. Default: 2.0. Values below 1 become 1.
+    # Set to 1.0 for fixed delays. Jitter never changes the next base delay.
+    backoff : Float = 2.0
+    # Maximum actual wait, including jitter. Default: 5 seconds.
+    # Negative durations become zero. Hitting this cap does not stop retries.
+    maximumDelay : Duration = Duration.seconds(5)
+    # Symmetric proportional variation. Default: 0.2; clamped to 0..1.
+    # For a 200 ms base, 0.2 samples 160..240 ms, then applies the cap.
+    # Set to 0.0 for exact waits. Samples are independent between runs.
+    jitter : Float = 0.2
+    # Optional bound on cumulative actual sleep. Default: None.
+    # A wait exceeding the remaining allowance stops retries before sleeping.
+    # Negative bounds become zero. Operation execution time is not counted.
+    maximumTotalDelay : Duration? = None
+  end
 
-# Runs +operation+ until it succeeds or exhausts the policy.
-#
-# The last application error is returned unchanged. This helper performs no
-# network-specific classification: callers decide what operation to wrap.
-#
-# @param policy [Policy] the bounded schedule
-# @param operation [Block<Result<X,E>>] a fresh attempt
-# @return [Result<X,E>] the first success or final failure
-#
-# @example Retrying an idempotent health check
-#   Retry.run(Retry.fixed(3, 250.milliseconds)) do
-#     HTTP.get("https://service.example.com/health")
-#   end
-run : Policy -> Block<Result<X, E>> -> Result<X, E>
-foul run(policy, operation) = runWithRandom(policy, { |error| true }, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
+  # Carries an explicit decision and the last application value.
+  # +Done(value)+ means the block stopped deliberately. +Again(value)+
+  # returned by +run+ means the schedule was exhausted before completion.
+  # Neither form wraps the application value in an additional +Result+.
+  type Decision<X> = Again(X) | Done(X)
 
-# Runs with an application-specific error predicate.
-#
-# A false predicate returns that error immediately. The predicate is evaluated
-# only when another attempt would otherwise be possible.
-#
-# @param policy [Policy] the bounded schedule
-# @param predicate [Predicate<E>] whether an error may be retried
-# @param operation [Block<Result<X,E>>] a fresh attempt
-# @return [Result<X,E>] the first success or final/non-retryable failure
-#
-# @example Retrying timeouts but returning parse failures immediately
-#   Retry.run(policy, { |error| error.kind == Timeout }) do
-#     client.get(url)
-#   end
-run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
-foul run(policy, predicate, operation) = runWithRandom(policy, predicate, { |delay| Task.sleep(delay) }, { Kex.Intrinsic.Retry.randomUnit() }, operation)
+  # Requests another attempt if the schedule allows it.
+  #
+  # @param value [X] the last outcome, retained if the schedule is exhausted
+  # @return [Decision<X>] +Again(value)+
+  # @example Polling an application job
+  #   Retry.again("pending")
+  again : X -> Decision<X>
+  let again(value) = Again(value)
 
-# Runs with injected error classification and sleeping.
-#
-# This is the deterministic testing seam: a fake sleeper can record durations
-# or advance a virtual clock. Production callers normally use +Retry.run+.
-#
-# @param policy [Policy] the bounded schedule
-# @param predicate [Predicate<E>] whether an error may be retried
-# @param sleeper [Sleeper] performs or records each scheduled delay
-# @param operation [Block<Result<X,E>>] a fresh attempt
-# @return [Result<X,E>] the first success or final failure
-runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
-foul runWith(policy, predicate, sleeper, operation) = runWithRandom(policy, predicate, sleeper, { 0.5 }, operation)
+  # Stops immediately, even when the application value represents failure.
+  #
+  # @param value [X] the final application outcome
+  # @return [Decision<X>] +Done(value)+
+  # @example Stop on invalid credentials without retrying
+  #   Retry.done(Error("invalid credentials"))
+  done : X -> Decision<X>
+  let done(value) = Done(value)
 
-# Runs with injected sleeping and a random source returning a value in
-# +0.0..1.0+. Out-of-range test values are clamped. Production +run+ uses a
-# cryptographically secure backend source; this overload makes jitter specs
-# deterministic.
-runWithRandom : Policy -> Predicate<E> -> Sleeper -> Block<Float> -> Block<Result<X, E>> -> Result<X, E>
-foul runWithRandom(policy, predicate, sleeper, random, operation) = attempt(policy, predicate, sleeper, random, operation, 1, policy.initialDelay, Duration.seconds(0))
+  # Runs a fresh operation until it succeeds, stops, or exhausts its schedule.
+  #
+  # The first attempt is immediate. Every later attempt follows one sleep.
+  # There is no sleep after success or the final error. Named timing options
+  # override the corresponding schedule field for this execution only.
+  #
+  # An ordinary block returns +Result<X, E>+: +Ok+ stops, +Error+ retries,
+  # and exhaustion returns the last +Error+ unchanged. An explicit block
+  # returns +Decision<X>+: +Done+ stops, +Again+ retries, and exhaustion
+  # returns the last +Again+. Match the returned decision to distinguish
+  # completion from exhaustion. Use one form consistently within a block.
+  #
+  # Finite settings are normalized: attempts below one become one, negative
+  # durations become zero, backoff below one becomes one, jitter and random
+  # samples are clamped to 0..1. Non-finite Float settings are unsupported.
+  #
+  # @param schedule [Schedule] reusable settings; defaults to +Schedule {}+
+  # @param attempts [Integer] total attempts; defaults to the schedule field
+  # @param delay [Duration] initial wait; defaults to the schedule field
+  # @param backoff [Float] delay multiplier; defaults to the schedule field
+  # @param maximumDelay [Duration] sleep cap; defaults to the schedule field
+  # @param jitter [Float] variation fraction; defaults to the schedule field
+  # @param maximumTotalDelay [Duration?] sleep budget; defaults to the field
+  # @param sleeper [Duration -> Void] defaults to real +Task.sleep+
+  # @param random [Block<Float>] defaults to secure backend sampling in 0..1
+  # @param operation [Block<X>] fresh Result or Decision on each attempt
+  # @return [X] first Ok/Done or last Error/Again, without extra wrapping
+  #
+  # @example Named options without constructing a schedule
+  #   Retry.run(attempts: 5, delay: 200.milliseconds, jitter: 0.0) do
+  #     Ok("ready")
+  #   end
+  #   # => Ok("ready")
+  #
+  # @example Stop before a wait exceeds the total sleep budget
+  #   Retry.run(
+  #     attempts: 5, delay: 1.seconds, backoff: 2.0,
+  #     jitter: 0.0, maximumTotalDelay: Just(2.seconds)
+  #   ) do
+  #     Error("busy")
+  #   end
+  #   # => Error("busy"), two calls and one second of sleep
+  #
+  # @example Test jitter without waiting
+  #   Retry.run(
+  #     attempts: 2, delay: 4.seconds, jitter: 0.25,
+  #     sleeper: { |wait| Assert.equal(wait, 3.seconds) },
+  #     random: { 0.0 }
+  #   ) do
+  #     Error("temporary")
+  #   end
+  #   # => Error("temporary"), two calls and one fake sleep
+  #
+  # The testing hooks are independent: replacing sleep keeps normal random
+  # sampling, and replacing randomness keeps real sleep. A random sample of
+  # 0 selects the lower jitter bound, 0.5 the base, and 1 the upper bound.
+  # With zero jitter no random sample is needed.
+  # lint:allow parameter-count — named options make each setting independent
+  run : Block<X> -> Schedule -> Integer -> Duration -> Float -> Duration -> Float -> Duration? -> (Duration -> Void) -> Block<Float> -> X
+  foul run(
+    operation,
+    schedule = Schedule {},
+    attempts = schedule.attempts,
+    delay = schedule.delay,
+    backoff = schedule.backoff,
+    maximumDelay = schedule.maximumDelay,
+    jitter = schedule.jitter,
+    maximumTotalDelay = schedule.maximumTotalDelay,
+    sleeper = { |wait| Task.sleep(wait) },
+    random = { Kex.Intrinsic.Retry.randomUnit() }
+  ) do
+    let settings = Schedule {
+      attempts: attempts,
+      delay: delay,
+      backoff: backoff,
+      maximumDelay: maximumDelay,
+      jitter: jitter,
+      maximumTotalDelay: maximumTotalDelay
+    }
+    attempt(settings, sleeper, random, operation, 1, boundedDelay(settings, delay.seconds), 0.0)
+  end
 
-foul attempt(policy: Policy, predicate: Predicate<E>, sleeper: Sleeper, random: Block<Float>, operation: Block<Result<X, E>>, number: Integer, delay: Duration, elapsed: Duration) -> Result<X, E> do
-  let result = operation()
-  return match result do
-    Ok(value) => Ok(value)
-    Error(error) => do
-      if number >= policy.maximumAttempts || !predicate(error)
-        return Error(error)
+  private do
+    retry? : Result<X, E> -> Bool
+    let retry?(Ok(_)) = false
+    let retry?(Error(_)) = true
+    retry? : Decision<X> -> Bool
+    let retry?(Done(_)) = false
+    let retry?(Again(_)) = true
+
+    let clamp(value: Float, low: Float, high: Float) -> Float do
+      if value < low
+        low
+      elif value > high
+        high
+      else
+        value
       end
-      let sample = random()
-      let boundedSample = if sample < 0.0 then 0.0 else if sample > 1.0 then 1.0 else sample end end
-      let jittered = Duration { seconds: delay.seconds * (1.0 + ((boundedSample * 2.0 - 1.0) * policy.jitterFraction)) }
-      let nextElapsed = Duration { seconds: elapsed.seconds + jittered.seconds }
-      let withinElapsed = match policy.maximumElapsed do
+    end
+
+    let boundedDelay(schedule: Schedule, waitSeconds: Float) -> Float do
+      let cap = if schedule.maximumDelay.seconds < 0.0
+        0.0
+      else
+        schedule.maximumDelay.seconds
+      end
+      clamp(waitSeconds, 0.0, cap)
+    end
+
+    attempt : Schedule -> (Duration -> Void) -> Block<Float> -> Block<X> -> Integer -> Float -> Float -> X
+    foul attempt(schedule, sleeper, random, operation, number, base, elapsed) do
+      let result = operation()
+      if number >= schedule.attempts || !retry?(result)
+        return result
+      end
+      let fraction = clamp(schedule.jitter, 0.0, 1.0)
+      let sample = if fraction == 0.0 then 0.5 else clamp(random(), 0.0, 1.0) end
+      let sleepSeconds = boundedDelay(schedule, base * (1.0 + (sample * 2.0 - 1.0) * fraction))
+      let nextElapsed = elapsed + sleepSeconds
+      let allowed = match schedule.maximumTotalDelay do
         None => true
-        Just(maximum) => nextElapsed.seconds <= maximum.seconds
+        Just(limit) => nextElapsed <= (if limit.seconds < 0.0 then 0.0 else limit.seconds end)
       end
-      if !withinElapsed
-        return Error(error)
+      if !allowed
+        return result
       end
-      sleeper(jittered)
-      let nextSeconds = delay.seconds * policy.multiplier
-      let bounded = if nextSeconds > policy.maximumDelay.seconds then policy.maximumDelay else Duration { seconds: nextSeconds } end
-      return attempt(policy, predicate, sleeper, random, operation, number + 1, bounded, nextElapsed)
+      sleeper(Duration { seconds: sleepSeconds })
+      let factor = if schedule.backoff < 1.0 then 1.0 else schedule.backoff end
+      let nextBase = boundedDelay(schedule, base * factor)
+      attempt(schedule, sleeper, random, operation, number + 1, nextBase, nextElapsed)
     end
   end
-end
-
-# The imported public namespace: `using Control.Retry` then `Retry.run(...)`.
-module Retry do
-  # Public imported alias of +Control.Retry.fixed+.
-  fixed : Integer -> Duration -> Policy
-  let fixed(maximumAttempts, delay) = Control.Retry.fixed(maximumAttempts, delay)
-
-  # Public imported alias of +Control.Retry.exponential+.
-  exponential : Integer -> Duration -> Duration -> Policy
-  let exponential(maximumAttempts, initialDelay, maximumDelay) = Control.Retry.exponential(maximumAttempts, initialDelay, maximumDelay)
-
-  # Public imported alias of +Control.Retry.run+.
-  run : Policy -> Block<Result<X, E>> -> Result<X, E>
-  foul run(policy, operation) = Control.Retry.run(policy, operation)
-
-  # Retries only errors accepted by +predicate+.
-  run : Policy -> Predicate<E> -> Block<Result<X, E>> -> Result<X, E>
-  foul run(policy, predicate, operation) = Control.Retry.run(policy, predicate, operation)
-
-  # Deterministic seam with an injected sleeper, primarily for specifications.
-  runWith : Policy -> Predicate<E> -> Sleeper -> Block<Result<X, E>> -> Result<X, E>
-  foul runWith(policy, predicate, sleeper, operation) = Control.Retry.runWith(policy, predicate, sleeper, operation)
-
-  # Deterministic seam with injected sleeping and random sampling.
-  runWithRandom : Policy -> Predicate<E> -> Sleeper -> Block<Float> -> Block<Result<X, E>> -> Result<X, E>
-  foul runWithRandom(policy, predicate, sleeper, random, operation) = Control.Retry.runWithRandom(policy, predicate, sleeper, random, operation)
 end

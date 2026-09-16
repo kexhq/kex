@@ -6624,10 +6624,11 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     return result;
 }
 
-auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
+auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& suppliedArgTypes,
                             SourceLocation loc, bool isMethodCall,
                             const ast::MethodCall* methodCall,
                             const ast::Expr* callExpr) -> TypePtr {
+    auto argTypes = suppliedArgTypes;
     // A field promised by an open record is known more specifically than an
     // unrelated global/UFCS method with the same name. Concrete record fields
     // already receive this priority later; structural receivers need it here
@@ -7173,6 +7174,62 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             m_unresolvedMethods.push_back(
                 {name, loc, typeToString(resolve(argTypes[0]))});
         return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
+    }
+
+    // Named arguments occupy their declared slots, while positional arguments
+    // (including the trailing block) fill the remaining slots in order. Keep
+    // omitted optional slots unknown, rather than checking the written named
+    // argument order against an unrelated parameter. This is especially
+    // important for callback-first APIs with independent optional settings.
+    // Only normalize a uniform layout: overloaded layouts need per-candidate
+    // placement and must not be guessed from the first signature.
+    if ((!isMethodCall || name.find("::") != std::string::npos) && !sigs->empty()) {
+        const auto* functionCall = callExpr
+            ? std::get_if<ast::FunctionCall>(&callExpr->kind) : nullptr;
+        const auto* named = functionCall ? &functionCall->namedArgs
+                                        : methodCall ? &methodCall->namedArgs : nullptr;
+        const auto& layout = sigs->front();
+        const bool uniform = !layout.paramNames.empty() &&
+            layout.paramNames.size() == layout.params.size() &&
+            std::all_of(sigs->begin(), sigs->end(), [&](const Signature& sig) {
+                return sig.paramNames == layout.paramNames &&
+                       sig.params.size() == layout.params.size() &&
+                       sig.requiredParams == layout.requiredParams;
+            });
+        if (named && !named->empty() && uniform) {
+            const auto positionalCount = functionCall ? functionCall->args.size()
+                                                     : methodCall->args.size();
+            const bool hasBlock = functionCall ? bool(functionCall->block)
+                                              : bool(methodCall->block);
+            std::vector<TypePtr> ordered(layout.params.size());
+            bool valid = argTypes.size() == positionalCount + named->size() + hasBlock;
+            for (size_t i = 0; valid && i < named->size(); ++i) {
+                const auto it = std::find(layout.paramNames.begin(),
+                                          layout.paramNames.end(), (*named)[i].first);
+                if (it == layout.paramNames.end()) { valid = false; break; }
+                const auto slot = std::distance(layout.paramNames.begin(), it);
+                if (ordered[slot]) { valid = false; break; }
+                ordered[slot] = argTypes[positionalCount + i];
+            }
+            size_t next = 0;
+            for (size_t i = 0; valid && i < positionalCount + hasBlock; ++i) {
+                while (next < ordered.size() && ordered[next]) ++next;
+                if (next == ordered.size()) { valid = false; break; }
+                ordered[next++] = argTypes[i < positionalCount ? i : argTypes.size() - 1];
+            }
+            if (valid) {
+                const auto required = layout.requiredParams.value_or(layout.params.size());
+                for (size_t i = 0; i < ordered.size(); ++i) {
+                    if (!ordered[i] && i < required) {
+                        error(loc, "Missing required argument `" + layout.paramNames[i] +
+                                   "` for `" + name + "`");
+                        return Type::unknown();
+                    }
+                    if (!ordered[i]) ordered[i] = Type::unknown();
+                }
+                argTypes = std::move(ordered);
+            }
+        }
     }
 
     // `let hello = makeGreeter("Hello")` is a top-level zero-arg binding

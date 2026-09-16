@@ -1,57 +1,234 @@
 using Control.Retry
+using Net.HTTP
 
-describe("Control.Retry") do
-  it("stops immediately when the predicate rejects an error") do
+type RetryTrace = Called | Waited(Duration) | Sampled
+
+foul trace() -> [RetryTrace] do
+  receive do
+    Called => [Called] + trace()
+    Waited(delay) => [Waited(delay)] + trace()
+    Sampled => [Sampled] + trace()
+  after timeout: 0
+    []
+  end
+end
+
+foul recordWait(delay: Duration) -> Void do
+  Process.self.send(Waited(delay))
+  ()
+end
+foul recordedError() -> Result<String, String> do
+  Process.self.send(Called)
+  Error("temporary")
+end
+
+describe "Control.Retry" do
+  after do
+    trace()
+  end
+
+  it "returns success immediately without sleeping or sampling randomness" do
     let result = Retry.run(
-      Retry.fixed(5, Duration.seconds(0)),
-      { |error| assert(error == "permanent"); false },
-      do Error("permanent") end
-    )
-
-    Assert.equal(result, Error("permanent"))
+      sleeper: { |wait| assert(false, "unexpected sleep"); () },
+      random: { assert(false, "unexpected randomness"); 0.0 }
+    ) do
+      Ok(42)
+    end
+    Assert.equal(result, Ok(42))
   end
 
-  it("does not sleep when the next delay exceeds the elapsed bound") do
-    let policy = Retry.fixed(
-      5,
-      Duration.seconds(1)
-    ).withMaximumElapsed(Duration.seconds(0))
-
-    let result = Retry.runWith(
-      policy,
-      { |error| true },
-      { |delay| assert(false, "elapsed bound must prevent sleeping") },
-      do Error("temporary") end
-    )
-
+  it "counts the initial attempt and returns the final error unchanged" do
+    let result = Retry.run(
+      attempts: 3, delay: 250.milliseconds, backoff: 1.0,
+      jitter: 0.0, sleeper: ~recordWait
+    ) do
+      recordedError()
+    end
     Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [
+      Called, Waited(250.milliseconds), Called,
+      Waited(250.milliseconds), Called
+    ])
   end
 
-  it("applies bounded jitter from an injected random source") do
-    let result = Retry.runWithRandom(
-      Retry.fixed(2, Duration.seconds(4)).withJitter(0.25),
-      { |error| error == "temporary" },
-      { |delay| Assert.equal(delay, Duration.seconds(3)) },
-      { 0.0 },
-      { Error("temporary") }
-    )
-
+  it "uses three attempts by default" do
+    let result = Retry.run(jitter: 0.0, sleeper: ~recordWait) do
+      recordedError()
+    end
     Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [
+      Called, Waited(100.milliseconds), Called,
+      Waited(200.milliseconds), Called
+    ])
   end
 
-  it("counts jittered sleep against maximum elapsed time") do
-    let policy = Retry.fixed(2, Duration.seconds(4))
-      .withJitter(0.5)
-      .withMaximumElapsed(Duration.seconds(5))
+  it "uses the documented exponential schedule" do
+    let schedule = Retry.Schedule {
+      attempts: 5, delay: 200.milliseconds, backoff: 2.0,
+      maximumDelay: 5.seconds, jitter: 0.0
+    }
+    let result = Retry.run(schedule: schedule, sleeper: ~recordWait) do
+      Error("busy")
+    end
+    Assert.equal(result, Error("busy"))
+    Assert.equal(trace(), [
+      Waited(200.milliseconds), Waited(400.milliseconds),
+      Waited(800.milliseconds), Waited(1600.milliseconds)
+    ])
+  end
 
-    let result = Retry.runWithRandom(
-      policy,
-      { |error| true },
-      { |delay| assert(false, "six-second jittered delay must exceed the bound") },
-      { 1.0 },
-      { Error("temporary") }
-    )
+  it "continues at the delay cap until attempts run out" do
+    let schedule = Retry.Schedule {
+      attempts: 6, delay: 500.milliseconds, backoff: 2.0,
+      maximumDelay: 2.seconds, jitter: 0.0
+    }
+    let result = Retry.run(schedule: schedule, sleeper: ~recordWait) do
+      Error("busy")
+    end
+    Assert.equal(result, Error("busy"))
+    Assert.equal(trace(), [
+      Waited(500.milliseconds), Waited(1.seconds), Waited(2.seconds),
+      Waited(2.seconds), Waited(2.seconds)
+    ])
+  end
 
+  it "caps the initial delay as well as subsequent delays" do
+    let result = Retry.run(
+      attempts: 2, delay: 10.seconds, maximumDelay: 1.seconds,
+      jitter: 0.0, sleeper: ~recordWait
+    ) do
+      Error("busy")
+    end
+    Assert.equal(result, Error("busy"))
+    Assert.equal(trace(), [Waited(1.seconds)])
+  end
+
+  it "caps actual sleep after applying positive jitter" do
+    let result = Retry.run(
+      attempts: 2, delay: 4.seconds, maximumDelay: 4.seconds,
+      jitter: 0.25, random: { 1.0 }, sleeper: ~recordWait
+    ) do
+      Error("busy")
+    end
+    Assert.equal(result, Error("busy"))
+    Assert.equal(trace(), [Waited(4.seconds)])
+  end
+
+  it "does not compound jitter into the exponential sequence" do
+    let result = Retry.run(
+      attempts: 3, delay: 1.seconds, maximumDelay: 10.seconds,
+      jitter: 0.5, random: { 0.0 }, sleeper: ~recordWait
+    ) do
+      Error("busy")
+    end
+    Assert.equal(result, Error("busy"))
+    Assert.equal(trace(), [Waited(500.milliseconds), Waited(1.seconds)])
+  end
+
+  it "stops before exceeding total scheduled sleep" do
+    let result = Retry.run(
+      attempts: 5, delay: 1.seconds, backoff: 2.0,
+      maximumTotalDelay: Just(2.seconds), jitter: 0.0,
+      sleeper: ~recordWait
+    ) do
+      recordedError()
+    end
     Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [Called, Waited(1.seconds), Called])
+  end
+
+  it "allows sleep exactly equal to the remaining budget" do
+    let result = Retry.run(
+      attempts: 3, delay: 1.seconds, backoff: 1.0,
+      maximumTotalDelay: Just(1.seconds), jitter: 0.0,
+      sleeper: ~recordWait
+    ) do
+      recordedError()
+    end
+    Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [Called, Waited(1.seconds), Called])
+  end
+
+  it "counts actual jittered sleep against the budget" do
+    let result = Retry.run(
+      attempts: 3, delay: 4.seconds, maximumDelay: 10.seconds,
+      maximumTotalDelay: Just(5.seconds), jitter: 0.5,
+      random: { 1.0 }, sleeper: ~recordWait
+    ) do
+      recordedError()
+    end
+    Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [Called])
+  end
+
+  it "shares settings without sharing attempt or backoff state" do
+    let schedule = Retry.Schedule {
+      attempts: 3, delay: 100.milliseconds, jitter: 0.0
+    }
+    let first = Retry.run(schedule: schedule, sleeper: ~recordWait) do
+      Error("first")
+    end
+    let second = Retry.run(schedule: schedule, sleeper: ~recordWait) do
+      Error("second")
+    end
+    Assert.equal(first, Error("first"))
+    Assert.equal(second, Error("second"))
+    Assert.equal(trace(), [
+      Waited(100.milliseconds), Waited(200.milliseconds),
+      Waited(100.milliseconds), Waited(200.milliseconds)
+    ])
+  end
+
+  it "overrides schedule settings for one execution only" do
+    let schedule = Retry.Schedule { attempts: 5, jitter: 0.0 }
+    let result = Retry.run(
+      schedule: schedule, attempts: 1, sleeper: ~recordWait
+    ) do
+      recordedError()
+    end
+    Assert.equal(result, Error("temporary"))
+    Assert.equal(schedule.attempts, 5)
+    Assert.equal(trace(), [Called])
+  end
+
+  it "normalizes nonpositive attempt counts to one execution" do
+    let result = Retry.run(attempts: -5, sleeper: ~recordWait) do
+      recordedError()
+    end
+    Assert.equal(result, Error("temporary"))
+    Assert.equal(trace(), [Called])
+  end
+
+  it "keeps HTTP error statuses as successful transport results" do
+    let response = Response.text(503, "busy")
+    let result = Retry.run(sleeper: ~recordWait) do
+      Process.self.send(Called)
+      Ok(response)
+    end
+    Assert.equal(result, Ok(response))
+    Assert.equal(trace(), [Called])
+  end
+
+  it "distinguishes explicit completion from exhaustion" do
+    let completed = Retry.run(attempts: 3, sleeper: ~recordWait) do
+      Retry.done("finished")
+    end
+    Assert.equal(completed, Retry.Done("finished"))
+    Assert.equal(trace(), [])
+    let exhausted = Retry.run(
+      attempts: 2, jitter: 0.0, sleeper: ~recordWait
+    ) do
+      Retry.again("pending")
+    end
+    Assert.equal(exhausted, Retry.Again("pending"))
+    Assert.equal(trace(), [Waited(100.milliseconds)])
+  end
+
+  it "can stop immediately with an application error" do
+    let result = Retry.run(sleeper: ~recordWait) do
+      Retry.done(Error("invalid credentials"))
+    end
+    Assert.equal(result, Retry.Done(Error("invalid credentials")))
+    Assert.equal(trace(), [])
   end
 end
