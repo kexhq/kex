@@ -524,6 +524,19 @@ auto Evaluator::registerNetBuiltins() -> void {
             return netError("UnsupportedBackend", "WebSocketClient",
                             "WebSocket clients are unavailable on the tree-walking backend");
         });
+    // Unlike the other WebSocket/HTTP-server intrinsics, `upgrade`'s declared
+    // return type is `Response<Binary>`, not a `Result` — so the walker
+    // reports its unavailability the same way a real server would answer an
+    // unsupported request, rather than as a typed error the caller can't
+    // actually get back (nothing here calls `.try` on a plain Response).
+    defineIntrinsic("NetWebSocket::upgrade", [](std::vector<ValuePtr>) -> ValuePtr {
+        std::string message = "WebSocket server upgrades are unavailable on the tree-walking backend\n";
+        return Value::record("Response", {
+            {"status", Value::record("Status", {{"code", Value::integer(501)}})},
+            {"headers", headersValue({{"Content-Type", "text/plain; charset=utf-8"}})},
+            {"body", Value::binary({message.begin(), message.end()})},
+        });
+    });
     defineIntrinsic("NetWebSocket::session", [](std::vector<ValuePtr>) {
         return Value::record("Session", {{"subprotocol", Value::none()}});
     });

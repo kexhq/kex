@@ -1,0 +1,68 @@
+# A WebSocket chat route where each connection gets its own `serving` actor,
+# so replies can reference session state (`echo #2: ...`) instead of the
+# connection handler tracking a counter by hand. Runs on the BEAM backend
+# only — `Net.HTTP.Server` and `Net.HTTP.WebSocket` are unavailable on the
+# tree-walking interpreter (see docs/networking.md).
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+record ChatSession do
+  messageCount : Integer = 0
+  history : [String] = []
+end
+
+serving ChatSession do
+  slot handle(text: String) -> Reply<String> do
+    new.messageCount = @messageCount + 1
+    new.history = [text | @history]
+    return { new, reply: "echo #${new.messageCount}: ${text}" }
+  end
+end
+
+foul serveChat(socket: Connection) -> Void do
+  let session = Process.spawn(ChatSession {})
+  loop do
+    match socket.receiveMessage.try do
+      Text(text) => socket.send(Text(session.handle(text).try)).try
+      CloseMessage(_, _) => break
+      _ => Void
+    end
+  end
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|
+  if handshake.subprotocols.contains?("chat.v2")
+    let handler : Connection -> Void = { |socket| serveChat(socket) }
+    Accept(handler, Headers.empty, Just("chat.v2"))
+  else
+    Reject(Response.text(426, "chat.v2 required"))
+  end
+end
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute)
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+
+  let socket = WebSocket.connect(
+    "ws://127.0.0.1:${port}/socket",
+    Net.HTTP.WebSocket.ClientOptions { subprotocols: ["chat.v2"] }
+  ).try
+
+  socket.send(Text("hello")).try
+  match socket.receiveMessage.try do
+    Text(text) => IO.printLine(text)
+    _ => IO.printLine("unexpected message")
+  end
+
+  socket.send(Text("again")).try
+  match socket.receiveMessage.try do
+    Text(text) => IO.printLine(text)
+    _ => IO.printLine("unexpected message")
+  end
+
+  socket.close
+  server.stop.try
+end

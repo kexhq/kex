@@ -233,8 +233,49 @@ socket.close
 ```
 
 `receiveMessage` is spelled out because `receive` is a Kex process keyword.
-Extensions are not negotiated. Server upgrades, raw-frame access, heartbeat,
-automatic reconnection, mocks, and browser WebSockets remain design work.
+Extensions are not negotiated. Raw-frame access, heartbeat, automatic
+reconnection, mocks, and browser WebSockets remain design work.
+
+## WebSocket server
+
+A route handler decides whether to accept a handshake and returns the result
+like any other `Response<Binary>` — `Net.HTTP.Server` recognizes what it
+actually is. A request that isn't a syntactically valid handshake (wrong
+method, missing `Sec-WebSocket-Key`, unsupported `Sec-WebSocket-Version`) is
+answered automatically without reaching the decision. `Net.HTTP` and
+`Net.HTTP.WebSocket` each have their own unrelated `ClientOptions` record,
+so importing both together needs `except:` to keep the name unambiguous:
+
+```kex
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul serveChat(socket: Connection) -> Void do
+  match socket.receiveMessage.try do
+    Text(text) => socket.send(Text(text)).try
+    _ => Void
+  end
+end
+
+foul socketRoute(request: Request<Binary>, context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|
+  if handshake.subprotocols.contains?("chat.v2")
+    let handler : Connection -> Void = { |socket| serveChat(socket) }
+    Accept(handler, Headers.empty, Just("chat.v2"))
+  else
+    Reject(Response.text(426, "chat.v2 required"))
+  end
+end
+
+let router = Router.build.get("/socket", ~socketRoute)
+```
+
+`Accept`'s `handler` runs in its own process with the negotiated server
+`Connection` once the 101 response is sent; its return value is discarded.
+`Accept`'s `headers` are added to the 101 response, minus any name that
+manages the handshake itself. Server frames are unmasked and incoming client
+frames are required to be masked, per RFC 6455 — the opposite of the client
+side above.
 
 ## Explicit retry
 

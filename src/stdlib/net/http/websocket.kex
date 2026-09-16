@@ -14,6 +14,8 @@
 #   socket.close
 module Net.HTTP.WebSocket
 
+using Net.HTTP
+
 # A complete high-level WebSocket message. Fragmentation and ping/pong control
 # frames are handled by the connection runtime.
 #
@@ -37,10 +39,31 @@ record Session do
   subprotocol : String?
 end
 
-# An opaque RFC 6455 client connection. It does not reconnect automatically.
+# An opaque RFC 6455 connection, client- or server-side. It does not
+# reconnect automatically.
 type Connection
 
-# Constructors for high-level WebSocket client connections.
+# Subprotocols offered by an incoming upgrade request, in the order the peer
+# listed them.
+record Handshake do
+  subprotocols : [String] = []
+end
+
+# A server's decision after inspecting a +Handshake+.
+#
+# +Accept+ takes over the connection once the 101 response is sent: +handler+
+# runs with the negotiated server +Connection+, and its return value is
+# discarded. +headers+ are added to the 101 response; a name that manages the
+# handshake itself (+Upgrade+, +Connection+, +Sec-WebSocket-Accept+,
+# +Sec-WebSocket-Protocol+) is dropped rather than overridden. +subprotocol+
+# must be one +handshake.subprotocols+ actually offered, or +None+.
+#
+# +Reject+ answers with an ordinary buffered response instead, leaving the
+# connection as plain HTTP — a client requesting an unsupported subprotocol
+# might get +Response.text(426, "chat.v2 required")+, for instance.
+type Upgrade = Accept(Connection -> Void, Headers, String?) | Reject(Response<Binary>)
+
+# Constructors for high-level WebSocket connections, client- and server-side.
 module WebSocket do
   # Opens a +ws:+ or verified +wss:+ connection with default options.
   #
@@ -65,6 +88,32 @@ module WebSocket do
   #     maximumMessageBytes: 1024 * 1024
   #   }).try
   foul connect(url: String, options: ClientOptions) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, options)
+
+  # Decides whether to accept an incoming +Net.HTTP.Server+ upgrade request.
+  #
+  # Call from a route handler and return the result directly — it types as
+  # an ordinary +Response<Binary>+, and +Net.HTTP.Server+ recognizes what it
+  # actually is: a request that isn't a syntactically valid WebSocket
+  # handshake at all (wrong method, missing +Sec-WebSocket-Key+, unsupported
+  # +Sec-WebSocket-Version+) is answered automatically without calling
+  # +decide+; a valid one reaches +decide+ for an application decision.
+  #
+  # @param request [Request<Binary>] the route handler's own request
+  # @param decide [Handshake -> Upgrade] the accept/reject decision
+  # @return [Response<Binary>] the handler's response — an upgrade in
+  #   disguise on +Accept+, sent as given on +Reject+
+  #
+  # @example An authenticated, subprotocol-gated chat route
+  #   foul socketRoute(request: Request<Binary>, context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|
+  #     if handshake.subprotocols.contains?("chat.v2")
+  #       let handler : Connection -> Void = { |socket| serveChat(socket) }
+  #       Accept(handler, Headers.empty, Just("chat.v2"))
+  #     else
+  #       Reject(Response.text(426, "chat.v2 required"))
+  #     end
+  #   end
+  #   let router = Router.build.get("/socket", ~socketRoute)
+  foul upgrade(request: Request<Binary>, decide: Handshake -> Upgrade) -> Response<Binary> = Kex.Intrinsic.NetWebSocket.upgrade(request, decide)
 end
 
 make Connection do
