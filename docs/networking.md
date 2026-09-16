@@ -247,8 +247,8 @@ answered automatically without reaching the decision. `Net.HTTP` and
 so importing both together needs `except:` to keep the name unambiguous:
 
 ```kex
-using Net.HTTP, except: [ClientOptions]
 using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
 using Net.Socket
 
 foul serveChat(socket: Connection) -> Void do

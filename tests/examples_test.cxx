@@ -80,6 +80,11 @@ int main() {
         it("serving_shared_document.kex", []() { assertTrue(parseFile("examples/serving_shared_document.kex")); });
         it("serving_rate_limiter.kex", []() { assertTrue(parseFile("examples/serving_rate_limiter.kex")); });
         it("net_values.kex", []() { assertTrue(parseFile("examples/net_values.kex")); });
+        // BEAM-only (Net.HTTP.Server/WebSocket are unavailable on the
+        // tree-walking interpreter), so parse-checked here rather than run
+        // below — see spec/net_websocket_server_beam.kex for the executed
+        // coverage of this same shape.
+        it("websocket_chat.kex", []() { assertTrue(parseFile("examples/websocket_chat.kex")); });
         it("records.kex", []() { assertTrue(parseFile("examples/records.kex")); });
         it("streams.kex", []() { assertTrue(parseFile("examples/streams.kex")); });
         it("testing.kex", []() { assertTrue(parseFile("examples/testing.kex")); });
