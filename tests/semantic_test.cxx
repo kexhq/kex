@@ -1899,6 +1899,53 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("accepts an arg-less block for Integer#times", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  3.times do\n"
+                "    IO.printLine(\"hi\")\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("still passes the index to Integer#times with a parameter block", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  3.times do |i|\n"
+                "    IO.printLine(i)\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("accepts a Block<Void> overload alongside a handler overload", []() {
+            assertTrue(noErrors(
+                "repeat : (Integer -> Void) -> Void\n"
+                "repeat : Block<Void> -> Void\n"
+                "let repeat(block) = 0\n"
+                "main do\n"
+                "  repeat do\n"
+                "    IO.printLine(\"hi\")\n"
+                "  end\n"
+                "  repeat do |i|\n"
+                "    IO.printLine(i)\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("still requires a block argument for each", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  [1, 2, 3].each do\n"
+                "    IO.printLine(\"tick\")\n"
+                "  end\n"
+                "end\n",
+                "expects argument 2 to be"
+            ));
+        });
     });
 
     describe("Semantic — Match exhaustiveness", []() {
