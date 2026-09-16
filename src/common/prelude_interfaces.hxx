@@ -8,6 +8,7 @@
 #include "type_def_utils.hxx"
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -388,6 +389,53 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         for (const auto& item : program.items)
             collectTraitNames(item, traitNames);
 
+    // Every function declared anywhere in the parsed sources, PRIVATE ones
+    // included: `type Handler = Type.of(handlerType)` (net/http.kex) names a
+    // `private do ... end` helper that exists only to give the alias a shape,
+    // and the rest of this builder otherwise never looks inside a private
+    // block at all. Keyed by simple name, mirroring how the real
+    // TypeChecker's own `m_userSignatures`/`namedFunctionSignature` resolve a
+    // bare `Type.of(name)` argument — see its own doc comment for why a
+    // multi-candidate name is left unresolved rather than guessed at.
+    std::unordered_map<std::string, std::vector<const ast::FunctionDef*>>
+        functionDefsByName;
+    auto recordFunctionDef = [&](const ast::FunctionDef& fn) {
+        functionDefsByName[fn.name].push_back(&fn);
+    };
+    auto collectFunctionDefsFromVisibility =
+        [&](const ast::VisibilityBlock& vb) {
+        for (const auto& item : vb.items)
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                if (*fn) recordFunctionDef(**fn);
+    };
+    std::function<void(const ast::ModuleDef&)> collectFunctionDefsFromModule =
+        [&](const ast::ModuleDef& mod) {
+        for (const auto& item : mod.body) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) recordFunctionDef(**fn);
+            } else if (const auto* nested =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*nested) collectFunctionDefsFromModule(**nested);
+            } else if (const auto* vb =
+                           std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                               &item)) {
+                if (*vb) collectFunctionDefsFromVisibility(**vb);
+            }
+        }
+    };
+    for (const auto& program : programs)
+        for (const auto& item : program.items) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) recordFunctionDef(**fn);
+            } else if (const auto* mod =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) collectFunctionDefsFromModule(**mod);
+            }
+        }
+
     std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
     // `make T, implement: Trait` claims, plus the constructors of every ADT
     // seen, so the claims can be expanded to constructors once all files are
@@ -605,6 +653,42 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             }
         };
 
+        // `type Handler = Type.of(handlerType)`: the argument is ordinary Kex
+        // code (a bare function reference here), not a type name, so this
+        // resolves it against `functionDefsByName` rather than
+        // `resolveSourceType`. Returns null when the argument isn't a bare
+        // function reference or its name doesn't resolve to exactly one
+        // declared function — the alias is then left unregistered, same as
+        // before this case existed, rather than guessed at.
+        auto resolveComputedAlias = [&](const ast::TypeQuery& query)
+            -> kex::semantic::TypePtr {
+            if (!query.argument) return nullptr;
+            const auto* identifier =
+                std::get_if<ast::Identifier>(&query.argument->kind);
+            if (!identifier) return nullptr;
+            auto candidates = functionDefsByName.find(identifier->name);
+            if (candidates == functionDefsByName.end() ||
+                candidates->second.size() != 1)
+                return nullptr;
+            std::unordered_map<std::string, kex::semantic::TypePtr> vars;
+            const ast::FunctionDef& fn = *candidates->second.front();
+            if (fn.clauses.empty()) return nullptr;
+            const auto& clause = fn.clauses.front();
+            std::vector<kex::semantic::TypePtr> params;
+            for (const auto& param : clause.params)
+                params.push_back(
+                    param.type && *param.type
+                        ? resolveSourceType(**param.type, vars, &typeAliases,
+                                           &traitNames)
+                        : kex::semantic::Type::unknown());
+            auto result = clause.returnAnnotation && *clause.returnAnnotation
+                ? resolveSourceType(**clause.returnAnnotation, vars,
+                                    &typeAliases, &traitNames)
+                : kex::semantic::Type::unknown();
+            if (query.query == "returnedBy") return result;
+            return kex::semantic::Type::func(std::move(params), result);
+        };
+
         auto collectTypeAlias = [&](const ast::TypeDef& td) {
             if (td.isDistinct && td.variants && td.variants->size() == 1) {
                 std::unordered_map<std::string, kex::semantic::TypePtr> vars;
@@ -613,6 +697,14 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 ifaces.distinctTypes[td.name] = {td.typeParams,
                                                  std::move(backing)};
                 return;
+            }
+            if (td.variants && td.variants->size() == 1 && !td.leadingPipe) {
+                if (const auto* query = std::get_if<ast::TypeQuery>(
+                        &(*td.variants)[0]->kind)) {
+                    if (auto resolved = resolveComputedAlias(*query))
+                        typeAliases[td.name] = resolved;
+                    return;
+                }
             }
             if (kex::isTransparentTypeAlias(td)) {
                 std::unordered_map<std::string, kex::semantic::TypePtr> noVars;

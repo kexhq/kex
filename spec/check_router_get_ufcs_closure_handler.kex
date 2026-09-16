@@ -1,0 +1,15 @@
+# kex: check-only
+# kexhq/kex#357: `Router.build.get(path, handler)` silently resolved `get` to
+# an unrelated same-named function whenever `handler` wasn't a bare `~name`
+# reference to a standalone function — the mismatch went undetected until the
+# resulting value was consumed elsewhere, if at all. Downstream of kexhq/
+# kex#358's fix (an inline closure now structurally unifies with `Handler`),
+# `Router.get` resolves correctly and `Server.start` accepts the result.
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+main do
+  let router = Router.build.get("/socket", { |request, context| Response.text(200, "hi") })
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router)
+  IO.printLine("ok")
+end

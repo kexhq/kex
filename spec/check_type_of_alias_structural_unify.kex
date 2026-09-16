@@ -1,0 +1,22 @@
+# kex: check-only
+# kexhq/kex#358: `type Handler = Type.of(handlerType)` (src/stdlib/net/http.kex)
+# captures a snapshot of `handlerType`'s checked type rather than minting a
+# structural alias. Before the fix, a parameter typed `Handler` only accepted
+# a bare `~name` reference traceable to the exact declaring function; an
+# independently-typed value of the identical structural shape — an inline
+# closure, a curried partial application, or an explicit annotated binding —
+# was rejected. `Router.route`'s handler parameter exercises all three forms.
+using Net.HTTP, except: [ClientOptions]
+
+foul namedHandler(request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "named")
+
+foul curriedHandler(room: Integer, request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "curried")
+
+main do
+  let closureHandler : Handler = { |request, context| Response.text(200, "closure") }
+  let byName = Router.build.route("GET", "/named", ~namedHandler)
+  let byClosureLiteral = Router.build.route("GET", "/closure", { |request, context| Response.text(200, "inline") })
+  let byAnnotatedBinding = Router.build.route("GET", "/annotated", closureHandler)
+  let byCurry = Router.build.route("GET", "/curried", ~curriedHandler(42))
+  IO.printLine("ok")
+end
