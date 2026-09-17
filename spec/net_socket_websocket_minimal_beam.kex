@@ -1,0 +1,15 @@
+# kex: run-beam
+# kexhq/kex#360: the SMALLEST repro from the issue. This alone crashed erlc
+# with `{key_exists,{b_local,{b_literal,close},2}}` before running a single
+# line — no call to `close`/`closed?` anywhere, just the two `using`s
+# together. Deliberately excludes `Net.HTTP.Client`: adding it was an
+# unreliable workaround (see net_socket_websocket_close_collision_beam.kex
+# for the version with Client and real close/closed? calls), not a fix, and
+# this spec exists specifically to keep covering the case where that
+# workaround isn't in play.
+using Net.Socket
+using Net.HTTP.WebSocket
+
+main do
+  IO.printLine("compiled fine")
+end
