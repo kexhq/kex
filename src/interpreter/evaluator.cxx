@@ -1404,7 +1404,12 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
 
                 for (size_t i = 0; i < clause.params.size(); i++) {
                     const auto& param = clause.params[i];
-                    if ((i + argOffset) < args.size()) {
+                    const bool omittedDefault = param.defaultValue &&
+                        i + argOffset < args.size() &&
+                        std::holds_alternative<AtomValue>(args[i + argOffset]->data) &&
+                        std::get<AtomValue>(args[i + argOffset]->data).name ==
+                            "__kex_default_argument__";
+                    if ((i + argOffset) < args.size() && !omittedDefault) {
                         const auto* dispatchType = dispatchParamType(param);
                         if (dispatchByParamType && dispatchType &&
                             !runtimeTypeMatches(
@@ -3685,9 +3690,14 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                         fullArgs[nextSlot] = std::move(a);
                     }
 
-                    // Fill any remaining nulls with None
-                    for (auto& a : fullArgs) {
-                        if (!a) a = Value::none();
+                    // Preserve omitted defaults separately from an explicitly
+                    // supplied None. Defaults are evaluated by the callee,
+                    // in declaration order and in its own lexical scope.
+                    for (size_t i = 0; i < clause.params.size(); ++i) {
+                        auto& value = fullArgs[i + receiverOffset];
+                        if (!value) value = clause.params[i].defaultValue
+                            ? Value::atom("__kex_default_argument__")
+                            : Value::none();
                     }
 
                     return func->native(std::move(fullArgs));

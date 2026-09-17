@@ -116,7 +116,7 @@ private:
     // match exhaustiveness checking. Populated in a pass over the whole
     // program before any function body is checked, so forward references
     // work the same way `m_globals` already does.
-    auto registerAdt(const ast::TypeDef& def) -> void;
+    auto registerAdt(const ast::TypeDef& def, const std::string& modulePath = "") -> void;
     auto registerAdtsInModule(const ast::ModuleDef& mod) -> void;
 
     // Type alias registry: `type X = <type_expr>` where the RHS is not

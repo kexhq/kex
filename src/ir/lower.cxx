@@ -2174,6 +2174,38 @@ struct Lowering {
         return wrapLets(binds, std::move(ex));
     }
 
+    auto fillDefaultSlots(const std::string& name,
+                          std::vector<ExprPtr>& slots,
+                          std::vector<Binding>& binds) -> void {
+        auto defaults = fnDefaults.find(name);
+        auto names = fnParamNames.find(name);
+        if (defaults == fnDefaults.end() || names == fnParamNames.end()) {
+            for (auto& slot : slots)
+                if (!slot) slot = lit(LitKind::None, "none");
+            return;
+        }
+        const auto savedSubst = subst;
+        const auto savedModule = currentModulePath;
+        if (auto dot = name.rfind('.'); dot != std::string::npos)
+            currentModulePath = name.substr(0, dot);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            if (!slots[i]) {
+                if (i < defaults->second.size() && defaults->second[i])
+                    slots[i] = atomize(*defaults->second[i], binds);
+                else
+                    slots[i] = lit(LitKind::None, "none");
+            }
+            // Bind once even when a later default references the argument.
+            const auto bound = fresh("DefaultArg");
+            binds.push_back({bound, std::move(slots[i])});
+            slots[i] = var(bound);
+            if (i < names->second.size() && !names->second[i].empty())
+                subst[names->second[i]] = bound;
+        }
+        subst = savedSubst;
+        currentModulePath = savedModule;
+    }
+
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
         // Supervisor child helpers are syntax-level builders because their
         // blocks become zero-arity start functions rather than ordinary
@@ -2352,7 +2384,7 @@ struct Lowering {
                 if (next >= slots.size()) break;
                 slots[next] = std::move(p);
             }
-            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+            fillDefaultSlots(n.name, slots, binds);
             auto ex = std::make_unique<Expr>();
             ex->node = localCall(emittedName, std::move(slots));
             return wrapLets(binds, std::move(ex));
@@ -3554,13 +3586,18 @@ struct Lowering {
                                 if (next >= slots.size()) break;
                                 slots[next] = std::move(p);
                             }
-                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            fillDefaultSlots(qualKey, slots, binds);
                             int ar = static_cast<int>(slots.size());
                             return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                         }
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
+                        if (auto defaults = fnDefaults.find(qualKey);
+                            defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                            args.resize(defaults->second.size());
+                            fillDefaultSlots(qualKey, args, binds);
+                        }
                         int ar = static_cast<int>(args.size());
                         return wrapLets(binds, localCallExpr(it->second, std::move(args)));
                     }
@@ -3695,13 +3732,18 @@ struct Lowering {
                         if (next >= slots.size()) break;
                         slots[next] = std::move(p);
                     }
-                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                    fillDefaultSlots(qualKey, slots, binds);
                     int ar = static_cast<int>(slots.size());
                     return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                 }
                 std::vector<ExprPtr> args;
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
+                if (auto defaults = fnDefaults.find(qualKey);
+                    defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                    args.resize(defaults->second.size());
+                    fillDefaultSlots(qualKey, args, binds);
+                }
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, localCallExpr(it->second, std::move(args)));
             }
@@ -8537,6 +8579,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 for (const auto& p : fd->clauses[0].params)
                     pnames.push_back(p.name ? *p.name : "");
                 L.fnParamNames[path + "." + fd->name] = std::move(pnames);
+                std::vector<const ast::ExprPtr*> defaults;
+                for (const auto& param : fd->clauses[0].params)
+                    defaults.push_back(param.defaultValue ? &*param.defaultValue : nullptr);
+                if (std::any_of(defaults.begin(), defaults.end(),
+                                [](auto* value) { return value != nullptr; }))
+                    L.fnDefaults[path + "." + fd->name] = std::move(defaults);
+
             }
         };
         auto preModuleType = [&](const ast::TypeDef* td) {
