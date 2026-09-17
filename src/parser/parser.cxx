@@ -1996,6 +1996,72 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       continue;
     }
 
+    // Direct call on an arbitrary expression's result: expr(args). Only a
+    // NAME can head a FunctionCall (`f(x)`) or a receiver.method a MethodCall
+    // — neither has a slot for "the callee is this whole expression" — so
+    // `g(~id)(10)` desugars to a hidden local bound to the callee, called by
+    // that name, reusing the call-a-local-function-value path that already
+    // works: `do let _chainN = expr; _chainN(args) end`. No newline may
+    // precede the `(` (unlike `.method` chaining, which explicitly allows
+    // one): `foo()\n(bar())` is two statements, not `foo()(bar())`.
+    if (check(TokenType::LParen)) {
+      // This `(`'s own offset, not the wrapped expr's: `f(1)(2)(3)` chains
+      // three times over the SAME base expr's (relocated, post-interpolation)
+      // start position, which a per-Parser counter can't tell apart either —
+      // string interpolation holes are each their own fresh Parser (see
+      // parseInterpolatedBody), so two SEPARATE `${f(a)(b)}` interpolations
+      // would otherwise both mint `_chain0` and collide on a real, distinct
+      // name. The paren position is unique per call site either way.
+      const auto callParenOffset = peek().startOffset;
+      advance();
+      std::vector<ast::ExprPtr> args;
+      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+      if (!check(TokenType::RParen)) {
+        do {
+          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+               check(TokenType::Type) || check(TokenType::Match) ||
+               check(TokenType::Loop)) &&
+              peekNext().type == TokenType::Colon) {
+            auto argName = advance().value;
+            advance(); // :
+            namedArgs.push_back({argName, parseExpr()});
+          } else {
+            args.push_back(parseExpr());
+          }
+        } while (match(TokenType::Comma));
+      }
+      expect(TokenType::RParen, "Expected ')'");
+
+      auto startOffset = expr->location.startOffset;
+      auto calleeName = "_chain" + std::to_string(callParenOffset);
+
+      auto pattern = std::make_unique<ast::Pattern>();
+      pattern->location = expr->location;
+      pattern->kind = ast::VarPattern{calleeName};
+
+      auto binding = std::make_unique<ast::Expr>();
+      binding->location = expr->location;
+      binding->kind =
+          ast::LetExpr{std::move(pattern), std::move(expr), std::nullopt};
+
+      auto call = std::make_unique<ast::Expr>();
+      call->location = currentLocation();
+      call->location.startOffset = startOffset;
+      call->kind = ast::FunctionCall{calleeName, std::move(args),
+                                     std::move(namedArgs), std::nullopt};
+
+      std::vector<ast::ExprPtr> body;
+      body.push_back(std::move(binding));
+      body.push_back(std::move(call));
+
+      auto block = std::make_unique<ast::Expr>();
+      block->location = currentLocation();
+      block->location.startOffset = startOffset;
+      block->kind = ast::BlockExpr{std::move(body)};
+      expr = complete(std::move(block));
+      continue;
+    }
+
     // Range: expr..expr
     if (match(TokenType::DotDot)) {
       auto range = std::make_unique<ast::Expr>();

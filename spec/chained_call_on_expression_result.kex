@@ -1,0 +1,34 @@
+# Only a NAME can head a FunctionCall (`f(x)`) or a receiver.method a
+# MethodCall — neither has a slot for "the callee is this whole expression"
+# — so `g(~id)(10)` used to leave the trailing `(10)` an orphaned, silently
+# accepted top-level expression instead of applying it to g(~id)'s result
+# (kexhq/kex#366's own repro, once its arity-declaration half was fixed).
+mk : (Integer -> Integer) -> (Integer -> Integer)
+let mk(f) = do |x| f(x) + 1 end
+
+check : ((Integer -> Integer) -> (Integer -> Integer)) -> Integer
+let check(g) = g(~id)(10)
+
+id : Integer -> Integer
+let id(x) = x
+
+level2 : Integer -> Integer -> (Integer -> Integer)
+let level2(a, b) = do |c| a + b + c end
+
+level1 : Integer -> (Integer -> (Integer -> Integer))
+let level1(a) = do |b| level2(a, b) end
+
+main do
+  IO.printLine("${check(mk)}")
+  IO.printLine("${check(~mk)}")
+
+  # three levels of chaining, and a method call landing on the final result
+  IO.printLine("${level1(1)(2)(3)}")
+  IO.printLine("${level1(1)(2)(3).even?}")
+
+  # NOT chained: a newline before the '(' starts a new statement instead —
+  # `check(mk)\n(99)` is two statements, not `check(mk)(99)`.
+  check(mk)
+  (99)
+  IO.printLine("still separate")
+end
