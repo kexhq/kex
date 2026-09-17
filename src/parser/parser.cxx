@@ -1442,7 +1442,8 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     if (elements.size() == 1) {
       auto grouped = std::move(elements[0]);
       grouped->location.startOffset = type->location.startOffset;
-      return complete(std::move(grouped)); // just grouping
+      grouped->parenthesized = true; // just grouping, but note it was there
+      return complete(std::move(grouped));
     }
     type->kind = ast::TupleType{std::move(elements)};
     return complete(std::move(type));
