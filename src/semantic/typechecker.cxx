@@ -1003,7 +1003,8 @@ auto TypeChecker::resolveModulePath(const std::string& name,
     return unique.value_or(name);
 }
 
-auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
+auto TypeChecker::registerAdt(const ast::TypeDef& def,
+                              const std::string& modulePath) -> void {
     if (!def.variants) return;
 
     if (def.isDistinct || kex::isTransparentTypeAlias(def)) return;
@@ -1013,6 +1014,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
         auto name = extractConstructorName(variant);
         if (!name) return;  // not constructor-shaped — a type alias, skip entirely
         names.push_back(*name);
+        if (!modulePath.empty()) continue;
         if (std::holds_alternative<ast::TypeName>(variant->kind))
             m_nullaryConstructors.insert(*name);
         // Payload arity: `None` is 0, `Just(T)` is 1, `Between(A, B)` is 2.
@@ -1023,9 +1025,10 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     }
     if (names.empty()) return;
 
-    m_adtVariants[def.name] = names;
-    for (const auto& name : names) {
-        m_adtOfConstructor[name] = def.name;
+    if (modulePath.empty()) {
+        m_adtVariants[def.name] = names;
+        for (const auto& name : names)
+            m_adtOfConstructor[name] = def.name;
     }
 
     // Record what each constructor produces, so `Just(1)` infers as an
@@ -1074,14 +1077,26 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
                 result.payloadTypes.push_back(std::move(declared));
             }
         }
-        m_constructorResult[*name] = std::move(result);
+        const auto key = modulePath.empty() ? *name : modulePath + "::" + *name;
+        m_constructorResult[key] = std::move(result);
     }
 }
 
 auto TypeChecker::constructorResultType(
     const std::string& name, const std::vector<TypePtr>& argTypes)
     -> TypePtr {
-    auto found = m_constructorResult.find(name);
+    auto found = m_constructorResult.end();
+    // A constructor declared in this lexical module shadows an imported
+    // constructor with the same spelling (for example a local Done versus
+    // Control.Retry's Done). Do not let stdlib interfaces choose its ADT.
+    for (auto module = m_currentModulePath; !module.empty();) {
+        found = m_constructorResult.find(module + "::" + name);
+        if (found != m_constructorResult.end()) break;
+        const auto dot = module.rfind('.');
+        if (dot == std::string::npos) break;
+        module.resize(dot);
+    }
+    if (found == m_constructorResult.end()) found = m_constructorResult.find(name);
     if (found == m_constructorResult.end()) return nullptr;
     const auto& info = found->second;
 
@@ -1104,11 +1119,15 @@ auto TypeChecker::constructorResultType(
 }
 
 auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
+    const auto previousModule = m_currentModulePath;
+    m_currentModulePath = previousModule.empty() || mod.name.starts_with(previousModule + ".")
+        ? mod.name : previousModule + "." + mod.name;
     for (const auto& item : mod.body) {
         std::visit([this, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node) return;
+                registerAdt(*node, m_currentModulePath);
                 if (auto constructors = kex::typeConstructors(*node))
                     for (const auto& constructor : *constructors)
                         m_moduleConstructors[mod.name][constructor.name] = {
@@ -1122,7 +1141,8 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
                     if (const auto* type =
                             std::get_if<std::unique_ptr<ast::TypeDef>>(
                                 &visible);
-                        type && *type)
+                        type && *type) {
+                        registerAdt(**type, m_currentModulePath);
                         if (auto constructors =
                                 kex::typeConstructors(**type))
                             for (const auto& constructor : *constructors)
@@ -1130,9 +1150,11 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
                                                     [constructor.name] = {
                                     (*type)->name, constructor.arity,
                                     node->isPublic};
+                    }
             }
         }, item);
     }
+    m_currentModulePath = previousModule;
 }
 
 auto TypeChecker::typeDefToType(const ast::TypeDef& def) -> TypePtr {
@@ -2043,6 +2065,31 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // populated m_userSignatures for these and checkFunctionDef will use the
     // annotation as ground truth.
     if (m_annotationDeclared.count(def.name)) {
+        // An annotation supplies types, but only the definition supplies
+        // parameter labels and defaults. Publish that shape before checking
+        // any caller (including a main block preceding an imported module).
+        const auto enrich = [&](std::vector<Signature>& signatures) {
+            for (auto& signature : signatures)
+                for (const auto& clause : def.clauses) {
+                    if (signature.params.size() != clause.params.size()) continue;
+                    signature.paramNames.clear();
+                    for (const auto& param : clause.params)
+                        signature.paramNames.push_back(param.name.value_or(""));
+                    auto required = clause.params.size();
+                    while (required > 0 && clause.params[required - 1].defaultValue)
+                        --required;
+                    signature.requiredParams = required;
+                }
+        };
+        if (auto scoped = m_scopedDeclaredSignatures.find(
+                m_currentModulePath + "\n" + def.name);
+            scoped != m_scopedDeclaredSignatures.end()) {
+            enrich(scoped->second);
+            auto qualified = m_userSignatures.find(
+                m_currentModulePath.empty() ? def.name
+                                           : m_currentModulePath + "::" + def.name);
+            if (qualified != m_userSignatures.end()) enrich(qualified->second);
+        }
         // `m_annotationDeclared` is keyed by the bare name, so an annotation in
         // ANOTHER module (`Digest`'s `sha256 : String -> String`, merged in from
         // source) also skipped this module's unannotated `sha256` — and with it
@@ -3338,6 +3385,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     checkedInterface.requiredParams =
                         signatures[0].requiredParams;
                     checkedInterface.isFoul = signatures[0].isFoul;
+                    checkedInterface.paramNames = signatures[0].paramNames;
                 }
                 publishable.push_back(checkedInterface);
                 if (placeholder != sigs.end())

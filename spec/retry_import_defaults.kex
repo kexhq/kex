@@ -1,0 +1,15 @@
+# kex: check-only
+using Control.Retry
+
+main do
+  Retry.run(attempts: 2, jitter: 0.0) do
+    Error("temporary")
+  end
+  let schedule = Retry.Schedule { attempts: 4 }
+  Retry.run(schedule: schedule, onRetry: { |info| IO.printLine(info.nextAttempt) }) do
+    Retry.again("pending")
+  end
+  Retry.run do
+    Ok(42)
+  end
+end

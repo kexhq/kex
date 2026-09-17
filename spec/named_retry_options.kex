@@ -1,0 +1,20 @@
+# Named options and a trailing block must retain types and evaluate defaults
+# in declaration order, including defaults referencing preceding parameters.
+main do
+  IO.printLine(NamedRetry.execute(limit: 5) do "first" end)
+  IO.printLine(NamedRetry.execute(label: None, settings: RetrySettings { limit: 7 }) do 42 end)
+  IO.printLine(NamedRetry.execute() do "last" end)
+end
+
+record RetrySettings do
+  limit : Integer = 3
+end
+
+module NamedRetry do
+  execute : Block<X> -> RetrySettings -> Integer -> String? -> X
+  foul execute(operation, settings = RetrySettings {}, limit = settings.limit, label = Just("default")) do
+    IO.printLine(limit)
+    IO.printLine(label)
+    operation()
+  end
+end

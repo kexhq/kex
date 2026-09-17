@@ -1,0 +1,24 @@
+# A module's own Done constructor must not acquire Retry.Decision's type
+# merely because Control.Retry is loaded (including through stdlib metadata).
+using Control.Retry
+
+module WorkQueue do
+  type Pending = Done(String) | Working
+
+  entries : String -> [Pending]
+  let entries(value) = [Done(value)]
+
+  message : String -> String
+  let message(value) = match entries(value).first do
+    Just(Done(text)) => text
+    _ => "not finished"
+  end
+end
+
+main do
+  IO.printLine(WorkQueue.message("complete"))
+  let result = Retry.run(attempts: 1) do
+    Retry.done("retry complete")
+  end
+  Assert.equal(result, Retry.Done("retry complete"))
+end

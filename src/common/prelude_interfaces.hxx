@@ -875,6 +875,24 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     if (*ann) {
                         auto sig = annotationToSignature(**ann, nullptr);
                         sig.isFoul = sig.isFoul || foulDefs.count(sig.name) > 0;
+                        // The annotation supplies types; its definition supplies
+                        // labels and defaults, also needed by check-only imports.
+                        for (const auto& member : mod.body) {
+                            const auto* definition = std::get_if<
+                                std::unique_ptr<ast::FunctionDef>>(&member);
+                            if (!definition || !*definition ||
+                                (*definition)->name != sig.name) continue;
+                            for (const auto& clause : (*definition)->clauses) {
+                                if (clause.params.size() != sig.params.size()) continue;
+                                sig.paramNames.clear();
+                                for (const auto& param : clause.params)
+                                    sig.paramNames.push_back(param.name.value_or(""));
+                                auto required = clause.params.size();
+                                while (required > 0 && clause.params[required - 1].defaultValue)
+                                    --required;
+                                sig.requiredParams = required;
+                            }
+                        }
                         // A first parameter naming a type declared by this
                         // nested companion has the companion's nominal
                         // identity at import sites. Preserve that identity so
@@ -888,7 +906,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                 if (ifaces.typeNames.count(qualified) > 0)
                                     named->name = qualified;
                             }
-                        addModuleSig(moduleName, sig);
+                        addModuleSig(moduleName, sig, sig.paramNames);
                         if (directBackendOwnership && !sig.params.empty())
                             addReceiverSig(moduleName, sig);
                     }

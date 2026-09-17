@@ -1,0 +1,61 @@
+# A deterministic API recovery example: a timeout, a busy server, then success.
+# The scripted request supplies real NetError and HTTP Response values without
+# accessing a network. In application code replace scriptedGet with HTTP.get.
+using Control.Retry
+using Net
+using Net.HTTP
+
+type ScriptedReply = RetryResponse(Result<Response<Binary>, NetError>)
+
+main do
+  Process.self.send(RetryResponse(Error(NetError {
+    kind: Timeout, operation: HTTPClient, message: "request timed out"
+  })))
+  Process.self.send(RetryResponse(Ok(Response.text(503, "try later"))))
+  Process.self.send(RetryResponse(Ok(Response.text(200, "inventory ready"))))
+
+  let schedule = Retry.Schedule {
+    attempts: 5, delay: 200.milliseconds, backoff: 2.0,
+    maximumDelay: 2.seconds, jitter: 0.0
+  }
+  let outcome = Retry.run(
+    schedule: schedule,
+    sleeper: { |_wait| () },
+    onRetry: { |info|
+      IO.printLine("attempt ${info.attempt} failed; " +
+        "retrying ${info.nextAttempt}/${info.maximumAttempts} " +
+        "in ${info.delay.seconds} seconds")
+    }
+  ) do
+    let result = scriptedGet()
+    match result do
+      Error(error) => if error.kind == Timeout || error.kind == Connect
+        Retry.again(result)
+      else
+        Retry.done(result)
+      end
+      Ok(response) => if [429, 502, 503, 504].contains?(response.status.code)
+        Retry.again(result)
+      else
+        Retry.done(result)
+      end
+    end
+  end
+
+  match outcome do
+    Done(Ok(response)) => IO.printLine(response.body.to(String).try)
+    Done(Error(error)) => IO.printLine("stopped: ${error.message}")
+    Again(last) => IO.printLine("retry budget exhausted: ${last}")
+  end
+end
+
+# Returns the next simulated transport outcome, failing if the script is empty.
+foul scriptedGet() -> Result<Response<Binary>, NetError> do
+  receive do
+    RetryResponse(result) => result
+  after timeout: 0
+    Error(NetError {
+      kind: MockEmpty, operation: HTTPClient, message: "script is empty"
+    })
+  end
+end

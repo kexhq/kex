@@ -33,6 +33,15 @@ module Retry do
   # Creating a schedule performs no work. It is immutable configuration:
   # each run starts a fresh attempt count and delay sequence.
   #
+  # * +attempts+: maximum executions, including the first; default 3.
+  # * +delay+: initial base wait; default 100 milliseconds.
+  # * +backoff+: base-delay multiplier; default 2.0, or 1.0 for fixed waits.
+  # * +maximumDelay+: cap on each actual wait, including jitter; default 5 seconds.
+  # * +jitter+: symmetric proportional variation; default 0.2, or 0.0 to disable.
+  # * +maximumTotalDelay+: cumulative sleep allowance; default +None+.
+  #   Operation execution time is excluded. A wait that exceeds the remaining
+  #   allowance ends the run without sleeping or calling the operation again.
+  #
   # @example Fixed delays: three waits of 250 milliseconds
   #   let schedule = Retry.Schedule {
   #     attempts: 4, delay: 250.milliseconds, backoff: 1.0,
@@ -116,6 +125,37 @@ module Retry do
   done : X -> Decision<X>
   let done(value) = Done(value)
 
+  # Describes a retry that is about to wait and then execute another attempt.
+  #
+  # Passed to +onRetry+ only after the last outcome requests a retry and
+  # the schedule permits it. There is no notification for the initial call,
+  # success, explicit completion, or exhaustion. Reporting does not consume
+  # attempts. Durations describe scheduled sleep, not wall-clock elapsed time.
+  #
+  # * +attempt+: the just-completed attempt, starting at 1.
+  # * +nextAttempt+: the attempt that follows the upcoming wait.
+  # * +maximumAttempts+: total permitted executions, including the first.
+  # * +remainingAttempts+: executions remaining, including the upcoming one.
+  # * +delay+: actual upcoming wait, after jitter and the delay cap.
+  # * +totalDelay+: sleep already performed, excluding the upcoming wait.
+  # * +result+: the last +Error+ or +Again+, including its application payload.
+  record Info<X> do
+    # The attempt that just finished, starting at 1.
+    attempt : Integer
+    # The attempt that will run after the upcoming delay.
+    nextAttempt : Integer
+    # Total allowed executions, normalized to at least 1.
+    maximumAttempts : Integer
+    # Executions still allowed, including the upcoming attempt.
+    remainingAttempts : Integer
+    # The actual upcoming wait, after jitter and the delay cap.
+    delay : Duration
+    # Sleep already performed in this run, excluding the upcoming wait.
+    totalDelay : Duration
+    # The last Error or Again value, including the application's payload.
+    result : X
+  end
+
   # Runs a fresh operation until it succeeds, stops, or exhausts its schedule.
   #
   # The first attempt is immediate. Every later attempt follows one sleep.
@@ -132,6 +172,7 @@ module Retry do
   # durations become zero, backoff below one becomes one, jitter and random
   # samples are clamped to 0..1. Non-finite Float settings are unsupported.
   #
+  # @param operation [Block<X>] fresh Result or Decision on each attempt
   # @param schedule [Schedule] reusable settings; defaults to +Schedule {}+
   # @param attempts [Integer] total attempts; defaults to the schedule field
   # @param delay [Duration] initial wait; defaults to the schedule field
@@ -141,7 +182,7 @@ module Retry do
   # @param maximumTotalDelay [Duration?] sleep budget; defaults to the field
   # @param sleeper [Duration -> Void] defaults to real +Task.sleep+
   # @param random [Block<Float>] defaults to secure backend sampling in 0..1
-  # @param operation [Block<X>] fresh Result or Decision on each attempt
+  # @param onRetry [Info<X> -> Void] reports an allowed retry; defaults to no action
   # @return [X] first Ok/Done or last Error/Again, without extra wrapping
   #
   # @example Named options without constructing a schedule
@@ -169,12 +210,50 @@ module Retry do
   #   end
   #   # => Error("temporary"), two calls and one fake sleep
   #
+  # @example Report progress to a user or log
+  #   using Net.HTTP
+  #   Retry.run(attempts: 5, onRetry: { |info|
+  #     let progress = "retrying ${info.nextAttempt}/${info.maximumAttempts}"
+  #     IO.printLine("${progress} in ${info.delay.seconds} seconds")
+  #   }) do
+  #     HTTP.get("https://api.example.com/inventory")
+  #   end
+  #
+  # @example Retry temporary HTTP failures and selected statuses
+  #   using Net
+  #   using Net.HTTP
+  #   let schedule = Retry.Schedule { attempts: 5 }
+  #   let outcome = Retry.run(schedule: schedule) do
+  #     let result = HTTP.get("https://api.example.com/inventory")
+  #     match result do
+  #       Error(error) => if error.kind == Timeout || error.kind == Connect
+  #         Retry.again(result)
+  #       else
+  #         Retry.done(result)
+  #       end
+  #       Ok(response) => if [429, 502, 503, 504].contains?(response.status.code)
+  #         Retry.again(result)
+  #       else
+  #         Retry.done(result)
+  #       end
+  #     end
+  #   end
+  #   match outcome do
+  #     Done(result) => IO.printLine(result)
+  #     Again(last) => IO.printLine("retry budget exhausted: ${last}")
+  #   end
+  #
+  # +Done(Error(...))+ means the application stopped on a permanent error.
+  # +Again(Ok(response))+ means an unacceptable HTTP status persisted until
+  # exhaustion. HTTP status classification and Retry-After handling are the
+  # application's responsibility; +run+ has no HTTP-specific behavior.
+  #
   # The testing hooks are independent: replacing sleep keeps normal random
   # sampling, and replacing randomness keeps real sleep. A random sample of
   # 0 selects the lower jitter bound, 0.5 the base, and 1 the upper bound.
   # With zero jitter no random sample is needed.
   # lint:allow parameter-count — named options make each setting independent
-  run : Block<X> -> Schedule -> Integer -> Duration -> Float -> Duration -> Float -> Duration? -> (Duration -> Void) -> Block<Float> -> X
+  run : Block<X> -> Schedule -> Integer -> Duration -> Float -> Duration -> Float -> Duration? -> (Duration -> Void) -> Block<Float> -> (Info<X> -> Void) -> X
   foul run(
     operation,
     schedule = Schedule {},
@@ -185,7 +264,8 @@ module Retry do
     jitter = schedule.jitter,
     maximumTotalDelay = schedule.maximumTotalDelay,
     sleeper = { |wait| Task.sleep(wait) },
-    random = { Kex.Intrinsic.Retry.randomUnit() }
+    random = { Kex.Intrinsic.Retry.randomUnit() },
+    onRetry = { |_info| () }
   ) do
     let settings = Schedule {
       attempts: attempts,
@@ -195,7 +275,7 @@ module Retry do
       jitter: jitter,
       maximumTotalDelay: maximumTotalDelay
     }
-    attempt(settings, sleeper, random, operation, 1, boundedDelay(settings, delay.seconds), 0.0)
+    attempt(settings, sleeper, random, onRetry, operation, 1, boundedDelay(settings, delay.seconds), 0.0)
   end
 
   private do
@@ -225,8 +305,8 @@ module Retry do
       clamp(waitSeconds, 0.0, cap)
     end
 
-    attempt : Schedule -> (Duration -> Void) -> Block<Float> -> Block<X> -> Integer -> Float -> Float -> X
-    foul attempt(schedule, sleeper, random, operation, number, base, elapsed) do
+    attempt : Schedule -> (Duration -> Void) -> Block<Float> -> (Info<X> -> Void) -> Block<X> -> Integer -> Float -> Float -> X
+    foul attempt(schedule, sleeper, random, onRetry, operation, number, base, elapsed) do
       let result = operation()
       if number >= schedule.attempts || !retry?(result)
         return result
@@ -242,10 +322,19 @@ module Retry do
       if !allowed
         return result
       end
+      onRetry(Info {
+        attempt: number,
+        nextAttempt: number + 1,
+        maximumAttempts: schedule.attempts,
+        remainingAttempts: schedule.attempts - number,
+        delay: Duration { seconds: sleepSeconds },
+        totalDelay: Duration { seconds: elapsed },
+        result: result
+      })
       sleeper(Duration { seconds: sleepSeconds })
       let factor = if schedule.backoff < 1.0 then 1.0 else schedule.backoff end
       let nextBase = boundedDelay(schedule, base * factor)
-      attempt(schedule, sleeper, random, operation, number + 1, nextBase, nextElapsed)
+      attempt(schedule, sleeper, random, onRetry, operation, number + 1, nextBase, nextElapsed)
     end
   end
 end

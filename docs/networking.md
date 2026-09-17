@@ -279,25 +279,28 @@ side above.
 
 ## Explicit retry
 
-Networking never retries a request implicitly. Import `Control.Retry` and wrap
-an operation when retrying is safe for that application:
+Networking never retries a request implicitly. Import `Control.Retry` to wrap
+an operation when repeating it is safe:
 
 ```kex
 using Control.Retry
+using Net.HTTP
 
-let policy = Retry.exponential(
-  4,
-  100.milliseconds,
-  2.seconds
-).withMaximumElapsed(5.seconds).withJitter(0.25)
-let response = Retry.run(policy, { |error| error.retryable? }) do
-  client.get(url)
-end.try
+let schedule = Retry.Schedule {
+  attempts: 4, delay: 100.milliseconds, backoff: 2.0,
+  maximumDelay: 2.seconds, maximumTotalDelay: Just(5.seconds), jitter: 0.25
+}
+let result = Retry.run(schedule: schedule) do
+  HTTP.get("https://api.example.com/inventory")
+end
 ```
 
-The helper supports fixed and capped exponential schedules, predicates,
-elapsed-delay bounds, and symmetric bounded jitter. Production jitter uses a
-cryptographically secure backend source. Tests can use `Retry.runWithRandom`
-to inject both a sleeper and a `0.0..1.0` random sample without sleeping or
-depending on nondeterminism. Retry cancellation and a full virtual-clock
-capability remain design work.
+`Ok` returns immediately; `Error` retries until the schedule is exhausted,
+then returns the last error unchanged. HTTP 429/503 responses are `Ok`, so
+use explicit `Retry.again` / `Retry.done` decisions to classify their statuses.
+A shared schedule carries settings, not shared attempt state. Named `sleeper:`
+and `random:` hooks support deterministic tests independently.
+
+See [Retrying operations](retrying.md) for complete examples, schedule timing,
+error selection, final-result handling, and testing. A cumulative-sleep limit
+is not a request deadline; configure request timeouts separately.

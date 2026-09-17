@@ -697,7 +697,7 @@ end
 
 let reconnecting = WebSocket.Reconnecting.connect(
   url,
-  policy: Control.Retry.exponential(maximumAttempts: 8)
+  schedule: Retry.Schedule { attempts: 8 }
 ).try
 reconnecting.events.each do |event|
   match event do
@@ -710,42 +710,28 @@ end
 
 ## Generic retry support
 
-- Add `Task.sleep(Duration)` as a general prelude utility.
-- Add opt-in `Control.Retry`.
-- `Retry.run` operates on `Block<Result<X,E>>`.
-- Support fixed and exponential policies, maximum attempts, maximum elapsed
-  duration, typed predicates, and bounded jitter.
-- Time and randomness are injectable capabilities so specs do not sleep or
-  depend on nondeterministic values.
+Implemented by opt-in `Control.Retry`; see [Retrying operations](retrying.md)
+for the current API and runnable examples. The generic runner retries returned
+errors automatically, or follows explicit `again` / `done` decisions.
 
 ```kex
-# Current API. `Retry.runWithRandom` additionally injects deterministic sleep
-# and random sources for specifications.
 using Control.Retry
+using Net.HTTP
 
-let policy = Retry.exponential(
-  5,
-  100.milliseconds,
-  5.seconds
-).withMaximumElapsed(20.seconds).withJitter(0.25)
-
-let response = Retry.run(policy, { |error| retryable?(error) }) do
-  client.get(url)
-end.try
+let schedule = Retry.Schedule {
+  attempts: 5, delay: 100.milliseconds, backoff: 2.0,
+  maximumDelay: 5.seconds, maximumTotalDelay: Just(20.seconds), jitter: 0.25
+}
+let result = Retry.run(schedule: schedule) do
+  HTTP.get("https://api.example.com/inventory")
+end
 ```
 
-Specs inject a virtual clock and deterministic random source:
-
-```kex
-let result = Retry.runWithRandom(
-  policy,
-  { |error| true },
-  { |delay| fakeClock.sleep(delay) },
-  { 0.5 },
-  { scriptedOperation.next }
-)
-assert(fakeClock.sleeps == [100.milliseconds, 200.milliseconds])
-```
+Attempts include the first call; exhaustion returns the last error unchanged.
+HTTP error statuses are responses, not transport errors, so status-based
+retries require an explicit decision. Schedule budgets count actual sleep,
+not operation execution time. Tests inject named `sleeper:` and `random:`
+callbacks independently; there are no separate testing entry points.
 
 ## Capability-based mocks
 

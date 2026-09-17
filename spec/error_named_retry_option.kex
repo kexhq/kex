@@ -1,0 +1,9 @@
+# kex: check-only
+# A named argument is checked against its declared slot, not the block slot.
+using Control.Retry
+
+main do
+  Retry.run(jitter: 0.0, attempts: "three") do
+    Ok(42)
+  end
+end

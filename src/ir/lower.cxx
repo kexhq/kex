@@ -3593,6 +3593,11 @@ struct Lowering {
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
+                        if (auto defaults = fnDefaults.find(qualKey);
+                            defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                            args.resize(defaults->second.size());
+                            fillDefaultSlots(qualKey, args, binds);
+                        }
                         int ar = static_cast<int>(args.size());
                         return wrapLets(binds, localCallExpr(it->second, std::move(args)));
                     }
@@ -3734,6 +3739,11 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
+                if (auto defaults = fnDefaults.find(qualKey);
+                    defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                    args.resize(defaults->second.size());
+                    fillDefaultSlots(qualKey, args, binds);
+                }
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, localCallExpr(it->second, std::move(args)));
             }
