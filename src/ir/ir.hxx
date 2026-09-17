@@ -234,6 +234,30 @@ struct FunDef {
     // always an accidental collision, never a legitimate overload, and must
     // be reported rather than silently merged or dropped (kexhq/kex#250).
     bool isFreeFunction = false;
+    // The `module X do ... end` path this definition was lowered from, when
+    // known (empty for a top-level, non-module-nested definition). Lets
+    // `lowerModules`'s bare-name redistribution notice when it is about to
+    // misfile a definition into some OTHER module's bucket: two DIFFERENT
+    // modules can each independently register the bare name "close"/"closed?"
+    // for a type they own, and only ONE registration can win the shared
+    // `definitions` map — without this, the LOSING module's own definition
+    // still got redirected to the WINNER's bucket by bare name alone, landing
+    // two unrelated definitions in one Core Erlang module and crashing
+    // `erlc` (kexhq/kex#360). A mismatch here means "route to MY OWN module
+    // under my own bare name instead," not "these are the same function."
+    std::string declaringModule;
+    // True for the shared, cross-owner dispatcher `makeDispatcher` (or its
+    // native-ADT-merge equivalent) builds for a method name multiple
+    // unrelated types answer. It has no `declaringModule` of its own — it is
+    // the runtime fallback for a call whose receiver's exact type isn't
+    // known statically, not any one owner's implementation — so it usually
+    // rides along peacefully in whichever bucket its bare name resolves to.
+    // The one case that needs this flag: that bucket ALSO turns out to hold
+    // an unrelated free function under the same bare name (kexhq/kex#360,
+    // e.g. `Net.Socket.TCP`'s own `close`). `mergeDuplicateFunctions` uses it
+    // to know which side of that collision to eject to the entry module
+    // instead of throwing — see its own doc comment.
+    bool isCollisionDispatcher = false;
 };
 
 struct Module {

@@ -1,0 +1,21 @@
+# kex: run-beam
+# kexhq/kex#360: importing both `Net.Socket` and `Net.HTTP.WebSocket` crashed
+# `erlc` outright — before running any code, even with no call to `close` or
+# `closed?` at all — because `Net.Socket.TCP`'s own `close`/`closed?` and the
+# cross-module dispatcher built for `Net.HTTP.Client`/`Net.HTTP.WebSocket.
+# Connection`'s own `close`/`closed?` all landed as separate, unmergeable
+# definitions in one compiled module. Exercises real calls on each colliding
+# type to also confirm each one still reaches its OWN implementation rather
+# than a neighbor's.
+using Net.Socket
+using Net.HTTP.WebSocket
+using Net.HTTP, only: [Client]
+
+main do
+  let listener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  IO.printLine(listener.closed?)
+  listener.close
+  let client = Client.open.try
+  client.close
+  IO.printLine("ok")
+end

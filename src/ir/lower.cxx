@@ -7647,6 +7647,7 @@ struct Lowering {
         // The arity the CALL was written at, context excluded.
         const int callArity = contextualOwners ? arity - 1 : arity;
         FunDef def; def.name = name; def.arity = arity;
+        def.isCollisionDispatcher = true;
         FunClause fc;
         std::vector<ExprPtr> fwdArgs;
         for (int i = 0; i < arity; i++) {
@@ -8025,6 +8026,129 @@ static auto continuesMethodGroup(
         return true;
     return methodDispatchTypes(first, receiverType) ==
            methodDispatchTypes(next, receiverType);
+}
+
+static auto unguardedCatchAll(const FunClause& c) -> bool {
+    return !c.guard &&
+        std::all_of(c.params.begin(), c.params.end(),
+            [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+}
+
+// Merge duplicate function definitions (same name + arity) by concatenating
+// their clauses. The prelude legitimately repeats a method across make blocks
+// for different types with different clause patterns (e.g. optional.kex
+// defines `or` for both Optional<X> and Result<X,E>); erlc needs a single
+// function with all the clauses unified, not two conflicting definitions.
+// Clauses arriving after an unguarded catch-all are unreachable (first
+// match wins) and are dropped — this happens when overlapping traits force
+// the same method body into two make blocks (e.g. Integer defines
+// identity/combine for both Monoid and Group).
+//
+// Also the fix for kexhq/kex#360: `lowerModules` redistributes a flat
+// module's functions into per-stdlib-module buckets by bare name, and two
+// UNRELATED receiver implementations from two different stdlib modules can
+// legitimately share a bare name + arity purely by accident (`Net.Socket.TCP`'s
+// own `close`/`closed?` and the cross-module dispatcher `close`/Client and
+// `Net.HTTP.WebSocket.Connection`'s own `closed?` collide this way) — landing
+// two separate, unmerged definitions in the SAME bucket, which `erlc` rejects
+// outright (`{key_exists, ...}` from `beam_ssa_throw`) before any code runs.
+// Applying this same merge to each bucket, exactly as already happens for the
+// flat module above, folds them into one correctly-ordered dispatcher instead.
+//
+// `ejectDispatcherConflicts`, when given, changes what happens on exactly
+// ONE of those collisions: a cross-owner dispatcher (`isCollisionDispatcher`)
+// landing on a free function's bare name. That combination can never merge
+// (a free function's clause has no discriminating guard) and normally throws
+// — correctly, since a free function and a make-block method sharing a bare
+// name is always an accidental collision the author needs to rename their
+// way out of (kexhq/kex#250). But a dispatcher isn't hand-written: it exists
+// ONLY because the same bare name legitimately belongs to several OTHER
+// owners too, and it is reachable from wherever it happens to be compiled —
+// so instead of throwing, the dispatcher is moved to `*ejectDispatcherConflicts`
+// (the entry module) rather than left fighting the free function for this
+// bucket's copy of the name.
+static auto mergeDuplicateFunctions(
+    std::vector<FunDef>& functions,
+    std::vector<FunDef>* ejectDispatcherConflicts = nullptr) -> void {
+    std::map<std::pair<std::string, int>, FunDef> merged;
+    for (auto& f : functions) {
+        auto key = std::make_pair(f.name, f.arity);
+        auto it = merged.find(key);
+        if (it == merged.end()) {
+            auto& fnc = f;
+            // Truncate clauses shadowed by an earlier catch-all within the
+            // same definition as well.
+            for (size_t i = 0; i < fnc.clauses.size(); i++)
+                if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size())
+                    fnc.clauses.resize(i + 1);
+            merged.emplace(key, std::move(fnc));
+        } else {
+            auto& existing = it->second;
+            // A free function can never legitimately share a bare name +
+            // arity with a RECEIVER method: unlike two receiver methods
+            // (which may legitimately reappear across make blocks or
+            // traits for different types, and are meant to be merged
+            // below), there is no relationship between a free function
+            // and a method that would make combining their clauses
+            // correct. Concatenating or silently dropping clauses here
+            // previously did whichever happened by construction order: a
+            // same-shaped receiver method clause (no discriminating
+            // guard, since it's the type's sole owner) looked identical
+            // to a plain free function's own clause, so the free
+            // function's body vanished and its callers silently invoked
+            // the OTHER definition instead — worse than the "undefined
+            // function" this was originally reported as (kexhq/kex#250).
+            // Report the collision instead.
+            //
+            // Restricted to free-vs-method (not free-vs-free): the BEAM
+            // REPL legitimately re-lowers an already-defined free
+            // function again across reloads as the session's cumulative
+            // source grows, which reaches here as two isFreeFunction
+            // entries for the SAME declaration — a real duplicate there,
+            // not a collision, and merging is harmless for it.
+            if (existing.isFreeFunction != f.isFreeFunction) {
+                if (ejectDispatcherConflicts &&
+                    (existing.isCollisionDispatcher || f.isCollisionDispatcher)) {
+                    auto& dispatcher =
+                        existing.isCollisionDispatcher ? existing : f;
+                    auto& keeper = existing.isCollisionDispatcher ? f : existing;
+                    ejectDispatcherConflicts->push_back(std::move(dispatcher));
+                    if (&keeper != &existing) existing = std::move(keeper);
+                    continue;
+                }
+                throw LowerError(
+                    "IR lower: `" + key.first + "/" +
+                    std::to_string(key.second) +
+                    "` names both a free function and a receiver method "
+                    "in this compilation unit — rename one of them");
+            }
+            // If the existing definition already ends with a catch-all
+            // but the incoming definition has specific patterns (e.g.
+            // ADT variant matches), insert the specific clauses BEFORE
+            // the catch-all so they get a chance to match first.
+            bool existingHasCatchAll = std::any_of(
+                existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+            if (existingHasCatchAll) {
+                bool incomingHasSpecific = std::any_of(
+                    f.clauses.begin(), f.clauses.end(),
+                    [&](const FunClause& c) { return !unguardedCatchAll(c); });
+                if (incomingHasSpecific) {
+                    auto catchAllIt = std::find_if(
+                        existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+                    for (auto& c : f.clauses) {
+                        if (!unguardedCatchAll(c))
+                            catchAllIt = existing.clauses.insert(catchAllIt, std::move(c)) + 1;
+                    }
+                }
+                continue;
+            }
+            existing.clauses.insert(existing.clauses.end(),
+                std::make_move_iterator(f.clauses.begin()),
+                std::make_move_iterator(f.clauses.end()));
+        }
+    }
+    functions.clear();
+    for (auto& [_, f] : merged) functions.push_back(std::move(f));
 }
 
 } // namespace
@@ -8742,6 +8866,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             auto def = L.lowerFunctionGroup(grp, "",
                                 it == L.moduleFunctions.end() ? grp.front()->name : it->second);
                             def.isFreeFunction = true;
+                            def.declaringModule = L.currentModulePath;
                             mod.functions.push_back(std::move(def));
                             grp.clear();
                         }
@@ -8758,7 +8883,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         std::vector<const ast::FunctionDef*> methods;
                         auto flushMethods = [&] {
                             if (!methods.empty()) {
-                                mod.functions.push_back(L.lowerMakeGroup(methods, typeName));
+                                auto def = L.lowerMakeGroup(methods, typeName);
+                                def.declaringModule = L.currentModulePath;
+                                mod.functions.push_back(std::move(def));
                                 methods.clear();
                             }
                         };
@@ -9178,6 +9305,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
             if (allAdt) {
                 FunDef merged; merged.name = name; merged.arity = arity;
+                merged.isCollisionDispatcher = true;
                 for (size_t i = 0; i < mod.functions.size(); ) {
                     auto& f = mod.functions[i];
                     std::string prefix = receiverImplementationPrefix(name);
@@ -9375,91 +9503,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     for (auto& acc : L.makeAccessors(definedFns, definedFnArities))
         mod.functions.push_back(std::move(acc));
 
-    // Merge duplicate function definitions (same name + arity) by concatenating
-    // their clauses. The prelude legitimately repeats a method across make blocks
-    // for different types with different clause patterns (e.g. optional.kex
-    // defines `or` for both Optional<X> and Result<X,E>); erlc needs a single
-    // function with all the clauses unified, not two conflicting definitions.
-    // Clauses arriving after an unguarded catch-all are unreachable (first
-    // match wins) and are dropped — this happens when overlapping traits force
-    // the same method body into two make blocks (e.g. Integer defines
-    // identity/combine for both Monoid and Group).
-    auto unguardedCatchAll = [](const FunClause& c) {
-        return !c.guard &&
-            std::all_of(c.params.begin(), c.params.end(),
-                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
-    };
-    {
-        std::map<std::pair<std::string, int>, FunDef> merged;
-        for (auto& f : mod.functions) {
-            auto key = std::make_pair(f.name, f.arity);
-            auto it = merged.find(key);
-            if (it == merged.end()) {
-                auto& fnc = f;
-                // Truncate clauses shadowed by an earlier catch-all within the
-                // same definition as well.
-                for (size_t i = 0; i < fnc.clauses.size(); i++)
-                    if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size())
-                        fnc.clauses.resize(i + 1);
-                merged.emplace(key, std::move(fnc));
-            } else {
-                auto& existing = it->second;
-                // A free function can never legitimately share a bare name +
-                // arity with a RECEIVER method: unlike two receiver methods
-                // (which may legitimately reappear across make blocks or
-                // traits for different types, and are meant to be merged
-                // below), there is no relationship between a free function
-                // and a method that would make combining their clauses
-                // correct. Concatenating or silently dropping clauses here
-                // previously did whichever happened by construction order: a
-                // same-shaped receiver method clause (no discriminating
-                // guard, since it's the type's sole owner) looked identical
-                // to a plain free function's own clause, so the free
-                // function's body vanished and its callers silently invoked
-                // the OTHER definition instead — worse than the "undefined
-                // function" this was originally reported as (kexhq/kex#250).
-                // Report the collision instead.
-                //
-                // Restricted to free-vs-method (not free-vs-free): the BEAM
-                // REPL legitimately re-lowers an already-defined free
-                // function again across reloads as the session's cumulative
-                // source grows, which reaches here as two isFreeFunction
-                // entries for the SAME declaration — a real duplicate there,
-                // not a collision, and merging is harmless for it.
-                if (existing.isFreeFunction != f.isFreeFunction)
-                    throw LowerError(
-                        "IR lower: `" + key.first + "/" +
-                        std::to_string(key.second) +
-                        "` names both a free function and a receiver method "
-                        "in this compilation unit — rename one of them");
-                // If the existing definition already ends with a catch-all
-                // but the incoming definition has specific patterns (e.g.
-                // ADT variant matches), insert the specific clauses BEFORE
-                // the catch-all so they get a chance to match first.
-                bool existingHasCatchAll = std::any_of(
-                    existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
-                if (existingHasCatchAll) {
-                    bool incomingHasSpecific = std::any_of(
-                        f.clauses.begin(), f.clauses.end(),
-                        [&](const FunClause& c) { return !unguardedCatchAll(c); });
-                    if (incomingHasSpecific) {
-                        auto catchAllIt = std::find_if(
-                            existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
-                        for (auto& c : f.clauses) {
-                            if (!unguardedCatchAll(c))
-                                catchAllIt = existing.clauses.insert(catchAllIt, std::move(c)) + 1;
-                        }
-                    }
-                    continue;
-                }
-                existing.clauses.insert(existing.clauses.end(),
-                    std::make_move_iterator(f.clauses.begin()),
-                    std::make_move_iterator(f.clauses.end()));
-            }
-        }
-        mod.functions.clear();
-        for (auto& [_, f] : merged) mod.functions.push_back(std::move(f));
-    }
+    // Merge duplicate function definitions (same name + arity) by
+    // concatenating their clauses — see mergeDuplicateFunctions's own doc
+    // comment for why this is needed and how clause ordering is preserved.
+    mergeDuplicateFunctions(mod.functions);
     // Publish the source arity of every function that takes hidden trait
     // dictionaries, for the call sites that cannot build them (see
     // makeDictionaryWrapper). Never shadows a real definition at that arity.
@@ -9893,23 +9940,55 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             continue;
         }
         const auto& def = found->second;
+        // `definitions[bareName]` can only remember ONE winner for a bare
+        // name — the module whose registration happened to run last. When
+        // THIS function actually belongs to a DIFFERENT module (stamped at
+        // the point it was lowered, while its own `module X do ... end`
+        // path was still known), routing it to the winner's bucket by bare
+        // name alone would misfile someone else's `close`/`closed?` next to
+        // it: two unrelated definitions, unmergeable, in one Core Erlang
+        // module (kexhq/kex#360). It still belongs under its OWN bare name —
+        // nothing else in its own module's bucket should also claim that
+        // name — just in its own module rather than the bare-name winner's.
+        if (!fn.declaringModule.empty() && fn.declaringModule != def.path) {
+            moduleBuckets[fn.declaringModule].push_back(std::move(fn));
+            continue;
+        }
         fn.name = def.sourceName;
         fn.exported = def.exported;
         moduleBuckets[def.path].push_back(std::move(fn));
     }
-    ModuleTargets globalTargets;
-    for (const auto& fn : globalFunctions)
-        globalTargets[fn.name] = {flat.name, fn.name};
     flat.functions = std::move(globalFunctions);
 
-    result.push_back(std::move(flat));
+    std::vector<Module> stdlibModules;
     for (const auto& path : modulePaths) {
         Module module;
         module.name = "Kex." + path;
-        if (auto it = moduleBuckets.find(path); it != moduleBuckets.end())
+        if (auto it = moduleBuckets.find(path); it != moduleBuckets.end()) {
             module.functions = std::move(it->second);
-        result.push_back(std::move(module));
+            // Two functions from UNRELATED stdlib modules can land in the
+            // same bucket sharing a bare name + arity purely by accident: the
+            // redistribution above routes by bare name alone, and a name
+            // this module's own free function owns (registered so a UFCS
+            // call reaches it directly) can coincide with a same-named,
+            // same-arity receiver method or cross-module dispatcher that
+            // merely happens to also carry that bare name (kexhq/kex#360).
+            // Left unmerged, both land in this module's Core Erlang output
+            // as separate definitions and `erlc` rejects the module
+            // outright, before any code runs. A dispatcher that loses this
+            // fight is ejected into the flat/entry module instead of
+            // throwing — see mergeDuplicateFunctions's own doc comment.
+            mergeDuplicateFunctions(module.functions, &flat.functions);
+        }
+        stdlibModules.push_back(std::move(module));
     }
+    // Built AFTER ejection above so a dispatcher moved into the flat module
+    // at the last minute is still a valid target for a call rewritten below.
+    ModuleTargets globalTargets;
+    for (const auto& fn : flat.functions)
+        globalTargets[fn.name] = {flat.name, fn.name};
+    result.push_back(std::move(flat));
+    for (auto& module : stdlibModules) result.push_back(std::move(module));
 
     // What each module in this unit actually ends up defining, so a redirect
     // can be checked against it rather than trusting the name alone.
