@@ -1612,17 +1612,24 @@ auto TypeChecker::annotationToSignature(
     -> std::optional<Signature> {
     if (!ann.type) return std::nullopt;
     // Unroll `A -> B -> C` (right-nested FunctionType) into params=[A,B], result=C.
+    // `A -> B -> C` and `A -> (B -> C)` build the identical right-nested
+    // FunctionType tree — the parens are otherwise transparent grouping — so
+    // the two-parameter curry and the one-parameter function-returning-a-
+    // function are indistinguishable without `parenthesized`. It only
+    // matters once we are already inside the chain: the ANNOTATION's own
+    // outermost node may itself be a redundant `(A -> B)`, which unrolls
+    // exactly like unparenthesized `A -> B` would.
     std::unordered_map<std::string, TypePtr> ownGenericVars;
     auto& genericVars = sharedGenericVars ? *sharedGenericVars : ownGenericVars;
     std::vector<TypePtr> params;
     const ast::TypeExpr* cur = ann.type.get();
+    bool firstNode = true;
     while (cur) {
-        if (auto* ft = std::get_if<ast::FunctionType>(&cur->kind)) {
-            params.push_back(ft->param ? resolveTypeExpr(*ft->param, genericVars) : Type::unknown());
-            cur = ft->result.get();
-        } else {
-            break;
-        }
+        auto* ft = std::get_if<ast::FunctionType>(&cur->kind);
+        if (!ft || (!firstNode && cur->parenthesized)) break;
+        params.push_back(ft->param ? resolveTypeExpr(*ft->param, genericVars) : Type::unknown());
+        cur = ft->result.get();
+        firstNode = false;
     }
     TypePtr result = cur ? resolveTypeExpr(*cur, genericVars) : Type::unknown();
     if (params.empty()) {
@@ -2419,12 +2426,17 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
+            // Same ambiguity as annotationToSignature: `A -> B -> C` and
+            // `A -> (B -> C)` build the identical right-nested FunctionType,
+            // so once inside this chain, a parenthesized result marks a
+            // genuine function-typed RESULT rather than another curried
+            // parameter, and stops the unroll.
             std::vector<TypePtr> params;
             params.push_back(node.param
                 ? resolveTypeExpr(*node.param, genericVars)
                 : Type::unknown());
             const ast::TypeExpr* resultExpr = node.result.get();
-            while (resultExpr) {
+            while (resultExpr && !resultExpr->parenthesized) {
                 const auto* next =
                     std::get_if<ast::FunctionType>(&resultExpr->kind);
                 if (!next) break;

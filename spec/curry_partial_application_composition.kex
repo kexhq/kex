@@ -1,0 +1,41 @@
+# kex: run-beam
+#
+# `~name(a)` on a 3+-arity function returns a value still needing more
+# arguments; calling that value across SEPARATE, later calls (not all the
+# remaining arguments in one call) used to fail on both backends — the
+# tree-walker looked up an unbound parameter, and BEAM tried to call a
+# fixed-arity fun with too few args — because the partial's "fill the rest"
+# closure always applied straight through once ANY further args arrived,
+# never checking whether that was actually enough.
+add3 : Integer -> Integer -> Integer -> Integer
+let add3(a, b, c) = a + b + c
+
+step1 : Integer -> (Integer -> (Integer -> Integer))
+let step1(a) = ~add3(a)
+
+# A bare `~name` capture (no argument group at all) is unaffected: it stays
+# one flat function of its own arity, not curried one argument at a time —
+# existing code relies on calling it with everything at once (a router
+# hands a 2-arg handler both its request and context together).
+callBoth : (Integer -> Integer -> Integer) -> Integer
+let callBoth(f) = f(10, 20)
+
+add2 : Integer -> Integer -> Integer
+let add2(a, b) = a + b
+
+main do
+  let x = step1(1)
+  let y = x(2)
+  IO.printLine("${y(3)}")
+
+  # explicit partial capture, still called across separate steps
+  let partial = ~add3(1, 2)
+  IO.printLine("${partial(3)}")
+
+  # a placeholder-filled capture is unaffected (single fill call, as before)
+  let sub5 = ~(-)(_, 5)
+  IO.printLine("${sub5(20)}")
+
+  # bare capture keeps its own flat arity
+  IO.printLine("${callBoth(~add2)}")
+end

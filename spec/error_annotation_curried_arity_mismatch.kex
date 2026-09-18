@@ -1,0 +1,9 @@
+# A genuinely 2-parameter curried annotation still has to warn when the
+# definition only takes 1 — the parenthesization fix for kexhq/kex#366 must
+# not swallow this real mismatch along with the false positive it targets.
+add : Integer -> Integer -> Integer
+let add(a) = a
+
+main do
+  IO.printLine(add(1, 2))
+end

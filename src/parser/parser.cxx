@@ -1442,7 +1442,8 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     if (elements.size() == 1) {
       auto grouped = std::move(elements[0]);
       grouped->location.startOffset = type->location.startOffset;
-      return complete(std::move(grouped)); // just grouping
+      grouped->parenthesized = true; // just grouping, but note it was there
+      return complete(std::move(grouped));
     }
     type->kind = ast::TupleType{std::move(elements)};
     return complete(std::move(type));
@@ -1992,6 +1993,82 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       call->kind = ast::MethodCall{std::move(expr), "get", std::move(args), {},
                                    std::nullopt,    false};
       expr = complete(std::move(call));
+      continue;
+    }
+
+    // Direct call on an arbitrary expression's result: expr(args). Only a
+    // NAME can head a FunctionCall (`f(x)`) or a receiver.method a MethodCall
+    // — neither has a slot for "the callee is this whole expression" — so
+    // `g(~id)(10)` desugars to a hidden local bound to the callee, called by
+    // that name, reusing the call-a-local-function-value path that already
+    // works: `do let _chainN = expr; _chainN(args) end`. Checked by BYTE
+    // ADJACENCY (the `(` starts exactly where the previously consumed token
+    // ends, no space/comment/newline of any width between them), not by
+    // source line: a same-line check is not narrow enough, since Kex has no
+    // statement separator at all inside a `do...end` body — `do
+    // failures.push!(error) () end` (real code, tey/src/tey/manifest.kex) is
+    // two statements on one line, a mutating call followed by an unrelated
+    // bare `()`, and a same-line check wrongly chained the second onto the
+    // first's result ("'_chainN' is not callable"). Only truly adjacent
+    // tokens are unambiguous: `f(1)(2)(3)` (a real chain) is always written
+    // with no space, while two independent statements always have at least
+    // one separating character (space or newline) between them in practice.
+    if (check(TokenType::LParen) && m_pos > 0
+        && m_tokens[m_pos - 1].endOffset == peek().startOffset) {
+      // This `(`'s own offset, not the wrapped expr's: `f(1)(2)(3)` chains
+      // three times over the SAME base expr's (relocated, post-interpolation)
+      // start position, which a per-Parser counter can't tell apart either —
+      // string interpolation holes are each their own fresh Parser (see
+      // parseInterpolatedBody), so two SEPARATE `${f(a)(b)}` interpolations
+      // would otherwise both mint `_chain0` and collide on a real, distinct
+      // name. The paren position is unique per call site either way.
+      const auto callParenOffset = peek().startOffset;
+      advance();
+      std::vector<ast::ExprPtr> args;
+      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+      if (!check(TokenType::RParen)) {
+        do {
+          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+               check(TokenType::Type) || check(TokenType::Match) ||
+               check(TokenType::Loop)) &&
+              peekNext().type == TokenType::Colon) {
+            auto argName = advance().value;
+            advance(); // :
+            namedArgs.push_back({argName, parseExpr()});
+          } else {
+            args.push_back(parseExpr());
+          }
+        } while (match(TokenType::Comma));
+      }
+      expect(TokenType::RParen, "Expected ')'");
+
+      auto startOffset = expr->location.startOffset;
+      auto calleeName = "_chain" + std::to_string(callParenOffset);
+
+      auto pattern = std::make_unique<ast::Pattern>();
+      pattern->location = expr->location;
+      pattern->kind = ast::VarPattern{calleeName};
+
+      auto binding = std::make_unique<ast::Expr>();
+      binding->location = expr->location;
+      binding->kind =
+          ast::LetExpr{std::move(pattern), std::move(expr), std::nullopt};
+
+      auto call = std::make_unique<ast::Expr>();
+      call->location = currentLocation();
+      call->location.startOffset = startOffset;
+      call->kind = ast::FunctionCall{calleeName, std::move(args),
+                                     std::move(namedArgs), std::nullopt};
+
+      std::vector<ast::ExprPtr> body;
+      body.push_back(std::move(binding));
+      body.push_back(std::move(call));
+
+      auto block = std::make_unique<ast::Expr>();
+      block->location = currentLocation();
+      block->location.startOffset = startOffset;
+      block->kind = ast::BlockExpr{std::move(body)};
+      expr = complete(std::move(block));
       continue;
     }
 

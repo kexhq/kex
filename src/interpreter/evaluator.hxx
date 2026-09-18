@@ -265,6 +265,15 @@ private:
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
     auto callFunction(const std::string& name, std::vector<ValuePtr> args,
                       NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    // Applies a `~name(...)` capture once its bound args are known, or —
+    // when that is still fewer than `arity` calls for (-1: unknown arity,
+    // always applies) — hands back ANOTHER partial value that closes over
+    // them and recurses here on its own next call. `~add3(a)` called via a
+    // plain `x(2)` needs this to eventually hand back a value still waiting
+    // on a third argument, not run add3 with one short.
+    auto makeCurriedCall(std::string fnName, int arity, bool isOp,
+                         bool isUnaryOp, TokenType opToken,
+                         std::vector<ValuePtr> boundArgs) -> ValuePtr;
     auto checkDeadline() const -> void;
     auto findNamedClause(const std::string& functionName,
                          const NamedArgs& namedArgs) const

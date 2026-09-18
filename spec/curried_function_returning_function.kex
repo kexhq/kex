@@ -1,0 +1,15 @@
+# A declared function whose one parameter is itself a function, returning
+# another function — (A -> B) -> (C -> D) — parses to the identical
+# right-nested FunctionType as an unparenthesized 2-parameter curry
+# (A -> B -> C -> D would too), so it used to get flattened into one and
+# rejected against its own honest, 1-parameter definition (kexhq/kex#366).
+mk : (Integer -> Integer) -> (Integer -> Integer)
+let mk(f) = do |x| f(x) + 1 end
+
+id : Integer -> Integer
+let id(x) = x
+
+main do
+  let inced = mk(id)
+  IO.printLine("${inced(10)}")
+end

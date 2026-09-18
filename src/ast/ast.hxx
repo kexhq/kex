@@ -93,6 +93,14 @@ struct TypeQuery {
 
 struct TypeExpr {
     SourceLocation location;
+    // Whether the source wrapped this node in its own `(...)`. Grouping
+    // parens are otherwise transparent — `(A -> B)` parses to the same
+    // FunctionType as `A -> B` — so a nested `-> (C -> D)` result and a
+    // naturally right-associated `-> C -> D` chain are indistinguishable
+    // without this: both currying two parameters (which annotationToSignature
+    // must unroll) and one parameter returning a function (which it must
+    // not) parse to the identical FunctionType{param, result} shape.
+    bool parenthesized = false;
     std::variant<
         TypeName,
         GenericType,
