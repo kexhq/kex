@@ -508,7 +508,7 @@ spec-tey: build
 # regression in the launcher.
 .PHONY: test-tey-launcher
 test-tey-launcher: build
-	@python3 tools/test-tey-pty-prompt.py "$(KEX)" tey/bin/tey
+	@ruby tools/test-tey-pty-prompt.rb "$(KEX)" tey/bin/tey
 
 # Compiling Tey is itself a test: it is written in Kex, so a change to the
 # compiler can break it, and until this existed the FIRST thing to find out
