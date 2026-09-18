@@ -1276,9 +1276,27 @@ auto kexCacheBase() -> std::optional<std::filesystem::path> {
 // dependency — 0.4 s of a 2.3 s warm build of Tey. The toolchain part covers
 // the stdlib sources as well, which a checkout can change without a new
 // revision.
+//
+// It also has to cover the compiler BINARY itself (kexhq/kex#372): `main() +
+// kGitRevision` alone doesn't move when this executable is rebuilt from
+// uncommitted local changes with the git HEAD unchanged — an ordinary state
+// while iterating on the compiler — so a rebuild with real behavioral
+// changes could otherwise silently keep serving `.beam` artifacts (and a
+// `mainArity`) from a stale prior build. Size + mtime, not a content hash:
+// this fingerprint is computed on every invocation, and hashing a 40+ MB
+// binary on every `kex --run` would cost far more than the cache saves.
 auto toolchainFingerprint() -> const std::string & {
   static const std::string fingerprint = [] {
     std::string text = kex::versionNumber() + "\n" + kex::kGitRevision + "\n";
+    if (const auto exePath = kex::executablePath(); !exePath.empty()) {
+      std::error_code ec;
+      const auto size = std::filesystem::file_size(exePath, ec);
+      const auto modified =
+          std::filesystem::last_write_time(exePath, ec).time_since_epoch().count();
+      text += "self:" + exePath.string() + "|" +
+              std::to_string(static_cast<unsigned long long>(size)) + "|" +
+              std::to_string(static_cast<long long>(modified)) + "\n";
+    }
     for (const auto &file : kex::standardLibrarySourceFiles()) {
       std::error_code ec;
       const auto size = std::filesystem::file_size(file, ec);

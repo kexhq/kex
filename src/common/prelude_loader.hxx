@@ -21,23 +21,28 @@
 
 namespace kex {
 
-inline auto executableDirectory() -> std::filesystem::path {
+inline auto executablePath() -> std::filesystem::path {
 #if defined(__APPLE__)
     uint32_t size = 1024;
     std::vector<char> buffer(size);
     if (_NSGetExecutablePath(buffer.data(), &size) != 0)
         buffer.resize(size);
     if (_NSGetExecutablePath(buffer.data(), &size) == 0)
-        return std::filesystem::weakly_canonical(buffer.data()).parent_path();
+        return std::filesystem::weakly_canonical(buffer.data());
 #elif defined(__linux__)
     std::vector<char> buffer(4096);
     const auto size = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
     if (size > 0) {
         buffer[static_cast<size_t>(size)] = '\0';
-        return std::filesystem::weakly_canonical(buffer.data()).parent_path();
+        return std::filesystem::weakly_canonical(buffer.data());
     }
 #endif
     return {};
+}
+
+inline auto executableDirectory() -> std::filesystem::path {
+    const auto path = executablePath();
+    return path.empty() ? path : path.parent_path();
 }
 
 // All standard-library sources share one root. `prelude.kex` is the manifest

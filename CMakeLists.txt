@@ -760,3 +760,14 @@ target_include_directories(multi_module_check_cli_test PRIVATE tests)
 target_compile_definitions(multi_module_check_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(multi_module_check_cli_test kex)
 add_test(NAME multi_module_check_cli_test COMMAND multi_module_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Regression test for #372: the `--run` cache used to key its fingerprint on
+# a git revision string and the stdlib sources' size/mtime only, never on the
+# `kex` binary itself — so a rebuild from uncommitted compiler changes with
+# the git HEAD unchanged could keep serving a stale cached `.beam`/mainArity.
+add_executable(run_cache_cli_test tests/run_cache_cli_test.cxx)
+target_link_libraries(run_cache_cli_test PRIVATE kex_lib)
+target_include_directories(run_cache_cli_test PRIVATE tests)
+target_compile_definitions(run_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(run_cache_cli_test kex)
+add_test(NAME run_cache_cli_test COMMAND run_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
