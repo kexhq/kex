@@ -369,6 +369,15 @@ jobs:
       - name: Type-check Tey
         run: make -C tey check KEX="$(pwd)/build/kex"
 
+      # kexhq/kex#279 regression guard: only a real pty reproduces it (a
+      # pipe's stdin is real, open, data-bearing — the bug is specifically
+      # backgrounded-with-no-controlling-terminal). Runs its own throwaway
+      # compiled program rather than driving `tey new`, so it does not
+      # depend on Tey's own (separately changing, separately built below)
+      # source compiling that day.
+      - name: Test tey launcher's stdin/pty handling
+        run: make -o build test-tey-launcher
+
       # Compiling Tey is the next assertion: it either builds with this
       # compiler or it does not.
       - name: Build Tey
