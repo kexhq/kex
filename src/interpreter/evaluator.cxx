@@ -3068,10 +3068,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             bool isOp = node.isOperator && opIt != opTokens.end();
             TokenType opToken = isOp ? opIt->second : TokenType::Plus;
 
-            // Partial: return a lambda that fills open slots (or appends) then calls.
+            // Partial: return a lambda that fills open slots (or appends),
+            // then applies (or, still short of arity, partially applies
+            // again — makeCurriedCall).
             auto lambda = std::make_shared<Value>();
             lambda->data = FunctionValue{"~" + fnName,
-                [this, fnName, slots, isOp, isUnaryOp, opToken](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
+                [this, fnName, slots, isOp, isUnaryOp, opToken, arity](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
                     std::vector<ValuePtr> finalArgs;
                     size_t fillIdx = 0;
                     for (const auto& s : slots) {
@@ -3082,11 +3084,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     while (fillIdx < fillArgs.size())
                         finalArgs.push_back(fillArgs[fillIdx++]);
-                    if (isUnaryOp && finalArgs.size() >= 1)
-                        return evalUnaryOp(TokenType::Bang, finalArgs[0], {});
-                    if (isOp && finalArgs.size() >= 2)
-                        return evalBinaryOp(opToken, finalArgs[0], finalArgs[1], {});
-                    return callFunction(fnName, std::move(finalArgs), {}, {});
+                    return makeCurriedCall(fnName, arity, isOp, isUnaryOp, opToken,
+                                           std::move(finalArgs));
                 }};
             return lambda;
         }
@@ -3539,6 +3538,27 @@ auto Evaluator::structuredTypeValue(const semantic::StructuredType& type)
         {"args", Value::list(std::move(args))},
         {"pure", Value::boolean(type.pure)},
     });
+}
+
+auto Evaluator::makeCurriedCall(std::string fnName, int arity, bool isOp,
+                                bool isUnaryOp, TokenType opToken,
+                                std::vector<ValuePtr> boundArgs) -> ValuePtr {
+    if (arity < 0 || static_cast<int>(boundArgs.size()) >= arity) {
+        if (isUnaryOp && !boundArgs.empty())
+            return evalUnaryOp(TokenType::Bang, boundArgs[0], {});
+        if (isOp && boundArgs.size() >= 2)
+            return evalBinaryOp(opToken, boundArgs[0], boundArgs[1], {});
+        return callFunction(fnName, std::move(boundArgs), {}, {});
+    }
+    auto lambda = std::make_shared<Value>();
+    lambda->data = FunctionValue{"~" + fnName,
+        [this, fnName, arity, isOp, isUnaryOp, opToken,
+         boundArgs = std::move(boundArgs)](std::vector<ValuePtr> more) mutable -> ValuePtr {
+            auto next = boundArgs;
+            for (auto& v : more) next.push_back(std::move(v));
+            return makeCurriedCall(fnName, arity, isOp, isUnaryOp, opToken, std::move(next));
+        }};
+    return lambda;
 }
 
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,

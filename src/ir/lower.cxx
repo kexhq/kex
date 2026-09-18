@@ -2158,18 +2158,50 @@ struct Lowering {
             return wrapLets(binds, buildCall(std::move(args)));
         }
 
-        // Partial: a fresh param per open slot, plus trailing params for any
-        // arity beyond the slots written (so `~add(1)` on add/2 still takes
-        // one more arg).
+        // Partial: a fresh param per open slot, plus params for any arity
+        // beyond the slots written. A bare `~name` (no argument group at
+        // all) keeps every trailing param on ONE flat lambda — it captures
+        // the function AS A VALUE, so existing code calling it with the
+        // callee's own natural arity in one go (a router handing a 2-arg
+        // route handler both its request and context together, say) must
+        // keep working. An EXPLICIT partial call (`~add3(a)`, one argument
+        // group actually written) instead gets one single-param lambda PER
+        // remaining arity, innermost-out — an Erlang fun's arity is fixed,
+        // so a flat lambda here could only ever be filled by one later call
+        // supplying every trailing argument together, while `~add3(a)` on a
+        // 3-arity function needs the other two appliable one at a time
+        // across SEPARATE calls (`x(2)` then `y(3)`) — the same shape the
+        // open-slot lambda already has for `~(-)(_, 5)`, filled by one
+        // `sub5(20)`.
         int trailing = (arity >= 0) ? std::max(0, arity - static_cast<int>(slots.size())) : 0;
+        const bool curryTrailing = !n.argGroups.empty();
         Lambda lam;
         std::vector<ExprPtr> finalArgs;
         for (auto& s : slots) {
             if (s.open) { std::string p = fresh("P"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
             else finalArgs.push_back(std::move(s.val));
         }
-        for (int i = 0; i < trailing; i++) { std::string p = fresh("T"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
-        lam.body = buildCall(std::move(finalArgs));
+        if (!curryTrailing) {
+            for (int i = 0; i < trailing; i++) { std::string p = fresh("T"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
+            lam.body = buildCall(std::move(finalArgs));
+            auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
+            return wrapLets(binds, std::move(ex));
+        }
+        std::vector<std::string> trailingParams;
+        for (int i = 0; i < trailing; i++) trailingParams.push_back(fresh("T"));
+        for (const auto& p : trailingParams) finalArgs.push_back(var(p));
+        ExprPtr body = buildCall(std::move(finalArgs));
+        for (auto it = trailingParams.rbegin(); it != trailingParams.rend(); ++it) {
+            Lambda inner;
+            inner.params.push_back(*it);
+            inner.body = std::move(body);
+            auto innerEx = std::make_unique<Expr>();
+            innerEx->node = std::move(inner);
+            body = std::move(innerEx);
+        }
+        if (lam.params.empty())
+            return wrapLets(binds, std::move(body));
+        lam.body = std::move(body);
         auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
         return wrapLets(binds, std::move(ex));
     }
