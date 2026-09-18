@@ -1,0 +1,63 @@
+# kex: run-beam
+#
+# kexhq/kex#370: a server-accepted WebSocket connection, stashed away by
+# its route handler and pushed to from a THIRD process while the client
+# is idle (hasn't sent anything since upgrading), used to hang for ~30s —
+# `server_loop`'s frame reading was a blocking `gen_tcp:recv` that
+# couldn't service a queued `{send, _}` request from any other process —
+# and then report the connection closed even though the client never
+# disconnected. The push below must reach the idle client immediately,
+# not after a timeout.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+record Registry do
+  sockets : [Connection] = []
+end
+
+serving Registry do
+  foul slot join(socket: Connection) -> Void do
+    new.sockets = [socket | @sockets]
+    return new
+  end
+
+  foul slot pingAll() -> Void do
+    @sockets.each { |socket| socket.send(Text("ping")).try }
+    return this
+  end
+end
+
+foul socketRoute(registry: Server<Registry>, request: Request<Binary>, context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|
+  let handler : Connection -> Void = { |socket|
+    registry.join(socket)
+    match socket.receiveMessage.try do
+      _ => Void
+    end
+  }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let registry = Process.spawn(Registry {})
+  let router = Router.build.get("/socket", { |request, context| socketRoute(registry, request, context) })
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+
+  let socket = WebSocket.connect("ws://127.0.0.1:${port}/socket").try
+
+  # The point of this spec: pinging an idle connection from a process
+  # other than its own handler must not block on the client speaking
+  # first, and must not tear the connection down as a side effect.
+  registry.pingAll()
+
+  match socket.receiveMessage.try do
+    Text(text) => assert(text == "ping", "the registry's push should reach the idle client")
+    other => assert(false, "expected the pushed ping, got ${other}")
+  end
+
+  socket.close
+  let shutdown = server.stop.try
+  IO.printLine("ok")
+end
