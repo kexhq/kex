@@ -38,6 +38,7 @@ help:
 	@echo "  make build-tey    Compile Tey with the freshly built kex"
 	@echo "  make tey-run      Write ./tey-run, a Tey launcher for this checkout"
 	@echo "  make spec-tey     Run Tey own spec suite (requires erlc)"
+	@echo "  make test-tey-launcher  Test tey/bin/tey's own stdin/pty handling"
 	@echo "  make docs         Build the docs site for this checkout into ../kdocs"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
@@ -493,6 +494,21 @@ spec-tey: build
 		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
 	done; \
 	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
+# kexhq/kex#279: `tey/bin/tey` backgrounds `erl` (so a terminal's Ctrl+C can
+# become the SIGTERM that runs kex_child_guard), and per POSIX an
+# asynchronous list's stdin is /dev/null unless the command redirects it
+# explicitly — so every interactive prompt Tey has silently took its
+# default, even on a real terminal, until the launcher script redirected its
+# own real stdin back in. Nothing that calls into kex_lib directly (every
+# other test here) exercises tey/bin/tey's own process plumbing at all, and
+# a pipe does not reproduce the bug either — only a real pty does. Compiles
+# its own two-line throwaway program rather than driving `tey new`, so it
+# does not need a working Tey build (build-tey, below) to catch a stdin
+# regression in the launcher.
+.PHONY: test-tey-launcher
+test-tey-launcher: build
+	@ruby tools/test-tey-pty-prompt.rb "$(KEX)" tey/bin/tey
 
 # Compiling Tey is itself a test: it is written in Kex, so a change to the
 # compiler can break it, and until this existed the FIRST thing to find out

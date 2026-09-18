@@ -65,9 +65,19 @@ if [ -n "${TEY_ERL:-}" ]; then ERL=$TEY_ERL; fi
 #
 # Neither half works alone: without `+Bi` the VM dies on the break path before
 # the SIGTERM lands, and without the trap nothing sends a SIGTERM at all.
+#
+# Backgrounding has its own cost: POSIX says an asynchronous list's stdin is
+# `/dev/null` unless the command redirects it explicitly (a script, here, has
+# job control disabled). Without `<&3` below, every interactive prompt Tey
+# has (`Tey.Cli.askLibrary`, `tey new`'s own, `Tey.Generator`) reads `eof` at
+# once and silently takes its default, "on a real terminal", `tey new` prints
+# its question and answers it before anyone can (kexhq/kex#279). `exec 3<&0`
+# saves the launcher's real stdin to fd 3 before it would otherwise be lost,
+# so the backgrounded VM can be handed it back explicitly.
+exec 3<&0
 "$ERL" +Bi -noshell -pa "$TEY_EBIN" \
   -eval 'io:setopts(standard_io, [{encoding, unicode}]), io:setopts(standard_error, [{encoding, unicode}]), case code:ensure_loaded(kex_main) of {error, LoadErr} -> io:format(standard_error, "tey: cannot load kex_main from ~ts (~p).~nThis usually means tey was built with a newer Erlang/OTP than the one running it (~s). Set TEY_ERL to the erl that built it, or reinstall.~n", [os:getenv("TEY_EBIN", "?"), LoadErr, erlang:system_info(otp_release)]), halt(1); _ -> ok end, try kex_main:main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) catch _:Reason:_ -> io:format(standard_error, "tey: ~p~n", [Reason]), halt(1) end' \
-  -extra "$@" &
+  -extra "$@" <&3 &
 tey_vm=$!
 trap 'kill -TERM "$tey_vm" 2>/dev/null' INT TERM HUP QUIT
 # `wait` returns 128+signal if the shell itself was interrupted; wait again so
