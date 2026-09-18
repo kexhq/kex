@@ -133,55 +133,179 @@ accept(Socket, Buffered, HandlerFun, Selected) ->
     ConnPid = self(),
     HandlerPid = spawn(fun() -> run_handler(HandlerFun, ConnPid) end),
     Monitor = erlang:monitor(process, HandlerPid),
-    server_loop(Transport, Buffered, none, ?DEFAULT_MAX_MESSAGE, Selected, HandlerPid, Monitor, false).
+    server_loop(Transport, Buffered, none, ?DEFAULT_MAX_MESSAGE, Selected, HandlerPid, Monitor, false, none).
 
 run_handler(HandlerFun, ConnPid) ->
     _ = HandlerFun({'Net.HTTP.WebSocket.Connection', ConnPid}),
     ok.
 
-server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed) ->
+% `Pending` is `none` or the `{From, Ref}` of a `receive_message` request
+% that couldn't be answered from `Buffer` alone. Rather than blocking this
+% process inside `gen_tcp:recv` while it waits for more bytes — which
+% would leave it unable to service a `{send, _}` (or any other) request
+% queued in its own mailbox by some other process holding the same
+% connection (kexhq/kex#370) — it arms the socket with `{active, once}`
+% and folds the resulting `{tcp, ...}` / `{tcp_closed, ...}` /
+% `{tcp_error, ...}` messages into this same `receive`, alongside the
+% existing `{call, ...}` clauses. A `receive_message` request is always
+% tried against the already-buffered bytes first (`server_try_receive`),
+% so a connection that already has a full frame buffered — or ever will,
+% from the fixed `Buffered` handed in by `accept/4` — never touches the
+% socket at all.
+server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending) ->
     receive
         {call, From, Ref, {send, _}} when Closed ->
             From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
         {call, From, Ref, {send, Message}} ->
             Reply = send_message(Transport, server, Message, Maximum),
             From ! {Ref, Reply},
             case Reply of
                 {'Error', _} ->
                     transport_close(Transport),
-                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true);
-                _ -> server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed)
+                    reply_pending_closed(Pending),
+                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
+                _ -> server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending)
             end;
         {call, From, Ref, receive_message} when Closed ->
             From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
         {call, From, Ref, receive_message} ->
-            case receive_message(Transport, server, Buffer, Fragment, Maximum) of
-                {Reply, NextBuffer, NextFragment, continue} ->
+            case server_try_receive(Transport, Buffer, Fragment, Maximum) of
+                {done, {Reply, NextBuffer, NextFragment, continue}} ->
                     From ! {Ref, Reply},
-                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed);
-                {Reply, NextBuffer, _, stop} ->
+                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
+                {done, {Reply, NextBuffer, _, stop}} ->
                     From ! {Ref, Reply},
-                    server_loop(Transport, NextBuffer, none, Maximum, Selected, HandlerPid, Monitor, true)
+                    server_loop(Transport, NextBuffer, none, Maximum, Selected, HandlerPid, Monitor, true, none);
+                {need_more, NextBuffer, NextFragment} ->
+                    ok = inet:setopts(element(2, Transport), [{active, once}]),
+                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, {From, Ref})
             end;
         {call, From, Ref, session} ->
             From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed);
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
         {call, From, Ref, close} ->
             case Closed of
                 false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
                 true -> ok
             end,
             From ! {Ref, 'Kex.Unit'},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true);
+            reply_pending_closed(Pending),
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
+        {tcp, _Socket, Data} ->
+            NextBuffer = <<Buffer/binary, Data/binary>>,
+            case Pending of
+                none ->
+                    % No request is waiting on this data (the socket
+                    % should only be armed while one is), but handle it
+                    % defensively rather than assume the invariant holds:
+                    % buffer it for whenever the next receive_message
+                    % request comes in.
+                    server_loop(Transport, NextBuffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
+                {From, Ref} ->
+                    case server_try_receive(Transport, NextBuffer, Fragment, Maximum) of
+                        {done, {Reply, RestBuffer, NextFragment, continue}} ->
+                            From ! {Ref, Reply},
+                            server_loop(Transport, RestBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
+                        {done, {Reply, RestBuffer, _, stop}} ->
+                            From ! {Ref, Reply},
+                            server_loop(Transport, RestBuffer, none, Maximum, Selected, HandlerPid, Monitor, true, none);
+                        {need_more, RestBuffer, NextFragment} ->
+                            ok = inet:setopts(element(2, Transport), [{active, once}]),
+                            server_loop(Transport, RestBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, {From, Ref})
+                    end
+            end;
+        {tcp_closed, _Socket} ->
+            reply_pending_error(Pending, native_error('Closed', closed)),
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
+        {tcp_error, _Socket, Reason} ->
+            reply_pending_error(Pending, native_error('Closed', Reason)),
+            transport_close(Transport),
+            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
         {'DOWN', Monitor, process, HandlerPid, Reason} ->
             case Closed of
                 false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
                 true -> ok
             end,
+            reply_pending_closed(Pending),
             case Reason of normal -> ok; _ -> error end
     end.
+
+reply_pending_closed(none) -> ok;
+reply_pending_closed({From, Ref}) -> From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)}.
+
+reply_pending_error(none, _Error) -> ok;
+reply_pending_error({From, Ref}, Error) -> From ! {Ref, Error}.
+
+% Non-blocking counterpart to `receive_message`/`read_frame`, used only by
+% `server_loop`: reports `{need_more, Buffer, Fragment}` instead of
+% reading more bytes off the socket itself, so the caller can arm
+% `{active, once}` and keep servicing its mailbox while it waits.
+server_try_receive(Transport, Buffer, Fragment, Maximum) ->
+    case read_frame_buffered(server, Buffer, Maximum) of
+        need_more -> {need_more, Buffer, Fragment};
+        {error, Error} -> {done, {Error, <<>>, none, stop}};
+        {ok, Fin, Opcode, Payload, Rest} ->
+            case handle_frame(Transport, server, Fin, Opcode, Payload, Rest, Fragment, Maximum) of
+                {continue_receive, NextBuffer, NextFragment, continue} ->
+                    server_try_receive(Transport, NextBuffer, NextFragment, Maximum);
+                Result -> {done, Result}
+            end
+    end.
+
+read_frame_buffered(Role, Buffer0, Maximum) ->
+    ExpectedMask = mask_bit(Role),
+    case take_buffered(Buffer0, 2) of
+        need_more -> need_more;
+        {ok, <<FinBit:1, Rsv:3, Opcode:4, Mask:1, LengthCode:7>>, Buffer1} ->
+            ValidHeader = Rsv =:= 0 andalso Mask =:= ExpectedMask andalso
+                          (Opcode =:= 0 orelse Opcode =:= 1 orelse Opcode =:= 2 orelse
+                           Opcode =:= 8 orelse Opcode =:= 9 orelse Opcode =:= 10),
+            case ValidHeader of
+                false -> {error, error_value('Protocol', <<"invalid WebSocket frame header">>)};
+                true ->
+                    case frame_length_buffered(Buffer1, LengthCode) of
+                        need_more -> need_more;
+                        {error, Reason} -> {error, native_error('Closed', Reason)};
+                        {ok, Length, Buffer2} ->
+                            case Length =< Maximum andalso
+                                 not (Opcode >= 8 andalso (FinBit =:= 0 orelse Length > 125)) of
+                                false -> {error, error_value('Limit', <<"WebSocket frame exceeds limit">>)};
+                                true ->
+                                    case read_payload_buffered(Role, Buffer2, Length) of
+                                        need_more -> need_more;
+                                        {ok, Payload, Rest} -> {ok, FinBit =:= 1, Opcode, Payload, Rest}
+                                    end
+                            end
+                    end
+            end
+    end.
+
+frame_length_buffered(Buffer, Code) when Code < 126 -> {ok, Code, Buffer};
+frame_length_buffered(Buffer, 126) ->
+    case take_buffered(Buffer, 2) of
+        need_more -> need_more;
+        {ok, <<Length:16/big>>, Rest} when Length >= 126 -> {ok, Length, Rest};
+        {ok, _, _} -> {error, invalid_length}
+    end;
+frame_length_buffered(Buffer, 127) ->
+    case take_buffered(Buffer, 8) of
+        need_more -> need_more;
+        {ok, <<0:1, Length:63/big>>, Rest} when Length >= 65536 -> {ok, Length, Rest};
+        {ok, _, _} -> {error, invalid_length}
+    end.
+
+read_payload_buffered(client, Buffer, Length) -> take_buffered(Buffer, Length);
+read_payload_buffered(server, Buffer, Length) ->
+    case take_buffered(Buffer, 4 + Length) of
+        need_more -> need_more;
+        {ok, <<MaskKey:4/binary, Masked/binary>>, Rest} -> {ok, mask(Masked, MaskKey), Rest}
+    end.
+
+take_buffered(Buffer, Count) when byte_size(Buffer) >= Count ->
+    {ok, binary:part(Buffer, 0, Count), binary:part(Buffer, Count, byte_size(Buffer) - Count)};
+take_buffered(_, _) -> need_more.
 
 start(URL, Protocols, Maximum) ->
     Parent = self(), Ref = make_ref(),
@@ -262,13 +386,19 @@ receive_message(Transport, Role, Buffer, Fragment, Maximum) ->
         {error, Error} -> {Error, <<>>, none, stop}
     end.
 
-handle_frame(Transport, Role, true, 9, Payload, Rest, Fragment, Maximum) ->
+% Ping/pong don't produce a user-visible message, so this reports
+% "keep reading" the same way an in-progress fragmented message does
+% (the `continue_receive` tuple below), rather than recursing into
+% `receive_message` directly: the buffered, non-blocking server-side
+% reader (`server_try_receive`) drives that tuple through its own loop
+% instead, and this way both callers share one control-frame path.
+handle_frame(Transport, Role, true, 9, Payload, Rest, Fragment, _Maximum) ->
     case send_frame(Transport, Role, 10, Payload) of
-        ok -> receive_message(Transport, Role, Rest, Fragment, Maximum);
+        ok -> {continue_receive, Rest, Fragment, continue};
         {error, Reason} -> {native_error('Closed', Reason), Rest, Fragment, stop}
     end;
-handle_frame(Transport, Role, true, 10, _, Rest, Fragment, Maximum) ->
-    receive_message(Transport, Role, Rest, Fragment, Maximum);
+handle_frame(_Transport, _Role, true, 10, _, Rest, Fragment, _Maximum) ->
+    {continue_receive, Rest, Fragment, continue};
 handle_frame(Transport, Role, true, 8, Payload, Rest, _, _) ->
     case close_payload(Payload) of
         {ok, Code, Reason} ->
