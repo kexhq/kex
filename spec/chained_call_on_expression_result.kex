@@ -31,4 +31,13 @@ main do
   check(mk)
   (99)
   IO.printLine("still separate")
+
+  # NOT chained even on the SAME line: a space before the '(' also starts a
+  # new statement, since Kex has no other separator inside a `do...end`
+  # body — `id(1) ()` is two statements, not `id(1)()` (kexhq/kex#367's own
+  # regression: tey/src/tey/manifest.kex has real code shaped exactly like
+  # this, `do failures.push!(error) () end`, which a same-line-only check
+  # wrongly chained into a single call).
+  id(1) ()
+  IO.printLine("still separate on one line")
 end

@@ -2001,21 +2001,20 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     // — neither has a slot for "the callee is this whole expression" — so
     // `g(~id)(10)` desugars to a hidden local bound to the callee, called by
     // that name, reusing the call-a-local-function-value path that already
-    // works: `do let _chainN = expr; _chainN(args) end`. Checked by SOURCE
-    // LINE, not by whether a Newline token still sits at m_pos: a `{ |x|
-    // stmt1 \n stmt2 }` lambda body's statement sequencing turned out to
-    // consume the newline between statements before reaching here, so a
-    // Newline-token check missed a real line break there and misfired on
-    // that block's NEXT, unrelated statement happening to start with `(`
-    // (a bare `()` unit literal, confirmed against spec/stdlib/retry.spec.kex,
-    // which crashed on exactly this at runtime: "'_chainN' is not callable").
-    // The previously CONSUMED token's line is authoritative regardless of
-    // what any enclosing construct did with tokens in between; unlike
-    // `.method` chaining (which explicitly allows one line break), a call
-    // applied directly to an expression's result never does:
-    // `foo()\n(bar())` is two statements, not `foo()(bar())`.
+    // works: `do let _chainN = expr; _chainN(args) end`. Checked by BYTE
+    // ADJACENCY (the `(` starts exactly where the previously consumed token
+    // ends, no space/comment/newline of any width between them), not by
+    // source line: a same-line check is not narrow enough, since Kex has no
+    // statement separator at all inside a `do...end` body — `do
+    // failures.push!(error) () end` (real code, tey/src/tey/manifest.kex) is
+    // two statements on one line, a mutating call followed by an unrelated
+    // bare `()`, and a same-line check wrongly chained the second onto the
+    // first's result ("'_chainN' is not callable"). Only truly adjacent
+    // tokens are unambiguous: `f(1)(2)(3)` (a real chain) is always written
+    // with no space, while two independent statements always have at least
+    // one separating character (space or newline) between them in practice.
     if (check(TokenType::LParen) && m_pos > 0
-        && m_tokens[m_pos - 1].location.line == peek().location.line) {
+        && m_tokens[m_pos - 1].endOffset == peek().startOffset) {
       // This `(`'s own offset, not the wrapped expr's: `f(1)(2)(3)` chains
       // three times over the SAME base expr's (relocated, post-interpolation)
       // start position, which a per-Parser counter can't tell apart either —
