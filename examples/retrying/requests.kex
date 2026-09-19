@@ -9,7 +9,7 @@ type ScriptedReply = RetryResponse(Result<Response<Binary>, NetError>)
 
 main do
   Process.self.send(RetryResponse(Error(NetError {
-    kind: Timeout, operation: HTTPClient, message: "request timed out"
+    kind: NetErrorKind.Timeout, operation: HTTPClient, message: "request timed out"
   })))
   Process.self.send(RetryResponse(Ok(Response.text(503, "try later"))))
   Process.self.send(RetryResponse(Ok(Response.text(200, "inventory ready"))))

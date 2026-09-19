@@ -34,7 +34,7 @@ foul chatLoop(users: [String]) do
     Join(name) => chatLoop([name | users])
     Leave(name) => chatLoop(users.reject { |u| u == name })
     Broadcast(from, text) => do
-      IO.printLine("[chat] " + from + ": " + text)
+      IO.printLine("[chat] ${from}: ${text}")
       chatLoop(users)
     end
   end

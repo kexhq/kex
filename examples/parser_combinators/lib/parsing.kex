@@ -25,7 +25,7 @@ make Parser do
   let advance = Parser { input: @input, pos: @pos + 1 }
 
   # The unconsumed tail of the input.
-  let remaining = @input.slice(@pos, @input.count)
+  let remaining = @input.drop(@pos)
 
   # --- Primitives ---
 

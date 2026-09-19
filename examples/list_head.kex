@@ -9,9 +9,8 @@ make [X] do
   let head(@[]) = None
   let head(@[x|_]) = Just(x)
 
-  tail :> This
-  let tail(@[]) = []
-  let tail(@[_|xs]) = xs
+  let tail(@[]) -> [X] = this
+  let tail(@[_|xs]) -> [X] = xs
 end
 
 minMaxOf : [String] -> (Integer, Integer)
@@ -20,7 +19,7 @@ let minMaxOf(_) = (1, 10)
 
 main(args) do
   let (min, max) = minMaxOf(args)
-  let list = (min..max).to(List).or([])
+  let list = (min..max).items
 
   IO.printLine("list = ${list}")
   match list.head do

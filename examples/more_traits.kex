@@ -52,7 +52,7 @@ end
 # --- Multiple traits ---
 
 trait Comparable do
-  compare : This -> Comparison
+  compare : This -> Ordering
   let lessThan?(other)    = this.compare(other) == Less
   let greaterThan?(other) = this.compare(other) == Greater
   let equalTo?(other)     = this.compare(other) == Equal
@@ -65,7 +65,7 @@ record Version do
 end
 
 make Version, implement: Comparable do
-  let compare(other) do
+  let compare(other) -> Ordering do
     if @major != other.major
       if @major < other.major then Less else Greater end
     elif @minor != other.minor
