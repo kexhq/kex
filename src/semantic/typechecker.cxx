@@ -2936,7 +2936,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
     const auto scopedDeclared = m_scopedDeclaredSignatures.find(declarationKey);
+    // `declarationKey` is module-scoped only, not receiver-scoped — a
+    // standalone annotation for a free fn (or another make block's method)
+    // sharing this name would otherwise claim a make method that has no
+    // relation to it at all, e.g. a free `tag : String -> String` leaking
+    // onto `make String`'s own `tag` and tripping a spurious arity-mismatch
+    // warning downstream (#105). A make-block method's contract comes only
+    // from its own receiver-matched signature (below, `makeDeclared`), never
+    // from this module-scoped, receiver-blind lookup.
     auto* declared = [&]() -> const Signature* {
+        if (m_inMakeBlock) return nullptr;
         if (scopedDeclared == m_scopedDeclaredSignatures.end()) return nullptr;
         // A lone declaration is still the contract even when its arity is
         // wrong; checkFunctionDef then emits the established annotation/body

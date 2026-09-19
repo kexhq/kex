@@ -389,6 +389,25 @@ int main() {
             assertEqual(tok.type, TokenType::Atom);
             assertEqual(tok.value, std::string("one_for_one"));
         });
+
+        it("tokenizes atoms with interior uppercase letters", []() {
+            auto tok = firstToken(":someAtom");
+            assertEqual(tok.type, TokenType::Atom);
+            assertEqual(tok.value, std::string("someAtom"));
+
+            tok = firstToken(":fooBar");
+            assertEqual(tok.type, TokenType::Atom);
+            assertEqual(tok.value, std::string("fooBar"));
+        });
+
+        it("stops a lowercase-led atom at a following space, not eating an adjacent identifier", []() {
+            auto tokens = tokenize(":foo Bar");
+            assertEqual(tokens.size(), static_cast<size_t>(3)); // Atom, UpperIdent, Eof
+            assertEqual(tokens[0].type, TokenType::Atom);
+            assertEqual(tokens[0].value, std::string("foo"));
+            assertEqual(tokens[1].type, TokenType::UpperIdent);
+            assertEqual(tokens[1].value, std::string("Bar"));
+        });
     });
 
     describe("Lexer — Operators", []() {
