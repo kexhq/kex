@@ -3,7 +3,7 @@ type CurrencyCode = Eur | Usd | Gbp | Huf
 record Currency do
   code : CurrencyCode
   name : String
-  symbol: String = None
+  symbol: String
   symbolBefore: Bool = true
 end
 
@@ -19,7 +19,7 @@ let ACCEPTED_CURRENCY = [
 ]
 
 module Currency do
-  let fromCode(code: String) -> Currecy? do
+  let fromCode(code: String) -> Currency? do
     let c = ACCEPTED_CURRENCY.find { |c| c.codeName == code.upperCase }
     return None if c.blank?
 
@@ -75,7 +75,7 @@ main(args) do
     # IO.inspect(currency)
     match money do
       Ok(m) => IO.printLine(m.display(ACCEPTED_CURRENCY))
-      Error(e) => IO.inspect(e)
+      Error(e) => IO.printLine("error: ${e}")
     end
     # IO.inspect(Money.fromValue(value))
     IO.printLine()

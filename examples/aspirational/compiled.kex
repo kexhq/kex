@@ -1,4 +1,6 @@
-# Compiled metaprogramming
+# kex: no-check
+# Compiled metaprogramming — a sketch, like its siblings in this directory;
+# not all of the generation forms imagined below exist yet.
 
 # Simple constant generation
 compiled do

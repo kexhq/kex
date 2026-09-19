@@ -1,0 +1,22 @@
+# kexhq/kex#362 — a lexical binding that holds a function outranks a
+# `using`-imported module function of the same name, same as it already does
+# for a global function (#289). The reverse order silently called the import
+# instead of applying the local, and mismatched its arity on BEAM.
+
+module Greeter do
+  let render(name: String, greeting: String) -> String = "${greeting}, ${name}!"
+end
+
+using Greeter
+
+foul viaBinding(text: String) -> String do
+  let render = { |name| "<${name}>" }
+  return render(text)
+end
+
+main do
+  IO.printLine(viaBinding("bound"))
+
+  # With no binding in scope, the bare call still means the import.
+  IO.printLine(render("world", "Hi"))
+end

@@ -685,7 +685,11 @@ auto Lexer::lexChar() -> Token {
 
 auto Lexer::lexAtom() -> Token {
     std::string atom;
-    while (!atEnd() && (isLowerAlpha(peek()) || isDigit(peek()) || peek() == '_')) {
+    // isIdentChar, not lowercase-only: a lowercase-led atom can still hold
+    // interior uppercase letters (`:someAtom`), same fix as lexSpliceIdent.
+    // The lowercase-lead requirement lives in the caller, so `:Some` never
+    // reaches here — that single-UpperIdent atom is a separate path.
+    while (!atEnd() && isIdentChar(peek())) {
         atom += advance();
     }
     return makeToken(TokenType::Atom, atom);

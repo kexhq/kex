@@ -529,6 +529,32 @@ build/kex --compile --source-root src -o build/beam src/tools/task.kex
 
 Requires CMake 3.20+ and a C++20 compiler. Readline is optional.
 
+### Building from source in CI
+
+`make build` (or `cmake --build build --parallel $(nproc)`, what it wraps)
+already bounds parallelism to the host's CPU count — see the comment on
+`JOBS` in the Makefile. A downstream project building Kex+Tey directly with
+`cmake --build build --parallel` (no job count, meaning *unbounded*) has hit
+OOM kills on standard 2 vCPU/7GB CI runners: enough independent heavy C++20
+translation units (the compiler itself, the vendored LSP framework's code
+generator, and — only relevant if the default `all` target is built — the
+test executables) become ready to compile at once that GNU Make launches far
+more `cc1plus` processes than the runner has memory for (kexhq/kex#363).
+
+If you only need `build/kex` (for example to then run `make -C tey build
+KEX=/path/to/kex`), build just that target rather than the default `all`,
+and always pass an explicit, conservative job count on a small runner:
+
+```sh
+cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON
+cmake --build build --target kex --parallel 2   # not bare --parallel
+```
+
+`--target kex` skips every test executable but still builds the vendored LSP
+framework (`kex`'s built-in `--lsp` mode links it), so it is lighter than a
+full build, not free — an explicit job count is what actually caps memory
+use on a small runner.
+
 ## Examples
 
 Good starting points:

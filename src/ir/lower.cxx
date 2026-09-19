@@ -2533,6 +2533,21 @@ struct Lowering {
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
             ex->node = localCall(n.name, {});
+        // A lexical binding (a `block` parameter, or any local holding a
+        // callable) outranks a `using` import of the same name too, not just
+        // the flat knownFns set below: innermost wins, as it does for every
+        // other local. Ahead of `moduleImports` because the reverse order
+        // silently discarded the binding and called the import instead —
+        // `let render = Template.html(...)` calling `render(x)` compiled to
+        // a call to the `using Template`-imported `Template.render/2`
+        // instead of applying the local, and erlc rejected the resulting
+        // arity mismatch (kexhq/kex#362). Same fix shape as the knownFns
+        // case below (kexhq/kex#289); kept as its own check because
+        // `moduleImports` must still outrank knownFns once no local shadows
+        // it, and `CallIndirect` (not `localCall`) is how a runtime value is
+        // applied.
+        else if (subst.count(n.name))
+            ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
         // A `using` import of this lexical scope outranks the flat knownFns
         // set. That set spans the whole merged program and carries every
         // module's `make` methods under their bare names, so `post` in main
@@ -2562,17 +2577,9 @@ struct Lowering {
             args.insert(args.begin(), var(currentName("this")));
             ex->node = localCall(n.name, std::move(args));
         }
-        // A lexical binding (a `block` parameter, or any local holding a
-        // callable) outranks a global function of the same name: innermost
-        // wins, as it does for every other local. Ahead of `knownFns` because
-        // the reverse order silently DISCARDED the binding and called the
-        // global — `foul f(link: (String -> String))` calling `link(x)`
-        // compiled to `call kex_main:link(x)` whenever a global `link` was in
-        // scope, which the prelude provides (kexhq/kex#289). Keep this
-        // indirect apply distinct from a truly unknown free function, which
-        // must fail only if executed.
-        else if (subst.count(n.name))
-            ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
+        // knownFns is checked last among the name-based fallbacks: the local
+        // binding and `using`-import checks above already outrank it
+        // (kexhq/kex#289, kexhq/kex#362).
         else if (knownFns.count(n.name))
             ex->node = localCall(n.name, std::move(args));
         else if (auto external = externalPrefixCall(n.name, arity); !external.empty())
@@ -6376,6 +6383,23 @@ struct Lowering {
         // Do the clauses in this group differ in their declared parameter
         // types? Only then is a guard wanted — a plain multi-clause function
         // discriminates with patterns and must be left alone.
+        // A NAMED record-destructure param (`JSON { status, body }`) discards
+        // its own tag at the Core Erlang pattern level — it becomes a plain
+        // Var (see the record-pattern special case in the clause loop below)
+        // because a record's fields are read by name, not position, so no
+        // single structural pattern can express it. That makes it invisible
+        // to Core Erlang's own dispatch, unlike a constructor pattern like
+        // `@Equal` (a real tagged-tuple pattern needing no guard at all) —
+        // so unlike those, it NEEDS the same runtime type guard a plain
+        // `reply: JSON` parameter would get. An ANONYMOUS record pattern
+        // (`{ status, body }`, no type name) stays excluded: it matches any
+        // record with those fields, which is structural, not a single tag.
+        auto namedRecordPatternType = [](const ast::Param& p) -> std::string {
+            if (p.name || !p.pattern) return "";
+            if (auto* rp = std::get_if<ast::RecordPattern>(&(*p.pattern)->kind))
+                return rp->typeName;
+            return "";
+        };
         const bool overloadedByParamType = [&] {
             if (group.size() < 2) return false;
             std::vector<std::string> signature;
@@ -6384,6 +6408,10 @@ struct Lowering {
                 for (const auto& clause : fn->clauses) {
                     std::vector<std::string> current;
                     for (const auto& p : clause.params) {
+                        if (auto rpType = namedRecordPatternType(p); !rpType.empty()) {
+                            current.push_back(rpType);
+                            continue;
+                        }
                         // A group that already discriminates with PATTERNS
                         // needs no guard, and adding one breaks it: Ordering's
                         // `combine(@Equal, other: Ordering)` / `combine(@Less,
@@ -6427,6 +6455,11 @@ struct Lowering {
                 // fresh var and prepend field/element bindings to the body.
                 std::vector<std::pair<std::string, ExprPtr>> prefix;
                 std::vector<std::pair<std::string, const ast::RecordPattern*>> recordPatterns;
+                // (writtenType, freshVarName) for each NAMED record-pattern
+                // param — the guard-generation step below tests these
+                // against the fresh var substituted for the pattern, since
+                // there is no `p.name` to test against directly.
+                std::vector<std::pair<std::string, std::string>> recordDispatchTargets;
                 for (const auto& p : clause.params) {
                     if (!p.name && p.pattern) {
                         auto& pk = (*p.pattern)->kind;
@@ -6435,6 +6468,8 @@ struct Lowering {
                             auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = rv;
                             fc.params.push_back(std::move(vp));
                             recordPatterns.push_back({rv, rp});
+                            if (!rp->typeName.empty())
+                                recordDispatchTargets.push_back({rp->typeName, rv});
                             std::vector<std::string> names;
                             collectRecordBindings(*rp, names);
                             for (const auto& name : names) subst[name] = name;
@@ -6513,16 +6548,24 @@ struct Lowering {
                 // has.
                 if (overloadedByParamType && !isLastInGroup) {
                     ExprPtr guard;
-                    for (const auto& p : clause.params) {
-                        const auto* declared = dispatchParamType(p);
-                        if (!p.name || !declared) continue;
-                        const auto written = renderDispatchType(*declared);
-                        if (!discriminatingType(written)) continue;
-                        auto test = typeGuard(written, var(*p.name));
+                    auto addGuardTest = [&](const std::string& written, ExprPtr subject) {
+                        if (!discriminatingType(written)) return;
+                        auto test = typeGuard(written, std::move(subject));
                         guard = guard ? intrin(Op::And, two(std::move(guard),
                                                             std::move(test)))
                                       : std::move(test);
+                    };
+                    for (const auto& p : clause.params) {
+                        const auto* declared = dispatchParamType(p);
+                        if (!p.name || !declared) continue;
+                        addGuardTest(renderDispatchType(*declared), var(*p.name));
                     }
+                    // Named record-pattern params (`JSON { status, body }`)
+                    // dispatch on their tag exactly like a plain `reply: JSON`
+                    // parameter would, but against the fresh var substituted
+                    // for the pattern (kexhq/kex#347).
+                    for (const auto& [written, rv] : recordDispatchTargets)
+                        addGuardTest(written, var(rv));
                     if (guard) fc.guard = std::move(guard);
                 }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
@@ -8074,13 +8117,43 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
     return receiverPat ? params.size() : params.size() + 1;
 }
 
-// Whether `next` continues the function group `first` opened — the ONE rule
-// every lowering site uses to turn adjacent declarations into a single BEAM
-// function (kexhq/kex#262). The parser already folds the untyped clauses of a
-// function into one FunctionDef; declarations it leaves separate (typed ones,
-// which may be overloads) still arrive here one by one. Four sites each spelled
-// this out by hand before, and #261 was what a drifting copy of the same rule
-// cost.
+// A free function's BEAM arity, unlike a make-block method's (`beamArity`
+// above), never gets an implicit receiver slot — there is no `this` to
+// occupy or free up. `beamArity`'s "no name on the first param means it's
+// the receiver, so don't add one" heuristic is wrong here: it made a plain
+// named-parameter clause (`respond(reply: String, route: String)`, arity 3
+// by that heuristic) look like a different function from a record-pattern
+// clause of the same free function (`respond(JSON { status, body },
+// route: String)`, arity 2 — no receiver to not-add-one for), splitting one
+// multi-clause overload set into two separate BEAM functions of the same
+// name. Only the LATTER function ever got emitted (kexhq/kex#347): the
+// merge step downstream treats a record-pattern clause as an unconditional
+// catch-all (its discriminating check lives in the body, not the head — see
+// `unguardedCatchAll`), so the two groups silently collapsed into whichever
+// one was flushed first.
+static auto freeFunctionArity(const ast::FunctionDef* fd) -> size_t {
+    if (!fd || fd->clauses.empty()) return 0;
+    return fd->clauses[0].params.size();
+}
+
+static auto continuesFreeFunctionGroup(const ast::FunctionDef& first,
+                                       const ast::FunctionDef& next) -> bool {
+    return first.name == next.name &&
+        freeFunctionArity(&first) == freeFunctionArity(&next);
+}
+
+// Whether `next` continues the MAKE-BLOCK method group `first` opened — the
+// rule every make-block lowering site uses to turn adjacent declarations
+// into a single BEAM function (kexhq/kex#262). The parser already folds the
+// untyped clauses of a function into one FunctionDef; declarations it leaves
+// separate (typed ones, which may be overloads) still arrive here one by
+// one. Several sites each spelled this out by hand before, and #261 was
+// what a drifting copy of the same rule cost.
+//
+// Uses `beamArity`'s implicit-receiver heuristic, which is correct here (a
+// make-block method always has a receiver, occupying position 0 either
+// explicitly via a pattern or implicitly via `this`) but wrong for a FREE
+// function — see `continuesFreeFunctionGroup` below (kexhq/kex#347).
 static auto continuesFunctionGroup(const ast::FunctionDef& first,
                                    const ast::FunctionDef& next) -> bool {
     return first.name == next.name && beamArity(&first) == beamArity(&next);
@@ -8800,7 +8873,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
 
     for (const auto& item : prog.items) {
         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
-            if (!fnGroup.empty() && !continuesFunctionGroup(*fnGroup.front(), **fdp)) flushGroup();
+            if (!fnGroup.empty() && !continuesFreeFunctionGroup(*fnGroup.front(), **fdp)) flushGroup();
             fnGroup.push_back(fdp->get());
             continue;
         }
@@ -8954,7 +9027,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     };
                     auto push = [&](const ast::FunctionDef* fd) {
                         if (!fd) return;
-                        if (!grp.empty() && !continuesFunctionGroup(*grp.front(), *fd)) flush();
+                        if (!grp.empty() && !continuesFreeFunctionGroup(*grp.front(), *fd)) flush();
                         grp.push_back(fd);
                     };
                     auto emitMake = [&](const ast::MakeDef* mk) {

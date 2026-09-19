@@ -12,5 +12,5 @@ main do
     end
   end
 
-  task.start.await
+  task.await
 end

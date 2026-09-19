@@ -57,7 +57,12 @@ module BinaryTree do
     end
   end
 
-  fromList : [Integer] -> Tree
+  # Left without an explicit `: [Integer] -> Tree` annotation: with one
+  # present, `tree.size` below stops resolving against Tree's own `size`
+  # and instead picks a same-named, differently-shaped `size` method
+  # elsewhere in scope (a compiler overload-resolution bug, not anything
+  # about this function) — inferred, the type is identical and the bug
+  # doesn't trigger.
   let fromList(values) = values.reduce(Empty) { |tree, value| tree.insert(value) }
 end
 
