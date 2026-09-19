@@ -144,6 +144,15 @@ private:
     auto registerMakeSignatures(const ast::Program& program) -> void;
     auto registerMakeSignaturesInModule(const ast::ModuleDef& mod,
                                        const std::string& parentPath) -> void;
+    // Collects every `export M[, as: Alias]` in the program into
+    // m_moduleReexports, keyed by the re-namespaced path it creates
+    // ("App.Geometry" for `module App do export Geometry end`) mapping to
+    // the module it actually names ("Geometry") — see resolveRecordName's
+    // alias-resolution step, which consults this the same way it does a
+    // `using M, as: Alias`.
+    auto registerExports(const ast::Program& program) -> void;
+    auto registerExportsInModule(const ast::ModuleDef& mod,
+                                 const std::string& parentPath) -> void;
     auto registerMakeSignature(const ast::MakeDef& def,
                                const std::string& modulePath) -> void;
     auto makeModuleVisible(const std::string& module) const -> bool;
@@ -320,6 +329,11 @@ private:
         std::string module;
         std::vector<std::string> onlyNames;
         std::vector<std::string> exceptNames;
+        // `using Module, as: Alias`'s alias, so a qualified reference
+        // written through it (`Alias.Member`) can be resolved back to
+        // `Module.Member` — the identity every other lookup (record fields,
+        // method ownership, ...) is keyed by.
+        std::optional<std::string> alias;
     };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
     std::vector<ImportSelection> m_declarationImports;
@@ -334,6 +348,12 @@ private:
     // the right granularity: it only ever decides whether a module's members
     // COULD be in scope, and a union can only make that answer more generous.
     std::unordered_set<std::string> m_importedModulePaths;
+    // "App.Geometry" -> "Geometry" for `module App do export Geometry end`
+    // — every `export` in the program, global rather than scope-stacked
+    // like m_declarationImports/m_importScopeStack, since a re-export's
+    // path is reachable from anywhere, not just where it was declared.
+    // See resolveRecordName's alias-resolution step.
+    std::unordered_map<std::string, std::string> m_moduleReexports;
     // `"Receiver#method"` -> the module whose `make` block declared it inside a
     // `private do ... end`. Such a method is callable only from within that
     // module; `docs/modules.md` says so, and nothing enforced it — a private

@@ -102,7 +102,7 @@ main do
 
   # Alias
   using Geometry, as: Geo
-  let c : Geo.Circle = Geometry.Circle { radius: 5.0 }
+  let c = Geo.Circle { radius: 5.0 }
   IO.printLine("via alias: area=${c.area.to(String).or("")}")
   IO.printLine(Formatter.describeCircle(c))
 
@@ -110,7 +110,7 @@ main do
   IO.printLine(App.Config.name + " v" + App.Config.version)
 
   # Re-exported access via export
-  let c2 : App.Geometry.Circle = Geometry.Circle { radius: 2.0 }
+  let c2 = App.Geometry.Circle { radius: 2.0 }
   IO.printLine(c2.circumference.to(String).or(""))
 
   # Selective re-exports

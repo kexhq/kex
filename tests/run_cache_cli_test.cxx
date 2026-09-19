@@ -109,5 +109,44 @@ int main() {
         });
     });
 
+    describe("Run cache — Kex.embed reads outside a `compiled do` block", []() {
+        it("never caches, so the embedded file's current content always wins", []() {
+            // `Template.text`/`Template.html` call `Kex.embed` directly, with
+            // no `compiled do ... end` wrapper for `sourceMentionsCompiledBlock`
+            // to see — the cache key used to be blind to this input entirely,
+            // so the SECOND run silently kept serving the first run's embedded
+            // text even after the file on disk changed. The fix opts an
+            // embed-calling source out of the run cache entirely, the same way
+            // an actual `compiled do` block already does: no entry is ever
+            // written for it, so there is nothing stale to serve.
+            char cacheTmp[] = "/tmp/kex_run_cache_embed_test_XXXXXX";
+            std::string cacheDir = mkdtemp(cacheTmp);
+            auto path = writeTempSource(
+                "main do\n"
+                "  let t = Template.text(Kex.embed(\"greeting.txt\"))\n"
+                "  IO.print(t())\n"
+                "end\n");
+            auto dir = fs::path(path).parent_path();
+            auto embedPath = dir / "greeting.txt";
+
+            { std::ofstream f(embedPath); f << "version one"; }
+            auto first = runKex(cacheDir, path);
+            assertEqual(first, std::string("version one"));
+            assertEqual(runCacheEntryCount(cacheDir), size_t{0},
+                        "a `Kex.embed` call must opt the run out of the cache "
+                        "entirely, exactly like a `compiled do` block does");
+
+            { std::ofstream f(embedPath); f << "version two"; }
+            auto second = runKex(cacheDir, path);
+            assertEqual(second, std::string("version two"),
+                        "changing the embedded file must not serve the first "
+                        "run's stale text");
+
+            std::remove(path.c_str());
+            std::remove(embedPath.c_str());
+            fs::remove_all(cacheDir);
+        });
+    });
+
     return runAll();
 }

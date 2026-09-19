@@ -2203,15 +2203,16 @@ auto storeCachedBeam(const std::filesystem::path &entry,
 // higher, and content-addressed the same way so a wrong hit is not possible.
 // A hit skips straight to running `erl` against the cached .beam files.
 //
-// The one input this can't see is a `compiled do` block's `Kex.embed(path)`,
-// which reads a file at expansion time that isn't any module's own source
-// (kexhq/kex#335 wants that to be inspectable at run time too, which would
-// make this worse, not better). Rather than track embed reads, this cache
-// simply refuses to apply — falls back to the normal, always-correct path —
-// whenever "compiled" appears anywhere in the entry file, the merged
-// `.spec.kex` base, or any resolved dependency's source text. A false
-// positive (the word appears in a comment or string) only costs a cache
-// miss; it can never cause a stale hit.
+// The one input this can't see is `Kex.embed(path)` — inside a `compiled do`
+// block or, via `Template.text`/`Template.html`, standing alone at any call
+// site — which reads a file at expansion time that isn't any module's own
+// source (kexhq/kex#335 wants that to be inspectable at run time too, which
+// would make this worse, not better). Rather than track embed reads, this
+// cache simply refuses to apply — falls back to the normal, always-correct
+// path — whenever "compiled" or "Kex.embed" appears anywhere in the entry
+// file, the merged `.spec.kex` base, or any resolved dependency's source
+// text. A false positive (the word appears in a comment or string) only
+// costs a cache miss; it can never cause a stale hit.
 auto runCacheRoot() -> std::optional<std::filesystem::path> {
   if (auto base = kexCacheBase()) return *base / "run";
   return std::nullopt;
@@ -2243,6 +2244,36 @@ auto sourceMentionsCompiledBlock(const std::string &src) -> bool {
         return true;
     }
     pos += 8;
+  }
+  return false;
+}
+
+// A conservative, lexer-free scan for `Kex.embed(...)` — the call form
+// `EmbedFolder::claim` (src/compiled/expand.cxx) recognizes, requiring the
+// literal `Kex` receiver (no alias or bare `embed(...)` is matched by that
+// macro, so none needs matching here either). Reachable outside any
+// `compiled do` block — `Template.text(Kex.embed(path))` and
+// `Template.html(Kex.embed(path))` call it directly — so
+// `sourceMentionsCompiledBlock` alone missed it: a file changed between two
+// runs of the exact same entry+deps was served the FIRST run's embedded
+// text, silently, forever (kexhq/kex#reported-as-run-cache-staleness). Same
+// false-positive-tolerant, false-negative-intolerant contract as that scan.
+auto sourceMentionsEmbed(const std::string &src) -> bool {
+  auto isWordChar = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+           c == '?' || c == '!';
+  };
+  size_t pos = 0;
+  while ((pos = src.find("Kex", pos)) != std::string::npos) {
+    const bool leftBoundary = pos == 0 || !isWordChar(src[pos - 1]);
+    size_t after = pos + 3; // strlen("Kex")
+    if (leftBoundary && src.compare(after, 1, ".") == 0 &&
+        src.compare(after + 1, 5, "embed") == 0) {
+      const size_t nameEnd = after + 1 + 5;
+      if (nameEnd >= src.size() || !isWordChar(src[nameEnd]))
+        return true;
+    }
+    pos += 3;
   }
   return false;
 }
@@ -2284,9 +2315,14 @@ auto runCacheKeyFor(const std::string &filepath, bool skipCheck,
   if (!runCacheRoot()) return runCacheMiss("KEX_CACHE is off");
   if (sourceMentionsCompiledBlock(entryRawSource))
     return runCacheMiss("entry file has a `compiled do` block");
-  if (!specBaseFile.empty() &&
-      sourceMentionsCompiledBlock(specBaseRawSource))
-    return runCacheMiss("its .spec.kex base has a `compiled do` block");
+  if (sourceMentionsEmbed(entryRawSource))
+    return runCacheMiss("entry file calls `Kex.embed`");
+  if (!specBaseFile.empty()) {
+    if (sourceMentionsCompiledBlock(specBaseRawSource))
+      return runCacheMiss("its .spec.kex base has a `compiled do` block");
+    if (sourceMentionsEmbed(specBaseRawSource))
+      return runCacheMiss("its .spec.kex base calls `Kex.embed`");
+  }
   std::vector<const LoadedDep *> sorted;
   for (const auto &dep : deps) sorted.push_back(&dep);
   std::sort(sorted.begin(), sorted.end(), [](const auto *a, const auto *b) {
@@ -2304,6 +2340,9 @@ auto runCacheKeyFor(const std::string &filepath, bool skipCheck,
       return runCacheMiss(("a dependency (" + *dep->path +
                            ") has a `compiled do` block")
                               .c_str());
+    if (sourceMentionsEmbed(*dep->source))
+      return runCacheMiss(
+          ("a dependency (" + *dep->path + ") calls `Kex.embed`").c_str());
     material += "dep:" + *dep->path + ":" + hexSha256(*dep->source) + "\n";
   }
   return hexDigest(kex::beam::computeSha256(
@@ -4637,6 +4676,107 @@ int main(int argc, char *argv[]) {
       // own so it does not hide inside whichever phase touches it first.
       (void)preludeSemanticInterfaces();
       timings.mark("prelude interfaces");
+
+      // Independent gating pre-check, on its own freshly re-parsed copy of
+      // the program — deliberately never touching `program` itself below.
+      // `mode == "check"` gates against PROJECT source plus the compiled
+      // stdlib INTERFACE, never an opt-in stdlib module's real SOURCE (see
+      // that path's own comment on its `resolveBeamDeps` call): merging the
+      // source ahead of the check can add a second, unannotated overload
+      // candidate for a function the interface alone resolves correctly,
+      // silencing a real mismatch (kexhq/kex#378 — a zero-arg block
+      // satisfied a one-arg parameter with no diagnostic under `--run`, the
+      // moment an unrelated opt-in stdlib module was anywhere in the
+      // build). `--run`/`--compile` below still merge that source into the
+      // real `program`, because lowering needs the actual bodies to emit —
+      // reordering or filtering that merge instead of duplicating the
+      // check regressed kexhq/kex#377's regression test, since IR
+      // lowering's overload-adjacency heuristics are sensitive to exactly
+      // where each dependency's declarations land in `program.items`.
+      if (mode == "compile" && !skipCheck) {
+        kex::ast::Program checkProgram;
+        {
+          auto entrySource = readFile(filepath);
+          kex::Lexer entryLexer(entrySource, filepath);
+          kex::Parser entryParser(entryLexer.tokenizeAll(), filepath);
+          checkProgram = entryParser.parseProgram();
+        }
+        std::vector<kex::semantic::Diagnostic> preCheckExpandDiags;
+        kex::compiled::ExpandOptions preCheckExpandOptions;
+        preCheckExpandOptions.sourcePath = filepath;
+        (void)kex::compiled::expand(checkProgram, preCheckExpandDiags,
+                                    preCheckExpandOptions);
+
+        std::string preCheckSpecBase;
+        for (const auto &candidate : specBaseCandidates(filepath)) {
+          if (!fileExists(candidate)) continue;
+          preCheckSpecBase = candidate;
+          auto baseSource = readFile(candidate);
+          kex::Lexer baseLexer(std::move(baseSource), candidate);
+          kex::Parser baseParser(baseLexer.tokenizeAll(), candidate);
+          auto baseProgram = baseParser.parseProgram();
+          std::vector<kex::ast::TopLevelItem> merged;
+          merged.reserve(baseProgram.items.size() + checkProgram.items.size());
+          for (auto &item : baseProgram.items)
+            if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
+                    item))
+              merged.push_back(std::move(item));
+          for (auto &item : checkProgram.items) merged.push_back(std::move(item));
+          checkProgram.items = std::move(merged);
+          break;
+        }
+
+        auto projectRoots = moduleRootsFor(filepath);
+        const auto stdlibRoots = kex::standardLibraryModuleRoots();
+        projectRoots.erase(
+            std::remove_if(projectRoots.begin(), projectRoots.end(),
+                           [&](const std::string &root) {
+                             return std::find(stdlibRoots.begin(),
+                                              stdlibRoots.end(),
+                                              root) != stdlibRoots.end();
+                           }),
+            projectRoots.end());
+        {
+          kex::semantic::Analyzer preCheckDependencyAnalysis(
+              &preludeSemanticInterfaces());
+          (void)preCheckDependencyAnalysis.analyze(checkProgram);
+          auto qualifiedModules = preCheckDependencyAnalysis.referencedModules();
+          for (auto it = qualifiedModules.begin();
+               it != qualifiedModules.end();) {
+            const auto imported =
+                preludeSemanticInterfaces().modules.find(*it);
+            if (imported != preludeSemanticInterfaces().modules.end() &&
+                imported->second.automaticImport)
+              it = qualifiedModules.erase(it);
+            else
+              ++it;
+          }
+          resolveBeamDeps(checkProgram, projectRoots,
+                          &preludeSemanticInterfaces(), qualifiedModules);
+        }
+
+        kex::backfillExternalTraitDefaults(checkProgram);
+        std::vector<kex::semantic::Diagnostic> postMergeExpandDiags;
+        kex::compiled::ExpandOptions postMergeExpandOptions;
+        postMergeExpandOptions.sourcePath = filepath;
+        (void)kex::compiled::expand(checkProgram, postMergeExpandDiags,
+                                    postMergeExpandOptions);
+
+        kex::semantic::Analyzer preCheckAnalyzer(&preludeSemanticInterfaces());
+        int typeErrors = 0;
+        if (!runSemanticCheck(checkProgram, filepath, &preCheckAnalyzer,
+                              preCheckSpecBase, &typeErrors)) {
+          std::cerr << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::magenta)
+                    << "Aborted:" << kex::color::apply(kex::color::reset)
+                    << " " << errorCountPhrase(typeErrors, "type")
+                    << " — fix before " << (compileRun ? "running" : "compiling")
+                    << " (use --no-check to skip).\n";
+          return 1;
+        }
+      }
+      timings.mark("gating pre-check");
+
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
       std::string tempDir;
