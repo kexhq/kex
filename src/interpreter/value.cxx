@@ -8,6 +8,12 @@
 
 namespace kex::interpreter {
 
+auto cachedCodepoints(const StringValue &s) -> const std::vector<char32_t> & {
+  if (!s.codepointCache)
+    s.codepointCache = std::make_shared<std::vector<char32_t>>(utf8::decode(s.value));
+  return *s.codepointCache;
+}
+
 namespace {
 
 // `std::to_string` is `%f`: six decimals, no exponent. That silently printed

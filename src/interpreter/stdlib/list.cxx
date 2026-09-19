@@ -30,7 +30,7 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* range = std::get_if<RangeValue>(&val->data)) return rangeToList(*range);
         if (auto* str = std::get_if<StringValue>(&val->data)) {
             std::vector<ValuePtr> chars;
-            for (auto cp : utf8::decode(str->value))
+            for (auto cp : cachedCodepoints(*str))
                 chars.push_back(Value::character(cp));
             return chars;
         }
@@ -251,7 +251,7 @@ auto Evaluator::registerListBuiltins() -> void {
     reg("count", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(utf8::length(str->value)));
+            return Value::integer(static_cast<int64_t>(cachedCodepoints(*str).size()));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
@@ -274,7 +274,7 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* list = std::get_if<ListValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(list->elements.size()));
         if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(utf8::length(str->value)));
+            return Value::integer(static_cast<int64_t>(cachedCodepoints(*str).size()));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         return Value::integer(0);
@@ -308,7 +308,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto n = std::get_if<IntValue>(&args[1]->data);
         if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            auto cps = utf8::decode(str->value);
+            const auto& cps = cachedCodepoints(*str);
             auto cnt = std::min(static_cast<size_t>(n->value), cps.size());
             return Value::string(utf8::encodeAll({cps.begin(), cps.begin() + cnt}));
         }
@@ -323,7 +323,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto n = std::get_if<IntValue>(&args[1]->data);
         if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            auto cps = utf8::decode(str->value);
+            const auto& cps = cachedCodepoints(*str);
             auto skip = std::min(static_cast<size_t>(n->value), cps.size());
             return Value::string(utf8::encodeAll({cps.begin() + skip, cps.end()}));
         }

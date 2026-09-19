@@ -4677,35 +4677,50 @@ int main(int argc, char *argv[]) {
       (void)preludeSemanticInterfaces();
       timings.mark("prelude interfaces");
 
-      // Independent gating pre-check, on its own freshly re-parsed copy of
-      // the program — deliberately never touching `program` itself below.
-      // `mode == "check"` gates against PROJECT source plus the compiled
-      // stdlib INTERFACE, never an opt-in stdlib module's real SOURCE (see
-      // that path's own comment on its `resolveBeamDeps` call): merging the
-      // source ahead of the check can add a second, unannotated overload
-      // candidate for a function the interface alone resolves correctly,
-      // silencing a real mismatch (kexhq/kex#378 — a zero-arg block
-      // satisfied a one-arg parameter with no diagnostic under `--run`, the
-      // moment an unrelated opt-in stdlib module was anywhere in the
-      // build). `--run`/`--compile` below still merge that source into the
-      // real `program`, because lowering needs the actual bodies to emit —
-      // reordering or filtering that merge instead of duplicating the
-      // check regressed kexhq/kex#377's regression test, since IR
-      // lowering's overload-adjacency heuristics are sensitive to exactly
-      // where each dependency's declarations land in `program.items`.
+      // Independent gating pre-check. `mode == "check"` gates against
+      // PROJECT source plus the compiled stdlib INTERFACE, never an opt-in
+      // stdlib module's real SOURCE (see that path's own comment on its
+      // `resolveBeamDeps` call): merging the source ahead of the check can
+      // add a second, unannotated overload candidate for a function the
+      // interface alone resolves correctly, silencing a real mismatch
+      // (kexhq/kex#378 — a zero-arg block satisfied a one-arg parameter
+      // with no diagnostic under `--run`, the moment an unrelated opt-in
+      // stdlib module was anywhere in the build). `--run`/`--compile` below
+      // still merge that source into the real `program`, because lowering
+      // needs the actual bodies to emit — reordering or filtering that
+      // merge instead of duplicating the check regressed kexhq/kex#377's
+      // regression test, since IR lowering's overload-adjacency heuristics
+      // are sensitive to exactly where each dependency's declarations land
+      // in `program.items`.
+      //
+      // MOVES `program.items` into `checkProgram` rather than re-parsing
+      // the entry file from disk: `program` already passed the ONE shared
+      // `compiled do`/`Kex.embed`/`Template.text` expansion pass above, and
+      // that pass runs the REAL, potentially expensive sandboxed evaluator
+      // (kexhq/kex#379 — a template of ordinary size can legitimately need
+      // several seconds there). Re-parsing and re-expanding a second, fully
+      // independent copy paid that cost TWICE for no reason. `expand()` is
+      // not re-run here at all: a merged-in dependency's own `compiled do`
+      // block is a rare shape this narrower check can afford to miss, since
+      // the real, unchanged gating check below still sees it correctly.
+      // Deferred rather than printed/aborted on immediately: when the entry
+      // also has an ordinary undefined-identifier mistake, the REAL gating
+      // check below finds that too (its own Analyzer pass, same as this
+      // one) AND additionally runs SemanticDB, which reports it with its
+      // own wording alongside the Analyzer's — two diagnostics for one
+      // mistake, both expected in the output (spec/error_undefined_variable
+      // — this pre-check aborting first, before the real check ever ran,
+      // silently dropped SemanticDB's line and undercounted the error).
+      // Surfacing this pre-check's own finding is only needed for the #378
+      // shape: the real check passes it by mistake, so nothing else would
+      // ever report it.
+      bool preCheckFailed = false;
+      std::vector<kex::semantic::Diagnostic> preCheckDiagnostics;
+      int preCheckTypeErrors = 0;
       if (mode == "compile" && !skipCheck) {
         kex::ast::Program checkProgram;
-        {
-          auto entrySource = readFile(filepath);
-          kex::Lexer entryLexer(entrySource, filepath);
-          kex::Parser entryParser(entryLexer.tokenizeAll(), filepath);
-          checkProgram = entryParser.parseProgram();
-        }
-        std::vector<kex::semantic::Diagnostic> preCheckExpandDiags;
-        kex::compiled::ExpandOptions preCheckExpandOptions;
-        preCheckExpandOptions.sourcePath = filepath;
-        (void)kex::compiled::expand(checkProgram, preCheckExpandDiags,
-                                    preCheckExpandOptions);
+        checkProgram.items = std::move(program.items);
+        const size_t originalCount = checkProgram.items.size();
 
         std::string preCheckSpecBase;
         for (const auto &candidate : specBaseCandidates(filepath)) {
@@ -4755,25 +4770,38 @@ int main(int argc, char *argv[]) {
                           &preludeSemanticInterfaces(), qualifiedModules);
         }
 
-        kex::backfillExternalTraitDefaults(checkProgram);
-        std::vector<kex::semantic::Diagnostic> postMergeExpandDiags;
-        kex::compiled::ExpandOptions postMergeExpandOptions;
-        postMergeExpandOptions.sourcePath = filepath;
-        (void)kex::compiled::expand(checkProgram, postMergeExpandDiags,
-                                    postMergeExpandOptions);
+        // Every item merged in above was PREPENDED (resolveBeamDeps's own
+        // convention), so the entry's own (already-expanded) items are
+        // still exactly the last `originalCount` of them — restorable by
+        // index regardless of how many dependency files contributed.
+        const size_t prependedCount = checkProgram.items.size() - originalCount;
 
+        // `Analyzer::analyze` directly, not `runSemanticCheck`: that helper
+        // also drives a `SemanticDB` pass for undefined-identifier
+        // diagnostics, which re-reads AND RE-PROCESSES `filepath` from disk
+        // (`SemanticDB::updateFile`) — including, for a file whose entry
+        // calls `Kex.embed`/`Template.text`, running the same expensive
+        // sandboxed scan a THIRD time (once in the shared expansion pass
+        // above, once in the real pipeline's own gating check below, and
+        // this would be a third — kexhq/kex#379 measured that scan at
+        // multiple seconds for an ordinary template). This pre-check's own
+        // job is the #378 overload-resolution class of error, which is the
+        // Analyzer's, not SemanticDB's; undefined identifiers are still
+        // caught by the real, unchanged gating check further down.
         kex::semantic::Analyzer preCheckAnalyzer(&preludeSemanticInterfaces());
-        int typeErrors = 0;
-        if (!runSemanticCheck(checkProgram, filepath, &preCheckAnalyzer,
-                              preCheckSpecBase, &typeErrors)) {
-          std::cerr << kex::color::apply(kex::color::bold)
-                    << kex::color::apply(kex::color::magenta)
-                    << "Aborted:" << kex::color::apply(kex::color::reset)
-                    << " " << errorCountPhrase(typeErrors, "type")
-                    << " — fix before " << (compileRun ? "running" : "compiling")
-                    << " (use --no-check to skip).\n";
-          return 1;
-        }
+        preCheckFailed = !preCheckAnalyzer.analyze(checkProgram);
+        preCheckDiagnostics = preCheckAnalyzer.diagnostics();
+        for (const auto &diag : preCheckDiagnostics)
+          if (diag.level == kex::semantic::Diagnostic::Level::Error)
+            preCheckTypeErrors++;
+
+        // Hand the entry's own items back to `program` either way: this
+        // pre-check's own verdict is consulted, deferred, further down —
+        // the real pipeline continues exactly as if it had never run.
+        program.items.clear();
+        program.items.reserve(originalCount);
+        for (size_t i = prependedCount; i < prependedCount + originalCount; i++)
+          program.items.push_back(std::move(checkProgram.items[i]));
       }
       timings.mark("gating pre-check");
 
@@ -4966,6 +4994,24 @@ int main(int argc, char *argv[]) {
                     << "Aborted:" << kex::color::apply(kex::color::reset) << " "
                     << errorCountPhrase(typeErrors, "type") << " — fix before "
                     << (compileRun ? "running" : "compiling")
+                    << " (use --no-check to skip).\n";
+          return 1;
+        }
+        // This check just passed the SAME program the earlier, narrower
+        // pre-check already rejected — exactly the #378 shape the pre-check
+        // exists for (an opt-in stdlib module's merged-in SOURCE adding an
+        // unannotated overload candidate that quietly resolves what the
+        // compiled interface alone would flag). Its diagnostics were held
+        // back until now specifically so they are shown ONLY when they add
+        // information this check did not already provide.
+        if (gatingAnalysis && preCheckFailed) {
+          for (const auto &diag : preCheckDiagnostics)
+            printSemanticDiagnostic(diag);
+          std::cerr << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::magenta)
+                    << "Aborted:" << kex::color::apply(kex::color::reset) << " "
+                    << errorCountPhrase(preCheckTypeErrors, "type")
+                    << " — fix before " << (compileRun ? "running" : "compiling")
                     << " (use --no-check to skip).\n";
           return 1;
         }
