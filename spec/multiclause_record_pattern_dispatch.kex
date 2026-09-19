@@ -1,0 +1,41 @@
+# kexhq/kex#347 — a multi-clause free function mixing a plain-typed clause
+# with NAMED record-pattern clauses (`respond(reply: String, ...)` /
+# `respond(JSON { ... }, ...)` / `respond(Text { ... }, ...)`) must dispatch
+# on the argument's RUNTIME type, exactly as `match` would, regardless of
+# whether the call site's own static type is a concrete variant or only the
+# abstract union. On BEAM this used to collapse to the first clause's body
+# unconditionally: `continuesFunctionGroup`'s arity heuristic assumed an
+# implicit receiver (correct for make-block methods, wrong for a free
+# function), splitting the three clauses into two separate BEAM functions of
+# the same name — and the record-pattern clauses looked like unconditional
+# catch-alls to the merge step, since their runtime type check lives in the
+# body (a positional field read), not in the Core Erlang head.
+
+record JSON do
+  status : Integer
+  body : String
+end
+
+record Text do
+  status : Integer
+  body : String
+end
+
+type Reply = JSON | Text | String
+
+foul respond(reply: String, route: String) -> String = "plain:${reply}@${route}"
+foul respond(JSON { status, body }, route: String) -> String = "json:${status}:${body}@${route}"
+foul respond(Text { status, body }, route: String) -> String = "text:${status}:${body}@${route}"
+
+# The call site here only knows the abstract `Reply` union, not which
+# variant — the case #347 reported as broken.
+foul dispatchGeneric(reply: Reply, route: String) -> String do
+  return respond(reply, route)
+end
+
+main do
+  IO.printLine(respond(JSON { status: 200, body: "{}" }, "r2"))
+  IO.printLine(dispatchGeneric(JSON { status: 200, body: "{}" }, "r3"))
+  IO.printLine(dispatchGeneric(Text { status: 404, body: "nf" }, "r4"))
+  IO.printLine(dispatchGeneric("plain-value", "r5"))
+end
