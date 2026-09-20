@@ -1669,6 +1669,24 @@ auto TypeChecker::annotationToSignature(
         firstNode = false;
     }
     TypePtr result = cur ? resolveTypeExpr(*cur, genericVars) : Type::unknown();
+    // A curried/higher-order signature spelled through a TRANSPARENT alias
+    // (`type Fn = Integer -> Integer; type Wrap = Fn -> Fn`) has no
+    // `FunctionType` node in the annotation's own AST at all — `cur` is just
+    // the bare name `Wrap` — so the syntax-level unrolling loop above never
+    // runs, and `result` ends up holding the alias's ENTIRE resolved arrow
+    // type as if it were the return value of a zero-parameter signature
+    // (kexhq/kex#375). `resolveTypeExpr` already resolved `Wrap` all the way
+    // through to its structural `FuncType` (m_typeAliases stores each alias
+    // fully resolved, not just one layer), so unroll THAT the same way the
+    // syntax-level loop above unrolls an explicit `(A -> B) -> (C -> D)`
+    // (kexhq/kex#366 fixed the miscount for that spelling; this is the same
+    // count run on the alias's resolved type instead of its surface syntax).
+    if (params.empty()) {
+        if (auto* resolvedFunc = std::get_if<FuncType>(&result->kind)) {
+            params = resolvedFunc->params;
+            result = resolvedFunc->result;
+        }
+    }
     if (params.empty()) {
         // Non-function annotation (e.g. `x : Int`) — treat as a zero-param
         // constant whose type IS the annotated type.
@@ -3738,6 +3756,27 @@ auto TypeChecker::importedFunctionVisible(
             module != m_importedInterfaces->modules.end() &&
             module->second.automaticImport)
             return true;
+    }
+    // `sourceName` on a receiver method is the METHOD's own name (`close`,
+    // set by `addReceiverSig` in prelude_interfaces.hxx) — but `only:`/
+    // `except:` on a `using` name the DECLARING TYPE (`using
+    // Net.HTTP.WebSocket, only: [Connection]`), not the method. Gating a
+    // dot-call candidate on the method's own name checked "close" against
+    // ["Connection"] and always lost, so a same-named, same-shaped method on
+    // some OTHER, always-visible type (`FileHandle`'s own nullary `close`)
+    // was the only candidate left standing — silently wrong overload
+    // resolution rather than a missing-import error (kexhq/kex#383). Try the
+    // receiver's own type name first; fall back to the method-name check,
+    // which is still right for a bare `only: [someFunction]` import of an
+    // ordinary module-level export.
+    if (function.isReceiverMethod && !function.signature.params.empty()) {
+        if (auto* named =
+                std::get_if<NamedType>(&function.signature.params.front()->kind)) {
+            const auto dot = named->name.rfind('.');
+            const auto bare = dot == std::string::npos
+                ? named->name : named->name.substr(dot + 1);
+            if (moduleMemberImported(function.sourceModule, bare)) return true;
+        }
     }
     return moduleMemberImported(function.sourceModule, function.sourceName);
 }

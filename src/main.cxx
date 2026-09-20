@@ -1451,6 +1451,30 @@ auto resolveBeamDeps(kex::ast::Program &program,
         std::cerr << "error: could not parse module " << modName << "\n";
         std::exit(1);
       }
+      // Expanded HERE, against THIS module's own path, while it is still its
+      // own separate AST — not later, once `resolveBeamDeps` has merged its
+      // items into the entry program's `items` alongside every other
+      // dependency's. `expandParsedProgram` in main() runs exactly once, on
+      // the entry file, with `sourcePath` fixed to the entry file's own
+      // path — so a `Kex.embed(...)` or builder-chain collapse candidate
+      // that a merged-in dependency module owns was resolving relative to
+      // the ENTRY file's directory, or (for a chain requiring `compiled`
+      // expansion) not being visited by that pass at all, since dependency
+      // items are parsed after it already ran. Real per-declaration source
+      // provenance would let one pass over the fully-merged program handle
+      // this uniformly; short of that, each dependency gets its own
+      // self-contained expansion, against its own path, before merging
+      // (kexhq/kex#385).
+      std::vector<kex::semantic::Diagnostic> depExpandDiagnostics;
+      kex::compiled::ExpandOptions depExpandOptions;
+      depExpandOptions.sourcePath = *path;
+      if (!kex::compiled::expand(*depProg, depExpandDiagnostics,
+                                 depExpandOptions)) {
+        for (const auto &diagnostic : depExpandDiagnostics)
+          printSemanticDiagnostic(diagnostic);
+        std::cerr << "error: could not expand module " << modName << "\n";
+        std::exit(1);
+      }
       resolve(*depProg, {}, src.get());
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }

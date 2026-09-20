@@ -45,6 +45,46 @@ auto receiverImplementationPrefix(const std::string& method) -> std::string {
     return method + "/";
 }
 
+// `kex_intrinsic_process:invoke_slot/2` dispatches into a `serving` type's
+// own compiled module by looking up the slot's BARE name/arity at runtime
+// (`erlang:function_exported/3` + `erlang:apply/3`) — it has no type
+// information to resolve a receiver-qualified call the way ordinary Kex call
+// sites do. A slot whose name collides program-wide with some other type's
+// method or record field is mangled to `name/TypeName` by the usual
+// collision handling, and `lowerModules`'s by-name redistribution then
+// carries the one surviving bare-name definition off to whichever OTHER
+// module's colliding name won the race — not this `serving` type's own
+// module. So the very first zero-argument call into a slot whose name
+// collides (kexhq/kex#384; kexhq/kex#377 covered only the case of a
+// top-level, moduleless `serving` block) died `function not exported`, once
+// anything pulling in a same-named colliding definition (`Net.HTTP`'s
+// `Port.value`, in the reported case) was anywhere in the build. Called only
+// AFTER `lowerModules` has finished redistributing and merging — so this
+// plain wrapper, republishing the slot under its own bare name via a local
+// call to the mangled implementation already sitting in the same module,
+// never competes with that shared machinery for the name at all.
+auto servingSlotBareAlias(const std::string& bareName, int arity,
+                          const std::string& targetName) -> FunDef {
+    FunDef alias;
+    alias.name = bareName;
+    alias.arity = arity;
+    FunClause clause;
+    std::vector<ExprPtr> args;
+    for (int i = 0; i < arity; ++i) {
+        const auto argName = "_servingSlotArg" + std::to_string(i);
+        auto param = std::make_unique<Pattern>();
+        param->kind = PatKind::Var;
+        param->name = argName;
+        clause.params.push_back(std::move(param));
+        args.push_back(var(argName));
+    }
+    auto body = std::make_unique<Expr>();
+    body->node = Call{"", targetName, arity, std::move(args), false};
+    clause.body = std::move(body);
+    alias.clauses.push_back(std::move(clause));
+    return alias;
+}
+
 auto mangleModulePath(const std::string& path) -> std::string {
     return path;
 }
@@ -8988,7 +9028,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 for (const auto& typeName :
                      Lowering::makeTargetNameList(node->target)) {
                 std::vector<const ast::FunctionDef*> mgrp;
-                auto flushM = [&]{ if (!mgrp.empty()) { mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName)); mgrp.clear(); } };
+                auto flushM = [&]{
+                    if (!mgrp.empty()) {
+                        mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName));
+                        mgrp.clear();
+                    }
+                };
                 auto pushFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
                     if (!mgrp.empty() &&
@@ -10039,6 +10084,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     }
     std::vector<std::string> modulePaths;
     std::unordered_set<std::string> seenModulePaths;
+    // A `serving` block's slots, declared inside a `module X do ... end` (or
+    // header-style `module X`) rather than at the top level — collected here
+    // so a slot whose bare name lost the collision race below (see
+    // `servingSlotBareAlias`'s own comment) can still be republished under
+    // its bare name in its OWN module afterward. Top-level, moduleless
+    // `serving` blocks are unaffected: `topLevelServingSlots` below already
+    // keeps those out of the by-name redistribution entirely.
+    struct NestedServingSlot {
+        std::string modulePath;
+        std::string typeName;
+        std::string slotName;
+    };
+    std::vector<NestedServingSlot> nestedServingSlots;
     std::function<void(const ast::ModuleDef&)> collect;
     collect = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
@@ -10094,6 +10152,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                         fd->name, methodDispatchTypes(*fd, typeName));
                     definitions[exact] = {path, exact, true};
                 }
+                if (mk->isServing && fd->isSlot)
+                    nestedServingSlots.push_back(
+                        {path, typeName, fd->name});
             };
             for (const auto& typeName :
                  Lowering::makeTargetNameList(mk->target)) {
@@ -10224,6 +10285,33 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             mergeDuplicateFunctions(module.functions, &flat.functions);
         }
         stdlibModules.push_back(std::move(module));
+    }
+    // A nested `serving` slot whose bare name lost the collision race above
+    // (see `servingSlotBareAlias`'s own comment, and kexhq/kex#384) has no
+    // bare-name definition left in its own module — only the mangled
+    // `name/TypeName` implementation, redistributed here by declaring
+    // module rather than by name. Republish it under its bare name, in that
+    // same module, purely for `kex_intrinsic_process:invoke_slot/2`'s
+    // runtime lookup. A slot that kept its bare name (no collision at all)
+    // is left alone.
+    for (const auto& slot : nestedServingSlots) {
+        const auto beamModuleName = "Kex." + slot.modulePath;
+        auto moduleIt = std::find_if(
+            stdlibModules.begin(), stdlibModules.end(),
+            [&](const Module& m) { return m.name == beamModuleName; });
+        if (moduleIt == stdlibModules.end()) continue;
+        const bool hasBare = std::any_of(
+            moduleIt->functions.begin(), moduleIt->functions.end(),
+            [&](const FunDef& fn) { return fn.name == slot.slotName; });
+        if (hasBare) continue;
+        const auto mangled =
+            mangleReceiverImplementation(slot.slotName, slot.typeName);
+        auto implIt = std::find_if(
+            moduleIt->functions.begin(), moduleIt->functions.end(),
+            [&](const FunDef& fn) { return fn.name == mangled; });
+        if (implIt == moduleIt->functions.end()) continue;
+        moduleIt->functions.push_back(
+            servingSlotBareAlias(slot.slotName, implIt->arity, mangled));
     }
     // Built AFTER ejection above so a dispatcher moved into the flat module
     // at the last minute is still a valid target for a call rewritten below.

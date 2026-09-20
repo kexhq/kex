@@ -26,17 +26,22 @@ send(_, _) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % caller through `{tcp_closed, ...}`/`{tcp_error, ...}`, both of which
 % already answer a pending receive with a `Closed` error, so waiting forever
 % here costs nothing when the peer actually goes away.
-receiveMessage({'Net.HTTP.WebSocket.Connection', Pid}) -> call(Pid, receive_message, infinity);
+% The request carries its own deadline (`infinity`, or a millisecond bound)
+% so `server_loop` can enforce it too, not just the caller's own `call/3`
+% wait — see that clause's own comment for why the caller alone is not
+% enough once a receive can be bounded at all.
+receiveMessage({'Net.HTTP.WebSocket.Connection', Pid}) -> call(Pid, {receive_message, infinity}, infinity);
 receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % An explicit, caller-chosen deadline (kexhq/kex#381) — `None` asks for the
 % exact same unbounded wait `receiveMessage/1` gives by default, spelled out
 % rather than left implicit in omitting an argument, and `Just(duration)`
 % asks for a real bound.
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, 'None') ->
-    call(Pid, receive_message, infinity);
+    call(Pid, {receive_message, infinity}, infinity);
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Duration', Seconds}})
   when is_number(Seconds), Seconds >= 0 ->
-    call(Pid, receive_message, timeout_ms(Seconds));
+    Timeout = timeout_ms(Seconds),
+    call(Pid, {receive_message, Timeout}, Timeout);
 receiveMessageWithin(_, _) -> error_value('Parse', <<"invalid WebSocket receive timeout">>).
 session({'Net.HTTP.WebSocket.Connection', Pid}) ->
     case call(Pid, session) of
@@ -171,6 +176,24 @@ run_handler(HandlerFun, ConnPid) ->
 % so a connection that already has a full frame buffered — or ever will,
 % from the fixed `Buffered` handed in by `accept/4` — never touches the
 % socket at all.
+%
+% A bounded request (kexhq/kex#381's `receiveMessage(timeout: Just(_))`)
+% also arms its OWN deadline here (`arm_receive_deadline`/the
+% `{receive_timeout, Ref}` clause below), not just the caller's own
+% `call/3` wait: this process has no idea the caller gave up once its
+% `after` fires, so without an equivalent deadline of its own it stays
+% parked with the stale `{From, Ref}` in `Pending` — and a HANDLER LOOPING
+% ON A SHORT TIMEOUT (poll, keep going on Timeout) sends exactly one retry
+% per round, whose new `{call, ..., NewRef, ...}` arrives and overwrites
+% `Pending` unconditionally. Data that lands in the gap between the old
+% caller giving up and that retry arriving was being delivered to the
+% already-abandoned `{From, OldRef}` — lost to the handler, and to nobody,
+% since its caller had already stopped listening for `OldRef` (observed as
+% a flaky client-side hang in spec/net_websocket_receive_timeout_beam.kex).
+% Timing this process's own give-up to the same deadline the caller asked
+% for keeps `Pending` from ever outliving the window the caller is actually
+% still watching, so an in-between arrival is buffered (the `none` branch
+% below) for the retry to pick straight back up, correctly, instead.
 server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending) ->
     receive
         {call, From, Ref, {send, _}} when Closed ->
@@ -186,10 +209,10 @@ server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor,
                     server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
                 _ -> server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending)
             end;
-        {call, From, Ref, receive_message} when Closed ->
+        {call, From, Ref, {receive_message, _Wait}} when Closed ->
             From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
             server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
-        {call, From, Ref, receive_message} ->
+        {call, From, Ref, {receive_message, Wait}} ->
             case server_try_receive(Transport, Buffer, Fragment, Maximum) of
                 {done, {Reply, NextBuffer, NextFragment, continue}} ->
                     From ! {Ref, Reply},
@@ -199,7 +222,19 @@ server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor,
                     server_loop(Transport, NextBuffer, none, Maximum, Selected, HandlerPid, Monitor, true, none);
                 {need_more, NextBuffer, NextFragment} ->
                     ok = inet:setopts(element(2, Transport), [{active, once}]),
+                    arm_receive_deadline(Wait, Ref),
                     server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, {From, Ref})
+            end;
+        {receive_timeout, Ref} ->
+            case Pending of
+                {From, Ref} ->
+                    From ! {Ref, error_value('Timeout', <<"WebSocket operation timed out">>)},
+                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
+                _ ->
+                    % Superseded by a later request, or already answered —
+                    % this timer's own request is no longer the one
+                    % `Pending` refers to, so it has nothing to do.
+                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending)
             end;
         {call, From, Ref, session} ->
             From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
@@ -256,6 +291,13 @@ reply_pending_closed({From, Ref}) -> From ! {Ref, error_value('Closed', <<"WebSo
 
 reply_pending_error(none, _Error) -> ok;
 reply_pending_error({From, Ref}, Error) -> From ! {Ref, Error}.
+
+% No deadline at all needs no timer; a real one schedules this process's own
+% `{receive_timeout, Ref}` to itself, so a caller-given bound is enforced
+% here too and `Pending` can never outlive it (see `server_loop`'s own
+% comment on why the caller's `call/3` wait alone is not enough).
+arm_receive_deadline(infinity, _Ref) -> ok;
+arm_receive_deadline(Wait, Ref) -> erlang:send_after(Wait, self(), {receive_timeout, Ref}), ok.
 
 % Non-blocking counterpart to `receive_message`/`read_frame`, used only by
 % `server_loop`: reports `{need_more, Buffer, Fragment}` instead of
@@ -362,7 +404,15 @@ loop(Transport, Buffer, Fragment, Maximum, Selected) ->
                 {'Error', _} -> transport_close(Transport);
                 _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
             end;
-        {call, From, Ref, receive_message} ->
+        {call, From, Ref, {receive_message, _Wait}} ->
+            % `_Wait` isn't honored here yet: this loop reads via a
+            % blocking `gen_tcp:recv` with its own fixed `?TIMEOUT`
+            % (kexhq/kex#370's server-side fix — `{active, once}` — was
+            % never mirrored to the client side), so a caller-given bound
+            % shorter than that isn't actually enforced client-side. Left
+            % as a known gap rather than claiming a guarantee this loop
+            % cannot keep; matching the new `{receive_message, Wait}` shape
+            % here is only about not breaking dispatch.
             case receive_message(Transport, client, Buffer, Fragment, Maximum) of
                 {Reply, NextBuffer, NextFragment, continue} ->
                     From ! {Ref, Reply},
