@@ -1,0 +1,12 @@
+# Regression test for kexhq/kex#379: `Template.scan` (which `Kex.embed` +
+# `Template.text` run at compile time) was severely super-linear, so a
+# template of ordinary real-world size — a few KB of HTML and CSS, nothing
+# exotic — reliably blew through the scanner's hardcoded 2000ms budget and
+# failed to compile at all. `large_template.ket` is ~9KB, well past every
+# size that timed out in the issue; if the scanner regresses back to
+# quadratic, this spec times out (via `make spec`'s own per-spec timeout)
+# rather than printing the line below.
+main do
+  let greet = Template.text(Kex.embed("lib/compiled/large_template.ket"))
+  IO.printLine(greet("world"))
+end

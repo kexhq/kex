@@ -1,0 +1,76 @@
+# kex: run-beam
+#
+# kexhq/kex#381: `receiveMessage` gave up after a hardcoded 31s even though
+# the peer was still connected and simply hadn't sent anything — a WebSocket
+# is routinely left open indefinitely with nothing to say for long stretches
+# (a chat room's participants, most of the time), so an idle-but-connected
+# client isn't an error at all. Fixed by giving `receiveMessage()` no
+# deadline by default, and adding `receiveMessage(timeout: Duration?)` so a
+# caller can ask for `None` (the same unbounded wait, spelled out) or
+# `Just(duration)` (a real bound) explicitly rather than that choice being
+# implicit in whether an argument was passed at all.
+#
+# Waiting the real 31s this bug was reported at would make this spec slow
+# forever, so what's exercised here is the mechanism at a scale a test suite
+# can afford: the server-side handler cycles through several rounds of its
+# own SHORT, explicit timeout while the client stays idle, without the
+# connection closing underneath it — a real message sent after several such
+# rounds still gets through and echoed back correctly.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul serveIdleThenEcho(socket: Connection) -> Void do
+  var reportedTimeout = false
+  loop do
+    match socket.receiveMessage(timeout: Just(100.milliseconds)) do
+      Ok(Text(text)) => do
+        socket.send(Text(text)).try
+        break
+      end
+      Ok(CloseMessage(_, _)) => break
+      Ok(_) => Void
+      Error(NetError { kind: Timeout }) => do
+        if !reportedTimeout
+          IO.printLine("server: got its own 100ms Timeout, as asked — still waiting")
+          reportedTimeout = true
+        end
+      end
+      Error(_) => break
+    end
+  end
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| serveIdleThenEcho(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute)
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+
+  let socket = WebSocket.connect("ws://127.0.0.1:${port}/socket").try
+
+  # Say nothing for well past several of the handler's own 100ms Timeouts —
+  # before the fix, the connection was torn down by the RUNTIME itself at
+  # 31s regardless of what the handler asked for; a handler using a much
+  # shorter bound on purpose is exactly the case that must keep working.
+  Task.sleep(500.milliseconds)
+
+  # `timeout: None` explicitly, rather than the bare zero-argument form —
+  # the same unbounded wait, spelled out.
+  socket.send(Text("still here")).try
+  match socket.receiveMessage(timeout: None).try do
+    Text(text) => assert(text == "still here", "the connection must survive repeated Timeouts and keep working")
+    other => assert(false, "expected the echo, got ${other}")
+  end
+
+  socket.close
+  Task.sleep(100.milliseconds)
+
+  let shutdown = server.stop.try
+  IO.printLine("ok")
+end

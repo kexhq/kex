@@ -334,17 +334,21 @@ private do
   # A cursor advanced to the next `\n` (not past it), and the text skipped.
   #
   # Hand-rolled rather than `Input#takeWhile`: see `scanText`'s comment on why.
+  #
+  # Tracks the run's start position and slices once at the end, rather than
+  # building it one `Char` at a time with `push!`: pushing to a `var` list
+  # rebinds it to a freshly copied list every call (kexhq/kex#379), so a
+  # character-at-a-time accumulation of an N-character line cost O(N^2), not
+  # O(N). One slice is O(N) total regardless of how many lines are scanned.
   let scanLine(cursor: Input) -> (String, Input) do
     var cur = cursor
-    var chars: [Char] = []
+    let start = cur.pos
     loop do
       break if cur.peek == None
       break if cur.peek == Just('\n')
-      let Just(ch) = cur.peek
-      chars.push!(ch)
       cur.advance!
     end
-    (chars.join(""), cur)
+    (cur.input.chars.drop(start).take(cur.pos - start).join(""), cur)
   end
 
   # A line's text with any trailing `\r` dropped, for a source that mixes
@@ -475,23 +479,31 @@ private do
   # collides with `List#takeWhile`, and calling it through an `Input` receiver
   # sends overload resolution down the wrong path (`json.kex`'s own scanners
   # hit the same thing and avoid it the same way).
+  #
+  # Tracks each run's start position and slices it out whole, rather than
+  # pushing one `Char` at a time: see `scanLine`'s comment on why that was
+  # quadratic (kexhq/kex#379). `<%%` still needs a per-occurrence split (it
+  # folds three input characters into two output ones), but that split is as
+  # rare as `<%%` itself, not once per character of ordinary text.
   let scanText(cursor: Input) -> (String, Input) do
     var cur = cursor
-    var chars: [Char] = []
+    var pieces: [String] = []
+    var runStart = cur.pos
     loop do
       break if cur.peek == None
       break if atTagOpen?(cur)
       if cur.peek == Just('<') && cur.peekAt(1) == Just('%') && cur.peekAt(2) == Just('%')
-        chars.push!('<')
-        chars.push!('%')
+        pieces.push!(cur.input.chars.drop(runStart).take(cur.pos - runStart).join(""))
+        pieces.push!("<%")
         cur.advanceBy!(3)
+        runStart = cur.pos
       else
-        let Just(ch) = cur.peek
-        chars.push!(ch)
         cur.advance!
+        ()
       end
     end
-    (chars.join(""), cur)
+    pieces.push!(cur.input.chars.drop(runStart).take(cur.pos - runStart).join(""))
+    (pieces.join(""), cur)
   end
 
   # Strips trailing spaces and tabs (not newlines): the indentation a `<%-`
@@ -575,16 +587,17 @@ private do
 
   # Reads a tag's body up to its closer, `%>` or `-%>`. Answers the raw text,
   # whether the closer trims the following newline, and the cursor past it.
+  #
+  # Slices the body out once at the closer, rather than pushing one `Char` at
+  # a time — see `scanLine`'s comment on why that was quadratic
+  # (kexhq/kex#379).
   let scanTagBody(cursor: Input) -> Result<(String, Bool, Input), TemplateError> do
     let start = cursor.pos
     var cur = cursor
-    var chars: [Char] = []
     loop do
       return Error(UnterminatedTag(start)) if cur.peek == None
-      return Ok((chars.join(""), true, cur.advanceBy(3))) if cur.peek == Just('-') && cur.peekAt(1) == Just('%') && cur.peekAt(2) == Just('>')
-      return Ok((chars.join(""), false, cur.advanceBy(2))) if cur.peek == Just('%') && cur.peekAt(1) == Just('>')
-      let Just(ch) = cur.peek
-      chars.push!(ch)
+      return Ok((cur.input.chars.drop(start).take(cur.pos - start).join(""), true, cur.advanceBy(3))) if cur.peek == Just('-') && cur.peekAt(1) == Just('%') && cur.peekAt(2) == Just('>')
+      return Ok((cur.input.chars.drop(start).take(cur.pos - start).join(""), false, cur.advanceBy(2))) if cur.peek == Just('%') && cur.peekAt(1) == Just('>')
       cur.advance!
     end
   end

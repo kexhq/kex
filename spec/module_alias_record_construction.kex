@@ -1,0 +1,37 @@
+# kexhq/kex#alias — constructing a record through a `using M, as: Alias`
+# alias, or through an `export M` re-namespaced path, used to tag the value
+# with the WRITTEN qualifier itself ('Geo.Circle', 'App.Geometry.Circle')
+# instead of the record's real identity ('Geometry.Circle') — nothing
+# registered under that spelling, so BEAM saw a bare, untagged tuple the
+# moment any method or pattern inspected it, and the typechecker separately
+# rejected passing such a value to a function that expected the record's
+# real (unaliased) type, since the two spellings didn't match structurally.
+
+module Geometry do
+  record Circle do
+    radius : Float = 1.0
+  end
+
+  make Circle do
+    let area = 3.14159 * this.radius * this.radius
+  end
+end
+
+module App do
+  export Geometry
+end
+
+foul describe(c: Geometry.Circle) -> String do
+  return "area=${c.area.to(String).or("")}"
+end
+
+main do
+  using Geometry, as: Geo
+  let viaAlias = Geo.Circle { radius: 5.0 }
+  IO.printLine(viaAlias.area.to(String).or(""))
+  IO.printLine(describe(viaAlias))
+
+  let viaExport = App.Geometry.Circle { radius: 2.0 }
+  IO.printLine(viaExport.area.to(String).or(""))
+  IO.printLine(describe(viaExport))
+end

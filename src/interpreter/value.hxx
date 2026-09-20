@@ -43,7 +43,26 @@ struct IntValue { int64_t value; };
 // fallback, not a parallel "the" representation of Integer.
 struct BigIntValue { mpz_class value; };
 struct FloatValue { double value; };
-struct StringValue { std::string value; };
+// `codepointCache` is populated lazily by `cachedCodepoints` (value.cxx) the
+// first time anything indexes or counts this string by codepoint, and reused
+// by every later call on the SAME StringValue — sharing it, not the bytes.
+// `Input` (src/stdlib/parsing.kex) is an immutable cursor that reuses the one
+// `ValuePtr` for its whole scan across every `advance`/`advanceBy` (record
+// fields are `ValuePtr`s, copied by shared_ptr, never deep-copied), so a
+// character-at-a-time scan like `Template.scan`'s `scanText` used to re-run
+// `utf8::decode` — a full decode of the ENTIRE remaining string — on every
+// single `peek`/`peekAt`/`at`, turning an O(n) scan into O(n^2) decodes of
+// ever-shrinking-but-still-huge strings (kexhq/kex#379). Caching the decode
+// once on the shared StringValue turns that back into one decode total.
+struct StringValue {
+  std::string value;
+  mutable std::shared_ptr<std::vector<char32_t>> codepointCache;
+};
+
+// This string's codepoints, decoded once and cached on `s` for every later
+// caller — see `StringValue::codepointCache`'s own comment.
+auto cachedCodepoints(const StringValue &s) -> const std::vector<char32_t> &;
+
 struct BinaryValue { std::vector<uint8_t> bytes; };
 // A Unicode codepoint, not a byte: `"école".chars` yields five of these.
 struct CharValue { char32_t value; };

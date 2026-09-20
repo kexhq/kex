@@ -278,6 +278,7 @@ auto TypeChecker::check(const ast::Program& program,
         }
         selection.onlyNames = block.onlyNames;
         selection.exceptNames = block.exceptNames;
+        selection.alias = block.alias;
         m_importedModulePaths.insert(selection.module);
         return selection;
     };
@@ -496,6 +497,8 @@ auto TypeChecker::check(const ast::Program& program,
     validateDeclarations(program, m_importedInterfaces, m_traits, diagnostics);
     registerDeclaredSignatures(program);
     registerMakeSignatures(program);
+    m_moduleReexports.clear();
+    registerExports(program);
     preRegisterFunctionSigs(program);
 
 
@@ -923,6 +926,40 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
             unique = candidate;
         }
         if (unique) return *unique;
+    }
+    // A leading portion of `name` is a KNOWN ALIAS (`using Geometry, as:
+    // Geo`) — a "Geo.Circle" reference names the record its TARGET module
+    // registers as "Geometry.Circle", not "Geo.Circle" literally. Longest
+    // prefix first, matching every lookup above (most specific wins).
+    // Checked last: an unaliased, directly-registered name always wins
+    // first (see the declaration-precedence comment above) — construction
+    // through the alias otherwise inferred a DIFFERENT type ("Geo.Circle")
+    // than the SAME record's field/method-derived type elsewhere
+    // ("Geometry.Circle"), so passing one to a function expecting the
+    // other was rejected as a type mismatch despite being the identical
+    // value (kexhq/kex#alias).
+    if (const auto dot = name.rfind('.'); dot != std::string::npos) {
+        auto aliasFor = [&](const std::string& prefix) -> std::optional<std::string> {
+            for (auto scope = m_importScopeStack.rbegin();
+                 scope != m_importScopeStack.rend(); ++scope)
+                for (auto import = scope->rbegin(); import != scope->rend(); ++import)
+                    if (import->alias && *import->alias == prefix) return import->module;
+            for (auto import = m_declarationImports.rbegin();
+                 import != m_declarationImports.rend(); ++import)
+                if (import->alias && *import->alias == prefix) return import->module;
+            if (auto reexport = m_moduleReexports.find(prefix);
+                reexport != m_moduleReexports.end())
+                return reexport->second;
+            return std::nullopt;
+        };
+        for (size_t prefixEnd = dot; prefixEnd != std::string::npos;
+             prefixEnd = prefixEnd == 0 ? std::string::npos
+                                        : name.rfind('.', prefixEnd - 1)) {
+            if (auto target = aliasFor(name.substr(0, prefixEnd))) {
+                const auto aliased = *target + name.substr(prefixEnd);
+                if (recordExists(aliased)) return aliased;
+            }
+        }
     }
     return name;
 }
@@ -2022,6 +2059,42 @@ auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
     }
 }
 
+auto TypeChecker::registerExportsInModule(const ast::ModuleDef& mod,
+                                          const std::string& parentPath) -> void {
+    const auto path = parentPath.empty() ||
+            mod.name.starts_with(parentPath + ".")
+        ? mod.name : parentPath + "." + mod.name;
+    for (const auto& item : mod.body) {
+        std::visit([this, &path](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
+                if (!node) return;
+                std::string target;
+                for (size_t i = 0; i < node->module.parts.size(); ++i) {
+                    if (i) target += ".";
+                    target += node->module.parts[i];
+                }
+                const auto alias =
+                    node->alias.value_or(node->module.parts.back());
+                m_moduleReexports[path + "." + alias] = target;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerExportsInModule(*node, path);
+            }
+        }, item);
+    }
+}
+
+auto TypeChecker::registerExports(const ast::Program& program) -> void {
+    for (const auto& item : program.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerExportsInModule(*node, "");
+            }
+        }, item);
+    }
+}
+
 auto TypeChecker::preRegisterFunctionSigs(const ast::Program& program) -> void {
     std::function<void(const ast::ModuleDef&)> registerModule;
     registerModule = [&](const ast::ModuleDef& module) {
@@ -2878,6 +2951,7 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
     }
     selection.onlyNames = block.onlyNames;
     selection.exceptNames = block.exceptNames;
+    selection.alias = block.alias;
     if (block.body.empty()) {
         if (!m_importScopeStack.empty())
             m_importScopeStack.back().push_back(std::move(selection));
@@ -4191,6 +4265,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             selection.onlyNames = node.onlyNames;
             selection.exceptNames = node.exceptNames;
+            selection.alias = node.alias;
             if (node.body.empty()) {
                 if (!m_importScopeStack.empty())
                     m_importScopeStack.back().push_back(std::move(selection));

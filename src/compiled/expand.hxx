@@ -42,7 +42,17 @@ struct ExpandOptions {
     // Wall-clock budget for all compile-time evaluation in one program. The
     // backstop for pathological cases; the step limit is what gives
     // reproducible errors across machines.
-    std::chrono::milliseconds timeout{2000};
+    //
+    // 2000ms (kexhq/kex#379) turned out too tight for the sandboxed tree-walk
+    // Evaluator's own throughput: an ordinary, non-pathological template a
+    // few KB in size — no exotic content, just realistic HTML/CSS/JS —
+    // legitimately needs several seconds of real interpreter work to scan,
+    // even with `Template.scan`'s own O(n^2) hot spots fixed (repeated
+    // UTF-8 re-decoding per character, and building up plain-text runs one
+    // `Char` at a time via `push!`, each of which copies the whole backing
+    // list). Fixing those made the scan linear in input size rather than
+    // quadratic, but linear-and-slow still needs a budget that fits it.
+    std::chrono::milliseconds timeout{10000};
     std::size_t stepLimit = 5'000'000;
     // Report errors inside a template's own body as well as at the use site.
     bool verbose = false;

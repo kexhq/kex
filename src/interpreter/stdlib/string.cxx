@@ -83,7 +83,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         }
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::none();
-        auto cps = utf8::decode(str->value);
+        const auto& cps = cachedCodepoints(*str);
         return i < cps.size() ? Value::just(Value::character(cps[i])) : Value::none();
     };
     defineIntrinsic("List::at", std::move(at));
@@ -94,7 +94,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
-        auto cps = utf8::decode(str->value);
+        const auto& cps = cachedCodepoints(*str);
         std::vector<ValuePtr> elems;
         elems.reserve(cps.size());
         for (auto cp : cps) elems.push_back(Value::character(cp));

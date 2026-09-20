@@ -492,6 +492,22 @@ invoke_slot(Request, State) when is_tuple(Request), tuple_size(Request) >= 1 ->
     case lists:member(Method, Slots) of
         false -> erlang:error({unknown_serving_slot, Method});
         true ->
+            % `function_exported/3` answers about the CURRENTLY LOADED code
+            % only — unlike an ordinary call, it never triggers the autoloader
+            % — so it reports `false` for a module nobody has called into yet,
+            % indistinguishable from that arity genuinely not existing. A
+            % `serving` block's own module is exactly a module nothing else in
+            % the program necessarily calls: `Process.spawn` never references
+            % it by name, only `kex_intrinsic_process` does, right here. That
+            % false negative sent the very first call into every such process
+            % down the "no capability context" branch instead, applying the
+            % ARITY+1 form — which some OTHER module's same-named, actually
+            % arity+1 method (a capability-threaded `foul` method elsewhere in
+            % the build, sharing this bare name) answered instead, with a
+            % receiver check that never matches this slot's own type
+            % (kexhq/kex#377). `ensure_loaded/1` is a no-op once the module is
+            % loaded, which every call after the first already leaves it.
+            code:ensure_loaded(Module),
             case erlang:function_exported(Module, Method, length(PlainArgs)) of
                 true -> erlang:apply(Module, Method, PlainArgs);
                 false -> erlang:apply(Module, Method, PlainArgs ++ [#{}])

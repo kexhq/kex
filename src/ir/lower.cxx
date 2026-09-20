@@ -383,6 +383,29 @@ struct Lowering {
                 }
                 if (!qualified.empty()) return qualified;
             }
+            // A leading PORTION of the qualifier is a KNOWN ALIAS: either a
+            // `using Geometry, as: Geo` single-segment alias, or a
+            // multi-segment one an `export Geometry` inside `module App`
+            // registers for its whole re-namespaced prefix (`App.Geometry`,
+            // still meaning `Geometry`). Longest prefix first, so a re-export
+            // nested inside an aliased scope resolves the more specific
+            // mapping. The record's real identity is registered under the
+            // alias's TARGET, not the written qualifier — construction
+            // through either otherwise tagged the tuple with the qualifier
+            // ITSELF ('Geo.Circle', 'App.Geometry.Circle'), which no
+            // is_record/tag guard anywhere recognizes — the record table
+            // only ever holds canonical module names — so a value built
+            // this way looked like a bare, untagged tuple to every
+            // method/pattern that later inspected it (kexhq/kex#alias).
+            for (size_t prefixEnd = dot; prefixEnd != std::string::npos;
+                 prefixEnd = prefixEnd == 0
+                     ? std::string::npos
+                     : name.rfind('.', prefixEnd - 1)) {
+                auto alias = moduleAliases.find(name.substr(0, prefixEnd));
+                if (alias == moduleAliases.end()) continue;
+                const auto aliased = alias->second + name.substr(prefixEnd);
+                if (records.count(aliased)) return aliased;
+            }
             if (const auto bare = name.substr(dot + 1); records.count(bare))
                 return bare;
             return name;
@@ -1841,44 +1864,21 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 return lowerMethodCall(n);
             } else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
-                std::string srcMod;
-                for (size_t i = 0; i < n.module.parts.size(); i++) {
-                    if (i) srcMod += ".";
-                    srcMod += n.module.parts[i];
-                }
-                auto saved = moduleImports;
-                auto savedAliases = moduleAliases;
-                auto savedUsing = usingModules;
-                usingModules.insert(srcMod);
-                if (n.alias) moduleAliases[*n.alias] = srcMod;
-                // Import immediate nested modules — and M's own last segment
-                // and sibling modules — under their leaf name too. The
-                // semantic resolver already makes `URL.parse` available after
-                // `using URI`; BEAM lowering must map that leaf back to its
-                // owning companion (`URI.URL`) just as the tree walker does.
-                // Explicit aliases still win: registerModuleAliases only
-                // fills a name in when nothing has claimed it yet.
-                registerModuleAliases(srcMod, n.onlyNames, n.exceptNames);
-                if (!n.onlyNames.empty()) {
-                    for (const auto& name : n.onlyNames) {
-                        auto key = srcMod + "." + name;
-                        if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
-                            moduleImports[name] = it->second;
-                    }
-                } else {
-                    for (const auto& [key, val] : moduleFunctions)
-                        if (key.rfind(srcMod + ".", 0) == 0) {
-                            auto bare = key.substr(srcMod.size() + 1);
-                            if (bare.find('.') == std::string::npos
-                                && std::find(n.exceptNames.begin(), n.exceptNames.end(), bare)
-                                    == n.exceptNames.end())
-                                moduleImports[bare] = val;
-                        }
-                }
+                // A bare `using M, as: Alias` statement (no `do`) reaches
+                // here with an EMPTY `n.body` — the parser only fills it for
+                // the explicit block form. Lowering it standalone applied
+                // the bindings and immediately restored them around nothing,
+                // so a value constructed through the alias on the very next
+                // statement was tagged with the alias's own name instead of
+                // the module it names (kexhq/kex#alias). That statement form
+                // is caught and handled by `lowerBodyFrom` before a body's
+                // generic per-statement fallthrough ever reaches `lower()`,
+                // so by the time a `UsingExpr` arrives here its body is
+                // always the real, explicit scope to lower under the
+                // bindings.
+                auto saved = applyUsingBindings(n);
                 auto result = lowerBody(n.body);
-                moduleImports = std::move(saved);
-                moduleAliases = std::move(savedAliases);
-                usingModules = std::move(savedUsing);
+                restoreUsingBindings(std::move(saved));
                 return result;
             } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
                 // .try desugars to: case operand of Ok(v) -> v; Error(e) -> return Error(e)
@@ -5850,6 +5850,64 @@ struct Lowering {
             [&]{ return lowerBodyFrom(outer, outerStart + 1); }, counterVar);
     }
 
+    // The import/alias state `applyUsingBindings` overwrites, so a caller can
+    // restore it once whatever scope the bindings apply to is done lowering.
+    struct UsingBindingsSaved {
+        std::unordered_map<std::string, std::string> imports;
+        std::unordered_map<std::string, std::string> aliases;
+        std::set<std::string> using_;
+    };
+
+    // Applies one `using Module[, as: Alias][, only:/except: ...]` statement's
+    // import/alias bindings, returning the pre-existing state for the caller
+    // to restore once the bindings go out of scope. Shared by both spellings
+    // this can take: `using M do ... end` (an expression; the caller lowers
+    // `n.body` itself while the bindings are live, matching them exactly to
+    // that block) and a BARE `using M, as: Alias` statement with no `do` —
+    // the parser leaves ITS `body` empty, and its scope is instead the REST
+    // of the enclosing block, so `lowerBodyFrom`'s bare-statement case below
+    // calls this the same way and treats what follows as that scope.
+    auto applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved {
+        UsingBindingsSaved saved{moduleImports, moduleAliases, usingModules};
+        std::string srcMod;
+        for (size_t i = 0; i < n.module.parts.size(); i++) {
+            if (i) srcMod += ".";
+            srcMod += n.module.parts[i];
+        }
+        usingModules.insert(srcMod);
+        if (n.alias) moduleAliases[*n.alias] = srcMod;
+        // Import immediate nested modules — and M's own last segment and
+        // sibling modules — under their leaf name too. The semantic resolver
+        // already makes `URL.parse` available after `using URI`; BEAM
+        // lowering must map that leaf back to its owning companion
+        // (`URI.URL`) just as the tree walker does. Explicit aliases still
+        // win: registerModuleAliases only fills a name in when nothing has
+        // claimed it yet.
+        registerModuleAliases(srcMod, n.onlyNames, n.exceptNames);
+        if (!n.onlyNames.empty()) {
+            for (const auto& name : n.onlyNames) {
+                auto key = srcMod + "." + name;
+                if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
+                    moduleImports[name] = it->second;
+            }
+        } else {
+            for (const auto& [key, val] : moduleFunctions)
+                if (key.rfind(srcMod + ".", 0) == 0) {
+                    auto bare = key.substr(srcMod.size() + 1);
+                    if (bare.find('.') == std::string::npos &&
+                        std::find(n.exceptNames.begin(), n.exceptNames.end(), bare) ==
+                            n.exceptNames.end())
+                        moduleImports[bare] = val;
+                }
+        }
+        return saved;
+    }
+    auto restoreUsingBindings(UsingBindingsSaved saved) -> void {
+        moduleImports = std::move(saved.imports);
+        moduleAliases = std::move(saved.aliases);
+        usingModules = std::move(saved.using_);
+    }
+
     // ---- Body lowering ----------------------------------------------------
     // A statement sequence. `let`/`var`/reassignments introduce SSA-renamed
     // bindings (updating `subst`); every other statement's value is bound to
@@ -6140,6 +6198,23 @@ struct Lowering {
                 auto rest = lowerBodyFrom(body, i + 1);
                 return matchBool(std::move(c), std::move(retX), std::move(rest));
             }
+        }
+
+        // A bare `using M, as: Alias` statement (no `do ... end`) scopes to
+        // the REST of this body, not to nothing: the parser leaves its own
+        // `body` empty (only the explicit block form fills it), so lowering
+        // it through the generic fallthrough below applied the bindings and
+        // restored them immediately, before any subsequent statement — a
+        // value constructed through the alias on the very next line was
+        // tagged with the alias's own name instead of the module it names
+        // (kexhq/kex#alias). `isLast` still means nothing follows, so it
+        // falls through as an ordinary (no-op) statement in that case.
+        if (auto* ue = std::get_if<ast::UsingExpr>(&e->kind);
+            ue && ue->body.empty() && !isLast) {
+            auto saved = applyUsingBindings(*ue);
+            auto rest = lowerBodyFrom(body, i + 1);
+            restoreUsingBindings(std::move(saved));
+            return rest;
         }
 
         if (isLast) return lower(e);
@@ -8757,6 +8832,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     }
                     auto alias = (*ed)->alias.value_or((*ed)->module.parts.back());
                     auto nsPath = path + "." + alias;
+                    // Records aren't re-namespaced the way functions are
+                    // just below (each one copied to a new `moduleFunctions`
+                    // key) — a record's identity is its BEAM tag, which
+                    // stays whatever the declaring module gave it. Instead,
+                    // teach `canonicalRecordName` the prefix rewrite: a
+                    // value constructed as `nsPath.Circle` (`App.Geometry.
+                    // Circle`, reached through `export Geometry` inside
+                    // `module App`) really means `srcMod.Circle`
+                    // (`Geometry.Circle`), the one records.count actually
+                    // recognizes. `moduleAliases` already serves the exact
+                    // same purpose for a `using M, as: Alias` prefix — the
+                    // multi-segment key here is inert for that lookup (it
+                    // only ever checks a call's single leading segment).
+                    L.moduleAliases[nsPath] = srcMod;
                     for (const auto& [key, val] : L.moduleFunctions) {
                         if (key.rfind(srcMod + ".", 0) != 0) continue;
                         auto bare = key.substr(srcMod.size() + 1);

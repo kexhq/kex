@@ -771,3 +771,15 @@ target_include_directories(run_cache_cli_test PRIVATE tests)
 target_compile_definitions(run_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(run_cache_cli_test kex)
 add_test(NAME run_cache_cli_test COMMAND run_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Regression test for kexhq/kex#377: a `serving` block in a sibling module
+# (not the entrypoint) failed its first slot call once `Net.HTTP` was
+# anywhere in the build. Two compilation units and real BEAM execution, so
+# like multi_module_check_cli_test.cxx this drives the real binary rather
+# than living in spec/*.kex.
+add_executable(serving_imported_module_beam_test tests/serving_imported_module_beam_test.cxx)
+target_link_libraries(serving_imported_module_beam_test PRIVATE kex_lib)
+target_include_directories(serving_imported_module_beam_test PRIVATE tests)
+target_compile_definitions(serving_imported_module_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(serving_imported_module_beam_test kex)
+add_test(NAME serving_imported_module_beam_test COMMAND serving_imported_module_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
