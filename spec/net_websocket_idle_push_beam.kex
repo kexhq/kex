@@ -23,6 +23,10 @@ serving Registry do
     return new
   end
 
+  # Readout for the synchronization in `main` below: how many connections
+  # have registered so far.
+  foul slot socketCount() -> Reply<Integer> = { reply: @sockets.length }
+
   foul slot pingAll() -> Void do
     @sockets.each { |socket| socket.send(Text("ping")).try }
     return this
@@ -50,6 +54,21 @@ main do
   # The point of this spec: pinging an idle connection from a process
   # other than its own handler must not block on the client speaking
   # first, and must not tear the connection down as a side effect.
+  #
+  # The handler registers with a separate call into this same registry,
+  # and NOTHING orders that call before this one: the server sends the
+  # 101 `connect` returns on BEFORE spawning the handler, so `pingAll`
+  # can run against an empty registry — the push is then never sent and
+  # the client below blocks until its 30s recv timeout and reports
+  # Closed/"timeout". Wait for the registration first. The wait is
+  # bounded so a genuine regression still fails fast instead of hanging
+  # the suite (or detonating 30s later with the misleading timeout).
+  var waited = 0
+  while registry.socketCount() != Ok(1) do
+    assert(waited < 200, "the handler should register its socket promptly")
+    Task.sleep(50.milliseconds)
+    waited = waited + 1
+  end
   registry.pingAll()
 
   match socket.receiveMessage.try do
