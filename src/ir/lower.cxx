@@ -3709,6 +3709,29 @@ struct Lowering {
                             fillDefaultSlots(qualKey, args, binds);
                         }
                         int ar = static_cast<int>(args.size());
+                        // `Module.name` may be a zero-param VALUE binding
+                        // rather than a real function — `let render =
+                        // Template.html(...)` in `module M do ... end`,
+                        // reached here as `M.render(x)` from OUTSIDE it (the
+                        // identical call from WITHIN the same module is
+                        // `lowerFunctionCall`'s own `zeroArgThunk` check —
+                        // see its comment for the full story). Its only
+                        // emitted arity is 0 (the thunk that hands back the
+                        // closure), so calling it directly at this call's own
+                        // arity emitted a call to an arity that was never
+                        // defined and erlc rejected the module outright:
+                        // `undefined function 'M.render'/1`, a dangling
+                        // reference to something that only ever existed as
+                        // `render/0`. Evaluate the thunk first, then apply
+                        // the supplied args to what it returns.
+                        if (!args.empty() && emittedModuleZeroArg.count(it->second)) {
+                            auto thunk = std::make_unique<Expr>();
+                            thunk->node = localCall(it->second, {});
+                            auto indirect = std::make_unique<Expr>();
+                            indirect->node = CallIndirect{
+                                std::move(thunk), std::move(args), false};
+                            return wrapLets(binds, std::move(indirect));
+                        }
                         return wrapLets(binds, localCallExpr(it->second, std::move(args)));
                     }
                 }
