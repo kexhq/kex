@@ -1,0 +1,46 @@
+# kex: run-beam
+# A `serving` process's slot, called through a `Server<T>` value whose
+# owning module `T` is never `using`-imported by the caller — reached only
+# through full qualification (`Catalog.Shelf.Stock`) or, as here, a record
+# field typed `Server<Catalog.Shelf.Stock>`.
+#
+# `checkCall`'s candidate filter exempts a make-block method from needing an
+# explicit import when "a value whose TYPE names that module" already
+# supplies the qualification (`CollisionWeb.Server.build(...)` needs no
+# `using CollisionWeb` for the same reason). That exemption reads the
+# receiver's OWN type name to find its module — correct for an ordinary,
+# unwrapped receiver, but `Process.spawn`'s result is `Server<T>`, not `T`:
+# the receiver's name is the bare word "Server", which has no module prefix
+# at all, so the exemption always missed it and fell through to requiring
+# `T`'s module be imported after all — even though the call already spells
+# it out in full. With no candidate left, the slot call fell all the way
+# through to the runtime's generic method dispatcher, which has no case for
+# a `Server` handle: `kex -C` reports nothing wrong, and the first real call
+# dies with `Undefined method: filed for Server`. Fixed by unwrapping
+# `Server<T>` to `T` before reading the module prefix, same as an ordinary
+# receiver already gets.
+#
+# BEAM-only: the interpreter dispatches every call dynamically and never
+# consulted this candidate list in the first place.
+module Catalog.Shelf do
+  record Stock do
+    count : Integer = 0
+  end
+
+  serving Stock do
+    slot filed() -> Reply<Integer> do
+      new.count = @count + 1
+      return { new, reply: new.count }
+    end
+  end
+end
+
+record Handle do
+  process : Server<Catalog.Shelf.Stock>
+end
+
+main do
+  let handle = Handle { process: Process.spawn(Catalog.Shelf.Stock {}) }
+  IO.printLine("${handle.process.filed().try}")
+  IO.printLine("${handle.process.filed().try}")
+end

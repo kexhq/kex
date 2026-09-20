@@ -7243,6 +7243,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (!isMethodCall || argTypes.empty()) return {};
                 auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind);
                 if (!named) return {};
+                // `Process.spawn`'s result is `Server<T>`, not `T` itself, so
+                // a slot call's receiver carries the WRAPPER's bare name
+                // ("Server") here, never a dot — the exemption below always
+                // missed it and fell back to requiring `T`'s module be
+                // `using`-imported just to call a slot on a value whose type
+                // already names it in full (`Server<Catalog.ServingShelf.
+                // Catalogue>`), the one shape this whole check exists to
+                // exempt. Unwrap to the carried type before reading its
+                // module prefix, same as an ordinary (unwrapped) receiver.
+                if (named->name == "Server" && named->typeArgs.size() == 1)
+                    if (auto* inner = std::get_if<NamedType>(
+                            &resolve(named->typeArgs.front())->kind))
+                        named = inner;
                 const auto dot = named->name.rfind('.');
                 return dot == std::string::npos ? std::string{}
                                                 : named->name.substr(0, dot);
