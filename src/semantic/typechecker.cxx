@@ -1989,6 +1989,28 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         signature.name = method.name;
         signature.isFoul = method.isFoul;
         signature.params.push_back(receiver);
+        // A param or return type written as `This` needs `m_currentMakeType`
+        // set to resolve to `receiver` — `resolveTypeExpr`'s only path for
+        // it — but this pre-pass runs before any make block is "entered" for
+        // checking, so neither was set here otherwise. Without this, a
+        // method's `This` self-registered as the literal, unsubstituted
+        // placeholder rather than `receiver`: harmless for a type with its
+        // own separate `:>` contract (nothing here gets consulted for it),
+        // but `m_annotatedMethods` is name-only, not receiver-scoped, so a
+        // method sharing a NAME with some UNRELATED type's `:>`-annotated
+        // one (`Router`'s inline-only `+`, next to `Stack`/`Queue`/`Set`'s
+        // own separately-declared `+`) still matched itself back out of
+        // this very table later, comparing its real inline `-> This`
+        // (resolved correctly, in the real per-clause check) against this
+        // stale, self-registered "This" — reporting the two as disagreeing
+        // (kexhq/rodolfo's docs/kex-issues.md #27, follow-up: reachable
+        // simply by `using` any stdlib module that pulls in a same-named
+        // `:>`-annotated method, `URI`'s `query` next to Rodolfo's own
+        // `Context.query` being the original trigger).
+        const bool wasInMakeBlock = m_inMakeBlock;
+        const auto previousMakeType = m_currentMakeType;
+        m_inMakeBlock = true;
+        m_currentMakeType = receiver;
         for (const auto& param : clause.params)
             signature.params.push_back(
                 param.type ? resolveTypeExpr(**param.type, targetVars)
@@ -1996,6 +2018,8 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         signature.result = clause.returnAnnotation
             ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
             : freshTypeVar();
+        m_inMakeBlock = wasInMakeBlock;
+        m_currentMakeType = previousMakeType;
         // Without the names a call site cannot place named arguments, and
         // lowering refused `router.launchOn(port: 4000)` for a method this
         // pass — not checkFunctionDef — registered.

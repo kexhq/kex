@@ -1,0 +1,16 @@
+# kex: check-only
+# kexhq/kex#383: `.close` on a `Net.HTTP.WebSocket.Connection` resolved to
+# `FileHandle.close` under `--compile`/`-C` — `importedFunctionVisible` gated
+# a receiver method's dot-call visibility on the METHOD's own name instead of
+# its DECLARING TYPE, so `only: [Connection]` never actually made `.close`
+# visible and a same-shaped prelude method (`FileHandle`'s own nullary
+# `close`) won by default. `close` must resolve to Connection's own (foul)
+# implementation — rejected here only because this call site is pure, which
+# is the correct diagnosis once the overload resolves to the right type.
+using Net.HTTP.WebSocket, only: [Connection]
+
+let closeIt(c: Connection) -> Void = c.close
+
+main do
+  IO.printLine("unreachable")
+end

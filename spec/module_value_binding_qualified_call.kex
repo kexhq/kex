@@ -1,0 +1,25 @@
+# A module's top-level `let NAME = <closure>` — a plain VALUE binding, not a
+# `let NAME(params) = ...` function definition — called through a qualified
+# `Module.NAME(args)` reference. Found investigating kexhq/kex#385's report
+# of `Template.html(Kex.embed(...))` silently returning "" when the binding
+# holding the compiled template lived in a non-entry module and was called
+# through its qualified name.
+#
+# A module body has no separate "bare value" construct the way a file's own
+# top level does (the synthetic-main collection that lets a bare `let x =
+# do |y| ... end` at a FILE's top level bind straight to a variable) — so
+# this registers as an ordinary zero-param FunctionDef, the only top-level-
+# declaration machinery a module body has. Calling it with more args than
+# its own declared zero used to fall straight through every real clause
+# (correctly rejected, since none take an argument) to the dispatcher's
+# generic "nothing matched" fallback — Optional.None — with no error at all,
+# instead of evaluating the zero-arg binding for its value and applying the
+# supplied args to THAT, exactly as the identical spelling at a file's own
+# top level already did.
+module Greet do
+  let hello = do |name| "Hello, ${name}!" end
+end
+
+main do
+  IO.printLine(Greet.hello("Ada"))
+end

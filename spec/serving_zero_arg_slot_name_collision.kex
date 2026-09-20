@@ -1,0 +1,30 @@
+# kex: run-beam
+# kexhq/kex#384: a ZERO-argument serving slot whose name collides with an
+# unrelated type or record field elsewhere in the program lost its bare-name
+# BEAM export once anything pulling in the colliding definition (`Net.HTTP`,
+# here — `Net.Port`'s own `value` field) was anywhere in the build. The
+# arity-1 case (`add`, `parse` in serving_slot_name_collision.kex) was
+# already covered by kexhq/kex#377's fix; this is the zero-argument edge
+# #377 did not reach — `kex_intrinsic_process:invoke_slot/2` dispatches
+# slots by bare name/arity at runtime, and the mangled `value/Counter`
+# implementation the collision left behind was never reachable under that
+# name at all.
+using Net.HTTP
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  slot value() -> Reply<Integer> = { reply: @count }
+  slot bump(by: Integer) -> Reply<Integer> do
+    new.count = @count + by
+    return { new, reply: new.count }
+  end
+end
+
+main do
+  let c = Process.spawn(Counter { count: 0 })
+  IO.printLine("${c.bump(5).try}")
+  IO.printLine("${c.value().try}")
+end

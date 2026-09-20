@@ -1547,6 +1547,49 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
             }
         }
 
+        // A module body has no separate "bare value" construct the way a
+        // FILE's own top level does (the synthetic-main collection IR
+        // lowering gives a top-level `let NAME = expr`) — so `let greet =
+        // do |x| ... end` inside `module M do ... end` registers here too,
+        // as an ordinary zero-param FunctionDef, purely because that is the
+        // only top-level-declaration machinery a module body has. Called
+        // with MORE args than its own zero, those args were never meant for
+        // THIS registration (the arity-reject check above correctly ruled
+        // every real clause out) — they are meant for whatever VALUE this
+        // binding evaluates to, exactly as the identical file-top-level
+        // spelling already works: `let greet = do |x| ... end; greet("Ada")`
+        // at a file's own top level resolves "greet" to the closure value
+        // directly and applies it, never routing through this dispatch at
+        // all. A single zero-param clause is that same shape; evaluate it
+        // for its value and apply the supplied args to THAT, instead of
+        // falling through to the generic "nothing matched" `None` below
+        // (kexhq/rodolfo's docs/kex-issues.md's follow-up on kexhq/kex#385:
+        // `Module.name(args)` on such a binding silently returned `""` —
+        // Optional.None's own showable rendering — with no error at all).
+        if (!args.empty() && m_functionDefs.count(regName) &&
+            m_functionDefs.at(regName).size() == 1) {
+            const auto* onlyDef = m_functionDefs.at(regName).front();
+            if (onlyDef->clauses.size() == 1 &&
+                onlyDef->clauses.front().params.empty()) {
+                pushEnv();
+                for (const auto& [name, value] : capturedImports)
+                    if (!m_functionDefs.contains(name)) m_env->define(name, value);
+                ValuePtr bound;
+                try {
+                    bound = evalBody(onlyDef->clauses.front().body);
+                } catch (ReturnException& ret) {
+                    bound = ret.value();
+                } catch (...) {
+                    popEnv();
+                    throw;
+                }
+                popEnv();
+                if (auto* boundFunc = std::get_if<FunctionValue>(&bound->data);
+                    boundFunc && boundFunc->native)
+                    return boundFunc->native(std::move(args));
+            }
+        }
+
         return Value::none();
     }};
 

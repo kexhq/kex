@@ -1,0 +1,21 @@
+# kexhq/kex#375: an arity-declaration check has to unfold a NAMED ALIAS of a
+# curried/higher-order signature (`type Wrap = Fn -> Fn`) the same way it
+# already unfolds an explicit `(A -> B) -> (C -> D)` annotation (#366) —
+# resolving it structurally, not stopping at the alias's own opaque surface
+# syntax.
+type Fn = Integer -> Integer
+type Wrap = Fn -> Fn
+
+mk : Wrap
+let mk(f) = do |x| f(x) + 1 end
+
+check : Wrap -> Integer
+let check(g) = g(~id)(10)
+
+id : Integer -> Integer
+let id(x) = x
+
+main do
+  IO.printLine("${check(mk)}")
+  IO.printLine("${check(~mk)}")
+end

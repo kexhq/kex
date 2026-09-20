@@ -1231,55 +1231,6 @@ auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::s
   return result;
 }
 
-// Every method name a `make T do ... end` block declares anywhere in the
-// program (any target, any nesting depth) — not which type it targets, just
-// the bare name. Used to notice when a program's own receiver method shares
-// a name with a stdlib module's (kexhq/rodolfo's docs/kex-issues.md #27,
-// `env.query` colliding with `Kex.URI`'s own `query`): the collision-
-// dispatcher lowering builds a merged runtime dispatcher for that name from
-// WHATEVER `Kex.URI.beam` the process finds on its code path, and if that
-// module's SOURCE was never pulled in as a dependency (nothing in the
-// program ever names "URI" — the collision is purely by method name), the
-// toolchain's stale prebuilt copy sits unrecompiled in the run's staging
-// directory instead, and every call through that dispatcher's URI branch
-// resolves against a beam that has never heard of the program's own type.
-auto collectDeclaredMethodNames(const kex::ast::Program &program)
-    -> std::unordered_set<std::string> {
-  std::unordered_set<std::string> names;
-  auto addFrom = [&](const kex::ast::MakeDef &make) {
-    auto addFn = [&](const kex::ast::FunctionDef *fd) {
-      if (fd) names.insert(fd->name);
-    };
-    for (const auto &item : make.body) {
-      if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item))
-        addFn(fd->get());
-      else if (auto *vb =
-                   std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&item))
-        if (*vb)
-          for (const auto &inner : (*vb)->items)
-            if (auto *fd =
-                    std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&inner))
-              addFn(fd->get());
-    }
-  };
-  auto scanItems = [&](auto &self,
-                       const std::vector<kex::ast::ModuleItem> &body) -> void {
-    for (const auto &item : body) {
-      if (auto *mk = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
-        if (*mk) addFrom(**mk);
-      if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-        if (*md) self(self, (*md)->body);
-    }
-  };
-  for (const auto &item : program.items) {
-    if (auto *mk = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
-      if (*mk) addFrom(**mk);
-    if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-      if (*md) scanItems(scanItems, (*md)->body);
-  }
-  return names;
-}
-
 struct LoadedDep {
   std::unique_ptr<std::string> source;
   std::unique_ptr<std::string> path;
@@ -1470,31 +1421,6 @@ auto resolveBeamDeps(kex::ast::Program &program,
       if (!automatic)
         modules.push_back(name);
     }
-    // A `make T do ... end` method whose NAME happens to match a stdlib
-    // module's own receiver method (`Context.query` here, `Kex.URI`'s own
-    // `query`) needs that stdlib module's SOURCE merged in too, even though
-    // nothing in this program ever names it — the collision-dispatcher
-    // lowering builds one merged runtime dispatcher for the shared name from
-    // whichever `Kex.URI.beam` the process happens to find, and without this
-    // that stays the toolchain's unextended prebuilt copy, never
-    // recompiled, so every call through its branch of the dispatcher runs
-    // against a beam that has never heard of this program's own receiver
-    // (kexhq/rodolfo's docs/kex-issues.md #27). Not cached alongside
-    // `referencedOrdered` above — this scan is a cheap AST walk over an
-    // already-parsed program, not a semantic analysis worth memoizing.
-    if (interfaces)
-      for (const auto &name : collectDeclaredMethodNames(prog)) {
-        const auto candidates = interfaces->receiverFunctions.find(name);
-        if (candidates == interfaces->receiverFunctions.end()) continue;
-        for (const auto &candidate : candidates->second) {
-          if (candidate.sourceModule.empty()) continue;
-          const auto imported = interfaces->modules.find(candidate.sourceModule);
-          if (imported != interfaces->modules.end() &&
-              imported->second.automaticImport)
-            continue;
-          modules.push_back(candidate.sourceModule);
-        }
-      }
     for (const auto &modName : modules) {
       auto resolved = resolver.resolve(modName);
       if (!resolved) continue;
