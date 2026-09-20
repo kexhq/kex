@@ -27,6 +27,7 @@
 #include "test.hxx"
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>

@@ -236,6 +236,26 @@ socket.close
 Extensions are not negotiated. Raw-frame access, heartbeat, automatic
 reconnection, mocks, and browser WebSockets remain design work.
 
+`receiveMessage()` waits for the next message for as long as the peer stays
+connected — an idle client is not an error, and a WebSocket is routinely left
+open indefinitely with nothing to say for long stretches (a chat room's
+participants, most of the time). A real disconnect still answers with a
+`Closed` error rather than hanging forever. `receiveMessage(timeout: Duration?)`
+makes the deadline explicit instead of implicit in whether you passed an
+argument: `None` waits exactly as long as the bare form does, and
+`Just(duration)` gives up and answers `Timeout` once `duration` elapses:
+
+```kex
+match connection.receiveMessage(timeout: Just(30.seconds)).try do
+  Text(text) => handleEvent(text)
+  _          => sendPing(connection)   # nothing in 30s — check the peer is alive
+end
+```
+
+A `Timeout` from the bounded form means exactly that — no message arrived in
+time — and is distinct from `Closed`; only the latter means the connection is
+gone.
+
 ## WebSocket server
 
 A route handler decides whether to accept a handshake and returns the result

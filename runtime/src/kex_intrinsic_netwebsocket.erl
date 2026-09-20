@@ -1,6 +1,6 @@
 -module(kex_intrinsic_netwebsocket).
--export([connect/2, send/2, receiveMessage/1, session/1, close/1, 'closed?'/1,
-         upgrade/2, accept/4]).
+-export([connect/2, send/2, receiveMessage/1, receiveMessageWithin/2, session/1,
+         close/1, 'closed?'/1, upgrade/2, accept/4]).
 
 -define(TIMEOUT, 30000).
 -define(HEADER_LIMIT, 65536).
@@ -17,8 +17,27 @@ connect(_, _) -> error_value('Parse', <<"invalid WebSocket client options">>).
 
 send({'Net.HTTP.WebSocket.Connection', Pid}, Message) -> call(Pid, {send, Message});
 send(_, _) -> error_value('Parse', <<"invalid WebSocket connection">>).
-receiveMessage({'Net.HTTP.WebSocket.Connection', Pid}) -> call(Pid, receive_message);
+% Unlike send/session/close, there is nothing to bound here: `receiveMessage`
+% is supposed to block until the peer speaks, which can legitimately be a
+% long time for an idle-but-connected client (kexhq/kex#381 — the 31000ms
+% budget `call/2` gives every OTHER operation used to also cap this one,
+% reporting a live, silent peer as a `Timeout` failure after 31s and closing
+% the connection out from under it). A real disconnect still reaches the
+% caller through `{tcp_closed, ...}`/`{tcp_error, ...}`, both of which
+% already answer a pending receive with a `Closed` error, so waiting forever
+% here costs nothing when the peer actually goes away.
+receiveMessage({'Net.HTTP.WebSocket.Connection', Pid}) -> call(Pid, receive_message, infinity);
 receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
+% An explicit, caller-chosen deadline (kexhq/kex#381) — `None` asks for the
+% exact same unbounded wait `receiveMessage/1` gives by default, spelled out
+% rather than left implicit in omitting an argument, and `Just(duration)`
+% asks for a real bound.
+receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, 'None') ->
+    call(Pid, receive_message, infinity);
+receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Duration', Seconds}})
+  when is_number(Seconds), Seconds >= 0 ->
+    call(Pid, receive_message, timeout_ms(Seconds));
+receiveMessageWithin(_, _) -> error_value('Parse', <<"invalid WebSocket receive timeout">>).
 session({'Net.HTTP.WebSocket.Connection', Pid}) ->
     case call(Pid, session) of
         {'Error', _} -> {'Net.HTTP.WebSocket.Session', 'None'};
@@ -629,11 +648,15 @@ lower(Value) -> string:lowercase(Value).
 transport_send({tcp, S}, Data) -> gen_tcp:send(S, Data); transport_send({tls, S}, Data) -> ssl:send(S, Data).
 transport_recv({tcp, S}, Count) -> gen_tcp:recv(S, Count, ?TIMEOUT); transport_recv({tls, S}, Count) -> ssl:recv(S, Count, ?TIMEOUT).
 transport_close({tcp, S}) -> gen_tcp:close(S); transport_close({tls, S}) -> ssl:close(S).
-call(Pid, Message) ->
+% Bounded operations (send/session/close) keep the 31s default; a receive
+% with nothing to bound asks for `infinity` explicitly (see `receiveMessage`).
+call(Pid, Message) -> call(Pid, Message, 31000).
+call(Pid, Message, Wait) ->
     case is_process_alive(Pid) of
         false -> error_value('Closed', <<"WebSocket is closed">>);
-        true -> Ref = make_ref(), Pid ! {call, self(), Ref, Message}, receive {Ref, Value} -> Value after 31000 -> error_value('Timeout', <<"WebSocket operation timed out">>) end
+        true -> Ref = make_ref(), Pid ! {call, self(), Ref, Message}, receive {Ref, Value} -> Value after Wait -> error_value('Timeout', <<"WebSocket operation timed out">>) end
     end.
 native_error(timeout, _) -> error_value('Timeout', <<"WebSocket operation timed out">>);
 native_error(Kind, Reason) -> error_value(Kind, unicode:characters_to_binary(io_lib:format("~p", [Reason]))).
+timeout_ms(Seconds) -> max(0, round(Seconds * 1000)).
 error_value(Kind, Message) -> {'Error', {'Net.NetError', Kind, 'WebSocketClient', Message, 'None', 'None'}}.

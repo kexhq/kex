@@ -142,6 +142,32 @@ make Connection do
   #     end
   #   end
   foul receiveMessage() -> Result<Message, NetError> = Kex.Intrinsic.NetWebSocket.receiveMessage(this)
+  # `receiveMessage`, but the deadline is explicit rather than implicit in
+  # whether you passed an argument at all: +None+ waits exactly as long as
+  # a bare +receiveMessage+ does (as long as the peer stays connected —
+  # routinely indefinitely, for a WebSocket left open with nothing to say),
+  # and +Just(duration)+ gives up and answers +Timeout+ once +duration+
+  # elapses without a message.
+  #
+  # A real disconnect is still reported as +Closed+, not +Timeout+: the two
+  # are distinguishable, unlike a bare +receiveMessage+ that assumes a
+  # failed read always means the peer is gone (kexhq/kex#381).
+  #
+  # @param timeout [Duration?] how long to wait before giving up, or +None+
+  #   to wait as long as the peer stays connected
+  # @return [Result<Message, NetError>] the next data or close message, or
+  #   +Timeout+ if none arrived in time
+  #
+  # @example Prompting an otherwise-quiet client every 30 seconds
+  #   match connection.receiveMessage(timeout: Just(30.seconds)).try do
+  #     Text(text) => handleEvent(text)
+  #     _          => sendPing(connection)
+  #   end
+  #
+  # @example Being explicit that a wait has no deadline, rather than relying
+  #   on the zero-argument form's default
+  #   connection.receiveMessage(timeout: None)
+  foul receiveMessage(timeout: Duration?) -> Result<Message, NetError> = Kex.Intrinsic.NetWebSocket.receiveMessageWithin(this, timeout)
   # Returns handshake details negotiated with the server.
   #
   # @return [Session] the selected subprotocol, if any
