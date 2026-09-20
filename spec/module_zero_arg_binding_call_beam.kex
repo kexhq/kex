@@ -1,0 +1,24 @@
+# kex: run-beam
+# A module-scoped `let name = <closure>` — a plain value binding, not a
+# `let name(params) = ...` function definition — called with arguments from
+# WITHIN its own module. Found via kexhq/rodolfo's report of a follow-up to
+# kexhq/kex#385: `Template.html(Kex.embed(...))` bound to a separate name and
+# called from a sibling function in the same module compiled fine but failed
+# to link — `undefined function 'M.render'/1` — because `zeroArgFns`/
+# `topLevelConstants` (which drive the "evaluate the thunk, then apply" call
+# shape) only ever collect from a file's own top level; the identical
+# declaration one level down, inside `module M do ... end`, was invisible to
+# that check and fell through to an ordinary direct call at the wrong arity,
+# since only the thunk itself (arity 0) was ever emitted. The interpreter
+# never hit this — it resolves calls dynamically rather than by declared
+# arity — so this is BEAM-only.
+module Greet do
+  let hello = do |name| "Hello, ${name}!" end
+
+  greetBoth : String -> String -> String
+  let greetBoth(a, b) = "${hello(a)} ${hello(b)}"
+end
+
+main do
+  IO.printLine(Greet.greetBoth("Ada", "Grace"))
+end

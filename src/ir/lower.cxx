@@ -2551,8 +2551,39 @@ struct Lowering {
         int arity = static_cast<int>(args.size());
         // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)
         // called with args: evaluate the thunk, then apply the resulting fun.
+        // `zeroArgFns`/`topLevelConstants` only ever collect from `prog.items`
+        // directly — a top-level `let render = Template.html(...)` — so the
+        // identical declaration one level down, inside `module M do ... end`,
+        // was invisible here and fell through to an ordinary direct call at
+        // its own (wrong) arity: `render(x)` inside the SAME module compiled
+        // to `apply 'M.render'/1(X)`, and erlc rejected the module outright
+        // since only `render/0` (the thunk itself) was ever emitted — a
+        // dangling reference the interpreter never hit, since it resolves
+        // calls dynamically rather than by declared arity (kexhq/rodolfo's
+        // docs/kex-issues.md, follow-up on kexhq/kex#385). `moduleZeroArgFns`
+        // is where a module-scoped 0-param declaration DOES get recorded;
+        // walk the same innermost-first enclosing-module chain the bare
+        // lookup a few lines up uses to find it under this call's own module.
+        // A module member's EMITTED name can differ from its bare source
+        // name (mangling), unlike a top-level one, which is always bare —
+        // `moduleFunctions` has the emitted spelling actually safe to call.
+        std::string zeroArgCallName = n.name;
         bool zeroArgThunk = !subst.count(n.name) &&
-            (zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
+            (zeroArgFns.count(n.name) || topLevelConstants.count(n.name) ||
+             [&] {
+                 for (auto scope = currentModulePath; !scope.empty();) {
+                     if (moduleZeroArgFns.count(scope + "." + n.name)) {
+                         if (auto emitted = moduleFunctions.find(scope + "." + n.name);
+                             emitted != moduleFunctions.end())
+                             zeroArgCallName = emitted->second;
+                         return true;
+                     }
+                     const auto dot = scope.rfind('.');
+                     if (dot == std::string::npos) break;
+                     scope.resize(dot);
+                 }
+                 return false;
+             }());
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
             && !zeroArgThunk) {
@@ -2569,10 +2600,10 @@ struct Lowering {
             // A real 0-arity FUNCTION `f()` stays a plain call below: its
             // result is returned as-is, never auto-applied.
             auto thunk = std::make_unique<Expr>();
-            thunk->node = localCall(n.name, {});
+            thunk->node = localCall(zeroArgCallName, {});
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
-            ex->node = localCall(n.name, {});
+            ex->node = localCall(zeroArgCallName, {});
         // A lexical binding (a `block` parameter, or any local holding a
         // callable) outranks a `using` import of the same name too, not just
         // the flat knownFns set below: innermost wins, as it does for every

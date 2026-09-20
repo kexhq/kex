@@ -1,0 +1,22 @@
+# `Query.from`, `Form.from`, and `Headers.from` take an ordered list of pairs
+# because duplicate keys are meaningful (`?tag=kex&tag=beam`, repeated form
+# fields, `Set-Cookie`) — see each record's own doc comment. Added `Map`
+# overloads for the common case where every key is used once, so a caller
+# who does not have (or does not care about) duplicates does not have to
+# spell out tuples. The list form must still preserve real duplicates.
+using URI
+using Net.HTTP
+
+main do
+  let q1 = Query.from([("tag", Just("kex")), ("tag", Just("beam")), ("debug", None)])
+  let q2 = Query.from({ "sort": Just("name"), "debug": None })
+  IO.printLine("${q1.entries.count} ${q2.entries.count}")
+
+  let f1 = Form.from([("email", "a@b.com"), ("password", "x")])
+  let f2 = Form.from({ "email": "a@b.com", "password": "x" })
+  IO.printLine("${f1.entries.count} ${f2.entries.count}")
+
+  let h1 = Headers.from([("Accept", "application/json"), ("X-Request-ID", "1")]).try
+  let h2 = Headers.from({ "Accept": "application/json", "X-Request-ID": "1" }).try
+  IO.printLine("${h1.entries.count} ${h2.entries.count}")
+end

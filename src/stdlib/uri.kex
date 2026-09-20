@@ -138,6 +138,21 @@ module Query do
   from : [(String, String?)] -> Query
   let from(entries) = Query { entries: entries }
 
+  # Builds a query from unordered key/value pairs, for the common case where
+  # every key is used once. A `Map` cannot hold "tag" twice, so — unlike the
+  # list form above — repeating a key here does not add a second field; it
+  # silently keeps only one value for it. Reach for the ordered list form
+  # instead of this one for anything that legitimately repeats a key, such
+  # as `?tag=kex&tag=beam`.
+  #
+  # @param entries [Map<String, String?>] decoded key/value pairs, one per key
+  # @return [Query] the query
+  #
+  # @example Building filters that each use a distinct key
+  #   Query.from({ "sort": Just("name"), "debug": None })
+  from : Map<String, String?> -> Query
+  let from(entries: Map<String, String?>) = Query { entries: entries.entries }
+
   # Parses generic URI query encoding; ++ remains a literal plus.
   #
   # @param text [String] encoded query text without the leading question mark
@@ -159,6 +174,21 @@ module Form do
   #   Form.from([("email", email), ("password", password)]).encode
   from : [(String, String)] -> Form
   let from(entries) = Kex.Intrinsic.URI.formFrom(entries)
+
+  # Builds a form from unordered key/value pairs, for the common case where
+  # every field name is used once. A `Map` cannot hold a name twice, so —
+  # unlike the list form above — a repeated field name here does not add a
+  # second entry; it silently keeps only one value for it. Reach for the
+  # ordered list form instead of this one for anything that legitimately
+  # repeats a field name, such as several same-named checkboxes.
+  #
+  # @param entries [Map<String, String>] decoded form fields, one per name
+  # @return [Form] the form
+  #
+  # @example Preparing a login request body
+  #   Form.from({ "email": email, "password": password }).encode
+  from : Map<String, String> -> Form
+  let from(entries: Map<String, String>) = Kex.Intrinsic.URI.formFrom(entries.entries)
 
   # Parses form encoding where ++ represents a space.
   #
