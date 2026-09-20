@@ -150,6 +150,22 @@ module Headers do
   from : [(String, String)] -> Result<Headers, NetError>
   let from(entries) = Kex.Intrinsic.NetHTTP.headers(entries)
 
+  # Validates header names and values from unordered pairs, for the common
+  # case where every name is used once. Do not use this for `Set-Cookie` or
+  # any other field that legitimately repeats — a `Map` cannot hold a name
+  # twice, so unlike the list form above, a second value for the same name
+  # here does not add a second field; it silently replaces the first (see
+  # this module's own +Headers+ record doc for why that specific field
+  # cannot be folded into one entry). Reach for the ordered list form for
+  # anything that might repeat a name.
+  #
+  # @return [Result<Headers, NetError>] validated fields, or +Parse+
+  #
+  # @example Forwarding a set of request headers that are each sent once
+  #   Headers.from({ "Accept": "application/json", "X-Request-ID": requestId }).try
+  from : Map<String, String> -> Result<Headers, NetError>
+  let from(entries: Map<String, String>) = Kex.Intrinsic.NetHTTP.headers(entries.entries)
+
   # Parses CRLF- or LF-separated header fields.
   #
   # Use this at a protocol boundary when headers arrive as text. Application

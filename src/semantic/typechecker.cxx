@@ -1669,6 +1669,24 @@ auto TypeChecker::annotationToSignature(
         firstNode = false;
     }
     TypePtr result = cur ? resolveTypeExpr(*cur, genericVars) : Type::unknown();
+    // A curried/higher-order signature spelled through a TRANSPARENT alias
+    // (`type Fn = Integer -> Integer; type Wrap = Fn -> Fn`) has no
+    // `FunctionType` node in the annotation's own AST at all — `cur` is just
+    // the bare name `Wrap` — so the syntax-level unrolling loop above never
+    // runs, and `result` ends up holding the alias's ENTIRE resolved arrow
+    // type as if it were the return value of a zero-parameter signature
+    // (kexhq/kex#375). `resolveTypeExpr` already resolved `Wrap` all the way
+    // through to its structural `FuncType` (m_typeAliases stores each alias
+    // fully resolved, not just one layer), so unroll THAT the same way the
+    // syntax-level loop above unrolls an explicit `(A -> B) -> (C -> D)`
+    // (kexhq/kex#366 fixed the miscount for that spelling; this is the same
+    // count run on the alias's resolved type instead of its surface syntax).
+    if (params.empty()) {
+        if (auto* resolvedFunc = std::get_if<FuncType>(&result->kind)) {
+            params = resolvedFunc->params;
+            result = resolvedFunc->result;
+        }
+    }
     if (params.empty()) {
         // Non-function annotation (e.g. `x : Int`) — treat as a zero-param
         // constant whose type IS the annotated type.
@@ -1971,6 +1989,28 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         signature.name = method.name;
         signature.isFoul = method.isFoul;
         signature.params.push_back(receiver);
+        // A param or return type written as `This` needs `m_currentMakeType`
+        // set to resolve to `receiver` — `resolveTypeExpr`'s only path for
+        // it — but this pre-pass runs before any make block is "entered" for
+        // checking, so neither was set here otherwise. Without this, a
+        // method's `This` self-registered as the literal, unsubstituted
+        // placeholder rather than `receiver`: harmless for a type with its
+        // own separate `:>` contract (nothing here gets consulted for it),
+        // but `m_annotatedMethods` is name-only, not receiver-scoped, so a
+        // method sharing a NAME with some UNRELATED type's `:>`-annotated
+        // one (`Router`'s inline-only `+`, next to `Stack`/`Queue`/`Set`'s
+        // own separately-declared `+`) still matched itself back out of
+        // this very table later, comparing its real inline `-> This`
+        // (resolved correctly, in the real per-clause check) against this
+        // stale, self-registered "This" — reporting the two as disagreeing
+        // (kexhq/rodolfo's docs/kex-issues.md #27, follow-up: reachable
+        // simply by `using` any stdlib module that pulls in a same-named
+        // `:>`-annotated method, `URI`'s `query` next to Rodolfo's own
+        // `Context.query` being the original trigger).
+        const bool wasInMakeBlock = m_inMakeBlock;
+        const auto previousMakeType = m_currentMakeType;
+        m_inMakeBlock = true;
+        m_currentMakeType = receiver;
         for (const auto& param : clause.params)
             signature.params.push_back(
                 param.type ? resolveTypeExpr(**param.type, targetVars)
@@ -1978,6 +2018,8 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         signature.result = clause.returnAnnotation
             ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
             : freshTypeVar();
+        m_inMakeBlock = wasInMakeBlock;
+        m_currentMakeType = previousMakeType;
         // Without the names a call site cannot place named arguments, and
         // lowering refused `router.launchOn(port: 4000)` for a method this
         // pass — not checkFunctionDef — registered.
@@ -3738,6 +3780,27 @@ auto TypeChecker::importedFunctionVisible(
             module != m_importedInterfaces->modules.end() &&
             module->second.automaticImport)
             return true;
+    }
+    // `sourceName` on a receiver method is the METHOD's own name (`close`,
+    // set by `addReceiverSig` in prelude_interfaces.hxx) — but `only:`/
+    // `except:` on a `using` name the DECLARING TYPE (`using
+    // Net.HTTP.WebSocket, only: [Connection]`), not the method. Gating a
+    // dot-call candidate on the method's own name checked "close" against
+    // ["Connection"] and always lost, so a same-named, same-shaped method on
+    // some OTHER, always-visible type (`FileHandle`'s own nullary `close`)
+    // was the only candidate left standing — silently wrong overload
+    // resolution rather than a missing-import error (kexhq/kex#383). Try the
+    // receiver's own type name first; fall back to the method-name check,
+    // which is still right for a bare `only: [someFunction]` import of an
+    // ordinary module-level export.
+    if (function.isReceiverMethod && !function.signature.params.empty()) {
+        if (auto* named =
+                std::get_if<NamedType>(&function.signature.params.front()->kind)) {
+            const auto dot = named->name.rfind('.');
+            const auto bare = dot == std::string::npos
+                ? named->name : named->name.substr(dot + 1);
+            if (moduleMemberImported(function.sourceModule, bare)) return true;
+        }
     }
     return moduleMemberImported(function.sourceModule, function.sourceName);
 }
@@ -7180,6 +7243,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (!isMethodCall || argTypes.empty()) return {};
                 auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind);
                 if (!named) return {};
+                // `Process.spawn`'s result is `Server<T>`, not `T` itself, so
+                // a slot call's receiver carries the WRAPPER's bare name
+                // ("Server") here, never a dot — the exemption below always
+                // missed it and fell back to requiring `T`'s module be
+                // `using`-imported just to call a slot on a value whose type
+                // already names it in full (`Server<Catalog.ServingShelf.
+                // Catalogue>`), the one shape this whole check exists to
+                // exempt. Unwrap to the carried type before reading its
+                // module prefix, same as an ordinary (unwrapped) receiver.
+                if (named->name == "Server" && named->typeArgs.size() == 1)
+                    if (auto* inner = std::get_if<NamedType>(
+                            &resolve(named->typeArgs.front())->kind))
+                        named = inner;
                 const auto dot = named->name.rfind('.');
                 return dot == std::string::npos ? std::string{}
                                                 : named->name.substr(0, dot);

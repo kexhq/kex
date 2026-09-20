@@ -45,6 +45,46 @@ auto receiverImplementationPrefix(const std::string& method) -> std::string {
     return method + "/";
 }
 
+// `kex_intrinsic_process:invoke_slot/2` dispatches into a `serving` type's
+// own compiled module by looking up the slot's BARE name/arity at runtime
+// (`erlang:function_exported/3` + `erlang:apply/3`) — it has no type
+// information to resolve a receiver-qualified call the way ordinary Kex call
+// sites do. A slot whose name collides program-wide with some other type's
+// method or record field is mangled to `name/TypeName` by the usual
+// collision handling, and `lowerModules`'s by-name redistribution then
+// carries the one surviving bare-name definition off to whichever OTHER
+// module's colliding name won the race — not this `serving` type's own
+// module. So the very first zero-argument call into a slot whose name
+// collides (kexhq/kex#384; kexhq/kex#377 covered only the case of a
+// top-level, moduleless `serving` block) died `function not exported`, once
+// anything pulling in a same-named colliding definition (`Net.HTTP`'s
+// `Port.value`, in the reported case) was anywhere in the build. Called only
+// AFTER `lowerModules` has finished redistributing and merging — so this
+// plain wrapper, republishing the slot under its own bare name via a local
+// call to the mangled implementation already sitting in the same module,
+// never competes with that shared machinery for the name at all.
+auto servingSlotBareAlias(const std::string& bareName, int arity,
+                          const std::string& targetName) -> FunDef {
+    FunDef alias;
+    alias.name = bareName;
+    alias.arity = arity;
+    FunClause clause;
+    std::vector<ExprPtr> args;
+    for (int i = 0; i < arity; ++i) {
+        const auto argName = "_servingSlotArg" + std::to_string(i);
+        auto param = std::make_unique<Pattern>();
+        param->kind = PatKind::Var;
+        param->name = argName;
+        clause.params.push_back(std::move(param));
+        args.push_back(var(argName));
+    }
+    auto body = std::make_unique<Expr>();
+    body->node = Call{"", targetName, arity, std::move(args), false};
+    clause.body = std::move(body);
+    alias.clauses.push_back(std::move(clause));
+    return alias;
+}
+
 auto mangleModulePath(const std::string& path) -> std::string {
     return path;
 }
@@ -2511,8 +2551,39 @@ struct Lowering {
         int arity = static_cast<int>(args.size());
         // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)
         // called with args: evaluate the thunk, then apply the resulting fun.
+        // `zeroArgFns`/`topLevelConstants` only ever collect from `prog.items`
+        // directly — a top-level `let render = Template.html(...)` — so the
+        // identical declaration one level down, inside `module M do ... end`,
+        // was invisible here and fell through to an ordinary direct call at
+        // its own (wrong) arity: `render(x)` inside the SAME module compiled
+        // to `apply 'M.render'/1(X)`, and erlc rejected the module outright
+        // since only `render/0` (the thunk itself) was ever emitted — a
+        // dangling reference the interpreter never hit, since it resolves
+        // calls dynamically rather than by declared arity (kexhq/rodolfo's
+        // docs/kex-issues.md, follow-up on kexhq/kex#385). `moduleZeroArgFns`
+        // is where a module-scoped 0-param declaration DOES get recorded;
+        // walk the same innermost-first enclosing-module chain the bare
+        // lookup a few lines up uses to find it under this call's own module.
+        // A module member's EMITTED name can differ from its bare source
+        // name (mangling), unlike a top-level one, which is always bare —
+        // `moduleFunctions` has the emitted spelling actually safe to call.
+        std::string zeroArgCallName = n.name;
         bool zeroArgThunk = !subst.count(n.name) &&
-            (zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
+            (zeroArgFns.count(n.name) || topLevelConstants.count(n.name) ||
+             [&] {
+                 for (auto scope = currentModulePath; !scope.empty();) {
+                     if (moduleZeroArgFns.count(scope + "." + n.name)) {
+                         if (auto emitted = moduleFunctions.find(scope + "." + n.name);
+                             emitted != moduleFunctions.end())
+                             zeroArgCallName = emitted->second;
+                         return true;
+                     }
+                     const auto dot = scope.rfind('.');
+                     if (dot == std::string::npos) break;
+                     scope.resize(dot);
+                 }
+                 return false;
+             }());
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
             && !zeroArgThunk) {
@@ -2529,10 +2600,10 @@ struct Lowering {
             // A real 0-arity FUNCTION `f()` stays a plain call below: its
             // result is returned as-is, never auto-applied.
             auto thunk = std::make_unique<Expr>();
-            thunk->node = localCall(n.name, {});
+            thunk->node = localCall(zeroArgCallName, {});
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
-            ex->node = localCall(n.name, {});
+            ex->node = localCall(zeroArgCallName, {});
         // A lexical binding (a `block` parameter, or any local holding a
         // callable) outranks a `using` import of the same name too, not just
         // the flat knownFns set below: innermost wins, as it does for every
@@ -3638,6 +3709,29 @@ struct Lowering {
                             fillDefaultSlots(qualKey, args, binds);
                         }
                         int ar = static_cast<int>(args.size());
+                        // `Module.name` may be a zero-param VALUE binding
+                        // rather than a real function — `let render =
+                        // Template.html(...)` in `module M do ... end`,
+                        // reached here as `M.render(x)` from OUTSIDE it (the
+                        // identical call from WITHIN the same module is
+                        // `lowerFunctionCall`'s own `zeroArgThunk` check —
+                        // see its comment for the full story). Its only
+                        // emitted arity is 0 (the thunk that hands back the
+                        // closure), so calling it directly at this call's own
+                        // arity emitted a call to an arity that was never
+                        // defined and erlc rejected the module outright:
+                        // `undefined function 'M.render'/1`, a dangling
+                        // reference to something that only ever existed as
+                        // `render/0`. Evaluate the thunk first, then apply
+                        // the supplied args to what it returns.
+                        if (!args.empty() && emittedModuleZeroArg.count(it->second)) {
+                            auto thunk = std::make_unique<Expr>();
+                            thunk->node = localCall(it->second, {});
+                            auto indirect = std::make_unique<Expr>();
+                            indirect->node = CallIndirect{
+                                std::move(thunk), std::move(args), false};
+                            return wrapLets(binds, std::move(indirect));
+                        }
                         return wrapLets(binds, localCallExpr(it->second, std::move(args)));
                     }
                 }
@@ -8988,7 +9082,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 for (const auto& typeName :
                      Lowering::makeTargetNameList(node->target)) {
                 std::vector<const ast::FunctionDef*> mgrp;
-                auto flushM = [&]{ if (!mgrp.empty()) { mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName)); mgrp.clear(); } };
+                auto flushM = [&]{
+                    if (!mgrp.empty()) {
+                        mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName));
+                        mgrp.clear();
+                    }
+                };
                 auto pushFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
                     if (!mgrp.empty() &&
@@ -10039,6 +10138,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     }
     std::vector<std::string> modulePaths;
     std::unordered_set<std::string> seenModulePaths;
+    // A `serving` block's slots, declared inside a `module X do ... end` (or
+    // header-style `module X`) rather than at the top level — collected here
+    // so a slot whose bare name lost the collision race below (see
+    // `servingSlotBareAlias`'s own comment) can still be republished under
+    // its bare name in its OWN module afterward. Top-level, moduleless
+    // `serving` blocks are unaffected: `topLevelServingSlots` below already
+    // keeps those out of the by-name redistribution entirely.
+    struct NestedServingSlot {
+        std::string modulePath;
+        std::string typeName;
+        std::string slotName;
+    };
+    std::vector<NestedServingSlot> nestedServingSlots;
     std::function<void(const ast::ModuleDef&)> collect;
     collect = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
@@ -10094,6 +10206,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                         fd->name, methodDispatchTypes(*fd, typeName));
                     definitions[exact] = {path, exact, true};
                 }
+                if (mk->isServing && fd->isSlot)
+                    nestedServingSlots.push_back(
+                        {path, typeName, fd->name});
             };
             for (const auto& typeName :
                  Lowering::makeTargetNameList(mk->target)) {
@@ -10224,6 +10339,33 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             mergeDuplicateFunctions(module.functions, &flat.functions);
         }
         stdlibModules.push_back(std::move(module));
+    }
+    // A nested `serving` slot whose bare name lost the collision race above
+    // (see `servingSlotBareAlias`'s own comment, and kexhq/kex#384) has no
+    // bare-name definition left in its own module — only the mangled
+    // `name/TypeName` implementation, redistributed here by declaring
+    // module rather than by name. Republish it under its bare name, in that
+    // same module, purely for `kex_intrinsic_process:invoke_slot/2`'s
+    // runtime lookup. A slot that kept its bare name (no collision at all)
+    // is left alone.
+    for (const auto& slot : nestedServingSlots) {
+        const auto beamModuleName = "Kex." + slot.modulePath;
+        auto moduleIt = std::find_if(
+            stdlibModules.begin(), stdlibModules.end(),
+            [&](const Module& m) { return m.name == beamModuleName; });
+        if (moduleIt == stdlibModules.end()) continue;
+        const bool hasBare = std::any_of(
+            moduleIt->functions.begin(), moduleIt->functions.end(),
+            [&](const FunDef& fn) { return fn.name == slot.slotName; });
+        if (hasBare) continue;
+        const auto mangled =
+            mangleReceiverImplementation(slot.slotName, slot.typeName);
+        auto implIt = std::find_if(
+            moduleIt->functions.begin(), moduleIt->functions.end(),
+            [&](const FunDef& fn) { return fn.name == mangled; });
+        if (implIt == moduleIt->functions.end()) continue;
+        moduleIt->functions.push_back(
+            servingSlotBareAlias(slot.slotName, implIt->arity, mangled));
     }
     // Built AFTER ejection above so a dispatcher moved into the flat module
     // at the last minute is still a valid target for a call rewritten below.

@@ -487,13 +487,28 @@ kex --lsp
 ```
 
 The VS Code extension in [`editors/vscode`](editors/vscode) adds Kex syntax
-highlighting and launches this server. See its README for development and
-installation instructions.
+highlighting and launches this server. It's published on the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Kex.kex-language):
+
+```sh
+code --install-extension Kex.kex-language
+```
+
+Or search for "Kex" in the Extensions view. See
+[its README](editors/vscode/README.md) for development instructions and to
+build it from source instead.
 
 The Vim/Neovim runtime files in [`editors/vim`](editors/vim) add syntax
 highlighting, indentation, and `%` matching on `do`/`end`; on Neovim they also
-ship a `vim.lsp.config` entry for the same server. See its README for how to
-put them on your `runtimepath`.
+ship a `vim.lsp.config` entry for the same server. There's no separate plugin
+repo yet — install straight from this checkout, e.g. with `lazy.nvim`:
+
+```lua
+{ dir = "/path/to/kex/editors/vim", name = "kex", lazy = false }
+```
+
+See [its README](editors/vim/README.md) for plugin-manager examples and how
+to put it on your `runtimepath` directly.
 
 Install the binary somewhere on your `PATH`:
 

@@ -1451,6 +1451,30 @@ auto resolveBeamDeps(kex::ast::Program &program,
         std::cerr << "error: could not parse module " << modName << "\n";
         std::exit(1);
       }
+      // Expanded HERE, against THIS module's own path, while it is still its
+      // own separate AST — not later, once `resolveBeamDeps` has merged its
+      // items into the entry program's `items` alongside every other
+      // dependency's. `expandParsedProgram` in main() runs exactly once, on
+      // the entry file, with `sourcePath` fixed to the entry file's own
+      // path — so a `Kex.embed(...)` or builder-chain collapse candidate
+      // that a merged-in dependency module owns was resolving relative to
+      // the ENTRY file's directory, or (for a chain requiring `compiled`
+      // expansion) not being visited by that pass at all, since dependency
+      // items are parsed after it already ran. Real per-declaration source
+      // provenance would let one pass over the fully-merged program handle
+      // this uniformly; short of that, each dependency gets its own
+      // self-contained expansion, against its own path, before merging
+      // (kexhq/kex#385).
+      std::vector<kex::semantic::Diagnostic> depExpandDiagnostics;
+      kex::compiled::ExpandOptions depExpandOptions;
+      depExpandOptions.sourcePath = *path;
+      if (!kex::compiled::expand(*depProg, depExpandDiagnostics,
+                                 depExpandOptions)) {
+        for (const auto &diagnostic : depExpandDiagnostics)
+          printSemanticDiagnostic(diagnostic);
+        std::cerr << "error: could not expand module " << modName << "\n";
+        std::exit(1);
+      }
       resolve(*depProg, {}, src.get());
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
@@ -4895,31 +4919,24 @@ int main(int argc, char *argv[]) {
 
       timings.mark("load dependencies");
 
-      // Run-result cache (kexhq/kex#323): only for `kex --run`'s
-      // throwaway compile-then-execute, never for a persistent `--compile`
-      // artifact or `--emit-core`'s text output — see the cache's own doc
-      // comment above `runCacheRoot` for why compileRun is the safe scope
-      // and what makes a hit here provably correct rather than merely fast.
-      std::vector<kex::ir::EmitResult> moduleResultsFromCache;
-      bool haveCachedResult = false;
-      std::optional<std::string> runCacheKeyValue;
-      if (mode == "compile" && compileRun) {
-        runCacheKeyValue = runCacheKeyFor(
-            filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
-            beamSpecBaseRawSource, beamDeps);
-        if (runCacheKeyValue)
-          if (auto hit = tryLoadRunCache(*runCacheKeyValue, outputDir)) {
-            moduleResultsFromCache = std::move(*hit);
-            haveCachedResult = true;
-          }
-      }
-      timings.mark("run cache lookup");
-
       // Needed either way (a run-cache hit still has to load and execute the
       // cached .beam files) and independent of the closure below, so it runs
       // once here rather than once per branch. `emit-core` returns before
       // ever reaching a point that needs these, same as before this cache
       // existed.
+      //
+      // Deliberately BEFORE the run-cache lookup below: the prebuilt runtime
+      // dir carries its own compiled copies of ordinary stdlib `.kex`
+      // modules (Kex.URI, Kex.URI.Query, ...), and a program that merges
+      // one of those modules' SOURCE in as a dependency (resolveBeamDeps)
+      // produces a same-named module of its own. In the no-cache path that
+      // is harmless — erlc writes that module's fresh `.beam` to outputDir
+      // strictly after this copy, so the fresh one wins. A run-cache hit
+      // has no later erlc step; it restores its saved `.beam` files
+      // straight into outputDir once, so that restore has to come AFTER
+      // this unconditional overwrite, or the toolchain's own possibly-stale
+      // prebuilt copy silently wins instead (kexhq/kex#27's `env.query`
+      // shape, reintroduced by the run-result cache's copy order).
       if (mode == "compile") {
         namespace fs = std::filesystem;
         std::string prebuilt = prebuiltRuntimeBeamDir();
@@ -4946,6 +4963,26 @@ int main(int argc, char *argv[]) {
       }
 
       timings.mark("copy runtime beams");
+
+      // Run-result cache (kexhq/kex#323): only for `kex --run`'s
+      // throwaway compile-then-execute, never for a persistent `--compile`
+      // artifact or `--emit-core`'s text output — see the cache's own doc
+      // comment above `runCacheRoot` for why compileRun is the safe scope
+      // and what makes a hit here provably correct rather than merely fast.
+      std::vector<kex::ir::EmitResult> moduleResultsFromCache;
+      bool haveCachedResult = false;
+      std::optional<std::string> runCacheKeyValue;
+      if (mode == "compile" && compileRun) {
+        runCacheKeyValue = runCacheKeyFor(
+            filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
+            beamSpecBaseRawSource, beamDeps);
+        if (runCacheKeyValue)
+          if (auto hit = tryLoadRunCache(*runCacheKeyValue, outputDir)) {
+            moduleResultsFromCache = std::move(*hit);
+            haveCachedResult = true;
+          }
+      }
+      timings.mark("run cache lookup");
 
       if (haveCachedResult) {
         moduleResults = std::move(moduleResultsFromCache);
