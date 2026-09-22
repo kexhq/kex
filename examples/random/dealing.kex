@@ -1,0 +1,16 @@
+# Replay a shuffled deck, then continue the same generator for the next hand.
+using Random
+
+main do
+  let cards = ["ace", "king", "queen", "jack", "ten", "nine"]
+  let initial = Random.seeded(42)
+  let (firstHand, generator) = initial.sample(cards, count: 3)
+  let (replayed, _) = initial.sample(cards, count: 3)
+  Assert.equal(firstHand, replayed)
+  IO.printLine("first hand: ${firstHand}")
+
+  let (secondHand, afterSecondHand) = generator.sample(cards, count: 3)
+  IO.printLine("another hand from a fresh deck: ${secondHand}")
+  let (weight, _) = afterSecondHand.float(-1.0..1.0)
+  IO.printLine("next model weight: ${weight}")
+end

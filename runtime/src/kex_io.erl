@@ -636,6 +636,7 @@ value_type_name(X) when is_integer(X) -> "Integer";
 value_type_name(X) when is_float(X) -> "Float";
 value_type_name(true) -> "Bool";
 value_type_name(false) -> "Bool";
+value_type_name({'Range', _, _}) -> "Range";
 value_type_name({'Char', _}) -> "Char";
 value_type_name({'Binary', Bin}) when is_binary(Bin) -> "Binary";
 value_type_name(X) when is_list(X) -> list_type_name(X);
@@ -692,6 +693,8 @@ to_string_optional(X) -> {'Just', to_string_bin(X)}.
 % A Kex String is a UTF-8 binary and a Char is {'Char', N}, so [] is
 % unambiguously an empty LIST ("[]") and an [Int] is unambiguously a list of
 % numbers. A [Char] is a LIST too — it is not a String — so it prints as one.
+to_string({'Range', {'Char', A}, {'Char', B}}) -> [$', A, $', $., $., $', B, $'];
+to_string({'Range', A, B}) -> to_string(A) ++ ".." ++ to_string(B);
 to_string(X) when is_binary(X)  -> unicode:characters_to_list(X);
 to_string({'Char', C})          -> [C];
 to_string(X) when is_list(X) ->

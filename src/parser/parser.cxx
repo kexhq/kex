@@ -1715,7 +1715,7 @@ auto Parser::parseEquality() -> ast::ExprPtr {
 }
 
 auto Parser::parseComparison() -> ast::ExprPtr {
-  auto left = parseAddition();
+  auto left = parseRange();
 
   while (check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
          check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
@@ -1724,12 +1724,22 @@ auto Parser::parseComparison() -> ast::ExprPtr {
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
     op->location.startOffset = startOffset;
-    auto right = parseAddition();
+    auto right = parseRange();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
   return complete(std::move(left));
+}
+
+auto Parser::parseRange() -> ast::ExprPtr {
+  auto start = parseAddition();
+  if (!match(TokenType::DotDot)) return start;
+  auto range = std::make_unique<ast::Expr>();
+  range->location = start->location;
+  auto end = parseAddition();
+  range->kind = ast::RangeExpr{std::move(start), std::move(end)};
+  return complete(std::move(range));
 }
 
 auto Parser::parseAddition() -> ast::ExprPtr {
@@ -2069,17 +2079,6 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       block->location.startOffset = startOffset;
       block->kind = ast::BlockExpr{std::move(body)};
       expr = complete(std::move(block));
-      continue;
-    }
-
-    // Range: expr..expr
-    if (match(TokenType::DotDot)) {
-      auto range = std::make_unique<ast::Expr>();
-      range->location = currentLocation();
-      range->location.startOffset = expr->location.startOffset;
-      auto end = parseAddition();
-      range->kind = ast::RangeExpr{std::move(expr), std::move(end)};
-      expr = complete(std::move(range));
       continue;
     }
 

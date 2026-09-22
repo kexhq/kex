@@ -2,102 +2,104 @@ using Random
 
 describe("Random") do
   it("replays the SplitMix64 reference sequence") do
-    let (first, rng) = Rng.seeded(0).nextUint64
+    let (first, rng) = Random.seeded(0).integer(0..18446744073709551615)
     assert(first == 16294208416658607535)
-    let (second, rng2) = rng.nextUint64
+    let (second, rng2) = rng.integer(0..18446744073709551615)
     assert(second == 7960286522194355700)
-    let (third, _) = rng2.nextUint64
+    let (third, _) = rng2.integer(0..18446744073709551615)
     assert(third == 487617019471545679)
   end
 
-  it("answers the same words for the same seed on every entry point") do
-    let (a, _) = Rng.seeded(42).nextUint64
+  it("replays the same seed and distinguishes different seeds") do
+    let (a, _) = Random.seeded(42).integer(0..18446744073709551615)
     assert(a == 13679457532755275413)
-    let (b, _) = Random.seeded(42).nextUint64
+    let (b, _) = Random.seeded(42).integer(0..18446744073709551615)
     assert(b == a)
-    let (c, _) = Rng.seeded(1).nextUint64
+    let (c, _) = Random.seeded(1).integer(0..18446744073709551615)
     assert(c == 10451216379200822465)
   end
 
   it("reduces any integer seed into the 64-bit state") do
-    let (negative, _) = Rng.seeded(-1).nextUint64
-    let (wrapped, _) = Rng.seeded(18446744073709551615).nextUint64
+    let (negative, _) = Random.seeded(-1).integer(0..18446744073709551615)
+    let (wrapped, _) = Random.seeded(18446744073709551615).integer(0..18446744073709551615)
     assert(negative == wrapped)
   end
 
   it("draws bounded integers without bias toward small answers") do
-    let (roll, _) = Rng.seeded(42).nextBounded(6)
+    let (roll, _) = Random.seeded(42).integer(0..5)
     assert(roll == 1)
-    let (percent, _) = Rng.seeded(7).nextBounded(100)
+    let (percent, _) = Random.seeded(7).integer(0..99)
     assert(percent == 87)
-    let (coin, _) = Rng.seeded(0).nextBounded(2)
+    let (coin, _) = Random.seeded(0).integer(0..1)
     assert(coin == 1)
-    let (whole, _) = Rng.seeded(42).nextBounded(18446744073709551616)
+    let (whole, _) = Random.seeded(42).integer(0..18446744073709551615)
     assert(whole == 13679457532755275413)
   end
 
   it("draws floats in range, deterministically per seed") do
-    let (first, _) = Rng.seeded(42).nextFloat
-    let (replay, _) = Rng.seeded(42).nextFloat
+    let (first, _) = Random.seeded(42).float
+    let (replay, _) = Random.seeded(42).float
     assert(first == replay)
     assert(first >= 0.0 && first < 1.0)
   end
 
   it("flips its coin from the top bit of each word") do
-    let (first, rng) = Rng.seeded(42).nextBoolean
+    let (first, rng) = Random.seeded(42).boolean
     assert(first)
-    let (second, _) = rng.nextBoolean
+    let (second, _) = rng.boolean
     assert(!second)
   end
 
   it("shuffles deterministically per seed") do
-    let (order, _) = Rng.seeded(42).shuffle([1, 2, 3, 4, 5])
+    let (order, _) = Random.seeded(42).shuffle([1, 2, 3, 4, 5])
     assert(order == [4, 5, 1, 2, 3])
-    let (other, _) = Rng.seeded(7).shuffle([1, 2, 3, 4, 5])
+    let (other, _) = Random.seeded(7).shuffle([1, 2, 3, 4, 5])
     assert(other == [3, 1, 2, 5, 4])
   end
 
   it("shuffles into a permutation of the input") do
-    let (order, _) = Rng.seeded(9).shuffle([3, 1, 2])
+    let (order, _) = Random.seeded(9).shuffle([3, 1, 2])
     assert(order.count == 3)
     assert(order.sort == [1, 2, 3])
-    let (empty, _) = Rng.seeded(9).shuffle([])
+    let (empty, _) = Random.seeded(9).shuffle([])
     assert(empty == [])
   end
 
   it("samples an ordered subset without replacement") do
-    let (hand, _) = Rng.seeded(42).sample(["a", "b", "c", "d", "e"], 2)
+    let (hand, _) = Random.seeded(42).sample(["a", "b", "c", "d", "e"], 2)
     assert(hand == ["d", "e"])
-    let (all, _) = Rng.seeded(42).sample(["a", "b"], 9)
+    let (all, _) = Random.seeded(42).sample(["a", "b"], 9)
     assert(all.count == 2)
     assert(all.sort == ["a", "b"])
-    let (none, _) = Rng.seeded(42).sample(["a", "b"], 0)
+    let (none, _) = Random.seeded(42).sample(["a", "b"], 0)
     assert(none == [])
   end
 
   it("chooses uniformly, or answers None when empty") do
-    let (pick, _) = Rng.seeded(42).choice(["a", "b", "c"])
+    let (pick, _) = Random.seeded(42).choice(["a", "b", "c"])
     assert(pick == Just("b"))
     let empty: [String] = []
-    let (missing, _) = Rng.seeded(42).choice(empty)
+    let (missing, _) = Random.seeded(42).choice(empty)
     assert(missing == None)
   end
 
   it("draws ambient integers inside their bounds") do
     20.times { |_|
-      let roll = Random.integer(6)
+      let roll = Random.integer(0..5)
       assert(roll >= 0 && roll < 6)
     }
-    let die = Random.between(1, 6)
+    let die = Random.integer(1..6)
     assert(die >= 1 && die <= 6)
   end
 
   it("draws ambient floats, booleans, and chances") do
     20.times { |_|
-      let unit = Random.float()
+      let unit = Random.float
       assert(unit >= 0.0 && unit < 1.0)
     }
-    let flip = Random.boolean()
+    let bounded = Random.float(10.0..11.0)
+    assert(bounded >= 10.0 && bounded < 11.0)
+    let flip = Random.boolean
     assert(flip == true || flip == false)
     assert(Random.chance?(1.0))
     assert(!Random.chance?(0.0))
@@ -108,10 +110,88 @@ describe("Random") do
     assert(pick == Just("a") || pick == Just("b") || pick == Just("c"))
     let empty: [String] = []
     assert(Random.choice(empty) == None)
-    let hand = Random.sample(["a", "b", "c", "d"], 2)
+    let hand = Random.sample(["a", "b", "c", "d"], count: 2)
     assert(hand.count == 2)
     let deck = Random.shuffle([1, 2, 3, 4])
     assert(deck.count == 4)
     assert(deck.sort == [1, 2, 3, 4])
+  end
+
+  it "reuses immutable state and advances through the returned generator" do
+    let initial = Random.seeded(42)
+    let (first, advanced) = initial.integer(1..6)
+    let (replayed, replayNext) = initial.integer(1..6)
+    Assert.equal(first, replayed)
+    Assert.equal(advanced, replayNext)
+    assert(advanced != initial)
+  end
+
+  it "draws weights from a floating range and replays the sequence" do
+    let initial = Random.seeded(42)
+    let (weight, advanced) = initial.float(-1.0..1.0)
+    let (unit, expectedNext) = initial.float
+    Assert.equal(weight, -1.0 * (1.0 - unit) + unit)
+    Assert.equal(advanced, expectedNext)
+    assert(weight >= -1.0 && weight < 1.0)
+  end
+
+  it "draws seeded probabilities and advances at both endpoints" do
+    let initial = Random.seeded(42)
+    let (never, afterNever) = initial.chance?(0.0)
+    let (always, afterAlways) = initial.chance?(1.0)
+    assert(!never && always)
+    Assert.equal(afterNever, afterAlways)
+    assert(afterNever != initial)
+  end
+
+  it "samples no positions without advancing and preserves duplicates" do
+    let initial = Random.seeded(42)
+    let (none, unchanged) = initial.sample([1, 2, 3], count: 0)
+    Assert.equal(none, [])
+    Assert.equal(unchanged, initial)
+    let (duplicates, _) = initial.sample([1, 1, 1], count: 2)
+    Assert.equal(duplicates, [1, 1])
+  end
+
+  it "preserves state for empty choices and shuffles" do
+    let initial = Random.seeded(42)
+    let (missing, afterChoice) = initial.choice([])
+    let (empty, afterShuffle) = initial.shuffle([])
+    Assert.equal(missing, None)
+    Assert.equal(empty, [])
+    Assert.equal(afterChoice, initial)
+    Assert.equal(afterShuffle, initial)
+  end
+
+  it "accepts singleton and negative integer ranges" do
+    let initial = Random.seeded(42)
+    let (only, advanced) = initial.integer(-7..-7)
+    Assert.equal(only, -7)
+    assert(advanced != initial)
+    let (negative, _) = initial.integer(-10..-1)
+    assert(negative >= -10 && negative <= -1)
+  end
+
+  it "advances past rejected words instead of biasing a large integer range" do
+    let initial = Random.seeded(42)
+    let (firstWord, afterFirst) = initial.integer(0..18446744073709551615)
+    let (secondWord, afterSecond) = afterFirst.integer(0..18446744073709551615)
+    assert(firstWord >= 9223372036854775809)
+    assert(secondWord < 9223372036854775809)
+    let (selected, advanced) = initial.integer(0..9223372036854775808)
+    Assert.equal(selected, secondWord)
+    Assert.equal(advanced, afterSecond)
+  end
+
+  it "excludes the upper float bound even when scaling rounds upward" do
+    let (value, _) = Random.seeded(42).float(1.0..1.0000000000000002)
+    Assert.equal(value, 1.0)
+    let (negative, _) = Random.seeded(42).float(-1.0000000000000002..-1.0)
+    Assert.equal(negative, -1.0000000000000002)
+  end
+
+  it "supports a floating interval wider than the largest finite float" do
+    let (value, _) = Random.seeded(42).float(-1.0e308..1.0e308)
+    assert(value >= -1.0e308 && value < 1.0e308)
   end
 end

@@ -32,6 +32,7 @@ type_of(X) when is_integer(X) -> named(<<"Integer">>);
 type_of(X) when is_float(X) -> named(<<"Float">>);
 type_of(true) -> named(<<"Bool">>);
 type_of(false) -> named(<<"Bool">>);
+type_of({'Range', _, _}) -> named(<<"Range">>);
 type_of({'Char', _}) -> named(<<"Char">>);
 type_of([]) -> with(<<"List">>, [named(<<"?">>)]);
 type_of(X) when is_list(X) -> with(<<"List">>, [element_type(X)]);

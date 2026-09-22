@@ -960,6 +960,70 @@ int main() {
                 interfaces, "must be declared foul"));
         });
 
+        it("preserves source defaults when merging compiled interfaces", []() {
+            semantic::ImportedInterfaces compiled;
+            semantic::ImportedFunction function;
+            function.sourceName = "draw";
+            function.backendModule = "Kex.Draw";
+            function.backendFunction = "draw";
+            function.backendArity = 2; // Includes the capability argument.
+            function.signature = {"draw", {semantic::Type::integer()},
+                                  semantic::Type::integer()};
+            compiled.modules["Draw"].exports["draw"].push_back(function);
+
+            semantic::ImportedInterfaces source;
+            function.backendArity = 1;
+            function.paramNames = {"limit"};
+            function.signature.requiredParams = 0;
+            source.modules["Draw"].exports["draw"].push_back(function);
+            auto merged = mergeSemanticInterfaces(std::move(compiled),
+                                                   std::move(source));
+            const auto& exports = merged.modules.at("Draw").exports.at("draw");
+            assertTrue(exports.size() == 1);
+            assertTrue(exports.front().backendArity == 2);
+            assertTrue(exports.front().signature.requiredParams == 0);
+            assertTrue(exports.front().paramNames == std::vector<std::string>{"limit"});
+            assertTrue(!hasErrorWithInterfaces(
+                "using Draw\nmain do Draw.draw() end\n", merged, ""));
+        });
+
+        it("does not import methods from an unrelated sibling module", []() {
+            semantic::ImportedInterfaces interfaces;
+            for (const auto& owner : {"Units.Left", "Units.Right"}) {
+                semantic::ImportedFunction format;
+                format.sourceName = "format";
+                format.sourceModule = owner;
+                format.backendModule = std::string("Kex.") + owner;
+                format.backendFunction = "format";
+                format.backendArity = 1;
+                format.signature = {"format", {semantic::Type::integer()},
+                                    semantic::Type::string()};
+                interfaces.modules[owner].sourceModule = owner;
+                interfaces.receiverFunctions["format"].push_back(format);
+            }
+            assertTrue(!hasErrorWithInterfaces(
+                "using Units.Left\nmain do 1.format end\n", interfaces, ""));
+        });
+
+        it("keeps prelude receiver methods available after opt-in interface merges", []() {
+            semantic::ImportedInterfaces compiled;
+            compiled.modules["Measure"].automaticImport = true;
+            semantic::ImportedFunction function;
+            function.sourceName = "kind";
+            function.sourceModule = "Measure";
+            function.backendModule = "kex_prelude";
+            function.signature = {"kind", {semantic::Type::named("Measure")},
+                                  semantic::Type::atom()};
+            compiled.receiverFunctions["kind"].push_back(function);
+            semantic::ImportedInterfaces source;
+            function.sourceModule = "Units.SI";
+            function.backendModule = "Kex.Units.SI";
+            source.receiverFunctions["kind"].push_back(function);
+            auto merged = mergeSemanticInterfaces(std::move(compiled), std::move(source));
+            assertTrue(merged.receiverFunctions.at("kind").size() == 1);
+            assertTrue(merged.receiverFunctions.at("kind").front().backendModule == "kex_prelude");
+        });
+
         it("lets a local module shadow an imported module target", []() {
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedModuleInterface numbers;
@@ -1458,6 +1522,15 @@ int main() {
             assertTrue(noErrors(
                 "main do\n  let x = (1, \"hello\", true)\nend\n"
             ));
+        });
+
+        it("rejects mismatched and unsupported range endpoints", []() {
+            assertTrue(hasError("main do 1..2.5 end\n", "same type"));
+            assertTrue(hasError("main do 1.0..2 end\n", "same type"));
+            assertTrue(hasError("main do 'a'..3 end\n", "same type"));
+            assertTrue(hasError("main do \"a\"..\"z\" end\n", "Integer, Float, or Char"));
+            assertTrue(noErrors("main do (-1.0..1.0) end\n"));
+            assertTrue(noErrors("main do 'a'..'z' end\n"));
         });
 
         it("accepts range", []() {
@@ -3348,6 +3421,19 @@ int main() {
     });
 
     describe("Semantic — typed networking interfaces", []() {
+        it("keeps identically named imported constructors in their declared ADTs", []() {
+            assertTrue(noErrors(
+                "using Net\n"
+                "main do\n"
+                "  let failure = NetError { kind: Timeout, operation: HTTPClient, message: \"timed out\" }\n"
+                "  let qualified = NetError { kind: Net.Timeout, operation: HTTPClient, message: \"timed out\" }\n"
+                "end\n"));
+            assertTrue(hasError(
+                "using Net\n"
+                "let fromCall(error: CallError) = NetError { kind: error, operation: HTTPClient, message: \"timed out\" }\n",
+                "kind"));
+        });
+
         it("keeps custom DNS resolvers nominal and checks their options", []() {
             assertTrue(noErrors(
                 "using Net.DNS\n"

@@ -19,6 +19,8 @@ auto Evaluator::registerListBuiltins() -> void {
     // All lambdas that need them must capture by value, not by reference.
     auto rangeToList = [](const RangeValue& r) -> std::vector<ValuePtr> {
         std::vector<ValuePtr> elems;
+        if (r.lower || r.upper)
+            throw std::runtime_error("This range cannot be enumerated");
         for (int64_t i = r.start; i <= r.end; i++)
             elems.push_back(r.isChar ? Value::character(static_cast<char32_t>(i))
                                      : Value::integer(i));
@@ -162,6 +164,17 @@ auto Evaluator::registerListBuiltins() -> void {
         auto acc = args[1];
         for (const auto& elem : elems) acc = fn->native({acc, elem});
         return acc;
+    });
+
+    defineIntrinsic("Range::bounds", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto& range = std::get<RangeValue>(args.at(0)->data);
+        auto low = range.lower ? range.lower : range.isChar
+            ? Value::character(static_cast<char32_t>(range.start))
+            : Value::integer(range.start);
+        auto high = range.upper ? range.upper : range.isChar
+            ? Value::character(static_cast<char32_t>(range.end))
+            : Value::integer(range.end);
+        return Value::tuple({low, high});
     });
 
     // Kex.Intrinsic.Range.items — the range's elements as a real list.

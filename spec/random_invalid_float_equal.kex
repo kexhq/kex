@@ -1,0 +1,5 @@
+using Random
+
+main do
+  Random.seeded(42).float(1.0..1.0)
+end

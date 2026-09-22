@@ -2677,7 +2677,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return range;
             }
             auto range = std::make_shared<Value>();
-            range->data = RangeValue{0, 0, false};
+            range->data = RangeValue{0, 0, false, start, end};
             return range;
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
@@ -4403,10 +4403,10 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         else if constexpr (std::is_same_v<T, ast::RangePattern>) {
             auto* rv = std::get_if<RangeValue>(&value->data);
             if (!rv) return false;
-            auto startVal = rv->isChar
+            auto startVal = rv->lower ? rv->lower : rv->isChar
                 ? Value::character(static_cast<char32_t>(rv->start))
                 : Value::integer(rv->start);
-            auto endVal = rv->isChar
+            auto endVal = rv->upper ? rv->upper : rv->isChar
                 ? Value::character(static_cast<char32_t>(rv->end))
                 : Value::integer(rv->end);
             if (!matchPattern(*pat.start, startVal)) return false;

@@ -363,6 +363,7 @@ auto Value::toString() const -> std::string {
             return result + " }";
         }
         else if constexpr (std::is_same_v<T, RangeValue>) {
+            if (v.lower) return v.lower->toString() + ".." + v.upper->toString();
             if (v.isChar) {
                 return std::string("'") + static_cast<char>(v.start) + "'.." +
                        "'" + static_cast<char>(v.end) + "'";
@@ -453,6 +454,7 @@ auto Value::toRepr() const -> std::string {
             return result + " }";
         }
         else if constexpr (std::is_same_v<T, RangeValue>) {
+            if (v.lower) return v.lower->toString() + ".." + v.upper->toString();
             if (v.isChar) {
                 return std::string("'") + static_cast<char>(v.start) + "'.." +
                        "'" + static_cast<char>(v.end) + "'";
@@ -646,7 +648,10 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
             return av.bytes == bv->bytes;
         }
         else if constexpr (std::is_same_v<AT, RangeValue>) {
-            return av.start == bv->start && av.end == bv->end;
+            if (av.lower || bv->lower)
+                return av.lower && bv->lower && valuesEqual(av.lower, bv->lower) &&
+                       valuesEqual(av.upper, bv->upper);
+            return av.isChar == bv->isChar && av.start == bv->start && av.end == bv->end;
         }
         else if constexpr (std::is_same_v<AT, MapValue>) {
             if (av.entries.size() != bv->entries.size()) return false;
@@ -766,6 +771,7 @@ auto Value::inspect() const -> std::string {
                 return result + " }";
             }
             else if constexpr (std::is_same_v<T, RangeValue>) {
+                if (node.lower) return rec(*node.lower) + ".." + rec(*node.upper);
                 if (node.isChar) {
                     return std::string(c(green)) + "'" + static_cast<char>(node.start) + "'" + c(reset)
                            + ".." + std::string(c(green)) + "'" + static_cast<char>(node.end) + "'" + c(reset);

@@ -31,6 +31,17 @@ auto Evaluator::registerMathBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
+    reg("Float::scaleUnit", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto low = toDouble(args.at(0));
+        const auto high = toDouble(args.at(1));
+        const auto unit = toDouble(args.at(2));
+        if (!std::isfinite(low) || !std::isfinite(high) || !(low < high))
+            throw std::runtime_error("Random.float: bounds must be finite and strictly ascending");
+        const auto value = low * (1.0 - unit) + high * unit;
+        return Value::floating(value >= high ? std::nextafter(high, low)
+                                            : value < low ? low : value);
+    });
+
     reg("Math::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::sqrt(args.empty() ? 0.0 : toDouble(args[0])), "Math.sqrt");
     });

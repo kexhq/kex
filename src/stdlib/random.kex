@@ -1,403 +1,242 @@
-# Pseudorandom values: integers, floats, choices, and shuffles.
+# Random values for simulations, sampling, games, and reproducible tests.
 #
-# Opt-in: nothing here is in scope until `using Random`, which brings both
-# the seeded generator and the ambient conveniences into scope at once.
+# Import with +using Random+. Ordinary calls return a value directly;
+# a +Random.Generator+ returns +(value, nextGenerator)+. Reusing the same
+# generator replays the same draw. Pass its returned state to continue.
 #
+# @example Roll a die or initialize a weight
 #   using Random
+#   let roll = Random.integer(1..6)
+#   let weight = Random.float(-1.0..1.0)
 #
-#   main do
-#     IO.printLine(Random.between(1, 6))
-#     IO.printLine(Random.shuffle(["a", "b", "c"]))
-#   end
+# @example Reproduce a sequence
+#   let generator = Random.seeded(42)
+#   let (first, afterFirst) = generator.integer(1..6)
+#   let (second, afterSecond) = afterFirst.integer(1..6)
 #
-# Two layers, for two needs. `Rng` is a small deterministic generator with
-# explicit state: the same seed answers the same sequence on every run and
-# on both backends, which is what makes randomized code testable. `Random`
-# is the ambient convenience layer over it: each call draws fresh entropy
-# from the host, so answers differ between runs.
-#
-#   let rng = Rng.seeded(42)
-#   let (roll, next) = rng.nextBounded(6)   # 0..5, then keep going with next
-#   Random.integer(6)                       # 0..5, fresh entropy, foul
-#
-# The generator is SplitMix64: tiny, fast, and good enough for modelling,
-# games, sampling, shuffling, and randomized tests. It is NOT cryptographic:
-# its state follows directly from its output, so never use it for secrets,
-# tokens, or anything an adversary gets to see. The ambient layer draws its
-# seeds from the host's secure source, but one secure seed does not make
-# the stream that follows secure.
-
-# The state of a deterministic generator: one 64-bit word.
-#
-# A value, not a handle: every step answers a new `Rng` alongside its
-# output, and the old one keeps answering what it always did. Thread the
-# answer forward and the sequence is reproducible from its seed.
-#
-#   let rng = Rng.seeded(42)
-#   let (a, rng) = rng.nextUint64
-#   let (b, rng) = rng.nextUint64   # same `a` and `b` on every run
-#
-# Build one with +Rng.seeded+ rather than by hand: the record literal does
-# no range reduction, and every step here assumes a state inside
-# 0..2^64 - 1.
-record Rng do
-  state : Integer = 0
-end
-
-# Constructors and constants for the deterministic +Rng+. The draws
-# themselves are methods in the +make+ block below, so every one answers
-# to Uniform Function Call Syntax: +rng.nextBounded(6)+.
-module Rng do
-  # One past the largest representable state: all arithmetic here is
-  # modulo 2^64, keeping the word closed under the mixing below. Also the
-  # largest exclusive bound one 64-bit draw can cover directly.
-  #
-  # Public because the +make+ block below lives outside this module and
-  # reaches it by qualification.
-  let maxBound = 18446744073709551616
-
-  # The SplitMix64 odd increment: every addition steps the state by a
-  # different odd multiple, so even a seed of 0 walks the whole space.
-  let gamma = 0x9e3779b97f4a7c15
-
-  # The two xor-shift/multiply mixing constants.
-  let mixA = 0xbf58476d1ce4e5b9
-  let mixB = 0x94d049bb133111eb
-
-  # Builds a generator from any integer seed.
-  #
-  # The seed is reduced modulo 2^64, so negative seeds and huge ones are
-  # fine: every integer names a generator, and equal integers name the
-  # same one.
-  #
-  # @param seed [Integer] any integer; equal seeds answer equal sequences
-  # @return [Rng] the generator
-  #
-  # @example
-  #   let (word, _) = Rng.seeded(42).nextUint64
-  #   word   # => 13679457532755275413, always
-  #
-  # @example Reproducible sampling in a test
-  #   let (pick, _) = Rng.seeded(7).choice(["a", "b", "c"])
-  seeded : Integer -> Rng
-  let seeded(seed: Integer) -> Rng do
-    return Rng { state: seed.modulo(Rng.maxBound) }
-  end
-
-end
-
-# The draws on an +Rng+. Each answers its draw alongside the generator
-# that follows it, so state threads through a chain of calls. All are
-# methods, so Uniform Function Call Syntax reaches every one.
-make Rng do
-  # Draws one 64-bit unsigned word and the generator that follows it.
-  #
-  # This is the primitive everything else here is built on: the raw
-  # SplitMix64 output, uniformly spread over 0..2^64 - 1. Pure arithmetic
-  # over unbounded integers with an explicit mask, so both backends agree
-  # bit for bit with the reference C.
-  #
-  # @return [(Integer, Rng)] the word and the next generator
-  #
-  # @example
-  #   let (word, next) = Rng.seeded(0).nextUint64
-  #   word   # => 16294208416658607535
-  nextUint64 :> (Integer, Rng)
-  let nextUint64 do
-    let mask = Rng.maxBound - 1
-    let advanced = Kex.Intrinsic.Bits.and(@state + Rng.gamma, mask)
-    let spread1 = Kex.Intrinsic.Bits.xor(advanced, Kex.Intrinsic.Bits.shiftRight(advanced, 30))
-    let mixed1 = Kex.Intrinsic.Bits.and(spread1 * Rng.mixA, mask)
-    let spread2 = Kex.Intrinsic.Bits.xor(mixed1, Kex.Intrinsic.Bits.shiftRight(mixed1, 27))
-    let mixed2 = Kex.Intrinsic.Bits.and(spread2 * Rng.mixB, mask)
-    let output = Kex.Intrinsic.Bits.xor(mixed2, Kex.Intrinsic.Bits.shiftRight(mixed2, 31))
-    return (output, Rng { state: advanced })
-  end
-
-  # Draws a uniform integer in 0..bound-1 and the generator that follows.
-  #
-  # Uses rejection sampling rather than a bare remainder, so small bounds
-  # are not biased toward small answers: draws that would tilt the range
-  # are discarded and redrawn. Dies when +bound+ is not positive or does
-  # not fit in one 64-bit word.
-  #
-  # @param bound [Integer] the exclusive upper bound, 1..2^64
-  # @return [(Integer, Rng)] the draw and the next generator
-  #
-  # @example
-  #   let (roll, _) = Rng.seeded(42).nextBounded(6)   # => 0..5
-  #
-  # @example Rolling again with the threaded state
-  #   var rng = Rng.seeded(42)
-  #   let (first, advanced) = rng.nextBounded(6)
-  #   rng = advanced
-  nextBounded :> Integer -> (Integer, Rng)
-  let nextBounded(bound: Integer) -> (Integer, Rng) do
-    if bound <= 0
-      die("Rng.nextBounded: bound must be positive, got ${bound}")
-    end
-    if bound > Rng.maxBound
-      die("Rng.nextBounded: bound does not fit in 64 bits")
-    end
-    let (draw, advanced) = this.nextUint64
-    # Draws at or above this limit would make some residues likelier than
-    # others; there is always less than one bound's worth of them, so the
-    # expected number of redraws stays below two.
-    let limit = Rng.maxBound - Rng.maxBound.modulo(bound)
-    return (draw.modulo(bound), advanced) if draw < limit
-    return advanced.nextBounded(bound)
-  end
-
-  # Draws a uniform float in 0.0..1.0 and the generator that follows.
-  #
-  # Takes the top 53 bits of one word: exactly what a double's mantissa
-  # holds, so every representable value in range is reachable and 1.0
-  # itself never comes out.
-  #
-  # @return [(Float, Rng)] the draw and the next generator
-  #
-  # @example
-  #   let (unit, _) = Rng.seeded(42).nextFloat   # => 0.0..1.0
-  nextFloat :> (Float, Rng)
-  let nextFloat do
-    let (draw, advanced) = this.nextUint64
-    # Into a float by multiplication, not conversion: `* 1.0` is the
-    # typed idiom (`Duration.seconds` is built the same way).
-    let mantissa = Kex.Intrinsic.Bits.shiftRight(draw, 11) * 1.0
-    return (mantissa / 9007199254740992.0, advanced)
-  end
-
-  # Draws a fair coin flip and the generator that follows.
-  #
-  # Reads the top bit of one word rather than the bottom one, which is
-  # the bit a multiply-mixed generator decorrelates fastest.
-  #
-  # @return [(Bool, Rng)] the flip and the next generator
-  #
-  # @example
-  #   let (heads, _) = Rng.seeded(42).nextBoolean
-  nextBoolean :> (Bool, Rng)
-  let nextBoolean do
-    let (draw, advanced) = this.nextUint64
-    return (Kex.Intrinsic.Bits.shiftRight(draw, 63) == 1, advanced)
-  end
-
-  # Shuffles a list into a new order, answering the generator that follows.
-  #
-  # A selection shuffle: each position draws uniformly among the elements
-  # not yet placed, so every permutation is equally likely. The input is
-  # untouched; shuffling an empty list answers an empty list.
-  #
-  # @param items [[A]] the elements to order
-  # @return [([A], Rng)] the shuffled elements and the next generator
-  #
-  # @example
-  #   let (order, _) = Rng.seeded(42).shuffle([1, 2, 3])
-  shuffle :> [A] -> ([A], Rng)
-  let shuffle(items: [A]) -> ([A], Rng) do
-    var pool = items
-    var out: [A] = []
-    var state = this
-    while !pool.empty? do
-      let (index, advanced) = state.nextBounded(pool.count)
-      state = advanced
-      # `index` is below `pool.count` by construction, so `None` is
-      # unreachable; `die` says what the typechecker cannot.
-      let picked = match pool.at(index) do
-        Just(x) => x
-        None => die("Rng.shuffle: unreachable empty draw")
-      end
-      out.push!(picked)
-      pool = pool.take(index) + pool.drop(index + 1)
-    end
-    return (out, state)
-  end
-
-  # Draws +n+ distinct elements in random order, with the next generator.
-  #
-  # Shuffles and takes the front: uniform over every ordered +n+-subset.
-  # Asking for more than the list holds answers the whole list shuffled;
-  # asking for none answers an empty list. Dies for a negative +n+.
-  #
-  # @param items [[A]] the elements to draw from
-  # @param n [Integer] how many to draw, 0 or more
-  # @return [([A], Rng)] the drawn elements and the next generator
-  #
-  # @example
-  #   let (hand, _) = Rng.seeded(42).sample([1, 2, 3, 4, 5], 2)
-  #   hand.count   # => 2
-  sample :> [A] -> Integer -> ([A], Rng)
-  let sample(items: [A], n: Integer) -> ([A], Rng) do
-    if n < 0
-      die("Rng.sample: count must not be negative, got ${n}")
-    end
-    let (order, advanced) = this.shuffle(items)
-    return (order.take(n), advanced)
-  end
-
-  # Draws one element uniformly, or +None+ from an empty list.
-  #
-  # The only fallible draw here, and the failure carries no information
-  # worth an error type: an empty list has no element to give, whatever
-  # the seed, so +None+ is the whole story.
-  #
-  # @param items [[A]] the elements to draw from
-  # @return [(A?, Rng)] the drawn element, if any, and the next generator
-  #
-  # @example
-  #   let (pick, _) = Rng.seeded(42).choice(["a", "b", "c"])
-  #   ["a", "b", "c"].contains?(pick.or(""))   # => true
-  choice :> [A] -> (A?, Rng)
-  let choice(items: [A]) -> (A?, Rng) do
-    return (None, this) if items.empty?
-    let (index, advanced) = this.nextBounded(items.count)
-    return (items.at(index), advanced)
-  end
-end
-
-# Ambient randomness: fresh host entropy on every call.
-#
-# Each function here draws its own seed from the host's secure source and
-# runs the deterministic core above on it, so answers differ between runs
-# the way the clock differs between reads. That is why every one is
-# +foul+: the same call with the same arguments may answer differently.
-#
-# Reach for +Rng+ instead when the answers must repeat: seeded simulation,
-# property tests, anything asserting on a particular draw.
+# These generators are not cryptographic; do not use their output for secrets.
 module Random do
-  # Builds a generator from fresh host entropy.
+  # Immutable state of a deterministic random sequence.
   #
-  # The entry point for hand-threaded flows that still vary between runs:
-  # seed once here, then draw purely from the answer.
-  #
-  # @return [Rng] a generator seeded from the host's secure source
-  #
-  # @example
-  #   var rng = Random.fresh()
-  #   let (roll, advanced) = rng.nextBounded(6)
-  #   rng = advanced
-  foul fresh() -> Rng do
+  # Construct with +Random.seeded+ or +Random.fresh+. Each draw returns its
+  # value first and the advanced generator second. Equal seeds reproduce equal
+  # sequences for the same operations on both backends.
+  record Generator do
+    state : Integer = 0
+  end
+
+  # Starts a deterministic sequence. Any Integer seed is reduced modulo 2^64.
+  # @param seed [Integer] reproducible seed, including negative or large values
+  # @return [Generator] initial state; no draw has been consumed
+  let seeded(seed: Integer) -> Generator = Generator {
+    state: seed.modulo(18446744073709551616)
+  }
+
+  # Starts a generator using fresh host entropy.
+  # @return [Generator] initial state for a sequence that varies between runs
+  foul fresh -> Generator do
     let high = Math.floor(Kex.Intrinsic.Retry.randomUnit() * 4294967296.0)
     let low = Math.floor(Kex.Intrinsic.Retry.randomUnit() * 4294967296.0)
-    return Rng.seeded(high * 4294967296 + low)
+    seeded(high * 4294967296 + low)
   end
 
-  # Builds a generator from any integer seed. The deterministic entry:
-  # the same seed replays the same sequence, which is what tests want.
-  #
-  # @param seed [Integer] any integer; equal seeds answer equal sequences
-  # @return [Rng] the generator
-  #
-  # @example
-  #   let (roll, _) = Random.seeded(42).nextBounded(6)
-  seeded : Integer -> Rng
-  let seeded(seed: Integer) -> Rng = Rng.seeded(seed)
+  module Generator do
+    make Random.Generator do
+      # Draws an integer between both endpoints, with the advanced generator.
+      # The range must be ascending and contain at most 2^64 integers.
+      # A singleton range is valid and still consumes a draw.
+      # @param range [Range<Integer>] inclusive integer bounds
+      # @return [(Integer, Generator)] drawn integer and advanced state
+      # @example A reproducible die roll
+      #   let (roll, advanced) = Random.seeded(42).integer(1..6)
+      let integer(range: Range<Integer>) -> (Integer, Generator) = drawInteger(this, range)
 
-  # Returns a uniform float in 0.0..1.0. Never answers 1.0 itself.
-  #
-  # @return [Float] the draw
-  #
-  # @example Scaling into a range
-  #   let jitter = Random.float() * maxJitter
-  foul float() -> Float do
-    let (value, _) = Random.fresh().nextFloat
-    return value
-  end
+      # Draws a float from the lower bound inclusive to the upper bound exclusive.
+      # Defaults to +0.0..1.0+. Bounds must be finite and strictly ascending.
+      # @param range [Range<Float>] half-open floating-point bounds
+      # @return [(Float, Generator)] drawn float and advanced state
+      # @example Initialize a model weight
+      #   let (weight, advanced) = Random.seeded(42).float(-1.0..1.0)
+      let float(range: Range<Float>) -> (Float, Generator) = drawFloat(this, range)
+      let float -> (Float, Generator) = drawFloat(this, 0.0..1.0)
 
-  # Returns a uniform integer in 0..bound-1. Dies unless +bound+ is
-  # positive and fits in 64 bits.
-  #
-  # @param bound [Integer] the exclusive upper bound, 1..2^64
-  # @return [Integer] the draw
-  #
-  # @example
-  #   Random.integer(6)    # => 0..5, like a die minus one
-  foul integer(bound: Integer) -> Integer do
-    let (value, _) = Random.fresh().nextBounded(bound)
-    return value
-  end
+      # Draws a fair Boolean and returns the advanced generator.
+      # @return [(Bool, Generator)] coin flip and advanced state
+      let boolean -> (Bool, Generator) = drawBoolean(this)
 
-  # Returns a uniform integer in +low+..+high+, endpoints included. Dies
-  # unless +low+ is below +high+ and the span fits in 64 bits.
-  #
-  # @param low [Integer] the smallest answer
-  # @param high [Integer] the largest answer
-  # @return [Integer] the draw
-  #
-  # @example
-  #   Random.between(1, 6)   # => a die roll
-  foul between(low: Integer, high: Integer) -> Integer do
-    if low > high
-      die("Random.between: low must not exceed high, got ${low}..${high}")
+      # Draws true with the supplied probability. Consumes one draw even at 0 or 1.
+      # @param probability [Float] probability from 0.0 through 1.0
+      # @return [(Bool, Generator)] outcome and advanced state
+      let chance?(probability: Float) -> (Bool, Generator) = drawChance(this, probability)
+
+      # Chooses an input position uniformly. Empty input returns None without a draw.
+      # @param items [[X]] values to choose from
+      # @return [(X?, Generator)] optional value and advanced state
+      let choice(items: [X]) -> (X?, Generator) = drawChoice(this, items)
+
+      # Selects input positions without replacement, in random order.
+      # Duplicate input values may appear more than once in the result.
+      # A count larger than the input selects every position; zero consumes no draws.
+      # @param items [[X]] population; unchanged by sampling
+      # @param count [Integer] nonnegative number of positions to select
+      # @return [([X], Generator)] selected values and advanced state
+      # @example Deal five cards reproducibly
+      #   let (hand, advanced) = Random.seeded(42).sample(cards, count: 5)
+      let sample(items: [X], count: Integer) -> ([X], Generator) = drawSample(this, items, count)
+
+      # Returns a random permutation, preserving duplicates and the input itself.
+      # Empty input consumes no draws.
+      # @param items [[X]] values to shuffle
+      # @return [([X], Generator)] permutation and advanced state
+      let shuffle(items: [X]) -> ([X], Generator) = drawSample(this, items, items.count)
     end
-    return low + Random.integer(high - low + 1)
   end
 
-  # Returns a fair coin flip.
-  #
-  # @return [Bool] the flip
-  #
-  # @example
-  #   if Random.boolean() then IO.printLine("heads") else IO.printLine("tails") end
-  foul boolean() -> Bool do
-    let (value, _) = Random.fresh().nextBoolean
-    return value
+  # Draws an integer from an inclusive range using fresh entropy.
+  # @param range [Range<Integer>] ascending inclusive bounds, span at most 2^64
+  # @return [Integer] drawn value
+  foul integer(range: Range<Integer>) -> Integer do
+    let (value, _) = drawInteger(fresh, range)
+    value
   end
 
-  # Returns +true+ with probability +p+: a coin weighted by its argument.
-  # Dies unless +p+ is inside 0.0..1.0.
-  #
-  # @param p [Float] the chance of +true+, 0.0..1.0
-  # @return [Bool] +true+ with probability +p+
-  #
-  # @example
-  #   Random.chance?(0.25)   # => true about one call in four
-  #
-  # @example Simulating a failure rate
-  #   if Random.chance?(0.01) then Error("flaky") else Ok(send(request)) end
-  foul chance?(p: Float) -> Bool do
-    if p < 0.0 || p > 1.0
-      die("Random.chance?: chance must be inside 0.0..1.0, got ${p}")
+  # Draws a float; defaults to [0.0, 1.0). The upper bound is excluded.
+  # @param range [Range<Float>] finite, strictly ascending bounds
+  # @return [Float] drawn value
+  foul float(range: Range<Float> = 0.0..1.0) -> Float do
+    let (value, _) = drawFloat(fresh, range)
+    value
+  end
+
+  # Draws a fair coin flip using fresh entropy.
+  # @return [Bool] true or false with equal probability
+  foul boolean -> Bool do
+    let (value, _) = drawBoolean(fresh)
+    value
+  end
+
+  # Returns true with the supplied probability using fresh entropy.
+  # @param probability [Float] probability from 0.0 through 1.0
+  # @return [Bool] sampled outcome
+  foul chance?(probability: Float) -> Bool do
+    let (value, _) = drawChance(fresh, probability)
+    value
+  end
+
+  # Chooses a position uniformly, returning None for an empty input.
+  # @param items [[X]] values to choose from
+  # @return [X?] chosen value, if any
+  foul choice(items: [X]) -> X? do
+    let (value, _) = drawChoice(fresh, items)
+    value
+  end
+
+  # Samples positions without replacement; duplicate values remain possible.
+  # @param items [[X]] population
+  # @param count [Integer] nonnegative count; capped at the input size
+  # @return [[X]] values selected in random order
+  foul sample(items: [X], count: Integer) -> [X] do
+    let (value, _) = drawSample(fresh, items, count)
+    value
+  end
+
+  # Returns a random permutation using fresh entropy.
+  # @param items [[X]] values to shuffle
+  # @return [[X]] shuffled copy
+  foul shuffle(items: [X]) -> [X] do
+    let (value, _) = drawSample(fresh, items, items.count)
+    value
+  end
+
+  private do
+    let drawInteger(source: Generator, range: Range<Integer>) -> (Integer, Generator) do
+      let (low, high) = integerBounds(range)
+      integerBetween(source, low, high)
     end
-    return Random.float() < p
-  end
 
-  # Returns a uniformly drawn element, or +None+ from an empty list.
-  #
-  # @param items [[A]] the elements to draw from
-  # @return [A?] the drawn element, if any
-  #
-  # @example
-  #   Random.choice(["heads", "tails"])   # => Just("heads") or Just("tails")
-  foul choice(items: [A]) -> A? do
-    let (value, _) = Random.fresh().choice(items)
-    return value
-  end
+    let drawFloat(source: Generator, range: Range<Float>) -> (Float, Generator) do
+      let (low, high) = floatBounds(range)
+      if !(low < high)
+        die("Random.float: bounds must be finite and strictly ascending")
+      end
+      let (word, advanced) = nextWord(source)
+      let unit = (Kex.Intrinsic.Bits.shiftRight(word, 11) * 1.0) / 9007199254740992.0
+      (Kex.Intrinsic.Float.scaleUnit(low, high, unit), advanced)
+    end
 
-  # Returns +n+ distinct elements in random order. Asking for more than
-  # the list holds answers the whole list shuffled. Dies for a
-  # negative +n+.
-  #
-  # @param items [[A]] the elements to draw from
-  # @param n [Integer] how many to draw, 0 or more
-  # @return [[A]] the drawn elements
-  #
-  # @example
-  #   Random.sample(["a", "b", "c", "d"], 2)   # => two of the four
-  foul sample(items: [A], n: Integer) -> [A] do
-    let (value, _) = Random.fresh().sample(items, n)
-    return value
-  end
+    let drawBoolean(source: Generator) -> (Bool, Generator) do
+      let (word, advanced) = nextWord(source)
+      (Kex.Intrinsic.Bits.shiftRight(word, 63) == 1, advanced)
+    end
 
-  # Returns the elements in a uniformly random order.
-  #
-  # @param items [[A]] the elements to order
-  # @return [[A]] the shuffled elements
-  #
-  # @example
-  #   Random.shuffle([1, 2, 3, 4])   # => the four, in a random order
-  foul shuffle(items: [A]) -> [A] do
-    let (value, _) = Random.fresh().shuffle(items)
-    return value
+    let drawChance(source: Generator, probability: Float) -> (Bool, Generator) do
+      if !(probability >= 0.0 && probability <= 1.0)
+        die("Random.chance?: probability must be between 0.0 and 1.0")
+      end
+      let (value, advanced) = drawFloat(source, 0.0..1.0)
+      (value < probability, advanced)
+    end
+
+    let drawChoice(source: Generator, items: [X]) -> (X?, Generator) do
+      return (None, source) if items.empty?
+      let (index, advanced) = below(source, items.count)
+      (items.at(index), advanced)
+    end
+
+    let drawSample(source: Generator, items: [X], count: Integer) -> ([X], Generator) do
+      if count < 0
+        die("Random.sample: count must not be negative")
+      end
+      var pool = items
+      var selected: [X] = []
+      var generator = source
+      while !pool.empty? && selected.count < count do
+        let (index, advanced) = below(generator, pool.count)
+        generator = advanced
+        selected.push!(pool.at(index).try)
+        pool = pool.take(index) + pool.drop(index + 1)
+      end
+      (selected, generator)
+    end
+
+    integerBetween : Generator -> Integer -> Integer -> (Integer, Generator)
+    let integerBetween(generator, low, high) do
+      if low > high
+        die("Random.integer: lower bound must not exceed upper bound")
+      end
+      let (value, advanced) = below(generator, high - low + 1)
+      (low + value, advanced)
+    end
+
+    integerBounds : Range<Integer> -> (Integer, Integer)
+    let integerBounds(range) = Kex.Intrinsic.Range.bounds(range)
+
+    floatBounds : Range<Float> -> (Float, Float)
+    let floatBounds(range) = Kex.Intrinsic.Range.bounds(range)
+
+    # SplitMix64's arithmetic stays private; public operations expose values.
+    nextWord : Generator -> (Integer, Generator)
+    let nextWord(generator: Generator) -> (Integer, Generator) do
+      let mask = 18446744073709551615
+      let advanced = Kex.Intrinsic.Bits.and(generator.state + 0x9e3779b97f4a7c15, mask)
+      let spread1 = Kex.Intrinsic.Bits.xor(advanced, Kex.Intrinsic.Bits.shiftRight(advanced, 30))
+      let mixed1 = Kex.Intrinsic.Bits.and(spread1 * 0xbf58476d1ce4e5b9, mask)
+      let spread2 = Kex.Intrinsic.Bits.xor(mixed1, Kex.Intrinsic.Bits.shiftRight(mixed1, 27))
+      let mixed2 = Kex.Intrinsic.Bits.and(spread2 * 0x94d049bb133111eb, mask)
+      let word = Kex.Intrinsic.Bits.xor(mixed2, Kex.Intrinsic.Bits.shiftRight(mixed2, 31))
+      (word, Generator { state: advanced })
+    end
+
+    below : Generator -> Integer -> (Integer, Generator)
+    let below(generator: Generator, bound: Integer) -> (Integer, Generator) do
+      let maximum = 18446744073709551616
+      if bound <= 0 || bound > maximum
+        die("Random.integer: range must contain between 1 and 2^64 integers")
+      end
+      let (word, advanced) = nextWord(generator)
+      let limit = maximum - maximum.modulo(bound)
+      return (word.modulo(bound), advanced) if word < limit
+      below(advanced, bound)
+    end
   end
 end

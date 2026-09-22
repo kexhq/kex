@@ -114,7 +114,14 @@ struct ServerValue {
 struct ListValue { std::vector<ValuePtr> elements; };
 struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
-struct RangeValue { int64_t start; int64_t end; bool isChar = false; };
+struct RangeValue {
+    int64_t start;
+    int64_t end;
+    bool isChar = false;
+    // Preserve non-machine-integer bounds without narrowing or materialization.
+    ValuePtr lower;
+    ValuePtr upper;
+};
 
 // A stream is a chain of cells. Forcing one answers the element there and the
 // cell after it, and MEMOISES both, so the element behind a given cell is
