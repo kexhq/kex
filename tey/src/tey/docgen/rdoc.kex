@@ -24,9 +24,8 @@ module Tey.Docgen.Rdoc do
     if text.empty?
       return None
     end
-    let lines = rewritePlusPairs(text, "").split("\n")
-    let blocks = mergeVerbatim(splitParagraphs(lines, [], []), [])
-    return classifyBlocks(blocks, "", [], None, [], None)
+    let blocks = mergeVerbatim(splitParagraphs(text.split("\n"), [], []), [])
+    return classifyBlocks(rewriteProseBlocks(blocks), "", [], None, [], None)
   end
 
   foul parseOrEmpty(text: String) -> Doc do
@@ -34,6 +33,30 @@ module Tey.Docgen.Rdoc do
       Just(doc) => doc
       None => emptyDoc()
     end
+  end
+
+  # `+code+` is prose markup, so it is rewritten per prose block — after the
+  # split, not before it. Rewriting the whole comment at once paired a `+`
+  # operator inside an indented code sample (say `1 + 1`) with the next prose
+  # pair (`+describe+`), turning the operator into a stray backtick and eating
+  # the markup. Verbatim blocks and `@example` code are Kex source and are
+  # left alone; `@param`/`@return` descriptions are prose and still rewrite.
+  # Pairing never crosses a block: each block is rewritten on its own.
+  foul rewriteProseBlocks(blocks: [[String]]) -> [[String]] do
+    return blocks.map { |block| rewriteProseBlock(block) }
+  end
+
+  foul rewriteProseBlock(block: [String]) -> [String] do
+    if block.empty?
+      return block
+    end
+    if (block.first.or("")).trim.startsWith?("@example")
+      return block
+    end
+    if verbatim?(block)
+      return block
+    end
+    return rewritePlusPairs(block.join("\n"), "").split("\n")
   end
 
   foul rewritePlusPairs(s: String, accum: String) -> String do
@@ -47,10 +70,53 @@ module Tey.Docgen.Rdoc do
             let inner = rest.take(endOffset)
             let tail = rest.drop(endOffset + 1)
             let head = s.take(start)
-            return rewritePlusPairs(tail, accum + head + "`" + inner + "`")
+            if plusPair?(head, inner, tail)
+              return rewritePlusPairs(tail, accum + head + "`" + inner + "`")
+            end
+            return rewritePlusPairs(rest, accum + head + "+")
           end
         end
       end
+    end
+  end
+
+  # A `+...+` pair is markup only when it reads as one: content with no space
+  # against either delimiter (so `1 + 1` stays an addition), no backtick
+  # inside (so converted spans never nest), and a non-identifier character on
+  # both sides (so `a+b` stays put even if it ever reaches here).
+  foul plusPair?(head: String, inner: String, tail: String) -> Bool do
+    if inner.empty?
+      return false
+    end
+    if inner.startsWith?(" ") || inner.endsWith?(" ")
+      return false
+    end
+    if inner.startsWith?("\n") || inner.endsWith?("\n")
+      return false
+    end
+    if inner.contains?("`")
+      return false
+    end
+    return boundaryBefore?(head) && boundaryAfter?(tail)
+  end
+
+  foul boundaryBefore?(head: String) -> Bool do
+    if head.empty?
+      return true
+    end
+    match head.chars.last do
+      None => true
+      Just(c) => !(c.letter? || c.digit?)
+    end
+  end
+
+  foul boundaryAfter?(tail: String) -> Bool do
+    if tail.empty?
+      return true
+    end
+    match tail.chars.first do
+      None => true
+      Just(c) => !(c.letter? || c.digit?)
     end
   end
 
