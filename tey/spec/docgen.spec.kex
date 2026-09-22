@@ -1,7 +1,7 @@
 using Tey.Docgen.Model
 using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?, parentTitleOf, topLevelPages, childPages, descendantPages]
 using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText, preludePaths]
-using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle]
+using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle, functionEntries]
 using Tey.Docgen.Index, only: [upsertVersion]
 using Tey.Docgen.Rdoc, only: [parseDoc]
 
@@ -354,4 +354,19 @@ end
 
 let noLocation() -> Kex.AST.Location do
   return Kex.AST.Location { file: "io.kex", line: 1, column: 1, startOffset: 0, endOffset: 0 }
+end
+
+describe("Tey.Docgen.Extract receiver methods") do
+  it("keeps a zero-argument receiver method in the API documentation") do
+    let body = [Kex.AST.FunctionDef(aBinding("boolean", false))]
+    let methods = functionEntries(body, "Random.Generator", true)
+    Assert.equal(methods.count, 1)
+    Assert.equal(methods.first.try.name, "boolean")
+    Assert.equal(methods.first.try.qualifiedName, "Random.Generator.boolean")
+  end
+
+  it("continues to treat module-level bindings as constants") do
+    let body = [Kex.AST.FunctionDef(aBinding("answer", false))]
+    Assert.equal(functionEntries(body, "Example", false).count, 0)
+  end
 end

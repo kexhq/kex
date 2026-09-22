@@ -358,6 +358,8 @@ record_field_init
 
 (* ===== Range ===== *)
 
+(* Range binds less tightly than arithmetic/unary operations, and more
+   tightly than comparisons: -1.0..1.0 means (-1.0)..1.0. *)
 range_expr = expr DOT_DOT expr ;
 
 (* ===== Control Flow ===== *)

@@ -139,6 +139,7 @@ private:
     auto parseAnd() -> ast::ExprPtr;
     auto parseEquality() -> ast::ExprPtr;
     auto parseComparison() -> ast::ExprPtr;
+    auto parseRange() -> ast::ExprPtr;
     auto parseAddition() -> ast::ExprPtr;
     auto parseMultiplication() -> ast::ExprPtr;
     auto parseUnary() -> ast::ExprPtr;

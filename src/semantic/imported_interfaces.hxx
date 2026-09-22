@@ -38,6 +38,8 @@ struct ImportedFunction {
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.
     bool isConstructor = false;
+    // Owning ADT, retained when constructor spellings collide across modules.
+    std::string constructorOwner;
 };
 
 struct ImportedModuleInterface {

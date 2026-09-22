@@ -27,6 +27,7 @@ convertTo(V, 'Byte') when is_integer(V), V >= 0, V =< 255 -> {'Just', V};
 convertTo(_, 'Byte') -> 'None';
 convertTo(V, 'Binary') when is_binary(V) -> {'Just', {'Binary', V}};
 convertTo({'Binary', V}, 'Binary') -> {'Just', {'Binary', V}};
+convertTo({'Range', _, _} = Range, 'List') -> {'Just', kex_intrinsic_range:items(Range)};
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
 convertTo(_, _) -> 'None'.
 

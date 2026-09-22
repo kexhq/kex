@@ -1,0 +1,21 @@
+using Random
+
+main do
+  let initial = Random.seeded(42)
+  let (roll, _) = initial.integer(-6..-1)
+  assert(roll >= -6 && roll <= -1)
+  let (weight, _) = initial.float(-1.0..1.0)
+  assert(weight >= -1.0 && weight < 1.0)
+  let huge = 0..18446744073709551615
+  let (word, _) = initial.integer(huge)
+  Assert.equal(word, 13679457532755275413)
+  let (single, _) = initial.integer(100000000000000000000..100000000000000000000)
+  Assert.equal(single, 100000000000000000000)
+  match -2 + 1..1 + 2 do
+    low..high => do
+      Assert.equal(low, -1)
+      Assert.equal(high, 3)
+    end
+  end
+  IO.printLine("range draws agree")
+end

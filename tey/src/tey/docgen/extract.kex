@@ -188,7 +188,7 @@ module Tey.Docgen.Extract do
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
       typeParams: info.typeParams,
-      functions: functionEntries(info.body, qualify(prefix, info.name)),
+      functions: functionEntries(info.body, qualify(prefix, info.name), false),
       doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
@@ -199,7 +199,7 @@ module Tey.Docgen.Extract do
       target: typeText(info.target),
       isFinal: info.isFinal,
       implements: info.implements.map { |t| typeText(t) },
-      functions: functionEntries(info.body, typeText(info.target)),
+      functions: functionEntries(info.body, typeText(info.target), true),
       doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
     })
@@ -226,11 +226,20 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul functionEntries(body: [Kex.AST.Node], prefix: String) -> [FunctionEntry] do
+  foul functionEntries(body: [Kex.AST.Node], prefix: String, receiverMethods: Bool) -> [FunctionEntry] do
     let entities = entitiesIn(body, prefix)
     let grouped = entities.map { |e|
       match e do
         FuncDecl(fn) => [fn]
+        ConstDecl(entry) => if receiverMethods
+          [FunctionEntry {
+            name: entry.name, qualifiedName: entry.qualifiedName,
+            signatures: ["${entry.name} : ${entry.typeName}"],
+            clauseCount: 1, doc: entry.doc, line: entry.line
+          }]
+        else
+          []
+        end
         _ => []
       end
     }

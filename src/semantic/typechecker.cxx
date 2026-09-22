@@ -3796,6 +3796,9 @@ auto TypeChecker::importedFunctionVisible(
     if (function.isReceiverMethod && !function.signature.params.empty()) {
         if (auto* named =
                 std::get_if<NamedType>(&function.signature.params.front()->kind)) {
+            // A qualified receiver carries access to its own companion's
+            // methods, even when obtained without a using declaration.
+            if (named->name == function.sourceModule) return true;
             const auto dot = named->name.rfind('.');
             const auto bare = dot == std::string::npos
                 ? named->name : named->name.substr(dot + 1);
@@ -3826,6 +3829,12 @@ auto TypeChecker::moduleMemberImported(const std::string& module,
             };
             const auto importParent = parentOf(import.module);
             if (importParent.empty() || importParent != parentOf(module))
+                return false;
+            // This sibling rule is for type companions, not unrelated
+            // modules such as Units.SI and Units.Data.
+            if (!m_importedInterfaces ||
+                !m_importedInterfaces->typeNames.contains(import.module) ||
+                !m_importedInterfaces->typeNames.contains(module))
                 return false;
         }
         auto selectedMember = member;
@@ -5349,14 +5358,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::tuple(std::move(types));
         }
         else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
-            auto startType = node.start ? inferExpr(*node.start) : Type::unknown();
-            if (node.end) inferExpr(*node.end);
-            // Infer element type from the start bound: Char ranges → Range<Char>,
-            // everything else → Range<Integer> (the common case).
-            auto* prim = std::get_if<PrimitiveType>(&startType->kind);
-            auto elemType = (prim && prim->kind == PrimitiveType::Char)
-                ? Type::charT() : Type::integer();
-            return Type::named("Range", {elemType});
+            auto startType = node.start ? resolve(inferExpr(*node.start)) : Type::unknown();
+            auto endType = node.end ? resolve(inferExpr(*node.end)) : Type::unknown();
+            const auto elementType = [](const TypePtr& bound) -> TypePtr {
+                if (std::holds_alternative<SizedFloatType>(bound->kind))
+                    return Type::float64();
+                if (std::holds_alternative<SizedIntType>(bound->kind))
+                    return Type::integer();
+                if (auto* primitive = std::get_if<PrimitiveType>(&bound->kind)) {
+                    if (primitive->kind == PrimitiveType::Char) return Type::charT();
+                    if (primitive->kind == PrimitiveType::Integer) return Type::integer();
+                }
+                return nullptr;
+            };
+            auto startElement = elementType(startType);
+            auto endElement = elementType(endType);
+            const auto unresolved = [](const TypePtr& bound) {
+                return std::holds_alternative<UnknownType>(bound->kind) ||
+                       std::holds_alternative<TypeVar>(bound->kind);
+            };
+            if ((!startElement && !unresolved(startType)) ||
+                (!endElement && !unresolved(endType)))
+                error(expr.location, "Range endpoints must be Integer, Float, or Char");
+            else if (startElement && endElement && !typesEqual(startElement, endElement))
+                error(expr.location, "Range endpoints must have the same type");
+            return Type::named("Range", {startElement ? startElement : Type::integer()});
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
             if (node.letPattern) {

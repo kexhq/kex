@@ -1,7 +1,9 @@
 # A span between two bounds, written +(1..10)+ or +('a'..'z')+.
 #
-# A range stores only its two endpoints and computes everything else from
-# them, so +(1..1000000)+ costs nothing to make. Both ends are included.
+# A range stores its endpoints on both backends without building a list.
+# Integer and character ranges can be enumerated with both ends included.
+# Float ranges describe continuous bounds, for example +(-1.0..1.0)+ for
+# random sampling; they cannot be enumerated without an explicit step.
 #
 #   (1..5).items          # => [1, 2, 3, 4, 5]
 #   (1..5).sum            # => 15
@@ -85,11 +87,8 @@ make Range, implement: Enumerable, Foldable do
   # @example
   #   (3..7).first   # => Just(3)
   # The list operations, over the materialized items. A range is an ordered
-  # collection, so `(1..5).first` and `(1..5).length` are questions it can
-  # answer, and on the BEAM backend, where a range IS its item list, they
-  # already worked. Only the walker rejected them ("Undefined method: first
-  # for Range"), so every one of these was a backend divergence rather than a
-  # deliberate restriction.
+  # collection, so +(1..5).first+ and +(1..5).length+ operate on its
+  # materialized elements. Floating bounds do not define such a collection.
   first :> A?
   let first = this.items.first
 

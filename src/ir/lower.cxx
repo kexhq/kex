@@ -5492,8 +5492,8 @@ struct Lowering {
         std::string sv = fresh("RSubj");
         auto subjVal = lower(n.subject);
         std::vector<ExprPtr> subjects;
-        subjects.push_back(callE("erlang", "hd", 1, one(var(sv))));
-        subjects.push_back(callE("lists", "last", 1, one(var(sv))));
+        subjects.push_back(callE("kex_intrinsic_range", "first", 1, one(var(sv))));
+        subjects.push_back(callE("kex_intrinsic_range", "last", 1, one(var(sv))));
         std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
@@ -6649,9 +6649,9 @@ struct Lowering {
                             auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = rv;
                             fc.params.push_back(std::move(vp));
                             if (rgp->start) if (auto* sv = std::get_if<ast::VarPattern>(&rgp->start->kind))
-                                prefix.push_back({sv->name, callE("erlang","hd",1,one(var(rv)))});
+                                prefix.push_back({sv->name, callE("kex_intrinsic_range","first",1,one(var(rv)))});
                             if (rgp->end) if (auto* ev = std::get_if<ast::VarPattern>(&rgp->end->kind))
-                                prefix.push_back({ev->name, callE("lists","last",1,one(var(rv)))});
+                                prefix.push_back({ev->name, callE("kex_intrinsic_range","last",1,one(var(rv)))});
                             continue;
                         }
                     }
@@ -7626,7 +7626,7 @@ struct Lowering {
             // block a receiver reaches, and the tuple family has no method a
             // record also defines — see `make Tuple` in the prelude.
             {"Tuple","is_tuple"},
-            {"Range","is_list"},
+
             {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         };
         return m;

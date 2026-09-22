@@ -18,6 +18,7 @@
 %% {'Char', N} tuples; everything else unchanged. The list HOF lowerings wrap
 %% their receiver in this so `"h3llo".filter(&alpha?)` etc. work; repack/2
 %% turns the result back into a String, since the two are distinct types.
+as_list({'Range', _, _} = R) -> kex_intrinsic_range:items(R);
 as_list(B) when is_binary(B) ->
     [{'Char', C} || C <- unicode:characters_to_list(B)];
 as_list(L) -> L.
@@ -119,7 +120,7 @@ partition(L, Fun) ->
 %% Element is the receiver, container is the arg.
 member(Elem, Container) when is_binary(Container) ->
     lists:member(Elem, as_list(Container));
-member(Elem, Container) -> lists:member(Elem, Container).
+member(Elem, Container) -> lists:member(Elem, as_list(Container)).
 
 %% first/1, last/1 — the first/last element wrapped in Just, or None for [].
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the

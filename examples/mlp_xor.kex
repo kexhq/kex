@@ -5,35 +5,12 @@
 # through tanh, so targets are -1 / +1 rather than 0 / 1, and a prediction
 # is 1 when the output is positive.
 #
-# Weight init draws from a tiny linear congruential generator instead of a
-# random builtin, so every run trains the same network.
+# Weight initialization uses Random.Generator with a fixed seed,
+# so every run trains the same network.
 #
 # Run: kex examples/mlp_xor.kex
 
-record Rng do
-  seed : Integer
-end
-
-make Rng do
-  # The next generator, paired with one uniform draw in [-1, 1].
-  draw :> (Rng, Float)
-  let draw do
-    let seed = (@seed * 48271) % 2147483647
-    let unit = seed / 2147483647.0
-    return (Rng { seed: seed }, unit * 2.0 - 1.0)
-  end
-
-  # The next generator, paired with n uniform draws in [-1, 1].
-  draws :> Integer -> (Rng, [Float])
-  let draws(n) do
-    let (nextRng, drawn) = (1..n).reduce((this, [])) do |state, _|
-      let (rng, acc) = state
-      let (stepped, x) = rng.draw
-      (stepped, [x | acc])
-    end
-    return (nextRng, drawn.reverse)
-  end
-end
+using Random
 
 # One layer of tanh neurons: weights[j] holds the inputs of neuron j.
 record Layer do
@@ -61,8 +38,8 @@ main do
     Sample { input: [1.0, 1.0], target: [-1.0] }
   ]
 
-  let (afterHidden, hidden) = newLayer(2, 4, Rng { seed: 42 })
-  let (_, output) = newLayer(4, 1, afterHidden)
+  let (hidden, afterHidden) = newLayer(2, 4, Random.seeded(42))
+  let (output, _) = newLayer(4, 1, afterHidden)
 
   var net = Network { layers: [hidden, output] }
   IO.printLine("training a 2-4-1 tanh network on xor")
@@ -214,18 +191,22 @@ end
 
 # A layer of nOut neurons reading nIn inputs, weights and biases drawn
 # from the generator.
-newLayer : Integer -> Integer -> Rng -> (Rng, Layer)
+newLayer : Integer -> Integer -> Random.Generator -> (Layer, Random.Generator)
 let newLayer(nIn, nOut, rng) do
-  let (spent, rows) = neuronRows(nIn, nOut, rng, [])
+  let (rows, spent) = neuronRows(nIn, nOut, rng, [])
   let weights = rows.map { |row| row.take(nIn) }
   let biases = rows.map { |row| row.drop(nIn).first.or(0.0) }
-  return (spent, Layer { weights: weights, biases: biases })
+  return (Layer { weights: weights, biases: biases }, spent)
 end
 
 # nOut rows of nIn + 1 draws each; the last draw of a row is its bias.
-neuronRows : Integer -> Integer -> Rng -> [[Float]] -> (Rng, [[Float]])
+neuronRows : Integer -> Integer -> Random.Generator -> [[Float]] -> ([[Float]], Random.Generator)
 let neuronRows(nIn, left, rng, acc) do
-  return (rng, acc.reverse) if left == 0
-  let (stepped, row) = rng.draws(nIn + 1)
+  return (acc.reverse, rng) if left == 0
+  let (row, stepped) = (1..(nIn + 1)).reduce(([], rng)) do |state, _|
+    let (values, generator) = state
+    let (weight, advanced) = generator.float(-1.0..1.0)
+    ([...values, weight], advanced)
+  end
   return neuronRows(nIn, left - 1, stepped, [row | acc])
 end

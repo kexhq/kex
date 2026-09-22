@@ -360,6 +360,27 @@ inline auto importedTraitFromSource(const ast::TraitDef& trait)
     return result;
 }
 
+inline auto resolveSharedNullaryConstructors(kex::semantic::ImportedInterfaces& interfaces)
+    -> void {
+    // Unique constructors retain their refinement (FS.Read, for example).
+    // Shared names such as Timeout need their ADT owner to distinguish a
+    // networking error from a server-call error. Run after interface merges
+    // too: the two owners may come from different source/artifact sets.
+    std::unordered_map<std::string, std::unordered_set<std::string>> owners;
+    for (const auto& adt : interfaces.adts)
+        for (const auto& constructor : adt.constructors)
+            owners[constructor].insert(adt.name);
+    for (auto& [_, module] : interfaces.modules)
+        for (auto& [name, functions] : module.exports) {
+            if (owners[name].size() < 2) continue;
+            for (auto& function : functions)
+                if (function.isConstructor && function.signature.params.empty() &&
+                    !function.constructorOwner.empty())
+                    function.signature.result =
+                        kex::semantic::Type::named(function.constructorOwner);
+        }
+}
+
 inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles,
                                      bool automaticImport,
                                      bool directBackendOwnership)
@@ -489,6 +510,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 param.type && *param.type
                     ? resolveSourceType(**param.type, vars, &typeAliases, &traitNames)
                     : kex::semantic::Type::unknown());
+        auto required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue)
+            --required;
+        sig.requiredParams = required + (selfType ? 1 : 0);
         sig.result = clause.returnAnnotation && *clause.returnAnnotation
             ? resolveSourceType(**clause.returnAnnotation, vars, &typeAliases, &traitNames)
             : kex::semantic::Type::unknown();
@@ -740,6 +765,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 function.signature.name = constructor.name;
                 function.signature.result =
                     kex::semantic::Type::named(constructor.name);
+                function.constructorOwner = td.name;
                 if (td.variants)
                     for (const auto& variant : *td.variants) {
                         const auto* generic =
@@ -1090,6 +1116,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // defining module's alias, the same way the KexI path carries them.
     for (auto& [name, body] : typeAliases)
         ifaces.typeAliases.try_emplace(name, body);
+    resolveSharedNullaryConstructors(ifaces);
     return ifaces;
 }
 
@@ -1133,11 +1160,17 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                 // duplicate that can later win overload selection.
                 if (duplicate == destination.end()) {
                     destination.push_back(std::move(function));
-                } else if (duplicate->paramNames.empty() &&
-                           !function.paramNames.empty()) {
-                    // Keep the compiled entry's backend ABI, but enrich it
-                    // with source parameter labels needed by named arguments.
-                    duplicate->paramNames = std::move(function.paramNames);
+                } else {
+                    // Keep the compiled ABI and enrich the source call shape.
+                    // KexI does not currently store default-argument counts.
+                    if (duplicate->paramNames.empty() && !function.paramNames.empty())
+                        duplicate->paramNames = std::move(function.paramNames);
+                    if (function.signature.requiredParams)
+                        duplicate->signature.requiredParams = function.signature.requiredParams;
+                    if (function.isConstructor) {
+                        duplicate->isConstructor = true;
+                        duplicate->constructorOwner = function.constructorOwner;
+                    }
                 }
             }
         }
@@ -1161,8 +1194,15 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                 });
             if (duplicate == destination.end())
                 destination.push_back(std::move(function));
-            else if (!function.backendModule.empty())
-                *duplicate = std::move(function);
+            else if (!function.backendModule.empty()) {
+                // An opt-in provider must not hide the prelude's method on
+                // a shared receiver type (for example Measure.kind).
+                const auto provider = base.modules.find(duplicate->sourceModule);
+                const bool ownsAutomaticMethod = !duplicate->backendModule.empty() &&
+                    provider != base.modules.end() && provider->second.automaticImport;
+                if (!ownsAutomaticMethod || duplicate->sourceModule == function.sourceModule)
+                    *duplicate = std::move(function);
+            }
         }
     }
     base.traitConformances.insert(
@@ -1184,6 +1224,7 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),
                        std::make_move_iterator(extra.traits.end()));
+    resolveSharedNullaryConstructors(base);
     return base;
 }
 
