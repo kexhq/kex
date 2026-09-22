@@ -261,6 +261,31 @@ describe("Tey.Docgen.Rdoc.parseDoc") do
     assert(doc.summary.contains?("```kex\nusing FS\n\nmain do\n  read(\"x\")\nend\n```"))
     assert(doc.summary.contains?("That is all."))
   end
+
+  it("leaves a + operator in a code sample alone") do
+    # test.kex's own shape: an indented sample with `1 + 1` above prose that
+    # uses +describe+ markup. The operator's `+` must not pair with the
+    # markup's opening `+`, which turned the sample into `1 ` 1` and ate the
+    # markup on the live docs site.
+    let text = "The built-in testing DSL: +describe+, +it+.\n\n  describe \"arithmetic\" do\n    it \"adds numbers\" do\n      assert(1 + 1 == 2)\n    end\n  end\n\nOutput nests by +describe+ depth."
+    let doc = parseDoc(text).or(emptyDoc())
+    assert(doc.summary.contains?("assert(1 + 1 == 2)"))
+    assert(doc.summary.contains?("`describe`"))
+    assert(!doc.summary.contains?("` 1"))
+  end
+
+  it("does not read a spaced + in prose as markup") do
+    let doc = parseDoc("Returns a + b.\n\nUses +foo+.").or(emptyDoc())
+    assert(doc.summary.contains?("a + b"))
+    assert(doc.summary.contains?("`foo`"))
+  end
+
+  it("leaves @example code alone") do
+    let doc = parseDoc("Adds.\n\n@example\n  assert(1 + 1 == 2)").or(emptyDoc())
+    let code = exampleCode(doc, 0)
+    assert(code.contains?("1 + 1"))
+    assert(!code.contains?("`"))
+  end
 end
 
 foul exampleCode(doc: Doc, index: Integer) -> String do
