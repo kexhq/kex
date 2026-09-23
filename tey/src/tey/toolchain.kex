@@ -66,6 +66,14 @@ foul installed?(version: String) -> Bool do
   return FS.File.file?(Tey.Toolchain.binaryOf(version))
 end
 
+# Where the Tey released with a Kex version lives — `bin/tey` reads the same
+# path. Beside the toolchain rather than inside it: reinstalling a Kex replaces
+# its whole directory, and a Tey running from there would lose its modules
+# mid-run.
+foul pairedTeyEbin(version: String) -> String do
+  return "${Tey.Toolchain.home}/tey/${version}/ebin"
+end
+
 # Released versions, newest first, read from the repository's tags. Tags that
 # are not versions are skipped rather than reported as junk.
 foul availableVersions -> [String] or! String do
@@ -422,6 +430,13 @@ foul uninstall(version: String) -> String or! String do
   let prefix = "${Tey.Toolchain.home}/toolchains/${version}"
   return Error("Kex ${version} is not installed") if !FS.Directory.directory?(prefix)
   return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix)
+  # Its Tey goes too — unless it is the one running this, whose modules still
+  # load from there. Nothing runs an orphan: `bin/tey` only picks it up while
+  # its Kex is selected, and a reinstall reuses it.
+  let paired = Tey.Toolchain.pairedTeyEbin(version)
+  if ENV.get("TEY_EBIN", "") != paired
+    FS.Directory.deleteAll("${Tey.Toolchain.home}/tey/${version}")
+  end
   if Tey.Toolchain.selected == Just(version)
     FS.File.delete("${Tey.Toolchain.home}/current")
     FS.File.delete(Tey.Toolchain.shimPath)
