@@ -324,7 +324,13 @@ literal
   | atom_literal
   ;
 
-atom_literal = COLON LOWER_IDENT ;
+(* `:ok`, `:b@localhost` (an interior "@" followed by an identifier character
+   continues the atom), or the quoted `:"b@host.example.com"`, which spells
+   any text. The quoted form lexes only where an expression can start, so
+   `sep:"x"` after a name stays a label and a string. No space may follow
+   the colon in either form. *)
+atom_literal = COLON LOWER_IDENT { "@" IDENT_CHAR { IDENT_CHAR } }
+             | COLON STRING_BODY ;
 
 (* ===== Operators ===== *)
 

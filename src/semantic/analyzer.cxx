@@ -106,6 +106,10 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Phase 0.5: per-module member effects, so a qualified call can be checked
     // against a module declared anywhere in the unit, including below it.
     collectModuleMemberEffects(program);
+    m_usings.clear();
+    for (const auto& item : program.items)
+        if (const auto* using_ = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+            if (*using_) m_usings.push_back(using_->get());
 
     // Phase 1: scope resolution and purity checking
     for (const auto& item : program.items) {
@@ -189,6 +193,11 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
     // A module never carries an effect of its own: entering one leaves the
     // surrounding purity exactly as it was, and each member declares its own.
     m_symbols.pushScope(m_inFoulContext);
+    // Its own `using`s apply inside it, and only there.
+    const auto outerUsings = m_usings.size();
+    for (const auto& item : mod.body)
+        if (const auto* using_ = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+            if (*using_) m_usings.push_back(using_->get());
 
     // Members are visible to each other regardless of the order they are
     // written in — a `make` block above a `private do` may still name what the
@@ -244,6 +253,7 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
         }, item);
     }
 
+    m_usings.resize(outerUsings);
     m_symbols.popScope();
 }
 
@@ -457,7 +467,15 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             auto* sym = m_symbols.lookup(node.name);
             if (!sym && node.name != "_" && node.name != "new") {
-                error(expr.location, "Undefined identifier: " + node.name);
+                // A function a `using` brought in is as nameable as a local
+                // one: bare, a zero-arg function is auto-called (`vended`).
+                if (const auto module = moduleImportingName(node.name); !module.empty()) {
+                    if (isQualifiedCallFoul(module, node.name) && !m_inFoulContext)
+                        error(expr.location, "Cannot call foul function '" +
+                                                 node.name + "' from pure context");
+                } else {
+                    error(expr.location, "Undefined identifier: " + node.name);
+                }
             }
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
@@ -693,9 +711,11 @@ auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
     std::function<void(const ast::ModuleDef&)> collect =
         [&](const ast::ModuleDef& mod) {
         auto& foulMembers = m_localModuleFoulMembers[mod.name];
+        auto& functions = m_localModuleFunctions[mod.name];
         for (const auto& item : mod.body) {
             if (const auto* fn =
                     std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) functions.insert((*fn)->name);
                 if (*fn && (*fn)->isFoul) foulMembers.insert((*fn)->name);
             } else if (const auto* ann =
                     std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
@@ -713,9 +733,13 @@ auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
                 if (*visibility)
                     for (const auto& inner : (*visibility)->items)
                         if (const auto* fn = std::get_if<
-                                std::unique_ptr<ast::FunctionDef>>(&inner))
+                                std::unique_ptr<ast::FunctionDef>>(&inner)) {
                             if (*fn && (*fn)->isFoul)
                                 foulMembers.insert((*fn)->name);
+                            // Only a public member is importable.
+                            if (*fn && (*visibility)->isPublic)
+                                functions.insert((*fn)->name);
+                        }
             }
         }
     };
@@ -723,6 +747,33 @@ auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
     for (const auto& item : program.items)
         if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
             if (*mod) collect(**mod);
+}
+
+auto Analyzer::moduleImportingName(const std::string& name) const -> std::string {
+    for (auto it = m_usings.rbegin(); it != m_usings.rend(); ++it) {
+        const auto& using_ = **it;
+        // `using M as A` makes `A.name` available, not a bare `name`.
+        if (using_.alias) continue;
+        if (!using_.onlyNames.empty() &&
+            std::find(using_.onlyNames.begin(), using_.onlyNames.end(), name) ==
+                using_.onlyNames.end())
+            continue;
+        if (std::find(using_.exceptNames.begin(), using_.exceptNames.end(), name) !=
+            using_.exceptNames.end())
+            continue;
+        std::string module;
+        for (const auto& part : using_.module.parts)
+            module += (module.empty() ? "" : ".") + part;
+        if (auto local = m_localModuleFunctions.find(module);
+            local != m_localModuleFunctions.end() && local->second.count(name))
+            return module;
+        if (m_importedInterfaces)
+            if (auto imported = m_importedInterfaces->modules.find(module);
+                imported != m_importedInterfaces->modules.end() &&
+                imported->second.exports.count(name))
+                return module;
+    }
+    return {};
 }
 
 auto Analyzer::isQualifiedCallFoul(const std::string& module,

@@ -1,0 +1,25 @@
+# `:"..."` spells an atom no bare `:name` can: a node name with dots, or any
+# text. A short node name needs no quotes — an interior `@` continues a bare
+# atom, and `:b@localhost` is the same atom as `:"b@localhost"`. It prints back the way it is written. After something that
+# ends an expression it is still a label colon and a string, so `sep:"x"`
+# keeps passing a named argument.
+
+let label(sep: String) = "[${sep}]"
+
+main do
+  let node = :"b@host.example.com"
+  IO.printLine(node)
+  IO.printLine(:"plain" == :plain)
+  IO.printLine(:"plain")
+  IO.printLine(:"two words")
+  IO.printLine(:"say \"hi\"")
+  IO.printLine([:"a@b", :c])
+  IO.printLine(:b@localhost == :"b@localhost")
+  IO.printLine(:b@localhost)
+  IO.printLine(:"trailing@")
+  IO.printLine(label(sep:"x"))
+  match node do
+    :"b@host.example.com" => IO.printLine("matched")
+    _ => IO.printLine("no match")
+  end
+end

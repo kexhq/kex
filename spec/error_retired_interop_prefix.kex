@@ -1,0 +1,7 @@
+# kex: check-only
+# The interop roots before `BEAM.` are gone (kexhq/kex#346). A leftover one is
+# reported by the checker, with the new spelling, rather than failing later.
+main do
+  IO.printLine(Erlang.lists.reverse([1, 2]))
+  IO.printLine(Elixir.Enum.count([1, 2]))
+end

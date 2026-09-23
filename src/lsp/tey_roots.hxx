@@ -13,7 +13,11 @@ namespace kex::lsp {
 auto teyPackageDirectory(const std::string& start) -> std::string;
 
 // The `--source-root` list `tey` would pass for a file inside a tey package:
-// one entry per locked dependency, `${cache}/src/<source>/<commit>/src`.
+// one entry per package in the governing `tey.lock` — the one at the
+// workspace root for a workspace member. A git package is its cache checkout
+// (`${cache}/src/<source>/<commit>[/<subdir>]/src`), a workspace member its
+// directory in the workspace, a path package the directory it names (or its
+// snapshot in the cache), and a `package.local.kex` override wins over all.
 //
 // The editor and `tey build` have to agree about where modules live, or a
 // dependency's every use is flagged undefined in the editor while the same

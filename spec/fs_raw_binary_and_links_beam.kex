@@ -9,7 +9,7 @@ main do
   FS.Directory.deleteAll(dir)
   FS.Directory.create(dir)
   let target = FS.Path.join(dir, "term.bin")
-  let bytes = Erlang.Erlang.term_to_binary({ "a": "b" })
+  let bytes = BEAM.erlang.term_to_binary({ "a": "b" })
   IO.printLine("written: ${FS.File.writeBytes(target, bytes)}")
   IO.printLine("same bytes: ${FS.File.readBytes(target).map { |read| read.length } == Ok(bytes.bytes.count)}")
   let dotted = FS.Path.join(dir, "./../kex_spec_fs_raw_binary/term.bin")

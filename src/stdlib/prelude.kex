@@ -30,6 +30,7 @@
 # declaration in that source file, not here.
 
 using Algebra
+using Atom
 using Binary
 using Blankable
 using Comparable

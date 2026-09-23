@@ -13,6 +13,7 @@
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
 #include "ir/emit_core.hxx"
+#include "ir/upgrade.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
 #include "compiled/expand.hxx"
@@ -799,6 +800,18 @@ namespace {
 // moduleRootsFor (semantic checks, discovery, validation and both runtimes)
 // observe exactly the same search path.
 std::vector<std::string> cliSourceRoots;
+
+// `--sname` / `--name` / `--cookie`: start the BEAM VM as a distributed node,
+// so the program can connect to others (`Node.connect`) and they to it. They
+// become erl's own `-sname`/`-name`/`-setcookie` on every VM kex launches.
+std::vector<std::string> cliDistributionArgs;
+
+auto distributionArgsForShell() -> std::string {
+  std::string out;
+  for (const auto &arg : cliDistributionArgs)
+    out += " " + shellSingleQuote(arg);
+  return out;
+}
 
 auto isIdentChar(char c) -> bool {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
@@ -1756,6 +1769,7 @@ auto compilePreludeCore(const std::string &dir,
     builtModules->clear();
     for (size_t i = 0; i < modules.size(); i++) {
       PreludeBuildModule built;
+      kex::ir::insertUpgradePoints(modules[i]);
       built.emitted = kex::ir::emitCore(modules[i]);
       std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
       if (!out) return false;
@@ -2589,6 +2603,11 @@ auto printUsage(const char *progName) -> void {
          "file for --emit-ast\n"
       << "      --source-root <dir>\n"
       << "                    Add a module source root (repeatable)\n"
+      << "      --sname <name>, --name <name@host>\n"
+      << "                    Run the BEAM VM as a distributed node (short or\n"
+      << "                    fully-qualified host name), reachable by `Node.connect`\n"
+      << "      --cookie <cookie>\n"
+      << "                    The shared secret nodes need to connect\n"
       << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
          "of a\n"
       << "                    program lie to another, so it is off unless the "
@@ -2682,6 +2701,9 @@ int main(int argc, char *argv[]) {
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
       {"source-root", required_argument, nullptr, 1008},
+      {"sname", required_argument, nullptr, 1017},
+      {"name", required_argument, nullptr, 1018},
+      {"cookie", required_argument, nullptr, 1019},
       // Mock.* is test-only (issue #144): a mock lets one part of a program
       // lie to another about the filesystem, environment, platform, network
       // or console, so the runtime denies the mock intrinsics unless the
@@ -2757,6 +2779,25 @@ int main(int argc, char *argv[]) {
       break;
     case 1015:
       testFilters.emplace_back(optarg);
+      break;
+    case 1017:
+    case 1018: {
+      const bool alreadyNamed =
+          std::find_if(cliDistributionArgs.begin(), cliDistributionArgs.end(),
+                       [](const std::string &a) {
+                         return a == "-sname" || a == "-name";
+                       }) != cliDistributionArgs.end();
+      if (alreadyNamed) {
+        std::cerr << "error: give a node one name: --sname or --name, once\n";
+        return 1;
+      }
+      cliDistributionArgs.push_back(opt == 1017 ? "-sname" : "-name");
+      cliDistributionArgs.emplace_back(optarg);
+      break;
+    }
+    case 1019:
+      cliDistributionArgs.push_back("-setcookie");
+      cliDistributionArgs.emplace_back(optarg);
       break;
     case 1011:
       mode = "emit-ast";
@@ -3006,6 +3047,8 @@ int main(int argc, char *argv[]) {
     {
       std::vector<std::string> erlArgs = {erlExecutable(), "-noshell", "-pa",
                                           beamDir};
+      erlArgs.insert(erlArgs.end(), cliDistributionArgs.begin(),
+                     cliDistributionArgs.end());
       if (!rtPaDir.empty()) {
         erlArgs.push_back("-pa");
         erlArgs.push_back(rtPaDir);
@@ -3599,7 +3642,7 @@ int main(int argc, char *argv[]) {
           }
 
           const auto putBack = [](const std::string &name) {
-            return "  Erlang.Erlang.put(:kexrepl" + name + ", " + name + ")\n";
+            return "  BEAM.erlang.put(:kexrepl" + name + ", " + name + ")\n";
           };
           // Any line can mutate a `var` from an earlier line — by reassigning
           // it or through a `!` method — so every tracked mutable name is
@@ -3735,8 +3778,10 @@ int main(int argc, char *argv[]) {
               &replAnalyzer.staticTypeOfCalls(),
               &replAnalyzer.typeMap());
           std::vector<kex::ir::EmitResult> results;
-          for (const auto& irModule : irModules)
+          for (auto& irModule : irModules) {
+            kex::ir::insertUpgradePoints(irModule);
             results.push_back(kex::ir::emitCore(irModule));
+          }
           const auto& result = results.front();
 
           // Compile and hot-load each module in the persistent VM, which is
@@ -3826,7 +3871,7 @@ int main(int argc, char *argv[]) {
                 // `name = v` and `name.foo!(v)`.
                 localBinds += std::string("  ") +
                               (isMutableLet ? "var " : "let ") + name +
-                              " = Erlang.Erlang.get(:kexrepl" + name + ")\n";
+                              " = BEAM.erlang.get(:kexrepl" + name + ")\n";
                 if (isMutableLet && !isMutableBind(name))
                   mutableBinds.push_back(name);
               }
@@ -4444,7 +4489,8 @@ int main(int argc, char *argv[]) {
     // Deliberately NOT applied to the REPL's persistent VM (the `BeamVm` block
     // above), where Ctrl+C should interrupt evaluation rather than end the
     // session.
-    std::string runCmd = erlExecutable() + " +Bi -noshell";
+    std::string runCmd =
+        erlExecutable() + " +Bi -noshell" + distributionArgsForShell();
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
     runCmd += " -pa " + absBeamDir;
@@ -5088,8 +5134,10 @@ int main(int argc, char *argv[]) {
                                                compileAnalysis
                                                    ? &compileAnalysis->typeMap()
                                                    : nullptr);
-        for (const auto &irMod : irModules)
+        for (auto &irMod : irModules) {
+          kex::ir::insertUpgradePoints(irMod);
           moduleResults.push_back(kex::ir::emitCore(irMod));
+        }
         result = moduleResults.front();
       } catch (const kex::ir::LowerError &e) {
         std::cerr << "error: " << e.what() << "\n";
@@ -5365,7 +5413,8 @@ int main(int argc, char *argv[]) {
             // `+Bi` for the same reason as the other run path above: it is
             // half of the Ctrl+C fix, with forwardSignalToChild's
             // SIGINT→SIGTERM the other half.
-            erlExecutable() + " +Bi -noshell -pa " + outputDir + " -eval " +
+            erlExecutable() + " +Bi -noshell" + distributionArgsForShell() +
+            " -pa " + outputDir + " -eval " +
             shellSingleQuote(mainCall);
         if (result.mainArity == 1 && !scriptArgs.empty()) {
           runCmd += " -extra";

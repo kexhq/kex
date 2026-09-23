@@ -3,8 +3,10 @@
 #include "../src/lsp/server.hxx"
 #include "../src/lsp/tey_roots.hxx"
 
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 
@@ -947,6 +949,86 @@ int main() {
             assertTrue(result.find("Weekday -> Any") == std::string::npos,
                        "@name resolved to the unrelated Weekday method");
         });
+        // Runs one document through the server: open it, then send `requests`
+        // (each a complete JSON-RPC request line), then shut down.
+        auto session = [](const std::string& uri, const std::string& text,
+                          const std::vector<std::string>& requests) {
+            auto escaped = std::string{};
+            for (char c : text) {
+                if (c == '\n') escaped += "\\n";
+                else if (c == '"' || c == '\\') { escaped += '\\'; escaped += c; }
+                else escaped += c;
+            }
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+                uri + R"(","languageId":"kex","version":1,"text":")" + escaped + R"("}}})");
+            for (const auto& request : requests) messages += frame(request);
+            messages += frame(R"({"jsonrpc":"2.0","id":99,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            return output.str();
+        };
+
+        it("parses quoted and @ atoms, keeping later columns exact", [session]() {
+            const auto result = session(
+                "file:///tmp/kex-lsp-atoms.kex",
+                "main do\n"
+                "  let node = :b@localhost\n"
+                "  let x: Integer = (:\"a b\", missingName)\n"
+                "end\n",
+                {});
+            assertTrue(result.find("Unexpected token") == std::string::npos,
+                       "the new atom spellings must parse: " + result);
+            // `missingName` starts at column 28 of its line — right after a
+            // quoted atom whose token text is shorter than its source.
+            assertTrue(result.find(R"("start":{"character":28,"line":2})") !=
+                           std::string::npos,
+                       "diagnostic after a quoted atom is misplaced: " + result);
+        });
+
+        it("offers no completion inside an atom, even after its @", [session]() {
+            const auto result = session(
+                "file:///tmp/kex-lsp-atom-completion.kex",
+                "main do\n  let host = :b@\nend\n",
+                {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-atom-completion.kex"},"position":{"line":1,"character":17}}})"});
+            const auto completion = responseForId(result, 2);
+            assertTrue(completion.find(R"("result":[])") != std::string::npos,
+                       "typing a node name must not pop up completions: " + completion);
+        });
+
+        it("completes and documents the Node module", [session]() {
+            const auto result = session(
+                "file:///tmp/kex-lsp-node.kex",
+                "using Node\n\nmain do\n  Node.connect(:b@localhost)\n  Node.\nend\n",
+                {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-node.kex"},"position":{"line":4,"character":7}}})",
+                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-node.kex"},"position":{"line":3,"character":8}}})"});
+            const auto completion = responseForId(result, 2);
+            assertTrue(completion.find("connect") != std::string::npos &&
+                           completion.find("whereis") != std::string::npos,
+                       "Node members missing from completion: " + completion);
+            const auto hover = responseForId(result, 3);
+            assertTrue(hover.find("connect : Atom -> Bool") != std::string::npos,
+                       "Node.connect hover lacks its signature: " + hover);
+        });
+
+        it("underlines the retired interop root with its replacement", [session]() {
+            const auto result = session(
+                "file:///tmp/kex-lsp-retired.kex",
+                "main do\n  IO.printLine(Erlang.lists.reverse([1]))\nend\n",
+                {});
+            assertTrue(result.find("interop is now `BEAM.`") != std::string::npos,
+                       "retired prefix not reported: " + result);
+            assertTrue(result.find(R"("start":{"character":15,"line":1})") !=
+                           std::string::npos,
+                       "the diagnostic must sit on `Erlang`: " + result);
+        });
+
         it("completes members after an inferred local receiver dot", []() {
             std::string messages;
             messages += frame(
@@ -1536,6 +1618,107 @@ int main() {
             assertTrue(configured.find("Undefined function: `hello`") ==
                            std::string::npos,
                        "initializationOptions sourceRoots were ignored");
+
+            unsetenv("TEY_CACHE");
+            fs::remove_all(root);
+        });
+
+        // The lockfile tey writes today (`packages`, with workspace, path and
+        // git-with-subdir sources), read from the WORKSPACE root by a member
+        // that has no lockfile of its own — the layout of Rodolfo's examples
+        // and of any app that vendors a package by path.
+        it("resolves workspace, path and git packages from the current tey.lock", [session]() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-tey-workspace";
+            const fs::path cache = root / "cache";
+            const std::string git = "https://example.invalid/remote.git";
+            const std::string commit = "fedcba9876543210fedcba9876543210fedcba98";
+            fs::remove_all(root);
+            setenv("TEY_CACHE", cache.string().c_str(), 1);
+            auto write = [](const fs::path& path, const std::string& text) {
+                fs::create_directories(path.parent_path());
+                std::ofstream(path) << text;
+            };
+            write(root / "package.kex",
+                  "package \"ws\" do\n  workspace do\n    members([\"apps/*\"])\n  end\nend\n");
+            write(root / "apps" / "app" / "package.kex",
+                  "package \"app\" do\n  tey(\"web\", workspace: true)\n"
+                  "  tey(\"vend\", path: \"vendor/vend\")\nend\n");
+            // A workspace package whose submodule names it back.
+            write(root / "lib" / "web" / "src" / "web.kex",
+                  "module Web\n\nusing Web.Markup\n\n"
+                  "greet : String -> String\n"
+                  "let greet(name: String) -> String = \"hi \" + name\n");
+            write(root / "lib" / "web" / "src" / "web" / "markup.kex",
+                  "module Web.Markup\n\nusing Web\n\n"
+                  "let broken -> Integer = \"not a number\"\n");
+            write(root / "vendor" / "vend" / "src" / "vend.kex",
+                  "module Vend\n\nlet vended -> Integer = 1\n");
+            write(fs::path(kex::lsp::teyCachePackagePath(git, commit)) / "pkg" / "src" / "remote.kex",
+                  "module Remote\n\nlet remote -> Integer = 2\n");
+            // Locked from git, but overridden locally — and not in the cache.
+            write(root / "over-local" / "src" / "over.kex",
+                  "module Over\n\nlet over -> Integer = 3\n");
+            write(root / "package.local.kex", "local(\"over\", path: \"over-local\")\n");
+            auto entry = [](const std::string& name, const std::string& source,
+                            const std::string& git, const std::string& commit,
+                            const std::string& subdir, const std::string& path) {
+                return "\"" + name + "\": {\"version\": \"0.1.0\", \"source\": \"" + source +
+                       "\", \"git\": \"" + git + "\", \"resolved\": \"\", \"commit\": \"" + commit +
+                       "\", \"subdir\": \"" + subdir + "\", \"path\": \"" + path +
+                       "\", \"sha256\": \"\", \"groups\": [], \"dependencies\": [], \"plugins\": {}, \"workspace\": " +
+                       (source == "workspace" ? "true" : "false") + "}";
+            };
+            write(root / "tey.lock",
+                  "{\n  \"version\": 1,\n  \"packages\": {\n    " +
+                  entry("app", "workspace", "", "", "", "apps/app") + ",\n    " +
+                  entry("over", "git", "https://example.invalid/over.git",
+                        "0000000000000000000000000000000000000000", "", "") + ",\n    " +
+                  entry("remote", "git", git, commit, "pkg", "") + ",\n    " +
+                  entry("vend", "path", "", "", "", "vendor/vend") + ",\n    " +
+                  entry("web", "workspace", "", "", "", "lib/web") + "\n  }\n}\n");
+
+            const auto mainPath = (root / "apps" / "app" / "src" / "main.kex").string();
+            const std::string mainText =
+                "using Web\nusing Vend\nusing Remote\nusing Over\n\n"
+                "main do\n  IO.printLine(greet(\"x\"))\n"
+                "  IO.printLine(vended + remote + over)\nend\n";
+            write(mainPath, mainText);
+            const auto app = session(
+                "file://" + mainPath, mainText,
+                {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://)" +
+                 mainPath + R"("},"position":{"line":6,"character":16}}})"});
+            assertTrue(app.find("module not found") == std::string::npos &&
+                           app.find("Undefined") == std::string::npos,
+                       "a locked package was unreachable: " + app);
+            // Web.Markup's own error belongs to markup.kex, not to main.kex.
+            assertTrue(app.find("not a number") == std::string::npos &&
+                           app.find("expected Integer") == std::string::npos,
+                       "an imported module's diagnostic leaked into the document: " + app);
+            const auto definition = responseForId(app, 2);
+            assertTrue(definition.find("web.kex") != std::string::npos &&
+                           definition.find(R"("start":{"character":0,"line":4})") !=
+                               std::string::npos,
+                       "go-to-definition must land on greet's declaration: " + definition);
+
+            // The package itself, open while its submodule names it back.
+            const auto webPath = (root / "lib" / "web" / "src" / "web.kex").string();
+            std::ifstream webFile(webPath);
+            const std::string webText((std::istreambuf_iterator<char>(webFile)), {});
+            const auto web = session("file://" + webPath, webText, {});
+            assertTrue(web.find("defined twice") == std::string::npos,
+                       "the open module was merged into itself: " + web);
+
+            // The member's manifest, in today's vocabulary.
+            const auto manifestPath = (root / "apps" / "app" / "package.kex").string();
+            const auto manifest = session(
+                "file://" + manifestPath,
+                "package \"app\" do\n  tey(\"web\", workspace: true)\n"
+                "  tey(\"vend\", path: \"vendor/vend\")\nend\n",
+                {});
+            assertTrue(manifest.find("Undefined function") == std::string::npos &&
+                           manifest.find("Unknown named argument") == std::string::npos,
+                       "the manifest vocabulary is out of date: " + manifest);
 
             unsetenv("TEY_CACHE");
             fs::remove_all(root);

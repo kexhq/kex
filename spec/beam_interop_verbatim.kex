@@ -1,0 +1,12 @@
+# kex: run-beam
+# `BEAM.<module>` names a BEAM module exactly as written (kexhq/kex#346):
+# lowercase, underscores and all. Before, only a capitalised segment reached
+# interop, and `Erlang.erlang.node()` passed the checker and then failed in
+# erlc as a call to a local function `erlang/0`.
+main do
+  IO.printLine(BEAM.lists.reverse([1, 2, 3]))
+  IO.printLine(BEAM.erlang.node())
+  IO.printLine(BEAM.string.uppercase("verbatim"))
+  IO.printLine(BEAM.net_kernel.connect_node(:"nobody@nowhere"))
+  IO.printLine(BEAM.erlang.is_atom(:"a@b"))
+end

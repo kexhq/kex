@@ -11,10 +11,41 @@
 # Opens a manifest. Everything the package declares lives in its block.
 #
 # @example
-#   bundle "demo" do
+#   package "demo" do
 #     version("0.1.0")
 #   end
+let package(name: String, body: Block<Void>) -> Void do
+end
+
+# The name the manifest opener had before `package`; older manifests still
+# use it.
 let bundle(name: String, body: Block<Void>) -> Void do
+end
+
+# Makes this package the root of a workspace: several packages developed
+# together in one checkout, sharing one `tey.lock`. Its block names the
+# member directories with +members+.
+#
+# @example
+#   workspace do
+#     members(["examples/*"])
+#   end
+let workspace(body: Block<Void>) -> Void do
+end
+
+# The directories of a workspace's member packages, each a path or a glob
+# relative to the workspace root.
+let members(patterns: [String]) -> Void do
+end
+
+# Adds commands to `tey` itself: `tey NAMESPACE COMMAND`. The block declares
+# them with +command+; +tey+ is the Tey version range the plugin works with.
+#
+# @example
+#   plugin(namespace: "docs", tey: ">= 0.4.0") do
+#     command("build", run: "script/docs.kex", description: "Build the docs")
+#   end
+let plugin(namespace: String, tey: String, body: Block<Void>) -> Void do
 end
 
 # The package's own version, as `MAJOR.MINOR.PATCH`.
@@ -56,12 +87,18 @@ end
 let command(name: String, run: String = "", description: String = "") -> Void do
 end
 
-# A Git dependency, pinned by exactly one of `tag:`, `branch:` or `ref:`.
+# A dependency, from exactly one source: `git:` (pinned by one of `tag:`,
+# `branch:` or `ref:`, and in `subdir:` when the package is not at the
+# repository's root), `path:` for a directory on this machine, or
+# `workspace: true` for a member of the same workspace.
 #
 # @example
 #   tey("greet", git: "https://github.com/kexhq/greet.git", tag: "v0.1.0")
+#   tey("rodolfo", path: "vendor/rodolfo")
+#   tey("rodolfo", workspace: true)
 let tey(name: String, git: String = "", tag: String = "",
-        branch: String = "", ref: String = "") -> Void do
+        branch: String = "", ref: String = "", subdir: String = "",
+        path: String = "", workspace: Bool = false) -> Void do
 end
 
 # Scopes the dependencies in its block to a group, so that

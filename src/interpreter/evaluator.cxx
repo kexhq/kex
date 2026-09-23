@@ -4572,6 +4572,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerTestBuiltins();
     registerProcessBuiltins();
     registerDigestBuiltins();
+    registerNodeBuiltins();
     registerParserBuiltins();
     registerEvalBuiltins();
     registerNetBuiltins();

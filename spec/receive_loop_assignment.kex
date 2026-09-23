@@ -1,0 +1,45 @@
+# The imperative server from docs/concurrency.md: a `var` reassigned inside
+# the arms of a `receive` that sits in a `loop`. The BEAM lowering once
+# rejected it outright (`unimplemented expr node AssignExpr`); the state has
+# to thread from each arm, and from the `after` branch, into the next pass.
+
+type Msg = Inc | Add(Integer) | Get(Process<Integer>) | Stop(Process<String>)
+
+main do
+  let counter: Process<Msg> = spawn do
+    var count = 0
+    var idle = 0
+    loop do
+      receive do
+        Inc => count = count + 1
+        Add(n) => do
+          let before = count
+          count = before + n
+        end
+        Get(sender) => sender.send(count)
+        Stop(sender) => do
+          sender.send("stopped at ${count} after ${idle} idle")
+          break
+        end
+      after timeout: 20
+        idle = idle + 1
+      end
+    end
+  end
+
+  counter.send(Inc)
+  counter.send(Add(10))
+  counter.send(Inc)
+  counter.send(Get(Process.self))
+  receive do
+    n => IO.printLine("count: ${n}")
+  end
+
+  receive do
+  after timeout: 70
+  end
+  counter.send(Stop(Process.self))
+  receive do
+    text => IO.printLine(text.to(String).or("").startsWith?("stopped at 12 after "))
+  end
+end

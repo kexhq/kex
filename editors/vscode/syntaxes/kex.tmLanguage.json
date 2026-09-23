@@ -6,6 +6,8 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#regexLiteral" },
+    { "comment": "A quoted atom, `:\"b@host.example.com\"`. Ahead of #strings, which would otherwise take the quotes; only where an expression starts, so `sep:\"x\"` stays a label and a string.",
+      "name": "constant.other.symbol.kex", "match": "(?<![A-Za-z0-9_)\\]}\"']):\"(?:[^\"\\\\]|\\\\.)*\"" },
     { "include": "#strings" },
     { "name": "keyword.control.kex", "match": "\\b(after|break|compiled|do|elif|else|end|export|final|foul|if|let|loop|main|match|next|private|public|receive|rescue|return|slot|spawn|then|timeout|try|trying|using|var|when|while|with)\\b" },
     { "name": "constant.language.kex", "match": "\\b(true|false|None)\\b" },
@@ -28,7 +30,7 @@
     { "comment": "Contextual record constructors inside make blocks. They are not reserved type names, so only the brace form receives constructor highlighting.",
       "name": "support.function.construct.kex", "match": "\\b(New|This)(?=\\s*\\{)" },
     { "name": "entity.name.type.kex", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
-    { "name": "constant.other.symbol.kex", "match": ":[a-zA-Z_][A-Za-z0-9_?!]*" },
+    { "name": "constant.other.symbol.kex", "match": ":[a-zA-Z_][A-Za-z0-9_?!]*(?:@[A-Za-z0-9_]+)*" },
     { "name": "variable.other.readwrite.instance.kex", "match": "@[a-z_][A-Za-z0-9_?!]*" },
     { "comment": "The field in functional rebinding syntax: `new.x = value` or `record.x = value`.",
       "name": "variable.other.member.assignment.kex",

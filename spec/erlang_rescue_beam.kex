@@ -7,7 +7,7 @@
 # `undef` on older ones instead, and the output would depend on the CI image.
 foul decodeNumber(text: String) -> String do
   trying do
-    let value = Erlang.Erlang.binary_to_integer(text)
+    let value = BEAM.erlang.binary_to_integer(text)
     return "decoded ${Type.of(value).name}"
   rescue
     _ => return "rescued"
@@ -15,7 +15,7 @@ foul decodeNumber(text: String) -> String do
 end
 
 foul decodeNumberWithRescue(text: String) -> String do
-  let value = Erlang.Erlang.binary_to_integer(text)
+  let value = BEAM.erlang.binary_to_integer(text)
   return "decoded ${Type.of(value).name}"
 rescue |error|
   return "rescued ${error}"

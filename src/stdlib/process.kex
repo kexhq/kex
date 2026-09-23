@@ -265,6 +265,18 @@ module Process do
   register : Pid -> Atom -> Void
   foul register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
 
+  # Registers the typed process +process+ under the atom +name+.
+  #
+  # @param process [Process<X>] the process to register
+  # @param name [Atom] the name to register it under
+  # @return [Void]
+  #
+  # @example
+  #   let logger = spawn do logLoop() end
+  #   Process.register(logger, :logger)
+  register : Process<X> -> Atom -> Void
+  foul register(process, name) = Kex.Intrinsic.Process.register(process, name)
+
   # Returns the +Pid+ registered under +name+, or +None+ when nothing is.
   #
   # @param name [Atom] the registered name

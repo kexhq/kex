@@ -73,6 +73,73 @@ auto stringField(const ::lsp::json::Object& object, std::string_view key)
     return value && value->isString() ? value->string() : std::string();
 }
 
+// A package directory's manifest declares a workspace (`workspace do`) —
+// Tey.Workspace.workspaceAt, read the way the editor can afford to: textually.
+auto declaresWorkspace(const fs::path& directory) -> bool {
+    const auto manifest = readFile(directory / "package.kex");
+    size_t lineStart = 0;
+    while (lineStart < manifest.size()) {
+        auto lineEnd = manifest.find('\n', lineStart);
+        if (lineEnd == std::string::npos) lineEnd = manifest.size();
+        auto first = manifest.find_first_not_of(" \t", lineStart);
+        if (first != std::string::npos && first < lineEnd &&
+            manifest.compare(first, 9, "workspace") == 0) {
+            auto after = manifest.find_first_not_of(" \t", first + 9);
+            if (after != std::string::npos && after < lineEnd &&
+                manifest.compare(after, 2, "do") == 0)
+                return true;
+        }
+        lineStart = lineEnd + 1;
+    }
+    return false;
+}
+
+// The directory whose `tey.lock` governs `packageDirectory`: the OUTERMOST
+// enclosing package that declares a workspace, or the package itself — the
+// root Tey.Workspace.discover picks. A workspace member has no lockfile of
+// its own; the one at the workspace root lists every member's dependencies.
+auto lockDirectoryFor(const fs::path& packageDirectory) -> fs::path {
+    fs::path chosen = packageDirectory;
+    std::error_code ec;
+    for (auto directory = packageDirectory; !directory.empty();
+         directory = directory.parent_path()) {
+        ec.clear();
+        if (fs::is_regular_file(directory / "package.kex", ec) && !ec &&
+            declaresWorkspace(directory))
+            chosen = directory;
+        if (!directory.has_relative_path()) break;
+    }
+    return chosen;
+}
+
+auto canonicalRoot(const fs::path& path) -> std::string {
+    std::error_code ec;
+    auto resolved = fs::weakly_canonical(path, ec);
+    return (ec ? path.lexically_normal() : resolved).string();
+}
+
+// `local("name", path: "../checkout")` lines of `package.local.kex` — the
+// developer's own overrides, which win over the lockfile (Tey.Local).
+auto localOverrides(const fs::path& workspaceRoot) -> std::map<std::string, fs::path> {
+    std::map<std::string, fs::path> overrides;
+    const auto text = readFile(workspaceRoot / "package.local.kex");
+    size_t at = 0;
+    while ((at = text.find("local(", at)) != std::string::npos) {
+        at += 6;
+        const auto nameOpen = text.find('"', at);
+        const auto nameClose = nameOpen == std::string::npos ? nameOpen : text.find('"', nameOpen + 1);
+        const auto pathKey = nameClose == std::string::npos ? nameClose : text.find("path:", nameClose);
+        const auto pathOpen = pathKey == std::string::npos ? pathKey : text.find('"', pathKey);
+        const auto pathClose = pathOpen == std::string::npos ? pathOpen : text.find('"', pathOpen + 1);
+        if (pathClose == std::string::npos) break;
+        fs::path path = text.substr(pathOpen + 1, pathClose - pathOpen - 1);
+        if (path.is_relative()) path = workspaceRoot / path;
+        overrides[text.substr(nameOpen + 1, nameClose - nameOpen - 1)] = path;
+        at = pathClose;
+    }
+    return overrides;
+}
+
 // The dependency source roots a `tey.lock` names, ordered by dependency name
 // so the same lockfile always produces the same search order.
 struct LockRoots {
@@ -83,7 +150,35 @@ struct LockRoots {
     bool complete = true;
 };
 
-auto rootsFromLock(const std::string& text) -> LockRoots {
+// Where one locked package's sources live — Tey.Commands.dependencyRoots:
+// a local override first, then by source kind. `workspace` is a member of
+// this workspace; `path` is snapshotted into the cache by content hash, but
+// the directory it was taken from is what the developer is editing, so it
+// wins while it exists; `git` is the cache checkout at its commit, inside its
+// `subdir` when the package is not at the repository root.
+auto packageRootFor(const ::lsp::json::Object& entry, const fs::path& workspaceRoot)
+    -> std::vector<fs::path> {
+    const auto source = stringField(entry, "source");
+    const auto path = stringField(entry, "path");
+    if (source == "workspace") return {workspaceRoot / path};
+    if (source == "path") {
+        std::vector<fs::path> candidates;
+        if (!path.empty())
+            candidates.push_back(fs::path(path).is_relative() ? workspaceRoot / path : fs::path(path));
+        if (const auto digest = stringField(entry, "sha256"); !digest.empty())
+            candidates.push_back(fs::path(cacheRoot()) / "snapshots" / digest);
+        return candidates;
+    }
+    const auto git = stringField(entry, "git");
+    const auto commit = stringField(entry, "commit");
+    if (git.empty() || commit.empty()) return {};
+    auto checkout = fs::path(teyCachePackagePath(git, commit));
+    if (const auto subdir = stringField(entry, "subdir"); !subdir.empty() && subdir != ".")
+        checkout /= subdir;
+    return {checkout};
+}
+
+auto rootsFromLock(const std::string& text, const fs::path& workspaceRoot) -> LockRoots {
     ::lsp::json::Value document;
     try {
         document = ::lsp::json::parse(text);
@@ -98,26 +193,36 @@ auto rootsFromLock(const std::string& text) -> LockRoots {
     const auto* version = root.find("version");
     if (!version || !version->isNumber() || version->number() != 1) return {};
 
-    const auto* deps = root.find("deps");
-    if (!deps || !deps->isObject()) return {};
+    // `packages` is the lockfile tey writes today; `deps`, git-only, is the
+    // shape it wrote first and an old checkout may still carry.
+    const auto* packages = root.find("packages");
+    if (!packages || !packages->isObject()) packages = root.find("deps");
+    if (!packages || !packages->isObject()) return {};
 
+    const auto overrides = localOverrides(workspaceRoot);
     LockRoots result;
     std::map<std::string, std::string> byName;
-    for (const auto& [name, entry] : deps->object().keyValueMap()) {
+    for (const auto& [name, entry] : packages->object().keyValueMap()) {
         if (!entry.isObject()) continue;
-        const auto& dependency = entry.object();
-        const auto git = stringField(dependency, "git");
-        const auto commit = stringField(dependency, "commit");
-        if (git.empty() || commit.empty()) continue;
-        const auto source =
-            fs::path(teyCachePackagePath(git, commit)) / "src";
-        std::error_code ec;
+        std::vector<fs::path> candidates;
+        if (const auto local = overrides.find(std::string(name)); local != overrides.end())
+            candidates.push_back(local->second);
+        for (auto& candidate : packageRootFor(entry.object(), workspaceRoot))
+            candidates.push_back(std::move(candidate));
+        if (candidates.empty()) continue;
+        bool found = false;
+        for (const auto& candidate : candidates) {
+            std::error_code ec;
+            const auto source = candidate / "src";
+            if (fs::is_directory(source, ec) && !ec) {
+                byName.emplace(std::string(name), canonicalRoot(source));
+                found = true;
+                break;
+            }
+        }
         // Not yet fetched: the answer is `tey install`, and dropping the root
         // leaves the resolver to say the module is missing — which is true.
-        if (fs::is_directory(source, ec) && !ec)
-            byName.emplace(std::string(name), source.lexically_normal().string());
-        else
-            result.complete = false;
+        if (!found) result.complete = false;
     }
 
     result.roots.reserve(byName.size());
@@ -128,6 +233,7 @@ auto rootsFromLock(const std::string& text) -> LockRoots {
 struct CacheEntry {
     fs::file_time_type modified{};
     std::uintmax_t size = 0;
+    fs::file_time_type localModified{};
     std::vector<std::string> roots;
 };
 
@@ -147,7 +253,8 @@ auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit)
 auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
     const auto packageDirectory = packageDirectoryFor(start);
     if (packageDirectory.empty()) return {};
-    const auto lockPath = packageDirectory / "tey.lock";
+    const auto workspaceRoot = lockDirectoryFor(packageDirectory);
+    const auto lockPath = workspaceRoot / "tey.lock";
 
     std::error_code ec;
     const auto modified = fs::last_write_time(lockPath, ec);
@@ -159,14 +266,18 @@ auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
     // `tey install` rewrites the lockfile and populates the cache behind the
     // server's back, so the cached answer is only good while the file it was
     // read from is unchanged.
+    // `package.local.kex` changes the answer as well.
+    ec.clear();
+    auto localModified = fs::last_write_time(workspaceRoot / "package.local.kex", ec);
+    if (ec) localModified = {};
     static std::unordered_map<std::string, CacheEntry> cache;
     const auto key = lockPath.string();
     if (const auto cached = cache.find(key);
         cached != cache.end() && cached->second.modified == modified &&
-        cached->second.size == size)
+        cached->second.size == size && cached->second.localModified == localModified)
         return cached->second.roots;
 
-    auto derived = rootsFromLock(readFile(lockPath));
+    auto derived = rootsFromLock(readFile(lockPath), workspaceRoot);
     // An incomplete answer is not remembered: the next request re-stats the
     // cache and picks up a `tey install` that fetched without touching the
     // lockfile.
@@ -177,6 +288,7 @@ auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
     auto& entry = cache[key];
     entry.modified = modified;
     entry.size = size;
+    entry.localModified = localModified;
     entry.roots = std::move(derived.roots);
     return entry.roots;
 }

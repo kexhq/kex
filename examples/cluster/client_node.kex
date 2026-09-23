@@ -1,0 +1,80 @@
+# Clustering, part 2 of 2: a node that uses another node's data.
+#
+# With store_node.kex already running, from examples/cluster:
+#
+#   kex --sname client --cookie demo client_node.kex
+#
+# Node names are atoms: `:store@myhost` spelled directly for a short name,
+# `:"store@host.example.com"` for a fully-qualified one, or — as here, since
+# the host is only known at run time — built with `Atom.from`.
+#
+# Two environment variables let the same program run as one of several
+# containers (see docker-compose.yml): KEX_STORE_NODE names the store's node
+# when it is on another host, and KEX_STOP_STORE=false leaves the store running
+# for the next client.
+
+using Node
+using Store
+
+foul pause(ms: Integer) do
+  receive do
+  after timeout: ms
+  end
+end
+
+# The store node may still be starting; ask a few times before giving up.
+foul reach(store: Atom, tries: Integer) -> Bool do
+  if tries == 0
+    return false
+  end
+  if Node.connect(store) && Node.whereis(store, :store).present?
+    return true
+  end
+  pause(200)
+  reach(store, tries - 1)
+end
+
+foul useStore do
+  let host = Node.self.string.split("@").last.or("localhost")
+  let storeNode = Atom.from(ENV.get("KEX_STORE_NODE", "store@" + host))
+  if !reach(storeNode, 25)
+    return IO.printLine("No store at ${storeNode}. Is store_node.kex running with the same cookie?")
+  end
+  IO.printLine("client: connected to ${Node.list}")
+
+  # Ask for the store's typed handle by the name it registered.
+  Node.send(storeNode, :store, WantStore(Process.self))
+  receive do
+    handle => do
+      let entries: Server<Entries> = handle
+      # Every slot call below runs on the store node, against its state.
+      IO.printLine("greeting: ${entries.get("greeting")}")
+      entries.put(Node.self.string, "was here")
+      IO.printLine("keys now: ${entries.keys()}")
+    end
+  after timeout: 5000
+    IO.printLine("The store did not answer.")
+  end
+
+  # A block of THIS program, run over there. The store node never loaded the
+  # client's code; Node.spawn sends it along.
+  let me = Process.self
+  Node.spawn(storeNode) do me.send((:ran_on, Node.self)) end
+  receive do
+    (:ran_on, where) => IO.printLine("spawned block ran on ${where}")
+  after timeout: 5000
+    IO.printLine("The spawned block did not report back.")
+  end
+
+  if ENV.get("KEX_STOP_STORE", "true") != "false"
+    Node.send(storeNode, :store, StopStore)
+  end
+end
+
+main do
+  if Node.alive?
+    useStore()
+  else
+    IO.printLine("Start this node with a name, e.g. `kex --sname client --cookie demo client_node.kex`.")
+  end
+end

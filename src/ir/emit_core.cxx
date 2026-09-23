@@ -150,7 +150,15 @@ struct Emitter {
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'None'";
-            case LitKind::Atom:   return "'" + l.text + "'";
+            case LitKind::Atom: {
+                // A quoted Kex atom (`:"it's"`) can hold quote and backslash.
+                std::string quoted = "'";
+                for (char c : l.text) {
+                    if (c == '\'' || c == '\\') quoted += '\\';
+                    quoted += c;
+                }
+                return quoted + "'";
+            }
         }
         return "'undefined'";
     }
@@ -538,7 +546,33 @@ auto emitCore(const Module& mod) -> EmitResult {
         if (i) out << ", ";
         out << "'" << exports[i].first << "'/" << exports[i].second;
     }
-    out << "]\n  attributes []\n\n";
+    out << "]\n  attributes [";
+    bool firstAttribute = true;
+    auto attribute = [&](const std::string& name, const std::string& value) {
+        out << (firstAttribute ? "" : ", ") << "'" << name << "' = " << value;
+        firstAttribute = false;
+    };
+    if (!mod.onLoad.empty()) attribute("on_load", "[{'" + mod.onLoad + "', 0}]");
+    if (auto slots = mod.servingSlots.find(mod.name); slots != mod.servingSlots.end()) {
+        std::string value = "[";
+        bool firstType = true;
+        for (const auto& [type, names] : slots->second) {
+            value += (firstType ? "{'" : ", {'") + type + "', [";
+            firstType = false;
+            for (size_t i = 0; i < names.size(); i++)
+                value += (i ? ", '" : "'") + names[i] + "'";
+            value += "]}";
+        }
+        attribute("kex_serving_slots", value + "]");
+    }
+    if (auto upgrades = mod.servingUpgrades.find(mod.name);
+        upgrades != mod.servingUpgrades.end()) {
+        std::string value = "[";
+        for (const auto& type : upgrades->second)
+            value += (value.size() > 1 ? ", '" : "'") + type + "'";
+        attribute("kex_serving_upgrade", value + "]");
+    }
+    out << "]\n\n";
     for (const auto& f : fns) out << f << "\n";
     out << "'module_info'/0 =\n  fun () ->\n    call 'erlang':'get_module_info'('"
         << mod.name << "')\n";

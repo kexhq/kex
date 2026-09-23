@@ -869,7 +869,7 @@ and using it buys OTP compatibility for free.
 
 | Direction | Status |
 |---|---|
-| Kex → Erlang **functions** | ✅ **works today** — `Erlang.*` maps to BEAM modules (`Erlang.Lists.reverse`, `Erlang.Erlang.abs`); see `examples/erlang_interop.kex` |
+| Kex → Erlang **functions** | ✅ **works today** — `BEAM.*` calls BEAM modules by their verbatim names (`BEAM.lists.reverse`, `BEAM.erlang.abs`); see `examples/erlang_interop.kex` |
 | Kex ← raw **messages** | ❌ blocked by the `{'kex_msg', ...}` envelope — stage A |
 | Kex → Erlang **gen_server** | needs `$gen_call` sending; typed version needs foreign slot declarations |
 | Erlang → Kex **server** | free *if* generated servers speak `$gen_call` |

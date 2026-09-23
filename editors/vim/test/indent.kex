@@ -124,3 +124,6 @@ main do
     Demo.log("frozen")
   end
 end
+
+# Atoms: bare, continued by @, quoted, and a label colon before a string.
+let nodes = (:b@localhost, :"b@host.example.com", label(sep:"x"))

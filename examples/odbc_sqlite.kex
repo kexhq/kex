@@ -3,8 +3,8 @@
 # The 'odbc' application talks to any ODBC driver manager. Here we drive
 # SQLite through it, the same way you would from Erlang:
 #
-#   Erlang.Odbc.connect(...)   -> 'odbc':'connect'(...)
-#   Erlang.Odbc.sql_query(...) -> 'odbc':'sql_query'(...)
+#   BEAM.odbc.connect(...)   -> 'odbc':'connect'(...)
+#   BEAM.odbc.sql_query(...) -> 'odbc':'sql_query'(...)
 #
 # Prerequisites (system level, not Kex):
 #   * Erlang/OTP built with ODBC support   (`erl -man odbc` should work)
@@ -30,7 +30,7 @@
 # is the TEXT view, and on BEAM a Kex Char is a tagged `{'Char', N}` tuple, so
 # odbc would receive a list of tuples rather than a string. `bytes` is
 # `binary_to_list` — the same BIF this file used to call directly, reached
-# through the stdlib instead of through `Erlang.Erlang`.
+# through the stdlib instead of through `BEAM.erlang`.
 #
 # This is the pattern docs/erlang-ffi-types-plan.md prescribes: a foreign
 # signature describes the BEAM shape, and adaptation is ordinary Kex code in a
@@ -41,20 +41,20 @@
 # (i.e. real Kex strings) instead of charlists — the same disagreement,
 # settled in the other direction so results need no unwrapping.
 foul connect(dsn: String) -> Any do
-  return Erlang.Odbc.connect(dsn.bytes, [(:binary_strings, true)])
+  return BEAM.odbc.connect(dsn.bytes, [(:binary_strings, true)])
 end
 
 # {:updated, N} for DDL/DML, {:selected, Fields, Rows} for a SELECT,
 # {:error, Reason} for either.
 foul query(ref: Any, sql: String) -> Any do
-  return Erlang.Odbc.sql_query(ref, sql.bytes)
+  return BEAM.odbc.sql_query(ref, sql.bytes)
 end
 
 # A parameterized query, safe against SQL injection. odbc:param_query/3 takes
 # one {Type, [Values...]} tuple per '?', the values list spanning all rows in
 # the batch — so this inserts three users in one call.
 foul params(ref: Any, sql: String, bindings: [Any]) -> Any do
-  return Erlang.Odbc.param_query(ref, sql.bytes, bindings)
+  return BEAM.odbc.param_query(ref, sql.bytes, bindings)
 end
 
 # --- The program ----------------------------------------------------------
@@ -115,14 +115,14 @@ foul demo(ref: Any) -> Void do
     (:error, reason) => IO.printLine("delete failed: ${reason}")
   end
 
-  Erlang.Odbc.disconnect(ref)
+  BEAM.odbc.disconnect(ref)
 end
 
 main do
-  Erlang.Odbc.start()
+  BEAM.odbc.start()
   match connect("Driver={SQLite3};Database=kex_demo.db") do
     (:ok, ref) => demo(ref)
     (:error, reason) => IO.printLine("connect failed: ${reason} — see the prerequisites at the top of this file")
   end
-  Erlang.Odbc.stop()
+  BEAM.odbc.stop()
 end

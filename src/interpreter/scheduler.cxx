@@ -635,6 +635,16 @@ auto Scheduler::isAlive(ProcessId id) const -> bool {
     return it != m_processes.end() && !it->second->finished;
 }
 
+auto Scheduler::registerName(const std::string& name, ProcessId id) -> void {
+    m_names[name] = id;
+}
+
+auto Scheduler::whereis(const std::string& name) const -> std::optional<ProcessId> {
+    auto it = m_names.find(name);
+    if (it == m_names.end() || !isAlive(it->second)) return std::nullopt;
+    return it->second;
+}
+
 auto Scheduler::link(ProcessId other) -> void {
     auto a = m_processes.find(m_current);
     auto b = m_processes.find(other);

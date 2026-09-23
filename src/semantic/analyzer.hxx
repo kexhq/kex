@@ -136,6 +136,17 @@ private:
     // asked about a qualified call — there is no module-level foulness.
     auto isQualifiedCallFoul(const std::string& module,
                              const std::string& member) const -> bool;
+    // The module whose function a bare `name` means through a `using` in
+    // scope — `using Vend` then `vended` — or empty. Respects `only:` and
+    // `except:`; checks modules declared in this unit, then imported
+    // interfaces.
+    auto moduleImportingName(const std::string& name) const -> std::string;
+    // The public functions of each module declared in this unit.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_localModuleFunctions;
+    // The `using` directives in scope, innermost last: the file's own, then
+    // those of each module being analyzed.
+    std::vector<const ast::UsingBlock*> m_usings;
 
     // Transitive effect computation — runs after Phase 1, before Phase 2.
     auto computeTransitiveEffects(const ast::Program& program) -> void;

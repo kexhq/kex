@@ -145,6 +145,7 @@ endif()
 add_library(kex_lib
     src/ir/lower.cxx
     src/ir/emit_core.cxx
+    src/ir/upgrade.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
@@ -182,6 +183,7 @@ add_library(kex_lib
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx
     src/interpreter/stdlib/digest.cxx
+    src/interpreter/stdlib/node.cxx
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/time.cxx
@@ -783,3 +785,21 @@ target_include_directories(serving_imported_module_beam_test PRIVATE tests)
 target_compile_definitions(serving_imported_module_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(serving_imported_module_beam_test kex)
 add_test(NAME serving_imported_module_beam_test COMMAND serving_imported_module_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Hot code reload: three compiled versions of one module loaded in turn into
+# a live VM (src/ir/upgrade.cxx, kex_intrinsic_process's serving upgrade).
+add_executable(hot_reload_beam_test tests/hot_reload_beam_test.cxx)
+target_link_libraries(hot_reload_beam_test PRIVATE kex_lib)
+target_include_directories(hot_reload_beam_test PRIVATE tests)
+target_compile_definitions(hot_reload_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(hot_reload_beam_test kex)
+add_test(NAME hot_reload_beam_test COMMAND hot_reload_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Two Kex programs as two connected BEAM nodes (--sname/--cookie, Node).
+# Skips itself where distributed Erlang cannot start.
+add_executable(cluster_beam_test tests/cluster_beam_test.cxx)
+target_link_libraries(cluster_beam_test PRIVATE kex_lib)
+target_include_directories(cluster_beam_test PRIVATE tests)
+target_compile_definitions(cluster_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(cluster_beam_test kex)
+add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

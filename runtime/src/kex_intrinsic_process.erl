@@ -8,7 +8,7 @@
           self/0, exit/2, register/2, whereis/1, run/2, run/3, stream/2,
           spawn/1, 'spawnServing'/3, server_call/4, server_cast/3, reply/1, cast/0,
           replyFrom/2, fromPid/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 %% Execute a program and capture its output with the streams KEPT APART, the
 %% same result the tree walker produces.
@@ -409,7 +409,11 @@ exit(Pid, Reason) -> erlang:exit(Pid, Reason).
 register(Pid, Name) -> erlang:register(Name, Pid).
 
 %% Process.whereis(name) — look up a registered process by name.
-whereis(Name) -> erlang:whereis(Name).
+whereis(Name) ->
+    case erlang:whereis(Name) of
+        undefined -> 'None';
+        Pid -> {'Just', Pid}
+    end.
 
 %% A typed Kex Server<X> is represented by the ordinary Server record tuple.
 %% The process itself is a real OTP gen_server; slot-specific code arrives as
@@ -445,9 +449,124 @@ cast() -> ok.
 init({State, Module, Slots}) ->
     erlang:put(kex_serving_module, Module),
     erlang:put(kex_serving_slots, Slots),
+    erlang:put(kex_serving_version, module_version(Module)),
+    erlang:put(kex_serving_fields, record_fields(State)),
     {ok, State}.
 
-handle_call(Request, {Pid, Tag}, State) ->
+%% ---- Hot code reload ----------------------------------------------------
+%%
+%% The server loop is OTP's; each request reaches the slot through
+%% `erlang:apply(Module, ...)`, a remote call, so a reloaded module's slot
+%% bodies take effect on the next request with no help. Two things do need
+%% help, and both are settled here, once per request, against whichever
+%% version of the module is loaded NOW:
+%%
+%%  - The state was built by the old code. If the reload changed its record's
+%%    fields, the state is rebuilt in the new layout by field name: a kept
+%%    field keeps its value, a new one takes its declared default. Then, if
+%%    the serving block declares an `upgrade` method, it runs once on that
+%%    rebuilt state — the `code_change/3` of a hand-written gen_server.
+%%  - The slot list was captured when the server started. A slot the reload
+%%    added is looked up in the module's `kex_serving_slots` attribute.
+
+module_version(undefined) -> undefined;
+module_version(Module) ->
+    case code:ensure_loaded(Module) of
+        {module, Module} -> erlang:get_module_info(Module, md5);
+        _ -> undefined
+    end.
+
+current(State0) ->
+    Module = erlang:get(kex_serving_module),
+    Version = module_version(Module),
+    case erlang:get(kex_serving_version) of
+        Version -> State0;
+        _ ->
+            erlang:put(kex_serving_version, Version),
+            erlang:put(kex_serving_slots,
+                       lists:usort(erlang:get(kex_serving_slots) ++
+                                   attribute_slots(Module, State0))),
+            upgrade(Module, migrate(Module, State0))
+    end.
+
+%% The field names of a record value, from the layout registry each module
+%% refreshes when it is loaded (its `on_load`).
+record_fields(State) when is_tuple(State), tuple_size(State) > 0 ->
+    maps:get(element(1, State), persistent_term:get(kex_display_records, #{}),
+             undefined);
+record_fields(_) -> undefined.
+
+migrate(Module, State) ->
+    Old = erlang:get(kex_serving_fields),
+    New = record_fields(State),
+    erlang:put(kex_serving_fields, New),
+    if
+        Old =:= undefined; New =:= undefined; Old =:= New -> State;
+        length(Old) =/= tuple_size(State) - 1 -> State;
+        true ->
+            Tag = element(1, State),
+            Values = maps:from_list(lists:zip(Old, tl(tuple_to_list(State)))),
+            list_to_tuple([Tag | [field_value(Module, Tag, F, Values) || F <- New]])
+    end.
+
+field_value(Module, Tag, Field, Values) ->
+    case Values of
+        #{Field := Value} -> Value;
+        _ ->
+            Default = case erlang:function_exported(Module, '__kex_record_default', 2) of
+                          true -> Module:'__kex_record_default'(Tag, Field);
+                          false -> kex_no_default
+                      end,
+            case Default of
+                kex_no_default -> erlang:error({kex_upgrade_field_without_default, Tag, Field});
+                _ -> Default
+            end
+    end.
+
+module_attribute(Module, Name) ->
+    try Module:module_info(attributes) of
+        Attributes -> proplists:get_value(Name, Attributes, [])
+    catch _:_ -> []
+    end.
+
+%% A record's tag is its qualified name inside a module (`Store.Counter`),
+%% while the compiler keys serving metadata by the name as written.
+state_type(State) when is_tuple(State), tuple_size(State) > 0,
+                       is_atom(element(1, State)) ->
+    Name = atom_to_binary(element(1, State)),
+    case binary:split(Name, <<".">>, [global]) of
+        [Name] -> element(1, State);
+        Parts -> binary_to_atom(lists:last(Parts))
+    end;
+state_type(_) -> undefined.
+
+attribute_slots(undefined, _State) -> [];
+attribute_slots(Module, State) ->
+    Type = state_type(State),
+    proplists:get_value(Type, module_attribute(Module, kex_serving_slots), []).
+
+upgrade(undefined, State) -> State;
+upgrade(Module, State) ->
+    Type = state_type(State),
+    case lists:member(Type, module_attribute(Module, kex_serving_upgrade)) of
+        false -> State;
+        true ->
+            Mangled = binary_to_atom(<<"upgrade/", (atom_to_binary(Type))/binary>>),
+            Candidates = [{Mangled, [State]}, {Mangled, [State, #{}]},
+                          {upgrade, [State]}, {upgrade, [State, #{}]}],
+            case [{F, A} || {F, A} <- Candidates,
+                            erlang:function_exported(Module, F, length(A))] of
+                [{F, A} | _] -> erlang:apply(Module, F, A);
+                [] -> State
+            end
+    end.
+
+%% OTP release handling (`sys:change_code/4`) takes the same path as the
+%% per-request check above.
+code_change(_OldVsn, State, _Extra) -> {ok, current(State)}.
+
+handle_call(Request, {Pid, Tag}, State0) ->
+    State = current(State0),
     erlang:put(kex_serving_from, {'From', Pid, Tag}),
     Result = invoke_slot(Request, State),
     erlang:erase(kex_serving_from),
@@ -465,7 +584,8 @@ handle_call(Request, {Pid, Tag}, State) ->
         Other -> erlang:error({invalid_serving_reply, Other})
     end.
 
-handle_cast(Request, State) ->
+handle_cast(Request, State0) ->
+    State = current(State0),
     case invoke_slot(Request, State) of
         {'Transition', Next, _} -> {noreply, Next};
         #{stop := Reason, new := Next} -> {stop, Reason, Next};

@@ -212,7 +212,7 @@ struct ImportedModule {
 };
 
 // Collects the module names a program imports with `using`, ignoring foreign
-// namespaces (Erlang./Elixir./Gleam.), which have no Kex source to parse.
+// namespaces (BEAM.), which have no Kex source to parse.
 auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
     std::vector<std::string> names;
     auto add = [&](const ast::TypeName& typeName) {

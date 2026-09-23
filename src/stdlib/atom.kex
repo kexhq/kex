@@ -1,0 +1,53 @@
+# Atoms: the +:name+ values. An atom is its own name — two atoms with the same
+# text are the same value, and comparing them is as cheap as comparing numbers.
+#
+#   :ok
+#   :b@localhost                  # an interior `@` is part of a bare atom
+#   :"b@host.example.com"         # the quoted form spells any text
+#
+# Most atoms are written in the source. +Atom.from+ makes one from text built
+# at runtime — a node name, say — and +string+ gives the text back.
+module Atom do
+  # Returns the atom whose name is +text+.
+  #
+  # On the BEAM atoms are never freed, and a node holds at most about a
+  # million. Build atoms from a bounded set of names — node names, config
+  # keys — never from untrusted input; +existing+ is the safe form for that.
+  #
+  # @param text [String] the atom's name
+  # @return [Atom] the atom
+  #
+  # @example
+  #   Atom.from("ok") == :ok                # => true
+  #   Atom.from("app@${host}")              # => :"app@myhost"
+  from : String -> Atom
+  let from(text) = Kex.Intrinsic.Atom.from(text)
+
+  # Returns the atom named +text+ only if one already exists, and +None+
+  # otherwise — it never creates an atom, so it is safe on untrusted input.
+  #
+  # @param text [String] the atom's name
+  # @return [Atom?] the atom, or +None+
+  #
+  # @example
+  #   Atom.existing("ok")                   # => Just(:ok)
+  #   match Atom.existing(input) do
+  #     Just(:start) => begin()
+  #     _ => IO.printLine("unknown command")
+  #   end
+  existing : String -> Atom?
+  let existing(text) = Kex.Intrinsic.Atom.existing(text)
+end
+
+make Atom do
+  # Returns the atom's name as text, without the leading colon. Total, like
+  # +Char.string+: every atom has a name.
+  #
+  # @return [String] the name
+  #
+  # @example
+  #   :ok.string                    # => "ok"
+  #   :"b@host.example.com".string  # => "b@host.example.com"
+  string :> String
+  let string = Kex.Intrinsic.Atom.name(this)
+end

@@ -1,0 +1,12 @@
+# `Node` on a node that was not started distributed — the tree walker always,
+# and the BEAM without --sname/--name. Both backends answer the same, so a
+# program can ask `Node.alive?` before reaching for other nodes.
+using Node
+
+main do
+  IO.printLine(Node.self)
+  IO.printLine(Node.alive?)
+  IO.printLine(Node.list)
+  IO.printLine(Node.whereis(Node.self, :no_such_process).map { |_| "found" }.or("none"))
+  IO.printLine(Node.connect(:"nobody@nowhere"))
+end

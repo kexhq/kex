@@ -4801,8 +4801,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 if (r) {
                     if (auto* uid = std::get_if<ast::UpperIdentifier>(&r->kind)) {
-                        if (uid->name == "Erlang" || uid->name == "Elixir" ||
-                            uid->name == "Gleam" ||
+                        // The interop roots before `BEAM.` (kexhq/kex#346).
+                        // Unchecked, a leftover `Erlang.lists.reverse` passed
+                        // the checker and died at runtime instead.
+                        const bool retiredRoot =
+                            (uid->name == "Erlang" || uid->name == "Elixir" ||
+                             uid->name == "Gleam") &&
+                            !m_localModules.count(uid->name) &&
+                            !m_importedModulePaths.count(uid->name);
+                        if (retiredRoot)
+                            error(r->location,
+                                  "`" + uid->name + ".` interop is now `BEAM.`, "
+                                  "followed by the module's real name: write "
+                                  "`BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`" +
+                                  std::string(uid->name == "Elixir"
+                                                  ? ", `BEAM.Elixir.Enum.map(xs, f)`"
+                                                  : ""));
+                        if (uid->name == "BEAM" || retiredRoot ||
                             (uid->name == "Kex" && intrinsicSegment)) {
                             for (const auto& a : node.args)
                                 if (a) inferExpr(*a);

@@ -91,10 +91,17 @@ names are unavailable; two-letter initialisms like `IO` are fine.
 | String | `"hello"`, `"v: ${expr}"`, `` `raw` `` | `String` |
 | Char | `'a'`, `'0'`, `'\n'` | `Char` |
 | Bool | `true`, `false` | `Bool` |
-| Atom | `:ok`, `:error` | `Atom` |
+| Atom | `:ok`, `:b@localhost`, `:"b@host.example.com"` | `Atom` |
 | None | `None` | `None` |
 
 Underscores in numeric literals are ignored (`1_000 == 1000`).
+
+An atom is a colon and a lowercase-led name. An `@` followed by a name
+character continues it, which spells a short node name: `:b@localhost`. Any
+other text takes the quoted form, `:"b@host.example.com"` or `:"two words"`.
+The quoted form has no interpolation, and only starts where an expression can,
+so `f(sep:"x")` still passes the named argument `sep`. `Atom.from(text)` builds
+an atom at runtime and `atom.string` gives its name back.
 
 ### String Interpolation
 
@@ -2251,8 +2258,9 @@ Kex targets two backends:
   `kex -i` opens a REPL on it
 
 Both backends support the full language. The BEAM backend provides real
-Erlang-level concurrency, distribution, and all supervisor restart strategies;
-the interpreter supports `restart: :only_crashed` only.
+Erlang-level concurrency, distribution (`Node`, `--sname`/`--name`/`--cookie`),
+hot code reload, and all supervisor restart strategies; the interpreter is a
+single unnamed node and supports `restart: :only_crashed` only.
 
 ### CLI
 

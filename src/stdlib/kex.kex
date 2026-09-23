@@ -268,7 +268,7 @@ module Kex.Interface do
   #
   # The term is an ordinary tree of tuples, lists, atoms, integers and
   # strings, so it is walked with normal pattern matching and `Tuple.items`.
-  # This exists so that reading it needs no `Erlang.*` interop: it is the one
+  # This exists so that reading it needs no `BEAM.*` interop: it is the one
   # intentional entry point rather than a general term decoder.
   #
   # @param path [FS.FilePath] the compiled .beam file to read

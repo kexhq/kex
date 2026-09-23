@@ -4,6 +4,16 @@
 #include <cctype>
 
 namespace kex::semantic {
+
+// Where a declaration symbol points "go to definition". A signature line
+// (`name : T -> U`) is written directly above its definition, often with the
+// documentation, so it is a fine target; the placeholder the collector used
+// before — line 0 of the file — sent every jump to the top of the module.
+static auto declaredAt(const SourceLocation& location, std::string_view path)
+    -> SourceLocation {
+    if (location.line > 0) return location;
+    return SourceLocation{path, 0, 0};
+}
 namespace {
 
 auto typeExprText(const ast::TypeExpr& type) -> std::string;
@@ -124,7 +134,7 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
             SymbolInfo info;
             info.name = ptr->name;
             info.kind = SymbolKind::Function;
-            info.definition = SourceLocation{std::string_view(m_state->path), 0, 0};
+            info.definition = declaredAt(ptr->location, m_state->path);
             info.module = "";
             info.isFoul = ptr->isFoul;
             info.type = Type::unknown();
@@ -172,7 +182,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
         SymbolInfo info;
         info.name = ann.name;
         info.kind = SymbolKind::Function;
-        info.definition = SourceLocation{std::string_view(m_state->path), 0, 0};
+        info.definition = declaredAt(ann.location, m_state->path);
         info.module = m_currentModule;
         info.isFoul = ann.isFoul;
         info.type = Type::unknown();
@@ -375,7 +385,8 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
         SymbolInfo fi;
         fi.name = field.name;
         fi.kind = SymbolKind::Function; // treated as accessor for completion
-        fi.definition = SourceLocation{std::string_view(m_state->path), 0, 0};
+        // A field has no location of its own; its record is the next best.
+        fi.definition = declaredAt(def.location, m_state->path);
         fi.module = module;
         fi.makeTarget = def.name;
         fi.type = Type::unknown();
@@ -419,7 +430,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
         SymbolInfo info;
         info.name = ann.name;
         info.kind = SymbolKind::Function;
-        info.definition = SourceLocation{std::string_view(m_state->path), 0, 0};
+        info.definition = declaredAt(ann.location, m_state->path);
         info.module = module;
         info.isFoul = ann.isFoul;
         info.makeTarget = target;

@@ -165,11 +165,22 @@ struct ProjectModules {
 // constantly, including in the modules next door, and the right response is
 // to check what it can.
 auto mergeProjectModules(ast::Program& program,
+                         const std::string& documentPath,
                          const std::vector<std::string>& moduleRoots,
                          const semantic::ImportedInterfaces* interfaces,
                          ProjectModules& retained) -> void {
     module::Resolver resolver(moduleRoots);
-    std::unordered_set<std::string> loaded;
+    // Keyed by canonical path, so two spellings of one file are one file.
+    auto identity = [](const std::string& path) {
+        std::error_code error;
+        auto resolved = std::filesystem::weakly_canonical(path, error);
+        return error ? path : resolved.string();
+    };
+    // The document is already here. A module it uses that uses IT back —
+    // `Rodolfo.Markup` naming `Rodolfo` from inside `rodolfo.kex` — would
+    // otherwise merge a second copy of the document's own declarations, and
+    // every method in it was then "defined twice for receiver".
+    std::unordered_set<std::string> loaded{identity(documentPath)};
     std::vector<ast::Program*> pending;
 
     auto discover = [&](const ast::Program& from) {
@@ -193,7 +204,7 @@ auto mergeProjectModules(ast::Program& program,
         for (const auto& name : names) {
             auto resolved = resolver.resolve(name);
             if (!resolved) continue;
-            if (!loaded.insert(resolved->path).second) continue;
+            if (!loaded.insert(identity(resolved->path)).second) continue;
             auto path = std::make_unique<std::string>(resolved->path);
             std::ifstream file(*path, std::ios::binary);
             if (!file) continue;
@@ -972,6 +983,43 @@ auto isNamespaceReceiverPosition(const std::string& source, unsigned int line,
            (source[offset] == ' ' || source[offset] == '\t'))
         ++offset;
     return offset < source.size() && source[offset] == '.';
+}
+
+// Whether the cursor sits in a bare atom literal: a `:` directly followed by
+// a lowercase-led name, whose `@`s continue it (`:b@localhost`) — the lexer's
+// own rule (Lexer::lexAtom), so the answer matches how the code will parse.
+// `::>` and `name :> Type` are annotations, never atoms.
+// Whether a diagnostic's file is the document being published. An empty
+// file is the document's own; any other spelling of the same path (relative,
+// through a symlink) still counts, so no real error of this file is dropped.
+auto belongsToDocument(std::string_view file, std::string_view document) -> bool {
+    if (file.empty() || file == document) return true;
+    std::error_code error;
+    return std::filesystem::equivalent(std::filesystem::path(file),
+                                       std::filesystem::path(document), error) &&
+           !error;
+}
+
+auto insideAtomLiteral(const std::string& text, unsigned int line,
+                       unsigned int character) -> bool {
+    size_t lineStart = 0;
+    for (unsigned int current = 0; current < line; ++current) {
+        const auto newline = text.find('\n', lineStart);
+        if (newline == std::string::npos) return false;
+        lineStart = newline + 1;
+    }
+    const auto lineEndPosition = text.find('\n', lineStart);
+    const auto lineEnd =
+        lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+    const auto cursor = byteOffsetForUtf16Column(text, lineStart, lineEnd, character);
+    auto start = cursor;
+    while (start > lineStart &&
+           (std::isalnum(static_cast<unsigned char>(text[start - 1])) ||
+            text[start - 1] == '_' || text[start - 1] == '@'))
+        --start;
+    if (start == cursor || start == lineStart || text[start - 1] != ':') return false;
+    if (start - 1 > lineStart && text[start - 2] == ':') return false;
+    return std::islower(static_cast<unsigned char>(text[start]));
 }
 
 auto atFieldType(const std::string& source, unsigned int line,
@@ -2422,7 +2470,7 @@ private:
         if (auto* state = m_db.fileState(path)) {
             auto& retained = m_projectModules[path];
             retained = {};
-            mergeProjectModules(state->ast, projectModuleRoots(path),
+            mergeProjectModules(state->ast, path, projectModuleRoots(path),
                                 &m_interfaces, retained);
         }
         m_referenceIndexReady = false;
@@ -2699,6 +2747,14 @@ private:
         ::lsp::Array<::lsp::Diagnostic> items;
         std::unordered_set<std::string> seen;
         for (const auto& diagnostic : diagnostics) {
+            // Analysing this document also analyses the modules it imports,
+            // and what is wrong THERE is reported with that file's own
+            // location. Published here, it landed on this document at the
+            // other file's line numbers — errors from a dependency scattered
+            // over every file that used it, often past this file's last
+            // line. Each file shows its own diagnostics when it is open.
+            if (!belongsToDocument(diagnostic.location.file, document.path))
+                continue;
             const auto key = std::to_string(diagnostic.location.line) + ":" +
                              std::to_string(diagnostic.location.column) + ":" +
                              diagnostic.message;
@@ -2793,6 +2849,14 @@ private:
         const auto prefix = completionPrefix(found->second.text,
                                              params.position.line,
                                              params.position.character);
+
+        // Inside an atom — `:ok`, or `:b@localhost` just after its `@`, which
+        // is a trigger character for `@field` — nothing can be completed: an
+        // atom names itself. Offering identifiers there turned typing a node
+        // name into a popup.
+        if (insideAtomLiteral(found->second.text, params.position.line,
+                              params.position.character))
+            return ::lsp::Array<::lsp::CompletionItem>{};
 
         if (auto target = withTargetPrefix(found->second.text,
                                            params.position.line,
@@ -2947,7 +3011,19 @@ private:
                     else { brace = i - 1; break; }
                 }
             }
-            if (brace != std::string::npos) {
+            // Only a KEY position takes a field name: the word being typed
+            // follows the brace or a comma. In a value — `title: env.|` —
+            // the literal is irrelevant and ordinary completion applies;
+            // offering the record's own fields there hid every method of
+            // the receiver being completed.
+            bool keyPosition = false;
+            {
+                size_t before = atName;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(text[before - 1])))
+                    --before;
+                keyPosition = before > 0 && (text[before - 1] == '{' || text[before - 1] == ',');
+            }
+            if (brace != std::string::npos && keyPosition) {
                 const auto written = text.substr(brace + 1,
                                                  cursor - brace - 1);
                 size_t first = 0;

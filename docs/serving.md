@@ -99,6 +99,40 @@ end
 multiple outstanding calls distinct. A call slot returning without `reply:`
 must use `from`; casts have no caller and cannot use it.
 
+## Hot code reload
+
+A server keeps running across a reload of the module that implements it:
+
+- **Changed slots.** A slot's new body takes effect on the next request,
+  because every request is dispatched to the currently loaded module.
+- **New slots.** A slot the new version adds can be called on a server that
+  was started before the slot existed.
+- **Changed state record.** If the state record's fields changed, the live
+  state is rebuilt in the new layout by field name before the next request.
+  A kept field keeps its value, and a new field takes its declared default.
+  A new field without a default cannot be filled in, so that request fails.
+- **The `upgrade` hook.** If the serving block declares an `upgrade` method,
+  it runs once on the rebuilt state, for anything a default cannot express.
+  This is the `code_change/3` of a hand-written gen_server, and OTP's
+  `sys:change_code` takes the same path.
+
+```kex
+record Counter do
+  n : Integer
+  step : Integer = 1     # new in this version: existing servers get 1
+end
+
+serving Counter do
+  slot bump -> Reply<Integer> do
+    new.n = @n + @step
+    return { new, reply: new.n }
+  end
+
+  # Runs once, on each live server, after this version is loaded.
+  let upgrade -> Counter = Counter { n: @n, step: @n > 100 then 10 else 1 }
+end
+```
+
 ## Erlang and Elixir interoperability
 
 On BEAM, a Kex server is an OTP `gen_server`. Slots use ordinary tuple request

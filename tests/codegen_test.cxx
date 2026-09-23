@@ -3,6 +3,7 @@
 #include "../src/compiled/reify.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include "../src/ir/emit_core.hxx"
+#include "../src/ir/upgrade.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
@@ -72,6 +73,20 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
     return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+}
+
+// The production path with hot-reload upgrade points inserted, as main.cxx
+// runs it before every emit.
+auto emitUpgradable(const std::string& source, const std::string& stem = "test")
+    -> std::string {
+    kex::Lexer lexer(source);
+    auto tokens = lexer.tokenizeAll();
+    kex::Parser parser(std::move(tokens));
+    auto program = parser.parseProgram();
+    auto ext = stdlibExternal();
+    auto module = kex::ir::lowerProgram(program, stem, "", &ext);
+    kex::ir::insertUpgradePoints(module);
+    return kex::ir::emitCore(module).source;
 }
 
 // Exercise the current AST -> IR -> Core Erlang pipeline used by `kex --run`.
@@ -1998,6 +2013,65 @@ int main() {
                 actual.pop_back();
             assertTrue(actual.rfind("3.14159", 0) == 0,
                        "Math.PI must remain numeric on BEAM");
+        });
+    });
+
+    describe("IR upgrade points — hot code reload", []() {
+        it("makes a receiving function recurse through a remote call", []() {
+            auto out = emitUpgradable(
+                "foul serve(n: Integer) do\n"
+                "  receive do\n"
+                "    :inc => serve(n + 1)\n"
+                "  end\n"
+                "end\n", "srv");
+            assertTrue(contains(out, "call 'kex_srv':'serve'("),
+                           "the self-call after a receive must be remote");
+            assertTrue(out.find("apply 'serve'/") == std::string::npos,
+                       "no local self-call may remain");
+        });
+
+        it("keeps local calls in a function that never receives", []() {
+            auto out = emitUpgradable(
+                "let count(n: Integer) -> Integer = n == 0 then 0 else count(n - 1)\n",
+                "pure");
+            assertTrue(contains(out, "apply 'count'/1("),
+                           "a function that does not receive keeps its local call");
+            assertTrue(out.find("call 'kex_pure':'count'") == std::string::npos,
+                       "no remote call is inserted without a receive");
+        });
+
+        it("lifts a receiving loop into an exported function", []() {
+            auto out = emitUpgradable(
+                "main do\n"
+                "  var n = 0\n"
+                "  loop do\n"
+                "    receive do\n"
+                "      :inc => n = n + 1\n"
+                "      :stop => break\n"
+                "    end\n"
+                "  end\n"
+                "  IO.printLine(n)\n"
+                "end\n", "lifted");
+            assertTrue(contains(out, "'__kex_loop_main_0'/1 ="),
+                           "the loop becomes a module function");
+            assertTrue(contains(out, "'__kex_loop_main_0'/1, 'module_info'/0"),
+                           "and is exported");
+            assertTrue(contains(out, "call 'kex_lifted':'__kex_loop_main_0'("),
+                           "entered and continued through remote calls");
+        });
+
+        it("leaves a loop in place when an early return escapes it", []() {
+            auto out = emitUpgradable(
+                "foul firstBig() -> Integer do\n"
+                "  loop do\n"
+                "    receive do\n"
+                "      n => return n if n > 10\n"
+                "    end\n"
+                "  end\n"
+                "  0\n"
+                "end\n", "early");
+            assertTrue(out.find("__kex_loop_") == std::string::npos,
+                       "a `return` must stay in the function that catches it");
         });
     });
 

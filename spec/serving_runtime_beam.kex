@@ -55,8 +55,8 @@ main do
   let second = Task.start { counter.later(47) }
   assert(first.await(1000) == Ok(Ok(31)), "first outstanding call should keep its reference")
   assert(second.await(1000) == Ok(Ok(47)), "second outstanding call should keep its reference")
-  let foreignReply = Erlang.Erlang.apply(:gen_server, :call, [counter.process, (:increment, 5)])
+  let foreignReply = BEAM.erlang.apply(:gen_server, :call, [counter.process, (:increment, 5)])
   assert(foreignReply == 9, "plain Erlang gen_server.call should invoke a Kex slot")
-  Erlang.Erlang.apply(:gen_server, :cast, [counter.process, (:reset, 6)])
+  BEAM.erlang.apply(:gen_server, :cast, [counter.process, (:reset, 6)])
   assert(counter.get() == Ok(6), "plain Erlang gen_server.cast should preserve mailbox ordering")
 end

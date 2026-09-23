@@ -1,84 +1,86 @@
 # Erlang Interop — calling Erlang/OTP libraries from Kex
 #
-# The Erlang.* namespace maps directly to BEAM modules:
-#   Erlang.Lists   → 'lists'
-#   Erlang.Ets     → 'ets'
-#   Erlang.Erlang  → 'erlang'  (the 'erlang' module itself)
+# The BEAM.* namespace calls any BEAM module, named verbatim:
+#   BEAM.lists        → 'lists'
+#   BEAM.ets          → 'ets'
+#   BEAM.erlang       → 'erlang'  (the 'erlang' module itself)
+#   BEAM.net_kernel   → 'net_kernel'
+#   BEAM.Elixir.Enum  → 'Elixir.Enum'
 #
-# Convention: capitalize the Erlang module name in Kex source,
-# the compiler lowercases it for the BEAM atom.
+# What you write after `BEAM.` is the real module name — no casing rules,
+# whichever language compiled the module.
 
 # kex: run-beam
 
 main do
   # --- lists module ---
   IO.printLine("lists:reverse →")
-  IO.printLine(Erlang.Lists.reverse([1, 2, 3, 4, 5]))
+  IO.printLine(BEAM.lists.reverse([1, 2, 3, 4, 5]))
 
   IO.printLine("lists:flatten →")
-  IO.printLine(Erlang.Lists.flatten([[1, 2], [3, 4], [5]]))
+  IO.printLine(BEAM.lists.flatten([[1, 2], [3, 4], [5]]))
 
   IO.printLine("lists:nth(3, ...) →")
-  IO.printLine(Erlang.Lists.nth(3, [10, 20, 30, 40]))
+  IO.printLine(BEAM.lists.nth(3, [10, 20, 30, 40]))
 
   IO.printLine("lists:last →")
-  IO.printLine(Erlang.Lists.last([10, 20, 30]))
+  IO.printLine(BEAM.lists.last([10, 20, 30]))
 
   # --- erlang module (BIFs) ---
   IO.printLine("erlang:abs(-42) →")
-  IO.printLine(Erlang.Erlang.abs(-42))
+  IO.printLine(BEAM.erlang.abs(-42))
 
   # --- math module ---
   IO.printLine("math:sqrt(144.0) →")
-  IO.printLine(Erlang.Math.sqrt(144.0))
+  IO.printLine(BEAM.math.sqrt(144.0))
 
   IO.printLine("math:pow(2, 10) →")
-  IO.printLine(Erlang.Math.pow(2.0, 10.0))
+  IO.printLine(BEAM.math.pow(2.0, 10.0))
 
   IO.printLine("math:pi() →")
-  IO.printLine(Erlang.Math.pi())
+  IO.printLine(BEAM.math.pi())
 
   # --- string module ---
   IO.printLine("string:uppercase →")
-  IO.printLine(Erlang.String.uppercase("hello kex"))
+  IO.printLine(BEAM.string.uppercase("hello kex"))
 
   IO.printLine("string:lowercase →")
-  IO.printLine(Erlang.String.lowercase("HELLO KEX"))
+  IO.printLine(BEAM.string.lowercase("HELLO KEX"))
 
   # --- ETS (in-memory key-value tables) ---
-  let tab = Erlang.Ets.new(:users, [:set, :public])
-  Erlang.Ets.insert(tab, (:alice, "Alice", 30))
-  Erlang.Ets.insert(tab, (:bob, "Bob", 25))
-  Erlang.Ets.insert(tab, (:carol, "Carol", 28))
+  let tab = BEAM.ets.new(:users, [:set, :public])
+  BEAM.ets.insert(tab, (:alice, "Alice", 30))
+  BEAM.ets.insert(tab, (:bob, "Bob", 25))
+  BEAM.ets.insert(tab, (:carol, "Carol", 28))
 
   IO.printLine("ets:lookup(:alice) →")
-  IO.printLine(Erlang.Ets.lookup(tab, :alice))
+  IO.printLine(BEAM.ets.lookup(tab, :alice))
 
   IO.printLine("ets:info(size) →")
-  IO.printLine(Erlang.Ets.info(tab, :size))
+  IO.printLine(BEAM.ets.info(tab, :size))
 
-  Erlang.Ets.delete(tab, :bob)
+  BEAM.ets.delete(tab, :bob)
   IO.printLine("after delete(:bob), size →")
-  IO.printLine(Erlang.Ets.info(tab, :size))
+  IO.printLine(BEAM.ets.info(tab, :size))
 
-  Erlang.Ets.delete(tab)
+  BEAM.ets.delete(tab)
 
   # --- Mnesia (distributed database) ---
-  Erlang.Mnesia.start()
+  BEAM.mnesia.start()
 
-  Erlang.Mnesia.create_table(:kex_demo, [(:attributes, [:id, :name, :score])])
+  BEAM.mnesia.create_table(:kex_demo, [(:attributes, [:id, :name, :score])])
 
-  Erlang.Mnesia.transaction do
-    Erlang.Mnesia.write((:kex_demo, 1, "Player1", 100))
-    Erlang.Mnesia.write((:kex_demo, 2, "Player2", 200))
+  BEAM.mnesia.transaction do
+    BEAM.mnesia.write((:kex_demo, 1, "Player1", 100))
+    BEAM.mnesia.write((:kex_demo, 2, "Player2", 200))
   end
 
-  let (_, result) = Erlang.Mnesia.transaction do
-    Erlang.Mnesia.read((:kex_demo, 1))
+  let (_, result) = BEAM.mnesia.transaction do
+    BEAM.mnesia.read((:kex_demo, 1))
   end
   IO.printLine("mnesia:read →")
   IO.printLine(result)
 
-  Erlang.Mnesia.delete_table(:kex_demo)
-  Erlang.Mnesia.stop()
+  BEAM.mnesia.delete_table(:kex_demo)
+  BEAM.mnesia.stop()
 end

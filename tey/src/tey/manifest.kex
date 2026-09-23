@@ -96,7 +96,7 @@ record ManifestPackage do
   license : String = ""
   packageKexRequirement : String = ">= 0.3.0"
   # The Erlang/OTP a package needs. Optional — absent means "no opinion" —
-  # and worth setting when the package reaches for `Erlang.*` interop that
+  # and worth setting when the package reaches for `BEAM.*` interop that
   # arrived in a particular release. The floor actually enforced is the higher
   # of this and the toolchain's own (see Tey.Toolchain.runtimeOtpFloor): a
   # package cannot ask for an OTP older than the one that compiled the runtime

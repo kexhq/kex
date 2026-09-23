@@ -90,7 +90,9 @@ syn match kexUpdateConstructor /\<\%(New\|This\)\>\ze\s*{/
 syn match kexOr /\%([.A-Za-z0-9_]\)\@<!or!\=\%([A-Za-z0-9_(]\)\@!/
 
 " ===== Literals and operators =====
-syn match kexAtom /:[A-Za-z_][A-Za-z0-9_?!]*/
+syn match kexAtom /:[A-Za-z_][A-Za-z0-9_?!]*\%(@[A-Za-z0-9_]\+\)*/
+" `:"b@host.example.com"`, only where an expression starts (not `sep:"x"`).
+syn match kexAtom /\%([A-Za-z0-9_)\]}"']\)\@<!:"\%([^"\\]\|\\.\)*"/
 syn match kexInstanceVar /@[a-z_][A-Za-z0-9_?!]*/
 syn match kexNumber /\%([A-Za-z0-9_]\)\@<!\%(0[xX][0-9a-fA-F_]\+\|0[bB][01_]\+\|0[oO][0-7_]\+\|[0-9][0-9_]*\%(\.[0-9][0-9_]*\)\=\%([eE][+-]\=[0-9]\+\)\=\)\%([A-Za-z0-9_]\)\@!/
 syn match kexOperator /->\|=>\|::>\|:>\|\.\.\.\?\|==\|!=\|<=\|>=\|&&\|||\|[+\-*/%=<>!?&|~^]/

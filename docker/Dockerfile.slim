@@ -6,8 +6,8 @@
 # 139 MB to 80 MB. `kex`, `kex -R`,
 # `kex --compile` and the REPL all work exactly as in the full image.
 #
-# What you give up is `Erlang.*` interop beyond the applications on the keep
-# list (which includes mnesia): `Erlang.ssh.…` has no ssh to reach in this
+# What you give up is `BEAM.*` interop beyond the applications on the keep
+# list (which includes mnesia): `BEAM.ssh.…` has no ssh to reach in this
 # image. If a program borrows a different one, use the full image.
 #
 #   docker build -f docker/Dockerfile.slim -t kex:slim .

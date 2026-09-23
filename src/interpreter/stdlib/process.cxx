@@ -458,6 +458,22 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
+    defineIntrinsic("Process::register", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        auto* process = std::get_if<ProcessValue>(&args[0]->data);
+        auto* name = std::get_if<AtomValue>(&args[1]->data);
+        if (process && name) m_scheduler->registerName(name->name, process->pid);
+        return Value::unit();
+    });
+
+    defineIntrinsic("Process::whereis", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* name = std::get_if<AtomValue>(&args[0]->data);
+        if (!name) return Value::none();
+        auto id = m_scheduler->whereis(name->name);
+        return id ? Value::just(Value::process(*id, m_scheduler.get())) : Value::none();
+    });
+
     defineDual("Process::spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         return Value::server(m_scheduler->startServer(args[0]), m_scheduler.get());
