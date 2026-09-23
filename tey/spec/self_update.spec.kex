@@ -27,6 +27,20 @@ describe("Tey.SelfUpdate.currentPrefix") do
     Mock.ENV.unset("TEY_EBIN")
     assert(Tey.SelfUpdate.currentPrefix == None)
   end
+
+  it("is the launcher's install while the Tey paired with a Kex runs") do
+    Mock.ENV.set("TEY_EBIN", "/home/ada/.local/share/tey/tey/0.4.0-beta.4/ebin")
+    Mock.ENV.set("TEY_INSTALL_EBIN", "/usr/local/lib/kex/tey/ebin")
+    assert(Tey.SelfUpdate.currentPrefix == Just("/usr/local"))
+    Mock.ENV.unset("TEY_INSTALL_EBIN")
+  end
+end
+
+describe("Tey.Toolchain.pairedTeyEbin") do
+  it("keeps a Kex release's Tey beside its toolchain, not inside it") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    assert(Tey.Toolchain.pairedTeyEbin("0.4.0-beta.4") == "/tey/tey/0.4.0-beta.4/ebin")
+  end
 end
 
 describe("Tey.SelfUpdate.prefixOf") do

@@ -29,6 +29,7 @@ foul parser -> OptionConfig do
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey install` as a Git merge driver")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
+    .flag("no-tey", None, "Skip installing the Tey a Kex release ships with on `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
     .flag("json", None, "Print `tey kex list`, `tey commands`, or `tey test` as JSON")
     .flag("list", None, "List `tey test` cases as JSON without running any of them")
@@ -125,7 +126,7 @@ foul parser -> OptionConfig do
     # One handler for every `kex install` spelling: bare, `latest`, a version,
     # and a source checkout with a version. They differ only in what follows
     # the two command words, which is exactly what the handler receives.
-    .command("kex install", "[<version> | latest | <src> <version>]", "install a Kex toolchain") do |options|
+    .command("kex install", "[<version> | latest | <src> <version>] [--pre] [--no-tey]", "install a Kex toolchain and the Tey it ships with") do |options|
       Tey.Cli.kexInstall(options)
     end
     .command("kex uninstall", "<version>", "remove an installed Kex") do |options|
@@ -209,10 +210,11 @@ private do
                                       options.flagEnabled?("list"))
   end
 
-  foul installKex(version: String) -> Integer do
+  foul installKex(version: String, options: ParsedOptions) -> Integer do
     match Tey.Toolchain.installRelease(version) do
       Ok(prefix) => do
         IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
+        Tey.Cli.syncTey(version, options)
         Tey.Cli.reportShim(version)
         0
       end
@@ -226,11 +228,31 @@ private do
   # Re-downloading a version already on the disk to arrive where you already
   # are is waste, so `install latest` that finds nothing to do selects it and
   # says so rather than reporting an install that did not happen.
-  foul alreadyCurrent(version: String) -> Integer do
+  foul alreadyCurrent(version: String, options: ParsedOptions) -> Integer do
     Tey.Toolchain.use(version)
     IO.printLine("Kex ${version} is the newest release and already installed; selected it")
+    Tey.Cli.syncTey(version, options)
     Tey.Cli.reportShim(version)
     return 0
+  end
+
+  # Kex and Tey are released as a pair, so installing a Kex release brings the
+  # Tey it ships along, for `bin/tey` to run while that Kex is selected. Quiet
+  # when it is already there; a failure never fails the Kex install, it only
+  # means this Tey keeps running with it.
+  foul syncTey(kexVersion: String, options: ParsedOptions) -> Void do
+    return () if options.flagEnabled?("no-tey")
+    match Tey.SelfUpdate.installPaired(kexVersion) do
+      Ok(None) => return ()
+      Ok(Just(version)) => do
+        IO.printLine("${Console.GREEN}Installed${Console.RESET} Tey ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}released with Kex ${kexVersion}${Console.RESET}")
+        return ()
+      end
+      Error(error) => do
+        IO.printError("warning: Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}\n")
+        return ()
+      end
+    end
   end
 
   # "* 0.3.0  installed, selected" — the marker is the selected one, so the
@@ -451,7 +473,7 @@ private do
     match options.arguments do
       [] => Tey.Cli.kexInstallCurrent(options)
       ["latest"] => Tey.Cli.kexInstallLatest(options)
-      [version] => Tey.Cli.installKex(version)
+      [version] => Tey.Cli.installKex(version, options)
       [source, version] => Tey.Cli.kexInstallSource(source, version)
       _ => Tey.Cli.unknown("kex install")
     end
@@ -476,7 +498,7 @@ private do
         IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
-      Ok(version) => Tey.Cli.installKex(version)
+      Ok(version) => Tey.Cli.installKex(version, options)
     end
   end
 
@@ -487,8 +509,8 @@ private do
         1
       end
       Ok(version) => do
-        return Tey.Cli.alreadyCurrent(version) if Tey.Toolchain.installed?(version)
-        Tey.Cli.installKex(version)
+        return Tey.Cli.alreadyCurrent(version, options) if Tey.Toolchain.installed?(version)
+        Tey.Cli.installKex(version, options)
       end
     end
   end

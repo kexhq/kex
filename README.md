@@ -42,6 +42,11 @@ tey kex use <version>       # switch what `kex` runs
 tey upgrade [--pre] [<version>] # upgrade Tey itself (non-brew installs)
 ```
 
+Kex and Tey are released as a pair, so `tey kex install` also fetches the Tey
+that Kex release shipped with and keeps it beside the toolchain; while that Kex
+is selected, `tey` runs it. A pre-release is tested with its own Tey that way,
+even under Homebrew. `--no-tey` skips it.
+
 The tap follows the stable line; `--HEAD` still works and builds from main.
 Pre-releases never arrive through brew — `tey kex install --pre` and
 `tey kex list --pre` are the channel-aware way to them. Docker images are

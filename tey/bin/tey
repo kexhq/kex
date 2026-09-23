@@ -16,7 +16,25 @@ while [ -L "$target" ]; do
 done
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
 PREFIX=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
-TEY_EBIN=${TEY_EBIN:-"$PREFIX/lib/kex/tey/ebin"}
+
+# Kex and Tey are developed and released as a pair, so the Tey that runs is
+# the one released with the selected Kex, when `tey kex install` put it beside
+# that toolchain. Without one — a Kex installed before this, `--no-tey`, the
+# bundled seed — it is this install's own. The layout mirrors
+# `Tey.Toolchain.pairedTeyEbin`; an explicit TEY_EBIN or TEY_KEX (a checkout's
+# `tey-run`, the container images) opts out of pairing entirely.
+TEY_INSTALL_EBIN="$PREFIX/lib/kex/tey/ebin"
+export TEY_INSTALL_EBIN
+if [ -z "${TEY_EBIN:-}" ] && [ -z "${TEY_KEX:-}" ]; then
+  tey_home=${TEY_HOME:-"${HOME}/.local/share/tey"}
+  if [ -f "$tey_home/current" ]; then
+    tey_selected=$(tr -d '[:space:]' < "$tey_home/current")
+    if [ -n "$tey_selected" ] && [ -f "$tey_home/tey/$tey_selected/ebin/kex_main.beam" ]; then
+      TEY_EBIN="$tey_home/tey/$tey_selected/ebin"
+    fi
+  fi
+fi
+TEY_EBIN=${TEY_EBIN:-"$TEY_INSTALL_EBIN"}
 export TEY_EBIN
 
 # A Kex installed alongside Tey by whatever installed Tey (Homebrew puts one

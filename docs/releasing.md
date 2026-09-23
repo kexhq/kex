@@ -65,6 +65,13 @@ had just installed said `tey 0.1.1`.
 The Homebrew keg version is still Kex's, and deliberately — see the `formula`
 job below.
 
+A Tey's number is not what pairs it with a Kex, though — the tag is. `tey kex
+install <version>` unpacks the `tey-*.tar.gz` published under that Kex's tag
+into `<tey home>/tey/<kex-version>/ebin`, and `bin/tey` runs that Tey while
+that Kex is selected. So a pre-release exercises the Tey it was released with
+even when nobody bumped `tey/package.kex`, and even under Homebrew, whose keg
+is never touched.
+
 Until `VERSION` moves, running the workflow again fails on the existing tag
 rather than rebuilding a published number.
 
@@ -155,10 +162,10 @@ Without it, only the `formula` job fails, and only on a stable release.
    without being able to build Kex at all.
 
    That filename is a contract, not a convenience: `install.sh` (the
-   curl-installed path) and `tey upgrade` both consume
+   curl-installed path), `tey upgrade` and `tey kex install` all consume
    `tey-<tey-version>.tar.gz` plus its `.sha256` under the Kex tag, and find
    the version by reading `tey/package.kex` at that tag. Renaming the asset,
-   dropping the checksum, or moving the manifest breaks both — keep all three
+   dropping the checksum, or moving the manifest breaks all of them — keep all three
    where they are.
 
    Both halves of the Homebrew formula come from these four archives: the keg

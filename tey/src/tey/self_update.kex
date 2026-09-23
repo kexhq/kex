@@ -24,9 +24,19 @@ type UpgradeOutcome =
 # to overwrite. `tey/bin/tey` exports TEY_EBIN before invoking the BEAM, so a
 # released install always knows.
 foul currentPrefix -> String? do
-  match ENV.get("TEY_EBIN") do
+  match Tey.SelfUpdate.installEbin do
     None => return None
     Just(ebin) => return Tey.SelfUpdate.prefixOf(ebin)
+  end
+end
+
+# The launcher's own runtime directory. TEY_EBIN can instead name the Tey
+# paired with the selected Kex (see `installPaired`), which is not an install
+# to upgrade — TEY_INSTALL_EBIN always names the launcher's.
+foul installEbin -> String? do
+  match ENV.get("TEY_INSTALL_EBIN") do
+    Just(ebin) => return Just(ebin)
+    None => return ENV.get("TEY_EBIN")
   end
 end
 
@@ -145,11 +155,45 @@ foul upgradePinned(version: String) -> UpgradeOutcome or! String do
   end
 end
 
+# The Tey a Kex release ships, unpacked beside that toolchain so `bin/tey`
+# runs it whenever that Kex is selected: Kex and Tey are developed and released
+# as a pair, and a pre-release is only tested properly as that pair. Nothing
+# installed is replaced — not even a Homebrew keg — which is what makes this
+# safe to do on every `tey kex install`.
+#
+# The answer is the Tey version unpacked, or None when it was already there:
+# tags do not move, so neither does what they carry.
+foul installPaired(kexVersion: String) -> String? or! String do
+  let ebin = Tey.Toolchain.pairedTeyEbin(kexVersion)
+  return Ok(None) if FS.Directory.directory?(ebin)
+  let tag = Tey.Toolchain.releaseTag(kexVersion).try
+  let version = Tey.SelfUpdate.teyVersionAt(tag).try
+  let unpacked = Tey.SelfUpdate.unpackRelease(tag, version).try
+  let parent = "${Tey.Toolchain.home}/tey/${kexVersion}"
+  if !FS.Directory.create("${Tey.Toolchain.home}/tey") || !FS.Directory.create(parent)
+    FS.Directory.deleteAll(unpacked)
+    return Error("could not create ${parent}")
+  end
+  let staged = "${ebin}.partial"
+  FS.Directory.deleteAll(staged) if FS.Directory.directory?(staged)
+  let copied = Tey.SelfUpdate.copyInto("${unpacked}/tey-${version}/lib/kex/tey/ebin", staged, true)
+  FS.Directory.deleteAll(unpacked)
+  match copied do
+    Error(error) => do
+      FS.Directory.deleteAll(staged)
+      return Error(error)
+    end
+    Ok(_) => ()
+  end
+  Tey.Toolchain.publish(staged, ebin).try
+  return Ok(Just(version))
+end
+
 private do
   # The prefix `tey upgrade` may write to, with the two refusals: nothing
   # install-like is running, or Homebrew owns it.
   foul installPrefix -> String or! String do
-    match ENV.get("TEY_EBIN") do
+    match Tey.SelfUpdate.installEbin do
       None => return Error("cannot tell where Tey is installed (TEY_EBIN is not set); `tey upgrade` works on a Tey installed from a release archive, not on a source checkout")
       Just(ebin) => match Tey.SelfUpdate.prefixOf(ebin) do
         None => return Error("cannot tell where Tey is installed (TEY_EBIN holds `${ebin}`, not a release install); `tey upgrade` works on an installed Tey, not on a source checkout")
@@ -277,35 +321,8 @@ private do
   # are the swap itself and the silent return. (`publish` failing is still
   # safe to report: it rolls the old tree back, so the runtime is intact.)
   foul installFrom(prefix: String, tag: String, version: String, verb: String) -> String or! String do
-    let downloads = "${Tey.Cache.root}/downloads"
-    return Error("could not create the download cache") if !FS.Directory.create(downloads)
-    let name = "tey-${version}"
-    let archive = "${downloads}/${name}.tar.gz"
-    let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
-    match Tey.Toolchain.download(url, archive) do
-      Error(error) => return Error(error)
-      Ok(_) => ()
-    end
-    match Tey.Toolchain.verifyArchive(archive, "${url}.sha256") do
-      Error(error) => return Error(error)
-      Ok(_) => ()
-    end
-    let unpacked = "${downloads}/${name}.unpacked"
-    FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
-    return Error("could not create ${unpacked}") if !FS.Directory.create(unpacked)
-    let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
-      Error(error) => return Error(error)
-      Ok(value) => value
-    end
-    if extracted.exitCode != 0
-      FS.Directory.deleteAll(unpacked)
-      return Error("could not unpack ${archive}: ${extracted.stderr}")
-    end
-    let tree = "${unpacked}/${name}"
-    if !FS.File.file?("${tree}/bin/tey") || !FS.File.file?("${tree}/bin/kex") || !FS.Directory.directory?("${tree}/lib/kex/tey/ebin")
-      FS.Directory.deleteAll(unpacked)
-      return Error("${name}.tar.gz does not contain a Tey installation")
-    end
+    let unpacked = Tey.SelfUpdate.unpackRelease(tag, version).try
+    let tree = "${unpacked}/tey-${version}"
     # The archive's launcher is baked for whoever built it; keep this
     # machine's Erlang choice rather than silently switching it.
     Tey.SelfUpdate.carryBakedErl(prefix, tree)
@@ -362,6 +379,36 @@ private do
       Error(error) => return Error(error)
       Ok(_) => return Ok(version)
     end
+  end
+
+  # Downloads, verifies and unpacks the Tey archive a tag publishes, answering
+  # the directory holding `tey-<version>/`. The caller owns that directory and
+  # deletes it when done.
+  foul unpackRelease(tag: String, version: String) -> String or! String do
+    let downloads = "${Tey.Cache.root}/downloads"
+    return Error("could not create the download cache") if !FS.Directory.create(downloads)
+    let name = "tey-${version}"
+    let archive = "${downloads}/${name}.tar.gz"
+    let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
+    Tey.Toolchain.download(url, archive).try
+    Tey.Toolchain.verifyArchive(archive, "${url}.sha256").try
+    let unpacked = "${downloads}/${name}.unpacked"
+    FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
+    return Error("could not create ${unpacked}") if !FS.Directory.create(unpacked)
+    let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
+      Error(error) => return Error(error)
+      Ok(value) => value
+    end
+    if extracted.exitCode != 0
+      FS.Directory.deleteAll(unpacked)
+      return Error("could not unpack ${archive}: ${extracted.stderr}")
+    end
+    let tree = "${unpacked}/${name}"
+    if !FS.File.file?("${tree}/bin/tey") || !FS.File.file?("${tree}/bin/kex") || !FS.Directory.directory?("${tree}/lib/kex/tey/ebin")
+      FS.Directory.deleteAll(unpacked)
+      return Error("${name}.tar.gz does not contain a Tey installation")
+    end
+    return Ok(unpacked)
   end
 
   # Copies one staged tree into place for the swap above, reporting what went
