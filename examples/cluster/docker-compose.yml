@@ -1,4 +1,4 @@
-# A three-node Kex cluster: store_node.kex and two copies of client_node.kex,
+# A five-node Kex cluster: store_node.kex and four copies of client_node.kex,
 # each in a container of its own, talking over distributed Erlang.
 #
 #   cd examples/cluster
@@ -23,7 +23,7 @@
 # of its node name, so a new one is started beside the services rather than as
 # another copy of one:
 #
-#   docker run --rm -it --network cluster_cluster --hostname client-c \
+#   docker run --rm -it --network cluster_cluster --hostname client-e \
 #     -v "$PWD:/work:ro" -e KEX_STORE_NODE=store@store -e KEX_STOP_STORE=false \
 #     -e KEX_ROUNDS=0 kex-cluster-example \
 #     --sname client --cookie kex-cluster-demo client_node.kex
@@ -68,6 +68,18 @@ services:
     <<: *kex-node
     hostname: client-b
     depends_on: [client-a]
+    command: ["--sname", "client", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "client_node.kex"]
+
+  client-c:
+    <<: *kex-node
+    hostname: client-c
+    depends_on: [client-b]
+    command: ["--sname", "client", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "client_node.kex"]
+
+  client-d:
+    <<: *kex-node
+    hostname: client-d
+    depends_on: [client-c]
     command: ["--sname", "client", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "client_node.kex"]
 
 networks:
