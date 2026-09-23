@@ -7,6 +7,6 @@ main do
   IO.printLine(Node.self)
   IO.printLine(Node.alive?)
   IO.printLine(Node.list)
-  IO.printLine(Node.whereis(Node.self, :no_such_process).map { |_| "found" }.or("none"))
+  IO.printLine(Node.whereIs(Node.self, :no_such_process).map { |_| "found" }.or("none"))
   IO.printLine(Node.connect(:"nobody@nowhere"))
 end

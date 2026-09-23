@@ -466,11 +466,11 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::unit();
     });
 
-    defineIntrinsic("Process::whereis", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::whereIs", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* name = std::get_if<AtomValue>(&args[0]->data);
         if (!name) return Value::none();
-        auto id = m_scheduler->whereis(name->name);
+        auto id = m_scheduler->whereIs(name->name);
         return id ? Value::just(Value::process(*id, m_scheduler.get())) : Value::none();
     });
 

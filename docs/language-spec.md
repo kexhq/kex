@@ -100,8 +100,18 @@ An atom is a colon and a lowercase-led name. An `@` followed by a name
 character continues it, which spells a short node name: `:b@localhost`. Any
 other text takes the quoted form, `:"b@host.example.com"` or `:"two words"`.
 The quoted form has no interpolation, and only starts where an expression can,
-so `f(sep:"x")` still passes the named argument `sep`. `Atom.from(text)` builds
-an atom at runtime and `atom.string` gives its name back.
+so `f(sep:"x")` still passes the named argument `sep`.
+
+From text, there are three ways to get an atom, each saying what it does:
+
+| Form | When | Result |
+|---|---|---|
+| `"hello".as(Atom)` | compile time, string literals only | `Atom` |
+| `Atom.from(text)` | run time; creates the atom | `Atom` |
+| `text.to(Atom)` | run time; finds an atom that already exists | `Atom?` |
+
+On the BEAM atoms are never freed, so text from outside a program should go
+through `.to(Atom)`. `atom.string` gives an atom's name back.
 
 ### String Interpolation
 
@@ -1519,7 +1529,7 @@ pid.alive?                       # is the process alive?
 pid.link                         # link caller to pid (bidirectional exit)
 pid.monitor                      # returns a Reference; demonitor with ref.demonitor
 Process.register(pid, :name)     # register pid under an atom
-Process.whereis(:name)           # Pid? for a registered name
+Process.whereIs(:name)           # Pid? for a registered name
 Process.exit(pid, reason)        # send an exit signal
 ```
 
@@ -2070,7 +2080,7 @@ Route methods on `Web.Server`: `get`, `post`, `put`, `patch`, `delete`,
 See §18 for the full process API. Summary:
 
 - `Process.self`, `Process.exit(pid, reason)`, `Process.register(pid, name)`,
-  `Process.whereis(name)`
+  `Process.whereIs(name)`
 - `Pid.send(msg)`, `Pid.link`, `Pid.unlink`, `Pid.monitor`, `Pid.alive?`
 - `Reference.demonitor`
 - `Task.start { expr }`, `task.await(timeout)`, `Task.awaitAll([tasks])`
@@ -2119,19 +2129,21 @@ name in the global namespace.
 ```kex
 module Kex do
   type Backend = Interpreter | Beam
-  type Feature = Http | FS | Process | WebServer
+  type Feature = FileSystem | ExternalPrograms
 end
 ```
 
 | Function | Description |
 |---|---|
 | `Kex.BACKEND` | Active backend (`Kex.Interpreter` or `Kex.Beam`) |
-| `Kex.Feature.has?(f)` | Whether a feature is available on this backend |
-| `Kex.Feature.list` | All available features |
+| `Kex.BACKEND.interpreted?` / `.compiled?` / `.beam?` | Which kind of backend it is |
+| `Kex.VERSION` | The running toolchain's version (`.release`, `.number`, `.revision`) |
+| `Kex.Feature.has?(f)` | Whether this build includes `f`: `FileSystem`, `ExternalPrograms` |
+| `Kex.Feature.list` | All the features this build includes |
 
 ```kex
-if Kex.BACKEND == Kex.Beam then
-  IO.printLine(Kex.Feature.has?(Kex.Process))
+if Kex.Feature.has?(Kex.ExternalPrograms)
+  IO.printLine(Process.run("git", ["rev-parse", "HEAD"]))
 end
 ```
 

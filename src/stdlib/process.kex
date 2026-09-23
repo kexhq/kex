@@ -36,7 +36,7 @@
 
 # An opaque BEAM process identifier.
 #
-# Obtained from +Process.self+ or +Process.whereis+. Send it messages, link to
+# Obtained from +Process.self+ or +Process.whereIs+. Send it messages, link to
 # it, monitor it, or ask whether it is still alive.
 type Pid
 
@@ -283,13 +283,13 @@ module Process do
   # @return [Pid?] the process, or +None+
   #
   # @example
-  #   Process.whereis(:main)        # => Just(pid)
-  #   Process.whereis(:not_there)   # => None
+  #   Process.whereIs(:main)        # => Just(pid)
+  #   Process.whereIs(:not_there)   # => None
   #
   # @example Sending to a named process if it is there
-  #   Process.whereis(:logger).map { |pid| pid.send(message) }
-  whereis : Atom -> Pid?
-  foul whereis(name) = Kex.Intrinsic.Process.whereis(name)
+  #   Process.whereIs(:logger).map { |pid| pid.send(message) }
+  whereIs : Atom -> Pid?
+  foul whereIs(name) = Kex.Intrinsic.Process.whereIs(name)
 end
 
 # What an external command left behind: its exit status and its output.

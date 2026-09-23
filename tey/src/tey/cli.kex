@@ -343,9 +343,9 @@ private do
   foul showVersion -> Integer do
     # `.number` already parenthesizes the revision, and nesting that inside
     # another pair reads badly: "tey 0.1.0 (Kex 0.3.0-beta (abc1234))".
-    let kex = match Kex.Kernel.VERSION.revision do
-      Just(revision) => "${Kex.Kernel.VERSION.release}, ${revision}"
-      None => Kex.Kernel.VERSION.release
+    let kex = match Kex.VERSION.revision do
+      Just(revision) => "${Kex.VERSION.release}, ${revision}"
+      None => Kex.VERSION.release
     end
     IO.printLine("${Console.BOLD}tey${Console.RESET} ${Tey.Version.number} ${Console.DIM}(Kex ${kex})${Console.RESET}")
     return 0

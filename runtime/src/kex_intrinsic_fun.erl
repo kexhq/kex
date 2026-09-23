@@ -29,6 +29,16 @@ convertTo(V, 'Binary') when is_binary(V) -> {'Just', {'Binary', V}};
 convertTo({'Binary', V}, 'Binary') -> {'Just', {'Binary', V}};
 convertTo({'Range', _, _} = Range, 'List') -> {'Just', kex_intrinsic_range:items(Range)};
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
+%% `"ok".to(Atom)` finds an atom that already EXISTS and never makes one:
+%% atoms are never freed, so creating them from untrusted text can exhaust the
+%% atom table. `Atom.from` is the creating form.
+convertTo(V, 'Atom') when is_binary(V) ->
+    try binary_to_existing_atom(V, utf8) of
+        Atom -> {'Just', Atom}
+    catch error:badarg -> 'None'
+    end;
+convertTo(V, 'Atom') when is_atom(V), V =/= true, V =/= false, V =/= 'None' ->
+    {'Just', V};
 convertTo(_, _) -> 'None'.
 
 %% Base-aware Integer <-> String, `.to(String, radix: 16)`. Only that pair is

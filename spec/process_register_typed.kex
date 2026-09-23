@@ -10,7 +10,7 @@ main do
     end
   end
   Process.register(echo, :echo)
-  IO.printLine(Process.whereis(:echo).map { |_| "registered" }.or("missing"))
+  IO.printLine(Process.whereIs(:echo).map { |_| "registered" }.or("missing"))
   echo.send(Ping(Process.self))
   receive do
     reply => IO.printLine(reply)

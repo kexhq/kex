@@ -1,0 +1,2 @@
+spec/error_unknown_module_function.kex:7:31: error: `Process` has no function `whereis` — did you mean `whereIs`?
+spec/error_unknown_module_function.kex:8:29: error: `Digest` has no function `sha512`

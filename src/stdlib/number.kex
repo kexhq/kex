@@ -364,6 +364,151 @@ module Float do
   #   Float.parsePrefix("12.5kg")   # => Just((12.5, "kg"))
   parsePrefix : String -> (Float, String)?
   let parsePrefix(s) = Kex.Intrinsic.Float.parsePrefix(s)
+
+  # The largest finite +Float+.
+  #
+  # A Kex +Float+ is always finite, so there is no infinity to start from:
+  # this is the bound to use instead, say as the first "smallest so far".
+  #
+  # @return [Float] 1.7976931348623157e308
+  #
+  # @example
+  #   let smallest = readings.reduce(Float.MAX) { |low, x| x < low then x else low }
+  MAX : Float
+  let MAX = 1.7976931348623157e308
+
+  # The most negative finite +Float+: +-Float.MAX+. Not the smallest positive
+  # one, which some languages call MIN.
+  #
+  # @return [Float] -1.7976931348623157e308
+  MIN : Float
+  let MIN = -1.7976931348623157e308
+end
+
+# The bounds of the sized numeric types: +Int8.MAX+, +UInt64.MAX+,
+# +Float32.MIN+ and so on. +Integer+ has none: it is arbitrary-precision.
+# For a float type, +MIN+ is the most negative finite value, not the smallest
+# positive one.
+
+# The range of a 32-bit float.
+module Float32 do
+  # The largest Float32: 3.4028234663852886e38.
+  MAX : Float32
+  let MAX = 3.4028234663852886e38
+
+  # The most negative finite Float32: -3.4028234663852886e38.
+  MIN : Float32
+  let MIN = -3.4028234663852886e38
+end
+
+# The range of a 64-bit float, the same as a +Float+.
+module Float64 do
+  # The largest Float64: 1.7976931348623157e308.
+  MAX : Float64
+  let MAX = 1.7976931348623157e308
+
+  # The most negative finite Float64: -1.7976931348623157e308.
+  MIN : Float64
+  let MIN = -1.7976931348623157e308
+end
+
+# The range of a signed 8-bit integer.
+module Int8 do
+  # The largest Int8: 127.
+  MAX : Int8
+  let MAX = 127
+
+  # The smallest Int8: -128.
+  MIN : Int8
+  let MIN = -128
+end
+
+# The range of a signed 16-bit integer.
+module Int16 do
+  # The largest Int16: 32767.
+  MAX : Int16
+  let MAX = 32767
+
+  # The smallest Int16: -32768.
+  MIN : Int16
+  let MIN = -32768
+end
+
+# The range of a signed 32-bit integer.
+module Int32 do
+  # The largest Int32: 2147483647.
+  MAX : Int32
+  let MAX = 2147483647
+
+  # The smallest Int32: -2147483648.
+  MIN : Int32
+  let MIN = -2147483648
+end
+
+# The range of a signed 64-bit integer.
+module Int64 do
+  # The largest Int64: 9223372036854775807.
+  MAX : Int64
+  let MAX = 9223372036854775807
+
+  # The smallest Int64: -9223372036854775808.
+  MIN : Int64
+  let MIN = -9223372036854775808
+end
+
+# The range of an unsigned 8-bit integer: +UInt8+ is another name for +Byte+.
+module UInt8 do
+  # The largest UInt8: 255.
+  MAX : UInt8
+  let MAX = 255
+
+  # The smallest UInt8: 0.
+  MIN : UInt8
+  let MIN = 0
+end
+
+# The range of an unsigned 16-bit integer.
+module UInt16 do
+  # The largest UInt16: 65535.
+  MAX : UInt16
+  let MAX = 65535
+
+  # The smallest UInt16: 0.
+  MIN : UInt16
+  let MIN = 0
+end
+
+# The range of an unsigned 32-bit integer.
+module UInt32 do
+  # The largest UInt32: 4294967295.
+  MAX : UInt32
+  let MAX = 4294967295
+
+  # The smallest UInt32: 0.
+  MIN : UInt32
+  let MIN = 0
+end
+
+# The range of an unsigned 64-bit integer.
+module UInt64 do
+  # The largest UInt64: 18446744073709551615.
+  MAX : UInt64
+  let MAX = 18446744073709551615
+
+  # The smallest UInt64: 0.
+  MIN : UInt64
+  let MIN = 0
+end
+
+# The range of a +Byte+, Kex's unsigned 8-bit integer (also called +UInt8+).
+module Byte do
+  # The largest Byte: 255.
+  MAX : Byte
+  let MAX = 255
+
+  # The smallest Byte: 0.
+  MIN : Byte
+  let MIN = 0
 end
 
 # Reading a number out of text without deciding in advance which half of the

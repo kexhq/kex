@@ -1,0 +1,28 @@
+# The bounds of the sized numeric types. A Kex Float is always finite — the
+# BEAM cannot represent infinity — so Float.MAX and Float.MIN are the bounds to
+# start from instead. Integer is arbitrary-precision and has none.
+main do
+  IO.printLine("Float    ${Float.MIN} .. ${Float.MAX}")
+  IO.printLine("Float32  ${Float32.MIN} .. ${Float32.MAX}")
+  IO.printLine("Float64  ${Float64.MIN == Float.MIN && Float64.MAX == Float.MAX}")
+  IO.printLine("Int8     ${Int8.MIN} .. ${Int8.MAX}")
+  IO.printLine("Int16    ${Int16.MIN} .. ${Int16.MAX}")
+  IO.printLine("Int32    ${Int32.MIN} .. ${Int32.MAX}")
+  IO.printLine("Int64    ${Int64.MIN} .. ${Int64.MAX}")
+  IO.printLine("UInt8    ${UInt8.MIN} .. ${UInt8.MAX}")
+  IO.printLine("UInt16   ${UInt16.MIN} .. ${UInt16.MAX}")
+  IO.printLine("UInt32   ${UInt32.MIN} .. ${UInt32.MAX}")
+  IO.printLine("UInt64   ${UInt64.MIN} .. ${UInt64.MAX}")
+  IO.printLine("Byte     ${Byte.MIN} .. ${Byte.MAX}")
+
+  # Each bound is its own type, so it fits where that type is expected.
+  let small: Int8 = Int8.MAX
+  let byte: Byte = Byte.MAX
+  # UInt8 is another name for Byte: the two are interchangeable.
+  let same: UInt8 = byte
+  IO.printLine("${small} ${byte} ${same}")
+
+  # The use infinity would otherwise serve: a starting bound.
+  let lowest = [3.5, -2.25, 8.0].reduce(Float.MAX) { |low, x| x < low then x else low }
+  IO.printLine(lowest)
+end

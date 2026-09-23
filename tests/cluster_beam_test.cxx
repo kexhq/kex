@@ -4,7 +4,7 @@
 // connects to it (`--sname`/`--cookie`, `Node.connect`) and checks what has
 // to work across the wire:
 //
-//  - Node.list / Node.whereis / Node.send to a registered name;
+//  - Node.list / Node.whereIs / Node.send to a registered name;
 //  - a typed record in a message, and a reply built from it;
 //  - a typed `Server` handle sent from a to b, whose slots b then calls —
 //    the call runs on a, against a's state;
@@ -125,7 +125,7 @@ foul awaitNode(a: Atom, tries: Integer) -> Bool do
   if tries == 0
     return false
   end
-  if Node.connect(a) && Node.whereis(a, :requests).present?
+  if Node.connect(a) && Node.whereIs(a, :requests).present?
     return true
   end
   pause(100)

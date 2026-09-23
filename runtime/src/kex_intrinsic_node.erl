@@ -3,7 +3,7 @@
 %% (Kex spells them `:"b@myhost"`); a cookie arrives as a string.
 -module(kex_intrinsic_node).
 -export([self/0, 'alive?'/0, list/0, start/1, stop/0, connect/1, disconnect/1,
-         'setCookie'/1, send/3, whereis/2, spawn/2]).
+         'setCookie'/1, send/3, 'whereIs'/2, spawn/2]).
 
 self() -> erlang:node().
 
@@ -37,7 +37,7 @@ disconnect(Node) -> erlang:disconnect_node(Node) =:= true.
 send(Node, Name, Message) ->
     erlang:send({Name, Node}, Message), 'Kex.Unit'.
 
-whereis(Node, Name) ->
+'whereIs'(Node, Name) ->
     Where = case Node of
                 Local when Local =:= node() -> erlang:whereis(Name);
                 Remote -> rpc:call(Remote, erlang, whereis, [Name])

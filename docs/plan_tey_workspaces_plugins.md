@@ -20,7 +20,7 @@ semantics, and finally plugins and generators.
 
 Resolve the Rodolfo blocker first. `Tey.Resolver` must validate requirements
 and write the lockfile using the Kex selected for the project, not
-`Kex.Kernel.VERSION`, which describes the compiler that built Tey.
+`Kex.VERSION`, which describes the compiler that built Tey.
 
 Add a `Tey.Toolchain.ToolchainInfo` record containing the selected compiler
 version and optional runtime OTP floor. Read both in one invocation of:

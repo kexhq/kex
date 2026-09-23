@@ -374,7 +374,7 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                 // A record's fields and a make block's methods carry the
                 // module they were DECLARED in as well as the type they belong
                 // to. They are members of the type, not of the module, so
-                // `Kex.Kernel.` must not offer `major`/`number`/`tuple` —
+                // `Kex.` must not offer `major`/`number`/`tuple` —
                 // those complete under `Version.`, which is what makeTarget
                 // matches below.
                 bool matchesMod = sym.module == qualifier && sym.makeTarget.empty();
