@@ -16,6 +16,7 @@
 // sandbox without networking) skips rather than fails: `b` reports whether
 // it came up as a node before anything else.
 #include "test.hxx"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -253,10 +254,16 @@ int main() {
                 std::cout << "    (skipped: no distributed Erlang here)\n" << client;
                 return;
             }
-            assertTrue(client.find("greeting: hello from :store@") != std::string::npos &&
-                           client.find("keys now: [client@") != std::string::npos &&
-                           client.find(", greeting]") != std::string::npos &&
-                           client.find("spawned block ran on :store@") != std::string::npos,
+            // A node name prints as the atom it is, and a host name that a bare
+            // atom cannot spell — `sjc22-bm208-…` on a CI runner — takes the
+            // quoted form: `:"store@sjc22-…"`. Compare with the quotes removed.
+            std::string unquoted = client;
+            unquoted.erase(std::remove(unquoted.begin(), unquoted.end(), '"'),
+                           unquoted.end());
+            assertTrue(unquoted.find("greeting: hello from :store@") != std::string::npos &&
+                           unquoted.find("keys now: [client@") != std::string::npos &&
+                           unquoted.find(", greeting]") != std::string::npos &&
+                           unquoted.find("spawned block ran on :store@") != std::string::npos,
                        "client_node.kex output: " + client);
             assertTrue(store.find("store: handing the store to a client") != std::string::npos &&
                            store.find("store: stopping") != std::string::npos,
