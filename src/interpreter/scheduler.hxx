@@ -128,6 +128,11 @@ public:
     auto currentProcessId() const -> ProcessId { return m_current; }
     auto isAlive(ProcessId id) const -> bool;
 
+    // `Process.register` / `Process.whereis`: a name stays with its process
+    // until the process finishes, as on the BEAM.
+    auto registerName(const std::string& name, ProcessId id) -> void;
+    auto whereis(const std::string& name) const -> std::optional<ProcessId>;
+
     // Passive bookkeeping only — records/removes a bidirectional edge
     // between the currently-running process and `other`. Deliberately NOT
     // BEAM's link model: no cascading kill on abnormal exit, no
@@ -201,6 +206,7 @@ private:
     Evaluator& m_evaluator;
     ProcessId m_nextId = 0;
     std::unordered_map<ProcessId, std::unique_ptr<Process>> m_processes;
+    std::unordered_map<std::string, ProcessId> m_names;
     std::deque<ProcessId> m_ready;
     ProcessId m_current = 0;
     uint64_t m_nextServerCall = 1;

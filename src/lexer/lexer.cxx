@@ -235,6 +235,12 @@ auto Lexer::scanToken() -> Token {
             }
             if (match('>')) return makeToken(TokenType::TypeAnnotation);
             if (isLowerAlpha(peek())) return lexAtom();
+            // `:"a@host.example.com"` — an atom no bare spelling can reach,
+            // as in Ruby. Only where an expression can START: after `name`
+            // it stays a label colon before a string, so `f(sep:"x")` keeps
+            // meaning what it did.
+            if (peek() == '"' && !canEndExpression(m_prevType))
+                return lexQuotedAtom(advance());
             return makeToken(TokenType::Colon);
 
         case '^': return makeToken(TokenType::Caret);
@@ -689,9 +695,27 @@ auto Lexer::lexAtom() -> Token {
     // interior uppercase letters (`:someAtom`), same fix as lexSpliceIdent.
     // The lowercase-lead requirement lives in the caller, so `:Some` never
     // reaches here — that single-UpperIdent atom is a separate path.
-    while (!atEnd() && isIdentChar(peek())) {
+    // An interior `@` followed by an identifier character continues the atom,
+    // so a short node name is spelled bare: `:b@localhost`. `@` only ever
+    // STARTS an `@field` shorthand, so nothing written adjacent to an atom
+    // meant anything else. A name with dots still needs `:"a@host.example"`.
+    while (!atEnd() && (isIdentChar(peek()) ||
+                        (peek() == '@' && isIdentChar(peekNext())))) {
         atom += advance();
     }
+    return makeToken(TokenType::Atom, atom);
+}
+
+auto Lexer::lexQuotedAtom(char quote) -> Token {
+    std::string atom;
+    while (!atEnd() && peek() != quote && peek() != '\n') {
+        char c = advance();
+        if (c == '\\' && !atEnd()) c = advance();
+        atom += c;
+    }
+    if (atEnd() || peek() != quote) return errorToken("Unterminated quoted atom");
+    advance();
+    if (atom.empty()) return errorToken("Empty quoted atom");
     return makeToken(TokenType::Atom, atom);
 }
 

@@ -1,0 +1,18 @@
+# A typed `Process<X>` registers under a name directly — the name is how a
+# process is found from elsewhere, including from another node.
+
+type Msg = Ping(Process<String>)
+
+main do
+  let echo: Process<Msg> = spawn do
+    receive do
+      Ping(sender) => sender.send("pong")
+    end
+  end
+  Process.register(echo, :echo)
+  IO.printLine(Process.whereis(:echo).map { |_| "registered" }.or("missing"))
+  echo.send(Ping(Process.self))
+  receive do
+    reply => IO.printLine(reply)
+  end
+end

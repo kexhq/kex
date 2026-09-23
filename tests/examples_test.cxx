@@ -96,6 +96,9 @@ int main() {
         it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
         it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(parseFile("examples/fizzbuzz.kex")); });
+        it("cluster/store_node.kex", []() { assertTrue(parseFile("examples/cluster/store_node.kex")); });
+        it("cluster/client_node.kex", []() { assertTrue(parseFile("examples/cluster/client_node.kex")); });
+        it("cluster/lib/store.kex", []() { assertTrue(parseFile("examples/cluster/lib/store.kex")); });
         it("fizzbuzz_abstraction.kex", []() { assertTrue(parseFile("examples/fizzbuzz_abstraction.kex")); });
         it("fizzbuzz_functional.kex", []() { assertTrue(parseFile("examples/fizzbuzz_functional.kex")); });
         it("fizzbuzz_pattern_matching.kex", []() { assertTrue(parseFile("examples/fizzbuzz_pattern_matching.kex")); });

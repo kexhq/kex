@@ -104,9 +104,16 @@ int main() {
 
         it("does not source-resolve foreign module namespaces", [&]() {
             kex::module::Resolver resolver({(base / "lib").string()});
-            assertTrue(!resolver.resolve("Erlang.GenServer").has_value());
-            assertTrue(!resolver.resolve("Elixir.Phoenix.Router").has_value());
-            assertTrue(!resolver.resolve("Gleam.Http").has_value());
+            assertTrue(!resolver.resolve("BEAM.gen_server").has_value());
+            assertTrue(!resolver.resolve("BEAM.Elixir.Phoenix.Router").has_value());
+            assertTrue(kex::module::Resolver::isForeignNamespace("BEAM.net_kernel"));
+        });
+
+        it("treats only BEAM. as foreign, never the retired prefixes", [&]() {
+            assertTrue(!kex::module::Resolver::isForeignNamespace("Erlang.Lists"));
+            assertTrue(!kex::module::Resolver::isForeignNamespace("Elixir.Enum"));
+            assertTrue(!kex::module::Resolver::isForeignNamespace("Gleam.Http"));
+            assertTrue(!kex::module::Resolver::isForeignNamespace("BEAMS.lists"));
         });
     });
 

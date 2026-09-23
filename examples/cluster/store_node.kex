@@ -1,0 +1,40 @@
+# Clustering, part 1 of 2: the node that owns the data.
+#
+# Start it first, from examples/cluster, with a short node name and a cookie
+# the other node shares:
+#
+#   kex --sname store --cookie demo store_node.kex
+#
+# then run client_node.kex from a second terminal. The store keeps its
+# entries in a `serving` process; this node's main loop hands that server's
+# handle to whoever asks, under the registered name `:store`.
+#
+# The loop below receives, so the compiler makes its self-call remote: reload
+# a new version of this module into the running node and the loop moves onto
+# it after its next message (see "Hot Code Reload" in docs/concurrency.md).
+
+using Node
+using Store
+
+foul serve(entries: Server<Entries>) do
+  receive do
+    WantStore(client) => do
+      IO.printLine("store: handing the store to a client")
+      client.send(entries)
+      serve(entries)
+    end
+    StopStore => IO.printLine("store: stopping")
+  end
+end
+
+main do
+  if Node.alive?
+    let entries = Process.spawn(Entries {})
+    entries.put("greeting", "hello from ${Node.self}")
+    Process.register(Process.self, :store)
+    IO.printLine("store: running as ${Node.self}")
+    serve(entries)
+  else
+    IO.printLine("Start this node with a name, e.g. `kex --sname store --cookie demo store_node.kex`.")
+  end
+end

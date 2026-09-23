@@ -1,0 +1,24 @@
+# A zero-arg function brought in by `using` is named bare, like a local one,
+# and a bare reference auto-calls it. The checker used to know only the local
+# ones: `using Vend` then `vended` was "Undefined identifier", though both
+# backends ran it. `only:` and `except:` still decide what a `using` brings in.
+
+module Vend do
+  let vended -> Integer = 1
+  let other -> Integer = 10
+  let twice(n: Integer) -> Integer = n * 2
+end
+
+module Only do
+  using Vend, only: [other]
+  let fromOnly -> Integer = other + 1
+end
+
+using Vend
+
+main do
+  IO.printLine(vended + 1)
+  IO.printLine(vended() + Vend.vended)
+  IO.printLine([1, 2].map(~twice))
+  IO.printLine(Only.fromOnly)
+end

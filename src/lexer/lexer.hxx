@@ -57,6 +57,7 @@ private:
     auto lexRawString(bool interpolating = false) -> Token;
     auto lexChar() -> Token;
     auto lexAtom() -> Token;
+    auto lexQuotedAtom(char quote) -> Token;
     auto lexSpliceIdent() -> Token;
 
     auto makeToken(TokenType type) -> Token;

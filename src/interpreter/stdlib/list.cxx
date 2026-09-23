@@ -75,7 +75,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // A tuple is not a list — its arity is part of its type — so the List
     // methods do not apply to one. `items` is the explicit conversion, and
     // the only way to walk a tuple generically without reaching for
-    // `Erlang.Erlang.tuple_to_list`.
+    // `BEAM.erlang.tuple_to_list`.
     defineIntrinsic("Tuple::items", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* tuple = std::get_if<TupleValue>(&args[0]->data))

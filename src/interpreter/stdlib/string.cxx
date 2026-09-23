@@ -53,6 +53,20 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Char");
     defineModule("Bool");
     defineModule("Atom");
+    // The walker has no atom table to consult: every name is an atom that
+    // `existing` can answer for.
+    defineIntrinsic("Atom::from", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* text = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        return Value::atom(text ? text->value : std::string{});
+    });
+    defineIntrinsic("Atom::existing", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* text = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        return text ? Value::just(Value::atom(text->value)) : Value::none();
+    });
+    defineIntrinsic("Atom::name", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* atom = args.empty() ? nullptr : std::get_if<AtomValue>(&args[0]->data);
+        return Value::string(atom ? atom->name : std::string{});
+    });
 
     // Unicode categories, tested on the FULL codepoint (see
     // src/common/unicode_category.hxx). std::isalpha and friends take a byte,
@@ -159,7 +173,7 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     // A String has two views: `chars` is the TEXT view (codepoints) and
     // `bytes` is the STORAGE view (the UTF-8 encoding). Kex code needed
-    // `Erlang.Erlang.binary_to_list` to reach the latter.
+    // `BEAM.erlang.binary_to_list` to reach the latter.
     defineIntrinsic("String::bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);

@@ -316,7 +316,22 @@ auto Value::toString() const -> std::string {
             return "#Binary<" + std::to_string(v.bytes.size()) + " bytes>";
         else if constexpr (std::is_same_v<T, CharValue>) return utf8::encode(v.value);
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
-        else if constexpr (std::is_same_v<T, AtomValue>) return ":" + v.name;
+        else if constexpr (std::is_same_v<T, AtomValue>) {
+            // Printed as written: bare when `:name` can spell it, else quoted.
+            const bool bare = !v.name.empty() && v.name[0] >= 'a' && v.name[0] <= 'z' &&
+                v.name.back() != '@' && v.name.find("@@") == std::string::npos &&
+                std::all_of(v.name.begin(), v.name.end(), [](char c) {
+                    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                           c == '@';
+                });
+            if (bare) return ":" + v.name;
+            std::string quoted = ":\"";
+            for (char c : v.name) {
+                if (c == '"' || c == '\\') quoted += '\\';
+                quoted += c;
+            }
+            return quoted + "\"";
+        }
         else if constexpr (std::is_same_v<T, VariantValue>) {
             if (v.args.empty()) return v.tag;
             std::string result = v.tag + "(";

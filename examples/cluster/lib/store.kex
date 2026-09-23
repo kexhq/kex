@@ -1,0 +1,27 @@
+module Store
+
+# A key-value store that lives on one node and is used from others.
+#
+# Both example programs `using Store`, so they agree on every tag that crosses
+# the wire: the `Entries` state, the `Request` protocol and the store's slots.
+# Plain data needs nothing more — records and variants arrive as themselves.
+
+record Entries do
+  values : {String: String} = {}
+end
+
+serving Entries do
+  slot put(key: String, value: String) -> Reply<Integer> do
+    new.values = @values.put(key, value)
+    return { new, reply: new.values.count }
+  end
+
+  slot get(key: String) -> Reply<String?> = { reply: @values.get(key) }
+
+  slot keys -> Reply<[String]> = { reply: @values.keys.sort }
+end
+
+# What a client asks the store node for. The node answers `WantStore` with the
+# store's own typed `Server<Entries>` handle; from then on the client calls
+# slots on it directly, and each call runs on the store node.
+type Request = WantStore(Pid) | StopStore

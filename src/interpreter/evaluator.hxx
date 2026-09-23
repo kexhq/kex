@@ -403,6 +403,7 @@ private:
     auto registerTestBuiltins() -> void;
     auto registerProcessBuiltins() -> void;
     auto registerDigestBuiltins() -> void;
+    auto registerNodeBuiltins() -> void;
     auto registerParserBuiltins() -> void;
     auto registerEvalBuiltins() -> void;
     auto registerNetBuiltins() -> void;

@@ -312,6 +312,9 @@ struct Lowering {
     // Ordinary helpers share the compiled module but must never become OTP
     // request handlers merely because erlang:apply/3 can see them.
     std::unordered_map<std::string, std::vector<std::string>> servingSlotsByType;
+    // Serving types whose block declares an `upgrade` method — the hook the
+    // serving runtime runs on a live state after a hot reload.
+    std::set<std::string> servingUpgradeTypes;
     const SourceLocation* currentLoc = nullptr;
     // Names bound with `let` (immutable) — a mutating `!` call on one is a
     // runtime error matching the walker's behaviour.
@@ -2882,6 +2885,26 @@ struct Lowering {
         return false;
     }
 
+    // The receiver of a `BEAM.<module>.fn(...)` interop call: root `BEAM`
+    // followed by one or more no-argument segments of ANY case, joined
+    // verbatim into the BEAM module atom. `BEAM.lists` is 'lists',
+    // `BEAM.beam_lib` is 'beam_lib', `BEAM.Elixir.Enum` is 'Elixir.Enum' —
+    // what you write is the real module name, whatever language compiled it.
+    static auto beamModulePath(const ast::Expr& e, std::string& out) -> bool {
+        auto* mc = std::get_if<ast::MethodCall>(&e.kind);
+        if (!mc || !mc->receiver || !mc->args.empty() || !mc->namedArgs.empty() ||
+            mc->block || mc->method.empty())
+            return false;
+        if (auto* uid = std::get_if<ast::UpperIdentifier>(&mc->receiver->kind)) {
+            if (uid->name != "BEAM") return false;
+            out = mc->method;
+            return true;
+        }
+        if (!beamModulePath(*mc->receiver, out)) return false;
+        out += "." + mc->method;
+        return true;
+    }
+
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
         // A bare mutating `!` call used where its rebind can't be applied is
         // a runtime error (matching the walker's behaviour). Statement-position
@@ -2894,6 +2917,20 @@ struct Lowering {
             }
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
+        }
+        // BEAM interop: a direct call into any BEAM module, named verbatim.
+        // `BEAM.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
+        // `BEAM.Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
+        // A trailing block becomes the last argument.
+        if (std::string mod; n.receiver && beamModulePath(*n.receiver, mod)) {
+            std::vector<Binding> binds;
+            std::vector<ExprPtr> args;
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            if (n.block) args.push_back(atomize(*n.block, binds));
+            int ar = static_cast<int>(args.size());
+            auto ex = std::make_unique<Expr>();
+            ex->node = Call{mod, n.method, ar, std::move(args), false};
+            return wrapLets(binds, std::move(ex));
         }
         // `.as(T)` is checked statically. Distinct/backing conversions erase
         // to the receiver; `.as(String)` is the universal total display path.
@@ -3520,40 +3557,6 @@ struct Lowering {
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 auto ex = std::make_unique<Expr>();
                 int ar = static_cast<int>(args.size());
-                ex->node = Call{mod, n.method, ar, std::move(args), false};
-                return wrapLets(binds, std::move(ex));
-            }
-        }
-        // Erlang.*/Elixir.*/Gleam.* interop: direct BEAM module calls.
-        // `Erlang.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
-        // `Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
-        // `Gleam.wisp.serve(h)` → `call 'wisp':'serve'(h)`
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && !path.empty() &&
-                (path[0] == "Erlang" || path[0] == "Elixir" || path[0] == "Gleam")) {
-                std::string mod;
-                if (path[0] == "Elixir") {
-                    for (size_t i = 1; i < path.size(); i++) {
-                        if (i > 1) mod += ".";
-                        mod += path[i];
-                    }
-                    mod = "Elixir." + mod;
-                } else {
-                    // Erlang/Gleam: lowercase all segments
-                    for (size_t i = 1; i < path.size(); i++) {
-                        if (i > 1) mod += ".";
-                        std::string seg = path[i];
-                        for (auto& c : seg) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        mod += seg;
-                    }
-                }
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-                int ar = static_cast<int>(args.size());
-                auto ex = std::make_unique<Expr>();
                 ex->node = Call{mod, n.method, ar, std::move(args), false};
                 return wrapLets(binds, std::move(ex));
             }
@@ -5534,6 +5537,9 @@ struct Lowering {
                 for (auto& [c, b] : nn.elifs) for (auto& s : b) collectMutated(s, out);
             } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
                 for (auto& cl : nn.clauses) collectMutated(cl.body, out);
+            } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+                for (auto& cl : nn.clauses) collectMutated(cl.body, out);
+                if (nn.afterBody) collectMutated(*nn.afterBody, out);
             } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
                 for (auto& s : nn.body) collectMutated(s, out);
             } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
@@ -5736,6 +5742,38 @@ struct Lowering {
                 cls.push_back(std::move(mcx));
             }
             return expandGuards(std::move(subjects), std::move(cls));
+        }
+        // A receive in a loop body — the imperative server shape
+        // `loop do receive do :inc => n = n + 1 ... end end`. Like a match,
+        // each clause (and the `after` branch) continues with the rest of the
+        // loop body, so an assignment in an arm threads into the next
+        // iteration instead of being lowered as a free-standing expression.
+        if (auto* re = std::get_if<ast::ReceiveExpr>(&e->kind)) {
+            std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
+            Receive r;
+            if (re->senderBinding) r.senderVar = *re->senderBinding;
+            for (const auto& cl : re->clauses) {
+                auto snap = subst;
+                if (re->senderBinding) subst[*re->senderBinding] = *re->senderBinding;
+                ReceiveClause rc;
+                rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
+                if (!pendingTypeGuards.empty())
+                    throw LowerError("IR lower: a type pattern (`x : T`) is not "
+                                     "supported in a receive clause");
+                rc.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
+                subst = snap;
+                r.clauses.push_back(std::move(rc));
+            }
+            if (re->timeout) {
+                r.timeout = lower(*re->timeout);
+                auto snap = subst;
+                r.afterBody = re->afterBody
+                    ? lowerLoopArmU(*re->afterBody, loopFn, mutVars, armEnd)
+                    : armEnd();
+                subst = snap;
+            }
+            auto ex = std::make_unique<Expr>(); ex->node = std::move(r);
+            return ex;
         }
         if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind))
             return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); }, &le2->counter);
@@ -7628,6 +7666,10 @@ struct Lowering {
             {"Tuple","is_tuple"},
 
             {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
+            // Wider than the Kex type as well: a Bool, `None` and every
+            // nullary variant are atoms too. The dispatcher emits it after
+            // all of those (see `deferBroader`'s neighbour below).
+            {"Atom","is_atom"},
         };
         return m;
     }
@@ -8008,6 +8050,15 @@ struct Lowering {
                                 broad);
         };
         deferBroader("Number", {"Integer", "Float"});
+        // `is_atom` also answers for a Bool, `None` and a nullary variant,
+        // so an `Atom` clause goes after every other primitive and ADT
+        // owner. Records and payload variants are tuples; they cannot match
+        // it wherever it sits.
+        if (auto atom = std::find(sortedOwners.begin(), sortedOwners.end(), "Atom");
+            atom != sortedOwners.end()) {
+            sortedOwners.erase(atom);
+            sortedOwners.push_back("Atom");
+        }
         // `is_tuple` is the widest guard in the family: a record, a variant
         // with a payload and a Char are all Erlang tuples. Left among the
         // primitives, a `make Tuple` clause shadowed every record sharing the
@@ -8706,6 +8757,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 if (std::find(slots.begin(), slots.end(), fd->name) == slots.end())
                     slots.push_back(fd->name);
             }
+            if (md.isServing && !fd->isSlot && fd->name == "upgrade")
+                L.servingUpgradeTypes.insert(typeName);
             definedFns.insert(fd->name);
             // A make-block method is a definition like any other, so if it is
             // foul it takes the capability context and every call to it has
@@ -9867,6 +9920,80 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             mod.functions.push_back(std::move(wrapper));
     }
     mod.typeVariantTags = L.typeVariantTags;
+
+    // Register record layouts when the module is loaded, not only when its
+    // `main` runs: a hot reload never calls `main` again, and neither does a
+    // cluster node that only received this code.
+    if (auto registration = L.withDisplayInfo(lit(LitKind::Atom, "ok"), mod.name);
+        !std::holds_alternative<Lit>(registration->node)) {
+        FunDef onLoad;
+        onLoad.name = "__kex_on_load";
+        onLoad.arity = 0;
+        onLoad.exported = false;
+        FunClause clause;
+        clause.body = std::move(registration);
+        onLoad.clauses.push_back(std::move(clause));
+        mod.functions.push_back(std::move(onLoad));
+        mod.onLoad = "__kex_on_load";
+    }
+
+    // Publish each serving type's slots on the module that implements them —
+    // the same module `Process.spawn` names (see the spawnServing lowering).
+    //
+    // Each such module also gets `__kex_record_default(Tag, Field)`, the
+    // declared default of a served record's field, or `kex_no_default`. A
+    // hot reload that adds a field to a server's state record fills it from
+    // here (kex_intrinsic_process:migrate/2). A module-nested type's function
+    // is routed to its own module by lowerModules, via the `@path` suffix.
+    std::map<std::string, FunDef> defaultFunctions;
+    for (const auto& [typeName, slots] : L.servingSlotsByType) {
+        std::string owner = mod.name;
+        std::string defaultFunction = "__kex_record_default";
+        if (auto declaring = L.localTypeModules.find(typeName);
+            declaring != L.localTypeModules.end()) {
+            owner = mangleModulePath("Kex." + declaring->second);
+            defaultFunction += "@" + declaring->second;
+        }
+        auto record = L.records.find(typeName);
+        if (record == L.records.end())
+            for (auto it = L.records.begin(); it != L.records.end(); ++it)
+                if (it->first.size() > typeName.size() &&
+                    it->first.ends_with("." + typeName))
+                    record = it;
+        if (record != L.records.end()) {
+            auto& fn = defaultFunctions[defaultFunction];
+            fn.name = defaultFunction;
+            fn.arity = 2;
+            const auto& info = record->second;
+            for (size_t i = 0; i < info.fields.size(); i++) {
+                if (i >= info.defaults.size() || !info.defaults[i] ||
+                    !*info.defaults[i])
+                    continue;
+                FunClause clause;
+                for (const auto& atom : {record->first, info.fields[i]}) {
+                    auto pat = std::make_unique<Pattern>();
+                    pat->kind = PatKind::Lit;
+                    pat->litKind = LitKind::Atom;
+                    pat->litText = atom;
+                    clause.params.push_back(std::move(pat));
+                }
+                L.subst.clear();
+                clause.body = L.lowerFieldDefault(info, *info.defaults[i]);
+                fn.clauses.push_back(std::move(clause));
+            }
+        }
+        mod.servingSlots[owner][typeName] = slots;
+        if (L.servingUpgradeTypes.count(typeName))
+            mod.servingUpgrades[owner].insert(typeName);
+    }
+    for (auto& [_, fn] : defaultFunctions) {
+        FunClause fallback;
+        fallback.params.push_back(L.wildPat());
+        fallback.params.push_back(L.wildPat());
+        fallback.body = lit(LitKind::Atom, "kex_no_default");
+        fn.clauses.push_back(std::move(fallback));
+        mod.functions.push_back(std::move(fn));
+    }
     return mod;
 }
 
@@ -10316,6 +10443,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         fn.exported = def.exported;
         moduleBuckets[def.path].push_back(std::move(fn));
     }
+    // `__kex_record_default@Store` belongs in `Kex.Store`, as the plain
+    // `__kex_record_default` (see lowerProgram).
+    for (auto it = globalFunctions.begin(); it != globalFunctions.end();) {
+        const std::string prefix = "__kex_record_default@";
+        if (it->name.rfind(prefix, 0) == 0) {
+            auto path = it->name.substr(prefix.size());
+            it->name = "__kex_record_default";
+            moduleBuckets[path].push_back(std::move(*it));
+            it = globalFunctions.erase(it);
+        } else {
+            ++it;
+        }
+    }
     flat.functions = std::move(globalFunctions);
 
     std::vector<Module> stdlibModules;
@@ -10373,7 +10513,11 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     for (const auto& fn : flat.functions)
         globalTargets[fn.name] = {flat.name, fn.name};
     result.push_back(std::move(flat));
-    for (auto& module : stdlibModules) result.push_back(std::move(module));
+    for (auto& module : stdlibModules) {
+        module.servingSlots = result.front().servingSlots;
+        module.servingUpgrades = result.front().servingUpgrades;
+        result.push_back(std::move(module));
+    }
 
     // What each module in this unit actually ends up defining, so a redirect
     // can be checked against it rather than trusting the name alone.

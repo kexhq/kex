@@ -4,7 +4,7 @@
 %% typed public surface of a module, stored as an Erlang external term. Both
 %% halves of that — locating a named chunk and decoding a term — are Erlang
 %% library calls, so a Kex program that wanted its own interface data had to
-%% reach through `Erlang.Beam_lib.chunks` and `Erlang.Erlang.binary_to_term`.
+%% reach through `BEAM.beam_lib.chunks` and `BEAM.erlang.binary_to_term`.
 %% This is the one intentional entry point instead.
 %%
 %% Deliberately NOT a general `binary_to_term`: decoding an arbitrary term

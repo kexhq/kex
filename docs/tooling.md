@@ -66,11 +66,19 @@ kex -e <file.kex>           # emit Core Erlang (.core) without invoking erlc
 kex --test-json <spec.kex>  # report describe/it as JSON records, with locations
 kex --test-list <spec.kex>  # list the cases as JSON, running none of them
 kex --test-only <name> ...  # run one case, or one describe (repeatable)
+kex --sname a --cookie secret <file.kex>
+                            # run as the distributed node a@<host>
+kex --name a@host.example.com --cookie secret <file.kex>
+                            # the same, with a fully-qualified host name
 ```
 
 `kex` gates on type checking by default. Use `--no-check` to skip the
 type-checker (useful when iterating on code that type-checks correctly at
 runtime but has incomplete annotations).
+
+`--sname`, `--name` and `--cookie` start the BEAM VM as a named node, so it
+can reach other nodes and they can reach it. See "Clustering" in
+[concurrency.md](concurrency.md).
 
 The three `--test-*` flags are for tools reading a spec run rather than people:
 one JSON record per case, carrying the file and line of the `it` and of the

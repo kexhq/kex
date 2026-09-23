@@ -10,9 +10,7 @@ namespace kex::module {
 Resolver::Resolver(std::vector<std::string> roots) : m_roots(std::move(roots)) {}
 
 auto Resolver::isForeignNamespace(const std::string& name) -> bool {
-    for (const auto& prefix : {"Erlang.", "Elixir.", "Gleam."})
-        if (name.rfind(prefix, 0) == 0) return true;
-    return false;
+    return name.rfind("BEAM.", 0) == 0;
 }
 
 namespace {

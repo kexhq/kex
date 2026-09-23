@@ -74,6 +74,10 @@ let s:cases = [
       \ ["'v'", 'kexChar'],
       \ ['capability Clock', 'kexStorage'],
       \ ['with Clock', 'kexKeyword'],
+      \ [':b@localhost', 'kexAtom'],
+      \ ['@localhost', 'kexAtom'],
+      \ [':"b@host', 'kexAtom'],
+      \ ['sep:\zs"x"', 'kexString'],
       \ ]
 for s:case in s:cases
   keepjumps normal! gg

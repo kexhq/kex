@@ -530,7 +530,7 @@ inspect_string(X) when is_map(X) ->
 inspect_string(X) when is_atom(X) ->
     case variant_metadata(X) of
         {0, _Owner} -> atom_to_list(X);
-        _ -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET
+        _ -> ?GREEN ++ atom_literal(atom_to_list(X)) ++ ?RESET
     end;
 inspect_string({'FileHandle', _Device, Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
@@ -720,7 +720,7 @@ to_string('false')              -> "false";
 to_string(X) when is_atom(X) ->
     S = atom_to_list(X),
     case S of
-        [C | _] when C >= $a, C =< $z -> [$: | S];
+        [C | _] when C >= $a, C =< $z -> atom_literal(S);
         _ -> S
     end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
@@ -871,4 +871,23 @@ split_env_entry(E) ->
     case string:split(E, "=") of
         [K, V] -> {unicode:characters_to_binary(K), unicode:characters_to_binary(V)};
         [K]    -> {unicode:characters_to_binary(K), <<>>}
+    end.
+
+%% A Kex atom as it is written: `:name` (or `:b@localhost`) when a bare atom
+%% can spell it, and `:"b@host.example.com"` when it takes the quoted form (the lexer's
+%% lexAtom / lexQuotedAtom). Matches the walker's AtomValue display.
+atom_literal(S) ->
+    Bare = lists:all(fun(C) -> (C >= $a andalso C =< $z) orelse
+                              (C >= $A andalso C =< $Z) orelse
+                              (C >= $0 andalso C =< $9) orelse
+                              C =:= $_ orelse C =:= $@
+                     end, S)
+           andalso lists:last(S) =/= $@
+           andalso string:find(S, "@@") =:= nomatch,
+    case Bare of
+        true -> [$: | S];
+        false -> ":\"" ++ lists:flatmap(fun($") -> "\\\"";
+                                           ($\\) -> "\\\\";
+                                           (C) -> [C]
+                                        end, S) ++ "\""
     end.

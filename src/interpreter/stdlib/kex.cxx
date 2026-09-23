@@ -170,7 +170,7 @@ auto Evaluator::registerKexBuiltins() -> void {
     // decoded. Reading a BEAM chunk and decoding an Erlang external term are
     // both things the compiler already does natively, so this works on the
     // tree walker as well as on BEAM; a Kex program needed
-    // `Erlang.Beam_lib.chunks` plus `Erlang.Erlang.binary_to_term` for it.
+    // `BEAM.beam_lib.chunks` plus `BEAM.erlang.binary_to_term` for it.
     defineIntrinsic("Interface::read", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* path = std::get_if<StringValue>(&args[0]->data);

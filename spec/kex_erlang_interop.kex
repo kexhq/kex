@@ -5,17 +5,17 @@
 module MyList do
   let double_all(xs) = xs.map { |x| x * 2 }
 
-  let sorted(xs) = Erlang.Lists.sort(xs)
+  let sorted(xs) = BEAM.lists.sort(xs)
 
-  let reversed(xs) = Erlang.Lists.reverse(xs)
+  let reversed(xs) = BEAM.lists.reverse(xs)
 
-  let sum(xs) = Erlang.Lists.foldl({ |x, acc| acc + x }, 0, xs)
+  let sum(xs) = BEAM.lists.foldl({ |x, acc| acc + x }, 0, xs)
 end
 
 module MyMath do
-  let hypotenuse(a, b) = Erlang.Math.sqrt(a * a + b * b)
+  let hypotenuse(a, b) = BEAM.math.sqrt(a * a + b * b)
 
-  let clamp(x, lo, hi) = Erlang.Erlang.min(Erlang.Erlang.max(x, lo), hi)
+  let clamp(x, lo, hi) = BEAM.erlang.min(BEAM.erlang.max(x, lo), hi)
 end
 
 main do

@@ -446,7 +446,7 @@ end
 # What `tey build` produces is what ships, so what `tey run` and `tey test`
 # exercise has to be the same thing — which is what `kex` does with no backend
 # flag at all: it compiles and runs on the BEAM. `-R` tree-walks the source
-# instead, and processes, `Erlang.*` interop and the String/Char representation
+# instead, and processes, `BEAM.*` interop and the String/Char representation
 # differ enough between the two that a green interpreter run says nothing about
 # the built package.
 #

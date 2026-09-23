@@ -1,0 +1,10 @@
+# The `Atom` module: atoms to and from their names.
+main do
+  IO.printLine(Atom.from("ok") == :ok)
+  IO.printLine(Atom.from("app@myhost"))
+  IO.printLine(Atom.from("app@host.example.com"))
+  IO.printLine(Atom.existing("ok"))
+  IO.printLine(:ok.string)
+  IO.printLine(:"b@host.example.com".string)
+  IO.printLine(:b@localhost.string.length)
+end

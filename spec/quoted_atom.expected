@@ -1,0 +1,11 @@
+:"b@host.example.com"
+true
+:plain
+:"two words"
+:"say \"hi\""
+[:a@b, :c]
+true
+:b@localhost
+:"trailing@"
+[x]
+matched

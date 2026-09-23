@@ -106,6 +106,29 @@ for (const [host, scopeName] of hosts) {
   });
 }
 
+// Atoms: a bare `:name`, one continued by `@` (`:b@localhost`, a node name),
+// and the quoted form for any other text. The quoted rule sits ahead of the
+// string rule, which would otherwise claim its quotes — but only where an
+// expression starts, since after a name `sep:"x"` is a label and a string.
+describe('Kex atoms', () => {
+  const SYMBOL = 'constant.other.symbol.kex';
+
+  test('a bare atom continues through an interior @', async () => {
+    expect(await scopesOf('source.kex', 'Node.connect(:b@localhost)', ':b@localhost')).toContain(SYMBOL);
+  });
+
+  test('a quoted atom is one atom, not a colon and a string', async () => {
+    const scopes = await scopesOf('source.kex', 'let a = :"b@host.example.com"', ':"b@host.example.com"');
+    expect(scopes).toContain(SYMBOL);
+    expect(scopes).not.toContain('string.quoted.double.kex');
+  });
+
+  test('after a name, the colon is a label and the string a string', async () => {
+    expect(await scopesOf('source.kex', 'label(sep:"x")', ':"x"')).toEqual([]);
+    expect(await scopesOf('source.kex', 'label(sep:"x")', 'x')).toContain('string.quoted.double.kex');
+  });
+});
+
 describe('package.json', () => {
   const manifest = JSON.parse(readFileSync(repoFile('package.json'), 'utf8'));
   const languages: { id: string; extensions?: string[]; configuration?: string }[] = manifest.contributes.languages;

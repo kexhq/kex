@@ -1,0 +1,14 @@
+# kex: check-only
+# `only:` limits what a `using` brings in: a name it leaves out stays
+# undefined as a bare reference, even though the module exports it.
+
+module Vend do
+  let vended -> Integer = 1
+  let other -> Integer = 10
+end
+
+using Vend, only: [other]
+
+main do
+  IO.printLine(vended + other)
+end

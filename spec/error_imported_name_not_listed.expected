@@ -1,0 +1,2 @@
+spec/error_imported_name_not_listed.kex:13:16: error: Undefined name: `vended` — did you mean `Vend`?
+spec/error_imported_name_not_listed.kex:13:16: error: Undefined identifier: vended

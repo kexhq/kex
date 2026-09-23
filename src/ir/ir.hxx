@@ -21,8 +21,10 @@
 //    flow joins carry the merged bindings explicitly (no hidden threading).
 //  - `return` is either in tail position (the value) or an explicit Return
 //    node that a later pass lowers to the target's early-exit mechanism.
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -269,6 +271,20 @@ struct Module {
     // populated during lowering and needed by subsequent user-program
     // lowerings so they can validate Construct tags against prelude types.
     std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
+    // The function run when the BEAM loads this module (`-on_load`), or
+    // empty. It registers the record layouts this build knows, so a module
+    // loaded by a hot reload — or onto a node that never ran this program's
+    // `main` — can still update and display its records.
+    std::string onLoad;
+    // `serving` slots by the BEAM module that implements them, then by state
+    // type name. Each module publishes its own entry as the
+    // `kex_serving_slots` attribute, which the serving runtime reads from
+    // the CURRENT loaded version — a slot added by a hot reload is callable
+    // on a server that was started before it existed.
+    std::map<std::string, std::map<std::string, std::vector<std::string>>> servingSlots;
+    // Serving types, by implementing module, whose block declares an
+    // `upgrade` method (the `kex_serving_upgrade` attribute).
+    std::map<std::string, std::set<std::string>> servingUpgrades;
 };
 
 // Small constructor helpers (keep lowering code readable).
