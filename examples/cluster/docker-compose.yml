@@ -10,17 +10,33 @@
 # them and run `up` again.
 #
 # Each client connects to the store by its node name, `store@store`, writes a
-# key named after itself, and lists the keys, so the second client also sees
-# the first client's key. Clients leave the store running (KEX_STOP_STORE=false),
-# so more of them can join:
+# key named after itself and lists the keys. Then it keeps chattering: every
+# two seconds it posts a numbered message under its own name, and prints what
+# every other client last posted, so the output shows the nodes exchanging
+# messages until you stop them (Ctrl-C, or `docker compose down`):
 #
-#   docker compose run --rm client-a
+#   client-b-1  | round 5: client@client-a said "message 5"
+#   client-a-1  | round 6: client@client-b said "message 5"
+#
+# Clients leave the store running (KEX_STOP_STORE=false), so more can join
+# while the cluster is up. Each needs a hostname of its own, since that is part
+# of its node name, so a new one is started beside the services rather than as
+# another copy of one:
+#
+#   docker run --rm -it --network cluster_cluster --hostname client-c \
+#     -v "$PWD:/work:ro" -e KEX_STORE_NODE=store@store -e KEX_STOP_STORE=false \
+#     -e KEX_ROUNDS=0 kex-cluster-example \
+#     --sname client --cookie kex-cluster-demo client_node.kex
 #
 # A node's name is `<sname>@<container hostname>`. That is why every service
 # sets `hostname:`; Compose's DNS resolves each hostname to its container.
 
 x-kex-node: &kex-node
   image: kex-cluster-example
+  # Built here, from this checkout, by the store service; never on a registry.
+  # Without this Compose first tries to pull it, and prints "pull access denied".
+  # A missing image is still built — `never` only rules out the registry.
+  pull_policy: never
   volumes:
     - ./:/work:ro
   networks:
@@ -28,6 +44,10 @@ x-kex-node: &kex-node
   environment: &kex-environment
     KEX_STORE_NODE: store@store
     KEX_STOP_STORE: "false"
+    # Keep chattering until `docker compose down` (or Ctrl-C): a message every
+    # two seconds from each client, and a line for each message it sees.
+    KEX_ROUNDS: "0"
+    KEX_INTERVAL: "2000"
 
 services:
   store:
