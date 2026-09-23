@@ -254,7 +254,8 @@ int main() {
                 return;
             }
             assertTrue(client.find("greeting: hello from :store@") != std::string::npos &&
-                           client.find("keys now: [from, greeting]") != std::string::npos &&
+                           client.find("keys now: [client@") != std::string::npos &&
+                           client.find(", greeting]") != std::string::npos &&
                            client.find("spawned block ran on :store@") != std::string::npos,
                        "client_node.kex output: " + client);
             assertTrue(store.find("store: handing the store to a client") != std::string::npos &&

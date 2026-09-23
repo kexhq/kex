@@ -7,6 +7,11 @@
 # Node names are atoms: `:store@myhost` spelled directly for a short name,
 # `:"store@host.example.com"` for a fully-qualified one, or — as here, since
 # the host is only known at run time — built with `Atom.from`.
+#
+# Two environment variables let the same program run as one of several
+# containers (see docker-compose.yml): KEX_STORE_NODE names the store's node
+# when it is on another host, and KEX_STOP_STORE=false leaves the store running
+# for the next client.
 
 using Node
 using Store
@@ -31,7 +36,7 @@ end
 
 foul useStore do
   let host = Node.self.string.split("@").last.or("localhost")
-  let storeNode = Atom.from("store@" + host)
+  let storeNode = Atom.from(ENV.get("KEX_STORE_NODE", "store@" + host))
   if !reach(storeNode, 25)
     return IO.printLine("No store at ${storeNode}. Is store_node.kex running with the same cookie?")
   end
@@ -44,7 +49,7 @@ foul useStore do
       let entries: Server<Entries> = handle
       # Every slot call below runs on the store node, against its state.
       IO.printLine("greeting: ${entries.get("greeting")}")
-      entries.put("from", Node.self.string)
+      entries.put(Node.self.string, "was here")
       IO.printLine("keys now: ${entries.keys()}")
     end
   after timeout: 5000
@@ -61,7 +66,9 @@ foul useStore do
     IO.printLine("The spawned block did not report back.")
   end
 
-  Node.send(storeNode, :store, StopStore)
+  if ENV.get("KEX_STOP_STORE", "true") != "false"
+    Node.send(storeNode, :store, StopStore)
+  end
 end
 
 main do

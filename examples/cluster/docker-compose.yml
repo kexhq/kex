@@ -1,0 +1,54 @@
+# A three-node Kex cluster: store_node.kex and two copies of client_node.kex,
+# each in a container of its own, talking over distributed Erlang.
+#
+#   cd examples/cluster
+#   docker compose up --build
+#
+# The first build compiles Kex from this checkout, and runs its spec suites the
+# way the published image does, so it takes a while. After that, `docker compose
+# up` starts the cluster in seconds. The programs are mounted, not copied: edit
+# them and run `up` again.
+#
+# Each client connects to the store by its node name, `store@store`, writes a
+# key named after itself, and lists the keys, so the second client also sees
+# the first client's key. Clients leave the store running (KEX_STOP_STORE=false),
+# so more of them can join:
+#
+#   docker compose run --rm client-a
+#
+# A node's name is `<sname>@<container hostname>`. That is why every service
+# sets `hostname:`; Compose's DNS resolves each hostname to its container.
+
+x-kex-node: &kex-node
+  image: kex-cluster-example
+  volumes:
+    - ./:/work:ro
+  networks:
+    - cluster
+  environment: &kex-environment
+    KEX_STORE_NODE: store@store
+    KEX_STOP_STORE: "false"
+
+services:
+  store:
+    <<: *kex-node
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    hostname: store
+    command: ["--sname", "store", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "store_node.kex"]
+
+  client-a:
+    <<: *kex-node
+    hostname: client-a
+    depends_on: [store]
+    command: ["--sname", "client", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "client_node.kex"]
+
+  client-b:
+    <<: *kex-node
+    hostname: client-b
+    depends_on: [client-a]
+    command: ["--sname", "client", "--cookie", "${KEX_COOKIE:-kex-cluster-demo}", "client_node.kex"]
+
+networks:
+  cluster:
