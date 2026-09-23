@@ -1,9 +1,17 @@
-# The `Atom` module: atoms to and from their names.
+# Atoms to and from their names. Three ways in, each saying what it does:
+# `"text".as(Atom)` is decided at compile time and needs a literal;
+# `Atom.from(text)` makes an atom from text built at run time; and
+# `text.to(Atom)` only finds one that already exists (on the BEAM; the tree
+# walker keeps no atom table, so there every name exists).
 main do
   IO.printLine(Atom.from("ok") == :ok)
   IO.printLine(Atom.from("app@myhost"))
   IO.printLine(Atom.from("app@host.example.com"))
-  IO.printLine(Atom.existing("ok"))
+  IO.printLine("ok".to(Atom))
+  IO.printLine("hello".as(Atom))
+  IO.printLine("b@host.example.com".as(Atom) == :"b@host.example.com")
+  let typed: Atom = "typed".as(Atom)
+  IO.printLine(typed)
   IO.printLine(:ok.string)
   IO.printLine(:"b@host.example.com".string)
   IO.printLine(:b@localhost.string.length)

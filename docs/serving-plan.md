@@ -179,7 +179,7 @@ beyond the slot signatures, it has failed its purpose.
 Verified against the tree.
 
 - **`Pid` is opaque and untyped** — `process.kex:2`, "Pid is an opaque BEAM
-  process identifier". `Process` exposes `self`, `exit`, `register`, `whereis`,
+  process identifier". `Process` exposes `self`, `exit`, `register`, `whereIs`,
   plus `make Pid` with `link`/`unlink`/`monitor`/`demonitor`.
 - **There is no `Process.spawn`.** The existing primitive is
   `Task.start : Block<X> -> Task` (`process.kex:47`), inside `module Task`.

@@ -11,7 +11,7 @@ namespace kex {
 // download page) can read one plain file instead of parsing a header.
 //
 // Everything that reports a version derives it from these: `kex --version`,
-// the REPL banner, and `Kex.Kernel.VERSION` inside Kex programs — which must
+// the REPL banner, and `Kex.VERSION` inside Kex programs — which must
 // agree, since the whole point of the last one is answering "what am I
 // actually running on?".
 //

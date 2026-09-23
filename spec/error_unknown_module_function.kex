@@ -1,0 +1,9 @@
+# kex: check-only
+# A standard-library module's interface lists everything it exports, so a
+# function it does not have is reported by the checker rather than failing at
+# run time. A spelling that differs only in case — like the old
+# `Process.whereis`, since renamed `whereIs` — comes with the right one.
+main do
+  IO.printLine(Process.whereis(:logger))
+  IO.printLine(Digest.sha512("text"))
+end

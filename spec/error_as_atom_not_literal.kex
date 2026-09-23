@@ -1,0 +1,10 @@
+# kex: check-only
+# `.as(Atom)` makes the atom at compile time, so it needs a string literal.
+# Atoms are never freed on the BEAM; text known only at run time takes one of
+# the forms that say what they do: `Atom.from` (makes one) or `.to(Atom)`
+# (finds an existing one).
+main do
+  let name = "hel" + "lo"
+  IO.printLine(name.as(Atom))
+  IO.printLine("x${name}".as(Atom))
+end

@@ -1,6 +1,7 @@
 # kex: run-beam
 
 main do
-  IO.printLine(Kex.interpreted?)
-  IO.printLine(Kex.underBeam?)
+  IO.printLine(Kex.BACKEND.interpreted?)
+  IO.printLine(Kex.BACKEND.compiled?)
+  IO.printLine(Kex.BACKEND.beam?)
 end

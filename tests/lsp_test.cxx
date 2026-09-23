@@ -1010,7 +1010,7 @@ int main() {
                  R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-node.kex"},"position":{"line":3,"character":8}}})"});
             const auto completion = responseForId(result, 2);
             assertTrue(completion.find("connect") != std::string::npos &&
-                           completion.find("whereis") != std::string::npos,
+                           completion.find("whereIs") != std::string::npos,
                        "Node members missing from completion: " + completion);
             const auto hover = responseForId(result, 3);
             assertTrue(hover.find("connect : Atom -> Bool") != std::string::npos,

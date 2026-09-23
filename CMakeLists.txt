@@ -5,7 +5,7 @@ include(GNUInstallDirs)
 
 # ── Build revision ──────────────────────────────────────────────────────
 # The commit a build came from, so `kex --version`, the REPL banner and
-# `Kex.Kernel.VERSION` can all report it. Resolved at CONFIGURE time, with
+# `Kex.VERSION` can all report it. Resolved at CONFIGURE time, with
 # .git/HEAD as a dependency so switching branches or committing re-runs this
 # rather than leaving a stale hash baked in. A source archive has no .git at
 # all; that is a normal state and leaves the revision empty (`None` in Kex).

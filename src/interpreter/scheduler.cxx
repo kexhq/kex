@@ -639,7 +639,7 @@ auto Scheduler::registerName(const std::string& name, ProcessId id) -> void {
     m_names[name] = id;
 }
 
-auto Scheduler::whereis(const std::string& name) const -> std::optional<ProcessId> {
+auto Scheduler::whereIs(const std::string& name) const -> std::optional<ProcessId> {
     auto it = m_names.find(name);
     if (it == m_names.end() || !isAlive(it->second)) return std::nullopt;
     return it->second;

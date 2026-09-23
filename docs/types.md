@@ -107,6 +107,24 @@ end
 | `Comparable` | Any type with `make X implement: Comparable` |
 | `Equatable` | Any type with `make X implement: Equatable` |
 
+### Numeric Bounds
+
+Each sized numeric type has `MAX` and `MIN`, typed as that type: `Int8.MAX`
+is `127`, `UInt64.MAX` is `18446744073709551615`, and `Byte.MAX` is `255`
+(`UInt8` is another name for `Byte`).
+`Integer` has none, since it is arbitrary-precision.
+
+A `Float` is always finite: an operation that would produce infinity or NaN
+raises, as the BEAM requires. `Float.MAX` and `Float.MIN` (also `Float32` and
+`Float64`) are the bounds to use where other languages reach for infinity:
+
+```kex
+let lowest = readings.reduce(Float.MAX) { |low, x| x < low then x else low }
+```
+
+For a float type, `MIN` is the most negative finite value, not the smallest
+positive one.
+
 ### `Comparison` Type
 
 `compare` returns a `Comparison` value — a built-in sum type:

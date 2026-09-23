@@ -43,7 +43,7 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     addExport("Process", "Kex.Process", "self", "self", 0);
     addExport("Process", "Kex.Process", "exit", "exit", 2);
     addExport("Process", "Kex.Process", "register", "register", 2);
-    addExport("Process", "Kex.Process", "whereis", "whereis", 1);
+    addExport("Process", "Kex.Process", "whereIs", "whereIs", 1);
     addExport("System", "Kex.System", "exit", "exit", 1);
     addExport("Math", "Kex.Math", "PI", "PI", 0);
     addExport("Task", "Kex.Task", "start", "start", 1);

@@ -64,7 +64,7 @@ describe("network value APIs") do
 
   it("reports only capabilities the active backend can actually use") do
     let support = Net.Support.current
-    if Kex.interpreted?
+    if Kex.BACKEND.interpreted?
       assert(!support.httpClient.compiled?)
       assert(!support.webSocketClient.usable?)
     else

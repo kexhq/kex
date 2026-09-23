@@ -1,0 +1,2 @@
+spec/error_as_atom_not_literal.kex:8:23: error: `.as(Atom)` needs a string literal; for text known only at run time use `Atom.from(text)`, or `text.to(Atom)` to find an existing atom
+spec/error_as_atom_not_literal.kex:9:29: error: `.as(Atom)` needs a string literal; for text known only at run time use `Atom.from(text)`, or `text.to(Atom)` to find an existing atom

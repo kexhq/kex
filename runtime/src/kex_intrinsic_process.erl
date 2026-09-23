@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 -export(['send'/2, 'sendFrom'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1, run/2, run/3, stream/2,
+          self/0, exit/2, register/2, 'whereIs'/1, run/2, run/3, stream/2,
           spawn/1, 'spawnServing'/3, server_call/4, server_cast/3, reply/1, cast/0,
           replyFrom/2, fromPid/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -408,8 +408,8 @@ exit(Pid, Reason) -> erlang:exit(Pid, Reason).
 %% Process.register(pid, name) — register a process under an atom name.
 register(Pid, Name) -> erlang:register(Name, Pid).
 
-%% Process.whereis(name) — look up a registered process by name.
-whereis(Name) ->
+%% Process.whereIs(name) — look up a registered process by name.
+'whereIs'(Name) ->
     case erlang:whereis(Name) of
         undefined -> 'None';
         Pid -> {'Just', Pid}

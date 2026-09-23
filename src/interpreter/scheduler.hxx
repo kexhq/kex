@@ -128,10 +128,10 @@ public:
     auto currentProcessId() const -> ProcessId { return m_current; }
     auto isAlive(ProcessId id) const -> bool;
 
-    // `Process.register` / `Process.whereis`: a name stays with its process
+    // `Process.register` / `Process.whereIs`: a name stays with its process
     // until the process finishes, as on the BEAM.
     auto registerName(const std::string& name, ProcessId id) -> void;
-    auto whereis(const std::string& name) const -> std::optional<ProcessId>;
+    auto whereIs(const std::string& name) const -> std::optional<ProcessId>;
 
     // Passive bookkeeping only — records/removes a bidirectional edge
     // between the currently-running process and `other`. Deliberately NOT

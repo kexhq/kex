@@ -196,7 +196,7 @@ auto isPrimitiveTypeName(const std::string& name) -> bool {
     static const std::unordered_set<std::string> names = {
         "Integer", "Int", "Float", "Number", "String", "Char", "Bool",
         "Atom", "Void", "Any", "Byte", "Int8", "Int16", "Int32", "Int64",
-        "UInt16", "UInt32", "UInt64", "Float32", "Float64",
+        "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
         "Tuple", "Block",
     };
     return names.count(name) != 0;

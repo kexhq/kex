@@ -2941,6 +2941,24 @@ struct Lowering {
                 target && target->name == "String")
                 return callE("kex_intrinsic_kex", "show", 1,
                              one(lower(n.receiver)));
+            // `"hello".as(Atom)`: the checker admits only a plain literal, so
+            // the atom is a constant in the emitted code.
+            if (const auto* target =
+                    std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
+                target && target->name == "Atom")
+                if (const auto* literal =
+                        std::get_if<ast::StringLiteral>(&n.receiver->kind);
+                    literal && literal->values.empty()) {
+                    // Plain text sits in `parts` (split, with nothing
+                    // interpolated between) or, for a literal marked
+                    // non-interpolating, in `value`.
+                    std::string text = literal->value;
+                    if (!literal->parts.empty()) {
+                        text.clear();
+                        for (const auto& part : literal->parts) text += part;
+                    }
+                    return lit(LitKind::Atom, text);
+                }
             return lower(n.receiver);
         }
         // A method on a trait-typed lexical parameter dispatches through the
@@ -7274,7 +7292,7 @@ struct Lowering {
             if (candidate.beamArity == 1) return &candidate;
         // Every import of this name takes more than a receiver, so there is
         // nothing to collide with: BEAM keys functions by name AND arity, and
-        // a field read is always arity 1. `Kex.Kernel.VERSION.patch` is the
+        // a field read is always arity 1. `Kex.VERSION.patch` is the
         // case — `patch` is also `Http.patch/2,3`, and blocking the accessor
         // here left the field unreadable on BEAM while the walker read it
         // fine. Emitting `patch/1` cannot shadow `patch/2`.
@@ -7782,7 +7800,7 @@ struct Lowering {
         // (the source-level is_record/2 form is a compiler macro).
         // The guard tests the value's TAG, so it is the record's canonical
         // identity that has to appear here — `make Version` inside
-        // Kex.Kernel guards values tagged 'Kex.Kernel.Version'.
+        // Kex guards values tagged 'Kex.Version'.
         const auto ty = canonicalRecordName(written);
         if (auto record = records.find(ty); record != records.end())
             return callE("erlang", "is_record", 3,

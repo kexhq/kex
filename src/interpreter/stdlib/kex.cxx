@@ -63,7 +63,13 @@ auto Evaluator::registerKexBuiltins() -> void {
         return "";
     };
 
-    static const std::vector<std::string> interpreterFeatures = {"FS"};
+    // The browser build has no host programs to run; everything else does.
+#ifdef __EMSCRIPTEN__
+    static const std::vector<std::string> interpreterFeatures = {"FileSystem"};
+#else
+    static const std::vector<std::string> interpreterFeatures = {
+        "FileSystem", "ExternalPrograms"};
+#endif
 
     auto hasFeature = [featureTag](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
@@ -74,7 +80,9 @@ auto Evaluator::registerKexBuiltins() -> void {
     };
 
     auto listFeatures = [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::list({makeVariant("FS")});
+        std::vector<ValuePtr> features;
+        for (const auto& f : interpreterFeatures) features.push_back(makeVariant(f));
+        return Value::list(std::move(features));
     };
 
     // Kex.backend and Kex.Feature.* are source-owned. These implementations
@@ -160,7 +168,7 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     // The release channel, "" for a stable build. Separate from version/0
     // rather than a fifth tuple element: the tuple is a published shape
-    // (`Kex.Kernel.VERSION.tuple`), and widening it would break every
+    // (`Kex.VERSION.tuple`), and widening it would break every
     // destructuring of it.
     defineIntrinsic("Kex::versionPreRelease", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::string(kVersionPreRelease);

@@ -2111,6 +2111,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             &node.args[0]->kind);
                     target && target->name == "String")
                     return Value::string(value->toString());
+                // `"hello".as(Atom)` — the checker admits only a literal.
+                if (const auto* target =
+                        std::get_if<ast::UpperIdentifier>(
+                            &node.args[0]->kind);
+                    target && target->name == "Atom")
+                    if (const auto* text = std::get_if<StringValue>(&value->data))
+                        return Value::atom(text->value);
                 return value;
             }
 
@@ -4618,6 +4625,15 @@ auto Evaluator::registerBuiltins() -> void {
                         return Value::just(integerResult(*parsed));
                     return Value::none();
                 }
+                return Value::none();
+            }
+
+            // `"ok".to(Atom)`. The walker keeps no atom table, so every name
+            // already counts as an atom; the BEAM answers only for existing ones.
+            if (targetName == "Atom") {
+                if (auto* s = std::get_if<StringValue>(&val->data))
+                    return Value::just(Value::atom(s->value));
+                if (std::holds_alternative<AtomValue>(val->data)) return Value::just(val);
                 return Value::none();
             }
 

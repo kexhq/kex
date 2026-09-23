@@ -36,7 +36,7 @@ auto Evaluator::registerNodeBuiltins() -> void {
     defineIntrinsic("Node::send", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::unit();
     });
-    defineIntrinsic("Node::whereis", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Node::whereIs", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::none();
     });
 }

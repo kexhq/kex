@@ -2,6 +2,9 @@ true
 :app@myhost
 :"app@host.example.com"
 :ok
+:hello
+true
+:typed
 ok
 b@host.example.com
 11

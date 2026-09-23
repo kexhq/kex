@@ -8,6 +8,46 @@
 
 namespace kex::semantic {
 
+namespace {
+
+// The name in `candidates` a misspelt `name` most likely meant: one differing
+// only in case (a renamed `whereis` is now `whereIs`) first, then the closest
+// within two edits. Empty when nothing is close.
+auto closestName(const std::string& name, const std::vector<std::string>& candidates)
+    -> std::string {
+    auto lower = [](std::string text) {
+        for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return text;
+    };
+    for (const auto& candidate : candidates)
+        if (lower(candidate) == lower(name)) return candidate;
+    auto distance = [](const std::string& a, const std::string& b) {
+        std::vector<size_t> row(b.size() + 1);
+        for (size_t j = 0; j <= b.size(); ++j) row[j] = j;
+        for (size_t i = 1; i <= a.size(); ++i) {
+            size_t diagonal = row[0];
+            row[0] = i;
+            for (size_t j = 1; j <= b.size(); ++j) {
+                const size_t above = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1,
+                                   diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
+                diagonal = above;
+            }
+        }
+        return row[b.size()];
+    };
+    std::string best;
+    size_t bestDistance = 3;
+    for (const auto& candidate : candidates)
+        if (const auto d = distance(name, candidate); d < bestDistance) {
+            bestDistance = d;
+            best = candidate;
+        }
+    return best;
+}
+
+} // namespace
+
 auto containsOpenType(const TypePtr& type) -> bool;
 
 namespace {
@@ -4860,6 +4900,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             };
             auto importedPath = node.receiver
                 ? importedModulePath(*node.receiver) : std::nullopt;
+            // The path exactly as written, before a `using` expands it.
+            const auto writtenPath = importedPath;
             // A bare receiver segment (`Set.from(…)`) may name a module only
             // under its qualified identity (`Data.Set`) once a `using`
             // brought it into scope unqualified — expand it before the
@@ -4876,7 +4918,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (importedPath) {
                 auto dependencyPath = *importedPath;
                 // A receiver chain can continue past the module into a
-                // constant or record field (`Kex.Kernel.VERSION.number`). If
+                // constant or record field (`Kex.VERSION.number`). If
                 // an interface identifies a module prefix, record that prefix
                 // rather than asking source discovery to interpret VERSION as
                 // another module segment and recompiling the prelude source.
@@ -4889,8 +4931,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             break;
                         }
                         // KexI source-module identities currently retain the
-                        // backend's leading `Kex.` (logical Kex.Kernel is
-                        // stored as Kex.Kex.Kernel). Accept that identity at
+                        // backend's leading `Kex.` (logical Kex.Interface is
+                        // stored as Kex.Kex.Interface). Accept that identity at
                         // this boundary so an automatic prelude module is
                         // still recognized as already compiled.
                         const auto backendPrefixed = "Kex." + candidate;
@@ -4921,6 +4963,50 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             const bool isLocalNamespace = importedPath &&
                 m_localModules.contains(*importedPath) &&
                 m_userSignatures.count(*importedPath + "::" + node.method) > 0;
+            // A module with a compiled interface lists everything it exports,
+            // so a name it does not export is a mistake the checker can name —
+            // left alone, `Process.whereis` after the rename to `whereIs`
+            // checked cleanly and failed only at run time, as an undefined
+            // method of the unrelated `Feature.Process`.
+            //
+            // Only where the call names that module unambiguously: written in
+            // full (`Process.whereis`), not reached through a `using` that
+            // expanded it (`Router.build` for `Net.HTTP.Router`, whose members
+            // are found by other means), and with no module of the program
+            // that the same last segment could mean instead.
+            const auto unambiguousImport = [&] {
+                if (!writtenPath || *writtenPath != *importedPath) return false;
+                const auto dot = writtenPath->rfind('.');
+                const auto last = dot == std::string::npos
+                    ? *writtenPath : writtenPath->substr(dot + 1);
+                for (const auto& local : m_localModules)
+                    if (local == last || local.ends_with("." + last)) return false;
+                return true;
+            };
+            if (isImportedNamespace && !isLocalNamespace && unambiguousImport()) {
+                const auto& module = m_importedInterfaces->modules.at(*importedPath);
+                // Only a module's OWN interface is complete. A `using` also
+                // files a partial copy under the bare name (`Router` for
+                // `Net.HTTP.Router`, which lacks the module's constants), and
+                // that copy cannot say what the module does not have.
+                if (module.sourceModule == *importedPath &&
+                    !module.exports.count(node.method)) {
+                    std::vector<std::string> exported;
+                    for (const auto& [name, _] : module.exports) exported.push_back(name);
+                    std::sort(exported.begin(), exported.end());
+                    auto message = "`" + *importedPath + "` has no function `" +
+                                   node.method + "`";
+                    if (auto hint = closestName(node.method, exported); !hint.empty())
+                        message += " — did you mean `" + hint + "`?";
+                    error(expr.location, message);
+                    for (const auto& a : node.args)
+                        if (a) inferExpr(*a);
+                    for (const auto& [_, a] : node.namedArgs)
+                        if (a) inferExpr(*a);
+                    if (node.block) inferExpr(**node.block);
+                    return Type::unknown();
+                }
+            }
             if (isImportedNamespace || isLocalNamespace) {
                 callName = *importedPath + "::" + node.method;
             } else if (isNamespaceCall &&
@@ -4975,6 +5061,21 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     error(expr.location,
                           "`.as` needs a type name as its target");
                     return Type::unknown();
+                }
+                // `"hello".as(Atom)` is the atom `:hello`, made at compile time —
+                // so only from text the compiler can see. Atoms are never freed;
+                // run-time text goes through `Atom.from` (makes one) or
+                // `.to(Atom)` (finds an existing one), both explicit about it.
+                if (typeToString(target) == "Atom") {
+                    const auto* literal = node.receiver
+                        ? std::get_if<ast::StringLiteral>(&node.receiver->kind)
+                        : nullptr;
+                    if (!literal || !literal->values.empty())
+                        error(expr.location,
+                              "`.as(Atom)` needs a string literal; for text known "
+                              "only at run time use `Atom.from(text)`, or "
+                              "`text.to(Atom)` to find an existing atom");
+                    return target;
                 }
                 auto source = node.receiver ? inferExpr(*node.receiver)
                                             : Type::unknown();

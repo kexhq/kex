@@ -27,7 +27,7 @@ foul reach(store: Atom, tries: Integer) -> Bool do
   if tries == 0
     return false
   end
-  if Node.connect(store) && Node.whereis(store, :store).present?
+  if Node.connect(store) && Node.whereIs(store, :store).present?
     return true
   end
   pause(200)

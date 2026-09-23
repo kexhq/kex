@@ -53,15 +53,9 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Char");
     defineModule("Bool");
     defineModule("Atom");
-    // The walker has no atom table to consult: every name is an atom that
-    // `existing` can answer for.
     defineIntrinsic("Atom::from", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* text = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         return Value::atom(text ? text->value : std::string{});
-    });
-    defineIntrinsic("Atom::existing", [](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* text = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        return text ? Value::just(Value::atom(text->value)) : Value::none();
     });
     defineIntrinsic("Atom::name", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* atom = args.empty() ? nullptr : std::get_if<AtomValue>(&args[0]->data);

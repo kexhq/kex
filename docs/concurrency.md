@@ -194,7 +194,7 @@ main do
   let a = :a@myhost
   Node.connect(a)
   Node.send(a, :requests, Ping(Process.self, "hi"))
-  Node.whereis(a, :requests).map { |pid| pid.send(:flush) }
+  Node.whereIs(a, :requests).map { |pid| pid.send(:flush) }
   Node.spawn(a) do IO.printLine("running on ${Node.self}") end
 end
 ```

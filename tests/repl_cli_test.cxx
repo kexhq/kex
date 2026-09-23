@@ -1178,7 +1178,7 @@ int main() {
 
             // Record fields need collectPatternNames to know RecordPattern.
             auto record = runBeamRepl(
-                "let { major, minor } = Kex.Kernel.VERSION\n"
+                "let { major, minor } = Kex.VERSION\n"
                 "major >= 0 && minor >= 0\n");
             assertTrue(record.find("defined") == std::string::npos, record);
             assertTrue(record.find("=> true : Bool") != std::string::npos, record);
@@ -1340,7 +1340,7 @@ int main() {
     });
 
     // One version, three places it surfaces. A program asking
-    // `Kex.Kernel.VERSION` is asking "what am I running on?", so a mismatch
+    // `Kex.VERSION` is asking "what am I running on?", so a mismatch
     // with what the CLI prints would make the answer worse than useless.
     describe("version reporting", []() {
         it("prints the version on the command line", []() {
@@ -1356,13 +1356,13 @@ int main() {
         });
 
         it("reports the same version to a Kex program", []() {
-            auto out = runRepl("Kex.Kernel.VERSION.number\n");
+            auto out = runRepl("Kex.VERSION.number\n");
             assertTrue(out.find(kex::versionNumber()) != std::string::npos,
-                       "Kex.Kernel.VERSION disagrees with the binary: " + out);
+                       "Kex.VERSION disagrees with the binary: " + out);
         });
 
         it("reports this build's git revision when there is one", []() {
-            auto out = runRepl("Kex.Kernel.VERSION.revision\n");
+            auto out = runRepl("Kex.VERSION.revision\n");
             if (*kex::kGitRevision) {
                 assertTrue(out.find(kex::kGitRevision) != std::string::npos,
                            "expected the revision in the tuple, got: " + out);

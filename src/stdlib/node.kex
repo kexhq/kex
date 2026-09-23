@@ -118,9 +118,9 @@ module Node do
   # @return [Pid?] the process, or +None+
   #
   # @example
-  #   Node.whereis(:b@myhost, :logger).map { |pid| pid.send(:flush) }
-  whereis : Atom -> Atom -> Pid?
-  foul whereis(node, name) = Kex.Intrinsic.Node.whereis(node, name)
+  #   Node.whereIs(:b@myhost, :logger).map { |pid| pid.send(:flush) }
+  whereIs : Atom -> Atom -> Pid?
+  foul whereIs(node, name) = Kex.Intrinsic.Node.whereIs(node, name)
 
   # Runs +block+ in a new process on +node+ and returns its +Pid+.
   #
