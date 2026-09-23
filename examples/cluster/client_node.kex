@@ -8,10 +8,17 @@
 # `:"store@host.example.com"` for a fully-qualified one, or — as here, since
 # the host is only known at run time — built with `Atom.from`.
 #
-# Two environment variables let the same program run as one of several
-# containers (see docker-compose.yml): KEX_STORE_NODE names the store's node
-# when it is on another host, and KEX_STOP_STORE=false leaves the store running
-# for the next client.
+# Environment variables let the same program run as one of several containers
+# (see docker-compose.yml):
+#
+#   KEX_STORE_NODE   the store's node, when it is on another host
+#   KEX_STOP_STORE   `false` leaves the store running for the next client
+#   KEX_ROUNDS       rounds of chatter after the demo; 0 keeps going for ever
+#                    (default 1: a single round, then done)
+#   KEX_INTERVAL     milliseconds between rounds (default 2000)
+#
+# In each round a client posts a numbered message under its own node name in
+# the store, then prints what every OTHER client last posted there.
 
 using Node
 using Store
@@ -19,6 +26,29 @@ using Store
 foul pause(ms: Integer) do
   receive do
   after timeout: ms
+  end
+end
+
+# One round of chatter, then the next after `interval` milliseconds, until
+# `rounds` are done (never, when it is 0). Every slot call runs on the store
+# node, so what a client prints is what the others have posted there.
+foul chatter(entries: Server<Entries>, round: Integer, rounds: Integer, interval: Integer) do
+  let me = Node.self.string
+  entries.put(me, "message ${round}")
+  let others = entries.keys().or([]).filter { |key| key != me && key != "greeting" }
+  if others.empty?
+    IO.printLine("round ${round}: no other clients yet")
+  end
+  others.each do |key|
+    let said = match entries.get(key) do
+      Ok(Just(text)) => text
+      _ => ""
+    end
+    IO.printLine("round ${round}: ${key} said \"${said}\"")
+  end
+  if rounds == 0 || round < rounds
+    pause(interval)
+    chatter(entries, round + 1, rounds, interval)
   end
 end
 
@@ -44,16 +74,18 @@ foul useStore do
 
   # Ask for the store's typed handle by the name it registered.
   Node.send(storeNode, :store, WantStore(Process.self))
-  receive do
+  let found: Server<Entries>? = receive do
     handle => do
       let entries: Server<Entries> = handle
       # Every slot call below runs on the store node, against its state.
       IO.printLine("greeting: ${entries.get("greeting")}")
       entries.put(Node.self.string, "was here")
       IO.printLine("keys now: ${entries.keys()}")
+      Just(entries)
     end
   after timeout: 5000
     IO.printLine("The store did not answer.")
+    None
   end
 
   # A block of THIS program, run over there. The store node never loaded the
@@ -64,6 +96,14 @@ foul useStore do
     (:ran_on, where) => IO.printLine("spawned block ran on ${where}")
   after timeout: 5000
     IO.printLine("The spawned block did not report back.")
+  end
+
+  let rounds = ENV.get("KEX_ROUNDS", "1").to(Integer).or(1)
+  if rounds != 1
+    match found do
+      Just(entries) => chatter(entries, 1, rounds, ENV.get("KEX_INTERVAL", "2000").to(Integer).or(2000))
+      None => ()
+    end
   end
 
   if ENV.get("KEX_STOP_STORE", "true") != "false"

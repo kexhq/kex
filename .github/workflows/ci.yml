@@ -436,6 +436,10 @@ jobs:
       # with its Kex — so a broken downloader, checksum or layout surfaces
       # here rather than on a user's machine.
       - name: Smoke-test install.sh
+        # Authenticated API calls: anonymous ones share the runner IP's
+        # 60/hour limit and fail with 403 when it runs out.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sh -n install.sh
