@@ -6,10 +6,11 @@
 #
 # The site itself — landing page, guide, navigation, theme — is authored in
 # Marqraft in the kexhq/docs repository, which builds and publishes it. This
-# script only produces what that site mounts as generated pages: docgen's
-# `--format fragments` output, one <package>/<version>/ per unit, plus the
-# manifest.json Marqraft reads (tools/docsite). output-dir defaults to
-# ../docs/generated — the `generated/` directory of a kexhq/docs checkout
+# script only produces what that site mounts: docgen's `--format fragments`
+# output, one <package>/<version>/ per unit. The site's marqraft.jsonc mounts
+# each package directory ("format": "fragments"), and Marqraft finds the
+# versions in it, so a new release needs no site edit. output-dir defaults
+# to ../docs/generated — the `generated/` directory of a kexhq/docs checkout
 # beside this one — so `marq dev ../docs` shows this checkout's reference.
 #
 # Each released tag is built from a temporary git worktree; the unreleased
@@ -25,8 +26,7 @@ set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 OUT="${1:-$(cd "$ROOT/.." && pwd)/docs/generated}"
-# Absolute, so later steps can change directory (the docsite tool runs from
-# its own package) without re-resolving a caller-relative path.
+# Absolute, so a caller-relative path means the same thing to every step.
 case "$OUT" in
   /*) ;;
   *) OUT="$ROOT/$OUT" ;;
@@ -133,12 +133,6 @@ dev_version="$(kex_version "$ROOT")-dev"
 build_docs "$ROOT/src/stdlib" prelude "Standard Library" "$dev_version" || unreleased_failed=1
 mapfile -t links < <(prelude_links "$dev_version")
 build_docs "$ROOT/tey/src" tey "Tey" "$(tey_version "$ROOT")-dev" "${links[@]}" || \
-  unreleased_failed=1
-
-# The handover: manifest.json (which mounts Marqraft loads, which one each
-# package's collection link opens) and a versions page per package. Fatal
-# like the unreleased builds above.
-(cd "$ROOT/tools/docsite" && "$TEY_RUN" run -- manifest "$OUT") || \
   unreleased_failed=1
 
 if [ "$unreleased_failed" -ne 0 ]; then
