@@ -541,6 +541,61 @@ module Tey.Docgen.Css do
       .fn h4 { margin: 0 0 0.4rem; font-size: 1rem; }
       .fn p:last-child, .fn pre:last-child { margin-bottom: 0; }
 
+      .fn h3 { margin: 0 0 0.4rem; font-size: 1rem; }
+
+      /* The heading of a member links to itself, so a reader can copy a
+         deep link without hunting for a pilcrow. */
+      a.self { color: inherit; text-decoration: none; }
+      a.self:hover code { border-color: var(--accent); }
+
+      /* A method's signature leads its box: the call shape first, prose after. */
+      pre.code.sig { margin-bottom: 0.8rem; padding: 0.6rem 0.9rem; }
+      pre.code a.xref { color: inherit; border-bottom: 1px dotted color-mix(in oklab, #e6a960 60%, transparent); }
+
+      /* "Implements Monoid, Enumerable." / "Implemented by ...": where a
+         type's methods come from, said right under its heading. */
+      .implements, .home-note {
+        color: var(--muted);
+        font-size: 0.95rem;
+        margin: 0 0 1.1rem;
+      }
+
+      /* A member group inside a type: "Methods", "On [Number]". */
+      .members { margin-top: 1.8rem; }
+      .members > h3, .entity > h3 {
+        font-family: var(--font-display);
+        font-size: 1.15rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+      }
+
+      /* Which trait a member fulfils: a small link chip beside its name. */
+      .tag-trait, .tag-kind {
+        margin-left: 0.5rem;
+        padding: 0.05rem 0.45rem;
+        border: 1px solid #efcfe0;
+        border-radius: 999px;
+        background: #f9ecf3;
+        color: #c2498a;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 500;
+        text-decoration: none;
+        vertical-align: middle;
+      }
+      .tag-kind { border-color: #e6d2b4; background: #f6ecdd; color: #9a5a13; }
+      .tag-trait:hover { border-color: #c2498a; }
+
+      /* Methods a type gets from a trait without writing them. */
+      .inherited dt, .elsewhere dt { min-width: 9rem; }
+
+      .prose ul { margin: 0 0 1.1rem; padding-left: 1.3rem; }
+      .prose li { margin: 0.25rem 0; }
+
+      /* A file's opening comment: what the page is about, before any one
+         declaration. */
+      .intro { font-size: 1.02rem; margin-bottom: 1.6rem; }
+
       .caption { margin: 0 0 0.3rem; color: var(--muted); font-size: 0.95rem; }
 
       .returns { color: var(--muted); }

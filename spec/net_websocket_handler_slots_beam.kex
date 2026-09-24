@@ -1,0 +1,72 @@
+# kex: run-beam
+#
+# An upgraded WebSocket must not keep holding one of the server's
+# `maximumHandlers` HTTP handler slots (kexhq/kex#390). With the slot held
+# for the socket's whole lifetime, a server capped at N handlers stopped
+# accepting after N open sockets — every later client sat in the listen
+# backlog, TCP established, handshake never answered. Here the cap is 2 and
+# five sockets stay open at once, then a plain HTTP request still gets through.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul echoUntilClosed(socket: Connection) -> Void do
+  match socket.receiveMessage do
+    Ok(Text(text)) => echoAndContinue(socket, text)
+    _ => Void
+  end
+end
+
+foul echoAndContinue(socket: Connection, text: String) -> Void do
+  socket.send(Text(text)).try
+  echoUntilClosed(socket)
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| echoUntilClosed(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+foul openSockets(port: Integer, count: Integer) -> [Connection] do
+  if count == 0
+    []
+  else
+    [WebSocket.connect("ws://127.0.0.1:${port}/socket").try] + openSockets(port, count - 1)
+  end
+end
+
+foul echoed?(socket: Connection, text: String) -> Bool do
+  socket.send(Text(text)).try
+  match socket.receiveMessage.try do
+    Text(reply) => reply == text
+    _ => false
+  end
+end
+
+foul pingRoute(_request: Request<Binary>, _context: Context) -> Response<Binary> = Response.text(200, "pong")
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute).get("/ping", ~pingRoute)
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router, ServerOptions {
+    maximumHandlers: 2,
+    backlog: 16,
+    gracefulShutdown: Duration.seconds(1)
+  }).try
+  let port = server.localAddress.port.value
+
+  let sockets = openSockets(port, 5)
+  assert(sockets.all? { |socket| echoed?(socket, "hello") }, "every open socket should still echo")
+  IO.printLine("open sockets: ${sockets.count}")
+
+  let client = Client.open().try
+  let pong = client.request("GET", "http://127.0.0.1:${port}/ping", Headers.empty, Binary.empty).try
+  assert(pong.status.code == 200, "plain HTTP should still be served while the sockets are open")
+  IO.printLine("ping: ${pong.status.code}")
+
+  sockets.each { |socket| socket.close }
+  client.close.try
+  server.stop.try
+  IO.printLine("ok")
+end

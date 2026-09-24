@@ -1,0 +1,21 @@
+# kexhq/kex#165: the `if ... do` mistake inside a `make` block is reported
+# once, at its own line. Recovering from it used to consume the `if`'s `end`
+# as the block's own, dropping every method after it and burying this one
+# mistake under unrelated errors.
+record Box do
+  n : Integer
+end
+
+make Box do
+  let label -> String do
+    if @n > 0 do "positive" else "other" end
+  end
+
+  let double -> Integer = @n * 2
+  triple :> Integer
+  let triple = @n * 3
+end
+
+main do
+  IO.printLine(Box { n: 1 }.label)
+end

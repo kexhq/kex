@@ -431,6 +431,7 @@ private:
     static auto alwaysReturns(const std::vector<ast::ExprPtr>& body) -> bool;
     // The type `Ctor(args...)` produces, or nullptr when the name is not a
     // registered ADT constructor.
+    auto siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const -> TypePtr;
     auto constructorResultType(const std::string& name,
                                const std::vector<TypePtr>& argTypes)
         -> TypePtr;
@@ -445,6 +446,15 @@ private:
     // chains (`user.name`, `point.x`) returns the declared field type.
     std::unordered_map<std::string,
                        std::unordered_map<std::string, TypePtr>> m_recordFields;
+    // The records the checked program itself declares, as opposed to the
+    // imported ones seeded into m_recordFields from interfaces.
+    std::unordered_set<std::string> m_programRecords;
+    // Type variables standing for unannotated FUNCTION PARAMETERS. The
+    // field-read rule of kexhq/kex#242 infers a record for these and nothing
+    // else: a variable bound by a pattern over an imported constructor
+    // (`MainDef(info)`) is untyped only because interfaces carry no payload
+    // types, and guessing a record for it misread `info.body`.
+    std::unordered_set<int> m_unannotatedParamVars;
     // Fields without a default whose declared type is not Optional.
     std::unordered_map<std::string, std::unordered_set<std::string>>
         m_requiredRecordFields;

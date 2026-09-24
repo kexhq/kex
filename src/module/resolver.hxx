@@ -19,6 +19,12 @@ public:
     auto resolve(const std::string& moduleName,
                  const std::string& currentModule = "") const -> std::optional<Resolution>;
     static auto isForeignNamespace(const std::string& moduleName) -> bool;
+    // The program's entry file, which no `using` may resolve to: its own
+    // directory is a source root, so a script named after the module it
+    // imports (`dimensions.kex` saying `using Dimensions`) would otherwise
+    // import itself and shadow the real module. Process-wide, set once by the
+    // CLI; empty means no file is excluded.
+    static auto setEntryFile(const std::string& path) -> void;
 
 private:
     std::vector<std::string> m_roots;

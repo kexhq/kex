@@ -57,8 +57,11 @@ tag(Parts, Values) ->
     case re:compile(Source, ?COMPILE_OPTS) of
         {ok, _} -> {'Regex.Regex', Source};
         {error, {Reason, _}} ->
-            erlang:error({invalid_regex, Source,
-                          unicode:characters_to_binary(Reason)})
+            %% The walker's own wording, as a binary so it prints as text
+            %% rather than a raw `{invalid_regex, ...}` term.
+            erlang:error(iolist_to_binary(
+                           [<<"invalid regex `">>, Source, <<"`: ">>,
+                            unicode:characters_to_binary(Reason)]))
     end.
 
 splice([], _) -> [];

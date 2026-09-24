@@ -139,6 +139,31 @@ make Binary, implement: Showable, Inspectable do
   #   data.at(-1)   # => None
   let at(index: Integer) -> Byte? = Kex.Intrinsic.Binary.at(this, index)
 
+  # The byte at +index+, counting from zero. The same as +at+, matching the
+  # +get+ that +List+ and +String+ carry.
+  #
+  # @param index [Integer] the position to read
+  # @return [Byte?] the byte, or +None+ when the index is outside the binary
+  #
+  # @example
+  #   Binary.fromBytes([104, 105]).get(1)   # => Just(105)
+  #   Binary.fromBytes([104, 105]).get(9)   # => None
+  get :> Integer -> Byte?
+  let get(index) = this.at(index)
+
+  # The byte at +index+, or +default+ when the index is outside the binary.
+  # The total form of +get+: the byte comes back unwrapped.
+  #
+  # @param index [Integer] the position to read
+  # @param default [Byte] the value to use when out of range
+  # @return [Byte] the byte, or +default+
+  #
+  # @example
+  #   Binary.fromBytes([104, 105]).get(0, 0)   # => 104
+  #   Binary.fromBytes([104, 105]).get(9, 0)   # => 0
+  get :> Integer -> Byte -> Byte
+  let get(index, default) = this.at(index).or(default)
+
   # The first +count+ bytes.
   #
   # Clamped at both ends, like the list operations: a +count+ of zero or less

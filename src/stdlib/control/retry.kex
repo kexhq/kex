@@ -305,12 +305,12 @@ module Retry do
         return result
       end
       let fraction = clamp(schedule.jitter, 0.0, 1.0)
-      let sample = if fraction == 0.0 then 0.5 else clamp(random(), 0.0, 1.0) end
+      let sample = fraction == 0.0 then 0.5 else clamp(random(), 0.0, 1.0)
       let sleepSeconds = boundedDelay(schedule, base * (1.0 + (sample * 2.0 - 1.0) * fraction))
       let nextElapsed = elapsed + sleepSeconds
       let allowed = match schedule.maximumTotalDelay do
         None => true
-        Just(limit) => nextElapsed <= (if limit.seconds < 0.0 then 0.0 else limit.seconds end)
+        Just(limit) => nextElapsed <= (limit.seconds < 0.0 then 0.0 else limit.seconds)
       end
       if !allowed
         return result
@@ -325,7 +325,7 @@ module Retry do
         result: result
       })
       sleeper(Duration { seconds: sleepSeconds })
-      let factor = if schedule.backoff < 1.0 then 1.0 else schedule.backoff end
+      let factor = schedule.backoff < 1.0 then 1.0 else schedule.backoff
       let nextBase = boundedDelay(schedule, base * factor)
       attempt(schedule, sleeper, random, onRetry, operation, number + 1, nextBase, nextElapsed)
     end

@@ -1,0 +1,9 @@
+module Views.Greeting
+
+# `render` is unannotated on purpose: the stdlib `Template` module this
+# expansion pulls into the build declares its own `render(source, context)`,
+# and a bare call here has to find THIS module's binding (kexhq/kex#385).
+let render = Template.html(Kex.embed("greeting.html.ket"))
+
+greet : String -> String
+let greet(name) = render(name)

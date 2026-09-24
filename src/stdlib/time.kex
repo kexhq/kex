@@ -510,10 +510,10 @@ module Time do
   #   Time.daysFromCivil(1970, 1, 1)   # => 0
   #   Time.daysFromCivil(2026, 7, 30)  # => 20664
   let daysFromCivil(year: Integer, month: Integer, day: Integer) -> Integer do
-    let y = if month <= 2 then year - 1 else year end
-    let era = if y < 0 then (y - 399) / 400 else y / 400 end
+    let y = month <= 2 then year - 1 else year
+    let era = y < 0 then (y - 399) / 400 else y / 400
     let yoe = y - era * 400
-    let mp = if month > 2 then month - 3 else month + 9 end
+    let mp = month > 2 then month - 3 else month + 9
     let doy = (153 * mp + 2) / 5 + day - 1
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
     return era * 146097 + doe - 719468
@@ -530,15 +530,15 @@ module Time do
   #   Time.civilFromDays(20664).iso   # => "2026-07-30"
   let civilFromDays(epochDay: Integer) -> Date do
     let z = epochDay + 719468
-    let era = if z < 0 then (z - 146096) / 146097 else z / 146097 end
+    let era = z < 0 then (z - 146096) / 146097 else z / 146097
     let doe = z - era * 146097
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
     let y = yoe + era * 400
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
     let mp = (5 * doy + 2) / 153
     let day = doy - (153 * mp + 2) / 5 + 1
-    let month = if mp < 10 then mp + 3 else mp - 9 end
-    let year = if month <= 2 then y + 1 else y end
+    let month = mp < 10 then mp + 3 else mp - 9
+    let year = month <= 2 then y + 1 else y
     return Date { year: year, month: month, day: day }
   end
 
@@ -673,8 +673,8 @@ module Time do
   let formatOffset(offset: Duration) -> String do
     let total = offset.wholeSeconds
     return "Z" if total == 0
-    let sign = if total < 0 then "-" else "+" end
-    let magnitude = if total < 0 then 0 - total else total end
+    let sign = total < 0 then "-" else "+"
+    let magnitude = total < 0 then 0 - total else total
     return "${sign}${Time.pad2(magnitude / 3600)}:${Time.pad2(magnitude.modulo(3600) / 60)}"
   end
 
@@ -1214,7 +1214,7 @@ make Duration do
   #
   # @example
   #   (1.hours - 90.minutes).abs.wholeMinutes   # => 30
-  let abs -> Duration = Duration { seconds: if this.seconds < 0.0 then 0.0 - this.seconds else this.seconds end }
+  let abs -> Duration = Duration { seconds: this.seconds < 0.0 then 0.0 - this.seconds else this.seconds }
 
   # Returns +true+ when the span is exactly zero.
   #
@@ -1586,9 +1586,9 @@ make Period, implement: Inspectable, Showable do
   #   2.months.iso             # => "P2M"
   let iso -> String do
     return "P0D" if this.zero?
-    let years = if this.years != 0 then "${this.years}Y" else "" end
-    let months = if this.months != 0 then "${this.months}M" else "" end
-    let days = if this.days != 0 then "${this.days}D" else "" end
+    let years = this.years != 0 then "${this.years}Y" else ""
+    let months = this.months != 0 then "${this.months}M" else ""
+    let days = this.days != 0 then "${this.days}D" else ""
     return "P${years}${months}${days}"
   end
 end
@@ -1752,7 +1752,7 @@ make Date, implement: Inspectable, Showable do
     let month = total.modulo(12) + 1
     let year = (total - total.modulo(12)) / 12
     let last = Time.daysInValidMonth(year, month)
-    let day = if this.day > last then last else this.day end
+    let day = this.day > last then last else this.day
     return Date { year: year, month: month, day: day }
   end
 

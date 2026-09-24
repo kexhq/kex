@@ -838,6 +838,7 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
         const auto name = owner.empty()
             ? record.name : owner + "." + record.name;
         auto& fields = m_recordFields[name];
+        m_programRecords.insert(name);
         if (namesOnly) return;
         const auto previousModule = m_currentModulePath;
         m_currentModulePath = owner;
@@ -1157,6 +1158,28 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
         const auto key = modulePath.empty() ? *name : modulePath + "::" + *name;
         m_constructorResult[key] = std::move(result);
     }
+}
+
+// A nullary constructor is typed as its own singleton type (`Less`, and the
+// typestate modes `Read`/`Write` that `FS.File.open` is overloaded on), so two
+// branches returning different constructors of one ADT — `c then Less else
+// Greater` — are not a mismatch but that ADT. Null when `a` and `b` are not
+// two distinct constructors of the same ADT (an ADT meeting one of its own
+// constructors already passes argMatchesParam).
+auto TypeChecker::siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const
+    -> TypePtr {
+    const auto* left = std::get_if<NamedType>(&resolve(a)->kind);
+    const auto* right = std::get_if<NamedType>(&resolve(b)->kind);
+    if (!left || !right || left->name == right->name ||
+        !left->typeArgs.empty() || !right->typeArgs.empty())
+        return nullptr;
+    const auto leftOwner = m_adtOfConstructor.find(left->name);
+    const auto rightOwner = m_adtOfConstructor.find(right->name);
+    if (leftOwner == m_adtOfConstructor.end() ||
+        rightOwner == m_adtOfConstructor.end() ||
+        leftOwner->second != rightOwner->second)
+        return nullptr;
+    return Type::named(leftOwner->second);
 }
 
 auto TypeChecker::constructorResultType(
@@ -2859,7 +2882,14 @@ auto TypeChecker::bindPatternVars(
                                  std::get_if<ListType>(&scrutinee->kind);
                              list && index == 0)
                         payload = list->element;
-                } else if (declaration && i < declaration->payloadTypes.size()) {
+                } else if (slot < 0 && declaration &&
+                           i < declaration->payloadTypes.size()) {
+                    // Only a CONCRETE declared payload. A type-parameter
+                    // payload's declared type is the placeholder the ADT was
+                    // registered with — one variable for the whole program —
+                    // so reading it bound every such pattern to whatever some
+                    // unrelated use had unified it with: `let Just(i) = ...`
+                    // came out `Char` in the merged prelude (kexhq/kex#249).
                     payload = declaration->payloadTypes[i];
                 }
                 // The built-in carriers come from the prelude interface, not a
@@ -3263,8 +3293,22 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             } else if (!param.type && pi < siblingParamContracts.size() &&
                        siblingParamContracts[pi]) {
                 paramType = siblingParamContracts[pi];
+            } else if (!param.type && pi == 0 && receiverIsFirstParam &&
+                       m_currentMakeType && param.pattern &&
+                       std::holds_alternative<ast::RecordPattern>(
+                           (*param.pattern)->kind)) {
+                // A receiver destructured in place (`let distance({ x: x1,
+                // y: y1 }, other)`) IS the make target, so its fields bind
+                // with their declared types. A fresh variable left them to
+                // arithmetic, which generalized `x1 * x1` to a bare `N` that
+                // `Float.sqrt` then rejected.
+                paramType = m_currentMakeType;
+            } else if (param.type) {
+                paramType = resolveTypeExpr(**param.type, genericVars);
             } else {
-                paramType = param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar();
+                paramType = freshTypeVar();
+                if (auto* var = std::get_if<TypeVar>(&paramType->kind))
+                    m_unannotatedParamVars.insert(var->id);
             }
             paramTypes.push_back(paramType);
             if (param.name.has_value() && *param.name != "_") {
@@ -4547,23 +4591,35 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // Reject constructor mismatches early, e.g.
                 //   let Ok(v) = parsePrefix(...)   when parsePrefix returns Optional
                 //   let Just(v) = parse(...)       when parse returns Result
+                bool mismatchReported = false;
                 if (auto* cp = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
                     auto resolved = resolve(valueType);
                     if (std::holds_alternative<UnknownType>(resolved->kind) ||
                         std::holds_alternative<TypeVar>(resolved->kind))
                         ; // permissive — can't determine the type at compile time
-                    else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind))
+                    else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind)) {
                         error(node.pattern->location, "cannot match `Just` — expected Optional, got " + typeToString(resolved));
+                        mismatchReported = true;
+                    }
                     else if (cp->name == "Ok" || cp->name == "Error") {
                         if (auto* nt = std::get_if<NamedType>(&resolved->kind)) {
-                            if (nt->name != "Result")
+                            if (nt->name != "Result") {
                                 error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                                mismatchReported = true;
+                            }
                         } else {
                             error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                            mismatchReported = true;
                         }
                     }
                 }
-                bindPatternVars(*node.pattern);
+                // With the value's type, as a `match` arm gets its subject's:
+                // bound without it, `let Just(i) = Just(2)` typed `i` from
+                // the constructor's declared payload instead (kexhq/kex#249).
+                // Not after a mismatch already reported above, which the
+                // owner check inside would only report a second time.
+                bindPatternVars(*node.pattern,
+                                mismatchReported ? nullptr : valueType);
             }
             return Type::unit();
         }
@@ -5544,7 +5600,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 bool rePermissive = std::holds_alternative<TypeVar>(elifType->kind) ||
                                     std::holds_alternative<UnknownType>(elifType->kind) ||
                                     std::holds_alternative<VoidType>(elifType->kind);
-                if (!rtPermissive && !rePermissive &&
+                if (auto joined = siblingConstructorJoin(rt, elifType)) {
+                    branchType = joined;
+                } else if (!rtPermissive && !rePermissive &&
                     !argMatchesParam(elifType, rt) && !argMatchesParam(rt, elifType)) {
                     error(expr.location, "Branch type mismatch: 'if' returns " +
                           typeToString(rt) + " but 'elif' returns " + typeToString(elifType));
@@ -5560,7 +5618,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 bool elsePermissive = std::holds_alternative<TypeVar>(elseType->kind) ||
                                       std::holds_alternative<UnknownType>(elseType->kind) ||
                                       std::holds_alternative<VoidType>(elseType->kind);
-                if (!thenPermissive && !elsePermissive &&
+                if (auto joined = siblingConstructorJoin(rt, elseType)) {
+                    branchType = joined;
+                } else if (!thenPermissive && !elsePermissive &&
                     !argMatchesParam(elseType, rt) && !argMatchesParam(rt, elseType)) {
                     error(expr.location, "Branch type mismatch: 'if' returns " +
                           typeToString(rt) + " but 'else' returns " + typeToString(elseType));
@@ -5603,7 +5663,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         // Check subsequent arms match the first concrete arm.
                         bool armPermissive = std::holds_alternative<TypeVar>(t->kind) ||
                                             std::holds_alternative<UnknownType>(t->kind);
-                        if (!armPermissive && !argMatchesParam(t, rt) && !argMatchesParam(rt, t)) {
+                        if (auto joined = siblingConstructorJoin(rt, t)) {
+                            resultType = joined;
+                        } else if (!armPermissive && !argMatchesParam(t, rt) && !argMatchesParam(rt, t)) {
                             error(expr.location, "Match arm type mismatch: expected " +
                                   typeToString(rt) + " but arm returns " + typeToString(t));
                         }
@@ -5917,6 +5979,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                       std::holds_alternative<UnknownType>(rt->kind);
                 bool elsePermissive = std::holds_alternative<TypeVar>(re->kind) ||
                                       std::holds_alternative<UnknownType>(re->kind);
+                if (auto joined = siblingConstructorJoin(rt, re)) return joined;
                 if (!thenPermissive && !elsePermissive &&
                     !argMatchesParam(re, rt) && !argMatchesParam(rt, re)) {
                     error(expr.location, "Branch type mismatch: 'then' returns " +
@@ -7004,6 +7067,35 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
     if (isMethodCall && !argTypes.empty()) {
         auto receiver = resolve(argTypes.front());
+        // A receiver known only by its trait (`s: Shape`) answers from the
+        // trait itself: a required method by its declared signature, a
+        // default one gradually (defaults carry no signature — see
+        // TraitDef::defaultMethods). Left to the overload lookup below, the
+        // call bound to whichever implementer declared the name — `describe
+        // expects argument 1 to be Rectangle, but got Shape` for a default
+        // that only Rectangle overrides.
+        // The same for a list of mixed implementers, whose element type is
+        // joined to the trait as a plain name (`[Circle {..}, Rectangle {..}]`
+        // is `[Shape]`).
+        std::string receiverTrait;
+        if (auto* constrained = std::get_if<ConstrainedType>(&receiver->kind))
+            receiverTrait = constrained->traitName;
+        else if (auto* named = std::get_if<NamedType>(&receiver->kind);
+                 named && named->typeArgs.empty() &&
+                 !m_recordFields.count(named->name) &&
+                 !m_adtVariants.count(named->name))
+            receiverTrait = named->name;
+        if (!receiverTrait.empty())
+            if (const TraitDef* trait = m_traits.get(receiverTrait)) {
+                for (const auto& required : trait->requiredMethods)
+                    if (required.name == name &&
+                        argTypes.size() == required.params.size() + 1)
+                        return required.result;
+                if (std::find(trait->defaultMethods.begin(),
+                              trait->defaultMethods.end(), name) !=
+                    trait->defaultMethods.end())
+                    return Type::unknown();
+            }
         if (auto* intersection =
                 std::get_if<IntersectionType>(&receiver->kind)) {
             for (const auto& member : intersection->members) {
@@ -7128,6 +7220,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         !m_currentModulePath.empty() &&
         scoped != m_scopedDeclaredSignatures.end())
         userSignatures = &scoped->second;
+    // The same preference for a declaration the module owns WITHOUT an
+    // annotation (`let render = Template.html(...)`): it is published only
+    // under its qualified name, so the bare-name lookup below would pick
+    // another module's same-named function instead — `Template.render`,
+    // once the Template source is merged into the build (kexhq/kex#385).
+    else if (auto own = m_userSignatures.find(m_currentModulePath + "::" +
+                                               name);
+             !isMethodCall && !m_currentModulePath.empty() &&
+             name.find("::") == std::string::npos &&
+             own != m_userSignatures.end() && !own->second.empty())
+        userSignatures = &own->second;
     else if (auto user = m_userSignatures.find(name);
              user != m_userSignatures.end())
         userSignatures = &user->second;
@@ -7161,6 +7264,41 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (record != m_importedInterfaces->recordFieldNames.end() &&
                     record->second.count(name))
                     return Type::unknown();
+            }
+        } else if (auto* var = std::get_if<TypeVar>(&receiver->kind);
+                   var && var->id >= 0 && var->id >= m_clauseVarMark &&
+                   m_unannotatedParamVars.count(var->id)) {
+            // An unannotated receiver reading a name that exactly one record
+            // declares as a field is that record — decided HERE, before any
+            // method is considered. Left to the method lookup below, a
+            // prelude method of the same name (`Weekday.name`,
+            // `OptionConfig.run`) won instead and typed the receiver as ITS
+            // owner, so `let describe(c) = c.name` became `Weekday -> String`
+            // (kexhq/kex#242). Only records THIS program declares count:
+            // the imported ones (the prelude's `Kex.AST.*` alone declare
+            // `name` several times) would make every common field name
+            // ambiguous. The fallback after the method lookup applies the
+            // same uniqueness rule, over every record, when no method matched
+            // at all; with two candidates there is no single answer, and
+            // resolution carries on as before. Gated like the unannotated-call
+            // case above: only a variable this clause created is its to bind.
+            std::string matchedRecord;
+            TypePtr matchedFieldType;
+            for (const auto& recName : m_programRecords)
+                if (auto record = m_recordFields.find(recName);
+                    record != m_recordFields.end())
+                if (auto field = record->second.find(name);
+                    field != record->second.end()) {
+                    if (!matchedRecord.empty()) {
+                        matchedRecord.clear();
+                        break;
+                    }
+                    matchedRecord = recName;
+                    matchedFieldType = field->second;
+                }
+            if (!matchedRecord.empty()) {
+                unifyVar(var->id, Type::named(matchedRecord));
+                return matchedFieldType;
             }
         } else if (auto* optional = std::get_if<OptionalType>(&receiver->kind)) {
             // `.field` on an optional used to pass here and then break three

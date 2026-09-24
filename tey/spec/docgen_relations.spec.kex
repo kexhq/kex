@@ -1,0 +1,260 @@
+using Tey.Docgen.Model
+using Tey.Docgen.Extract, only: [pageFor]
+using Tey.Docgen.Relations, only: [build, traitMethods]
+using Tey.Docgen.Html, only: [pageBodyHtml, variantsHtml]
+using Tey.Docgen.Fragments, only: [sitePath]
+using Tey.Docgen.Index, only: [fileHeader]
+
+# The reader-facing rules docgen adds on top of extraction: signatures that
+# name and type every parameter, a type's methods gathered from every file,
+# a trait's required/provided split and its implementors, and the page
+# layout that follows from them. Everything here goes through real Kex
+# source, parsed the way `tey docs build` parses it.
+
+foul parsePage(file: String, source: String) -> SourcePage do
+  return parsePageWith(file, source, "")
+end
+
+foul parsePageWith(file: String, source: String, header: String) -> SourcePage do
+  match Kex.AST.parse(source, file) do
+    Ok(Kex.AST.Program { items }) => pageFor(file, items, header)
+    Error(error) => die("spec source does not parse: ${error.message}")
+  end
+end
+
+foul modelOf(pages: [SourcePage]) -> PackageModel do
+  let (types, traits) = build(pages)
+  return PackageModel {
+    package: "prelude", version: "0.4.0", label: "Standard Library",
+    baseUrl: "", generatedAt: "", pages: pages,
+    links: Tey.Docgen.Nav.withTypeHomes(Tey.Docgen.Nav.buildLinks(pages), types),
+    types: types, traits: traits
+  }
+end
+
+# Every function on a page, whichever section it sits in.
+foul functionsOf(page: SourcePage) -> [FunctionEntry] = Tey.Docgen.Relations.allFunctions(page.entities)
+
+foul signaturesOf(page: SourcePage, name: String) -> [String] do
+  return functionsOf(page).filter { |f| f.name == name }.flatMap { |f| f.signatures }
+end
+
+let enumerableSource() -> String do
+  return [
+    "# Things that can be walked.",
+    "trait Walkable do",
+    "  # Folds from the left.",
+    "  reduce :> A -> (A -> T -> A) -> A",
+    "",
+    "  # Calls +f+ with each item.",
+    "  #",
+    "  # @param f [T -> Void] called once per item",
+    "  # @return [Void]",
+    "  let each(f) do",
+    "    this.reduce(0) { |_, item| f(item) }",
+    "  end",
+    "",
+    "  # Keeps the items +pred+ accepts.",
+    "  #",
+    "  # @param pred [T -> Bool] the test",
+    "  # @return [[T]] the kept items",
+    "  let keep(pred) = this.reduce([]) { |acc, item| pred(item) then acc + [item] else acc }",
+    "end"
+  ].join("\n")
+end
+
+let bagSource() -> String do
+  return [
+    "# A bag of things.",
+    "type Bag<X>",
+    "",
+    "make Bag<X>, implement: Walkable do",
+    "  # Folds the bag.",
+    "  reduce :> A -> (A -> X -> A) -> A",
+    "  let reduce(acc, f) = acc",
+    "",
+    "  # Keeps what +pred+ accepts, as a bag.",
+    "  let keep(pred) = this",
+    "end",
+    "",
+    "make Bag<X> do",
+    "  # How many things.",
+    "  size : Integer",
+    "  let size = 0",
+    "end"
+  ].join("\n")
+end
+
+let extraSource() -> String do
+  return [
+    "make Bag<X> do",
+    "  # Shakes the bag.",
+    "  let shake = this",
+    "end"
+  ].join("\n")
+end
+
+describe("Tey.Docgen signatures") do
+  it("names and types every parameter from the annotation") do
+    let page = parsePage("math.kex", "module M do\n  # Both.\n  both : Integer -> Integer -> Integer\n  let both(a, b) = a + b\nend")
+    Assert.equal(signaturesOf(page, "both"), ["both(a: Integer, b: Integer) -> Integer"])
+  end
+
+  it("prefers a named clause over a literal pattern clause") do
+    let page = parsePage("m.kex", "trait Mono do\n  identity :> This\n  # Repeats.\n  #\n  # @param n [Integer] how many\n  let repeat(0) = this.identity\n  let repeat(n: Integer) -> This = this\nend")
+    Assert.equal(signaturesOf(page, "repeat"), ["repeat(n: Integer) -> This"])
+  end
+
+  it("types an unannotated method from its @param and @return tags") do
+    let page = parsePage("walkable.kex", enumerableSource())
+    Assert.equal(signaturesOf(page, "each"), ["each(f: (T -> Void)) -> Void"])
+  end
+
+  it("reads a zero-parameter member as a property") do
+    let page = parsePage("bag.kex", bagSource())
+    Assert.equal(signaturesOf(page, "size"), ["size : Integer"])
+  end
+
+  it("keeps the declared return type for the Returns check") do
+    let page = parsePage("math.kex", "module M do\n  # Both.\n  both : Integer -> Integer -> Integer\n  let both(a, b) = a + b\nend")
+    Assert.equal(functionsOf(page).first.try.returnType, "Integer")
+  end
+end
+
+describe("Tey.Docgen.Extract page intro") do
+  it("cuts the file header off the first declaration's doc") do
+    let source = "# About this file.\n\n# The trait itself.\ntrait Tally do\n  go :> Integer\nend"
+    let page = parsePageWith("t.kex", source, fileHeader(source.split("\n")))
+    Assert.equal(page.intro, "About this file.")
+    match page.entities.first do
+      Just(TraitDecl(entry)) => Assert.equal(entry.doc.summary, "The trait itself.")
+      _ => assert(false)
+    end
+  end
+
+  it("leaves a comment that runs into the declaration as its doc") do
+    let lines = ["# The trait itself.", "trait Tally do", "end"]
+    Assert.equal(fileHeader(lines), "")
+  end
+end
+
+describe("Tey.Docgen.Extract make blocks") do
+  it("folds two blocks for the same receiver in one file into one") do
+    let page = parsePage("bag.kex", bagSource())
+    let makes = page.entities.flatMap { |e|
+      match e do
+        MakeDecl(entry) => [entry]
+        _ => []
+      end
+    }
+    Assert.equal(makes.count, 1)
+    Assert.equal(makes.first.try.functions.map { |f| f.name }.uniq, ["reduce", "keep", "size"])
+  end
+end
+
+describe("Tey.Docgen.Relations") do
+  it("gathers a type's traits and extensions across files") do
+    let model = modelOf([parsePage("walkable.kex", enumerableSource()), parsePage("bag.kex", bagSource()), parsePage("extra.kex", extraSource())])
+    let facts = Tey.Docgen.Relations.typeFactsFor(model, "Bag").try
+    Assert.equal(facts.traits, ["Walkable"])
+    Assert.equal(facts.homePath, "bag")
+    Assert.equal(facts.extensions.map { |x| x.urlPath }, ["bag", "extra"])
+  end
+
+  it("lists a trait's implementors") do
+    let model = modelOf([parsePage("walkable.kex", enumerableSource()), parsePage("bag.kex", bagSource())])
+    let facts = model.traits.find { |t| t.name == "Walkable" }.try
+    Assert.equal(facts.implementors.map { |x| x.target }, ["Bag<X>"])
+  end
+
+  it("splits a trait into required and provided methods") do
+    let model = modelOf([parsePage("walkable.kex", enumerableSource())])
+    let entry = Tey.Docgen.Relations.traitEntries(model.pages.first.try.entities).first.try
+    let (required, provided) = traitMethods(model, entry)
+    Assert.equal(required.map { |f| f.name }, ["reduce"])
+    Assert.equal(provided.map { |f| f.name }, ["each", "keep"])
+  end
+
+  it("counts a make block on the trait as its defaults") do
+    let source = "trait Show do\n  show :> String\nend\n\nmake Show do\n  let show = \"?\"\nend"
+    let model = modelOf([parsePage("show.kex", source)])
+    let entry = Tey.Docgen.Relations.traitEntries(model.pages.first.try.entities).first.try
+    let (required, provided) = traitMethods(model, entry)
+    Assert.equal(required.count, 0)
+    Assert.equal(provided.map { |f| f.name }, ["show"])
+  end
+end
+
+foul bagHtml() -> String do
+  let model = modelOf([parsePage("walkable.kex", enumerableSource()), parsePage("bag.kex", bagSource()), parsePage("extra.kex", extraSource())])
+  return pageBodyHtml(model.pages.find { |p| p.urlPath == "bag" }.try, model, true)
+end
+
+describe("Tey.Docgen.Html type pages") do
+  it("says which traits the type implements") do
+    assert(bagHtml().contains?("Implements <a class=\"xref\" href=\"walkable.html#trait-walkable\"><code>Walkable</code></a>"))
+  end
+
+  it("lists the trait methods the type gets without writing them") do
+    let page = bagHtml()
+    assert(page.contains?("From <a class=\"xref\" href=\"walkable.html#trait-walkable\"><code>Walkable</code></a>"))
+    assert(page.contains?("walkable.html#walkable-each"))
+    # `keep` is the bag's own, so it is not listed as inherited.
+    assert(!page.contains?("walkable.html#walkable-keep\"><code>keep"))
+  end
+
+  it("tags a member that fulfils a trait method") do
+    assert(bagHtml().contains?("class=\"tag-trait\" href=\"walkable.html#walkable-keep\""))
+  end
+
+  it("points at the other modules that add methods") do
+    let page = bagHtml()
+    assert(page.contains?("Defined in other modules"))
+    assert(page.contains?("extra.html#bag-shake"))
+  end
+
+  it("folds the make blocks into the type section") do
+    assert(!bagHtml().contains?("kind-make"))
+  end
+
+  it("drops the placeholder variant of an abstract type") do
+    Assert.equal(variantsHtml(Just([VariantEntry { name: "", fields: [] }])), "")
+  end
+end
+
+describe("Tey.Docgen.Model anchors") do
+  it("spells a receiver without its type variables") do
+    Assert.equal(ownerSlugOf("[X]"), "list")
+    Assert.equal(ownerSlugOf("[Number]"), "list-number")
+    Assert.equal(ownerSlugOf("FileHandle<CanRead, W>"), "filehandle-canread")
+  end
+
+  it("gives operators a readable slug") do
+    Assert.equal(slugOf("+"), "op-plus")
+    Assert.equal(slugOf("<=>"), "op-lt-eq-gt")
+  end
+
+  it("finds the type a receiver extends") do
+    Assert.equal(baseTypeOf("[[Y]]"), "List")
+    Assert.equal(baseTypeOf("Map<K, V>"), "Map")
+  end
+end
+
+describe("Tey.Docgen.Fragments.sitePath") do
+  it("turns a sibling page into a pretty URL") do
+    Assert.equal(sitePath("list.html#list-map", ["prelude", "0.4.0"]), "/prelude/0.4.0/list/#list-map")
+  end
+
+  it("climbs out of a nested page") do
+    Assert.equal(sitePath("../net.html", ["prelude", "0.4.0", "net"]), "/prelude/0.4.0/net/")
+  end
+
+  it("maps an index page to its directory") do
+    Assert.equal(sitePath("index.html", ["prelude", "0.4.0"]), "/prelude/0.4.0/")
+  end
+
+  it("leaves in-page and external links alone") do
+    Assert.equal(sitePath("#x", ["prelude"]), "#x")
+    Assert.equal(sitePath("https://kex.run", ["prelude"]), "https://kex.run")
+  end
+end

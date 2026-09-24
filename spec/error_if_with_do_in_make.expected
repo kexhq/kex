@@ -1,0 +1,2 @@
+spec/error_if_with_do_in_make.kex:11:15: error: use 'then' instead of 'do' in if expression: `if cond then body end`
+Aborted: 1 syntax error — fix before running.

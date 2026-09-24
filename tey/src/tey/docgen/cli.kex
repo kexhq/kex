@@ -29,6 +29,8 @@ module Tey.Docgen.Cli do
       .string("package", None, "Package name (default: package.kex's, else prelude)", None, false)
       .string("label", None, "Human-readable package label", None, false)
       .string("base-url", None, "Documentation site base URL", Just("https://docs.kex.run"), false)
+      .string("format", None, "site (a standalone site) or fragments (page bodies for a host site)", Just("site"), false)
+      .string("link-model", None, "Another unit's model.json to link names into (comma-separated)", None, false)
       .integer("port", None, "HTTP port", Just("4322"), false)
   end
 
@@ -72,6 +74,10 @@ module Tey.Docgen.Cli do
     IO.printLine("  --package <name>   package name (default: package.kex's, else required)")
     IO.printLine("  --label <text>     human-readable package label (default: the name)")
     IO.printLine("  --base-url <url>   site base URL for sitemap")
+    IO.printLine("  --format <f>       site (default) or fragments: page bodies plus")
+    IO.printLine("                     .page.json sidecars and nav.json, for a host site")
+    IO.printLine("  --link-model <p>   another unit's model.json whose names this unit's")
+    IO.printLine("                     pages may link to (comma-separated for several)")
     IO.printLine("")
     IO.printLine("Outputs (all derived from the canonical typed model):")
     IO.printLine("  model.json         full documentation model")

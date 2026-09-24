@@ -77,7 +77,7 @@ module FS do
     #
     # @param path [FilePath] the file to open
     # @param mode [FileModes] +Read+, +Write+, +Append+ or +ReadWrite+
-    # @return [Result<FileHandle, FileError>] the handle, or +OpenFailed+
+    # @return [Result<FileHandle<CanRead, CannotWrite>, FileError>] the handle, or +OpenFailed+
     #
     # @example Reading a file line by line
     #   match FS.File.open("log.txt", Read) do

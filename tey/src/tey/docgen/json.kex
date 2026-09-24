@@ -4,7 +4,7 @@
 # index for dynamic name/kind/type search on the docs site).
 
 module Tey.Docgen.Json do
-  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf, anchorOf, slugOf]
+  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf, anchorOf, memberAnchorOf]
 
   foul modelJson(model: PackageModel) -> String do
     return JSON.stringify({
@@ -221,8 +221,8 @@ module Tey.Docgen.Json do
 
   foul childSearchEntries(e: Entity, page: SourcePage) -> [SearchEntry] do
     match e do
-      TraitDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
-      MakeDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
+      TraitDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page, entry.qualifiedName) }
+      MakeDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page, entry.target) }
       # `flatMap`, not `map(...).reduce([], +)`: the bare `[]` seed left the
       # element type open, and what it unified with depended on the rest of
       # the program — adding an unrelated module was enough to infer
@@ -232,7 +232,7 @@ module Tey.Docgen.Json do
     end
   end
 
-  foul functionSearchEntry(f: FunctionEntry, page: SourcePage) -> SearchEntry do
+  foul functionSearchEntry(f: FunctionEntry, page: SourcePage, owner: String) -> SearchEntry do
     return SearchEntry {
       name: f.name,
       qualifiedName: f.qualifiedName,
@@ -241,7 +241,7 @@ module Tey.Docgen.Json do
       types: f.types,
       summary: f.doc.summary,
       urlPath: page.urlPath,
-      anchor: "fn-${slugOf(f.name)}",
+      anchor: memberAnchorOf(owner, f.name),
       line: f.line
     }
   end

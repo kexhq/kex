@@ -260,9 +260,9 @@ make [X], implement: Enumerable, Foldable do
   # Folds the list from the left, starting with +acc+ and combining each
   # element via +f+.
   #
-  # @param acc [Acc]   initial accumulator value
-  # @param f   [Acc -> X -> Acc]
-  # @return [Acc]
+  # @param acc [A]     initial accumulator value
+  # @param f   [A -> X -> A]
+  # @return [A]
   #
   # @example
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6

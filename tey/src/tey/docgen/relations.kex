@@ -1,0 +1,225 @@
+# Cross-file relations: which make blocks extend which type, which traits a
+# type implements, and who implements each trait.
+#
+# Extraction documents one file at a time, but a reader thinks in types. The
+# methods of `Integer` live in number.kex, time.kex, units.kex and
+# algebra.kex; the fact that a `List` is `Enumerable` — and so has `map`,
+# `filter` and `find` — is written on a make block, not on the type. These
+# indexes are what let the List page say where its methods come from, and
+# the Enumerable page say who implements it.
+
+module Tey.Docgen.Relations do
+  using Tey.Docgen.Model, only: [Entity, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, TypeDecl, RecordDecl, ConstDecl, TraitEntry, MakeEntry, FunctionEntry, SourcePage, PackageModel, Extension, TypeFacts, TraitFacts, anchorOf, baseTypeOf]
+
+  foul build(pages: [SourcePage]) -> ([TypeFacts], [TraitFacts]) do
+    let traitNames = pages.flatMap { |page| traitEntries(page.entities) }.flatMap { |t| [t.name, t.qualifiedName] }
+    let extensions = pages.flatMap { |page| pageExtensions(page, page.entities) }
+    # `make Inspectable do` gives every Inspectable a default method: it
+    # belongs to the trait (traitMethods), not to a type of that name.
+    let bases = extensions.map { |e| baseTypeOf(e.target) }.uniq.reject { |b| traitNames.contains?(b) }
+    let types = bases.map { |base| typeFacts(base, extensions, pages) }
+    let traits = pages.flatMap { |page| pageTraits(page, page.entities, extensions) }
+    return (types, traits)
+  end
+
+  foul pageExtensions(page: SourcePage, entities: [Entity]) -> [Extension] do
+    return entities.flatMap { |e|
+      match e do
+        MakeDecl(entry) => [extensionOf(page, e, entry)]
+        ModuleDecl(entry) => pageExtensions(page, entry.children)
+        _ => []
+      end
+    }
+  end
+
+  foul extensionOf(page: SourcePage, entity: Entity, entry: MakeEntry) -> Extension do
+    return Extension {
+      target: entry.target,
+      urlPath: page.urlPath,
+      pageTitle: page.title,
+      anchor: anchorOf(entity),
+      implements: entry.implements,
+      names: entry.functions.map { |f| f.name }.uniq
+    }
+  end
+
+  foul typeFacts(base: String, extensions: [Extension], pages: [SourcePage]) -> TypeFacts do
+    let mine = extensions.filter { |e| baseTypeOf(e.target) == base }
+    let home = homePathOf(base, mine, pages)
+    return TypeFacts {
+      name: base,
+      homePath: home,
+      homeAnchor: homeAnchorOf(base, home, mine, pages),
+      extensions: mine,
+      traits: mine.flatMap { |e| e.implements }.uniq
+    }
+  end
+
+  # Where a reader should land for a type: the page declaring it; else the
+  # page titled after it (string.kex for the builtin String); else the page
+  # whose make block adds the most methods — number.kex for Integer, not
+  # algebra.kex, which only makes it a Monoid.
+  foul homePathOf(base: String, mine: [Extension], pages: [SourcePage]) -> String do
+    match pages.find { |p| declares?(p.entities, base) } do
+      Just(page) => return page.urlPath
+      None => ()
+    end
+    match pages.find { |p| p.title == base } do
+      Just(page) => return page.urlPath
+      None => ()
+    end
+    # number.kex declares `module Float` (parsing, bounds) beside its
+    # `make Float`: the page with the type's companion module is its home.
+    match pages.find { |p| companionModule?(p.entities, base) && mine.any? { |e| e.urlPath == p.urlPath } } do
+      Just(page) => return page.urlPath
+      None => ()
+    end
+    match mine.first do
+      Just(first) => return mine.reduce(first, { |best, e| e.names.count > best.names.count then e else best }).urlPath
+      None => return ""
+    end
+  end
+
+  foul homeAnchorOf(base: String, home: String, mine: [Extension], pages: [SourcePage]) -> String do
+    let declared = pages.filter { |p| p.urlPath == home }.flatMap { |p| declarationAnchors(p.entities, base) }
+    match declared.first do
+      Just(anchor) => return anchor
+      None => ()
+    end
+    match mine.find { |e| e.urlPath == home } do
+      Just(e) => return e.anchor
+      None => return ""
+    end
+  end
+
+  foul declarationAnchors(entities: [Entity], base: String) -> [String] do
+    return entities.flatMap { |e|
+      match e do
+        TypeDecl(entry) => entry.name == base then [anchorOf(e)] else []
+        RecordDecl(entry) => entry.name == base then [anchorOf(e)] else []
+        ModuleDecl(entry) => declarationAnchors(entry.children, base)
+        _ => []
+      end
+    }
+  end
+
+  foul companionModule?(entities: [Entity], base: String) -> Bool do
+    return entities.any? { |e|
+      match e do
+        ModuleDecl(entry) => entry.qualifiedName == base || companionModule?(entry.children, base)
+        _ => false
+      end
+    }
+  end
+
+  foul declares?(entities: [Entity], base: String) -> Bool do
+    return entities.any? { |e|
+      match e do
+        TypeDecl(entry) => entry.name == base || entry.qualifiedName == base
+        RecordDecl(entry) => entry.name == base || entry.qualifiedName == base
+        ModuleDecl(entry) => declares?(entry.children, base)
+        _ => false
+      end
+    }
+  end
+
+  foul pageTraits(page: SourcePage, entities: [Entity], extensions: [Extension]) -> [TraitFacts] do
+    return entities.flatMap { |e|
+      match e do
+        TraitDecl(entry) => [TraitFacts {
+          name: entry.name,
+          qualifiedName: entry.qualifiedName,
+          urlPath: page.urlPath,
+          anchor: anchorOf(e),
+          implementors: extensions.filter { |x| x.implements.any? { |i| namesTrait?(i, entry.name, entry.qualifiedName) } }
+        }]
+        ModuleDecl(entry) => pageTraits(page, entry.children, extensions)
+        _ => []
+      end
+    }
+  end
+
+  # `implement: Enumerable` and `implement: Kex.Enumerable` both name the
+  # trait declared as `Enumerable` inside `module Kex`.
+  foul namesTrait?(written: String, name: String, qualifiedName: String) -> Bool do
+    let spelled = (written.split("<").first.or(written)).trim
+    return spelled == qualifiedName || spelled == name || qualifiedName.endsWith?(".${spelled}")
+  end
+
+  # The facts for the type a make target extends, if any make extends it.
+  foul typeFactsFor(model: PackageModel, base: String) -> TypeFacts? do
+    return model.types.find { |t| t.name == base }
+  end
+
+  foul traitFactsFor(model: PackageModel, written: String) -> TraitFacts? do
+    return model.traits.find { |t| namesTrait?(written, t.name, t.qualifiedName) }
+  end
+
+  # The declaration of a trait, for its method list.
+  foul traitEntryFor(model: PackageModel, facts: TraitFacts) -> TraitEntry? do
+    let found = model.pages.flatMap { |p| traitEntries(p.entities) }
+    return found.find { |t| t.qualifiedName == facts.qualifiedName }
+  end
+
+  foul traitEntries(entities: [Entity]) -> [TraitEntry] do
+    return entities.flatMap { |e|
+      match e do
+        TraitDecl(entry) => [entry]
+        ModuleDecl(entry) => traitEntries(entry.children)
+        _ => []
+      end
+    }
+  end
+
+  # A trait's methods as an implementor sees them. Required: declared with
+  # no body and given no default anywhere. Provided: a body in the trait,
+  # or a default from a `make <Trait>` block in any file — plus methods such
+  # a block adds that the trait never declared.
+  foul traitMethods(model: PackageModel, entry: TraitEntry) -> ([FunctionEntry], [FunctionEntry]) do
+    let defaults = model.pages.flatMap { |p| traitDefaults(p.entities, entry) }
+    let defaultNames = defaults.map { |f| f.name }
+    let declaredNames = entry.functions.map { |f| f.name }
+    let required = entry.functions.filter { |f| required?(f) && !defaultNames.contains?(f.name) }
+    let provided = entry.functions.reject { |f| required?(f) && !defaultNames.contains?(f.name) }
+    return (required, provided + defaults.reject { |f| declaredNames.contains?(f.name) })
+  end
+
+  foul traitDefaults(entities: [Entity], entry: TraitEntry) -> [FunctionEntry] do
+    return entities.flatMap { |e|
+      match e do
+        MakeDecl(m) => do
+          let base = baseTypeOf(m.target)
+          (base == entry.name || base == entry.qualifiedName) then m.functions else []
+        end
+        ModuleDecl(m) => traitDefaults(m.children, entry)
+        _ => []
+      end
+    }
+  end
+
+  # Whether a make target names a trait of this package.
+  foul traitTarget?(model: PackageModel, target: String) -> Bool do
+    let base = baseTypeOf(target)
+    return model.traits.any? { |t| t.name == base || t.qualifiedName == base }
+  end
+
+  # Every function documented anywhere in these entities: top-level and
+  # module functions, trait methods, make members.
+  foul allFunctions(entities: [Entity]) -> [FunctionEntry] do
+    return entities.flatMap { |e|
+      match e do
+        FuncDecl(entry) => [entry]
+        TraitDecl(entry) => entry.functions
+        MakeDecl(entry) => entry.functions
+        ModuleDecl(entry) => allFunctions(entry.children)
+        _ => []
+      end
+    }
+  end
+
+  # A trait method with no clause is one an implementor must write; one with
+  # a body comes for free.
+  foul required?(f: FunctionEntry) -> Bool do
+    return f.clauseCount == 0
+  end
+end

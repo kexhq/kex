@@ -277,6 +277,21 @@ module Tey.Docgen.Highlight do
     return toks.map { |t| renderTok(t) }.join("")
   end
 
+  # The same highlighting, with every type name that `hrefOf` can place
+  # wrapped in a link to it — signatures read as code and navigate as a
+  # reference. `hrefOf` answers "" for a name it cannot place.
+  foul highlightLinked(source: String, hrefOf: (String -> String)) -> String do
+    return lexAll(source.chars, []).map { |t| renderLinkedTok(t, hrefOf) }.join("")
+  end
+
+  foul renderLinkedTok(t: Tok, hrefOf: (String -> String)) -> String do
+    let plain = renderTok(t)
+    return plain if t.cls != "type"
+    let href = hrefOf(t.text)
+    return plain if href.empty?
+    return "<a class=\"xref\" href=\"${esc(href)}\">${plain}</a>"
+  end
+
   foul renderTok(t: Tok) -> String do
     if t.cls == "plain" || t.cls == "ident"
       return esc(t.text)

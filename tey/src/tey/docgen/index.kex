@@ -3,7 +3,7 @@
 # versions, llms.txt/llms-full.txt, robots.txt and sitemap.xml.
 
 module Tey.Docgen.Index do
-  using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, kindOf, nameOf, lineOf]
+  using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, LinkEntry, kindOf, nameOf, lineOf]
 
   foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
     let out = optString(parsed.values.get("out"))
@@ -43,6 +43,7 @@ module Tey.Docgen.Index do
       return 1
     end
     let (preludeFile, preludeNames, preludeText) = preludeInfo(source)
+    let (typeFacts, traitFacts) = Tey.Docgen.Relations.build(pages)
     let model = PackageModel {
       package: pkg,
       version: version,
@@ -51,11 +52,16 @@ module Tey.Docgen.Index do
       generatedAt: DateTime.now().iso,
       pages: pages,
       modules: Tey.Docgen.Nav.buildModules(pages),
-      links: Tey.Docgen.Nav.buildLinks(pages),
+      # This unit's own names first: `resolve` takes the first hit, so a
+      # name defined here never links away to another unit.
+      links: Tey.Docgen.Nav.withTypeHomes(Tey.Docgen.Nav.buildLinks(pages), typeFacts) + externalLinks(optString(parsed.values.get("link-model"))),
       preludeModules: preludeNames,
       preludeSource: preludeFile,
-      preludeDoc: preludeText
+      preludeDoc: preludeText,
+      types: typeFacts,
+      traits: traitFacts
     }
+    reportDocDrift(pages)
     let _ = FS.File.write(FS.Path.join(out, "model.json"), Tey.Docgen.Json.modelJson(model))
     let _ = FS.File.write(FS.Path.join(out, "search.json"), Tey.Docgen.Json.searchJson(model))
     # Per-version copies: the root files describe the last build, these stay
@@ -63,10 +69,90 @@ module Tey.Docgen.Index do
     let _ = FS.File.write(FS.Path.join(versionDir, "model.json"), Tey.Docgen.Json.modelJson(model))
     let _ = FS.File.write(FS.Path.join(versionDir, "search.json"), Tey.Docgen.Json.searchJson(model))
     let written = writePages(pages, versionDir, model)
+    let format = optString(parsed.values.get("format"))
+    if format == "fragments"
+      let fragments = Tey.Docgen.Fragments.write(pages, versionDir, model)
+      writeUnitIndexFiles(pages, model, out)
+      IO.printLine("docgen: wrote ${fragments} fragment(s), ${written} Markdown page(s), nav.json")
+      return 0
+    end
+    if format != "site" && !format.empty?
+      IO.printError("docgen: unknown --format ${format} (site or fragments)")
+      return 1
+    end
     writeHtml(pages, versionDir, out, model)
     writeIndexFiles(pages, model, out)
     IO.printLine("docgen: wrote ${written} page(s), model.json and search.json")
     return 0
+  end
+
+  # Names another unit documents, so this one's signatures and prose can
+  # link to them: the Tey reference links `String` and `FS.Path` into the
+  # standard library's. Each model.json says which unit it is; its pages sit
+  # at ../../<package>/<version>/ from this unit's version directory. A file
+  # that cannot be read is reported and skipped — links are an extra.
+  foul externalLinks(paths: String) -> [LinkEntry] do
+    return paths.split(",").map { |p| p.trim }.reject { |p| p.empty? }.flatMap { |path|
+      match FS.File.read(path) do
+        Error(_) => do
+          IO.printError("docgen: cannot read --link-model ${path}; skipped")
+          []
+        end
+        Ok(text) => match JSON.parse(text) do
+          Error(_) => do
+            IO.printError("docgen: --link-model ${path} is not JSON; skipped")
+            []
+          end
+          Ok(root) => do
+            let prefix = "../../${jsonText(root["package"])}/${jsonText(root["version"])}/"
+            match root["links"] do
+              Just(list) => list.map { |l| LinkEntry {
+                name: jsonText(l["name"]),
+                urlPath: prefix + jsonText(l["urlPath"]),
+                anchor: jsonText(l["anchor"]),
+                kind: jsonText(l["kind"])
+              } }
+              None => []
+            end
+          end
+        end
+      end
+    }
+  end
+
+  # The unit's own index files — its manifest and the shared versions.json —
+  # without the site-level ones (landing pages, llms.txt, sitemap), which a
+  # host site that frames fragments owns.
+  foul writeUnitIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
+    let versions = accumulateVersions(out, model)
+    let versionDir = FS.Path.join(FS.Path.join(out, model.package), model.version)
+    let _ = FS.File.write(FS.Path.join(versionDir, "manifest.json"), versionManifestJson(pages, model))
+    let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(versions))
+    return ()
+  end
+
+  # A @return tag that names a different type than the signature declares
+  # is a doc comment that has drifted from its code (`min : X?` documented as
+  # returning `Number?`). The page shows the signature's type; this says
+  # where the tag disagrees so the comment can be fixed.
+  foul reportDocDrift(pages: [SourcePage]) -> () do
+    let drifts = pages.flatMap { |page|
+      Tey.Docgen.Relations.allFunctions(page.entities).flatMap { |f|
+        let documented = match f.doc.returns do
+          Just(r) => r.typeName
+          None => ""
+        end
+        let same = normalizeType(documented) == normalizeType(f.returnType)
+        (documented.empty? || f.returnType.empty? || same) then [] else ["  note: ${page.source}:${f.line} ${f.name}: @return [${documented}] but the signature returns ${f.returnType}"]
+      }
+    }
+    drifts.each { |line| IO.printError(line) }
+    IO.printLine("docgen: ${drifts.count} @return tag(s) disagree with their signature") if !drifts.empty?
+    return ()
+  end
+
+  foul normalizeType(text: String) -> String do
+    return text.replace(" ", "")
   end
 
   foul optString(value: String?) -> String do
@@ -99,6 +185,17 @@ module Tey.Docgen.Index do
   foul commentBody(line: String) -> String do
     return line.drop(2) if line.startsWith?("# ")
     return line.drop(1)
+  end
+
+  # The file's opening comment, when it is its own block: a blank line
+  # after it, not a declaration. A comment that runs straight into a
+  # declaration is that declaration's doc, and the page gets no intro.
+  foul fileHeader(lines: [String]) -> String do
+    let comment = lines.takeWhile { |line| line.trim.startsWith?("#") && !line.startsWith?("#!") }
+    return "" if comment.empty?
+    let after = lines.drop(comment.count).first.or("x")
+    return "" if !after.trim.empty?
+    return comment.map { |line| commentBody(line.trim) }.join("\n")
   end
 
   # "using List" -> "List"; anything else (a comment, a blank line, an
@@ -173,7 +270,8 @@ module Tey.Docgen.Index do
     let fullPath = FS.Path.join(sourceDir, fileName)
     match Kex.AST.parseFile(fullPath) do
       Ok(Kex.AST.Program { items }) => do
-        let page = Tey.Docgen.Extract.pageFor(fileName, items)
+        let header = fileHeader(FS.File.readLines(fullPath).or([]))
+        let page = Tey.Docgen.Extract.pageFor(fileName, items, header)
         IO.printLine("  ok ${fileName} (${page.entities.count} entities)")
         return buildPagesLoop(rest, sourceDir, pages + [page])
       end

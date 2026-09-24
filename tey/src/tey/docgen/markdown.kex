@@ -2,7 +2,7 @@
 # kex signatures, frontmatter with the entity index).
 
 module Tey.Docgen.Markdown do
-  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, Doc, Return, Example, SourcePage, PackageModel, kindOf, nameOf]
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, Doc, Return, Example, SourcePage, PackageModel, kindOf, nameOf, memberAnchorOf, baseTypeOf]
 
   foul pageMarkdown(page: SourcePage, model: PackageModel) -> String do
     let frontmatter = pageFrontmatter(page, model)
@@ -30,18 +30,33 @@ module Tey.Docgen.Markdown do
   end
 
   foul pageBody(page: SourcePage, model: PackageModel) -> String do
-    let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n\n")
-    return "# ${page.title}\n\n${sections}\n"
+    let intro = page.intro.empty? then "" else Tey.Docgen.Rdoc.parseOrEmpty(page.intro).summary + "\n\n"
+    let sections = entitiesMd(page.entities, page, model)
+    return "# ${page.title}\n\n${intro}${sections}\n"
+  end
+
+  # The same layout as the HTML: a type's make blocks on its own page are
+  # folded into the type's section.
+  foul entitiesMd(entities: [Entity], page: SourcePage, model: PackageModel) -> String do
+    let owners = Tey.Docgen.Html.declaredTypeNames(entities) + Tey.Docgen.Html.declaredTraitNames(entities)
+    return entities.map { |e|
+      match e do
+        MakeDecl(entry) => owners.contains?(baseTypeOf(entry.target)) then "" else makeSection(entry, page, model)
+        TypeDecl(entry) => typeSection(entry, Tey.Docgen.Html.makesFor(entities, entry.name), page, model)
+        RecordDecl(entry) => recordSection(entry, Tey.Docgen.Html.makesFor(entities, entry.name), page, model)
+        _ => entitySection(e, page, model)
+      end
+    }.reject { |md| md.empty? }.join("\n\n")
   end
 
   foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
-      TypeDecl(entry) => typeSection(entry, page, model)
-      RecordDecl(entry) => recordSection(entry, page, model)
-      TraitDecl(entry) => Tey.Docgen.Markdown.traitSection(entry)
+      TypeDecl(entry) => typeSection(entry, [], page, model)
+      RecordDecl(entry) => recordSection(entry, [], page, model)
+      TraitDecl(entry) => traitSection(entry, page, model)
       MakeDecl(entry) => makeSection(entry, page, model)
       ModuleDecl(entry) => moduleSection(entry, page, model)
-      FuncDecl(entry) => Tey.Docgen.Markdown.functionSection(entry)
+      FuncDecl(entry) => "## function \`${entry.name}\`\n\n${overloadMd(entry, page, model)}"
       ConstDecl(entry) => constantSection(entry)
     end
   end
@@ -51,15 +66,14 @@ module Tey.Docgen.Markdown do
   # siblings of this page.
   foul linkMd(model: PackageModel, fromPath: String, name: String) -> String do
     match Tey.Docgen.Nav.resolve(model.links, name) do
-      Just(entry) => do
-        if fromPath == entry.urlPath
-          return "[${name}](#${entry.anchor})"
-        end
-        let prefix = Tey.Docgen.Nav.upsToVersionDir(fromPath)
-        return "[${name}](${prefix}${entry.urlPath}.md#${entry.anchor})"
-      end
+      Just(entry) => "[${name}](${hrefMd(fromPath, entry.urlPath, entry.anchor)})"
       None => name
     end
+  end
+
+  foul hrefMd(fromPath: String, toPath: String, anchor: String) -> String do
+    return "#${anchor}" if fromPath == toPath
+    return "${Tey.Docgen.Nav.upsToVersionDir(fromPath)}${toPath}.md#${anchor}"
   end
 
   foul linkTypeMd(model: PackageModel, fromPath: String, text: String) -> String do
@@ -72,111 +86,220 @@ module Tey.Docgen.Markdown do
     }.join("")
   end
 
-  foul typeSection(e: TypeEntry, page: SourcePage, model: PackageModel) -> String do
+  foul typeSection(e: TypeEntry, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
     let params = typeParamSuffix(e.typeParams)
     let parents = if e.parents.empty?
       ""
     else
       " : " + e.parents.map { |p| linkTypeMd(model, page.urlPath, p) }.join(", ")
     end
-    let variantLines = match e.variants do
-      Just(vs) => do
-        let bullets = vs.map { |v| variantBullet(v.name, v.fields) }.join("\n")
-        "\n\n**Variants**\n\n${bullets}"
-      end
-      None => ""
+    let real = e.variants.or([]).reject { |v| v.name.empty? }
+    let variantLines = if real.empty?
+      ""
+    else
+      "**Variants**\n\n" + real.map { |v| variantBullet(v.name, v.fields) }.join("\n") + "\n\n"
     end
-    return "## type \`${e.name}${params}\`${parents}\n\n${docBlock(e.doc)}${variantLines}"
+    return "## type \`${e.name}${params}\`${parents}\n\n${entityDocMd(e.doc)}${variantLines}${typeBodyMd(e.name, makes, page, model)}"
   end
 
   foul variantBullet(name: String, fields: [String]) -> String do
-    if name.empty?
-      return "  - _(abstract)_"
-    end
     if fields.empty?
       return "  - \`${name}\`"
     end
     return "  - \`${name}(${fields.join(", ")})\`"
   end
 
-  foul recordSection(e: RecordEntry, page: SourcePage, model: PackageModel) -> String do
+  foul recordSection(e: RecordEntry, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
     let params = typeParamSuffix(e.typeParams)
     let bullets = e.fields.map { |f|
       let typeName = linkTypeMd(model, page.urlPath, f.typeName)
       let suffix = if f.hasDefault then " (optional)" else "" end
       "  - \`${f.name}\` : ${typeName}${suffix}"
     }.join("\n")
-    return "## record \`${e.name}${params}\`\n\n${docBlock(e.doc)}**Fields**\n\n${bullets}"
+    let fields = e.fields.empty? then "" else "**Fields**\n\n${bullets}\n\n"
+    return "## record \`${e.name}${params}\`\n\n${entityDocMd(e.doc)}${fields}${typeBodyMd(e.name, makes, page, model)}"
   end
 
-  foul traitSection(e: TraitEntry) -> String do
+  foul typeBodyMd(name: String, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
+    let (plain, special) = makes.partition { |m| Tey.Docgen.Html.genericReceiver?(m.target, name) }
+    let groups = (plain + special).map { |m|
+      let title = Tey.Docgen.Html.genericReceiver?(m.target, name) then "Methods" else "On \`${m.target}\`"
+      "### ${title}\n\n${entityDocMd(m.doc)}${functionsMd(m.functions, m.target, 4, m.implements, page, model)}"
+    }.join("\n\n")
+    return [implementsMd(name, page, model), groups, providedMd(name, page, model), elsewhereMd(name, page, model)].reject { |x| x.empty? }.join("\n\n")
+  end
+
+  foul implementsMd(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      Just(facts) => facts.traits.empty? then "" else "Implements ${traitLinksMd(facts.traits, page, model)}."
+      None => ""
+    end
+  end
+
+  foul traitLinksMd(traits: [String], page: SourcePage, model: PackageModel) -> String do
+    return traits.map { |t|
+      match Tey.Docgen.Relations.traitFactsFor(model, t) do
+        Just(facts) => "[\`${t}\`](${hrefMd(page.urlPath, facts.urlPath, facts.anchor)})"
+        None => "\`${t}\`"
+      end
+    }.join(", ")
+  end
+
+  foul providedMd(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      None => return ""
+      Just(facts) => do
+        let own = facts.extensions.flatMap { |x| x.names }
+        return facts.traits.map { |t| providedFromMd(t, own, page, model) }.reject { |x| x.empty? }.join("\n\n")
+      end
+    end
+  end
+
+  foul providedFromMd(written: String, own: [String], page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.traitFactsFor(model, written) do
+      None => return ""
+      Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do
+        None => return ""
+        Just(entry) => do
+          let (_, provided) = Tey.Docgen.Relations.traitMethods(model, entry)
+          let inherited = provided.reject { |f| own.contains?(f.name) }
+          let names = inherited.map { |f| f.name }.uniq
+          return "" if names.empty?
+          let rows = names.map { |n|
+            let summary = inherited.filter { |f| f.name == n }.map { |f| Tey.Docgen.Html.firstSentence(f.doc.summary) }.find { |t| !t.empty? }.or("")
+            "  - [\`${n}\`](${hrefMd(page.urlPath, facts.urlPath, memberAnchorOf(facts.qualifiedName, n))}) — ${summary}"
+          }.join("\n")
+          return "### From [\`${facts.name}\`](${hrefMd(page.urlPath, facts.urlPath, facts.anchor)})\n\n${rows}"
+        end
+      end
+    end
+  end
+
+  foul elsewhereMd(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      None => return ""
+      Just(facts) => do
+        let others = facts.extensions.reject { |x| x.urlPath == page.urlPath || x.names.empty? }
+        return "" if others.empty?
+        let rows = others.map { |x|
+          let names = x.names.map { |n| "[\`${n}\`](${hrefMd(page.urlPath, x.urlPath, memberAnchorOf(x.target, n))})" }.join(", ")
+          "  - [${x.pageTitle}](${hrefMd(page.urlPath, x.urlPath, x.anchor)}): ${names}"
+        }.join("\n")
+        return "### Defined in other modules\n\n${rows}"
+      end
+    end
+  end
+
+  foul traitSection(e: TraitEntry, page: SourcePage, model: PackageModel) -> String do
     let params = typeParamSuffix(e.typeParams)
-    let details = renderFunctions(e.functions)
-    return "## trait \`${e.name}${params}\`\n\n${docBlock(e.doc)}${details}"
+    let owner = e.qualifiedName
+    let (required, provided) = Tey.Docgen.Relations.traitMethods(model, e)
+    let implementors = match model.traits.find { |t| t.qualifiedName == e.qualifiedName } do
+      Just(facts) => facts.implementors.empty? then "" else "Implemented by " + facts.implementors.map { |x| "[\`${x.target}\`](${hrefMd(page.urlPath, x.urlPath, x.anchor)})" }.join(", ") + ".\n\n"
+      None => ""
+    end
+    let req = required.empty? then "" else "### Required methods\n\n${functionsMd(required, owner, 4, [], page, model)}\n\n"
+    let prov = provided.empty? then "" else "### Provided methods\n\n${functionsMd(provided, owner, 4, [], page, model)}\n\n"
+    return "## trait \`${e.name}${params}\`\n\n${entityDocMd(e.doc)}${implementors}${req}${prov}"
   end
 
   foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
-    let impls = if e.implements.empty?
-      ""
-    else
-      " implements " + e.implements.map { |i| linkTypeMd(model, page.urlPath, i) }.join(", ")
+    let base = baseTypeOf(e.target)
+    let facts = Tey.Docgen.Relations.typeFactsFor(model, base)
+    let home = match facts do
+      Just(f) => f.homePath == page.urlPath && Tey.Docgen.Html.firstMakeOnPage?(f, e, page)
+      None => false
     end
-    let details = renderFunctions(e.functions)
-    return "## make \`${e.target}\`${impls}\n\n${docBlock(e.doc)}${details}"
+    let fns = functionsMd(e.functions, e.target, 3, e.implements, page, model)
+    if home
+      let rest = [providedMd(base, page, model), elsewhereMd(base, page, model)].reject { |x| x.empty? }.join("\n\n")
+      let traits = implementsMd(base, page, model)
+      return "## type \`${e.target}\`\n\n${traits.empty? then "" else traits + "\n\n"}${entityDocMd(e.doc)}${fns}\n\n${rest}"
+    end
+    let homeLine = match facts do
+      Just(f) => f.homePath.empty? || f.homePath == page.urlPath then "" else "More methods of [\`${base}\`](${hrefMd(page.urlPath, f.homePath, f.homeAnchor)}), added by this module.\n\n"
+      None => ""
+    end
+    let impls = e.implements.empty? then "" else "Implements ${traitLinksMd(e.implements, page, model)}.\n\n"
+    return "## extends \`${e.target}\`\n\n${homeLine}${impls}${entityDocMd(e.doc)}${fns}"
   end
 
   foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
-    let details = e.children.map { |c| entitySection(c, page, model) }.join("\n\n")
-    return "## module \`${e.qualifiedName}\`\n\n${docBlock(e.doc)}${details}"
-  end
-
-  foul functionSection(e: FunctionEntry) -> String do
-    return "## function \`${e.name}\`\n\n${docBlock(e.doc)}${signatureBlock(e)}"
-  end
-
-  foul signatureBlock(f: FunctionEntry) -> String do
-    if f.signatures.empty?
-      return ""
-    end
-    return "\n```kex\n${f.signatures.join("\n")}\n```\n"
+    let (members, declarations) = e.children.partition { |c| Tey.Docgen.Html.memberEntity?(c) }
+    let api = members.map { |c|
+      match c do
+        FuncDecl(f) => "### \`${f.name}\`\n\n${overloadMd(f, page, model)}"
+        ConstDecl(k) => "### \`${k.name}\` (constant)\n\n${k.typeName.empty? then "" else "```kex\n${k.name} : ${k.typeName}\n```\n\n"}${entityDocMd(k.doc)}"
+        _ => ""
+      end
+    }.join("\n\n")
+    let own = "## module \`${e.qualifiedName}\`\n\n${entityDocMd(e.doc)}${api}"
+    let nested = entitiesMd(declarations, page, model)
+    return nested.empty? then own else own + "\n\n" + nested
   end
 
   foul constantSection(e: ConstantEntry) -> String do
-    return "## constant \`${e.name}\`\n\n${docBlock(e.doc)}"
+    let typePart = e.typeName.empty? then "" else " : \`${e.typeName}\`"
+    return "## constant \`${e.name}\`${typePart}\n\n${entityDocMd(e.doc)}"
   end
 
-  foul renderFunctions(functions: [FunctionEntry]) -> String do
-    if functions.empty?
-      return ""
-    end
-    let sections = functions.map { |f| functionBlock(f) }
-    return "\n" + sections.join("\n\n")
+  # One heading per name; overloads listed under it.
+  foul functionsMd(functions: [FunctionEntry], owner: String, level: Integer, implements: [String],
+                   page: SourcePage, model: PackageModel) -> String do
+    let names = functions.map { |f| f.name }.uniq
+    let hashes = "#".repeat(level)
+    return names.map { |n|
+      let tags = traitTagsMd(n, implements, page, model)
+      let body = functions.filter { |f| f.name == n }.map { |f| overloadMd(f, page, model) }.join("\n\n")
+      "${hashes} \`${n}\`${tags}\n\n${body}"
+    }.join("\n\n")
   end
 
-  foul functionBlock(f: FunctionEntry) -> String do
-    let parts = ["#### \`${f.name}\`"]
-    let withSummary = if f.doc.summary.empty?
-      parts
-    else
-      parts + ["", f.doc.summary]
-    end
-    let withSigs = signatureParts(withSummary, f)
-    let withReturns = returnParts(withSigs, f.doc)
+  foul traitTagsMd(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do
+    let hits = implements.flatMap { |t|
+      match Tey.Docgen.Relations.traitFactsFor(model, t) do
+        None => []
+        Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do
+          None => []
+          Just(entry) => entry.functions.any? { |f| f.name == name } then [facts.name] else []
+        end
+      end
+    }
+    return hits.empty? then "" else " (from ${hits.join(", ")})"
+  end
+
+  foul overloadMd(f: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
+    let parts = signatureParts([], f)
+    let withSummary = f.doc.summary.empty? then parts else parts + ["", f.doc.summary]
+    let withParams = paramParts(withSummary, f)
+    let withReturns = returnParts(withParams, f)
     let withExamples = exampleParts(withReturns, f.doc)
-    return withExamples.join("\n")
+    return withExamples.join("\n").trim
   end
 
   foul signatureParts(parts: [String], f: FunctionEntry) -> [String] do
     if f.signatures.empty?
       return parts
     end
-    return parts + ["", "```kex"] + f.signatures + ["```"]
+    return parts + ["```kex"] + f.signatures + ["```"]
   end
 
-  foul returnParts(parts: [String], doc: Doc) -> [String] do
-    match doc.returns do
+  foul paramParts(parts: [String], f: FunctionEntry) -> [String] do
+    let described = f.doc.params.reject { |p| p.description.empty? }
+    return parts if described.empty?
+    let typed = !f.signatures.empty?
+    let rows = described.map { |p|
+      let typePart = typed || p.typeName.empty? then "" else " (\`${p.typeName}\`)"
+      "  - \`${p.name}\`${typePart} — ${p.description}"
+    }
+    return parts + ["", "**Parameters**", ""] + rows
+  end
+
+  foul returnParts(parts: [String], f: FunctionEntry) -> [String] do
+    match f.doc.returns do
       Just(r) => do
-        let line = returnLine(r)
+        let typed = !f.signatures.empty?
+        let line = typed then r.description else returnLine(r)
         if line.empty?
           return parts
         end
@@ -213,7 +336,13 @@ module Tey.Docgen.Markdown do
     else
       ["_${ex.caption}_", ""]
     end
-    return caption + ["```kex", ex.code, "```"]
+    return caption + ["```kex", ex.code, "```", ""]
+  end
+
+  foul entityDocMd(doc: Doc) -> String do
+    let examples = exampleParts([], doc)
+    let tail = examples.empty? then "" else examples.join("\n").trim + "\n\n"
+    return docBlock(doc) + tail
   end
 
   foul docBlock(doc: Doc) -> String do

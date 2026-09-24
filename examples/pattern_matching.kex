@@ -1,4 +1,3 @@
-# kex: no-check
 # Pattern matching examples
 
 type Shape
@@ -86,10 +85,14 @@ let describe(list: [Int]) -> String do
 end
 
 # Tuple patterns in receive
+foul process(value) = IO.printLine("processing ${value}")
+foul logFailure(message: String) = IO.printError(message)
+foul retryLater = IO.printLine("retrying later")
+
 foul handleMessage do
   receive do
     (:ok, value) => process(value)
-    (:error, reason) => log("Failed: ${reason}")
-    (:timeout) => retry()
+    (:error, reason) => logFailure("Failed: ${reason}")
+    (:timeout) => retryLater
   end
 end

@@ -7,16 +7,24 @@
 # PackageModel, so nothing here parses Markdown or JSON.
 
 module Tey.Docgen.Html do
-  using Tey.Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, LinkEntry, kindOf, nameOf, anchorOf]
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, Doc, SourcePage, PackageModel, VersionEntry, LinkEntry, kindOf, nameOf, anchorOf, memberAnchorOf, ownerSlugOf, baseTypeOf]
 
   foul pageHtml(page: SourcePage, model: PackageModel) -> String do
+    return layout(page.title, page.urlPath, pageBodyHtml(page, model, true), model)
+  end
+
+  # A page's content without the chrome — what `pageHtml` wraps in the
+  # layout, and what a host site (the fragments output) wraps in its own.
+  # `heading` is false when the host renders the title itself.
+  foul pageBodyHtml(page: SourcePage, model: PackageModel, heading: Bool) -> String do
     if preludePage?(page, model)
-      return preludePageHtml(page, model)
+      return preludeBodyHtml(page, model, heading)
     end
-    let sections = page.entities.map { |e| entitySection(e, page, model) }.join("\n")
+    let sections = entitiesHtml(page.entities, page, model)
     let tag = preludeTag(preludePaths(model).contains?(page.urlPath))
-    let body = "<h1>${esc(page.title)}${tag}</h1>\n${sections}\n${submodulesHtml(page, model)}"
-    return layout(page.title, page.urlPath, body, model)
+    let intro = page.intro.empty? then "" else "<div class=\"intro\">\n${docHtml(Tey.Docgen.Rdoc.parseOrEmpty(page.intro), page, model)}</div>\n"
+    let h1 = heading then "<h1>${esc(page.title)}${tag}</h1>\n" else ""
+    return "${h1}${intro}${sections}\n${submodulesHtml(page, model)}"
   end
 
   # A module family spread over several files ("Net" + net/dns.kex,
@@ -46,17 +54,16 @@ module Tey.Docgen.Html do
   # blank. What it HAS is a list of imports and a comment explaining them —
   # which is exactly the page a reader wants: what am I given for free, and
   # where does each of those live.
-  foul preludePageHtml(page: SourcePage, model: PackageModel) -> String do
+  foul preludeBodyHtml(page: SourcePage, model: PackageModel, heading: Bool) -> String do
     let doc = Tey.Docgen.Rdoc.parseOrEmpty(model.preludeDoc)
     let items = model.preludeModules.map { |name| preludeItem(model, page.urlPath, name) }.join("\n")
-    let body = [
-      "<h1>${esc(page.title)}</h1>",
-      docHtml(doc),
+    return [
+      heading then "<h1>${esc(page.title)}</h1>" else "",
+      plainDocHtml(doc),
       "<h2 class=\"group\">Modules in the prelude</h2>",
       "<p class=\"group-note\">${model.preludeModules.count} module(s), visible in every file with no import.</p>",
       "<ul class=\"prelude-list\">\n${items}\n</ul>"
     ].join("\n")
-    return layout(page.title, page.urlPath, body, model)
   end
 
   foul preludeItem(model: PackageModel, fromPath: String, name: String) -> String do
@@ -105,19 +112,39 @@ module Tey.Docgen.Html do
   # them — visible everywhere, or one `using` away — because that is the first
   # question anyone has about a standard library.
   foul versionIndexHtml(model: PackageModel) -> String do
+    return layout(labelOf(model), "", versionIndexBodyHtml(model, true), model)
+  end
+
+  foul versionIndexBodyHtml(model: PackageModel, heading: Bool) -> String do
     let label = labelOf(model)
     let top = firstModulesOfPages(model.pages)
     let lede = "<p class=\"lede\">Reference documentation for the <strong>${esc(label)}</strong> package, generated from source at ${esc(model.generatedAt.take(10))}.</p>"
-    let heading = "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>"
-    return layout(label, "", "${heading}\n${lede}\n${indexSections(model, top)}", model)
+    let h1 = heading then "<h1>${esc(label)} <span class=\"ver\">${esc(model.version)}</span></h1>\n" else ""
+    return "${h1}${lede}\n${indexSections(model, top)}"
+  end
+
+  # The modules worth a card. `Int8`, `Float32` and friends are modules
+  # holding two constants each, declared in number.kex beside Integer and
+  # Float: listing them beside `Net` and `FS` made the index read as if the
+  # stdlib had a dozen integer libraries. They are on their file's page.
+  foul cardModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
+    return model.modules.reject { |m| constantsOnly?(model, m) }
+  end
+
+  foul constantsOnly?(model: PackageModel, m: Tey.Docgen.Model.ModuleIndexEntry) -> Bool do
+    return false if m.members.empty?
+    match model.pages.find { |p| p.urlPath == m.urlPath } do
+      None => false
+      Just(page) => page.title != m.qualifiedName && m.members.all? { |mem| mem.anchor.startsWith?("constant-") }
+    end
   end
 
   foul indexSections(model: PackageModel, top: [String]) -> String do
     if model.preludeModules.empty?
-      return cardGrid(model.modules, top)
+      return cardGrid(cardModules(model), top)
     end
     let paths = preludePaths(model)
-    let (included, optIn) = model.modules.partition { |m| paths.contains?(m.urlPath) }
+    let (included, optIn) = cardModules(model).partition { |m| paths.contains?(m.urlPath) }
     return [
       "<h2 class=\"group\">In the prelude</h2>",
       "<p class=\"group-note\">Visible in every file, with no import. ${included.count} module(s).</p>",
@@ -479,7 +506,7 @@ module Tey.Docgen.Html do
     # any. A prose page declares nothing, and an empty <ul> is not markup
     # worth emitting.
     let entityLinks = if active && !page.entities.empty?
-      "<ul class=\"side-sub\">\n" + page.entities.map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n") + "\n</ul>"
+      "<ul class=\"side-sub\">\n" + sectionEntities(page.entities).map { |e| "<li><a href=\"#${anchorOf(e)}\">${esc(nameOf(e))}</a></li>" }.join("\n") + "\n</ul>"
     else
       ""
     end
@@ -523,15 +550,74 @@ module Tey.Docgen.Html do
     return "<a class=\"card\" href=\"${href}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
 
+  # A page's declarations in source order — except that a type's `make`
+  # blocks on the same page are pulled into the type's own section, so
+  # `List` reads as one thing (the type, then its methods, grouped by the
+  # receiver they need) rather than a type followed by three loose "make"
+  # sections.
+  foul entitiesHtml(entities: [Entity], page: SourcePage, model: PackageModel) -> String do
+    let owners = declaredTypeNames(entities) + declaredTraitNames(entities)
+    return entities.map { |e|
+      match e do
+        MakeDecl(entry) => owners.contains?(baseTypeOf(entry.target)) then "" else makeSection(entry, page, model)
+        TypeDecl(entry) => typeSection(entry, makesFor(entities, entry.name), page, model)
+        RecordDecl(entry) => recordSection(entry, makesFor(entities, entry.name), page, model)
+        _ => entitySection(e, page, model)
+      end
+    }.reject { |html| html.empty? }.join("\n")
+  end
+
+  # The declarations that get a section of their own: everything except the
+  # make blocks folded into a type or trait on the same page.
+  foul sectionEntities(entities: [Entity]) -> [Entity] do
+    let owners = declaredTypeNames(entities) + declaredTraitNames(entities)
+    return entities.reject { |e|
+      match e do
+        MakeDecl(entry) => owners.contains?(baseTypeOf(entry.target))
+        _ => false
+      end
+    }
+  end
+
+  foul declaredTypeNames(entities: [Entity]) -> [String] do
+    return entities.flatMap { |e|
+      match e do
+        TypeDecl(entry) => [entry.name]
+        RecordDecl(entry) => [entry.name]
+        _ => []
+      end
+    }
+  end
+
+  # A `make <Trait>` beside its trait is the trait's defaults, rendered in
+  # the trait's own section (Relations.traitMethods).
+  foul declaredTraitNames(entities: [Entity]) -> [String] do
+    return entities.flatMap { |e|
+      match e do
+        TraitDecl(entry) => [entry.name]
+        _ => []
+      end
+    }
+  end
+
+  foul makesFor(entities: [Entity], name: String) -> [MakeEntry] do
+    return entities.flatMap { |e|
+      match e do
+        MakeDecl(entry) => baseTypeOf(entry.target) == name then [entry] else []
+        _ => []
+      end
+    }
+  end
+
   foul entitySection(e: Entity, page: SourcePage, model: PackageModel) -> String do
     match e do
-      TypeDecl(entry) => typeSection(entry, page, model)
-      RecordDecl(entry) => recordSection(entry, page, model)
+      TypeDecl(entry) => typeSection(entry, [], page, model)
+      RecordDecl(entry) => recordSection(entry, [], page, model)
       TraitDecl(entry) => traitSection(entry, page, model)
       MakeDecl(entry) => makeSection(entry, page, model)
       ModuleDecl(entry) => moduleSection(entry, page, model)
       FuncDecl(entry) => functionSection(entry, page, model)
-      ConstDecl(entry) => constantSection(entry)
+      ConstDecl(entry) => constantSection(entry, page, model)
     end
   end
 
@@ -541,40 +627,156 @@ module Tey.Docgen.Html do
     return { |name| linkType(model.links, page.urlPath, name) }
   end
 
-  foul typeSection(e: TypeEntry, page: SourcePage, model: PackageModel) -> String do
+  # The bare href for a name, or "" — what linked highlighting and linked
+  # prose both need.
+  foul hrefer(page: SourcePage, model: PackageModel) -> (String -> String) do
+    return { |name|
+      match Tey.Docgen.Nav.resolve(model.links, name) do
+        Just(entry) => Tey.Docgen.Nav.hrefFrom(page.urlPath, entry.urlPath, entry.anchor)
+        None => ""
+      end
+    }
+  end
+
+  foul typeSection(e: TypeEntry, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
     let link = Tey.Docgen.Html.linker(page, model)
     let parents = if e.parents.empty?
       ""
     else
-      " : " + e.parents.map { |p| link(p) }.join(", ")
+      " : " + e.parents.map { |p| "<code>${linkTypeText(link, p)}</code>" }.join(", ")
     end
-    return "<section class=\"entity\" id=\"type-${slug(e.name)}\">\n<h2><span class=\"kind kind-type\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${parents}</h2>\n${docHtml(e.doc)}${variantsHtml(e.variants)}\n</section>"
+    let head = "<h2><span class=\"kind kind-type\">type</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code>${parents}</h2>"
+    let body = "${entityDocHtml(e.doc, page, model)}${variantsHtml(e.variants)}${typeBodyHtml(e.name, makes, page, model)}"
+    return "<section class=\"entity\" id=\"${anchorOf(TypeDecl(e))}\">\n${head}\n${body}\n</section>"
   end
 
+  # Only real constructors: an abstract type (`type List<X>`) has none, and a
+  # "Variants: (abstract)" heading told the reader nothing.
   foul variantsHtml(variants: [VariantEntry]?) -> String do
-    match variants do
-      Just(vs) => do
-        let items = vs.map { |v| variantItem(v) }.join("\n")
-        return "<h3>Variants</h3>\n<ul class=\"variants\">\n${items}\n</ul>"
-      end
-      None => ""
-    end
+    let real = variants.or([]).reject { |v| v.name.empty? }
+    return "" if real.empty?
+    let items = real.map { |v| variantItem(v) }.join("\n")
+    return "<h3>Variants</h3>\n<ul class=\"variants\">\n${items}\n</ul>\n"
   end
 
   foul variantItem(v: VariantEntry) -> String do
-    if v.name.empty?
-      return "<li class=\"abstract\"><em>abstract</em></li>"
-    end
     if v.fields.empty?
       return "<li><code>${esc(v.name)}</code></li>"
     end
     return "<li><code>${esc(v.name)}(${esc(v.fields.join(", "))})</code></li>"
   end
 
-  foul recordSection(e: RecordEntry, page: SourcePage, model: PackageModel) -> String do
+  foul recordSection(e: RecordEntry, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
     let link = Tey.Docgen.Html.linker(page, model)
     let rows = e.fields.map { |f| fieldRow(f, link) }.join("\n")
-    return "<section class=\"entity\" id=\"record-${slug(e.name)}\">\n<h2><span class=\"kind kind-record\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n</section>"
+    let fields = e.fields.empty? then "" else "<h3>Fields</h3>\n<dl class=\"fields\">\n${rows}\n</dl>\n"
+    let head = "<h2><span class=\"kind kind-record\">record</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>"
+    return "<section class=\"entity\" id=\"${anchorOf(RecordDecl(e))}\">\n${head}\n${entityDocHtml(e.doc, page, model)}${fields}${typeBodyHtml(e.name, makes, page, model)}\n</section>"
+  end
+
+  # Everything about a type beyond its declaration: the traits it
+  # implements (from every file), its methods grouped by receiver, the
+  # methods it gets from those traits for free, and the other modules that
+  # add methods to it.
+  foul typeBodyHtml(name: String, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
+    # The plain receiver's methods first; `[Number]`-only extras after.
+    let (plain, special) = makes.partition { |m| genericReceiver?(m.target, name) }
+    let groups = (plain + special).map { |m| makeGroupHtml(m, name, page, model) }.join("\n")
+    return "${implementsHtml(name, page, model)}${groups}${providedHtml(name, page, model)}${elsewhereHtml(name, page, model)}"
+  end
+
+  # "Methods" for the plain receiver, "On `[Number]`" for a specialised one.
+  foul makeGroupHtml(m: MakeEntry, base: String, page: SourcePage, model: PackageModel) -> String do
+    let title = if genericReceiver?(m.target, base)
+      "Methods"
+    else
+      "On <code>${esc(m.target)}</code>"
+    end
+    # The traits are on the type's own "Implements" line; each member that
+    # fulfils one carries the trait's tag.
+    let fns = functionsHtml(m.functions, m.target, 4, m.implements, page, model)
+    return "<section class=\"members\" id=\"${anchorOf(MakeDecl(m))}\">\n<h3>${title}</h3>\n${entityDocHtml(m.doc, page, model)}${fns}\n</section>"
+  end
+
+  # `[X]` and `FileHandle<R, W>` are the type itself; `[Number]` is not.
+  foul genericReceiver?(target: String, base: String) -> Bool do
+    return ownerSlugOf(target) == ownerSlugOf(base)
+  end
+
+  # Every trait the type implements, wherever the implementing make block
+  # lives — algebra.kex is what makes Integer a Monoid, and number.kex's
+  # reader should still learn that.
+  foul implementsHtml(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      Just(facts) => facts.traits.empty? then "" else "<p class=\"implements\">Implements ${traitLinks(facts.traits, page, model)}.</p>\n"
+      None => ""
+    end
+  end
+
+  foul traitLinks(traits: [String], page: SourcePage, model: PackageModel) -> String do
+    let links = traits.map { |t|
+      match Tey.Docgen.Relations.traitFactsFor(model, t) do
+        Just(facts) => "<a class=\"xref\" href=\"${Tey.Docgen.Nav.hrefFrom(page.urlPath, facts.urlPath, facts.anchor)}\"><code>${esc(t)}</code></a>"
+        None => "<code>${esc(t)}</code>"
+      end
+    }
+    return links.join(", ")
+  end
+
+  # The trait methods a type gets without writing them: a trait's provided
+  # methods, minus any the type defines itself somewhere. This is the
+  # answer to "where does `List.eachIndexed` come from?".
+  foul providedHtml(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      None => return ""
+      Just(facts) => do
+        let own = facts.extensions.flatMap { |x| x.names }
+        return facts.traits.map { |t| providedFromHtml(t, own, page, model) }.join("")
+      end
+    end
+  end
+
+  foul providedFromHtml(written: String, own: [String], page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.traitFactsFor(model, written) do
+      None => return ""
+      Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do
+        None => return ""
+        Just(entry) => do
+          let (_, provided) = Tey.Docgen.Relations.traitMethods(model, entry)
+          let inherited = provided.reject { |f| own.contains?(f.name) }
+          let names = inherited.map { |f| f.name }.uniq
+          return "" if names.empty?
+          let rows = names.map { |n|
+            let fs = inherited.filter { |f| f.name == n }
+            let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, facts.urlPath, memberAnchorOf(facts.qualifiedName, n))
+            let summary = fs.map { |f| firstSentence(f.doc.summary) }.find { |t| !t.empty? }.or("")
+            "<div class=\"param\"><dt><a class=\"xref\" href=\"${href}\"><code>${esc(n)}</code></a></dt><dd>${inlineCode(summary)}</dd></div>"
+          }.join("\n")
+          let traitHref = Tey.Docgen.Nav.hrefFrom(page.urlPath, facts.urlPath, facts.anchor)
+          return "<h3>From <a class=\"xref\" href=\"${traitHref}\"><code>${esc(facts.name)}</code></a></h3>\n<dl class=\"params inherited\">\n${rows}\n</dl>\n"
+        end
+      end
+    end
+  end
+
+  # Other modules that add methods to this type: `make Integer` in
+  # time.kex is where `5.seconds` comes from.
+  foul elsewhereHtml(name: String, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.typeFactsFor(model, name) do
+      None => return ""
+      Just(facts) => do
+        let others = facts.extensions.reject { |x| x.urlPath == page.urlPath || x.names.empty? }
+        return "" if others.empty?
+        let rows = others.map { |x|
+          let pageHref = Tey.Docgen.Nav.hrefFrom(page.urlPath, x.urlPath, x.anchor)
+          let names = x.names.map { |n|
+            "<a class=\"xref\" href=\"${Tey.Docgen.Nav.hrefFrom(page.urlPath, x.urlPath, memberAnchorOf(x.target, n))}\"><code>${esc(n)}</code></a>"
+          }.join(", ")
+          "<div class=\"param\"><dt><a class=\"xref\" href=\"${pageHref}\">${esc(x.pageTitle)}</a></dt><dd>${names}</dd></div>"
+        }.join("\n")
+        return "<h3>Defined in other modules</h3>\n<dl class=\"params elsewhere\">\n${rows}\n</dl>\n"
+      end
+    end
   end
 
   foul fieldRow(f: Tey.Docgen.Model.FieldEntry, link: (String -> String)) -> String do
@@ -606,65 +808,215 @@ module Tey.Docgen.Html do
     end
   end
 
+  # A trait: what an implementor must write, what it then gets for free,
+  # and who implements it.
   foul traitSection(e: TraitEntry, page: SourcePage, model: PackageModel) -> String do
-    let link = Tey.Docgen.Html.linker(page, model)
-    return "<section class=\"entity\" id=\"trait-${slug(e.name)}\">\n<h2><span class=\"kind kind-trait\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
-  end
-
-  foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
-    let link = Tey.Docgen.Html.linker(page, model)
-    let impls = if e.implements.empty?
+    let owner = e.qualifiedName
+    let (required, provided) = Tey.Docgen.Relations.traitMethods(model, e)
+    let requiredHtml = if required.empty?
       ""
     else
-      " implements " + e.implements.map { |i| link(i) }.join(", ")
+      "<h3>Required methods</h3>\n<p class=\"group-note\">An implementor writes these.</p>\n${functionsHtml(required, owner, 4, [], page, model)}\n"
     end
-    return "<section class=\"entity\" id=\"make-${slug(e.target)}\">\n<h2><span class=\"kind kind-make\">make</span> <code>${esc(e.target)}</code>${impls}</h2>\n${docHtml(e.doc)}${functionsHtml(e.functions, link)}\n</section>"
+    let providedHtml = if provided.empty?
+      ""
+    else
+      let note = required.empty? then "" else "<p class=\"group-note\">Every implementor gets these, written in terms of the required methods.</p>\n"
+      "<h3>Provided methods</h3>\n${note}${functionsHtml(provided, owner, 4, [], page, model)}\n"
+    end
+    let head = "<h2><span class=\"kind kind-trait\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>"
+    return "<section class=\"entity\" id=\"${anchorOf(TraitDecl(e))}\">\n${head}\n${entityDocHtml(e.doc, page, model)}${implementedByHtml(e, page, model)}${requiredHtml}${providedHtml}\n</section>"
   end
 
+  foul implementedByHtml(e: TraitEntry, page: SourcePage, model: PackageModel) -> String do
+    match model.traits.find { |t| t.qualifiedName == e.qualifiedName } do
+      None => return ""
+      Just(facts) => do
+        return "" if facts.implementors.empty?
+        let items = facts.implementors.map { |x|
+          let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, x.urlPath, x.anchor)
+          "<a class=\"xref\" href=\"${href}\"><code>${esc(x.target)}</code></a>"
+        }.join(", ")
+        return "<p class=\"implements\">Implemented by ${items}.</p>\n"
+      end
+    end
+  end
+
+  # A make block with no type declaration on its page. On the type's home
+  # page (string.kex for String) it carries everything the type section
+  # would; elsewhere it points home.
+  foul makeSection(e: MakeEntry, page: SourcePage, model: PackageModel) -> String do
+    let base = baseTypeOf(e.target)
+    let facts = Tey.Docgen.Relations.typeFactsFor(model, base)
+    let home = match facts do
+      Just(f) => f.homePath == page.urlPath && firstMakeOnPage?(f, e, page)
+      None => false
+    end
+    # On its home page a builtin's make block IS the type's documentation
+    # (String has no `type` declaration); anywhere else it extends a type
+    # documented elsewhere.
+    let head = if home
+      "<h2><span class=\"kind kind-type\">type</span> <code>${esc(e.target)}</code></h2>"
+    else
+      "<h2><span class=\"kind kind-make\">extends</span> <code>${esc(e.target)}</code></h2>"
+    end
+    let fns = functionsHtml(e.functions, e.target, 3, e.implements, page, model)
+    let body = if home
+      "${implementsHtml(base, page, model)}${entityDocHtml(e.doc, page, model)}${fns}${providedHtml(base, page, model)}${elsewhereHtml(base, page, model)}"
+    else
+      let impls = e.implements.empty? then "" else "<p class=\"implements\">Implements ${traitLinks(e.implements, page, model)}.</p>\n"
+      "${homeNote(base, facts, page, model)}${impls}${entityDocHtml(e.doc, page, model)}${fns}"
+    end
+    return "<section class=\"entity\" id=\"${anchorOf(MakeDecl(e))}\">\n${head}\n${body}\n</section>"
+  end
+
+  foul firstMakeOnPage?(facts: Tey.Docgen.Model.TypeFacts, e: MakeEntry, page: SourcePage) -> Bool do
+    match facts.extensions.find { |x| x.urlPath == page.urlPath } do
+      Just(x) => x.anchor == anchorOf(MakeDecl(e))
+      None => false
+    end
+  end
+
+  foul homeNote(base: String, facts: Tey.Docgen.Model.TypeFacts?, page: SourcePage, model: PackageModel) -> String do
+    match Tey.Docgen.Relations.traitFactsFor(model, base) do
+      Just(t) => do
+        let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, t.urlPath, t.anchor)
+        return "<p class=\"home-note\">Methods every <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a> gets, defined by this module.</p>\n"
+      end
+      None => ()
+    end
+    match facts do
+      Just(f) => do
+        return "" if f.homePath.empty? || f.homePath == page.urlPath
+        let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, f.homePath, f.homeAnchor)
+        return "<p class=\"home-note\">More methods of <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a>, added by this module.</p>\n"
+      end
+      None => ""
+    end
+  end
+
+  # A module's own functions and constants are its API, listed under it
+  # (h3) like a type's methods. Types, traits and nested modules it declares
+  # stand as sections of their own after that.
   foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
-    let children = e.children.map { |c| entitySection(c, page, model) }.join("\n")
-    return "<section class=\"entity\" id=\"module-${slug(e.qualifiedName)}\">\n<h2><span class=\"kind kind-module\">module</span> <code>${esc(e.qualifiedName)}</code></h2>\n${docHtml(e.doc)}${children}\n</section>"
+    let (members, declarations) = e.children.partition { |c| memberEntity?(c) }
+    let api = members.map { |c| moduleMemberHtml(c, page, model) }.join("\n")
+    let apiHtml = api.empty? then "" else "<div class=\"functions\">\n${api}\n</div>\n"
+    let head = "<h2><span class=\"kind kind-module\">module</span> <code>${esc(e.qualifiedName)}</code></h2>"
+    let own = "<section class=\"entity\" id=\"${anchorOf(ModuleDecl(e))}\">\n${head}\n${entityDocHtml(e.doc, page, model)}${apiHtml}</section>"
+    return own + "\n" + entitiesHtml(declarations, page, model)
+  end
+
+  foul memberEntity?(e: Entity) -> Bool do
+    match e do
+      FuncDecl(_) => true
+      ConstDecl(_) => true
+      _ => false
+    end
+  end
+
+  foul moduleMemberHtml(e: Entity, page: SourcePage, model: PackageModel) -> String do
+    let anchor = anchorOf(e)
+    match e do
+      FuncDecl(f) => "<div class=\"fn\" id=\"${anchor}\">\n<h3><a class=\"self\" href=\"#${anchor}\"><code>${esc(f.name)}</code></a></h3>\n${overloadHtml(f, page, model)}\n</div>"
+      ConstDecl(c) => do
+        let typePart = c.typeName.empty? then "" else "<pre class=\"code sig\"><code>${Tey.Docgen.Highlight.highlightLinked("${c.name} : ${c.typeName}", hrefer(page, model))}</code></pre>\n"
+        "<div class=\"fn\" id=\"${anchor}\">\n<h3><a class=\"self\" href=\"#${anchor}\"><code>${esc(c.name)}</code></a> <span class=\"tag-kind\">constant</span></h3>\n${typePart}${docHtml(c.doc, page, model)}${examplesHtml(c.doc)}\n</div>"
+      end
+      _ => ""
+    end
   end
 
   foul functionSection(e: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
-    let link = Tey.Docgen.Html.linker(page, model)
-    return "<section class=\"entity\" id=\"function-${slug(e.name)}\">\n<h2><span class=\"kind kind-function\">function</span> <code>${esc(e.name)}</code></h2>\n${docHtml(e.doc)}${signaturesHtml(e)}${paramsHtml(e.doc, link)}${returnsHtml(e.doc, link)}${examplesHtml(e.doc)}${deprecatedHtml(e.doc)}\n</section>"
+    let head = "<h2><span class=\"kind kind-function\">function</span> <code>${esc(e.name)}</code></h2>"
+    return "<section class=\"entity\" id=\"${anchorOf(FuncDecl(e))}\">\n${head}\n${overloadHtml(e, page, model)}\n</section>"
   end
 
-  foul constantSection(e: ConstantEntry) -> String do
+  foul constantSection(e: ConstantEntry, page: SourcePage, model: PackageModel) -> String do
     let typePart = if e.typeName.empty?
       ""
     else
-      " <code>${esc(e.typeName)}</code>"
+      " <code>: ${linkTypeText(linker(page, model), e.typeName)}</code>"
     end
-    return "<section class=\"entity\" id=\"constant-${slug(e.name)}\">\n<h2><span class=\"kind kind-constant\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${docHtml(e.doc)}\n</section>"
+    return "<section class=\"entity\" id=\"${anchorOf(ConstDecl(e))}\">\n<h2><span class=\"kind kind-constant\">constant</span> <code>${esc(e.name)}</code>${typePart}</h2>\n${entityDocHtml(e.doc, page, model)}\n</section>"
   end
 
-  foul functionsHtml(functions: [FunctionEntry], link: (String -> String)) -> String do
-    if functions.empty?
-      return ""
-    end
-    let sections = functions.map { |f| functionDetail(f, link) }.join("\n")
+  # Members of a trait or make block, one heading per NAME: overloads
+  # (`count` and `count(pred)`) are one method with several signatures, not
+  # two unrelated entries. `owner` scopes the anchors; `implements` lets a
+  # member that fulfils a trait method say which trait.
+  foul functionsHtml(functions: [FunctionEntry], owner: String, level: Integer, implements: [String],
+                     page: SourcePage, model: PackageModel) -> String do
+    return "" if functions.empty?
+    let names = functions.map { |f| f.name }.uniq
+    let sections = names.map { |n|
+      functionGroupHtml(functions.filter { |f| f.name == n }, n, owner, level, implements, page, model)
+    }.join("\n")
     return "\n<div class=\"functions\">\n${sections}\n</div>"
   end
 
-  foul functionDetail(f: FunctionEntry, link: (String -> String)) -> String do
-    return "<div class=\"fn\" id=\"fn-${slug(f.name)}\">\n<h4><code>${esc(f.name)}</code></h4>\n${docHtml(f.doc)}${signaturesHtml(f)}${paramsHtml(f.doc, link)}${returnsHtml(f.doc, link)}${examplesHtml(f.doc)}${deprecatedHtml(f.doc)}\n</div>"
+  foul functionGroupHtml(fs: [FunctionEntry], name: String, owner: String, level: Integer, implements: [String],
+                         page: SourcePage, model: PackageModel) -> String do
+    let anchor = memberAnchorOf(owner, name)
+    let tags = traitTag(name, implements, page, model)
+    let head = "<h${level}><a class=\"self\" href=\"#${anchor}\"><code>${esc(name)}</code></a>${tags}</h${level}>"
+    let body = fs.map { |f| overloadHtml(f, page, model) }.join("\n")
+    return "<div class=\"fn\" id=\"${anchor}\">\n${head}\n${body}\n</div>"
   end
 
-  foul signaturesHtml(f: FunctionEntry) -> String do
+  # "from Enumerable": this member is the type's own version of a method the
+  # trait declares, linked to the trait's description of it.
+  foul traitTag(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do
+    let hits = implements.flatMap { |t|
+      match Tey.Docgen.Relations.traitFactsFor(model, t) do
+        None => []
+        Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do
+          None => []
+          Just(entry) => entry.functions.any? { |f| f.name == name } then [facts] else []
+        end
+      end
+    }
+    return hits.map { |facts|
+      let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, facts.urlPath, memberAnchorOf(facts.qualifiedName, name))
+      " <a class=\"tag-trait\" href=\"${href}\" title=\"Implements ${esc(facts.name)}.${esc(name)}\">${esc(facts.name)}</a>"
+    }.join("")
+  end
+
+  # One overload: its signature first (what you call), then the prose.
+  foul overloadHtml(f: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
+    let link = linker(page, model)
+    return "${signaturesHtml(f, page, model)}${docHtml(f.doc, page, model)}${paramsHtml(f, link, page, model)}${returnsHtml(f, link, page, model)}${examplesHtml(f.doc)}${deprecatedHtml(f.doc)}"
+  end
+
+  foul signaturesHtml(f: FunctionEntry, page: SourcePage, model: PackageModel) -> String do
     if f.signatures.empty?
       return ""
     end
-    return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(f.signatures.join("\n"))}</code></pre>\n"
+    return "<pre class=\"code sig\"><code>${Tey.Docgen.Highlight.highlightLinked(f.signatures.join("\n"), hrefer(page, model))}</code></pre>\n"
   end
 
-  foul docHtml(doc: Doc) -> String do
+  foul docHtml(doc: Doc, page: SourcePage, model: PackageModel) -> String do
     if doc.summary.empty?
       return ""
     end
-    let paras = summaryParagraphs(doc.summary).map { |p| paragraphHtml(p) }.join("\n")
+    let hrefOf = hrefer(page, model)
+    let paras = summaryParagraphs(doc.summary).map { |p| paragraphHtml(p, hrefOf) }.join("\n")
     return paras + "\n"
+  end
+
+  # A declaration's doc: prose, then its examples and any deprecation —
+  # a type's @example is as much a part of it as a method's.
+  foul entityDocHtml(doc: Doc, page: SourcePage, model: PackageModel) -> String do
+    return "${docHtml(doc, page, model)}${examplesHtml(doc)}${deprecatedHtml(doc)}"
+  end
+
+  # Unlinked: for prose with no page to resolve against (the prelude
+  # comment, card summaries).
+  foul plainDocHtml(doc: Doc) -> String do
+    if doc.summary.empty?
+      return ""
+    end
+    return summaryParagraphs(doc.summary).map { |p| paragraphHtml(p, { |_| "" }) }.join("\n") + "\n"
   end
 
   # Paragraphs break on blank lines — except inside a fenced block, where a
@@ -694,57 +1046,105 @@ module Tey.Docgen.Html do
     return groupParagraphs(rest, current + [line], accum, fenced)
   end
 
-  # A summary paragraph is either prose or a fenced block that Rdoc produced
-  # from an indented (verbatim) block — the latter is highlighted code, not
-  # text to reflow.
-  foul paragraphHtml(p: String) -> String do
+  # A summary paragraph is prose, a fenced block that Rdoc produced from an
+  # indented (verbatim) block, or a bullet list — each rendered as what it
+  # is rather than reflowed into one paragraph.
+  foul paragraphHtml(p: String, hrefOf: (String -> String)) -> String do
     if p.startsWith?("```")
-      let lines = p.split("\n")
-      let body = lines.drop(1).takeWhile { |l| l != "```" }.join("\n")
+      let fenced = p.split("\n")
+      let body = fenced.drop(1).takeWhile { |l| l != "```" }.join("\n")
       return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
     end
-    return "<p>${inlineCode(p).replace("\n", "<br>\n")}</p>"
+    let lines = p.split("\n")
+    if lines.all? { |l| bulletLine?(l) || l.startsWith?("  ") }
+      return bulletListHtml(lines, hrefOf)
+    end
+    # Soft line breaks in a comment are the width of the source file, not
+    # the author's intent: the paragraph reflows.
+    return "<p>${linkedInline(lines.map { |l| l.trim }.join(" "), hrefOf)}</p>"
+  end
+
+  foul bulletLine?(line: String) -> Bool do
+    let t = line.trim
+    return t.startsWith?("- ") || t.startsWith?("* ")
+  end
+
+  # `- item` lines, with indented continuation lines folded into the item
+  # above them.
+  foul bulletListHtml(lines: [String], hrefOf: (String -> String)) -> String do
+    let items = lines.reduce([], { |acc, line|
+      bulletLine?(line) then acc + [line.trim.drop(2)] else acc.take(acc.count - 1) + ["${acc.last.or("")} ${line.trim}"]
+    })
+    return "<ul>\n" + items.map { |i| "<li>${linkedInline(i, hrefOf)}</li>" }.join("\n") + "\n</ul>"
   end
 
   # Minimal inline Markdown for doc prose: `code` spans. Splitting on the
   # backtick alternates plain/code segments; an unmatched trailing backtick
   # degrades to literal text rather than swallowing the rest of the page.
   foul inlineCode(text: String) -> String do
-    let parts = text.split("`")
-    if parts.count == 1
-      return esc(text)
-    end
-    if parts.count % 2 == 0
-      return esc(text)
-    end
-    let rendered = parts.reduce(("", 0), { |acc, part|
-      let (buffer, i) = acc
-      let segment = if i % 2 == 1 then "<code>${esc(part)}</code>" else esc(part) end
-      (buffer + segment, i + 1)
-    })
-    let (html, _) = rendered
-    return html
+    return linkedInline(text, { |_| "" })
   end
 
-  foul paramsHtml(doc: Doc, link: (String -> String)) -> String do
+  # The same, with a code span that names something documented — a type, a
+  # trait, `List.map` — linked to it.
+  foul linkedInline(text: String, hrefOf: (String -> String)) -> String do
+    let parts = text.split("`")
+    if parts.count == 1 || parts.count % 2 == 0
+      return esc(text)
+    end
+    return parts.mapIndexed { |part, i|
+      if i % 2 == 1
+        let href = linkableCode?(part) then hrefOf(part) else ""
+        href.empty? then "<code>${esc(part)}</code>" else "<a class=\"xref\" href=\"${esc(href)}\"><code>${esc(part)}</code></a>"
+      else
+        esc(part)
+      end
+    }.join("")
+  end
+
+  # Only a bare name is a reference: `List`, `FS.Path`, `List.map`. A code
+  # span with spaces or parentheses is an expression, not a name.
+  foul linkableCode?(code: String) -> Bool do
+    return !code.empty? && code.chars.all? { |c| c.letter? || c.digit? || c == '.' || c == '_' || c == '?' || c == '!' }
+  end
+
+  foul firstSentence(text: String) -> String do
+    let para = summaryParagraphs(text).first.or("")
+    return "" if para.startsWith?("```")
+    let flat = para.split("\n").map { |l| l.trim }.join(" ")
+    let sentences = flat.split(". ")
+    return sentences.count > 1 then sentences.first.or("") + "." else flat
+  end
+
+  # Each parameter's meaning. Its type is in the signature right above,
+  # so it is repeated here only when there is no signature to read it from.
+  foul paramsHtml(f: FunctionEntry, link: (String -> String), page: SourcePage, model: PackageModel) -> String do
+    let doc = f.doc
     if doc.params.empty?
       return ""
     end
+    let hrefOf = hrefer(page, model)
+    let typed = !f.signatures.empty?
     let rows = doc.params.map { |p|
-      let typePart = if p.typeName.empty? then "" else " <code>${linkTypeText(link, p.typeName)}</code>" end
-      "<div class=\"param\"><dt><code>${esc(p.name)}</code>${typePart}</dt><dd>${inlineCode(p.description)}</dd></div>"
+      let typePart = if typed || p.typeName.empty? then "" else " <code>${linkTypeText(link, p.typeName)}</code>" end
+      "<div class=\"param\"><dt><code>${esc(p.name)}</code>${typePart}</dt><dd>${linkedInline(p.description, hrefOf)}</dd></div>"
     }.join("\n")
     return "<h5>Parameters</h5>\n<dl class=\"params\">\n${rows}\n</dl>\n"
   end
 
-  foul returnsHtml(doc: Doc, link: (String -> String)) -> String do
-    match doc.returns do
+  # The signature already states the result type, so when there is one
+  # "Returns" says only what the value MEANS. A @return tag whose type
+  # disagrees would otherwise put two answers side by side
+  # (`min : X?` above "Returns: Number?").
+  foul returnsHtml(f: FunctionEntry, link: (String -> String), page: SourcePage, model: PackageModel) -> String do
+    match f.doc.returns do
       Just(r) => do
-        if r.typeName.empty? && r.description.empty?
+        let typed = !f.signatures.empty?
+        if r.description.empty? && (typed || r.typeName.empty?)
           return ""
         end
-        let typePart = if r.typeName.empty? then "" else "<code>${linkTypeText(link, r.typeName)}</code> — " end
-        return "<p class=\"returns\"><strong>Returns:</strong> ${typePart}${inlineCode(r.description)}</p>\n"
+        let typePart = if typed || r.typeName.empty? then "" else "<code>${linkTypeText(link, r.typeName)}</code> — " end
+        return "<p class=\"returns\"><strong>Returns</strong> ${typePart}${linkedInline(r.description, hrefer(page, model))}</p>\n"
       end
       None => ""
     end
@@ -801,7 +1201,7 @@ module Tey.Docgen.Html do
   end
 
   foul slug(name: String) -> String do
-    return name.lowerCase.replace(" ", "-").replace(".", "-").replace("/", "-")
+    return Tey.Docgen.Model.slugOf(name)
   end
 
   foul typeParamSuffix(typeParams: [String]) -> String do

@@ -3026,11 +3026,21 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     m_pos = saved;
   }
 
-  // `do` after an if condition is a syntax error — use `then`.
-  if (check(TokenType::Do))
-    error(
-        "use 'then' instead of 'do' in if expression: `if cond then body end`");
-  bool inlineThen = match(TokenType::Then);
+  // `do` after an if condition is a syntax error — use `then`. Reported
+  // without throwing, then parsed AS `then`: the recovery a throw starts used
+  // to consume the `if`'s own `end` as the enclosing block's, cutting a
+  // surrounding `make` block short and burying this one mistake under
+  // unrelated errors further down (kexhq/kex#165).
+  bool inlineThen;
+  if (check(TokenType::Do)) {
+    m_diagnostics.push_back(
+        {currentLocation(),
+         "use 'then' instead of 'do' in if expression: `if cond then body end`"});
+    advance();
+    inlineThen = !check(TokenType::Newline);
+  } else {
+    inlineThen = match(TokenType::Then);
+  }
   if (!inlineThen)
     skipNewlines();
 

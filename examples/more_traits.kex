@@ -67,11 +67,11 @@ end
 make Version, implement: Comparable do
   let compare(other) -> Ordering do
     if @major != other.major
-      if @major < other.major then Less else Greater end
+      @major < other.major then Less else Greater
     elif @minor != other.minor
-      if @minor < other.minor then Less else Greater end
+      @minor < other.minor then Less else Greater
     elif @patch != other.patch
-      if @patch < other.patch then Less else Greater end
+      @patch < other.patch then Less else Greater
     else
       Equal
     end

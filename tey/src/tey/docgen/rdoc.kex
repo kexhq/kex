@@ -281,7 +281,7 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  # @return [Type] description
+  # Reads a `@return [Type] description` directive.
   foul parseReturn(lines: [String]) -> Return do
     let body = (lines.first.or("")).drop(8).trim
     match parseBracketed(body) do

@@ -1,51 +1,118 @@
-# The docs.kex.run assembler.
+# Describes the generated reference to the docs site that frames it.
 #
-# docgen documents ONE unit per run — a package, the stdlib, a prose tree —
-# and writes that unit's pages plus a few site-wide files. Those site-wide
-# files are the problem this fixes: `llms.txt`, `llms-full.txt` and
-# `sitemap.xml` are rewritten by every build with only that build's pages, so
-# the last unit to run wins and everything else disappears from them.
-# `versions.json` is the exception; it accumulates.
+# docgen documents ONE unit per run (the stdlib, Tey) and, with
+# `--format fragments`, writes that unit as page bodies under
+# `<out>/<package>/<version>/`. The site itself — landing page, guide,
+# navigation, theme — is authored in Marqraft in the kexhq/docs repository,
+# which mounts this output as generated, read-only pages. This tool is the
+# handover: after every docgen run it reads what is on disk and writes
 #
-# So this reads what is on disk after every build has run — one
-# `manifest.json` per `<package>/<version>/` — and rewrites the three
-# site-wide files from all of them together. It also writes the CNAME, which
-# is deployment, not documentation.
+#   manifest.json               the mounts Marqraft loads: one per
+#                               (package, version); the release a reader
+#                               should land on is listed in the site's
+#                               collections menu, the others are built and
+#                               linkable but unlisted
+#   _versions/<package>/        a generated "versions" page per package,
+#                               mounted at /<package>/
 #
-# It composes with docgen through files, never imports: docgen stays a
-# documentation generator that knows nothing about this site, and everything
-# specific to kexhq lives here.
+# The site-wide files (llms.txt, sitemap.xml, CNAME) belong to the site and
+# are written by kexhq/docs after its build, not here.
 #
-#   tey run --package docsite -- <site-dir> [base-url]
-
-using Net.HTTP
+#   tey run --package docsite -- manifest <generated-dir>
 
 main(args) do
-  let site = args.first.or("")
-  if site.empty?
-    IO.printError("docsite: usage: docsite <site-dir> [base-url]")
+  let command = args.first.or("")
+  let site = args.second.or("")
+  if command != "manifest" || site.empty?
+    IO.printError("docsite: usage: docsite manifest <generated-dir>")
     return System.exit(1)
   end
   if !FS.File.directory?(site)
     IO.printError("docsite: ${site} is not a directory")
     return System.exit(1)
   end
-  let baseUrl = normalizeBase(args.second.or("https://docs.kex.run"))
-
   let units = readUnits(site)
   if units.empty?
     IO.printError("docsite: no <package>/<version>/manifest.json under ${site} — did the docgen builds run?")
     return System.exit(1)
   end
-  IO.printLine("docsite: ${units.count} unit(s), ${pageCount(units)} page(s)")
-
-  writeLlms(site, units, baseUrl)
-  writeLlmsFull(site, units)
-  writeSitemap(site, units, baseUrl)
-  writeRobots(site, baseUrl)
-  writeCname(site, baseUrl)
-  IO.printLine("docsite: wrote llms.txt, llms-full.txt, sitemap.xml, robots.txt, CNAME")
+  let listed = listedVersions(units)
+  let packages = units.map { |unit| unit.package }.uniq
+  packages.each { |package| writeVersionsPage(site, package, units, listed) }
+  let mounts = units.map { |unit| mountValue(unit, listed) } + packages.map { |package| versionsMount(package) }
+  let manifest: Any = { mounts: mounts }
+  let _ = FS.File.write(FS.Path.join(site, "manifest.json"), JSON.stringify(manifest))
+  IO.printLine("docsite: ${units.count} unit(s), ${pageCount(units)} page(s); listed ${listed.map { |l| "${l.package} ${l.version}" }.join(", ")}")
   return System.exit(0)
+end
+
+foul mountValue(unit: Unit, listed: [Latest]) -> Any do
+  let value: Any = {
+    dir: "${unit.package}/${unit.version}",
+    title: unit.label,
+    listed: listed.any? { |l| l.package == unit.package && l.version == unit.version }
+  }
+  return value
+end
+
+foul versionsMount(package: String) -> Any do
+  let value: Any = { dir: "_versions/${package}", listed: false }
+  return value
+end
+
+# The version each package's collection link opens: its newest release, or
+# — for a package that has not released anything yet — its newest build.
+foul listedVersions(units: [Unit]) -> [Latest] do
+  let stable = latestStableVersions(units)
+  let packages = units.map { |unit| unit.package }.uniq
+  return packages.flatMap { |package|
+    match stable.find { |l| l.package == package } do
+      Just(found) => [found]
+      None => newestBuild(units, package)
+    end
+  }
+end
+
+foul newestBuild(units: [Unit], package: String) -> [Latest] do
+  let mine = units.filter { |unit| unit.package == package }
+  match mine.first do
+    None => []
+    Just(first) => do
+      let newest = mine.reduce(first, { |best, unit| unit.generatedAt > best.generatedAt then unit else best })
+      [Latest { package: package, version: newest.version }]
+    end
+  end
+end
+
+# /<package>/: every published version of one package, newest release
+# first. A generated page like the reference itself, so the site frames it.
+foul writeVersionsPage(site: String, package: String, units: [Unit], listed: [Latest]) -> () do
+  let dir = FS.Path.join(FS.Path.join(site, "_versions"), package)
+  let _ = FS.Directory.create(dir)
+  let mine = units.filter { |unit| unit.package == package }.sort { |a, b| a.generatedAt > b.generatedAt }
+  let label = mine.first.map { |unit| unit.label }.or(package)
+  let items = mine.map { |unit|
+    let mark = listed.any? { |l| l.package == package && l.version == unit.version } then " <span class=\"tag-prelude\">current</span>" else ""
+    "<a class=\"card\" href=\"/${package}/${unit.version}/\"><span class=\"card-title\">${esc(unit.label)} ${esc(unit.version)}${mark}</span><span class=\"card-meta\">generated ${esc(unit.generatedAt.take(10))} · ${unit.pages.count} page(s)</span></a>"
+  }.join("\n")
+  let body = "<p class=\"lede\">Every published build of the ${esc(label)} reference, newest first. Versions ending in <code>-dev</code> are unreleased snapshots.</p>\n<div class=\"cards\">\n${items}\n</div>\n"
+  let _ = FS.File.write(FS.Path.join(dir, "index.html"), body)
+  let sidecar: Any = {
+    title: "${label} versions",
+    description: "Every published version of the ${label} reference.",
+    path: "/${package}/",
+    template: "page",
+    body: "index.html",
+    data: { package: package }
+  }
+  let _ = FS.File.write(FS.Path.join(dir, "index.page.json"), JSON.stringify(sidecar))
+  let nav: Any = { title: "${label} versions", path: "/${package}/", children: [] }
+  let _ = FS.File.write(FS.Path.join(dir, "nav.json"), JSON.stringify(nav))
+  return ()
+end
+
+foul esc(s: String) -> String do
+  return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 end
 
 # One documented unit, as its own manifest describes it.
@@ -68,7 +135,7 @@ end
 # present. A directory without one is skipped rather than reported: the site
 # root also holds assets/ and the odd stray file.
 foul readUnits(site: String) -> [Unit] do
-  let packages = FS.Directory.directories(site).or([]).filter { |d| d != "assets" }.sort
+  let packages = FS.Directory.directories(site).or([]).filter { |d| d != "assets" && !d.startsWith?("_") }.sort
   return packages.flatMap { |package| unitsOf(site, package) }
 end
 
@@ -120,50 +187,6 @@ foul jsonText(value: Any?, fallback: String) -> String do
     None => fallback
     Just(v) => "${v}"
   end
-end
-
-# --- the site-wide files -------------------------------------------------
-
-# The full URL of a page: the unit's prefix is what the per-unit files cannot
-# know, and leaving it off is what made the old site-wide sitemap point at
-# `/list` rather than `/prelude/0.4.0/list`.
-foul pageUrl(baseUrl: String, unit: Unit, page: Page) -> String do
-  return "${baseUrl}/${unit.package}/${unit.version}/${page.path}"
-end
-
-foul writeLlms(site: String, units: [Unit], baseUrl: String) -> () do
-  let latest = latestStableVersions(units)
-  let sections = units.map { |unit| llmsSection(unit, baseUrl, latest) }.join("\n\n")
-  let header = [
-    "# Kex documentation",
-    "",
-    "Everything published at ${baseUrl}, one section per documented unit.",
-    "Sections list alphabetically, which reads as a curriculum: the Guide",
-    "first, then the Standard Library, then Tey.",
-    "",
-    "How to read this with an LLM: start with the Guide, then the prelude",
-    "tour, then the reference sections. A section marked (latest) is the",
-    "release to cite; versions ending in `-dev` are unreleased snapshots.",
-    "`versions.json` enumerates every published (package, version), and each",
-    "one carries its own `model.json` and `search.json`. Every page below",
-    "also exists as raw Markdown — the same address with `.html` swapped",
-    "for `.md` — and the whole corpus concatenated is `llms-full.txt`.",
-    ""
-  ].join("\n")
-  let _ = FS.File.write(FS.Path.join(site, "llms.txt"), header + sections + "\n")
-  return ()
-end
-
-foul llmsSection(unit: Unit, baseUrl: String, latest: [Latest]) -> String do
-  let mark = match latest.find { |l| l.package == unit.package } do
-    Just(found) => found.version == unit.version then " (latest)" else ""
-    None => ""
-  end
-  let heading = "## ${unit.label} ${unit.version}${mark}\n\n"
-  let links = unit.pages.map { |page|
-    "- [${page.title}](${pageUrl(baseUrl, unit, page)}.html)"
-  }.join("\n")
-  return heading + links
 end
 
 # What readers should cite, per package: its highest released version.
@@ -250,77 +273,6 @@ foul greaterSemVer(a: SemVer, b: SemVer) -> Bool do
   return false if a.pre == b.pre
   return true if a.pre == ""
   return false
-end
-
-# The whole corpus in one file, for a model that wants it in a single shot.
-# The .md docgen already wrote per page IS the corpus; this concatenates it
-# rather than re-rendering anything.
-foul writeLlmsFull(site: String, units: [Unit]) -> () do
-  let bodies = units.flatMap { |unit| unitMarkdown(site, unit) }
-  let _ = FS.File.write(FS.Path.join(site, "llms-full.txt"),
-                        bodies.join("\n\n---\n\n") + "\n")
-  return ()
-end
-
-foul unitMarkdown(site: String, unit: Unit) -> [String] do
-  let versionDir = FS.Path.join(FS.Path.join(site, unit.package), unit.version)
-  return unit.pages.flatMap { |page| pageMarkdown(versionDir, page) }
-end
-
-# Prose units render HTML only, so a missing .md is expected, not an error.
-foul pageMarkdown(versionDir: String, page: Page) -> [String] do
-  match FS.File.read(FS.Path.join(versionDir, page.path + ".md")) do
-    Error(_) => []
-    Ok(text) => [text]
-  end
-end
-
-foul writeSitemap(site: String, units: [Unit], baseUrl: String) -> () do
-  let entries = units.flatMap { |unit| sitemapEntries(unit, baseUrl) }.join("\n")
-  let body = [
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-    "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
-    entries,
-    "\n</urlset>\n"
-  ].join("")
-  let _ = FS.File.write(FS.Path.join(site, "sitemap.xml"), body)
-  return ()
-end
-
-foul sitemapEntries(unit: Unit, baseUrl: String) -> [String] do
-  return unit.pages.map { |page|
-    "  <url>\n    <loc>${pageUrl(baseUrl, unit, page)}</loc>\n    <lastmod>${unit.generatedAt}</lastmod>\n  </url>"
-  }
-end
-
-foul writeRobots(site: String, baseUrl: String) -> () do
-  let _ = FS.File.write(FS.Path.join(site, "robots.txt"),
-                        "User-agent: *\nAllow: /\nSitemap: ${baseUrl}/sitemap.xml\n")
-  return ()
-end
-
-# GitHub Pages reads the custom domain out of this file, so it has to be in
-# the published tree. It is deployment configuration, which is why it is here
-# and not in docgen.
-foul writeCname(site: String, baseUrl: String) -> () do
-  let host = hostOf(baseUrl)
-  if host.empty?
-    return ()
-  end
-  let _ = FS.File.write(FS.Path.join(site, "CNAME"), host + "\n")
-  return ()
-end
-
-foul hostOf(baseUrl: String) -> String do
-  match URI.URL.parse(baseUrl) do
-    Error(_) => ""
-    Ok(url) => url.host.ascii
-  end
-end
-
-foul normalizeBase(url: String) -> String do
-  return url.take(url.count - 1) if url.endsWith?("/")
-  return url
 end
 
 foul pageCount(units: [Unit]) -> Integer do
