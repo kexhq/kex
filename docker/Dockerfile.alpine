@@ -11,10 +11,14 @@
 
 FROM alpine:3.22 AS build
 
+# erlang27, not erlang: Alpine 3.22's plain `erlang` is OTP 26, and Kex needs
+# OTP 27+ (CMakeLists.txt refuses older). The versioned packages install to
+# the same /usr/lib/erlang.
+
 RUN apk add --no-cache \
         build-base cmake git bash \
         gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
-        erlang erlang-dev erlang-odbc unixodbc-dev
+        erlang27 erlang27-dev erlang27-odbc unixodbc-dev
 
 WORKDIR /src
 COPY . .
@@ -49,7 +53,7 @@ FROM alpine:3.22
 # libgmpxx is its own package on Alpine: the binary links GMP's C++
 # wrapper, and `gmp` alone leaves the image failing to start.
 RUN apk add --no-cache gmp libgmpxx pcre2 readline libstdc++ boost-context openssl \
-        erlang erlang-odbc unixodbc
+        erlang27 erlang27-odbc unixodbc
 
 COPY --from=build /opt/kex /opt/kex
 COPY --from=build /opt/tey /opt/tey

@@ -18,7 +18,7 @@ FROM alpine:3.22 AS build
 RUN apk add --no-cache \
         build-base cmake git bash \
         gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
-        erlang erlang-dev erlang-odbc unixodbc-dev
+        erlang27 erlang27-dev erlang27-odbc unixodbc-dev
 
 WORKDIR /src
 COPY . .
@@ -55,7 +55,7 @@ FROM alpine:3.22
 # pruning in a second RUN left this image exactly as big as the full one.
 COPY docker/prune-otp.sh /tmp/prune-otp.sh
 RUN apk add --no-cache gmp libgmpxx pcre2 readline libstdc++ boost-context openssl \
-        erlang erlang-odbc unixodbc \
+        erlang27 erlang27-odbc unixodbc \
     && sh /tmp/prune-otp.sh \
     && rm /tmp/prune-otp.sh
 

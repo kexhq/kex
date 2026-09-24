@@ -1,0 +1,13 @@
+# A Measure prints as its value and unit: `IO.printLine` and interpolation
+# show `5.0 W`, the same text as `to(String)`, not the record's fields.
+# Inspecting it still shows the record, as it does for Date.
+using Units.SI
+
+main do
+  let power = 1.volt * 5.ampere
+  IO.printLine(power)
+  IO.printLine("drawn: ${power}")
+  IO.printLine(power.inspected.startsWith?("Measure {"))
+  IO.printLine(power.to(String))
+  IO.printLine(90.minute)
+end
