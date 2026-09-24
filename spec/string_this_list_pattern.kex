@@ -1,0 +1,18 @@
+# kexhq/kex#125: a list pattern on a String subject matches its characters on
+# both backends, also when written through the `@` wrapper. BEAM coerced the
+# string to a list only for a bare `[...]` pattern, so `@[a | rest]` never
+# matched there and fell through to the next arm.
+let tailOf(s: String) -> String = match s do
+  @[_ | rest] => rest
+  _ => "none"
+end
+
+let firstOf(s: String) -> String = match s do
+  @[a | _] => "${a}"
+  _ => "none"
+end
+
+main do
+  IO.printLine("[${tailOf("abc")}] [${firstOf("xyz")}] [${tailOf("")}]")
+  IO.printLine("[${"a".rest}]")
+end

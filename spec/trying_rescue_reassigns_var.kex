@@ -1,0 +1,52 @@
+# kexhq/kex#116: a statement-position `trying` whose body or rescue arms
+# reassign an outer `var` threads the new value out, as `if`/`match` already
+# did. BEAM had no lowering for an assignment in a rescue arm and failed the
+# whole build ("unimplemented expr node AssignExpr"); the walker ran it.
+foul bodyOnly(text: String) -> Integer do
+  var n = 0
+  trying do
+    n = Integer.parse(text).try
+  rescue
+    _ => IO.printLine("  (body-only rescue)")
+  end
+  return n
+end
+
+let both(text: String) -> String do
+  var n = 0
+  var status = "start"
+  trying do
+    n = Integer.parse(text).try
+    status = "parsed"
+  rescue
+    _ => status = "failed"
+  end
+  return "${n}/${status}"
+end
+
+let multiArm(text: String) -> String do
+  var note = ""
+  trying do
+    note = "ok:${Integer.parse(text).try}"
+  rescue
+    ParseError { message } => note = "parse error: ${message}"
+    _ => note = "other"
+  end
+  return note
+end
+
+let inlineReturn(text: String) -> Integer do
+  var n = 0
+  trying do
+    n = Integer.parse(text).try
+  rescue return -99
+  end
+  return n + 1
+end
+
+main do
+  IO.printLine("${bodyOnly("5")} ${bodyOnly("x")}")
+  IO.printLine("${both("5")} ${both("x")}")
+  IO.printLine("${multiArm("5")} | ${multiArm("x")}")
+  IO.printLine("${inlineReturn("5")} ${inlineReturn("x")}")
+end

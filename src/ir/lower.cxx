@@ -5387,8 +5387,19 @@ struct Lowering {
         // never match either, trading one broken shape for another.
         std::string listCoercedSubject;
         {
-            const auto firstPattern = [](const ast::MatchClause& c) {
-                return c.patterns.empty() ? nullptr : c.patterns[0].get();
+            // Seen through a `@` wrapper, which lowerPattern unwraps too:
+            // `@[a | rest]` is the same list pattern, and left undetected its
+            // string subject was never coerced, so the arm could not match on
+            // BEAM while the walker matched it (kexhq/kex#125).
+            const auto firstPattern =
+                [](const ast::MatchClause& c) -> const ast::Pattern* {
+                if (c.patterns.empty() || !c.patterns[0]) return nullptr;
+                const ast::Pattern* p = c.patterns[0].get();
+                while (const auto* self = std::get_if<ast::ThisPattern>(&p->kind)) {
+                    if (!self->inner) return p;
+                    p = self->inner.get();
+                }
+                return p;
             };
             const bool anyListPattern = std::any_of(
                 n.clauses.begin(), n.clauses.end(), [&](const auto& c) {
@@ -6264,7 +6275,11 @@ struct Lowering {
         {
             auto* ie = std::get_if<ast::IfExpr>(&e->kind);
             auto* me = std::get_if<ast::MatchExpr>(&e->kind);
-            if (ie || (me && !me->subjectBinding)) {
+            // `trying` too: an assignment in its body or a rescue arm
+            // (`rescue _ => found = None`) had no expression form to lower to
+            // and failed the whole build ("unimplemented expr node AssignExpr").
+            auto* te = std::get_if<ast::TryingExpr>(&e->kind);
+            if (ie || te || (me && !me->subjectBinding)) {
                 std::unordered_set<std::string> muts;
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
@@ -6292,6 +6307,54 @@ struct Lowering {
                         auto cb = branch(ie->thenBody);
                         caseE = matchBool(std::move(cc), std::move(cb),
                                           std::move(elseP));
+                    } else if (te) {
+                        // The rescue arms see the pre-`trying` names: the
+                        // body may have thrown before any of its rebinds.
+                        const auto beforeTry = subst;
+                        TryCatch tc;
+                        tc.body = lowerLoopBodyFrom(te->body, 0, "", mutVars, yieldState);
+                        subst = beforeTry;
+                        const auto& rescue = te->rescue;
+                        if (rescue.isInlineReturn) {
+                            MatchClause c;
+                            c.patterns.push_back(wildPat());
+                            auto retExpr = std::make_unique<Expr>();
+                            retExpr->node = Return{lower(rescue.inlineReturnExpr)};
+                            c.body = std::move(retExpr);
+                            tc.clauses.push_back(std::move(c));
+                        } else if (rescue.isCatchAll) {
+                            MatchClause c;
+                            if (rescue.catchAllParam.empty()) {
+                                c.patterns.push_back(wildPat());
+                            } else {
+                                auto p = std::make_unique<Pattern>();
+                                p->kind = PatKind::Var;
+                                p->name = rescue.catchAllParam;
+                                subst[rescue.catchAllParam] = rescue.catchAllParam;
+                                c.patterns.push_back(std::move(p));
+                            }
+                            c.body = lowerLoopBodyFrom(rescue.catchAllBody, 0, "",
+                                                       mutVars, yieldState);
+                            subst = beforeTry;
+                            tc.clauses.push_back(std::move(c));
+                        } else {
+                            for (const auto& clause : rescue.clauses) {
+                                MatchClause mc;
+                                mc.patterns.push_back(
+                                    clause.patterns.empty()
+                                        ? wildPat()
+                                        : lowerPattern(clause.patterns[0]));
+                                mc.guard = withTypeGuards(
+                                    clause.guard ? lower(*clause.guard) : nullptr);
+                                mc.body = clause.body
+                                    ? lowerLoopArmU(clause.body, "", mutVars, yieldState)
+                                    : yieldState();
+                                subst = beforeTry;
+                                tc.clauses.push_back(std::move(mc));
+                            }
+                        }
+                        caseE = std::make_unique<Expr>();
+                        caseE->node = std::move(tc);
                     } else {
                         std::vector<ExprPtr> subjects;
                         subjects.push_back(lower(me->subject));

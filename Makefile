@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -41,6 +41,7 @@ help:
 	@echo "  make test-tey-launcher  Test tey/bin/tey's own stdin/pty handling"
 	@echo "  make docs         Generate this checkout's reference into ../docs/generated"
 	@echo "  make parse        Parse all examples (syntax check)"
+	@echo "  make check-examples  Type-check all examples"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
 	@echo "  make uninstall    Remove kex from $(BINDIR)"
@@ -121,8 +122,8 @@ web-demo: build-wasm
 
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
-test-all: test spec-orphans spec spec-prelude spec-stdlib \
-          spec-beam spec-prelude-beam spec-stdlib-beam spec-test-json
+test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-examples \
+          spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
 
 # Harness and generator regressions, including simulated crashes/timeouts.
 .PHONY: test-fuzz
@@ -394,6 +395,34 @@ spec-stdlib: build
 	done; \
 	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
 
+# examples/*.spec.kex, on both backends (kexhq/kex#164). Unlike the loops
+# above, a spec that exits non-zero without reporting a count (a type error,
+# a crash) is a failure too, not a silent zero.
+spec-examples-beam: BACKEND_FLAGS = --run
+spec-examples-beam: BACKEND_NAME = through BEAM
+spec-examples: BACKEND_FLAGS = --run-walker
+spec-examples spec-examples-beam: build
+	@echo "Running example specs $(BACKEND_NAME)..."
+	@failed=0; passed=0; \
+	for f in examples/*.spec.kex; do \
+		if [ "$(BACKEND_FLAGS)" = "--run" ] && grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
+		kex_flags="$(BACKEND_FLAGS) --no-colors"; \
+		output=$$($(KEX) $$kex_flags "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -ne 0 ] && [ "$$f_failed" -eq 0 ]; then f_failed=1; fi; \
+		if [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep -E '✗|error' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
 spec-stdlib-beam: build
 	@echo "Running opt-in stdlib spec suite through BEAM..."
 	@failed=0; passed=0; \
@@ -414,6 +443,23 @@ spec-stdlib-beam: build
 			echo "$$output" | grep '✗' | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
+# Type-check every example (kexhq/kex#226). `parse` only proves they parse,
+# and the example specs only run the files that have specs, so a type error in
+# any other example went unnoticed until someone ran it by hand.
+check-examples: build
+	@echo "Type-checking all examples..."
+	@failed=0; passed=0; \
+	for f in examples/*.kex; do \
+		if output=$$($(KEX) --check --no-colors "$$f" 2>&1); then \
+			passed=$$((passed + 1)); \
+		else \
+			printf "  \033[31m✗\033[0m %s\n" "$$(basename $$f)"; \
+			echo "$$output" | grep error | head -3 | sed 's/^/    /'; \
+			failed=$$((failed + 1)); \
+		fi; \
 	done; \
 	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
 

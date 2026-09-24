@@ -1,0 +1,15 @@
+# kexhq/kex#242: a field read on an UNANNOTATED parameter resolves to the one
+# record the program declares with that field, before any same-named prelude
+# method (`Weekday.name`, `OptionConfig.run`) is considered. The method used to
+# win, and typed the parameter as the method's owner: `describe : Weekday ->
+# String`, rejecting every real caller.
+record Command do
+  name : String
+  run : String
+end
+
+let describe(c) = "${c.name}: ${c.run}"
+
+main do
+  IO.printLine(describe(Command { name: "build", run: "kex build" }))
+end

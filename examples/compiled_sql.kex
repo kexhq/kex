@@ -55,7 +55,7 @@ module SQL do
           fields: @fields,
           table: @table,
           conditions: @conditions,
-          order: Ok("${col} ${dir}")
+          order: Just("${col} ${dir}")
         }
       end
 
@@ -83,7 +83,7 @@ module SQL do
         var idx = 1
 
         @conditions.each do |col, val|
-          let prefix = if idx == 1 then " WHERE " else " AND " end
+          let prefix = idx == 1 then " WHERE " else " AND "
           sql = sql + "${prefix}${col} = $${idx}"
           params = params + [val]
           idx = idx + 1

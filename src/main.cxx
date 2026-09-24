@@ -1720,25 +1720,32 @@ auto compilePreludeCore(const std::string &dir,
   // Track item index boundaries per tier: tierBounds[t] = index of first
   // item belonging to tier t.  tierBounds[4] = total item count.
   std::array<size_t, 5> tierBounds{};
-  for (size_t t = 0; t < 4; t++) {
-    tierBounds[t] = merged.items.size();
-    for (const auto &f : tierGroups[t]) {
-      kex::Lexer lex(readFile(f), f);
-      kex::Parser parser(lex.tokenizeAll(), f);
-      auto prog = parser.parseProgram();
-      for (auto &item : prog.items)
-        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
-          merged.items.push_back(std::move(item));
-    }
-  }
-  for (const auto &f : optInFiles) {
+  // A stdlib file that does not parse is reported as itself, and stops the
+  // build before analysis. Parser recovery can drop the rest of an enclosing
+  // block, and analyzing what survived produced a wall of type errors in
+  // OTHER files (every String method missing after a truncated `make String`)
+  // with nothing pointing at the file that was actually wrong (kexhq/kex#165).
+  bool parsed = true;
+  auto mergeFile = [&](const std::string &f) {
     kex::Lexer lex(readFile(f), f);
     kex::Parser parser(lex.tokenizeAll(), f);
     auto prog = parser.parseProgram();
+    for (const auto &diag : parser.diagnostics()) {
+      std::cerr << "error: prelude source: " << diag.location.file << ":"
+                << diag.location.line << ":" << diag.location.column << ": "
+                << diag.message << "\n";
+      parsed = false;
+    }
     for (auto &item : prog.items)
       if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
         merged.items.push_back(std::move(item));
+  };
+  for (size_t t = 0; t < 4; t++) {
+    tierBounds[t] = merged.items.size();
+    for (const auto &f : tierGroups[t]) mergeFile(f);
   }
+  for (const auto &f : optInFiles) mergeFile(f);
+  if (!parsed) return false;
   tierBounds[4] = merged.items.size();
   try {
     kex::semantic::Analyzer analyzer;
@@ -4406,11 +4413,25 @@ int main(int argc, char *argv[]) {
   }
 
   std::string filepath = argv[optind];
+  kex::module::Resolver::setEntryFile(filepath);
+
+  const bool compiledInput =
+      filepath.size() > 5 &&
+      filepath.compare(filepath.size() - 5, 5, ".beam") == 0;
+  // Every other mode reads Kex SOURCE. Handed a compiled module, `-c` used to
+  // fall into the run path below and execute it, and the source-reading modes
+  // parsed BEAM bytes as program text (kexhq/kex#85).
+  if (compiledInput && !(mode == "compile" && compileRun)) {
+    std::cerr << "error: " << filepath
+              << " is a compiled BEAM module, not Kex source — run it with "
+                 "`kex "
+              << filepath << "`, or pass the .kex file it was built from\n";
+    return 1;
+  }
 
   // `kex file.kx.beam [args]` or `kex file.beam [args]` — run a compiled BEAM
   // module.
-  if (filepath.size() > 5 &&
-      filepath.compare(filepath.size() - 5, 5, ".beam") == 0) {
+  if (compiledInput) {
     std::vector<std::string> beamArgs;
     for (int i = optind + 1; i < argc; i++)
       beamArgs.push_back(argv[i]);

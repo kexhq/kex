@@ -88,28 +88,41 @@ init(Parent, Ref, Address, Port, Router, MaximumHandlers, Backlog) ->
         {error, Reason} -> Parent ! {Ref, error, Reason}
     end.
 
+% `Active` maps every live worker to `http` or `websocket`; `Http` counts the
+% `http` ones. Only those count against `MaximumHandlers`: a worker that has
+% upgraded to a WebSocket reports `handler_upgraded` and stops holding a
+% handler slot for the rest of its (potentially unbounded) lifetime. Counting
+% it would have capped a WebSocket server at `maximumHandlers` concurrent
+% connections, with every later client stuck in the listen backlog, TCP
+% established but never accepted (#390). Upgraded workers stay in `Active` so
+% graceful shutdown still waits for and, past the grace period, kills them.
 accept_loop(Listener, Router, MaximumHandlers, Active, Completed, Failed) ->
+    accept_loop(Listener, Router, MaximumHandlers, Active, 0, Completed, Failed).
+
+accept_loop(Listener, Router, MaximumHandlers, Active, Http, Completed, Failed) ->
     receive
         {call, From, Ref, {stop, Grace}} ->
             gen_tcp:close(Listener),
             shutdown_loop(Active, Completed, Failed, From, Ref,
                           erlang:monotonic_time(millisecond), Grace);
-        {handler_done, Worker, ok} ->
-            accept_loop(Listener, Router, MaximumHandlers,
-                        maps:remove(Worker, Active), Completed + 1, Failed);
-        {handler_done, Worker, error} ->
-            accept_loop(Listener, Router, MaximumHandlers,
-                        maps:remove(Worker, Active), Completed, Failed + 1)
+        {handler_upgraded, Worker} ->
+            {Active1, Http1} = upgrade_worker(Worker, Active, Http),
+            accept_loop(Listener, Router, MaximumHandlers, Active1, Http1, Completed, Failed);
+        {handler_done, Worker, Result} ->
+            {Active1, Http1} = remove_worker(Worker, Active, Http),
+            {Completed1, Failed1} = tally(Result, Completed, Failed),
+            accept_loop(Listener, Router, MaximumHandlers, Active1, Http1, Completed1, Failed1)
     after 0 ->
-        case maps:size(Active) >= MaximumHandlers of
+        case Http >= MaximumHandlers of
           true ->
             receive
-                {handler_done, Worker, ok} ->
-                    accept_loop(Listener, Router, MaximumHandlers,
-                                maps:remove(Worker, Active), Completed + 1, Failed);
-                {handler_done, Worker, error} ->
-                    accept_loop(Listener, Router, MaximumHandlers,
-                                maps:remove(Worker, Active), Completed, Failed + 1);
+                {handler_upgraded, Worker} ->
+                    {Active1, Http1} = upgrade_worker(Worker, Active, Http),
+                    accept_loop(Listener, Router, MaximumHandlers, Active1, Http1, Completed, Failed);
+                {handler_done, Worker, Result} ->
+                    {Active1, Http1} = remove_worker(Worker, Active, Http),
+                    {Completed1, Failed1} = tally(Result, Completed, Failed),
+                    accept_loop(Listener, Router, MaximumHandlers, Active1, Http1, Completed1, Failed1);
                 {call, From, Ref, {stop, Grace}} ->
                     gen_tcp:close(Listener),
                     shutdown_loop(Active, Completed, Failed, From, Ref,
@@ -123,13 +136,29 @@ accept_loop(Listener, Router, MaximumHandlers, Active, Completed, Failed) ->
                     {error, _} -> gen_tcp:close(Socket), Owner ! {handler_done, Worker, error}
                 end,
                 accept_loop(Listener, Router, MaximumHandlers,
-                            maps:put(Worker, true, Active), Completed, Failed);
-            {error, timeout} -> accept_loop(Listener, Router, MaximumHandlers, Active, Completed, Failed);
+                            maps:put(Worker, http, Active), Http + 1, Completed, Failed);
+            {error, timeout} -> accept_loop(Listener, Router, MaximumHandlers, Active, Http, Completed, Failed);
             {error, closed} -> ok;
-            {error, _} -> accept_loop(Listener, Router, MaximumHandlers, Active, Completed, Failed + 1)
+            {error, _} -> accept_loop(Listener, Router, MaximumHandlers, Active, Http, Completed, Failed + 1)
           end
         end
     end.
+
+upgrade_worker(Worker, Active, Http) ->
+    case maps:find(Worker, Active) of
+        {ok, http} -> {maps:put(Worker, websocket, Active), Http - 1};
+        _ -> {Active, Http}
+    end.
+
+remove_worker(Worker, Active, Http) ->
+    case maps:take(Worker, Active) of
+        {http, Active1} -> {Active1, Http - 1};
+        {_, Active1} -> {Active1, Http};
+        error -> {Active, Http}
+    end.
+
+tally(ok, Completed, Failed) -> {Completed + 1, Failed};
+tally(_, Completed, Failed) -> {Completed, Failed + 1}.
 
 shutdown_loop(Active, Completed, Failed, From, Ref, Started, Grace) ->
     case maps:size(Active) of
@@ -138,6 +167,8 @@ shutdown_loop(Active, Completed, Failed, From, Ref, Started, Grace) ->
             Elapsed = erlang:monotonic_time(millisecond) - Started,
             Remaining = max(0, Grace - Elapsed),
             receive
+                {handler_upgraded, _} ->
+                    shutdown_loop(Active, Completed, Failed, From, Ref, Started, Grace);
                 {handler_done, Worker, ok} ->
                     shutdown_loop(maps:remove(Worker, Active), Completed + 1,
                                   Failed, From, Ref, Started, Grace);
@@ -157,23 +188,25 @@ finish_shutdown(Completed, Failed, Forced, From, Ref, Started) ->
 connection_wait() ->
     receive
         {serve, Socket, Router, Owner} ->
-            Result = try handle_connection(Socket, Router, <<>>) catch _:_ -> error end,
+            Result = try handle_connection(Socket, Router, <<>>, Owner) catch _:_ -> error end,
             gen_tcp:close(Socket), Owner ! {handler_done, self(), Result}
     after 5000 -> ok
     end.
 
-handle_connection(Socket, Router, Buffered) ->
+handle_connection(Socket, Router, Buffered, Owner) ->
     case read_request(Socket, Buffered) of
         {ok, Request, Method, Path, Rest, KeepAlive} ->
             case dispatch(Request, Method, Path, Router) of
                 {'Net.HTTP.WebSocket.UpgradeResponse', Response, HandlerFun, Selected} ->
                     case send_upgrade_response(Socket, Response) of
-                        ok -> kex_intrinsic_netwebsocket:accept(Socket, Rest, HandlerFun, Selected);
+                        ok ->
+                            Owner ! {handler_upgraded, self()},
+                            kex_intrinsic_netwebsocket:accept(Socket, Rest, HandlerFun, Selected);
                         _ -> error
                     end;
                 Response ->
                     case send_response(Socket, Response, Method, KeepAlive) of
-                        ok when KeepAlive -> handle_connection(Socket, Router, Rest);
+                        ok when KeepAlive -> handle_connection(Socket, Router, Rest, Owner);
                         ok -> ok;
                         _ -> error
                     end

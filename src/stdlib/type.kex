@@ -176,7 +176,7 @@ make Type do
     # A function reads as its signature: `String -> String`, `foul () -> Void`.
     if this.name == "Function" && this.args.count > 0
       let arrow = this.args.map(&.to(String)).join(" -> ")
-      let signature = if this.args.count == 1 then "() -> ${arrow}" else arrow end
+      let signature = this.args.count == 1 then "() -> ${arrow}" else arrow
       return "foul ${signature}" if this.pure == false
       return signature
     end

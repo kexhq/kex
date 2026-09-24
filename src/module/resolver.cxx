@@ -15,6 +15,27 @@ auto Resolver::isForeignNamespace(const std::string& name) -> bool {
 
 namespace {
 
+auto entryFile() -> std::filesystem::path& {
+    static std::filesystem::path path;
+    return path;
+}
+
+auto isEntryFile(const std::filesystem::path& candidate) -> bool {
+    if (entryFile().empty()) return false;
+    std::error_code ec;
+    return std::filesystem::equivalent(candidate, entryFile(), ec) && !ec;
+}
+
+} // namespace
+
+auto Resolver::setEntryFile(const std::string& path) -> void {
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(path, ec);
+    entryFile() = ec ? std::filesystem::path(path) : canonical;
+}
+
+namespace {
+
 auto lowered(const std::string& part) -> std::string {
     std::string result = part;
     for (auto& c : result)
@@ -91,7 +112,8 @@ auto Resolver::resolve(const std::string& moduleName,
             std::optional<std::string> matchedPath;
             for (const auto& relative : sourcePaths(candidateName)) {
                 auto direct = std::filesystem::path(root) / relative;
-                if (std::filesystem::is_regular_file(direct)) {
+                if (std::filesystem::is_regular_file(direct) &&
+                    !isEntryFile(direct)) {
                     matchedPath = direct.string();
                     break;
                 }
@@ -102,7 +124,8 @@ auto Resolver::resolve(const std::string& moduleName,
                 for (const auto& relative :
                      sourcePaths(candidateName.substr(0, dot))) {
                     auto container = std::filesystem::path(root) / relative;
-                    if (std::filesystem::is_regular_file(container)) {
+                    if (std::filesystem::is_regular_file(container) &&
+                        !isEntryFile(container)) {
                         matchedPath = container.string();
                         break;
                     }

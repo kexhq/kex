@@ -1,0 +1,37 @@
+# kexhq/kex#247: a `foul` method carries one hidden argument (the capability
+# context) beyond the `let` form, and the dynamic dispatcher used to be built
+# per BEAM arity, so a foul method was unreachable whenever the call site did
+# not know the receiver's type statically. Each call below reaches its method
+# without a static receiver type.
+record Counter do
+  n : Integer
+end
+
+make Counter do
+  foul shout -> String do
+    IO.printLine("shouting ${@n}")
+    return "n=${@n}"
+  end
+
+  foul add(k: Integer) -> Integer do
+    IO.printLine("adding ${k}")
+    return @n + k
+  end
+end
+
+foul erased(x: Any) -> String = x.shout
+
+foul unannotated(x) -> String = x.shout
+
+foul viaOptional(maybe: Counter?) -> String = match maybe do
+  Just(c) => c.shout
+  None => "none"
+end
+
+main do
+  IO.printLine(erased(Counter { n: 1 }))
+  IO.printLine(unannotated(Counter { n: 2 }))
+  IO.printLine(viaOptional(Just(Counter { n: 3 })))
+  let maybe : Counter? = Just(Counter { n: 4 })
+  IO.printLine("${maybe.map { |c| c.add(1) }}")
+end

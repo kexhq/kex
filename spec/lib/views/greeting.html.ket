@@ -1,0 +1,4 @@
+---
+params: [name: String]
+---
+<p>Hello, <%= name %>!</p>

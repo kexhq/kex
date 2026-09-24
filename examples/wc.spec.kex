@@ -1,4 +1,3 @@
-# kex: no-check
 # Specs for wc.kex — exercises wordCount and sumCounts against a replaced
 # `FS.File` capability, so no real files are involved (kexhq/kex#143).
 #
@@ -14,7 +13,15 @@ record FakeFiles do
 end
 
 make FakeFiles, implement: FS.File do
-  foul read(path) = @files.get(path)
+  foul read(path) = match @files.get(path) do
+    Just(content) => Ok(content)
+    None => Error(ReadFailed(path))
+  end
+
+  foul readBytes(path) = match @files.get(path) do
+    Just(content) => Ok(content.to(Binary).or(Binary.empty))
+    None => Error(ReadFailed(path))
+  end
 
   # `String.lines` already drops one trailing newline rather than reporting an
   # empty final line, which is what the real `readLines` does too.
@@ -26,13 +33,16 @@ make FakeFiles, implement: FS.File do
 
   foul open(path, mode) = Error(OpenFailed(path))
   foul write(path, content) = false
+  foul writeBytes(path, content) = false
   foul append(path, content) = false
   foul directory?(path) = false
+  foul symlink?(path) = false
   foul delete(path) = false
   foul copy(src, dst) = false
   foul rename(src, dst) = false
-  foul feed(path) = []
+  foul feed(path) = None
   foul absolute(path) = Just(path)
+  foul canonical(path) = Ok(path)
 end
 
 let noFiles = FakeFiles { files: {} }

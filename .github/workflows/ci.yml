@@ -243,6 +243,12 @@ jobs:
       - name: Stdlib spec suite
         run: make -o build spec-stdlib
 
+      - name: Example spec suite
+        run: make -o build spec-examples
+
+      - name: Type-check examples
+        run: make -o build check-examples
+
       # The two backends are expected to agree on every spec, so a difference
       # fails the build. Known representation-level gaps (pid rendering, a
       # Range printing as its item list) are outside these suites by design.
@@ -254,6 +260,9 @@ jobs:
 
       - name: Stdlib spec suite via BEAM
         run: make -o build spec-stdlib-beam
+
+      - name: Example spec suite via BEAM
+        run: make -o build spec-examples-beam
 
       # The JSON reporting an editor's test tree reads, on both backends
       # (kexhq/kex#199). Same reasoning as the suites above: the records are a

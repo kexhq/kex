@@ -1,43 +1,48 @@
-# kex: no-check
 # Error handling with Result and Optional
 
 type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 
-let parsePort(s: String) -> Result<Int, ParseError> do
+type AppError = BadPort(ParseError) | MissingSetting(String) | NoEmail(String)
+
+record Config do
+  host : String
+  port : Integer
+end
+
+record User do
+  name : String
+  age : Integer
+  email : String?
+end
+
+let parsePort(s: String) -> Result<Integer, ParseError> do
   return Error(EmptyInput) if s.empty?
 
   match Integer.parse(s) do
-    Ok(n)    => do
-      return Error(Overflow) if n > 65535
-
-      return Ok(n)
-    end
+    Ok(n) => n > 65535 then Error(Overflow) else Ok(n)
     Error(_) => Error(InvalidFormat(s))
   end
 end
 
-# Aspirational: file I/O and Config not yet in stdlib
-foul loadConfig(path: String) -> Result<Config, AppError> do
-  match IO.read(path) do
-    Error(e) => return Error(AppError(e))
-    Ok(content) => do
-      match Config.parse(content) do
-        Error(e) => return Error(e)
-        Ok(parsed) => do
-          match parsePort(parsed.get("port")) do
-            Error(e) => return Error(AppError(e))
-            Ok(port) => return Ok(Config { port: port, host: parsed.get("host") })
-          end
-        end
-      end
-    end
+# Each failure is wrapped in the application's own error type, and `return`
+# leaves as soon as one step fails.
+let loadConfig(settings: {String: String}) -> Result<Config, AppError> do
+  let host = match settings.get("host") do
+    Just(value) => value
+    None => return Error(MissingSetting("host"))
+  end
+  let rawPort = match settings.get("port") do
+    Just(value) => value
+    None => return Error(MissingSetting("port"))
+  end
+  match parsePort(rawPort) do
+    Ok(port) => Ok(Config { host: host, port: port })
+    Error(why) => Error(BadPort(why))
   end
 end
 
-# Optional handled with match and if let
-let findUser(users: [User], name: String) -> User? do
-  return users.find { |u| u.name == name }
-end
+# Optional handled with match
+let findUser(users: [User], name: String) -> User? = users.find { |u| u.name == name }
 
 let greetUser(users: [User], name: String) -> String do
   match findUser(users, name) do
@@ -46,29 +51,36 @@ let greetUser(users: [User], name: String) -> String do
   end
 end
 
-# Aspirational: fetchUser not yet in stdlib
-foul getUserEmail(id: Int) -> Result<String, AppError> do
-  match fetchUser(id) do
-    Error(e) => return Error(e)
-    Ok(user) => do
-      match user.email do
-        Just(email) => Ok(email)
-        None => Error(AppError(:no_email))
-      end
-    end
+# An Optional turned into a Result once a missing value becomes an error
+let userEmail(users: [User], name: String) -> Result<String, AppError> do
+  match findUser(users, name).flatMap { |user| user.email } do
+    Just(email) => Ok(email)
+    None => Error(NoEmail(name))
   end
 end
 
 # flatMap for Optional chaining
 let firstAdultEmail(users: [User]) -> String? do
-  return users
-    .find(&.adult?)
-    .flatMap(&.email)
+  users.find { |u| u.age >= 18 }.flatMap { |u| u.email }
 end
 
 main do
   match parsePort("8080") do
-    Ok(port)    => IO.printLine("listening on ${port}")
-    Error(why)  => IO.printLine("bad port: ${why}")
+    Ok(port) => IO.printLine("listening on ${port}")
+    Error(why) => IO.printLine("bad port: ${why}")
   end
+
+  match loadConfig({"host": "localhost", "port": "99999"}) do
+    Ok(config) => IO.printLine("config: ${config.host}:${config.port}")
+    Error(why) => IO.printLine("config failed: ${why}")
+  end
+
+  let users = [
+    User { name: "Ada", age: 36, email: Just("ada@example.com") },
+    User { name: "Tim", age: 12, email: None },
+  ]
+  IO.printLine(greetUser(users, "Ada"))
+  IO.printLine(greetUser(users, "Bob"))
+  IO.printLine("${userEmail(users, "Tim")}")
+  IO.printLine(firstAdultEmail(users).or("no adult with an email"))
 end

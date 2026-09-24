@@ -1,0 +1,17 @@
+# kexhq/kex#385: `Template.html(Kex.embed(...))` in an IMPORTED module
+# (spec/lib/views/greeting.kex) is the same zero-cost `String -> String`
+# function it is in the entry file. Two things stood in the way: the embed
+# resolved against the entry file's directory, and the module's unannotated
+# `let render = ...` lost a bare `render(name)` call to the stdlib Template
+# module's own `render(source, context) -> Result<String, TemplateError>`
+# once that module's source was merged into the build. And each file is
+# expanded on its own, so the entry's own template below has to get a
+# generated name distinct from the module's, not a second `__kexTemplate0`.
+using Views.Greeting
+
+let farewell = Template.text("Bye, <%= who %>, see you <%= later %>.")
+
+main do
+  IO.printLine(Views.Greeting.greet("Ada"))
+  IO.printLine(farewell("Ada", "soon"))
+end

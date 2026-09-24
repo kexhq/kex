@@ -7,6 +7,8 @@
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 
+#include <cstdint>
+#include <cstdio>
 #include <cctype>
 #include <exception>
 #include <filesystem>
@@ -1529,7 +1531,8 @@ struct LoweredTemplate {
 };
 
 auto lowerTemplateFunction(bool htmlMode, const std::string& source, const SourceLocation& blame,
-                           int& counter, std::chrono::milliseconds timeout,
+                           const std::string& namePrefix, int& counter,
+                           std::chrono::milliseconds timeout,
                            std::vector<semantic::Diagnostic>& diagnostics)
     -> std::optional<LoweredTemplate> {
     std::vector<TemplateNode> nodes;
@@ -1564,7 +1567,7 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
 
     auto fn = std::make_unique<ast::FunctionDef>();
     fn->location = blame;
-    fn->name = "__kexTemplate" + std::to_string(counter++);
+    fn->name = namePrefix + std::to_string(counter++);
     ast::FunctionClause clause;
     clause.hasParamList = true;
     bool typesOk = true;
@@ -1598,6 +1601,7 @@ struct TemplateCallFolder {
     std::vector<semantic::Diagnostic>& diagnostics;
     std::chrono::milliseconds timeout;
     std::vector<std::unique_ptr<ast::FunctionDef>> generated;
+    std::string namePrefix;
     int counter = 0;
     bool ok = true;
 
@@ -1644,7 +1648,8 @@ struct TemplateCallFolder {
         }
 
         auto lowered =
-            lowerTemplateFunction(htmlMode, source, slot->location, counter, timeout, diagnostics);
+            lowerTemplateFunction(htmlMode, source, slot->location, namePrefix, counter,
+                                  timeout, diagnostics);
         if (!lowered) {
             ok = false;
             return true;
@@ -1658,9 +1663,28 @@ struct TemplateCallFolder {
 // Runs TemplateCallFolder over the whole program, exactly like foldEmbeds:
 // every function/`make` method/`main` body, `compiled do` or not,
 // unconditional on the program having any `compiled` block at all.
+// Every file is expanded on its own — a dependency module before it is merged
+// into the entry program (see resolveBeamDeps) — so a counter alone would name
+// the first template of EACH file `__kexTemplate0`, and after the merge the
+// entry's `~__kexTemplate0` could bind to a dependency's function. A stable
+// FNV-1a of the source path keeps each file's names apart and the output
+// deterministic for a given path (kexhq/kex#385).
+auto templateNamePrefix(const std::string& sourcePath) -> std::string {
+    if (sourcePath.empty()) return "__kexTemplate";
+    std::uint32_t hash = 2166136261u;
+    for (unsigned char c : sourcePath) {
+        hash ^= c;
+        hash *= 16777619u;
+    }
+    char digits[9];
+    std::snprintf(digits, sizeof digits, "%08x", hash);
+    return std::string("__kexTemplate_") + digits + "_";
+}
+
 auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& diagnostics,
                     const ExpandOptions& options) -> bool {
-    TemplateCallFolder folder{diagnostics, options.timeout, {}, 0, true};
+    TemplateCallFolder folder{diagnostics, options.timeout, {},
+                              templateNamePrefix(options.sourcePath), 0, true};
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
     walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };

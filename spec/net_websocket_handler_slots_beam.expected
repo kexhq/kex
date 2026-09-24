@@ -1,0 +1,3 @@
+open sockets: 5
+ping: 200
+ok
