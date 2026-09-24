@@ -4989,7 +4989,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // files a partial copy under the bare name (`Router` for
                 // `Net.HTTP.Router`, which lacks the module's constants), and
                 // that copy cannot say what the module does not have.
-                if (module.sourceModule == *importedPath &&
+                // `Kex.embed` is expanded before checking (compiled/expand.cxx);
+                // one still here failed to expand, and says why itself.
+                const bool compileTimeForm =
+                    *importedPath == "Kex" && node.method == "embed";
+                if (module.sourceModule == *importedPath && !compileTimeForm &&
                     !module.exports.count(node.method)) {
                     std::vector<std::string> exported;
                     for (const auto& [name, _] : module.exports) exported.push_back(name);
