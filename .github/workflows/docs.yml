@@ -43,15 +43,13 @@ jobs:
       # Same toolchain CI uses for the compiler + Tey jobs: erlang for erlc
       # (Tey compiles to .beam and runs on the BEAM, which is how it serves
       # and how `tey docs build` runs at all).
-      # OTP 27+ for json:decode, which JSON.parse uses on BEAM
-      # (runtime/src/kex_intrinsic_json.erl). ubuntu-latest's erlang-base is
-      # OTP 25, where JSON.parse silently falls back to the Kex parser: the
-      # Tey reference's --link-model read of the stdlib's 1 MB model.json then
-      # ran for hours instead of a second. Installed before Kex, so the
-      # runtime and Tey are compiled by the same OTP they run on.
+      # Kex needs OTP 27+ (CMakeLists refuses older); ubuntu-latest's
+      # erlang-base is OTP 25. On 25, JSON.parse had silently fallen back to
+      # the Kex parser, and the Tey reference's --link-model read of the
+      # stdlib's 1 MB model.json ran for hours instead of a second.
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "28"
+          otp-version: "27"
 
       - name: Install dependencies
         run: |

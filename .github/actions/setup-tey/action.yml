@@ -34,8 +34,9 @@ inputs:
     default: "true"
   erlang:
     description: >-
-      Install Erlang/OTP. Kex compiles to BEAM, so it is required — turn this
-      off only when the runner or container already has it.
+      Install Erlang/OTP (27 or newer, unless a new enough one is already on
+      PATH). Kex compiles to BEAM, so it is required — turn this off only
+      when the runner or container already has OTP 27+.
     required: false
     default: "true"
   repository:
@@ -96,18 +97,40 @@ runs:
         echo "Kex ${kex_version} with Tey ${tey_version}"
 
     # The archives link gmp/pcre2/readline/openssl by soname and run on the
-    # BEAM. The runner images carry the libraries; Erlang they do not.
-    - name: Install Erlang
+    # BEAM. The runner images carry the libraries; Erlang they do not, and
+    # Kex needs OTP 27 or newer. An Erlang already on PATH is kept only when
+    # it is new enough; Ubuntu's erlang-base (OTP 25) is not, so Linux gets
+    # OTP 27 from setup-beam.
+    - name: Check Erlang
+      id: erlang
       if: inputs.erlang == 'true'
       shell: bash
       run: |
         set -euo pipefail
+        release=0
         if command -v erl >/dev/null 2>&1; then
-          echo "Erlang already present: $(erl -noshell -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().')"
-          exit 0
+          release="$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt().')"
         fi
+        if [ "$release" -ge 27 ]; then
+          echo "Erlang already present: OTP ${release}"
+          echo "install=false" >> "$GITHUB_OUTPUT"
+        else
+          [ "$release" -gt 0 ] && echo "Erlang on PATH is OTP ${release}; Kex needs OTP 27 or newer"
+          echo "install=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Erlang (Linux)
+      if: inputs.erlang == 'true' && steps.erlang.outputs.install == 'true' && runner.os == 'Linux'
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: "27"
+
+    - name: Install Erlang (macOS)
+      if: inputs.erlang == 'true' && steps.erlang.outputs.install == 'true' && runner.os != 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
         case "$RUNNER_OS" in
-          Linux)  sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends erlang-base ;;
           macOS)  brew install erlang ;;
           *)      echo "::error::no Erlang install recipe for ${RUNNER_OS}"; exit 1 ;;
         esac

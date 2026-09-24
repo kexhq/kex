@@ -3,12 +3,18 @@ description: Restore this run's compiler and BEAM runtime for the runner OS and 
 runs:
   using: composite
   steps:
+    # The same OTP the native build compiled the runtime beams with (see
+    # ci.yml): Ubuntu's erlang-base is OTP 25, older than Kex supports.
+    - uses: erlef/setup-beam@v1
+      if: runner.os == 'Linux'
+      with:
+        otp-version: "27"
     - name: Install runtime dependencies (Linux)
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgmp-dev libpcre2-dev libreadline-dev libssl-dev erlang-base
+        sudo apt-get install -y libgmp-dev libpcre2-dev libreadline-dev libssl-dev
     - name: Install runtime dependencies (macOS)
       if: runner.os == 'macOS'
       shell: bash

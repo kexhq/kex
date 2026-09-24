@@ -180,11 +180,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Ubuntu 24.04's erlang-base is OTP 25, and Kex needs OTP 27+
+      # (CMakeLists refuses older), so Erlang comes from setup-beam. 27 is
+      # the floor on purpose: runtime beams load on the OTP that compiled
+      # them and newer, so the artifacts run on any supported OTP.
+      - uses: erlef/setup-beam@v1
+        if: runner.os == 'Linux'
+        with:
+          otp-version: "27"
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev libssl-dev erlang-base libboost-context-dev
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev libssl-dev libboost-context-dev
 
       # cmake ships with the macOS runner image. No OpenSSL here: CMakeLists
       # uses CommonCrypto for SHA-256 on Apple. PCRE2 is explicit because,

@@ -9,7 +9,7 @@
 #
 #   docker build -f docker/Dockerfile.alpine -t kex:alpine .
 
-FROM alpine:3.20 AS build
+FROM alpine:3.22 AS build
 
 RUN apk add --no-cache \
         build-base cmake git bash \
@@ -44,7 +44,7 @@ RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
         INSTALL_NONINTERACTIVE=1 \
     && rm -f /opt/tey/bin/kex
 
-FROM alpine:3.20
+FROM alpine:3.22
 
 # libgmpxx is its own package on Alpine: the binary links GMP's C++
 # wrapper, and `gmp` alone leaves the image failing to start.
