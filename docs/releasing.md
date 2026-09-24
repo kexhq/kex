@@ -302,6 +302,11 @@ sticks.
   something better into the release afterwards when a version deserves it.
 - **Anything extra for a pre-release.** No tap update, no `latest` image, no
   `/releases/latest`. That is the whole point of the channel.
+- **The guide's new edition.** The tag push regenerates the reference for
+  every release (`.github/workflows/docs.yml`), but the guide is written by
+  hand in kexhq/docs. Cut its copy for the new version there with
+  `marq copy-collection /guide/<old>/ /guide/<new>/ --unlist`; its README
+  has the details.
 
 ## Known gaps
 

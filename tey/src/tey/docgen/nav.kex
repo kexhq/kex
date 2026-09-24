@@ -97,6 +97,19 @@ module Tey.Docgen.Nav do
     return entries.filter { |e| uniqueTarget?(entries, e) }
   end
 
+  # The links, plus a home for every type that make blocks extend. A bare
+  # `Integer` is claimed by a module (number parsing) AND by five make
+  # blocks, so the uniqueness rule drops it — yet a type name in a
+  # signature means the type, and the type has a home page
+  # (Relations.homePathOf). Those homes fill in what uniqueness left out;
+  # a name that already links keeps its link.
+  foul withTypeHomes(links: [LinkEntry], types: [Tey.Docgen.Model.TypeFacts]) -> [LinkEntry] do
+    let homes = types.filter { |t| !t.homePath.empty? && resolve(links, t.name) == None }.map { |t|
+      LinkEntry { name: t.name, urlPath: t.homePath, anchor: t.homeAnchor, kind: "type" }
+    }
+    return links + homes
+  end
+
   foul linkEntriesOnPage(entities: [Entity], urlPath: String) -> [LinkEntry] do
     return entities.flatMap { |e|
       let own = linkableNames(e).map { |n|
@@ -104,11 +117,19 @@ module Tey.Docgen.Nav do
       }
       let nested = match e do
         ModuleDecl(entry) => linkEntriesOnPage(entry.children, urlPath)
-        TraitDecl(entry) => []
-        MakeDecl(entry) => []
+        TraitDecl(entry) => memberLinks(entry.qualifiedName, entry.qualifiedName, entry.functions, urlPath)
+        MakeDecl(entry) => memberLinks(Tey.Docgen.Model.baseTypeOf(entry.target), entry.target, entry.functions, urlPath)
         _ => []
       end
       own + nested
+    }
+  end
+
+  # `List.map`, `Enumerable.filter`: members are linkable under their
+  # owner's name, so prose that writes `List.map` lands on the method.
+  foul memberLinks(ownerName: String, owner: String, functions: [Tey.Docgen.Model.FunctionEntry], urlPath: String) -> [LinkEntry] do
+    return functions.map { |f| f.name }.uniq.map { |n|
+      LinkEntry { name: "${ownerName}.${n}", urlPath: urlPath, anchor: Tey.Docgen.Model.memberAnchorOf(owner, n), kind: "function" }
     }
   end
 

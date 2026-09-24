@@ -167,7 +167,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   # condition. The same operation as +readLine+, under the name +IO.getLine+
   # uses.
   #
-  # @return [String?] the next line, or +None+ at end of file
+  # @return [Result<String?, ReadError>] the next line, or +None+ at end of file
   #
   # @example Walking a file line by line
   #   foul echo(handle: FileHandle<CanRead, W>) -> Void do
@@ -186,7 +186,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #
   # Answers +None+ at end of file.
   #
-  # @return [String?] the next character, or +None+ at end of file
+  # @return [Result<String?, ReadError>] the next character, or +None+ at end of file
   #
   # @example
   #   let firstChar = handle.get.or("")
@@ -196,7 +196,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   # Reads the next line from the handle, without its newline. The same as
   # +getLine+, named for reading from a file rather than from a console.
   #
-  # @return [String?] the next line, or +None+ at end of file
+  # @return [Result<String?, ReadError>] the next line, or +None+ at end of file
   #
   # @example
   #   let header = handle.readLine.or("")
@@ -211,7 +211,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   # Reads from the current position, so calling it after a +readLine+ gives
   # the rest of the file rather than the whole of it.
   #
-  # @return [String?] the remaining contents, or +None+
+  # @return [Result<String, ReadError>] the remaining contents
   #
   # @example
   #   let body = handle.read.or("")
@@ -227,7 +227,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   # Unlike +read+, this accepts arbitrary binary data and cannot fail because
   # the input is not valid UTF-8. It starts at the handle's current position.
   #
-  # @return [Binary] the remaining bytes
+  # @return [Result<Binary, ReadError>] the remaining bytes
   #
   # @example Reading a file with an unknown encoding
   #   let payload = handle.readBytes.try

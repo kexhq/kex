@@ -1,15 +1,20 @@
 name: Docs
 
-# Generates the documentation site and publishes it to the kexhq/docs
-# repository, which GitHub Pages serves. The site is built here — not in the
-# docs repo — because docgen is part of this repo's toolchain: `tey docs`
-# parses sources with the compiler built by this very workflow, and old
-# releases are built from git worktrees only this repo has.
+# Generates the reference half of docs.kex.run and hands it to the site.
+#
+# The site — landing page, guide, navigation, theme — is authored with
+# Marqraft in kexhq/docs, which builds and publishes it. What only this repo
+# can produce is the reference: `tey docs` parses sources with the compiler
+# built by this very workflow, and old releases are built from git worktrees
+# only this repo has. So this workflow generates it (docgen's fragments
+# output plus tools/docsite's manifest.json), force-pushes it to the
+# `reference` branch of kexhq/docs — a branch that holds nothing else, like
+# gh-pages — and asks kexhq/docs to rebuild.
 #
 # A tag push means a new release and a full rebuild of every version (old
 # tags parse through the CURRENT docgen). A main push only changes the
-# unreleased docs, so that build skips the tag worktrees. `workflow_dispatch`
-# rebuilds everything by hand.
+# unreleased reference, so that build skips the tag worktrees.
+# `workflow_dispatch` rebuilds everything by hand.
 on:
   push:
     branches: [main]
@@ -24,7 +29,7 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  reference:
     runs-on: ubuntu-latest
     steps:
       # Full history and tags: build-docs.sh adds a worktree per release tag.
@@ -47,70 +52,46 @@ jobs:
       - name: Build Tey
         run: make build-tey
 
-      # The hand-written book source (kexhq/docs, guide/<version>/). Public,
-      # so the default token reads it; absent content skips silently in
-      # build-docs.sh via GUIDE_SOURCE's dir-exists convention.
-      - name: Check out guide source
+      # The previous hand-over, so a tag build that no longer parses keeps
+      # that version's pages instead of dropping them (build-docs.sh only
+      # warns for old tags). An empty branch on the first run is fine.
+      - name: Check out the current reference
         uses: actions/checkout@v4
         with:
           repository: kexhq/docs
-          path: guide-src
+          ref: reference
+          path: reference-out
+        continue-on-error: true
 
-      # GUIDE_SOURCE names guide-src's version directory. It used to be a
-      # literal here ("guide/0.4.0-alpha") with a comment asking whoever cuts
-      # a release to bump it by hand — nobody did, across three later tags
-      # (kexhq/kex#305), so the guide silently kept serving alpha content.
-      # Derived from VERSION instead, the same file CMake and release.yml
-      # build from, so it can't drift from what the rest of the site labels
-      # itself. If kexhq/docs has no guide/<version>/ yet for the version
-      # being built (expected right after a version bump, before the book is
-      # updated to match), this falls back to the newest guide directory that
-      # DOES exist and says so loudly — so the mismatch shows up as a visible
-      # warning on every run instead of nothing at all.
-      - name: Resolve guide source
-        id: guide
+      - name: Generate reference
         run: |
-          set -euo pipefail
-          version="$(tr -d '[:space:]' < VERSION)"
-          dir="guide-src/guide/${version}"
-          if [ -d "$dir" ]; then
-            echo "source=${dir}" >> "$GITHUB_OUTPUT"
-          else
-            fallback="$(ls guide-src/guide | sort -V | tail -1 || true)"
-            if [ -z "$fallback" ]; then
-              echo "::warning::No guide-src/guide/${version} and no other guide directory exists either — the guide will be skipped."
-              echo "source=guide-src/guide/${version}" >> "$GITHUB_OUTPUT"
-            else
-              echo "::warning::guide-src/guide/${version} does not exist yet (kexhq/docs has not been updated for this release) — falling back to guide/${fallback}, which is stale. Add guide/${version}/ to kexhq/docs."
-              echo "source=guide-src/guide/${fallback}" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      # The site base URL for sitemap/robots/llms. Canonical URL is the
-      # custom domain; kexhq.github.io/docs redirects to it.
-      - name: Generate docs
-        env:
-          BASE_URL: https://docs.kex.run
-          GUIDE_SOURCE: ${{ steps.guide.outputs.source }}
-        run: |
+          mkdir -p reference-out
+          rm -rf reference-out/.git
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            tools/build-docs.sh docs-out
+            tools/build-docs.sh reference-out
           else
-            SKIP_TAGS=1 tools/build-docs.sh docs-out
+            SKIP_TAGS=1 tools/build-docs.sh reference-out
           fi
 
-      # Pushes docs-out to kexhq/docs' gh-pages branch, which GitHub Pages
-      # serves. Requires the DOCS_PUBLISH_TOKEN secret: a fine-grained PAT
-      # with Contents: read+write on kexhq/docs.
-      - name: Publish to kexhq/docs
+      # Requires the DOCS_PUBLISH_TOKEN secret: a fine-grained PAT with
+      # Contents: read+write on kexhq/docs (the same permission covers the
+      # repository_dispatch below).
+      - name: Hand over to kexhq/docs
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.DOCS_PUBLISH_TOKEN }}
           external_repository: kexhq/docs
-          publish_branch: gh-pages
-          publish_dir: docs-out
-          # Keep the CNAME file on gh-pages so GitHub Pages keeps serving
-          # docs.kex.run; without it every publish detaches the custom domain.
-          cname: docs.kex.run
-          enable_jekyll: false
-          commit_message: "docs: publish ${{ github.ref_name }}"
+          publish_branch: reference
+          publish_dir: reference-out
+          force_orphan: true
+          enable_jekyll: true
+          commit_message: "reference: ${{ github.ref_name }} kexhq/kex@${{ github.sha }}"
+
+      - name: Ask kexhq/docs to rebuild
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_PUBLISH_TOKEN }}
+        run: |
+          gh api repos/kexhq/docs/dispatches \
+            -f event_type=reference-updated \
+            -F "client_payload[ref]=${{ github.ref_name }}" \
+            -F "client_payload[sha]=${{ github.sha }}"

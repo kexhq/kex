@@ -99,6 +99,9 @@ module Tey.Docgen.Model do
     doc : Doc
     line : Integer
     types : [String] = []
+    # The result type the source declares (annotation or inline `-> T`),
+    # or "" when it declares none.
+    returnType : String = ""
   end
 
   record ConstantEntry do
@@ -123,6 +126,46 @@ module Tey.Docgen.Model do
     urlPath : String
     title : String
     entities : [Entity]
+    # The file's opening comment when it stands apart from the first
+    # declaration (a blank line between them): prose about the FILE, which
+    # the AST reader would otherwise glue onto whatever is declared first.
+    intro : String = ""
+  end
+
+  # One `make` block seen from the type it extends: where it is, what it
+  # adds, and which traits it declares. A type's methods are spread over
+  # many files (`make Integer` lives in number.kex, time.kex, units.kex and
+  # algebra.kex), and these rows are what put them back together.
+  record Extension do
+    target : String
+    urlPath : String
+    pageTitle : String
+    anchor : String
+    implements : [String]
+    names : [String]
+  end
+
+  # Everything the package says about one type, across files. `homePath` is
+  # the page a reader should land on for the type — the one declaring it, or
+  # the one named after it for builtins such as Integer and String.
+  record TypeFacts do
+    name : String
+    homePath : String
+    # The section on the home page to land on: the type's declaration, or
+    # its first make block there.
+    homeAnchor : String
+    extensions : [Extension]
+    traits : [String]
+  end
+
+  # A trait seen from the outside: where it is documented and which make
+  # blocks implement it.
+  record TraitFacts do
+    name : String
+    qualifiedName : String
+    urlPath : String
+    anchor : String
+    implementors : [Extension]
   end
 
   # The navigation unit: one per module in the package, pointing at the page
@@ -172,6 +215,10 @@ module Tey.Docgen.Model do
     # prelude IS. It declares no entities, so without this its page is blank.
     preludeSource : String = ""
     preludeDoc : String = ""
+    # Cross-file relations (Tey.Docgen.Relations): every type's extensions
+    # and traits, every trait's implementors.
+    types : [TypeFacts] = []
+    traits : [TraitFacts] = []
   end
 
   # A flattened search row: one per entity (and per function inside traits,
@@ -255,7 +302,10 @@ module Tey.Docgen.Model do
   # the HTML renderer — because the cross-link index and the sidebar compute
   # the same ids, and the HTML must match whatever they resolved to.
   foul anchorOf(entity: Entity) -> String do
-    return "${kindOf(entity)}-${slugOf(anchorNameOf(entity))}"
+    match entity do
+      MakeDecl(e) => return "make-${ownerSlugOf(e.target)}"
+      _ => return "${kindOf(entity)}-${slugOf(anchorNameOf(entity))}"
+    end
   end
 
   # A make's anchor is keyed by its full target spelling (type params
@@ -264,12 +314,93 @@ module Tey.Docgen.Model do
   foul anchorNameOf(entity: Entity) -> String do
     match entity do
       MakeDecl(e) => e.target
-      ModuleDecl(e) => e.qualifiedName
-      _ => nameOf(entity)
+      _ => qualifiedNameOf(entity)
     end
   end
 
+  # The anchor of a function documented inside a trait or make section:
+  # scoped by its owner, because `count` is a member of both `[X]` and
+  # `String`, and one page can hold several owners.
+  foul memberAnchorOf(owner: String, name: String) -> String do
+    return "${ownerSlugOf(owner)}-${slugOf(name)}"
+  end
+
+  # An owner spelled as a type: `[X]` -> "list", `[Number]` -> "list-number",
+  # `FileHandle<CanRead, W>` -> "filehandle-canread". Type variables (a lone
+  # capital, optionally numbered) say nothing about WHICH methods these are,
+  # so they are dropped rather than baked into every anchor.
+  foul ownerSlugOf(owner: String) -> String do
+    let spelled = owner.replace("[", " List ").replace("{", " Map ")
+    let words = Tey.Docgen.Model.wordsOf(spelled).reject { |w| typeVariable?(w) }
+    let joined = words.map { |w| w.lowerCase }.join("-")
+    return joined.empty? then slugOf(owner) else joined
+  end
+
+  foul typeVariable?(word: String) -> Bool do
+    return false if word.empty? || word.count > 2
+    let head = word.take(1)
+    return head.upperCase == head && head.lowerCase != head && word.drop(1).all? { |c| c.digit? }
+  end
+
+  # Identifier-ish runs of a type text: letters, digits, `_`, `?`, `!`.
+  foul wordsOf(text: String) -> [String] do
+    return text.split(" ").flatMap { |part| wordSplit(part, "", []) }.reject { |w| w.empty? }
+  end
+
+  foul wordSplit(rest: String, word: String, out: [String]) -> [String] do
+    return out + [word] if rest.empty?
+    let ch = rest.take(1)
+    if "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_?!".contains?(ch)
+      return wordSplit(rest.drop(1), word + ch, out)
+    end
+    return wordSplit(rest.drop(1), "", out + [word])
+  end
+
+  # An id-safe spelling of a name: lower case, every run of punctuation one
+  # dash. `?` and `!` survive — they are part of Kex names (`empty?`) and
+  # legal in a fragment.
   foul slugOf(name: String) -> String do
-    return name.lowerCase.replace(" ", "-").replace(".", "-").replace("/", "-")
+    let words = wordsOf(name.replace(".", " ").replace("/", " "))
+    return operatorSlug(name) if words.empty?
+    return words.map { |w| w.lowerCase }.join("-")
+  end
+
+  # An operator method has no letters to slug: `+` is "op-plus", `<=>` is
+  # "op-lt-eq-gt" — distinct, stable and readable in a URL.
+  foul operatorSlug(name: String) -> String do
+    let names = name.chars.map { |c| operatorCharName(c) }.reject { |n| n.empty? }
+    return "op-" + names.join("-")
+  end
+
+  foul operatorCharName(c: Char) -> String do
+    match c do
+      '+' => "plus"
+      '-' => "minus"
+      '*' => "times"
+      '/' => "div"
+      '%' => "mod"
+      '<' => "lt"
+      '>' => "gt"
+      '=' => "eq"
+      '!' => "not"
+      '&' => "and"
+      '|' => "or"
+      '^' => "xor"
+      '~' => "tilde"
+      '[' => "index"
+      '.' => "dot"
+      '?' => "q"
+      _ => ""
+    end
+  end
+
+  # "[X]" -> "List", "{K: V}" -> "Map", "FileHandle<R, W>" -> "FileHandle",
+  # "Map<K, V>" -> "Map": the type a make block extends, whatever
+  # specialisation it spells.
+  foul baseTypeOf(target: String) -> String do
+    let t = target.trim
+    return "List" if t.startsWith?("[")
+    return "Map" if t.startsWith?("{")
+    return (t.split("<").first.or(t)).trim
   end
 end

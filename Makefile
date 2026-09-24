@@ -39,7 +39,7 @@ help:
 	@echo "  make tey-run      Write ./tey-run, a Tey launcher for this checkout"
 	@echo "  make spec-tey     Run Tey own spec suite (requires erlc)"
 	@echo "  make test-tey-launcher  Test tey/bin/tey's own stdin/pty handling"
-	@echo "  make docs         Build the docs site for this checkout into ../kdocs"
+	@echo "  make docs         Generate this checkout's reference into ../docs/generated"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
@@ -568,10 +568,13 @@ tey-run: tey/bin/tey Makefile
 	@chmod +x $@
 	@echo "Wrote ./tey-run (TEY_EBIN=tey/ebin, TEY_KEX=$(KEX), TEY_ERL=$(ERL))"
 
-# The documentation site for THIS checkout, unreleased versions only — the
+# The generated reference for THIS checkout, unreleased versions only — the
 # every-tag rebuild is what CI runs (.github/workflows/docs.yml), and that
 # needs a full git history plus a worktree per tag. Output defaults to
-# ../kdocs; pass a directory as O= to put it elsewhere.
+# ../docs/generated, the generated/ directory of a kexhq/docs checkout beside
+# this one, so `marq dev ../docs` shows it inside the site; pass a directory
+# as O= to put it elsewhere. The site itself (guide, landing page, theme) is
+# authored and built in kexhq/docs with Marqraft.
 #
 # Both the stdlib and Tey are built. Neither is discovered: the stdlib is not
 # a Tey package at all, so tools/build-docs.sh states each one's name and

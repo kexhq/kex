@@ -214,7 +214,7 @@ make Input do
   # use it where the grammar requires something to be there.
   #
   # @param f [Input -> Result<(T, Input), ParseError>] the parser to repeat
-  # @return [([T], Input)] the results and the cursor, or the first failure
+  # @return [Result<([T], Input), ParseError>] the results and the cursor, or the first failure
   #
   # @example
   #   Input { input: "abc" }.some { |p| p.charWhen(~alpha?) }
@@ -235,7 +235,7 @@ make Input do
   # the caret.
   #
   # @param expected [String] the literal that must be next
-  # @return [(String, Input)] the literal and the cursor, or an +Expected+ error
+  # @return [Result<(String, Input), ParseError>] the literal and the cursor, or an +Expected+ error
   #
   # @example
   #   Input { input: "abc" }.string("abc")   # => Ok(("abc", cursor at 3))
@@ -291,7 +291,7 @@ make Input do
   # they all started from.
   #
   # @param alts [[Input -> Result<(T, Input), ParseError>]] the parsers to try, in order
-  # @return [(T, Input)] the first success, or +NoMatch+
+  # @return [Result<(T, Input), ParseError>] the first success, or +NoMatch+
   #
   # @example
   #   cursor.choice([

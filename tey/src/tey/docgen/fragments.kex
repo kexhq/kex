@@ -1,0 +1,200 @@
+# `tey docs build --format fragments`: the reference as page bodies for a
+# host site to frame, instead of a standalone site with docgen's own chrome.
+#
+# The unit lands where `site` output would (<out>/<package>/<version>/), as
+#
+#   <page>.html        the page body — no <html>, no header, no sidebar, no h1
+#   <page>.page.json   what the host needs to frame it: title, description,
+#                      URL path, template, and `data` (package, version,
+#                      source file, the on-page table of contents)
+#   index.html/.page.json  the unit's landing page (the module cards)
+#   nav.json           the unit's page tree: {title, path, children}
+#   *.md, model.json, search.json, manifest.json  as in `site` output
+#
+# Pages are addressed the way a static host with pretty URLs serves them:
+# `list` is /<package>/<version>/list/. Every relative link the shared
+# renderer produced (`../net.html#module-net`) is rewritten to that form, so
+# a fragment works wherever the host mounts the unit at /<package>/<version>/.
+# Nothing here knows which host that is; Marqraft reads this layout as
+# generated, read-only pages.
+
+module Tey.Docgen.Fragments do
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, SourcePage, PackageModel, kindOf, nameOf, qualifiedNameOf, anchorOf]
+
+  foul write(pages: [SourcePage], versionDir: String, model: PackageModel) -> Integer do
+    let written = pages.map { |page| writePage(page, versionDir, model) }.count
+    let indexBody = absolutize(Tey.Docgen.Html.versionIndexBodyHtml(model, false), model, "")
+    let _ = FS.File.write(FS.Path.join(versionDir, "index.html"), indexBody)
+    let _ = FS.File.write(FS.Path.join(versionDir, "index.page.json"), JSON.stringify({
+      title: Tey.Docgen.Html.labelOf(model),
+      description: "Reference documentation for ${Tey.Docgen.Html.labelOf(model)} ${model.version}.",
+      path: unitRoot(model),
+      template: "reference",
+      body: "index.html",
+      data: unitData(model, "", [])
+    }))
+    let _ = FS.File.write(FS.Path.join(versionDir, "nav.json"), JSON.stringify(navTree(pages, model)))
+    return written
+  end
+
+  foul writePage(page: SourcePage, versionDir: String, model: PackageModel) -> () do
+    Tey.Docgen.Index.ensureDirectory(FS.Path.join(versionDir, Tey.Docgen.Index.dirNameOf(page.urlPath)))
+    let body = absolutize(Tey.Docgen.Html.pageBodyHtml(page, model, false), model, page.urlPath)
+    let stem = page.urlPath.split("/").last.or(page.urlPath)
+    let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".html"), body)
+    let _ = FS.File.write(FS.Path.join(versionDir, page.urlPath + ".page.json"), JSON.stringify({
+      title: page.title,
+      description: descriptionOf(page),
+      path: pageUrl(model, page.urlPath),
+      template: "reference",
+      body: "${stem}.html",
+      data: unitData(model, page.source, tocOf(page.entities))
+    }))
+    return ()
+  end
+
+  # Everything a theme might show beside the body: which unit and version
+  # this is (the header badge), where the source lives, and the page's
+  # sections for an "On this page" list.
+  foul unitData(model: PackageModel, source: String, toc: [TocEntry]) -> Any do
+    let data: Any = {
+      package: model.package,
+      version: model.version,
+      label: Tey.Docgen.Html.labelOf(model),
+      source: source,
+      toc: toc.map { |t| tocValue(t) },
+      tocHtml: tocHtml(toc)
+    }
+    return data
+  end
+
+  record TocEntry do
+    title : String
+    anchor : String
+    kind : String
+    nested : Bool
+  end
+
+  foul tocValue(t: TocEntry) -> Any do
+    let value: Any = { title: t.title, anchor: t.anchor, kind: t.kind, nested: t.nested }
+    return value
+  end
+
+  # The rail as markup too, so a theme template can place it without
+  # walking JSON: a template language that sees the data as `Any` cannot
+  # iterate it. A page with a single section has nothing to navigate.
+  foul tocHtml(toc: [TocEntry]) -> String do
+    return "" if toc.count < 2
+    let items = toc.map { |t|
+      let klass = t.nested then " class=\"toc-nested\"" else ""
+      "<li${klass}><a href=\"#${Tey.Docgen.Html.esc(t.anchor)}\">${Tey.Docgen.Html.esc(t.title)}</a></li>"
+    }.join("")
+    return "<nav><p class=\"toc-heading\">On this page</p><ul>${items}</ul></nav>"
+  end
+
+  # "/prelude/0.4.0/": where the unit is mounted.
+  foul unitRoot(model: PackageModel) -> String do
+    return "/${model.package}/${model.version}/"
+  end
+
+  foul pageUrl(model: PackageModel, urlPath: String) -> String do
+    return urlPath.empty? then unitRoot(model) else "${unitRoot(model)}${urlPath}/"
+  end
+
+  # The page tree, nested the way the standalone sidebar nests it: a module
+  # family (Net, Net.DNS, Net.HTTP) is one branch.
+  foul navTree(pages: [SourcePage], model: PackageModel) -> Any do
+    let children = Tey.Docgen.Nav.topLevelPages(pages).map { |p| navNode(p, pages, model) }
+    let tree: Any = { title: Tey.Docgen.Html.labelOf(model), path: unitRoot(model), children: children }
+    return tree
+  end
+
+  foul navNode(page: SourcePage, pages: [SourcePage], model: PackageModel) -> Any do
+    let children = Tey.Docgen.Nav.childPages(pages, page.title).map { |c| navNode(c, pages, model) }
+    let node: Any = { title: page.title, path: pageUrl(model, page.urlPath), children: children }
+    return node
+  end
+
+  # The sections a reader can jump to, in page order: each declaration with
+  # a section of its own, and those a module declares.
+  foul tocOf(entities: [Entity]) -> [TocEntry] do
+    return tocAt(entities, false)
+  end
+
+  foul tocAt(entities: [Entity], nested: Bool) -> [TocEntry] do
+    return Tey.Docgen.Html.sectionEntities(entities).flatMap { |e|
+      let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested: nested }
+      match e do
+        ModuleDecl(entry) => [own] + tocAt(entry.children.reject { |c| Tey.Docgen.Html.memberEntity?(c) }, true)
+        _ => [own]
+      end
+    }
+  end
+
+  foul tocTitle(e: Entity) -> String do
+    match e do
+      ModuleDecl(entry) => entry.qualifiedName
+      _ => nameOf(e)
+    end
+  end
+
+  # One sentence for the page's <meta name="description">: the file's intro,
+  # else what its first declaration says, else its title.
+  foul descriptionOf(page: SourcePage) -> String do
+    let intro = Tey.Docgen.Html.firstSentence(Tey.Docgen.Rdoc.parseOrEmpty(page.intro).summary)
+    return intro if !intro.empty?
+    let first = page.entities.map { |e| Tey.Docgen.Html.firstSentence(summaryOf(e)) }.find { |s| !s.empty? }
+    return first.or(page.title).replace("`", "")
+  end
+
+  foul summaryOf(e: Entity) -> String do
+    match e do
+      TypeDecl(entry) => entry.doc.summary
+      RecordDecl(entry) => entry.doc.summary
+      TraitDecl(entry) => entry.doc.summary
+      MakeDecl(entry) => entry.doc.summary
+      ModuleDecl(entry) => entry.doc.summary
+      FuncDecl(entry) => entry.doc.summary
+      ConstDecl(entry) => entry.doc.summary
+    end
+  end
+
+  # Every relative href in a fragment, rewritten to a site path: from the
+  # page at `urlPath`, "../net.html#module-net" is "/prelude/0.4.0/net/#module-net"
+  # and "index.html" is "/prelude/0.4.0/". A fragment-only href ("#x"), an
+  # absolute one and an external URL stay as they are.
+  foul absolutize(html: String, model: PackageModel, urlPath: String) -> String do
+    let parts = html.split("href=\"")
+    let base = unitRoot(model).split("/").reject { |s| s.empty? } + Tey.Docgen.Index.dirNameOf(urlPath).split("/").reject { |s| s.empty? }
+    let rewritten = parts.drop(1).map { |part|
+      let href = part.split("\"").first.or("")
+      "href=\"" + sitePath(href, base) + part.drop(href.count)
+    }
+    return parts.first.or("") + rewritten.join("")
+  end
+
+  foul sitePath(href: String, base: [String]) -> String do
+    return href if href.empty? || href.startsWith?("#") || href.startsWith?("/") || href.contains?("://") || href.startsWith?("mailto:")
+    let pieces = href.split("#")
+    let target = pieces.first.or("")
+    let fragment = pieces.count > 1 then "#" + pieces.drop(1).join("#") else ""
+    let segments = normalize(base, target.split("/"))
+    let last = segments.last.or("")
+    if last.endsWith?(".html")
+      let stem = last.take(last.count - 5)
+      let dirs = segments.take(segments.count - 1)
+      let path = stem == "index" then dirs else dirs + [stem]
+      return "/" + path.map { |s| s + "/" }.join("") + fragment
+    end
+    return "/" + segments.join("/") + fragment
+  end
+
+  foul normalize(base: [String], rel: [String]) -> [String] do
+    return rel.reduce(base, { |acc, s|
+      if s == ".." then acc.take(acc.count - 1)
+      elif s == "." || s.empty? then acc
+      else acc + [s]
+      end
+    })
+  end
+end
