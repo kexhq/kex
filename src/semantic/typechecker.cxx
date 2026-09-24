@@ -3303,8 +3303,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 // arithmetic, which generalized `x1 * x1` to a bare `N` that
                 // `Float.sqrt` then rejected.
                 paramType = m_currentMakeType;
+            } else if (param.type) {
+                paramType = resolveTypeExpr(**param.type, genericVars);
             } else {
-                paramType = param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar();
+                paramType = freshTypeVar();
+                if (auto* var = std::get_if<TypeVar>(&paramType->kind))
+                    m_unannotatedParamVars.insert(var->id);
             }
             paramTypes.push_back(paramType);
             if (param.name.has_value() && *param.name != "_") {
@@ -7262,7 +7266,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     return Type::unknown();
             }
         } else if (auto* var = std::get_if<TypeVar>(&receiver->kind);
-                   var && var->id >= 0 && var->id >= m_clauseVarMark) {
+                   var && var->id >= 0 && var->id >= m_clauseVarMark &&
+                   m_unannotatedParamVars.count(var->id)) {
             // An unannotated receiver reading a name that exactly one record
             // declares as a field is that record — decided HERE, before any
             // method is considered. Left to the method lookup below, a
