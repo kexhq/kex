@@ -82,13 +82,20 @@ esac
 # below can even start. Installing it is one privileged, per-OS command too
 # many for a script piped from the network — check, and say exactly what to
 # run instead.
+# Kex needs OTP 27 or newer; Ubuntu 24.04's erlang-base is OTP 25, so a
+# present-but-old Erlang gets the same advice as a missing one.
+case "$(uname -s)" in
+  Darwin) hint="brew install erlang" ;;
+  Linux) hint="your distro's Erlang/OTP package if it is 27 or newer (Debian 13, Ubuntu 26.04), else asdf or https://www.erlang.org/downloads" ;;
+  *) hint="install Erlang/OTP 27 or newer for your system (https://www.erlang.org/downloads)" ;;
+esac
 if ! have erl; then
-  case "$(uname -s)" in
-    Darwin) hint="brew install erlang" ;;
-    Linux) hint="sudo apt-get install -y erlang-base  (or your distro's Erlang/OTP package)" ;;
-    *) hint="install Erlang/OTP for your system (https://www.erlang.org/downloads)" ;;
-  esac
-  die "no \`erl\` on PATH — install Erlang/OTP first, then run this again:
+  die "no \`erl\` on PATH — install Erlang/OTP 27 or newer first, then run this again:
+  $hint"
+fi
+otp_release="$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt().' 2>/dev/null || echo 0)"
+if [ "$otp_release" -lt 27 ] 2>/dev/null; then
+  die "\`erl\` on PATH is Erlang/OTP $otp_release; Kex needs OTP 27 or newer:
   $hint"
 fi
 

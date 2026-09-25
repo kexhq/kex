@@ -7,7 +7,7 @@ name: Docs
 # can produce is the reference: `tey docs` parses sources with the compiler
 # built by this very workflow, and old releases are built from git worktrees
 # only this repo has. So this workflow generates it (docgen's fragments
-# output plus tools/docsite's manifest.json), force-pushes it to the
+# output, one <package>/<version>/ per unit), force-pushes it to the
 # `reference` branch of kexhq/docs — a branch that holds nothing else, like
 # gh-pages — and asks kexhq/docs to rebuild.
 #
@@ -31,6 +31,9 @@ permissions:
 jobs:
   reference:
     runs-on: ubuntu-latest
+    # A normal run takes minutes; a stuck one used to hold the runner for
+    # GitHub's six-hour limit before anyone saw it.
+    timeout-minutes: 60
     steps:
       # Full history and tags: build-docs.sh adds a worktree per release tag.
       - uses: actions/checkout@v4
@@ -40,11 +43,19 @@ jobs:
       # Same toolchain CI uses for the compiler + Tey jobs: erlang for erlc
       # (Tey compiles to .beam and runs on the BEAM, which is how it serves
       # and how `tey docs build` runs at all).
+      # Kex needs OTP 27+ (CMakeLists refuses older); ubuntu-latest's
+      # erlang-base is OTP 25. On 25, JSON.parse had silently fallen back to
+      # the Kex parser, and the Tey reference's --link-model read of the
+      # stdlib's 1 MB model.json ran for hours instead of a second.
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
-            libssl-dev erlang-base libboost-context-dev
+            libssl-dev libboost-context-dev
 
       - name: Build kex
         run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel

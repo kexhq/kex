@@ -311,11 +311,21 @@ make Float do
   end
 end
 
-make Measure do
+make Measure, implement: Showable do
   let factor -> Float = this.unit.factor
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
   let to(String) -> String = "${this.value} ${this.unit.symbol}"
+
+  # Renders the measure as its value and unit, so +IO.printLine+ and
+  # interpolation show +5.0 W+ rather than the record's fields. Inspecting
+  # it (the REPL's echo, +inspected+) still shows the record itself.
+  #
+  # @return [String] the value and the unit's symbol
+  #
+  # @example
+  #   "drawn: ${1.volt * 5.ampere}"   # => "drawn: 5.0 W"
+  let showValue -> String = this.to(String)
   # Formatting into a target display unit deliberately has NO prelude clause.
   # A unit module (Units.SI, Units.Data, ...) supplies `to(String, in:)` for
   # the units it owns, and reaching one requires importing it. A catch-all

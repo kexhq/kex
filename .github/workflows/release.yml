@@ -222,12 +222,21 @@ jobs:
       # Everything is named explicitly, including the two the x86_64 image
       # happens to preinstall: linux-arm64 builds on a DIFFERENT runner image,
       # and "it was already there on the other one" is not a dependency list.
+      # Ubuntu 24.04's erlang-base is OTP 25, and Kex needs OTP 27+
+      # (CMakeLists refuses older), so Erlang comes from setup-beam. 27 is
+      # the floor on purpose: runtime beams load on the OTP that compiled
+      # them and newer, so the artifacts run on any supported OTP.
+      - uses: erlef/setup-beam@v1
+        if: runner.os == 'Linux'
+        with:
+          otp-version: "27"
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
-            libssl-dev erlang-base libboost-context-dev
+            libssl-dev libboost-context-dev
 
       # Unversioned erlang, the same formula users get: brew is the main
       # install path for Kex, so the OTP that compiles these runtime beams and
@@ -344,11 +353,16 @@ jobs:
       # its Kex.* companions), which only the native build can produce: it
       # means running the native kex through erlc, and a cross-compiled build
       # cannot. Same arrangement as ci.yml's wasm job.
+      # OTP 27+ from setup-beam, as in the build job: Ubuntu's is OTP 25.
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+
       - name: Install native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libgmp-dev libreadline-dev \
-            erlang-base libboost-context-dev
+            libboost-context-dev
 
       - name: Build native kex (for the compiled stdlib unit)
         run: |

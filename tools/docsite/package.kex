@@ -1,8 +1,0 @@
-package "docsite" do
-  description("Describes the generated reference to the docs.kex.run site (kexhq/docs).")
-  version("0.1.0")
-  kex(">= 0.3.0")
-  license("MIT")
-  entrypoint("src/main.kex")
-  target("docsite")
-end

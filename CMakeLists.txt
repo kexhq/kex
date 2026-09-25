@@ -426,6 +426,17 @@ if(ERLC_EXECUTABLE)
         )
         if(_otp_result EQUAL 0 AND _otp_release MATCHES "^[0-9]+$")
             set(KEX_RUNTIME_OTP_FLOOR "${_otp_release}")
+            # OTP 27 is the oldest Kex supports on BEAM: the runtime relies on
+            # modules it introduced (json, which JSON.parse and JSON.stringify
+            # use; on older OTP they silently fell back to the Kex parser,
+            # which is too slow for real documents). Refuse to build a runtime
+            # that would load on anything older.
+            if(_otp_release LESS 27)
+                message(FATAL_ERROR
+                    "Kex needs Erlang/OTP 27 or newer; ${ERL_EXECUTABLE} is OTP ${_otp_release}. "
+                    "Install a newer Erlang (brew install erlang, asdf, or erlef/setup-beam in CI), "
+                    "or put its bin/ first on PATH, then re-run cmake.")
+            endif()
         else()
             message(WARNING "Runtime beams: could not determine the OTP release of ${ERL_EXECUTABLE}; the BEAM runtime-version check will be disabled")
         endif()

@@ -11,7 +11,7 @@
 # against golden files, and libm rounds the last bit differently between
 # implementations — which is also why CI builds both.
 
-FROM debian:bookworm-slim AS build
+FROM debian:trixie-slim AS build
 
 # erlang-crypto: Debian splits the crypto NIF out of erlang-base (Alpine's
 # `erlang` meta-package does not), and --no-install-recommends means it is
@@ -61,14 +61,14 @@ RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
         INSTALL_NONINTERACTIVE=1 \
     && rm -f /opt/tey/bin/kex
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Runtime only: the shared libraries the binary links, plus Erlang for `-R`,
 # `--compile` and the REPL's BEAM mode. erlang-crypto here too — see the
 # build stage's comment — since `Digest.sha256` runs in programs users
 # execute in this image, not just in the spec suite that built it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgmp10 libpcre2-8-0 libreadline8 libboost-context1.74.0 libssl3 \
+        libgmp10 libpcre2-8-0 libreadline8t64 libboost-context1.83.0 libssl3t64 \
         erlang-base erlang-odbc erlang-crypto \
     && rm -rf /var/lib/apt/lists/*
 

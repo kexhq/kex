@@ -629,7 +629,7 @@ on Kex itself — it is not part of how anyone installs Kex, and nothing but a
 local dev setup reads it. What the dependencies cover: CMake (the build system
 itself), GMP (arbitrary-precision `Integer`), PCRE2 (regex in the
 interpreter — the BEAM backend uses Erlang's `re` instead), Boost.Context
-(native fibers), Erlang/OTP (`erlc` for the runtime beams and BEAM backend),
+(native fibers), Erlang/OTP 27 or newer (`erlc` for the runtime beams and BEAM backend),
 OpenSSL (SHA-256 on Linux only — macOS uses CommonCrypto), and readline
 (optional, nicer REPL).
 

@@ -4,7 +4,9 @@
 %% what the tree-walker runs, what parses JSONC, and what reports a precise
 %% `JSON.Error` with a position. These answer only when they can give exactly
 %% the value that implementation would, and `None` otherwise, so the Kex code
-%% falls back to itself (kexhq/kex#333).
+%% falls back to itself (kexhq/kex#333). They rely on OTP's `json` module,
+%% new in OTP 27 — the oldest release Kex supports on BEAM (CMakeLists.txt
+%% refuses to build against anything older).
 -module(kex_intrinsic_json).
 -export([decode/1, encode/1]).
 

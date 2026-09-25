@@ -15,8 +15,9 @@
 # `list` is /<package>/<version>/list/. Every relative link the shared
 # renderer produced (`../net.html#module-net`) is rewritten to that form, so
 # a fragment works wherever the host mounts the unit at /<package>/<version>/.
-# Nothing here knows which host that is; Marqraft reads this layout as
-# generated, read-only pages.
+# Nothing here knows which host that is. Marqraft reads this layout as a
+# mount with "format": "fragments": each unit directory is a version, each
+# sidecar a read-only page, nav.json the version's page tree.
 
 module Tey.Docgen.Fragments do
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, SourcePage, PackageModel, kindOf, nameOf, qualifiedNameOf, anchorOf]
