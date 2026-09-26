@@ -1,0 +1,46 @@
+describe("Tey build targets") do
+  let root = "/tmp/tey_targets_spec"
+  let checkout = FS.Directory.current
+  let compiler = FS.Path.join(checkout, "build/kex")
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create("${root}/src")
+    # The entrypoint is deliberately NOT `src/main.kex`: its module is
+    # `kex_tool`, which the escript has to be told about.
+    FS.File.write("${root}/package.kex", `
+      package "targets" do
+        kex(">= 0.3.0")
+        target("args-tool", entrypoint: "src/tool.kex")
+      end
+    `)
+    FS.File.write("${root}/src/tool.kex", `
+      main(args) do
+        args.each { |argument| IO.printLine("${argument}:${argument.length}") }
+      end
+    `)
+    FS.File.write("${root}/run-build.kex", `
+      using Tey.Commands
+
+      main do
+        System.exit(Tey.Commands.buildSelected("", false, "2"))
+      end
+    `)
+    ENV.set("TEY_KEX", compiler)
+  end
+
+  after { FS.Directory.deleteAll(root) }
+
+  # kexhq/kex#406: `escript` hands `main` charlists, while `kex --run` hands it
+  # binaries. The target sees `[String]` either way.
+  it("passes the escript's arguments to main as strings") do
+    let build = Process.run("sh", ["-c",
+      "cd \"$1\" && exec \"$2\" --no-colors --source-root \"$3\" \"$4\"",
+      "tey-targets-spec", root, compiler,
+      FS.Path.join(checkout, "tey/src"), "${root}/run-build.kex"]).try
+    assert(build.exitCode == 0, build.stderr)
+    let run = Process.run("${root}/ebin/args-tool", ["héllo", "two words"]).try
+    assert(run.exitCode == 0, run.stderr)
+    assert(run.stdout == "héllo:5\ntwo words:9\n", run.stdout)
+  end
+end

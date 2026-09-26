@@ -382,6 +382,10 @@ module Mock do
       None => Error(ReadFailed(path))
     end
     foul symlink?(path) = false
+    foul info(path) = match this.cannedRead(path) do
+      Just(content) => Ok(FileInfo { kind: :file, size: content.bytes.count, modified: DateTime.fromEpochSeconds(0) })
+      None => Error(ReadFailed(path))
+    end
 
     # A fake is a value, so there is nowhere for a write to go. Refusing is
     # the honest answer and the useful one: a test that did not expect a

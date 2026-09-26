@@ -1,6 +1,6 @@
 -module(kex_intrinsic_kex).
 -export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, inspect/2, show/1, kind/1,
-         version/0, versionPreRelease/0]).
+         version/0, versionPreRelease/0, hash/1]).
 
 %% Defined by erlc from CMake (see CMakeLists.txt) so this reports the same
 %% version the native binary does. The fallbacks keep a bare
@@ -56,6 +56,10 @@ inspect(Value, true) -> kex_io:inspect_value(Value);
 inspect(Value, false) -> inspect(Value).
 
 show(Value) -> unicode:characters_to_binary(kex_io:to_string(Value)).
+
+%% Kex.hash (kexhq/kex#403): non-negative and below 2^32, like the
+%% tree-walker's.
+hash(Value) -> erlang:phash2(Value, 1 bsl 32).
 
 %% Broad language-level categories for source-owned libraries handling Any.
 kind('None') -> none;

@@ -1,0 +1,56 @@
+# kex: run-beam
+#
+# `Connection.send` with any `Message`, not only an inline `Text(...)`
+# (kexhq/kex#398): the checker used to treat every `.send` as process
+# messaging and type the call as its argument, so a `BinaryMessage` or a
+# `Message`-typed value failed `.try`.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul echo(socket: Connection) -> Void do
+  match socket.receiveMessage.try do
+    CloseMessage(_, _) => Void
+    message => do
+      socket.send(message).try
+      echo(socket)
+    end
+  end
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| echo(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute)
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+  let socket = WebSocket.connect("ws://127.0.0.1:${port}/socket").try
+
+  socket.send(BinaryMessage(Binary.fromBytes([1, 2, 3]))).try
+  match socket.receiveMessage.try do
+    BinaryMessage(bytes) => IO.printLine("binary: ${bytes.bytes}")
+    _ => IO.printLine("unexpected")
+  end
+
+  let typed: Message = Text("typed")
+  let sent: Result<Void, Net.NetError> = socket.send(typed)
+  IO.printLine("sent ok: ${sent.ok?}")
+  match socket.receiveMessage.try do
+    Text(text) => IO.printLine("text: ${text}")
+    _ => IO.printLine("unexpected")
+  end
+
+  [socket].each { |each| each.send(BinaryMessage(Binary.fromBytes([9]))) }
+  match socket.receiveMessage.try do
+    BinaryMessage(bytes) => IO.printLine("unused result: ${bytes.bytes}")
+    _ => IO.printLine("unexpected")
+  end
+
+  socket.close
+  server.stop.try
+  IO.printLine("ok")
+end

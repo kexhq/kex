@@ -20,6 +20,17 @@ change between otherwise identical calls. Use them when reproducibility is
 unnecessary. These are non-cryptographic generators, including the ordinary
 operations; do not use their output for passwords, tokens, or other secrets.
 
+## Secrets
+
+`Random.secureBytes(count)` reads the operating system's cryptographically
+secure generator, and `Random.token(bytes)` renders that many secure bytes as
+lowercase hex. Use these for keys, session tokens and unguessable identifiers:
+
+```kex
+let key = Random.secureBytes(32)      # a Binary of 32 bytes
+let session = Random.token(32)        # 64 hex characters
+```
+
 ## Replay a sequence
 
 `Random.seeded(42)` returns a `Random.Generator`. Every generator operation

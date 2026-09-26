@@ -1,6 +1,7 @@
 # kex: run-beam
 # An exception raised inside an Erlang call is rescuable, by `trying … rescue`
-# and by a function-level `rescue`, like any Kex failure (kexhq/kex#326).
+# and by a function-level `rescue`, like any Kex failure (kexhq/kex#326). An
+# Erlang `throw` is too, as the thrown value (kexhq/kex#400).
 #
 # `binary_to_integer` raises `badarg` on every OTP release. An Erlang function
 # that only exists on newer releases (`json:decode`, OTP 27+) would raise
@@ -21,8 +22,16 @@ rescue |error|
   return "rescued ${error}"
 end
 
+foul thrown(value: Atom) -> String do
+  BEAM.erlang.throw(value)
+  return "not thrown"
+rescue |error|
+  return "rescued thrown ${error}"
+end
+
 main do
   IO.printLine(decodeNumber("42"))
   IO.printLine(decodeNumberWithRescue("nope"))
   IO.printLine(decodeNumber("nope"))
+  IO.printLine(thrown(:oops))
 end
