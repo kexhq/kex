@@ -24,10 +24,47 @@ record Receipt do
   # Tey.Snapshot.contentDigest), so reinstalling an unchanged path can say
   # so. Empty for a project's own `tey install`, which builds in place.
   sourceDigest : String = ""
+  # A Git source's pin, as `--tag`, `--branch` or `--ref` asked for it, and
+  # the commit that resolved to. Empty for a path.
+  sourceSelector : String = ""
+  sourceRequested : String = ""
+  sourceCommit : String = ""
+  # The targets `--target` limited the install to, so updating it installs
+  # the same ones; empty when every target was installed.
+  selectedTargets : [String] = []
   targets : [String] = []
   kex : String = ""
   otp : String = ""
   installedAt : String = ""
+end
+
+# How `tey install <argument>` was asked to install a program: the workspace
+# member (`--package`), the Git pin (`--tag`/`--branch`/`--ref`, "ref" of
+# "HEAD" when none), which targets (`--target`, all when empty), whether to
+# take over others' programs (`--force`), and whether to re-resolve rather
+# than use the program's committed lock (`--fresh`).
+#
+# `pinned?` says a pin was given at all — reinstalling by name keeps the
+# receipt's unless one is. `rebuild?` rebuilds even when nothing moved.
+record InstallOptions do
+  packageName : String = ""
+  force? : Bool = false
+  selector : String = "ref"
+  requested : String = "HEAD"
+  pinned? : Bool = false
+  targets : [String] = []
+  fresh? : Bool = false
+  rebuild? : Bool = false
+end
+
+# Why reinstalling `receipt` by name has nothing to do, or None when it must
+# be rebuilt. A tag or an exact commit is a pin the user chose: it stays,
+# with a pointer at moving it. Pure, so the whole rule is testable.
+let pinnedReason(receipt: Receipt, options: InstallOptions) -> String? do
+  return None if options.rebuild? || options.pinned? || receipt.sourceKind != "git"
+  let exact = receipt.sourceSelector == "ref" && receipt.sourceRequested != "HEAD"
+  return None if receipt.sourceSelector != "tag" && !exact
+  return Just("${receipt.name} is pinned at ${Tey.Programs.pinText(receipt)}; pass --tag, --branch or --ref to move it")
 end
 
 # What `tey install <argument>` names. `tey add` is how a dependency is added,
@@ -135,8 +172,10 @@ let encode(receipt: Receipt) -> String do
     name: receipt.name,
     version: receipt.version,
     source: { kind: receipt.sourceKind, path: receipt.sourcePath,
-              sha256: receipt.sourceDigest },
+              sha256: receipt.sourceDigest, selector: receipt.sourceSelector,
+              requested: receipt.sourceRequested, commit: receipt.sourceCommit },
     targets: receipt.targets,
+    selected: receipt.selectedTargets,
     kex: receipt.kex,
     otp: receipt.otp,
     installedAt: receipt.installedAt
@@ -157,7 +196,11 @@ let decode(text: String) -> Receipt or! String do
     sourceKind: Tey.Programs.text(Tey.Programs.field(source, "kind")),
     sourcePath: Tey.Programs.text(Tey.Programs.field(source, "path")),
     sourceDigest: Tey.Programs.text(Tey.Programs.field(source, "sha256")),
+    sourceSelector: Tey.Programs.text(Tey.Programs.field(source, "selector")),
+    sourceRequested: Tey.Programs.text(Tey.Programs.field(source, "requested")),
+    sourceCommit: Tey.Programs.text(Tey.Programs.field(source, "commit")),
     targets: Tey.Programs.strings(root["targets"]),
+    selectedTargets: Tey.Programs.strings(root["selected"]),
     kex: Tey.Programs.text(root["kex"]),
     otp: Tey.Programs.text(root["otp"]),
     installedAt: Tey.Programs.text(root["installedAt"])
@@ -246,13 +289,17 @@ foul remove(name: String) -> Bool do
 end
 
 # Whether `path` is an escript Tey's own target build wrote: its emulator
-# line names `kex_main`, which every compiled Kex entry module is called.
+# line starts Kex's escript launcher, or names `kex_main` directly as an escript
+# built before the launcher did.
 foul teyBuilt?(path: String) -> Bool do
   match Process.run("head", ["-n", "2", "--", path]) do
     Error(_) => false
     Ok(result) => do
       let header = result.stdout
-      result.exitCode == 0 && header.startsWith?("#!") && header.contains?("-escript main kex_main")
+      # `kex_escript` is the runtime's launcher every escript starts in since
+      # kexhq/kex#406; `kex_main` is what one written before it names.
+      let entry = header.contains?("-escript main kex_escript") || header.contains?("-escript main kex_main")
+      result.exitCode == 0 && header.startsWith?("#!") && entry
     end
   end
 end
@@ -260,7 +307,17 @@ end
 # The line `tey list` prints for one installed program.
 let listLine(receipt: Receipt) -> String do
   let version = receipt.version == "" then "" else " ${receipt.version}"
-  return "${receipt.name}${version} (${receipt.targets.join(", ")}) from ${receipt.sourcePath}"
+  let pin = receipt.sourceKind != "git" then "" else " @ ${Tey.Programs.pinText(receipt)}"
+  return "${receipt.name}${version} (${receipt.targets.join(", ")}) from ${receipt.sourcePath}${pin}"
+end
+
+# `v0.4.0`, `main (3f9c1a2)`, or a short commit — what a Git install is pinned
+# to, as `tey list` shows it.
+let pinText(receipt: Receipt) -> String do
+  let short = receipt.sourceCommit.take(7)
+  return receipt.sourceRequested if receipt.sourceSelector == "tag"
+  return short if receipt.sourceRequested == receipt.sourceCommit
+  return "${receipt.sourceRequested} (${short})"
 end
 
 private do

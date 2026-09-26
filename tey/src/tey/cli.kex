@@ -1,8 +1,9 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installProgram, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
+using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
+using Tey.Programs, only: [InstallOptions]
 using Tey.Toolchain, only: [installSource, use]
 
 # Options AND commands in one declaration: OptionParser matches the command
@@ -29,6 +30,9 @@ foul parser -> OptionConfig do
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey install` as a Git merge driver")
     .flag("force", None, "Let `tey install` replace programs it does not own")
+    .string("target", None, "Install only these targets of a program (comma-separated)", None, false)
+    .flag("fresh", None, "Resolve a program's dependencies anew instead of using its tey.lock")
+    .flag("rebuild", None, "Rebuild an installed program even when its source has not moved")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("no-tey", None, "Skip installing the Tey a Kex release ships with on `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
@@ -51,8 +55,11 @@ foul parser -> OptionConfig do
         Just(name) => Tey.Commands.add(name, options)
       end
     end
-    .command("install", "[<path>]", "install the workspace, or the program at <path>") do |options|
+    .command("install", "[<path> | <git-url> | <name>...]", "install the workspace, a program from a path or Git URL, or update installed programs") do |options|
       Tey.Cli.installCommand(options)
+    end
+    .command("uninstall", "<name>...", "remove installed programs") do |options|
+      Tey.Commands.uninstallPrograms(options.arguments)
     end
     .command("update", "[<name>]", "re-resolve dependencies transactionally") do |options|
       Tey.Commands.updateDependencies(options.arguments.first.or(""))
@@ -399,12 +406,26 @@ private do
       return Tey.Cli.incomplete("install --merge-driver", "<base> <ours> <theirs>")
     end
     # `tey add` adds a dependency, so an argument here is always a program.
-    if options.arguments.count == 1
-      return Tey.Commands.installProgram(options.arguments.first.or(""),
-                                         options.value("package", ""),
-                                         options.flagEnabled?("force"))
+    if !options.arguments.empty?
+      let pins = ["tag", "branch", "ref"].filter { |key| options.value(key).present? }
+      if pins.count > 1
+        IO.printError("${Console.RED}error:${Console.RESET} choose only one of --tag, --branch or --ref\n")
+        return 1
+      end
+      let selector = pins.first.or("ref")
+      let targets = options.value("target", "").split(",").map { |name| name.trim }
+        .filter { |name| !name.empty? }
+      return Tey.Commands.installPrograms(options.arguments, InstallOptions {
+        packageName: options.value("package", ""),
+        force?: options.flagEnabled?("force"),
+        selector: selector,
+        requested: options.value(selector, "HEAD"),
+        pinned?: !pins.empty?,
+        targets: targets,
+        fresh?: options.flagEnabled?("fresh"),
+        rebuild?: options.flagEnabled?("rebuild")
+      })
     end
-    return Tey.Cli.unknown("install") if !options.arguments.empty?
     return Tey.Commands.installWorkspace(options.value("without", ""),
                                          options.value("package", ""),
                                          options.flagEnabled?("force"))

@@ -121,7 +121,7 @@ end
 # covers every `kex ...` subcommand).
 let reservedCommands -> [String] do
   return ["add", "build", "clean", "docs", "help", "init", "install", "kex",
-          "list", "local", "new", "run", "setup", "test", "update"]
+          "list", "local", "new", "run", "setup", "test", "uninstall", "update"]
 end
 
 # Reads a `package.kex`.

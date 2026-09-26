@@ -8,6 +8,9 @@ foul execute(args: [String]) -> ProcessResult or! String do
 end
 
 foul pinRef(url: String, selector: String, requested: String) -> (String, String) or! String do
+  # A full commit id is already pinned; `ls-remote` only lists ref names, so
+  # asking it would fail. Cloning checks the commit exists.
+  return Ok((requested, requested)) if selector == "ref" && Tey.Git.commitId?(requested)
   let refName = match selector do
     "tag" => "refs/tags/${requested}^{}"
     "branch" => "refs/heads/${requested}"
@@ -38,6 +41,12 @@ foul tags(url: String) -> [String] or! String do
       return Ok(Tey.Semver.newestFirst(names))
     end
   end
+end
+
+# A full hexadecimal commit id. A short one is left to `ls-remote`: it could
+# as well be a ref name.
+let commitId?(text: String) -> Bool do
+  return text.count == 40 && text.chars.all? { |c| "0123456789abcdef".contains?("${c}") }
 end
 
 private do

@@ -1,4 +1,4 @@
-using Tey.Programs, only: [Adopt, Claim, Foreign, Free, GitSource, InstalledName, Mine, OwnedBy, PathSource, ProgramSource, Receipt, Reserved, claim, classify, decode, encode, refusal]
+using Tey.Programs, only: [Adopt, Claim, Foreign, Free, GitSource, InstalledName, Mine, OwnedBy, PathSource, ProgramSource, Receipt, Reserved, claim, classify, decode, encode, refusal, pinText, pinnedReason, InstallOptions]
 
 describe("Tey.Programs receipts") do
   it("round-trips a receipt through JSON") do
@@ -10,6 +10,53 @@ describe("Tey.Programs receipts") do
     }
     let decoded = Tey.Programs.decode(Tey.Programs.encode(receipt)).try
     assert(decoded == receipt, "${decoded}")
+  end
+
+  it("round-trips a Git source's pin") do
+    let receipt = Receipt {
+      name: "gitty", sourceKind: "git", sourcePath: "https://example.com/gitty.git",
+      sourceSelector: "tag", sourceRequested: "v1.0.0",
+      sourceCommit: "3f9c1a2b4d5e6f708192a3b4c5d6e7f809102132", targets: ["gitty"]
+    }
+    let decoded = Tey.Programs.decode(Tey.Programs.encode(receipt)).try
+    assert(decoded == receipt, "${decoded}")
+  end
+
+  it("shows a Git pin the way it was asked for") do
+    let commit = "3f9c1a2b4d5e6f708192a3b4c5d6e7f809102132"
+    let tagged = Receipt { name: "g", sourceKind: "git", sourceSelector: "tag",
+                           sourceRequested: "v1.0.0", sourceCommit: commit }
+    assert(Tey.Programs.pinText(tagged) == "v1.0.0")
+    let branch = Receipt { ...tagged, sourceSelector: "branch", sourceRequested: "main" }
+    assert(Tey.Programs.pinText(branch) == "main (3f9c1a2)")
+    let exact = Receipt { ...tagged, sourceSelector: "ref", sourceRequested: commit }
+    assert(Tey.Programs.pinText(exact) == "3f9c1a2")
+  end
+
+  it("round-trips the targets --target selected") do
+    let receipt = Receipt { name: "pair", targets: ["second"], selectedTargets: ["second"] }
+    let decoded = Tey.Programs.decode(Tey.Programs.encode(receipt)).try
+    assert(decoded.selectedTargets == ["second"], "${decoded}")
+  end
+
+  it("keeps a tag or an exact commit pinned on reinstall, and nothing else") do
+    let commit = "3f9c1a2b4d5e6f708192a3b4c5d6e7f809102132"
+    let tagged = Receipt { name: "g", sourceKind: "git", sourceSelector: "tag",
+                           sourceRequested: "v1.0.0", sourceCommit: commit }
+    let exact = Receipt { ...tagged, sourceSelector: "ref", sourceRequested: commit }
+    let head = Receipt { ...tagged, sourceSelector: "ref", sourceRequested: "HEAD" }
+    let branch = Receipt { ...tagged, sourceSelector: "branch", sourceRequested: "main" }
+    let path = Receipt { name: "p", sourceKind: "path", sourcePath: "/src/p" }
+    let plain = InstallOptions {}
+    let reason = Tey.Programs.pinnedReason(tagged, plain).or("")
+    assert(reason.contains?("pinned at v1.0.0"), reason)
+    assert(Tey.Programs.pinnedReason(exact, plain).set?)
+    assert(Tey.Programs.pinnedReason(head, plain).none?)
+    assert(Tey.Programs.pinnedReason(branch, plain).none?)
+    assert(Tey.Programs.pinnedReason(path, plain).none?)
+    # A new pin moves it; --rebuild rebuilds it where it is.
+    assert(Tey.Programs.pinnedReason(tagged, InstallOptions { pinned?: true }).none?)
+    assert(Tey.Programs.pinnedReason(tagged, InstallOptions { rebuild?: true }).none?)
   end
 
   it("rejects a receipt without a package name") do
@@ -79,5 +126,14 @@ describe("Tey.Programs.claim") do
     assert(decision == Foreign)
     assert(Tey.Programs.refusal("gamma", decision, "/bin/gamma", false).present?)
     assert(Tey.Programs.refusal("gamma", decision, "/bin/gamma", true).none?)
+  end
+end
+
+describe("Tey.Git.commitId?") do
+  it("accepts only a full hexadecimal commit id") do
+    assert(Tey.Git.commitId?("3f9c1a2b4d5e6f708192a3b4c5d6e7f809102132"))
+    assert(!Tey.Git.commitId?("3f9c1a2"))
+    assert(!Tey.Git.commitId?("main"))
+    assert(!Tey.Git.commitId?("3F9C1A2B4D5E6F708192A3B4C5D6E7F80910213Z"))
   end
 end

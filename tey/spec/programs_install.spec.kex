@@ -179,4 +179,162 @@ describe("Tey program receipts integration") do
     let ran = Process.run("${home}/bin/hello", []).try
     assert(ran.stdout.trim == "hello from a path dependency", ran.stdout + ran.stderr)
   end
+
+  # A Git repository at `${root}/<name>.git` with two commits: `v1.0.0`, whose
+  # programs print "one", and `main` after it, printing "two". Answers the
+  # file:// URL to install from.
+  let gitRepository(name: String, targets: [String]) -> String do
+    let repo = "${root}/${name}.git"
+    let declarations = targets.map { |target| "  target(\"${target}\", entrypoint: \"src/${target}.kex\")" }.join("\n")
+    FS.Directory.create("${repo}/src")
+    FS.File.write("${repo}/package.kex",
+                  "package \"${name}\" do\n  kex(\">= 0.3.0\")\n${declarations}\nend\n")
+    let git = "git -c user.name=spec -c user.email=spec@example.com"
+    let write(text: String) -> Void do
+      targets.each do |target|
+        FS.File.write("${repo}/src/${target}.kex", "main do\n  IO.printLine(\"${text}\")\nend\n")
+      end
+      ()
+    end
+    write("one")
+    Process.run("sh", ["-c", "cd \"$1\" && git init -q -b main && ${git} add -A && ${git} commit -q -m one && git tag v1.0.0",
+                       "spec", repo]).try
+    write("two")
+    Process.run("sh", ["-c", "cd \"$1\" && ${git} commit -q -am two", "spec", repo]).try
+    return "file://${repo}"
+  end
+
+  it("installs from a Git URL at HEAD, or at a tag") do
+    let url = gitRepository("gitty", ["gitty"])
+    let head = tey(root, "install ${url}")
+    assert(head.exitCode == 0, head.stdout + head.stderr)
+    let ranTwo = Process.run("${home}/bin/gitty", []).try
+    assert(ranTwo.stdout.trim == "two", "head: [${ranTwo.exitCode}] ${ranTwo.stdout}${ranTwo.stderr}")
+    let receipt = Tey.Programs.decode(FS.File.read("${home}/programs/gitty/receipt.json").try).try
+    assert(receipt.sourceKind == "git", "${receipt}")
+    assert(receipt.sourcePath == url, receipt.sourcePath)
+    assert(receipt.sourceRequested == "HEAD", receipt.sourceRequested)
+    assert(Tey.Git.commitId?(receipt.sourceCommit), receipt.sourceCommit)
+
+    let tagged = tey(root, "install ${url} --tag v1.0.0")
+    assert(tagged.exitCode == 0, tagged.stdout + tagged.stderr)
+    let ranOne = Process.run("${home}/bin/gitty", []).try
+    assert(ranOne.stdout.trim == "one", "tag: [${ranOne.exitCode}] ${ranOne.stdout}${ranOne.stderr}")
+    let pinned = Tey.Programs.decode(FS.File.read("${home}/programs/gitty/receipt.json").try).try
+    assert(pinned.sourceSelector == "tag" && pinned.sourceRequested == "v1.0.0", "${pinned}")
+    let listed = tey(root, "list")
+    assert(listed.stdout.contains?("@ v1.0.0"), listed.stdout)
+
+    # A full commit id is a pin of its own.
+    let exact = tey(root, "install ${url} --ref ${receipt.sourceCommit}")
+    assert(exact.exitCode == 0, exact.stdout + exact.stderr)
+    let ranExact = Process.run("${home}/bin/gitty", []).try
+    assert(ranExact.stdout.trim == "two", "exact: [${ranExact.exitCode}] ${ranExact.stdout}${ranExact.stderr}")
+  end
+
+  it("installs only the targets --target names") do
+    let url = gitRepository("pair", ["first", "second"])
+    let unknown = tey(root, "install ${url} --target third")
+    assert(unknown.exitCode != 0, "installed an undeclared target")
+    assert(unknown.stderr.contains?("no target third"), unknown.stderr)
+
+    let one = tey(root, "install ${url} --target second")
+    assert(one.exitCode == 0, one.stdout + one.stderr)
+    assert(FS.File.file?("${home}/bin/second"))
+    assert(!FS.File.file?("${home}/bin/first"), "installed a target not asked for")
+
+    # Resolving anew rather than from the program's lock installs the same.
+    let fresh = tey(root, "install ${url} --fresh")
+    assert(fresh.exitCode == 0, fresh.stdout + fresh.stderr)
+    assert(FS.File.file?("${home}/bin/first") && FS.File.file?("${home}/bin/second"))
+  end
+
+  it("refuses more than one Git pin") do
+    let refused = tey(root, "install file:///nowhere.git --tag v1 --branch main")
+    assert(refused.exitCode != 0)
+    assert(refused.stderr.contains?("only one of"), refused.stderr)
+  end
+
+  # Commits a new message for every target of the repository `gitRepository`
+  # made, on `main`.
+  let commitMessage(name: String, targets: [String], text: String) -> Void do
+    let repo = "${root}/${name}.git"
+    targets.each do |target|
+      FS.File.write("${repo}/src/${target}.kex", "main do\n  IO.printLine(\"${text}\")\nend\n")
+    end
+    let git = "git -c user.name=spec -c user.email=spec@example.com"
+    Process.run("sh", ["-c", "cd \"$1\" && ${git} commit -q -am \"$2\"", "spec", repo, text]).try
+    ()
+  end
+
+  let output(program: String) -> String do
+    return Process.run("${home}/bin/${program}", []).map { |ran| ran.stdout.trim }.or("")
+  end
+
+  it("updates a path install by name only when its source changed") do
+    writePackage("alpha", ["alpha"])
+    assert(tey(root, "install ./alpha").exitCode == 0)
+    let unchanged = tey(root, "install alpha")
+    assert(unchanged.exitCode == 0, unchanged.stderr)
+    assert(unchanged.stdout.contains?("up to date"), unchanged.stdout)
+
+    FS.File.write("${root}/alpha/src/main.kex", "main do\n  IO.printLine(\"alpha two\")\nend\n")
+    let changed = tey(root, "install alpha")
+    assert(changed.exitCode == 0, changed.stdout + changed.stderr)
+    assert(output("alpha") == "alpha two", output("alpha"))
+
+    let rebuilt = tey(root, "install alpha --rebuild")
+    assert(rebuilt.exitCode == 0, rebuilt.stderr)
+    assert(rebuilt.stdout.contains?("Installed alpha"), rebuilt.stdout)
+  end
+
+  it("updates a branch install, and keeps a tag pinned until told") do
+    let url = gitRepository("gitty", ["gitty"])
+    assert(tey(root, "install ${url}").exitCode == 0)
+    assert(tey(root, "install gitty").stdout.contains?("up to date"))
+    commitMessage("gitty", ["gitty"], "three")
+    let moved = tey(root, "install gitty")
+    assert(moved.exitCode == 0, moved.stdout + moved.stderr)
+    assert(output("gitty") == "three", output("gitty"))
+
+    assert(tey(root, "install ${url} --tag v1.0.0").exitCode == 0)
+    let pinned = tey(root, "install gitty")
+    assert(pinned.exitCode == 0, pinned.stderr)
+    assert(pinned.stdout.contains?("pinned at v1.0.0"), pinned.stdout)
+    assert(output("gitty") == "one", output("gitty"))
+
+    let repinned = tey(root, "install gitty --branch main")
+    assert(repinned.exitCode == 0, repinned.stdout + repinned.stderr)
+    assert(output("gitty") == "three", output("gitty"))
+  end
+
+  it("keeps a --target selection when updating, and updates several at once") do
+    let url = gitRepository("pair", ["first", "second"])
+    assert(tey(root, "install ${url} --target second").exitCode == 0)
+    writePackage("alpha", ["alpha"])
+    assert(tey(root, "install ./alpha").exitCode == 0)
+    commitMessage("pair", ["first", "second"], "three")
+    let both = tey(root, "install pair alpha")
+    assert(both.exitCode == 0, both.stdout + both.stderr)
+    assert(output("second") == "three", output("second"))
+    assert(!FS.File.file?("${home}/bin/first"), "an update installed an unselected target")
+
+    let mixed = tey(root, "install pair ./alpha")
+    assert(mixed.exitCode != 0, "accepted a source among names")
+  end
+
+  it("uninstalls what its receipt owns and leaves what it does not") do
+    writePackage("alpha", ["alpha", "alpha-extra"])
+    assert(tey(root, "install ./alpha").exitCode == 0)
+    FS.File.write("${home}/bin/alpha-extra", "#!/bin/sh\necho mine\n")
+    let removed = tey(root, "uninstall alpha")
+    assert(removed.exitCode == 0, removed.stderr)
+    assert(!FS.File.file?("${home}/bin/alpha"))
+    assert(FS.File.file?("${home}/bin/alpha-extra"), "removed a file Tey did not write")
+    assert(removed.stderr.contains?("alpha-extra"), removed.stderr)
+    assert(!FS.Directory.directory?("${home}/programs/alpha"))
+
+    let missing = tey(root, "uninstall alpha")
+    assert(missing.exitCode != 0 && missing.stderr.contains?("not installed"), missing.stderr)
+  end
 end
