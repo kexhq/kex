@@ -3160,17 +3160,27 @@ struct Lowering {
                     // "undefined function render/2" (spec/
                     // argument_type_dispatch.kex). Leave those to the normal
                     // resolution path.
+                    // Under either spelling of the receiver's type: with only
+                    // the qualified one, a module's overload set
+                    // (`Srv.Server`'s two `listen`s) took the shortcut to a
+                    // plain `listen/4` no module defines.
                     const bool overloadedByArgument =
                         argumentOverloadedMethods.count(localOverloadKey(
-                            n.method, receiverType, n.args.size() + 1)) > 0;
+                            n.method, receiverType, n.args.size() + 1)) > 0 ||
+                        argumentOverloadedMethods.count(localOverloadKey(
+                            n.method, bareReceiver, n.args.size() + 1)) > 0;
                     localTypeShadows =
                         !overloadedByArgument &&
                         knownTypes.count(receiverType) &&
                         owners != methodOwners.end() &&
                         std::any_of(owners->second.begin(), owners->second.end(),
                                     [&](const std::string& owner) {
+                                        // Named arguments are placed by the
+                                        // resolved target's parameter names,
+                                        // which this shortcut does not do.
                                         return owner == receiverType ||
-                                               owner == bareReceiver;
+                                               (owner == bareReceiver &&
+                                                n.namedArgs.empty());
                                     });
                 }
             }
