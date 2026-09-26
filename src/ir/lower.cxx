@@ -8227,7 +8227,10 @@ struct Lowering {
                         pat->litText = tag;
                         mc.patterns.push_back(std::move(pat));
                     } else {
-                        // Payload variant: tuple pattern {Tag, _}.
+                        // Payload variant: tuple pattern {Tag, _, ...}, one
+                        // wildcard per field. A fixed {Tag, _} matched only
+                        // one-field constructors, so `Node(v, l, r)` fell
+                        // through to the next owner's clause.
                         auto pat = std::make_unique<Pattern>();
                         pat->kind = PatKind::Tuple;
                         auto tagPat = std::make_unique<Pattern>();
@@ -8235,9 +8238,13 @@ struct Lowering {
                         tagPat->litKind = LitKind::Atom;
                         tagPat->litText = tag;
                         pat->args.push_back(std::move(tagPat));
-                        auto wild = std::make_unique<Pattern>();
-                        wild->kind = PatKind::Wild;
-                        pat->args.push_back(std::move(wild));
+                        const auto fields = variantArity.count(tag)
+                            ? std::max(1, variantArity.at(tag)) : 1;
+                        for (int field = 0; field < fields; ++field) {
+                            auto wild = std::make_unique<Pattern>();
+                            wild->kind = PatKind::Wild;
+                            pat->args.push_back(std::move(wild));
+                        }
                         mc.patterns.push_back(std::move(pat));
                     }
                     std::vector<ExprPtr> args;
