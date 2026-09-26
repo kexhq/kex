@@ -1,0 +1,75 @@
+# A `return` inside a block leaves the function the block was WRITTEN in,
+# Ruby-style (kexhq/kex#408). BEAM used to decide by accident: with an early
+# return of its own anywhere in the function, a block's `return` left it; with
+# none, it was the block's value. The tree-walker always took it as the
+# block's value.
+
+# No other early return in the function: `return` in `each` still leaves it.
+let firstOver(items: [Integer], limit: Integer) -> Integer? do
+  items.each do |item|
+    return Just(item) if item > limit
+  end
+  None
+end
+
+# With one: the same.
+let firstEven(items: [Integer]) -> String do
+  return "empty" if items.empty?
+  items.each do |item|
+    return "even ${item}" if item % 2 == 0
+  end
+  return "all odd"
+end
+
+# A higher-order function written in Kex, with an early return of its own. The
+# block's `return` targets `search`, where the block was written, and must
+# pass straight through `visit` rather than end it.
+let visit(items: [Integer], f: Integer -> Void) -> Integer do
+  return 0 if items.empty?
+  items.each { |item| f(item) }
+  return items.count
+end
+
+let search(items: [Integer]) -> String do
+  let seen = visit(items) do |item|
+    return "found ${item}" if item > 5
+  end
+  return "visited ${seen}"
+end
+
+# A named function defined inside a block is a function: its `return` leaves
+# it, not the function around the block (spec helpers inside `describe` are
+# the usual shape).
+let labels(items: [Integer]) -> String do
+  let named = items.map do |n|
+    let label(x: Integer) -> String do
+      return "one" if x == 1
+      return "many"
+    end
+    label(n)
+  end
+  return named.join("+")
+end
+
+# A block called after its function has returned has no call left to leave:
+# its `return` is its own value.
+let classifier(limit: Integer) -> (Integer -> String) do
+  let classify = do |n|
+    return "over" if n > limit
+    "under"
+  end
+  return classify
+end
+
+main do
+  IO.printLine("${firstOver([1, 20, 3, 40], 10)}")
+  IO.printLine("${firstOver([1, 2], 10)}")
+  IO.printLine(firstEven([3, 5, 8, 9]))
+  IO.printLine(firstEven([3, 5]))
+  IO.printLine(firstEven([]))
+  IO.printLine(search([1, 2, 9, 3]))
+  IO.printLine(search([1, 2]))
+  IO.printLine(labels([1, 2, 3]))
+  let classify = classifier(3)
+  IO.printLine("${[1, 7].map(classify)}")
+end

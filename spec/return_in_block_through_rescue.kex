@@ -1,0 +1,34 @@
+# A block's `return` passes through a `rescue` on its way to the function the
+# block was written in (kexhq/kex#408). A rescue takes Kex failures and Erlang
+# throws (#400), but not Kex's own returns: once blocks threw a tagged return,
+# the rescue caught that as an ordinary throw and turned the `return` into
+# `Error({kex_return, ...})`.
+let firstBig(items: [Integer]) -> String do
+  let result = trying do
+    items.each do |item|
+      return "big ${item}" if item > 10
+    end
+    "none"
+  rescue
+    _ => "rescued"
+  end
+  return result
+end
+
+# A real failure in the same position is still rescued.
+let failing(items: [Integer]) -> String do
+  let result = trying do
+    let negative = items.find { |item| item < 0 }
+    Error("bad ${negative.or(0)}").try if negative.set?
+    "fine"
+  rescue
+    message => "rescued ${message}"
+  end
+  return result
+end
+
+main do
+  IO.printLine(firstBig([1, 20, 3]))
+  IO.printLine(firstBig([1, 2]))
+  IO.printLine(failing([1, -2]))
+end

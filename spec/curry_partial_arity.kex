@@ -1,0 +1,25 @@
+# A partial application `~f(a)` is ONE function over the remaining arguments
+# (`~add(1)` is `{ |b| add(1, b) }`) — kexhq/kex#408. BEAM built nested
+# one-argument funs, so a caller passing every remaining argument at once got
+# `badarity`: the HTTP server handing a `~handler(x)` route its request and
+# context answered every request with a 500.
+let greet(greeting: String, name: String, mark: String) -> String = "${greeting}, ${name}${mark}"
+
+let add(a: Integer, b: Integer) -> Integer = a + b
+
+let adder(a: Integer) -> (Integer -> Integer) = ~add(a)
+
+# Calls its function with both arguments together, the way a runtime callback
+# is called.
+let applyBoth(f, x, y) = f(x, y)
+
+main do
+  let hello = ~greet("Hello")
+  IO.printLine(hello("Ada", "!"))
+  IO.printLine(applyBoth(hello, "Grace", "."))
+  IO.printLine(~greet("Hi", "Linus")("~"))
+  IO.printLine("${[1, 2, 3].map(~add(10))}")
+  IO.printLine("${adder(5)(2)}")
+  let sub5 = ~(-)(_, 5)
+  IO.printLine("${sub5(20)}")
+end

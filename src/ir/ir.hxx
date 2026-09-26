@@ -150,6 +150,8 @@ struct FieldGet {
 struct Lambda {
     std::vector<std::string> params;
     ExprPtr body;
+    // A named local function rather than a block: its own return scope.
+    bool ownReturnScope = false;
 };
 
 // ---- Control --------------------------------------------------------------

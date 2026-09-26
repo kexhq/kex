@@ -1251,11 +1251,12 @@ private do
     let manifest: ManifestPackage = member.memberManifest
     let names = manifest.manifestDependencies.map { |dependency| dependency.manifestName }
     let declarations = Tey.Commands.pluginsForNames(names, context, state).try
-    return declarations.map do |declaration|
+    let bindings = declarations.map do |declaration|
       let key = scopeName == "" then declaration.pluginNamespace else "${scopeName}:${declaration.pluginNamespace}"
       Binding { approvalKey: key, scopeName: scopeName,
                 declaration: declaration }
     end
+    return Ok(bindings)
   end
 
   foul pluginsForNames(names: [String], context: Context,

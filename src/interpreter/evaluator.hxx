@@ -17,13 +17,28 @@
 
 namespace kex::interpreter {
 
+// A `return` unwinding to the call it leaves. `frame` is that call's flag
+// (Environment::returnFrame): a function catches only its own, and a block
+// passes one through while its call is still running. Null means the nearest
+// function, for returns with no call around them (a rescue's inline return,
+// a top-level block).
 class ReturnException : public std::exception {
 public:
-    explicit ReturnException(ValuePtr value) : m_value(std::move(value)) {}
+    explicit ReturnException(ValuePtr value, std::shared_ptr<bool> frame = nullptr)
+        : m_value(std::move(value)), m_frame(std::move(frame)) {}
     auto value() const -> ValuePtr { return m_value; }
+    auto frame() const -> const std::shared_ptr<bool>& { return m_frame; }
+    // Whether the call at `frame` should take this return.
+    auto targets(const std::shared_ptr<bool>& frame) const -> bool {
+        return !m_frame || m_frame == frame;
+    }
+    // Whether it is on its way to a call that is still running, so a block
+    // must let it pass rather than take it as its own value.
+    auto passesThroughBlock() const -> bool { return m_frame && *m_frame; }
 
 private:
     ValuePtr m_value;
+    std::shared_ptr<bool> m_frame;
 };
 
 class BreakException : public std::exception {};

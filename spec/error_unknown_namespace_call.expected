@@ -1,0 +1,5 @@
+spec/error_unknown_namespace_call.kex:11:21: error: Unknown module `Web.Server`
+spec/error_unknown_namespace_call.kex:12:11: error: Unknown module `Nope`
+spec/error_unknown_namespace_call.kex:13:11: error: `Shop` has no function `cost`
+spec/error_unknown_namespace_call.kex:14:21: error: `Shop` has no module `Inner`
+spec/error_unknown_namespace_call.kex:15:21: error: `IO` has no function `nothing`

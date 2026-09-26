@@ -408,6 +408,11 @@ struct Lambda {
     // Both backends then collect body expressions instead of returning only
     // the final one.
     mutable bool collection = false;
+    // A named local function (`let f(x) do ... end` inside a body), which
+    // the parser represents as a let-bound lambda. It is a FUNCTION, so a
+    // `return` in it leaves it — unlike a block, whose `return` leaves the
+    // function it was written in (kexhq/kex#408).
+    bool namedFunction = false;
 };
 
 // `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
