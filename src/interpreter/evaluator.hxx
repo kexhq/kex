@@ -398,6 +398,10 @@ private:
         m_expressionTypes = nullptr;
     // Current server caller/reference, saved per process by Scheduler.
     ValuePtr m_servingFrom;
+    // Slots declared `-> Void`: casts. A call on a server whose type the
+    // checker could not pin down (read back from `Process.Shared`, say) is
+    // told apart by the slot itself (kexhq/kex#402).
+    std::unordered_set<std::string> m_castSlots;
     auto registerBitsBuiltins() -> void;
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;

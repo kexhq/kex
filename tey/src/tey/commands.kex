@@ -1317,7 +1317,7 @@ private do
       status = outcome if outcome != 0
       let output = "${Tey.Commands.outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output)
+        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
           IO.printLine("  Target  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
@@ -1351,7 +1351,7 @@ private do
       status = outcome if outcome != 0
       let output = "${outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output)
+        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
           IO.printLine("  Target  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
@@ -1374,15 +1374,15 @@ private do
   # by an Erlang older than the one that compiled it, and that failure reads
   # as `corrupt atom table`.
   #
-  # The entry point is `kex_escript`, not the program's own `kex_main`: an
-  # escript always calls `main/1`, and a program written `main do ... end`
-  # compiles to `main/0`, so every such program died with "undefined function
-  # kex_main:main/1" before running a line. The launcher calls whichever the
-  # program has, the way `kex --run` does.
-  foul writeEscript(from: String, output: String) -> Bool do
-    let launcher = FS.Path.join(from, "kex_escript.erl")
-    return false if !FS.File.write(launcher, Tey.Commands.escriptLauncher)
-    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], {ok,_,L}=compile:file(\"${launcher}\",[binary,report]), ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_escript\"}, {archive,[{\"kex_escript.beam\",L}|B],[]}]), halt()."
+  # The escript starts in the runtime's `kex_escript`, not in the program:
+  # `escript` passes arguments as charlists, and `kex_escript` converts them
+  # to the `[String]` that `main(args)` gets under `kex --run` too
+  # (kexhq/kex#406). `-kex_entry` names the program's module, which is
+  # `kex_<stem>` for the entrypoint's file — `kex_main` only when that file
+  # is `main.kex`.
+  foul writeEscript(from: String, output: String, entrypoint: String) -> Bool do
+    let entry = "kex_${FS.Path.stem(entrypoint)}"
+    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_escript -kex_entry ${entry}\"}, {archive,B,[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
       Error(_) => return false
       Ok(result) => do
@@ -1391,34 +1391,6 @@ private do
       end
     end
   end
-
-  # The escript's entry module (see writeEscript): UTF-8 standard streams,
-  # the program's `main/1` with its arguments or its `main/0`, and an
-  # uncaught error reported the way `kex --run` reports it. A program that
-  # calls `System.exit(n)` halts with its own status before reaching `halt(0)`.
-  let escriptLauncher -> String = `
-    -module(kex_escript).
-    -export([main/1]).
-
-    main(Args) ->
-        io:setopts(standard_io, [{encoding, unicode}]),
-        io:setopts(standard_error, [{encoding, unicode}]),
-        {module, kex_main} = code:ensure_loaded(kex_main),
-        try
-            case erlang:function_exported(kex_main, main, 1) of
-                true -> kex_main:main([unicode:characters_to_binary(A) || A <- Args]);
-                false -> kex_main:main()
-            end,
-            halt(0)
-        catch
-            _:Reason:_ when is_binary(Reason); is_list(Reason) ->
-                io:format(standard_error, "Internal error: ~ts~n", [Reason]),
-                halt(1);
-            _:Reason:_ ->
-                io:format(standard_error, "Internal error: ~p~n", [Reason]),
-                halt(1)
-        end.
-  `
 
   # The package name inside a path: `tey new /tmp/ooo` makes `ooo` in
   # `/tmp/ooo`, the way every other scaffolder reads its argument.

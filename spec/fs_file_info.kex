@@ -1,0 +1,32 @@
+# `FS.File.info`: a path's kind, size and modification time from one `lstat`
+# (kexhq/kex#401), where a caller used to reach for `file:read_file_info`
+# through BEAM interop to fingerprint a tree for changes.
+
+using FS
+
+main do
+  let root = "${FS.Directory.current}/.kex_spec_file_info"
+  FS.Directory.deleteAll(root)
+  FS.Directory.create("${root}/nested")
+  FS.File.write("${root}/hello.txt", "héllo\n")
+
+  let file = FS.File.info("${root}/hello.txt").try
+  IO.printLine("file: ${file.kind} ${file.size} bytes")
+  IO.printLine("modified after 2000: ${file.modified.date.year > 2000}")
+  IO.printLine("stable: ${FS.File.info("${root}/hello.txt").try == file}")
+  IO.printLine("directory: ${FS.File.info("${root}/nested").try.kind}")
+  match FS.File.info("${root}/missing") do
+    Ok(_) => IO.printLine("missing: found?")
+    Error(ReadFailed(_)) => IO.printLine("missing: ReadFailed")
+    Error(_) => IO.printLine("missing: other error")
+  end
+
+  # The `Mock.Files` stand-in answers too: a canned file, modified at the epoch.
+  with FS.File = Mock.Files { files: {"kex.toml": "name = 1\n"} } do
+    let canned = FS.File.info("kex.toml").try
+    IO.printLine("mocked: ${canned.kind} ${canned.size} ${canned.modified.iso}")
+    IO.printLine("mocked missing: ${FS.File.info("absent").error?}")
+  end
+
+  FS.Directory.deleteAll(root)
+end

@@ -27,7 +27,26 @@ dispatch_method(Receiver, Method, Args)
     case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
         undefined -> undefined_method(Receiver, Method, <<>>);
         Module ->
-            Name = binary_to_atom(Method, utf8),
+            Arity = length(Args) + 1,
+            Plain = binary_to_atom(Method, utf8),
+            %% A method name several record types share is compiled once per
+            %% type (`size/Files`), behind one dispatcher that lives in just
+            %% ONE of their modules, not necessarily this record's: adding
+            %% `FS.FileInfo`'s `size` field moved `size`'s dispatcher into
+            %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
+            %% `undef` in `Kex.Mock`. The type's own implementation is always
+            %% in its module, so use it when the plain name is not there.
+            _ = code:ensure_loaded(Module),
+            Name = case erlang:function_exported(Module, Plain, Arity) of
+                true -> Plain;
+                false ->
+                    Short = lists:last(binary:split(atom_to_binary(Tag, utf8), <<".">>, [global])),
+                    Mangled = binary_to_atom(<<Method/binary, "/", Short/binary>>, utf8),
+                    case erlang:function_exported(Module, Mangled, Arity) of
+                        true -> Mangled;
+                        false -> Plain
+                    end
+            end,
             erlang:apply(Module, Name, [Receiver | Args])
     end;
 dispatch_method(Receiver, Method, _Args) ->

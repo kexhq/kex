@@ -49,6 +49,22 @@ describe("JSON.parse") do
     )
   end
 
+  # The BEAM parses JSONC by blanking out comments and handing the rest to
+  # OTP's decoder (kexhq/kex#405), so an escaped quote must not end a string
+  # early and expose the comment markers inside it.
+  it("keeps comment markers inside strings with escaped quotes") do
+    let options = { allowComments: true }
+
+    assert(
+      JSON.parse(
+        "{\"q\":\"say \\\"//hi\\\" /*\",\"z\":\"\\\\\"} // end",
+        options: options
+      ) == Ok({ "q": "say \"//hi\" /*", "z": "\\" })
+    )
+    assert(JSON.parse("[1, /* two */ 2]\n/* multi\nline */", options: options) == Ok([1, 2]))
+    assert(JSON.parse("[1, 2 // no close", options: options) == Error(JSON.UnexpectedEnd(17)))
+  end
+
   it("rejects unknown options") do
     assert(
       JSON.parse("null", options: { unknown: true }) ==

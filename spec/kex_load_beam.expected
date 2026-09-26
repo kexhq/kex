@@ -1,0 +1,8 @@
+compiled: 0
+loaded: :kex_theme_3f2a
+call: Hello, Ada!
+raised: Error(kex_theme_3f2a:divide/1 raised error: runtime error: Division by zero)
+unexported: Error(kex_theme_3f2a does not export greet/0)
+already loaded: true
+never loaded: false
+missing file: true

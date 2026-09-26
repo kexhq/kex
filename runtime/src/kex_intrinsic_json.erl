@@ -8,7 +8,7 @@
 %% new in OTP 27 — the oldest release Kex supports on BEAM (CMakeLists.txt
 %% refuses to build against anything older).
 -module(kex_intrinsic_json).
--export([decode/1, encode/1]).
+-export([decode/1, decodeCommented/1, encode/1]).
 
 %% decode(Text) -> Just(Value) | None.
 %% Objects are maps with String (binary) keys, arrays lists, null None —
@@ -29,6 +29,62 @@ decode(Text) ->
             end
     catch
         _:_ -> 'None'
+    end.
+
+%% decodeCommented(Text) -> Just(Value) | None. JSONC: `decode` after
+%% blanking out `//` and `/* */` comments, which json.kex accepts wherever it
+%% accepts whitespace. Without this `allowComments: true` always ran the Kex
+%% parser, taking seconds on a few kilobytes (kexhq/kex#405). An unterminated
+%% comment is None, and the Kex parser reports it with its position.
+decodeCommented(Text) ->
+    case strip_comments(kex_io:to_string_bin(Text), []) of
+        {ok, Stripped} -> decode(Stripped);
+        error -> 'None'
+    end.
+
+%% Comment markers inside a string literal are text, so strings are copied
+%% through as they are, escapes included.
+strip_comments(<<>>, Acc) ->
+    {ok, iolist_to_binary(lists:reverse(Acc))};
+strip_comments(<<$", _/binary>> = Bin, Acc) ->
+    End = string_end(Bin, 1),
+    strip_comments(binary:part(Bin, End, byte_size(Bin) - End),
+                   [binary:part(Bin, 0, End) | Acc]);
+strip_comments(<<"//", Rest/binary>>, Acc) ->
+    case binary:match(Rest, <<"\n">>) of
+        {At, _} -> strip_comments(binary:part(Rest, At, byte_size(Rest) - At), [$\s | Acc]);
+        nomatch -> strip_comments(<<>>, [$\s | Acc])
+    end;
+strip_comments(<<"/*", Rest/binary>>, Acc) ->
+    case binary:match(Rest, <<"*/">>) of
+        {At, _} -> strip_comments(binary:part(Rest, At + 2, byte_size(Rest) - At - 2), [$\s | Acc]);
+        nomatch -> error
+    end;
+strip_comments(Bin, Acc) ->
+    case binary:match(Bin, [<<"\"">>, <<"/">>]) of
+        {0, _} ->
+            %% A lone `/`: not a comment, and not JSON either. Kept, so the
+            %% decoder rejects it and the Kex parser explains why.
+            <<Slash, Rest/binary>> = Bin,
+            strip_comments(Rest, [Slash | Acc]);
+        {At, _} ->
+            strip_comments(binary:part(Bin, At, byte_size(Bin) - At),
+                           [binary:part(Bin, 0, At) | Acc]);
+        nomatch ->
+            strip_comments(<<>>, [Bin | Acc])
+    end.
+
+%% The offset just past the closing quote of the string literal whose body
+%% starts at From, or the end of Bin when it is unterminated.
+string_end(Bin, From) when From >= byte_size(Bin) -> byte_size(Bin);
+string_end(Bin, From) ->
+    case binary:match(Bin, [<<"\\">>, <<"\"">>], [{scope, {From, byte_size(Bin) - From}}]) of
+        {At, 1} ->
+            case binary:at(Bin, At) of
+                $" -> At + 1;
+                _ -> string_end(Bin, At + 2)
+            end;
+        nomatch -> byte_size(Bin)
     end.
 
 only_whitespace(<<>>) -> true;

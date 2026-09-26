@@ -1,0 +1,14 @@
+# `Random.secureBytes` and `Random.token`: randomness from the OS CSPRNG for
+# secrets (kexhq/kex#404), where `Random`'s generators are not cryptographic.
+
+using Random
+
+main do
+  let bytes = Random.secureBytes(300)
+  IO.printLine("length: ${bytes.length}")
+  IO.printLine("differs: ${Random.secureBytes(16) != Random.secureBytes(16)}")
+  IO.printLine("empty: ${Random.secureBytes(0).length} ${Random.secureBytes(-3).length}")
+  let token = Random.token
+  IO.printLine("token: ${token.length} ${Binary.fromHex(token).map { |b| b.length }}")
+  IO.printLine("short: ${Random.token(4).length}")
+end

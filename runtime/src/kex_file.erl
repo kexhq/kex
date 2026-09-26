@@ -9,7 +9,7 @@
 -export([exists/1, lines/1, read/1, read_bytes/1, write/2, write_bytes/2, append/2, size/1, delete/1, feed/1,
          open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
-         canonical/1, 'symlink?'/1,
+         canonical/1, 'symlink?'/1, info/1,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
@@ -523,6 +523,28 @@ real_walk([Part | Rest], Done, Hops) ->
         {ok, Info} -> element(3, Info) =:= symlink;
         _ -> false
     end.
+
+%% info(Path) -> Just({Kind, Size, ModifiedEpochSeconds}) | None, from one
+%% lstat: a symlink is reported as itself, not as what it points at. `raw`
+%% skips the file server, which matters to a caller stat-ing every entry of a
+%% tree (kexhq/kex#401). A mocked file is a regular file, modified at the
+%% epoch.
+info(Path) ->
+    case mock_content(Path) of
+        undefined ->
+            case file:read_link_info(pth(Path), [{time, posix}, raw]) of
+                {ok, Info} ->
+                    %% #file_info: size is index 2, type 3, mtime 6.
+                    {'Just', {info_kind(element(3, Info)), element(2, Info), element(6, Info)}};
+                _ -> 'None'
+            end;
+        C -> {'Just', {file, byte_size(C), 0}}
+    end.
+
+info_kind(regular) -> file;
+info_kind(directory) -> directory;
+info_kind(symlink) -> symlink;
+info_kind(_) -> other.
 
 to_bin(X) when is_binary(X) -> X;
 to_bin(X) -> unicode:characters_to_binary(X).

@@ -1,0 +1,54 @@
+# `Process.Shared<X>`: typed, read-mostly state every process can read
+# without a round trip (kexhq/kex#402). On the BEAM it is `persistent_term`,
+# which a program used to reach through `BEAM.persistent_term` — and got its
+# values back untyped, so a `Server<X>` stored there lost its slots
+# ("Undefined method: broadcast for Server").
+
+record Site do
+  title : String
+  pages : [String]
+end
+
+record Hub do
+  count : Integer = 0
+end
+
+serving Hub do
+  foul slot broadcast(message: String) -> Reply<Integer> = { reply: message.length + @count }
+
+  foul slot bump -> Void do
+    new.count = @count + 1
+    return new
+  end
+end
+
+main do
+  let site : Process.Shared<Site> = Process.Shared.named("spec.site")
+  IO.printLine("empty: ${site.get.none?}")
+  site.put(Site { title: "Docs", pages: ["a", "b"] })
+  IO.printLine("title: ${site.get.map { |s| s.title }.or("")}")
+
+  # Another handle on the same name, from another process, is the same slot.
+  let reader = Task.start do
+    let again : Process.Shared<Site> = Process.Shared.named("spec.site")
+    again.get.map { |s| s.pages.count }.or(0)
+  end
+  IO.printLine("from a task: ${reader.await}")
+
+  site.put(Site { title: "Replaced", pages: [] })
+  IO.printLine("replaced: ${site.get.map { |s| s.title }.or("")}")
+  IO.printLine("deleted: ${site.delete} ${site.delete}")
+  IO.printLine("after delete: ${site.get.none?}")
+
+  # A stored server keeps its type, so its slots can be called.
+  let hub : Process.Shared<Server<Hub>> = Process.Shared.named("spec.hub")
+  hub.put(Process.spawn(Hub { count: 1 }))
+  match hub.get do
+    Just(server) => do
+      IO.printLine("slot: ${server.broadcast("hello").or(0)}")
+      server.bump
+      IO.printLine("after a cast: ${server.broadcast("hello").or(0)}")
+    end
+    None => IO.printLine("slot: missing")
+  end
+end

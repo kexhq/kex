@@ -1,0 +1,19 @@
+# `Kex.hash`: a cheap structural hash of any value (kexhq/kex#403). The
+# numbers differ between backends, so only their relationships are printed.
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+main do
+  let stamps = [("a.txt", 1700000000, 12), ("b.txt", 1700000001, 40)]
+  let same = [("a.txt", 1700000000, 12), ("b.txt", 1700000001, 40)]
+  let changed = [("a.txt", 1700000000, 12), ("b.txt", 1700000002, 40)]
+  IO.printLine("equal lists: ${Kex.hash(stamps) == Kex.hash(same)}")
+  IO.printLine("changed list: ${Kex.hash(stamps) != Kex.hash(changed)}")
+  IO.printLine("maps: ${Kex.hash({ a: 1, b: 2 }) == Kex.hash({ b: 2, a: 1 })}")
+  IO.printLine("records: ${Kex.hash(Point { x: 1, y: 2 }) == Kex.hash(Point { x: 1, y: 2 })} ${Kex.hash(Point { x: 1, y: 2 }) != Kex.hash(Point { x: 2, y: 1 })}")
+  let big = Kex.hash(Math.pow(2, 200))
+  IO.printLine("range: ${[Kex.hash("x"), Kex.hash(:x), Kex.hash(Just(3)), big].all? { |h| h >= 0 && h < 4294967296 }}")
+end

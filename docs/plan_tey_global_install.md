@@ -180,10 +180,10 @@ the old receipt's bins released only after the new ones land), and says
   own package has no targets, `--package` is required.
 - `dependencyRootsAt(start)` replaces building against the working directory's
   lock, which a copy staged elsewhere cannot use.
-- Installed escripts start through a `kex_escript` launcher. An escript
-  always calls `main/1`, and a `main do` program compiles to `main/0`, so
-  every such program Tey had installed died with "undefined function
-  kex_main:main/1".
+- Installed escripts start through the runtime's `kex_escript` (kexhq/kex#406,
+  merged from `main`). An escript always calls `main/1`, and a `main do`
+  program compiles to `main/0`, so every such program Tey installed had died
+  with "undefined function kex_main:main/1".
 
 ## 5. Collisions
 
