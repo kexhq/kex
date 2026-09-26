@@ -56,6 +56,17 @@ foul verify(dependency: Tey.Lockfile.Dependency) -> String or! String do
   return Error("content hash mismatch for ${dependency.name}: expected ${dependency.sha256}, got ${actual}")
 end
 
+# The files a snapshot of `root` holds, relative to it: everything but VCS
+# metadata, build output and `.teyignore` matches.
+foul sourceFiles(root: String) -> [String] do
+  return Tey.Snapshot.includedFiles(root)
+end
+
+# The content digest a snapshot of `root` is published under.
+foul contentDigest(root: String) -> String or! String do
+  return Tey.Snapshot.digest(root)
+end
+
 private do
   let excludedNames = [".git", ".hg", ".svn", ".tey", ".cache", ".DS_Store",
                        "build", "build-wasm", "_build", "dist", "ebin",

@@ -9896,14 +9896,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // falls back to lives one arity DOWN (see makeDispatcher).
                 const std::string mangledPrefix =
                     receiverImplementationPrefix(name);
-                bool contextualOwners = false;
+                // Only when EVERY owner at this arity carries the context: with
+                // a pure owner beside a foul one — `Headers.get(this, name)`
+                // and `Process.Shared.get` (this + context) are both get/2 —
+                // the second argument of a call reaching the fallback is as
+                // likely a user's key as a context, and reading it as the
+                // context dropped the key: `json["version"]` on a map became
+                // `kex_prelude:get(map, #{})` in any program that compiled in
+                // Net.HTTP (kexhq/kex#408).
+                bool contextualOwner = false;
+                bool pureOwner = false;
                 for (const auto& fn : mod.functions)
                     if (fn.arity == arity &&
-                        fn.name.rfind(mangledPrefix, 0) == 0 &&
-                        fn.hasCapabilityContext) {
-                        contextualOwners = true;
-                        break;
+                        fn.name.rfind(mangledPrefix, 0) == 0) {
+                        if (fn.hasCapabilityContext) contextualOwner = true;
+                        else pureOwner = true;
                     }
+                const bool contextualOwners = contextualOwner && !pureOwner;
                 // A dispatcher can mix a foul owner with a PURE prelude
                 // fallback — `write` is Mock.Files' (foul, context-carrying)
                 // and FileHandle's (pure) at once. Prefer the context-stripped
