@@ -1,0 +1,191 @@
+# What Tey has put in `${TEY_HOME}/bin`, and who owns each file there.
+#
+# Every package whose targets Tey installs gets a receipt at
+# `${TEY_HOME}/programs/<name>/receipt.json`. The receipt is the only
+# authority for ownership: a file in the bin directory that no receipt lists
+# is not Tey's to overwrite or delete. Without one, a second package declaring
+# the same target name silently replaced the first package's program, and
+# nothing could say what a file in there was or where it had come from.
+#
+# Keyed by PACKAGE, not by binary: one package may install several targets,
+# and reinstalling or removing it acts on all of them together.
+module Tey.Programs
+
+using JSON
+
+record Receipt do
+  name : String
+  version : String = ""
+  # Where the program was built from. Only "path" (a checkout on this
+  # machine) for now; Git sources add their URL, selector and commit here.
+  sourceKind : String = "path"
+  sourcePath : String = ""
+  targets : [String] = []
+  kex : String = ""
+  otp : String = ""
+  installedAt : String = ""
+end
+
+# What installing one target name would do to the bin directory.
+type Claim =
+  | Free
+  | Mine
+  | Adopt
+  | Reserved
+  | OwnedBy(String)
+  | Foreign
+
+# Names that are Tey's own and never a package's to take: the `kex` shim
+# lives in this directory, and replacing it would change which compiler every
+# shell runs.
+let reservedNames -> [String] = ["kex"]
+
+foul directory -> String do
+  return "${Tey.Toolchain.home}/programs"
+end
+
+foul receiptPath(name: String) -> String do
+  return FS.Path.join(Tey.Programs.directory, name, "receipt.json")
+end
+
+let encode(receipt: Receipt) -> String do
+  return JSON.stringify({
+    name: receipt.name,
+    version: receipt.version,
+    source: { kind: receipt.sourceKind, path: receipt.sourcePath },
+    targets: receipt.targets,
+    kex: receipt.kex,
+    otp: receipt.otp,
+    installedAt: receipt.installedAt
+  }) + "\n"
+end
+
+let decode(text: String) -> Receipt or! String do
+  let root = match JSON.parse(text) do
+    Error(_) => return Error("invalid receipt JSON")
+    Ok(value) => value
+  end
+  let name = Tey.Programs.text(root["name"])
+  return Error("receipt has no package name") if name == ""
+  let source = root["source"]
+  return Ok(Receipt {
+    name: name,
+    version: Tey.Programs.text(root["version"]),
+    sourceKind: Tey.Programs.text(Tey.Programs.field(source, "kind")),
+    sourcePath: Tey.Programs.text(Tey.Programs.field(source, "path")),
+    targets: Tey.Programs.strings(root["targets"]),
+    kex: Tey.Programs.text(root["kex"]),
+    otp: Tey.Programs.text(root["otp"]),
+    installedAt: Tey.Programs.text(root["installedAt"])
+  })
+end
+
+# The decision for one target name, given every receipt and what is on disk.
+# Pure, so the whole rule is testable without a bin directory.
+#
+# `teyBuilt?` covers the programs a project-local `tey install` put here
+# before receipts existed: they are escripts Tey itself wrote, so taking them
+# into a receipt loses nothing, where refusing would make every existing
+# installation demand `--force` on its next reinstall.
+let claim(target: String, packageName: String, receipts: [Receipt],
+          exists?: Bool, teyBuilt?: Bool) -> Claim do
+  return Reserved if Tey.Programs.reservedNames.contains?(target)
+  let owner = receipts.find do |receipt|
+    receipt.targets.contains?(target)
+  end
+  match owner do
+    Just(receipt) => do
+      return Mine if receipt.name == packageName
+      return OwnedBy(receipt.name)
+    end
+    None => ()
+  end
+  return Free if !exists?
+  return Adopt if teyBuilt?
+  return Foreign
+end
+
+# Why a claim stops the install, or None when it may go ahead. `--force`
+# takes a name over from another package or from an unowned file, but never
+# from Tey itself.
+let refusal(target: String, claim: Claim, path: String, force?: Bool) -> String? do
+  match claim do
+    Reserved => Just("`${target}` is reserved for Tey's own launcher; rename the target")
+    OwnedBy(owner) when !force? => Just("`${target}` is already installed by `${owner}`; pass --force to take it over")
+    Foreign when !force? => Just("${path} already exists and was not installed by Tey; pass --force to replace it")
+    _ => None
+  end
+end
+
+foul load(name: String) -> Receipt? do
+  match FS.File.read(Tey.Programs.receiptPath(name)) do
+    Error(_) => None
+    Ok(text) => match Tey.Programs.decode(text) do
+      Error(_) => None
+      Ok(receipt) => Just(receipt)
+    end
+  end
+end
+
+# Every receipt, by package name. An unreadable one is reported rather than
+# skipped silently: skipping it would make the files it owns look unowned.
+foul all -> [Receipt] do
+  let names = FS.Directory.directories(Tey.Programs.directory).or([]).sort
+  return names.flatMap do |name|
+    let path = Tey.Programs.receiptPath(name)
+    match FS.File.read(path) do
+      Error(_) => []
+      Ok(text) => match Tey.Programs.decode(text) do
+        Ok(receipt) => [receipt]
+        Error(error) => do
+          IO.printError("warning: ignoring ${path}: ${error}\n")
+          []
+        end
+      end
+    end
+  end
+end
+
+# Written beside the final file and renamed into place, so a reader never
+# sees half a receipt and a failed write leaves the previous one intact.
+foul save(receipt: Receipt) -> Void or! String do
+  let path = Tey.Programs.receiptPath(receipt.name)
+  let staging = "${path}.new"
+  return Error("could not create ${FS.Path.dirname(path)}") if !FS.Directory.create(FS.Path.dirname(path))
+  return Error("could not write ${staging}") if !FS.File.write(staging, Tey.Programs.encode(receipt))
+  return Error("could not write ${path}") if !FS.File.rename(staging, path)
+  return Ok(())
+end
+
+foul remove(name: String) -> Bool do
+  return FS.Directory.deleteAll(FS.Path.join(Tey.Programs.directory, name))
+end
+
+# Whether `path` is an escript Tey's own target build wrote: its emulator
+# line names `kex_main`, which every compiled Kex entry module is called.
+foul teyBuilt?(path: String) -> Bool do
+  match Process.run("head", ["-n", "2", "--", path]) do
+    Error(_) => false
+    Ok(result) => do
+      let header = result.stdout
+      result.exitCode == 0 && header.startsWith?("#!") && header.contains?("-escript main kex_main")
+    end
+  end
+end
+
+# The line `tey list` prints for one installed program.
+let listLine(receipt: Receipt) -> String do
+  let version = receipt.version == "" then "" else " ${receipt.version}"
+  return "${receipt.name}${version} (${receipt.targets.join(", ")}) from ${receipt.sourcePath}"
+end
+
+private do
+  let text(None) -> String = ""
+  let text(Just(value)) -> String = "${value}"
+
+  let field(None, _) = None
+  let field(Just(block), key: String) = block[key]
+
+  let strings(None) -> [String] = []
+  let strings(Just(values)) -> [String] = values.map { |value| "${value}" }
+end

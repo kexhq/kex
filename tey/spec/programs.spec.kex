@@ -1,0 +1,60 @@
+using Tey.Programs, only: [Adopt, Claim, Foreign, Free, Mine, OwnedBy, Receipt, Reserved, claim, decode, encode, refusal]
+
+describe("Tey.Programs receipts") do
+  it("round-trips a receipt through JSON") do
+    let receipt = Receipt {
+      name: "rodolfo", version: "0.4.0", sourceKind: "path",
+      sourcePath: "/src/rodolfo", targets: ["rodolfo", "rodolfo-admin"],
+      kex: "0.5.1", otp: "28", installedAt: "2026-09-26T12:00:00+02:00"
+    }
+    let decoded = Tey.Programs.decode(Tey.Programs.encode(receipt)).try
+    assert(decoded == receipt, "${decoded}")
+  end
+
+  it("rejects a receipt without a package name") do
+    assert(Tey.Programs.decode("{\"targets\": [\"x\"]}").error?)
+    assert(Tey.Programs.decode("not json").error?)
+  end
+end
+
+describe("Tey.Programs.claim") do
+  let receipts = [
+    Receipt { name: "alpha", targets: ["alpha", "shared"] },
+    Receipt { name: "beta", targets: ["beta"] }
+  ]
+
+  it("never lets a package take the kex shim") do
+    let decision = Tey.Programs.claim("kex", "alpha", receipts, true, false)
+    assert(decision == Reserved)
+    assert(Tey.Programs.refusal("kex", decision, "/bin/kex", true).present?)
+  end
+
+  it("treats a name the package's own receipt lists as its own") do
+    assert(Tey.Programs.claim("shared", "alpha", receipts, true, false) == Mine)
+  end
+
+  it("names the owner of a name another receipt lists") do
+    let decision = Tey.Programs.claim("shared", "beta", receipts, true, true)
+    assert(decision == OwnedBy("alpha"))
+    let reason = Tey.Programs.refusal("shared", decision, "/bin/shared", false)
+    assert(reason.or("").contains?("alpha"), "${reason}")
+    assert(Tey.Programs.refusal("shared", decision, "/bin/shared", true).none?)
+  end
+
+  it("is free when nothing is there") do
+    assert(Tey.Programs.claim("gamma", "gamma", receipts, false, false) == Free)
+  end
+
+  it("adopts an unowned escript Tey built before receipts existed") do
+    let decision = Tey.Programs.claim("gamma", "gamma", receipts, true, true)
+    assert(decision == Adopt)
+    assert(Tey.Programs.refusal("gamma", decision, "/bin/gamma", false).none?)
+  end
+
+  it("refuses an unowned file Tey did not write unless forced") do
+    let decision = Tey.Programs.claim("gamma", "gamma", receipts, true, false)
+    assert(decision == Foreign)
+    assert(Tey.Programs.refusal("gamma", decision, "/bin/gamma", false).present?)
+    assert(Tey.Programs.refusal("gamma", decision, "/bin/gamma", true).none?)
+  end
+end

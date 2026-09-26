@@ -1,7 +1,7 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, buildSelected, clean, init, install, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
+using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Toolchain, only: [installSource, use]
 
@@ -28,6 +28,7 @@ foul parser -> OptionConfig do
     .flag("cache", None, "Remove the complete cache with `tey clean`")
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey install` as a Git merge driver")
+    .flag("force", None, "Let `tey install` replace programs it does not own")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("no-tey", None, "Skip installing the Tey a Kex release ships with on `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
@@ -63,7 +64,7 @@ foul parser -> OptionConfig do
              "manage developer-only live path overrides") do |options|
       Tey.Cli.localOverride(options)
     end
-    .command("list", "", "show locked dependencies") do |_|
+    .command("list", "", "show locked dependencies and installed programs") do |_|
       Tey.Commands.list
     end
     .command("run", "[args...]", "run the package entrypoint on the BEAM") do |options|
@@ -398,8 +399,9 @@ private do
       return Tey.Cli.incomplete("install --merge-driver", "<base> <ours> <theirs>")
     end
     return Tey.Cli.unknown("install") if !options.arguments.empty?
-    return Tey.Commands.install(options.value("without", ""),
-                                options.value("package", ""))
+    return Tey.Commands.installWorkspace(options.value("without", ""),
+                                         options.value("package", ""),
+                                         options.flagEnabled?("force"))
   end
 
   foul kexList(options: ParsedOptions) -> Integer do
