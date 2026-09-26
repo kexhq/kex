@@ -94,6 +94,25 @@ module Http do
   end
 end
 
+# The services the handlers below call into, stubbed so the example stands on
+# its own.
+record UserError do
+  message : String
+end
+
+module UserService do
+  let getAll() -> [String] = ["ada", "grace"]
+
+  let create(body: String) -> String or! UserError do
+    return Error(UserError { message: "empty body" }) if body.empty?
+    return Ok(body)
+  end
+end
+
+module Logger do
+  foul info(message: String) -> Void = IO.printLine("[info] ${message}")
+end
+
 # Using the router
 module App do
   using Http do

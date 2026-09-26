@@ -57,49 +57,98 @@ auto erlBinary(const std::string& s) -> std::string {
 struct Emitter {
     int wildCounter = 0;
     bool m_returnThrows = false;
+    // The Core variable holding the running function's return tag, when a
+    // block inside it contains a `return`; empty otherwise.
+    std::string m_returnTag;
+    // Emitting a block body whose `return` targets m_returnTag.
+    bool m_inBlock = false;
 
-    // Does this IR subtree contain a Return node (not crossing a Lambda /
-    // LetRec, which are their own return scopes)?
-    static auto hasReturn(const ExprPtr& e) -> bool {
+    // Does this IR subtree contain a Return node? A Lambda is not entered
+    // unless `throughLambdas`: its returns are handled by the lambda itself
+    // (see the Lambda case in emit), while the function it sits in only needs
+    // to know that one exists — see hasBlockReturn.
+    static auto hasReturn(const ExprPtr& e, bool throughLambdas = false) -> bool {
         if (!e) return false;
-        return std::visit([](const auto& n) -> bool {
+        const auto r = [throughLambdas](const ExprPtr& x) { return hasReturn(x, throughLambdas); };
+        return std::visit([&](const auto& n) -> bool {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, Return>) return true;
-            else if constexpr (std::is_same_v<T, Let>) return hasReturn(n.value) || hasReturn(n.body);
+            else if constexpr (std::is_same_v<T, Let>) return r(n.value) || r(n.body);
             else if constexpr (std::is_same_v<T, Seq>) {
-                for (auto& x : n.exprs) if (hasReturn(x)) return true; return false;
+                for (auto& x : n.exprs) if (r(x)) return true; return false;
             } else if constexpr (std::is_same_v<T, Match>) {
-                for (auto& s : n.subjects) if (hasReturn(s)) return true;
+                for (auto& s : n.subjects) if (r(s)) return true;
                 for (auto& c : n.clauses) {
-                    if (c.guard && hasReturn(*c.guard)) return true;
-                    if (hasReturn(c.body)) return true;
+                    if (c.guard && r(*c.guard)) return true;
+                    if (r(c.body)) return true;
                 }
                 return false;
             } else if constexpr (std::is_same_v<T, Intrinsic>) {
-                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+                for (auto& a : n.args) if (r(a)) return true; return false;
             } else if constexpr (std::is_same_v<T, Call>) {
-                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+                for (auto& a : n.args) if (r(a)) return true; return false;
             } else if constexpr (std::is_same_v<T, CallIndirect>) {
-                if (hasReturn(n.callee)) return true;
-                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+                if (r(n.callee)) return true;
+                for (auto& a : n.args) if (r(a)) return true; return false;
             } else if constexpr (std::is_same_v<T, MakeTuple>) {
-                for (auto& a : n.elements) if (hasReturn(a)) return true; return false;
+                for (auto& a : n.elements) if (r(a)) return true; return false;
             } else if constexpr (std::is_same_v<T, MakeList>) {
-                for (auto& a : n.elements) if (hasReturn(a)) return true;
-                return n.rest && hasReturn(*n.rest);
+                for (auto& a : n.elements) if (r(a)) return true;
+                return n.rest && r(*n.rest);
             } else if constexpr (std::is_same_v<T, Construct>) {
-                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+                for (auto& a : n.args) if (r(a)) return true; return false;
             } else if constexpr (std::is_same_v<T, TryCatch>) {
-                if (hasReturn(n.body)) return true;
-                for (auto& c : n.clauses) if (hasReturn(c.body)) return true;
+                if (r(n.body)) return true;
+                for (auto& c : n.clauses) if (r(c.body)) return true;
                 return false;
             } else if constexpr (std::is_same_v<T, LetRec>) {
                 // Loops and guard continuations lower to a LetRec but stay in
                 // the SAME return scope: a `return` inside a loop escapes the
                 // enclosing function, so recurse into both bodies.
-                return hasReturn(n.funBody) || hasReturn(n.contBody);
+                return r(n.funBody) || r(n.contBody);
+            } else if constexpr (std::is_same_v<T, Lambda>) {
+                // A named local function's returns are its own.
+                return throughLambdas && !n.ownReturnScope && r(n.body);
             }
-            // Lambda bodies are a separate return scope; leaves have none.
+            // Leaves have none.
+            return false;
+        }, e->node);
+    }
+
+    // Does a block (Lambda) somewhere under this body contain a `return`? Such
+    // a return leaves the function the block was WRITTEN in, Ruby-style, so
+    // that function needs a return tag the block can name (kexhq/kex#408).
+    static auto hasBlockReturn(const ExprPtr& e) -> bool {
+        if (!e) return false;
+        if (const auto* lambda = std::get_if<Lambda>(&e->node))
+            return !lambda->ownReturnScope &&
+                   hasReturn(lambda->body, /*throughLambdas=*/true);
+        return std::visit([](const auto& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            const auto any = [](const auto& list) {
+                for (const auto& x : list) if (hasBlockReturn(x)) return true;
+                return false;
+            };
+            if constexpr (std::is_same_v<T, Return>) return hasBlockReturn(n.value);
+            else if constexpr (std::is_same_v<T, Let>) return hasBlockReturn(n.value) || hasBlockReturn(n.body);
+            else if constexpr (std::is_same_v<T, Seq>) return any(n.exprs);
+            else if constexpr (std::is_same_v<T, Match>) {
+                if (any(n.subjects)) return true;
+                for (const auto& c : n.clauses) {
+                    if (c.guard && hasBlockReturn(*c.guard)) return true;
+                    if (hasBlockReturn(c.body)) return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<T, Intrinsic> || std::is_same_v<T, Call> ||
+                                 std::is_same_v<T, Construct>) return any(n.args);
+            else if constexpr (std::is_same_v<T, CallIndirect>) return hasBlockReturn(n.callee) || any(n.args);
+            else if constexpr (std::is_same_v<T, MakeTuple>) return any(n.elements);
+            else if constexpr (std::is_same_v<T, MakeList>) return any(n.elements) || (n.rest && hasBlockReturn(*n.rest));
+            else if constexpr (std::is_same_v<T, TryCatch>) {
+                if (hasBlockReturn(n.body)) return true;
+                for (const auto& c : n.clauses) if (hasBlockReturn(c.body)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, LetRec>) return hasBlockReturn(n.funBody) || hasBlockReturn(n.contBody);
             return false;
         }, e->node);
     }
@@ -123,13 +172,79 @@ struct Emitter {
     // Emit a clause body, wrapping it in the return try/catch iff it contains
     // an early return.
     auto emitClauseBody(const ExprPtr& body) -> std::string {
-        if (!hasReturn(body)) return emit(body);
-        bool saved = m_returnThrows;
+        const bool blockReturn = hasBlockReturn(body);
+        if (!hasReturn(body) && !blockReturn) {
+            const bool savedBlock = m_inBlock;
+            m_inBlock = false;
+            auto plain = emit(body);
+            m_inBlock = savedBlock;
+            return plain;
+        }
+        const bool saved = m_returnThrows;
+        const bool savedBlock = m_inBlock;
+        const auto savedTag = m_returnTag;
         m_returnThrows = true;
-        std::string b = wrapReturnCatch(emit(body));
+        m_inBlock = false;
+        if (blockReturn) m_returnTag = uniq("_RetTag");
+        std::string b = blockReturn ? wrapTaggedReturnCatch(emit(body), m_returnTag)
+                                    : wrapReturnCatch(emit(body));
         m_returnThrows = saved;
+        m_inBlock = savedBlock;
+        m_returnTag = savedTag;
         return b;
     }
+
+    // A function a block can return from. The tag is a fresh reference per
+    // call, so a block names the invocation it was written in, not whichever
+    // function happens to be nearest on the stack (a HOF written in Kex with
+    // an early return of its own must not swallow it). It is marked live in
+    // the process dictionary while the call runs: a block called after its
+    // function returned (a stored route handler) finds it gone and returns
+    // from itself instead of throwing into an unrelated caller.
+    auto wrapTaggedReturnCatch(const std::string& body, const std::string& tag) -> std::string {
+        std::string rv = uniq("_Ret"), rvv = uniq("_RV"), rvt = uniq("_RV");
+        std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
+        std::string t = uniq("_T"), t2 = uniq("_T"), got = uniq("_Tg");
+        std::string c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
+        const std::string key = "{'kex_frame', " + tag + "}";
+        const std::string erase = "call 'erlang':'erase'(" + key + ")";
+        return "let <" + tag + "> = call 'erlang':'make_ref'()\n"
+               "in do call 'erlang':'put'(" + key + ", 'true')\n"
+               "try\n    " + body + "\n"
+               "of <" + rv + "> -> do " + erase + " " + rv + "\n"
+               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
+               "  do " + erase + "\n"
+               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+               "    <'throw', {'kex_return', " + rvv + "}, " + t + "> when 'true' -> " + rvv + "\n"
+               "    <'throw', {'kex_return', " + got + ", " + rvt + "}, " + t2 + "> when call 'erlang':'=:='(" +
+                    got + ", " + tag + ") -> " + rvt + "\n"
+               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
+                    trc + ", " + rsn + ")\n"
+               "  end";
+    }
+
+    // A block's own direct returns: rethrown toward the function while its
+    // call is still running, the block's value once it is not.
+    auto wrapBlockReturnCatch(const std::string& body, const std::string& tag) -> std::string {
+        std::string rv = uniq("_Ret"), rvt = uniq("_RV");
+        std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
+        std::string t = uniq("_T"), got = uniq("_Tg");
+        std::string c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
+        return "try\n    " + body + "\n"
+               "of <" + rv + "> -> " + rv + "\n"
+               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
+               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+               "    <'throw', {'kex_return', " + got + ", " + rvt + "}, " + t + "> when call 'erlang':'=:='(" +
+                    got + ", " + tag + ") ->\n"
+               "      case call 'erlang':'get'({'kex_frame', " + tag + "}) of\n"
+               "        <'true'> when 'true' -> primop 'raise'(" + trc + ", " + rsn + ")\n"
+               "        <" + uniq("_Gone") + "> when 'true' -> " + rvt + "\n"
+               "      end\n"
+               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
+                    trc + ", " + rsn + ")\n"
+               "  end";
+    }
+
     // Core Erlang treats `_` as a real variable, so repeating it within one
     // pattern is a duplicate-variable error — each wildcard needs a distinct
     // fresh name.
@@ -373,14 +488,51 @@ struct Emitter {
                     head += erlVar(n.params[i]);
                 }
                 head += ")";
-                return "fun " + head + " ->\n    " + emit(n.body);
+                // A `return` in a block leaves the function the block was
+                // written in, Ruby-style (kexhq/kex#408). It used to follow
+                // the enclosing function's mode by accident: a throw past the
+                // fun when that function had an early return of its own, and
+                // a plain block value when it had none.
+                //
+                // With no enclosing function to name (a block at a module's
+                // top level), the block is its own return scope.
+                if (m_returnTag.empty() || n.ownReturnScope) {
+                    const bool saved = m_returnThrows;
+                    m_returnThrows = false;
+                    auto own = emitClauseBody(n.body);
+                    m_returnThrows = saved;
+                    return "fun " + head + " ->\n    " + own;
+                }
+                const bool saved = m_returnThrows;
+                const bool savedBlock = m_inBlock;
+                m_returnThrows = true;
+                m_inBlock = true;
+                auto body = emit(n.body);
+                m_returnThrows = saved;
+                m_inBlock = savedBlock;
+                if (hasReturn(n.body)) body = wrapBlockReturnCatch(body, m_returnTag);
+                return "fun " + head + " ->\n    " + body;
             } else if constexpr (std::is_same_v<T, CallIndirect>) {
                 std::string args;
                 for (size_t i = 0; i < n.args.size(); i++) {
                     if (i) args += ", ";
                     args += emit(n.args[i]);
                 }
-                return "apply " + emit(n.callee) + "(" + args + ")";
+                // A function value is called with the arity it has when that
+                // matches (the fast path, a plain apply); otherwise through
+                // applyFlexible, which fills a partial application in over
+                // several calls or feeds a returned function the rest. A
+                // curried capture used to be nested one-argument funs, so the
+                // runtime calling a `~handler(x)` route with (request,
+                // context) got `badarity` (kexhq/kex#408).
+                const auto callee = uniq("_Callee");
+                const auto count = std::to_string(n.args.size());
+                return "let <" + callee + "> = " + emit(n.callee) + "\n"
+                       "in case call 'erlang':'is_function'(" + callee + ", " + count + ") of\n"
+                       "  <'true'> when 'true' -> apply " + callee + "(" + args + ")\n"
+                       "  <" + uniq("_NotArity") + "> when 'true' -> call 'kex_intrinsic_fun':'applyFlexible'(" +
+                       callee + ", [" + args + "])\n"
+                       "end";
             } else if constexpr (std::is_same_v<T, LetRec>) {
                 std::string head = "(";
                 for (size_t i = 0; i < n.params.size(); i++) {
@@ -397,6 +549,9 @@ struct Emitter {
                 // consumed by an enclosing `let`); the function-body try/catch
                 // turns it back into the result. In a return-free tail spot
                 // it's just the value.
+                if (m_inBlock && !m_returnTag.empty())
+                    return "call 'erlang':'throw'({'kex_return', " + m_returnTag + ", " +
+                           emit(n.value) + "})";
                 if (m_returnThrows)
                     return "call 'erlang':'throw'({'kex_return', " + emit(n.value) + "})";
                 return emit(n.value);

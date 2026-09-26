@@ -49,6 +49,16 @@ auto Environment::parent() const -> std::shared_ptr<Environment> {
     return m_parent;
 }
 
+auto Environment::setReturnFrame(std::shared_ptr<bool> frame) -> void {
+    m_returnFrame = std::move(frame);
+}
+
+auto Environment::returnFrame() const -> std::shared_ptr<bool> {
+    for (const auto* scope = this; scope; scope = scope->m_parent.get())
+        if (scope->m_returnFrame) return scope->m_returnFrame;
+    return nullptr;
+}
+
 auto Environment::importAll(const Environment& other) -> void {
     for (const auto& [name, b] : other.m_bindings)
         m_bindings[name] = b;

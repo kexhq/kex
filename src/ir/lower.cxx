@@ -1843,14 +1843,34 @@ struct Lowering {
                 // f(v).try }` yields `[Error(...)]` instead of crashing the
                 // process — which is what the walker has always done, and what
                 // `each` relies on to drop the error with the block's result.
-                if (n.rescue) lam.body = wrapWithTryCatch(std::move(lam.body), *n.rescue);
+                if (n.rescue)
+                    lam.body = wrapWithTryCatch(std::move(lam.body), *n.rescue,
+                                                /*blockValue=*/!n.namedFunction);
                 else if (irHasEscapingTryThrow(lam.body))
                     lam.body = wrapPropagateTryError(std::move(lam.body));
+                lam.ownReturnScope = n.namedFunction;
                 subst = snap;
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(lam);
                 return ex;
             } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
+                // `return X if cond` (ReturnExpr wrapping a TrailingIf) gates
+                // the return itself, not just its value: when cond is false it
+                // is a statement that evaluates to None and control carries
+                // on. The body walkers special-case it where a rest-of-body
+                // exists; everywhere else — notably as the LAST statement of
+                // an if/match branch — it reaches here, and lowering it as
+                // `return (cond ? X : None)` returned None from the whole
+                // function whenever the guard was not taken (kexhq/kex#408).
+                if (n.value)
+                    if (const auto* ti = std::get_if<ast::TrailingIf>(&n.value->kind)) {
+                        auto c = lower(ti->condition);
+                        auto retX = std::make_unique<Expr>();
+                        retX->node = Return{ti->expr ? lower(ti->expr)
+                                                     : lit(LitKind::None, "none")};
+                        return matchBool(std::move(c), std::move(retX),
+                                         lit(LitKind::None, "none"));
+                    }
                 auto ex = std::make_unique<Expr>();
                 ex->node = Return{lower(n.value)};
                 return ex;
@@ -2201,50 +2221,26 @@ struct Lowering {
             return wrapLets(binds, buildCall(std::move(args)));
         }
 
-        // Partial: a fresh param per open slot, plus params for any arity
-        // beyond the slots written. A bare `~name` (no argument group at
-        // all) keeps every trailing param on ONE flat lambda — it captures
-        // the function AS A VALUE, so existing code calling it with the
-        // callee's own natural arity in one go (a router handing a 2-arg
-        // route handler both its request and context together, say) must
-        // keep working. An EXPLICIT partial call (`~add3(a)`, one argument
-        // group actually written) instead gets one single-param lambda PER
-        // remaining arity, innermost-out — an Erlang fun's arity is fixed,
-        // so a flat lambda here could only ever be filled by one later call
-        // supplying every trailing argument together, while `~add3(a)` on a
-        // 3-arity function needs the other two appliable one at a time
-        // across SEPARATE calls (`x(2)` then `y(3)`) — the same shape the
-        // open-slot lambda already has for `~(-)(_, 5)`, filled by one
-        // `sub5(20)`.
+        // Partial: ONE fun over a fresh param per open slot plus one per
+        // argument beyond the slots written — `~add(1)` is `{ |b| add(1, b) }`,
+        // as the language spec defines it, and `~greet("Hi")` on a 3-arity
+        // function takes the other two together. That is the arity an Erlang
+        // caller uses: the HTTP server calls a `~handler(x)` route with
+        // (request, context) in one go, which the nested one-argument funs
+        // this used to build rejected with `badarity` (kexhq/kex#408). Kex
+        // code that supplies the rest over several calls still works: an
+        // indirect call whose argument count differs from the fun's arity
+        // goes through `kex_intrinsic_fun:applyFlexible` (see CallIndirect in
+        // emit_core), which returns a partial for the remainder.
         int trailing = (arity >= 0) ? std::max(0, arity - static_cast<int>(slots.size())) : 0;
-        const bool curryTrailing = !n.argGroups.empty();
         Lambda lam;
         std::vector<ExprPtr> finalArgs;
         for (auto& s : slots) {
             if (s.open) { std::string p = fresh("P"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
             else finalArgs.push_back(std::move(s.val));
         }
-        if (!curryTrailing) {
-            for (int i = 0; i < trailing; i++) { std::string p = fresh("T"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
-            lam.body = buildCall(std::move(finalArgs));
-            auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
-            return wrapLets(binds, std::move(ex));
-        }
-        std::vector<std::string> trailingParams;
-        for (int i = 0; i < trailing; i++) trailingParams.push_back(fresh("T"));
-        for (const auto& p : trailingParams) finalArgs.push_back(var(p));
-        ExprPtr body = buildCall(std::move(finalArgs));
-        for (auto it = trailingParams.rbegin(); it != trailingParams.rend(); ++it) {
-            Lambda inner;
-            inner.params.push_back(*it);
-            inner.body = std::move(body);
-            auto innerEx = std::make_unique<Expr>();
-            innerEx->node = std::move(inner);
-            body = std::move(innerEx);
-        }
-        if (lam.params.empty())
-            return wrapLets(binds, std::move(body));
-        lam.body = std::move(body);
+        for (int i = 0; i < trailing; i++) { std::string p = fresh("T"); lam.params.push_back(p); finalArgs.push_back(var(p)); }
+        lam.body = buildCall(std::move(finalArgs));
         auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
         return wrapLets(binds, std::move(ex));
     }
@@ -3139,6 +3135,16 @@ struct Lowering {
                     if (auto owner = variantOwner.find(receiverType);
                         owner != variantOwner.end())
                         receiverType = owner->second;
+                    // The checker names a type declared in a module by its
+                    // qualified path (`Net.HTTP.Router`), while `methodOwners`
+                    // records the bare name its `make` block wrote. Only an
+                    // Unknown receiver reached here unharmed: once
+                    // `Router.build` was typed, `.get` fell through to the
+                    // prelude's `get` and failed at run time with "Undefined
+                    // method: get for Net.HTTP.Router" (kexhq/kex#408).
+                    const auto dot = receiverType.rfind('.');
+                    const std::string bareReceiver = dot == std::string::npos
+                        ? receiverType : receiverType.substr(dot + 1);
                     // Require the local `make` block to actually define this
                     // method FOR THIS TYPE — `localMethods` alone would let an
                     // unrelated local method of the same name capture calls on
@@ -3161,8 +3167,11 @@ struct Lowering {
                         !overloadedByArgument &&
                         knownTypes.count(receiverType) &&
                         owners != methodOwners.end() &&
-                        std::find(owners->second.begin(), owners->second.end(),
-                                  receiverType) != owners->second.end();
+                        std::any_of(owners->second.begin(), owners->second.end(),
+                                    [&](const std::string& owner) {
+                                        return owner == receiverType ||
+                                               owner == bareReceiver;
+                                    });
                 }
             }
             auto resolved = resolvedCalls->find(&n);
@@ -6437,14 +6446,23 @@ struct Lowering {
     }
 
     // ---- Rescue -----------------------------------------------------------
-    auto lowerRescueClauses(const ast::RescueBlock& rescue) -> std::vector<MatchClause> {
+    // `blockValue`: the rescue belongs to a block, where `rescue return X`
+    // supplies the BLOCK's value — the same thing the tree-walker does —
+    // rather than leaving the enclosing function the way a `return` written
+    // in the block's body does (kexhq/kex#408).
+    auto lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValue = false)
+        -> std::vector<MatchClause> {
         std::vector<MatchClause> out;
         if (rescue.isInlineReturn) {
             MatchClause c;
             c.patterns.push_back(wildPat());
-            auto retExpr = std::make_unique<Expr>();
-            retExpr->node = Return{lower(rescue.inlineReturnExpr)};
-            c.body = std::move(retExpr);
+            if (blockValue) {
+                c.body = lower(rescue.inlineReturnExpr);
+            } else {
+                auto retExpr = std::make_unique<Expr>();
+                retExpr->node = Return{lower(rescue.inlineReturnExpr)};
+                c.body = std::move(retExpr);
+            }
             out.push_back(std::move(c));
         } else if (rescue.isCatchAll) {
             MatchClause c;
@@ -6476,10 +6494,11 @@ struct Lowering {
         return out;
     }
 
-    auto wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue) -> ExprPtr {
+    auto wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
+                          bool blockValue = false) -> ExprPtr {
         TryCatch tc;
         tc.body = std::move(body);
-        tc.clauses = lowerRescueClauses(rescue);
+        tc.clauses = lowerRescueClauses(rescue, blockValue);
         auto ex = std::make_unique<Expr>();
         ex->node = std::move(tc);
         return ex;

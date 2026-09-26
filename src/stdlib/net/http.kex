@@ -216,6 +216,7 @@ end
 module Router do
   # @return [Router] a router with no routes
   # @example +Router.build.get("/health", { |request, context| Response.text(200, "ok") })+
+  build : Router
   let build = Router { routes: [] }
 end
 

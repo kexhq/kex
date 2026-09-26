@@ -230,9 +230,9 @@ private:
                     const std::vector<TypePtr>& hintParams) -> TypePtr;
 
     // Look up matching signatures for `name` with `nonBlockArgTypes` as the
-    // non-block args, find the first that has a FuncType as its last param,
+    // non-block args, take those that have a FuncType as their last param,
     // and resolve any negative-ID generic placeholders against the actual arg
-    // types. Returns the resolved block param types, or empty if not found.
+    // types. Returns the block param types they agree on, or empty if none.
     auto resolveBlockHints(const std::string& name,
                            const std::vector<TypePtr>& nonBlockArgTypes,
                            bool isMethodCall = false,
@@ -245,6 +245,12 @@ private:
                          const std::vector<TypePtr>& argTypes,
                          size_t slArgIdx,
                          bool isMethodCall = false) -> std::vector<TypePtr>;
+    // The hints every candidate signature agrees on, position by position;
+    // Unknown where they differ (see its definition).
+    auto agreedHints(const std::vector<std::vector<TypePtr>>& hintSets)
+        -> std::vector<TypePtr>;
+    // A variable, Unknown, or trait-bounded type: one that accepts anything.
+    auto isOpenType(const TypePtr& type) -> bool;
 
     // Signatures of `name` visible through the imported package interfaces:
     // receiver functions for bare names, qualified module exports for
@@ -286,6 +292,10 @@ private:
                                           const TypePtr& receiverType) const -> bool;
     auto resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr;
     auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
+    // Why `written.method(...)` names nothing callable, if it does not: an
+    // unknown module, or a local module without that member.
+    auto namespaceCallProblem(const std::string& written, const std::string& resolved,
+                              const std::string& method) -> std::optional<std::string>;
     auto typeNameReference(const ast::Expr& expr) -> TypePtr;
     // Backing store for the pointer namedFunctionSignature returns when the
     // match came from imported interfaces.

@@ -1503,6 +1503,12 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     // pops this scope before propagating; otherwise m_env
                     // leaks one level deep for the rest of the program (see
                     // the identical guard on the MatchExpr clause loop above).
+                    auto returnFrame = std::make_shared<bool>(true);
+                    m_env->setReturnFrame(returnFrame);
+                    struct FrameGuard {
+                        std::shared_ptr<bool> frame;
+                        ~FrameGuard() { *frame = false; }
+                    } frameGuard{returnFrame};
                     try {
                         auto result = evalBody(clause.body);
                         popEnv();
@@ -1515,6 +1521,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                                 return result;
                             } catch (ReturnException& ret) {
                                 popEnv();
+                                if (!ret.targets(returnFrame)) throw;
                                 return ret.value();
                             }
                         }
@@ -1530,6 +1537,9 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                         return errorVal;
                     } catch (ReturnException& ret) {
                         popEnv();
+                        // A block's `return` for some other call — the one it
+                        // was written in — passes through this one.
+                        if (!ret.targets(returnFrame)) throw;
                         return ret.value();
                     } catch (const BreakException&) {
                         popEnv();
@@ -1575,14 +1585,25 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 for (const auto& [name, value] : capturedImports)
                     if (!m_functionDefs.contains(name)) m_env->define(name, value);
                 ValuePtr bound;
+                // A function body like any other: a block's `return` in it
+                // leaves it.
+                auto bindingFrame = std::make_shared<bool>(true);
+                m_env->setReturnFrame(bindingFrame);
                 try {
                     bound = evalBody(onlyDef->clauses.front().body);
                 } catch (ReturnException& ret) {
+                    *bindingFrame = false;
+                    if (!ret.targets(bindingFrame)) {
+                        popEnv();
+                        throw;
+                    }
                     bound = ret.value();
                 } catch (...) {
+                    *bindingFrame = false;
                     popEnv();
                     throw;
                 }
+                *bindingFrame = false;
                 popEnv();
                 if (auto* boundFunc = std::get_if<FunctionValue>(&bound->data);
                     boundFunc && boundFunc->native)
@@ -1710,6 +1731,13 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
         }
     }
     ValuePtr result;
+    // `main` is a function a block can return from, as on BEAM.
+    auto mainFrame = std::make_shared<bool>(true);
+    m_env->setReturnFrame(mainFrame);
+    struct FrameGuard {
+        std::shared_ptr<bool> frame;
+        ~FrameGuard() { *frame = false; }
+    } frameGuard{mainFrame};
     try {
         result = evalBody(block.body);
     } catch (TryException& e) {
@@ -2693,12 +2721,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // pattern; run thenBody with bindings in scope if it matches.
                 auto scrutinee = node.condition ? eval(*node.condition) : Value::none();
                 pushEnv();
-                bool matched = matchPattern(*node.letPattern, scrutinee);
                 ValuePtr result = Value::none();
-                if (matched) {
-                    result = evalBody(node.thenBody);
-                } else if (node.elseBody) {
-                    result = evalBody(*node.elseBody);
+                // Popped on the way out of a `return`, `.try` or error too.
+                // Left pushed, the caller's own popEnv removed the wrong
+                // scope, and every later lookup ran one level off — a later
+                // `return` there named this dead call and escaped to `main`
+                // (JSON.stringify(Just(x)) ended the program; kexhq/kex#408).
+                try {
+                    bool matched = matchPattern(*node.letPattern, scrutinee);
+                    if (matched) {
+                        result = evalBody(node.thenBody);
+                    } else if (node.elseBody) {
+                        result = evalBody(*node.elseBody);
+                    }
+                } catch (...) {
+                    popEnv();
+                    throw;
                 }
                 popEnv();
                 return result;
@@ -2784,11 +2822,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         return Value::none();
                     }
                     auto value = trailing->expr ? eval(*trailing->expr) : Value::none();
-                    throw ReturnException(value);
+                    throw ReturnException(value, m_env->returnFrame());
                 }
             }
             auto value = node.value ? eval(*node.value) : Value::none();
-            throw ReturnException(value);
+            throw ReturnException(value, m_env->returnFrame());
         }
         else if constexpr (std::is_same_v<T, ast::Lambda>) {
             auto lambda = std::make_shared<Value>();
@@ -2801,12 +2839,27 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
             const ast::RescueBlock* rescuePtr = node.rescue ? &*node.rescue : nullptr;
             const bool collection = node.collection;
+            const bool namedFunction = node.namedFunction;
             auto collectionDepth = std::make_shared<int>(0);
             lambda->data = FunctionValue{"<lambda>",
                 [this, bodyPtr, paramNames, capturedEnv, rescuePtr,
-                 collection, collectionDepth](std::vector<ValuePtr> args) -> ValuePtr {
+                 collection, namedFunction,
+                 collectionDepth](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
+                    // A named local function (`let f(x) do ... end` in a
+                    // body) is a function: its `return` leaves it, so it is a
+                    // frame of its own. A block is not, and passes a `return`
+                    // on to the function it was written in (see below).
+                    std::shared_ptr<bool> ownFrame;
+                    if (namedFunction) {
+                        ownFrame = std::make_shared<bool>(true);
+                        m_env->setReturnFrame(ownFrame);
+                    }
+                    struct FrameGuard {
+                        std::shared_ptr<bool> frame;
+                        ~FrameGuard() { if (frame) *frame = false; }
+                    } frameGuard{ownFrame};
                     // If the lambda expects multiple params but receives a single
                     // tuple, auto-spread it so `list.each do |a, b|` works on
                     // a list of pairs without breaking `each do |pair|`.
@@ -2864,6 +2917,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             try {
                                 result = evalRescue(*rescuePtr, e.error(), {});
                             } catch (ReturnException& ret) {
+                                if (!(ownFrame && ret.targets(ownFrame)) &&
+                                    ret.passesThroughBlock()) {
+                                    m_env = prevEnv;
+                                    throw;
+                                }
                                 result = ret.value();
                             }
                         } else {
@@ -2882,6 +2940,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             return errorVal;
                         }
                     } catch (ReturnException& ret) {
+                        // `return` in a block leaves the function the block
+                        // was written in, Ruby-style (kexhq/kex#408): let it
+                        // through while that call is still running. A block
+                        // called after its function returned (a stored
+                        // handler) has nothing to leave but itself.
+                        if (!(ownFrame && ret.targets(ownFrame)) &&
+                            ret.passesThroughBlock()) {
+                            m_env = prevEnv;
+                            throw;
+                        }
                         result = ret.value();
                     } catch (...) {
                         m_env = prevEnv;
@@ -4805,36 +4873,49 @@ auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error
         throw ReturnException(eval(*rescue.inlineReturnExpr));
     }
 
+    // Both scopes are popped on the way out of a `return` in the rescue too:
+    // left pushed, the enclosing call popped the wrong one (see IfExpr).
     if (rescue.isCatchAll) {
         pushEnv();
         if (!rescue.catchAllParam.empty()) {
             m_env->define(rescue.catchAllParam, error);
         }
-        auto result = evalBody(rescue.catchAllBody);
+        ValuePtr result;
+        try {
+            result = evalBody(rescue.catchAllBody);
+        } catch (...) {
+            popEnv();
+            throw;
+        }
         popEnv();
         return result;
     }
 
     pushEnv();
-    for (const auto& clause : rescue.clauses) {
-        bool matched = false;
-        for (const auto& pattern : clause.patterns) {
-            if (matchPattern(*pattern, error)) {
-                matched = true;
-                break;
-            }
-        }
-        if (matched) {
-            if (clause.guard) {
-                auto guardVal = eval(**clause.guard);
-                if (auto* b = std::get_if<BoolValue>(&guardVal->data); b && !b->value) {
-                    continue;
+    try {
+        for (const auto& clause : rescue.clauses) {
+            bool matched = false;
+            for (const auto& pattern : clause.patterns) {
+                if (matchPattern(*pattern, error)) {
+                    matched = true;
+                    break;
                 }
             }
-            auto result = eval(*clause.body);
-            popEnv();
-            return result;
+            if (matched) {
+                if (clause.guard) {
+                    auto guardVal = eval(**clause.guard);
+                    if (auto* b = std::get_if<BoolValue>(&guardVal->data); b && !b->value) {
+                        continue;
+                    }
+                }
+                auto result = eval(*clause.body);
+                popEnv();
+                return result;
+            }
         }
+    } catch (...) {
+        popEnv();
+        throw;
     }
     popEnv();
 

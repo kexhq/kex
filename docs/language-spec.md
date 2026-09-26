@@ -587,6 +587,25 @@ end
 `return` is required to yield a value from a `do...end` body. The last
 expression without `return` is **not** an implicit return — use `return`.
 
+Inside a block, `return` leaves the function the block was written in, as in
+Ruby — not just the block:
+
+```kex
+let firstOver(items: [Integer], limit: Integer) -> Integer? do
+  items.each do |item|
+    return Just(item) if item > limit
+  end
+  None
+end
+```
+
+It passes through any function in between, including a higher-order function
+that has returns of its own. A named function defined inside a block
+(`let f(x) do ... end`) is a function, not a block: its `return` leaves it. A block called after its function has already
+returned (a stored handler, say) has nothing to leave but itself, so there
+`return` gives the block's value. A block's own `rescue return X` is the
+block's fallback value too: it replaces what the block would have produced.
+
 ### Multiple Clauses (Pattern Matching)
 
 A function may have several clauses distinguished by parameter patterns. Clauses

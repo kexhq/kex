@@ -1,0 +1,11 @@
+# kex: check-only
+# `Router.build` is a `Router` (kexhq/kex#408). It had no signature, and a
+# module the checker reads from source only knows the results it is told, so
+# it came out Unknown — anything accepted it, and a reduce over it typed its
+# accumulator from whatever it met first.
+using Net.HTTP, only: [Router]
+
+main do
+  let wrong: Integer = Router.build
+  IO.printLine("${wrong}")
+end

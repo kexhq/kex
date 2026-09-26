@@ -346,6 +346,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.returnAnnotation = cloneOpt(node.returnAnnotation);
                 copy.rescue = cloneOpt(node.rescue);
                 copy.collection = node.collection;
+                copy.namedFunction = node.namedFunction;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
                 out->kind =
