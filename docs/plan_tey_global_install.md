@@ -164,6 +164,27 @@ Reinstalling an already-installed package replaces it in place (steps 1–8 with
 the old receipt's bins released only after the new ones land), and says
 "Replaced rodolfo 0.3.2 → 0.4.0".
 
+### As implemented for paths (step 2)
+
+- The workspace around the path is copied (what a snapshot would hold, plus a
+  committed `tey.lock`) into `${TEY_HOME}/staging/<nonce>`, beside
+  `programs/` so a half-built tree is never listed as a program. It is built
+  there and renamed to `programs/<name>/build` only after its programs are in
+  place; any failure deletes it. The user's checkout gains nothing.
+- The lock is resolved against the ORIGINAL tree and written into the copy.
+  A `path:` dependency (`../lib`) is relative to where the workspace really
+  is, and resolving snapshots it into the cache, where the copy's install
+  finds it. The lock fingerprint is location-independent, so the copy reuses
+  it as-is.
+- The path given picks the member it is inside of; at a workspace root whose
+  own package has no targets, `--package` is required.
+- `dependencyRootsAt(start)` replaces building against the working directory's
+  lock, which a copy staged elsewhere cannot use.
+- Installed escripts start through a `kex_escript` launcher. An escript
+  always calls `main/1`, and a `main do` program compiles to `main/0`, so
+  every such program Tey had installed died with "undefined function
+  kex_main:main/1".
+
 ## 5. Collisions
 
 A target name is refused when it is:
@@ -235,8 +256,7 @@ output only if users turn out to expect otherwise.
 
 1. *(done)* Receipts for the existing project-local target install, plus the §5
    ownership rule and the `tey list` section. Useful alone and exercises the state.
-2. `tey install <path>`: snapshot,
-   build, publish atomically.
+2. *(done)* `tey install <path>`: snapshot, build, publish atomically.
 3. Git sources with `--tag/--branch/--ref`, `--package`, `--target`, locked by
    default with `--fresh`.
 4. `tey uninstall`, re-install by name, `--rebuild`.

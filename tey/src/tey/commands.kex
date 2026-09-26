@@ -7,7 +7,7 @@ using Tey.Local, only: [Override, load, remove, set, validateAgainstLock]
 using Tey.Manifest, only: [Command, ManifestPackage, Plugin, read]
 using Tey.Resolver, only: [resolvePackage, resolveWorkspace]
 using Tey.Plugin, only: [approved?, Binding]
-using Tey.Programs, only: [Claim, Receipt]
+using Tey.Programs, only: [Claim, GitSource, InstalledName, PathSource, Receipt]
 using Tey.PluginHost, only: [Invocation]
 using Tey.Toolchain, only: [kex]
 using Tey.Workspace, only: [Context, Member, discover, select]
@@ -110,42 +110,168 @@ foul installWorkspace(without: String, packageName: String, force?: Bool) -> Int
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  let state = match Tey.Commands.installLock(context) do
+  match Tey.Commands.installDependencies(context, without) do
     Error(error) => return Tey.Commands.fail(error)
-    Ok(value) => value
+    Ok(_) => ()
   end
+  Tey.Commands.installTargetsSelected(context, packageName, force?)
+end
+
+# Resolves (or reuses) the workspace's lock, fetches and verifies what it
+# names, approves plugins, and writes the lock back — everything `tey install`
+# does before building.
+foul installDependencies(context: Context, without: String) -> Void or! String do
+  let state = Tey.Commands.installLock(context).try
   let wanted = state.lockedDependencies.filter do |dependency|
     let external = dependency.source != "workspace"
     let excluded = Tey.Lockfile.dependencyGroups(dependency).contains?(without)
     let included = without == "" || !excluded
     external && included
   end
-  wanted.each do |dependency|
-    let path = match Tey.Cache.fetch(dependency) do
-      Error(error) => return Tey.Commands.fail(error)
-      Ok(value) => value
-    end
-    match Tey.Cache.verify(dependency) do
-      Error(error) => return Tey.Commands.fail(error)
-      Ok(_) => IO.printLine("${Console.GREEN}Installed${Console.RESET} ${Tey.Lockfile.dependencyName(dependency)} ${Console.DIM}at ${path}${Console.RESET}")
-    end
-  end
-  let approvedState = match Tey.Commands.approvePlugins(context, state) do
-    Error(error) => return Tey.Commands.fail(error)
-    Ok(value) => value
-  end
-  let lockPath = FS.Path.join(context.workspaceRoot, "tey.lock")
-  match Tey.Commands.publishLock(lockPath, approvedState) do
-    Error(error) => return Tey.Commands.fail(error)
-    Ok(_) => ()
-  end
+  Tey.Commands.fetchAll(wanted).try
+  let approvedState = Tey.Commands.approvePlugins(context, state).try
+  Tey.Commands.publishLock(FS.Path.join(context.workspaceRoot, "tey.lock"),
+                           approvedState).try
   let externalCount = state.lockedDependencies.filter do |dependency|
     dependency.source != "workspace"
   end.count
   let omitted = externalCount - wanted.count
   IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s)") if omitted == 0
   IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
-  Tey.Commands.installTargetsSelected(context, packageName, force?)
+  return Ok(())
+end
+
+foul fetchAll(dependencies: [Tey.Lockfile.Dependency]) -> Void or! String do
+  return Ok(()) if dependencies.empty?
+  let dependency = dependencies.first.try
+  let path = Tey.Cache.fetch(dependency).try
+  Tey.Cache.verify(dependency).try
+  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${Tey.Lockfile.dependencyName(dependency)} ${Console.DIM}at ${path}${Console.RESET}")
+  return Tey.Commands.fetchAll(dependencies.drop(1))
+end
+
+# `tey install <argument>`: a program, from a path for now. A Git URL and an
+# installed program's name (reinstalling it) are the next steps of
+# docs/plan_tey_global_install.md.
+foul installProgram(argument: String, packageName: String, force?: Bool) -> Integer do
+  match Tey.Programs.classify(argument) do
+    PathSource(path) => return Tey.Commands.installFromPath(path, packageName, force?)
+    GitSource(url) => return Tey.Commands.fail("installing from a Git URL is not supported yet: ${url}")
+    InstalledName(name) => do
+      match Tey.Programs.load(name) do
+        Just(receipt) => return Tey.Commands.fail("`${name}` is already installed; reinstall it with `tey install ${receipt.sourcePath}`")
+        None => return Tey.Commands.fail("`${name}` is not a path, a Git URL, or an installed program")
+      end
+    end
+  end
+end
+
+# Installs the program at `path` without touching it: the workspace around it
+# is copied into a staging directory, which gets its own lock, dependencies
+# and build, and only replaces the program's previous build tree once its
+# programs are in place. The user's checkout gains no `ebin/`, no `tey.lock`,
+# nothing.
+foul installFromPath(path: String, packageName: String, force?: Bool) -> Integer do
+  let home = ENV.get("HOME", "")
+  let expanded = path == "~" || path.startsWith?("~/") then "${home}${path.drop(1)}" else path
+  let source = FS.Path.absolute?(expanded) then FS.Path.normalize(expanded) else FS.Path.join(FS.Directory.current, expanded)
+  return Tey.Commands.fail("${path} is not a directory") if !FS.Directory.directory?(source)
+  let context = match Tey.Workspace.discover(source) do
+    Error(error) => return Tey.Commands.fail("${path}: ${error}")
+    Ok(value) => value
+  end
+  let member = match Tey.Commands.programMember(context, packageName) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let package: ManifestPackage = member.memberManifest
+  if package.targets.empty?
+    return Tey.Commands.fail("`${package.name}` declares no targets; it is a library. Add it to a project with `tey add`")
+  end
+  let staging = match Tey.Programs.stagingDirectory do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let status = Tey.Commands.installStaged(context, member, staging, force?)
+  FS.Directory.deleteAll(staging) if status != 0
+  return status
+end
+
+# The member of `context` a path install means: the one `--package` names,
+# else the one the path is inside of.
+foul programMember(context: Context, packageName: String) -> Member or! String do
+  if packageName != ""
+    return Ok(Tey.Workspace.select(context, packageName, false).try.first.try)
+  end
+  let withTargets = context.members.filter do |member|
+    let package: ManifestPackage = member.memberManifest
+    !package.targets.empty?
+  end.map do |member|
+    let package: ManifestPackage = member.memberManifest
+    package.name
+  end
+  let ask = "${context.workspaceRoot} is a workspace; choose a package with --package (${withTargets.join(", ")})"
+  match context.currentMember do
+    None => return Error(ask)
+    Just(member) => do
+      let package: ManifestPackage = member.memberManifest
+      # The workspace root's own package, when it has no programs of its
+      # own, is not what `tey install ./workspace` means.
+      let atRoot = member.memberRoot == context.workspaceRoot
+      return Error(ask) if atRoot && package.targets.empty? && !withTargets.empty?
+      return Ok(member)
+    end
+  end
+end
+
+foul installStaged(context: Context, member: Member, staging: String,
+                   force?: Bool) -> Integer do
+  let package: ManifestPackage = member.memberManifest
+  match Tey.Programs.stage(context.workspaceRoot, staging) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
+  let digest = match Tey.Snapshot.contentDigest(staging) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let relative = FS.Path.relativeTo(member.memberRoot, context.workspaceRoot)
+  let stagedRoot = relative == "." then staging else FS.Path.join(staging, relative)
+  let stagedContext = match Tey.Workspace.discover(stagedRoot) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let stagedMember = match Tey.Workspace.select(stagedContext, package.name, false) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value.first.or(member)
+  end
+  # Resolved against the ORIGINAL tree, and handed to the copy: a `path:`
+  # dependency (`../lib`) is relative to where the workspace really is, not
+  # to the staging directory, and resolving snapshots it into the cache,
+  # where the copy's install finds it. Nothing is written to the original.
+  # The lock fingerprint is location-independent, so the copy reuses it.
+  let resolved = match Tey.Commands.installLock(context) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  match Tey.Commands.publishLock(FS.Path.join(staging, "tey.lock"), resolved) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
+  match Tey.Commands.installDependencies(stagedContext, "") do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
+  let origin = Receipt { name: package.name, sourceKind: "path",
+                         sourcePath: member.memberRoot, sourceDigest: digest }
+  let status = Tey.Commands.installMemberTargetsFrom(stagedMember, force?, origin)
+  return status if status != 0
+  match Tey.Programs.publishBuild(package.name, staging) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
+  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${package.name} ${package.version} ${Console.DIM}from ${member.memberRoot}${Console.RESET}")
+  return 0
 end
 
 foul updateDependencies(name: String = "") -> Integer do
@@ -294,6 +420,14 @@ end
 # Every name is checked before anything is built, so a refused install costs
 # nothing and changes nothing.
 foul installMemberTargets(member: Member, force?: Bool = false) -> Integer do
+  return Tey.Commands.installMemberTargetsFrom(member, force?, Receipt {
+    name: "", sourceKind: "path", sourcePath: member.memberRoot
+  })
+end
+
+# `installMemberTargets`, recording `origin`'s source fields in the receipt —
+# a program built in a staging copy came from somewhere else.
+foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt) -> Integer do
   let package: ManifestPackage = member.memberManifest
   return 0 if package.targets.empty?
   let binDirectory = Tey.Toolchain.binDirectory
@@ -337,7 +471,7 @@ foul installMemberTargets(member: Member, force?: Bool = false) -> Integer do
     end
     ()
   end
-  match Tey.Commands.recordInstall(package, member.memberRoot, installed, receipts, claims) do
+  match Tey.Commands.recordInstall(package, origin, installed, receipts, claims) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
@@ -364,7 +498,7 @@ end
 # over with `--force` leave the other package's receipt, and targets the
 # previous receipt owned that this install no longer declares are removed
 # from the bin directory rather than left behind unowned.
-foul recordInstall(package: ManifestPackage, root: String, installed: [String],
+foul recordInstall(package: ManifestPackage, origin: Receipt, installed: [String],
                    receipts: [Receipt], claims: [(String, Claim)]) -> Void or! String do
   return Ok(()) if installed.empty?
   let binDirectory = Tey.Toolchain.binDirectory
@@ -400,7 +534,8 @@ foul recordInstall(package: ManifestPackage, root: String, installed: [String],
   end
   return Tey.Programs.save(Receipt {
     name: package.name, version: package.version,
-    sourceKind: "path", sourcePath: root,
+    sourceKind: origin.sourceKind, sourcePath: origin.sourcePath,
+    sourceDigest: origin.sourceDigest,
     targets: [...installed, ...kept],
     kex: kex, otp: otp, installedAt: Time.now().iso
   })
@@ -412,17 +547,28 @@ end
 # does not have is reported rather than quietly dropped — the answer is
 # `tey install`, and silence would look like a broken `using`.
 foul dependencyRoots -> [String] do
-  let context = match Tey.Workspace.discover(FS.Directory.current) do
+  return Tey.Commands.dependencyRootsAt(FS.Directory.current)
+end
+
+# `dependencyRoots` for the workspace around `start` rather than around the
+# working directory. A program being installed from a path is built in a
+# staged copy while the user stands somewhere else entirely — possibly in
+# another project, whose lockfile would otherwise supply the dependencies.
+foul dependencyRootsAt(start: String) -> [String] do
+  let context = match Tey.Workspace.discover(start) do
     Error(_) => return []
     Ok(value) => value
   end
-  let state = match Tey.Commands.readLock do
+  let state = match Tey.Commands.readLockAt(context) do
     Error(_) => do
       # No lockfile at all. Only worth saying when the package actually
       # declares dependencies — a package with none needs nothing.
-      match Tey.Commands.manifest do
-        Ok(package) => IO.printError("${Console.RED}error:${Console.RESET} no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
-        Error(_) => ()
+      match context.currentMember do
+        Just(member) => do
+          let package: ManifestPackage = member.memberManifest
+          IO.printError("${Console.RED}error:${Console.RESET} no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+        end
+        None => ()
       end
       return []
     end
@@ -483,7 +629,7 @@ end
 foul sourceRootsAt(packageRoot: String) -> [String] do
   let source = FS.Path.join(packageRoot, "src")
   let own = FS.Directory.directory?(source) then ["--source-root", source] else []
-  return [...own, ...Tey.Commands.dependencyRoots]
+  return [...own, ...Tey.Commands.dependencyRootsAt(packageRoot)]
 end
 
 # A library's compilable units: every `.kex` directly under `src/`. Not a
@@ -1227,8 +1373,16 @@ private do
   # The result carries the same OTP floor as any other beam: it cannot be run
   # by an Erlang older than the one that compiled it, and that failure reads
   # as `corrupt atom table`.
+  #
+  # The entry point is `kex_escript`, not the program's own `kex_main`: an
+  # escript always calls `main/1`, and a program written `main do ... end`
+  # compiles to `main/0`, so every such program died with "undefined function
+  # kex_main:main/1" before running a line. The launcher calls whichever the
+  # program has, the way `kex --run` does.
   foul writeEscript(from: String, output: String) -> Bool do
-    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_main\"}, {archive,B,[]}]), halt()."
+    let launcher = FS.Path.join(from, "kex_escript.erl")
+    return false if !FS.File.write(launcher, Tey.Commands.escriptLauncher)
+    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], {ok,_,L}=compile:file(\"${launcher}\",[binary,report]), ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_escript\"}, {archive,[{\"kex_escript.beam\",L}|B],[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
       Error(_) => return false
       Ok(result) => do
@@ -1237,6 +1391,34 @@ private do
       end
     end
   end
+
+  # The escript's entry module (see writeEscript): UTF-8 standard streams,
+  # the program's `main/1` with its arguments or its `main/0`, and an
+  # uncaught error reported the way `kex --run` reports it. A program that
+  # calls `System.exit(n)` halts with its own status before reaching `halt(0)`.
+  let escriptLauncher -> String = `
+    -module(kex_escript).
+    -export([main/1]).
+
+    main(Args) ->
+        io:setopts(standard_io, [{encoding, unicode}]),
+        io:setopts(standard_error, [{encoding, unicode}]),
+        {module, kex_main} = code:ensure_loaded(kex_main),
+        try
+            case erlang:function_exported(kex_main, main, 1) of
+                true -> kex_main:main([unicode:characters_to_binary(A) || A <- Args]);
+                false -> kex_main:main()
+            end,
+            halt(0)
+        catch
+            _:Reason:_ when is_binary(Reason); is_list(Reason) ->
+                io:format(standard_error, "Internal error: ~ts~n", [Reason]),
+                halt(1);
+            _:Reason:_ ->
+                io:format(standard_error, "Internal error: ~p~n", [Reason]),
+                halt(1)
+        end.
+  `
 
   # The package name inside a path: `tey new /tmp/ooo` makes `ooo` in
   # `/tmp/ooo`, the way every other scaffolder reads its argument.
@@ -1526,7 +1708,10 @@ private do
   end
 
   foul readLock -> LockState or! String do
-    let context = Tey.Workspace.discover(FS.Directory.current).try
+    return Tey.Commands.readLockAt(Tey.Workspace.discover(FS.Directory.current).try)
+  end
+
+  foul readLockAt(context: Context) -> LockState or! String do
     match FS.File.read(FS.Path.join(context.workspaceRoot, "tey.lock")) do
       Error(_) => Error("tey.lock not found; run `tey install`")
       Ok(text) => Tey.Lockfile.decode(text)

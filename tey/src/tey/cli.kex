@@ -1,7 +1,7 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
+using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installProgram, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Toolchain, only: [installSource, use]
 
@@ -51,7 +51,7 @@ foul parser -> OptionConfig do
         Just(name) => Tey.Commands.add(name, options)
       end
     end
-    .command("install", "[<base> <ours> <theirs>]", "resolve, fetch, and install the workspace") do |options|
+    .command("install", "[<path>]", "install the workspace, or the program at <path>") do |options|
       Tey.Cli.installCommand(options)
     end
     .command("update", "[<name>]", "re-resolve dependencies transactionally") do |options|
@@ -397,6 +397,12 @@ private do
     if options.flagEnabled?("merge-driver")
       return Tey.Commands.lock if options.arguments.count == 3
       return Tey.Cli.incomplete("install --merge-driver", "<base> <ours> <theirs>")
+    end
+    # `tey add` adds a dependency, so an argument here is always a program.
+    if options.arguments.count == 1
+      return Tey.Commands.installProgram(options.arguments.first.or(""),
+                                         options.value("package", ""),
+                                         options.flagEnabled?("force"))
     end
     return Tey.Cli.unknown("install") if !options.arguments.empty?
     return Tey.Commands.installWorkspace(options.value("without", ""),

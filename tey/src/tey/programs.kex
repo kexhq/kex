@@ -20,11 +20,22 @@ record Receipt do
   # machine) for now; Git sources add their URL, selector and commit here.
   sourceKind : String = "path"
   sourcePath : String = ""
+  # The content digest of the tree the program was built from (see
+  # Tey.Snapshot.contentDigest), so reinstalling an unchanged path can say
+  # so. Empty for a project's own `tey install`, which builds in place.
+  sourceDigest : String = ""
   targets : [String] = []
   kex : String = ""
   otp : String = ""
   installedAt : String = ""
 end
+
+# What `tey install <argument>` names. `tey add` is how a dependency is added,
+# so an argument to `tey install` always means a program.
+type ProgramSource =
+  | PathSource(String)
+  | GitSource(String)
+  | InstalledName(String)
 
 # What installing one target name would do to the bin directory.
 type Claim =
@@ -44,6 +55,77 @@ foul directory -> String do
   return "${Tey.Toolchain.home}/programs"
 end
 
+# A path when it starts like one (`.`, `/`, `~`), a Git URL when it has a
+# scheme or is scp-like (`git@host:owner/repo`), and otherwise the name of an
+# installed program.
+let classify(argument: String) -> ProgramSource do
+  let pathLike = [".", "/", "~"].any? { |prefix| argument.startsWith?(prefix) }
+  return PathSource(argument) if pathLike
+  let scpLike = argument.contains?("@") && argument.contains?(":")
+  return GitSource(argument) if argument.contains?("://") || scpLike
+  return InstalledName(argument)
+end
+
+# Where a program's staged build tree ends up once it is installed.
+foul buildDirectory(name: String) -> String do
+  return FS.Path.join(Tey.Programs.directory, name, "build")
+end
+
+# A fresh directory to build a program in before it is installed. Beside
+# `programs/` rather than in it, so a half-built tree is never listed as a
+# program, and on the same filesystem, so publishing it is a rename.
+foul stagingDirectory -> String or! String do
+  let root = FS.Path.join(Tey.Toolchain.home, "staging")
+  return Error("could not create ${root}") if !FS.Directory.create(root)
+  let nonce = Digest.sha256("${DateTime.epochNanos()}").take(16)
+  let path = FS.Path.join(root, nonce)
+  return Error("could not create ${path}") if !FS.Directory.create(path)
+  return Ok(path)
+end
+
+# Copies the tree at `root` into `destination`: what a snapshot would hold,
+# plus a committed `tey.lock` — the dependency versions the program's author
+# tested, which a snapshot leaves out.
+foul stage(root: String, destination: String) -> Void or! String do
+  let lock = FS.File.file?(FS.Path.join(root, "tey.lock")) then ["tey.lock"] else []
+  let files = [...Tey.Snapshot.sourceFiles(root), ...lock]
+  let failed = files.find do |relative|
+    !Tey.Programs.copyInto(root, relative, destination)
+  end
+  match failed do
+    Just(relative) => return Error("could not copy ${relative} from ${root}")
+    None => return Ok(())
+  end
+end
+
+foul copyInto(root: String, relative: String, destination: String) -> Bool do
+  let target = FS.Path.join(destination, relative)
+  return false if !FS.Directory.create(FS.Path.dirname(target))
+  match Process.run("cp", ["-a", "--", FS.Path.join(root, relative), target]) do
+    Ok(result) => return result.exitCode == 0
+    Error(_) => return false
+  end
+end
+
+# Replaces a program's build tree with the one it was just installed from.
+# The old tree is moved aside first and removed last, so a failure part way
+# leaves one of the two in place.
+foul publishBuild(name: String, staged: String) -> Void or! String do
+  let destination = Tey.Programs.buildDirectory(name)
+  return Error("could not create ${FS.Path.dirname(destination)}") if !FS.Directory.create(FS.Path.dirname(destination))
+  let previous = "${destination}.old"
+  FS.Directory.deleteAll(previous)
+  if FS.Directory.directory?(destination) && !FS.File.rename(destination, previous)
+    return Error("could not replace ${destination}")
+  end
+  if !FS.File.rename(staged, destination)
+    FS.File.rename(previous, destination)
+    return Error("could not publish ${destination}")
+  end
+  FS.Directory.deleteAll(previous)
+  return Ok(())
+end
+
 foul receiptPath(name: String) -> String do
   return FS.Path.join(Tey.Programs.directory, name, "receipt.json")
 end
@@ -52,7 +134,8 @@ let encode(receipt: Receipt) -> String do
   return JSON.stringify({
     name: receipt.name,
     version: receipt.version,
-    source: { kind: receipt.sourceKind, path: receipt.sourcePath },
+    source: { kind: receipt.sourceKind, path: receipt.sourcePath,
+              sha256: receipt.sourceDigest },
     targets: receipt.targets,
     kex: receipt.kex,
     otp: receipt.otp,
@@ -73,6 +156,7 @@ let decode(text: String) -> Receipt or! String do
     version: Tey.Programs.text(root["version"]),
     sourceKind: Tey.Programs.text(Tey.Programs.field(source, "kind")),
     sourcePath: Tey.Programs.text(Tey.Programs.field(source, "path")),
+    sourceDigest: Tey.Programs.text(Tey.Programs.field(source, "sha256")),
     targets: Tey.Programs.strings(root["targets"]),
     kex: Tey.Programs.text(root["kex"]),
     otp: Tey.Programs.text(root["otp"]),

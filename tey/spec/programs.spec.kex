@@ -1,11 +1,12 @@
-using Tey.Programs, only: [Adopt, Claim, Foreign, Free, Mine, OwnedBy, Receipt, Reserved, claim, decode, encode, refusal]
+using Tey.Programs, only: [Adopt, Claim, Foreign, Free, GitSource, InstalledName, Mine, OwnedBy, PathSource, ProgramSource, Receipt, Reserved, claim, classify, decode, encode, refusal]
 
 describe("Tey.Programs receipts") do
   it("round-trips a receipt through JSON") do
     let receipt = Receipt {
       name: "rodolfo", version: "0.4.0", sourceKind: "path",
       sourcePath: "/src/rodolfo", targets: ["rodolfo", "rodolfo-admin"],
-      kex: "0.5.1", otp: "28", installedAt: "2026-09-26T12:00:00+02:00"
+      sourceDigest: "abc123", kex: "0.5.1", otp: "28",
+      installedAt: "2026-09-26T12:00:00+02:00"
     }
     let decoded = Tey.Programs.decode(Tey.Programs.encode(receipt)).try
     assert(decoded == receipt, "${decoded}")
@@ -14,6 +15,28 @@ describe("Tey.Programs receipts") do
   it("rejects a receipt without a package name") do
     assert(Tey.Programs.decode("{\"targets\": [\"x\"]}").error?)
     assert(Tey.Programs.decode("not json").error?)
+  end
+end
+
+describe("Tey.Programs.classify") do
+  it("reads a path from how it starts") do
+    assert(Tey.Programs.classify("./tool") == PathSource("./tool"))
+    assert(Tey.Programs.classify("../tool") == PathSource("../tool"))
+    assert(Tey.Programs.classify("/src/tool") == PathSource("/src/tool"))
+    assert(Tey.Programs.classify("~/src/tool") == PathSource("~/src/tool"))
+    assert(Tey.Programs.classify(".") == PathSource("."))
+  end
+
+  it("reads a Git URL from a scheme or an scp-like address") do
+    assert(Tey.Programs.classify("https://github.com/kexhq/rodolfo.git") ==
+           GitSource("https://github.com/kexhq/rodolfo.git"))
+    assert(Tey.Programs.classify("git@github.com:kexhq/rodolfo.git") ==
+           GitSource("git@github.com:kexhq/rodolfo.git"))
+  end
+
+  it("reads anything else as an installed program's name") do
+    assert(Tey.Programs.classify("rodolfo") == InstalledName("rodolfo"))
+    assert(Tey.Programs.classify("my-tool") == InstalledName("my-tool"))
   end
 end
 

@@ -18,7 +18,7 @@ describe("Tey program receipts integration") do
   # pointed at the scratch directory.
   let tey(directory: String, arguments: String) -> ProcessResult do
     return Process.run("sh", ["-c",
-      "cd \"$1\" && TEY_HOME=\"$5\" exec \"$2\" --no-colors --source-root \"$3\" \"$4\" -- ${arguments}",
+      "cd \"$1\" && TEY_HOME=\"$5\" TEY_CACHE=\"$5/cache\" exec \"$2\" --no-colors --source-root \"$3\" \"$4\" -- ${arguments}",
       "tey-programs-spec", directory, compiler,
       FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex", home]).try
   end
@@ -43,6 +43,9 @@ describe("Tey program receipts integration") do
     let installed = tey("${root}/alpha", "install")
     assert(installed.exitCode == 0, installed.stderr)
     assert(FS.File.file?("${home}/bin/alpha"))
+    # A `main do` program compiles to main/0; the escript must still start it.
+    let ran = Process.run("${home}/bin/alpha", []).try
+    assert(ran.stdout.trim == "alpha", ran.stdout + ran.stderr)
     let receipt = Tey.Programs.decode(FS.File.read("${home}/programs/alpha/receipt.json").try).try
     assert(receipt.targets == ["alpha"], "${receipt}")
     assert(receipt.sourcePath == "${root}/alpha", receipt.sourcePath)
@@ -96,5 +99,84 @@ describe("Tey program receipts integration") do
     assert(!FS.File.file?("${home}/bin/alpha-extra"))
     let receipt = Tey.Programs.decode(FS.File.read("${home}/programs/alpha/receipt.json").try).try
     assert(receipt.targets == ["alpha"], "${receipt}")
+  end
+
+  it("installs a program from a path without touching its checkout") do
+    writePackage("alpha", ["alpha"])
+    let installed = tey(root, "install ./alpha")
+    assert(installed.exitCode == 0, installed.stderr)
+    assert(FS.File.file?("${home}/bin/alpha"))
+    let ran = Process.run("${home}/bin/alpha", []).try
+    assert(ran.stdout.trim == "alpha", ran.stdout + ran.stderr)
+    let receipt = Tey.Programs.decode(FS.File.read("${home}/programs/alpha/receipt.json").try).try
+    assert(receipt.sourcePath == "${root}/alpha", receipt.sourcePath)
+    assert(!receipt.sourceDigest.empty?, "no source digest")
+    assert(FS.File.file?("${home}/programs/alpha/build/package.kex"))
+    assert(!FS.Directory.directory?("${root}/alpha/ebin"), "built inside the checkout")
+    assert(!FS.File.file?("${root}/alpha/tey.lock"), "wrote a lock into the checkout")
+    assert(FS.Directory.directories("${home}/staging").or([]).empty?, "left a staging tree behind")
+  end
+
+  it("refuses a library with a pointer to `tey add`") do
+    writePackage("helpers", [])
+    let refused = tey(root, "install ./helpers")
+    assert(refused.exitCode != 0, "installed a library")
+    assert(refused.stderr.contains?("tey add"), refused.stderr)
+    assert(!FS.Directory.directory?("${home}/programs/helpers"))
+  end
+
+  it("installs a workspace member, and asks which one at the root") do
+    FS.Directory.create("${root}/ws/packages/cli/src")
+    FS.File.write("${root}/ws/package.kex", `
+      package "ws" do
+        kex(">= 0.3.0")
+        workspace do
+          members(["packages/*"])
+        end
+      end
+    `)
+    FS.File.write("${root}/ws/packages/cli/package.kex", `
+      package "cli" do
+        kex(">= 0.3.0")
+        target("cli")
+      end
+    `)
+    FS.File.write("${root}/ws/packages/cli/src/main.kex", "main do\n  IO.printLine(\"cli\")\nend\n")
+
+    let ambiguous = tey(root, "install ./ws")
+    assert(ambiguous.exitCode != 0, "picked a member without being told")
+    assert(ambiguous.stderr.contains?("--package"), ambiguous.stderr)
+
+    let byPath = tey(root, "install ./ws/packages/cli")
+    assert(byPath.exitCode == 0, byPath.stderr)
+    assert(FS.File.file?("${home}/bin/cli"))
+
+    let byName = tey(root, "install ./ws --package cli")
+    assert(byName.exitCode == 0, byName.stderr)
+  end
+
+  it("builds against a path dependency outside the program's workspace") do
+    FS.Directory.create("${root}/greeting/src")
+    FS.File.write("${root}/greeting/package.kex", `
+      package "greeting" do
+        kex(">= 0.3.0")
+      end
+    `)
+    FS.File.write("${root}/greeting/src/greeting.kex",
+                  "module Greeting\n\nlet text -> String = \"hello from a path dependency\"\n")
+    FS.Directory.create("${root}/hello/src")
+    FS.File.write("${root}/hello/package.kex", `
+      package "hello" do
+        kex(">= 0.3.0")
+        tey("greeting", path: "../greeting")
+        target("hello")
+      end
+    `)
+    FS.File.write("${root}/hello/src/main.kex",
+                  "using Greeting\n\nmain do\n  IO.printLine(Greeting.text)\nend\n")
+    let installed = tey(root, "install ./hello")
+    assert(installed.exitCode == 0, installed.stdout + installed.stderr)
+    let ran = Process.run("${home}/bin/hello", []).try
+    assert(ran.stdout.trim == "hello from a path dependency", ran.stdout + ran.stderr)
   end
 end
