@@ -6,12 +6,16 @@
 #include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if !defined(__EMSCRIPTEN__)
+#include <sys/random.h>  // getentropy: glibc, macOS, musl
+#endif
 #endif
 
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
 #include <random>
+#include <unordered_map>
 #include <thread>
 
 namespace {
@@ -133,6 +137,46 @@ auto Evaluator::registerProcessBuiltins() -> void {
         std::random_device source;
         std::uniform_real_distribution<double> distribution(0.0, 1.0);
         return Value::floating(distribution(source));
+    });
+
+    // Process.Shared<X> (kexhq/kex#402). The tree-walker has one address
+    // space, so a process-wide map is what persistent_term is on the BEAM.
+    // A handle is the slot's name.
+    static std::unordered_map<std::string, ValuePtr> sharedValues;
+    defineIntrinsic("Shared::named", [](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::string(args.empty() ? std::string{} : args[0]->toString());
+    });
+    defineIntrinsic("Shared::put", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() == 2) sharedValues[args[0]->toString()] = args[1];
+        return Value::unit();
+    });
+    defineIntrinsic("Shared::get", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto found = sharedValues.find(args[0]->toString());
+        return found == sharedValues.end() ? Value::none() : Value::just(found->second);
+    });
+    defineIntrinsic("Shared::delete", [](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::boolean(!args.empty() && sharedValues.erase(args[0]->toString()) > 0);
+    });
+
+    // Random.secureBytes: the OS CSPRNG through getentropy(3), which serves
+    // at most 256 bytes per call (kexhq/kex#404).
+    defineIntrinsic("Random::secureBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto* count = args.empty() ? nullptr : std::get_if<IntValue>(&args[0]->data);
+        std::vector<uint8_t> bytes(count && count->value > 0 ? static_cast<size_t>(count->value) : 0);
+#if defined(__EMSCRIPTEN__)
+        // Emscripten's random_device reads crypto.getRandomValues (or Node's
+        // crypto.randomFillSync): the host's CSPRNG.
+        std::random_device source;
+        for (auto& byte : bytes) byte = static_cast<uint8_t>(source() & 0xff);
+#else
+        for (size_t offset = 0; offset < bytes.size(); offset += 256) {
+            const auto chunk = std::min<size_t>(256, bytes.size() - offset);
+            if (::getentropy(bytes.data() + offset, chunk) != 0)
+                throw std::runtime_error("Random.secureBytes: no entropy available");
+        }
+#endif
+        return Value::binary(std::move(bytes));
     });
 
     defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {

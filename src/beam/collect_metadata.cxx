@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
 #include <functional>
@@ -666,6 +667,18 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     if (td.variants && !td.variants->empty() &&
         (td.isDistinct || kex::isTransparentTypeAlias(td)))
         te.backingType = convertTypeExpr(td.variants->front());
+    // A union of atom literals (`type FileKind = :file | :directory`) is an
+    // alias too, and without its body an importer saw an opaque `FileKind`
+    // that no `:file` could satisfy.
+    if (!te.backingType && td.variants && !td.variants->empty() &&
+        !td.isDistinct && td.typeParams.empty() &&
+        std::all_of(td.variants->begin(), td.variants->end(), [](const auto& v) {
+            return v && std::holds_alternative<kex::ast::AtomType>(v->kind);
+        })) {
+        std::vector<KexiTypePtr> members;
+        for (const auto& v : *td.variants) members.push_back(convertTypeExpr(v));
+        te.backingType = kexiUnion(std::move(members));
+    }
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.
     if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td)) {

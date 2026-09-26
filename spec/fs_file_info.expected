@@ -1,0 +1,7 @@
+file: :file 7 bytes
+modified after 2000: true
+stable: true
+directory: :directory
+missing: ReadFailed
+mocked: :file 9 1970-01-01T00:00:00Z
+mocked missing: true

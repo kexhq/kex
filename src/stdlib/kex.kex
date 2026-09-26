@@ -251,6 +251,89 @@ module Kex do
                 preRelease: Kex.Intrinsic.Kex.versionPreRelease() }
   end
 
+  # A compiled module loaded into the running program by +Kex.load+.
+  #
+  # For a program that decides at run time what code it needs: a site
+  # generator rendering a theme's templates, a plugin host. Compile the source
+  # with `kex --compile -o <dir>` once, then load the `.beam` and call it as
+  # often as needed, without starting another VM for every call
+  # (kexhq/kex#399).
+  #
+  # Every entry module is named after its file (`kex_<stem>.beam` for
+  # `<stem>.kex`), and so is everything declared at the top level of that
+  # file. A `let render = Template.html(Kex.embed(path))` written outside any
+  # `module` therefore lands in `kex_<stem>`, not in a module the file names;
+  # give each generated file a distinct name, or put the declaration inside a
+  # `module`, whose functions compile into `Kex.<Name>`.
+  #
+  # The BEAM backend only: under the interpreter, +Kex.load+ answers an error.
+  #
+  #   let theme = Kex.load("cache/kex_theme_3f2a.beam").try
+  #   let html = theme.call(:render, [context]).try
+  record LoadedModule do
+    # The module's BEAM name, e.g. +:kex_theme+ or +:"Kex.Theme"+.
+    name : Atom
+  end
+
+  # Loads the compiled module at +path+, replacing an older version of it
+  # that is already loaded. See +Kex.LoadedModule+.
+  #
+  # @param path [String] a `.beam` file written by `kex --compile`
+  # @return [Result<LoadedModule, String>] the module, or why it could not be
+  #   loaded
+  #
+  # @example
+  #   let theme = Kex.load("build/kex_theme.beam").try
+  load : String -> Result<LoadedModule, String>
+  foul load(path) = Kex.Intrinsic.Code.load(path).map { |name| LoadedModule { name: name } }
+
+  # The module already loaded under +name+, or +None+ when there is none.
+  #
+  # @param name [Atom] the module's BEAM name
+  # @return [LoadedModule?] the module
+  #
+  # @example Loading only once
+  #   let theme = Kex.loaded(:kex_theme).or(Kex.load(path).try)
+  loaded : Atom -> LoadedModule?
+  foul loaded(name) = Kex.Intrinsic.Code.loaded?(name) then Just(LoadedModule { name: name }) else None
+
+  make LoadedModule do
+    # Calls the module's function +function+ with +arguments+.
+    #
+    # A failure inside the call is an +Error+ describing it, not a crash of
+    # the caller, and so is a function the module does not export with that
+    # many arguments. A `foul` function takes one argument more than it
+    # declares, its capabilities, so call pure functions this way.
+    #
+    # @param function [Atom] the function's name
+    # @param arguments [[Any]] its arguments, in order
+    # @return [Result<Any, String>] what the function returned, or why the
+    #   call failed
+    #
+    # @example
+    #   theme.call(:render, [context])   # => Ok("<html>...")
+    call :> Atom -> [Any] -> Result<Any, String>
+    foul call(function, arguments) = Kex.Intrinsic.Code.call(@name, function, arguments)
+  end
+
+  # A non-cryptographic hash of any value: a non-negative +Integer+ below
+  # 2^32, the same for equal values.
+  #
+  # Cheap to compute over a whole structure, with no string built along the
+  # way, which suits fingerprinting data to notice when it changed. It is
+  # stable only within one running program: the number differs between the
+  # interpreter and the BEAM, and may change between Kex versions, so never
+  # store it or send it anywhere. Use +Digest+ for that, or for anything an
+  # adversary could choose collisions for.
+  #
+  # @param value [Any] the value to hash
+  # @return [Integer] the hash, from 0 up to 2^32 - 1
+  #
+  # @example Noticing that a project's files changed
+  #   let stamp = Kex.hash(paths.map { |path| (path, FS.File.info(path).try) })
+  hash : Any -> Integer
+  let hash(value) = Kex.Intrinsic.Kex.hash(value)
+
   # Which optional capabilities this build includes.
   #
   # Optional non-network capabilities in this build. Networking has its own

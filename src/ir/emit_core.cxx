@@ -592,11 +592,18 @@ struct Emitter {
                 }
                 catchBody += "\n    end";
 
-                // Rescuable: a Kex failure (`throw {kex_try_error, E}`) and an
+                // Rescuable: a Kex failure (`throw {kex_try_error, E}`), an
                 // Erlang `error` — the reason a raising Erlang call (`json:decode`)
-                // or a runtime fault (`badarith`) carries (#326). Everything else
-                // (`kex_return`, exits) re-raises untouched.
+                // or a runtime fault (`badarith`) carries (#326) — and any other
+                // Erlang `throw`, rescued as the thrown value (#400). Kex's own
+                // `kex_return` throws — the function-local `{kex_return, V}`
+                // and a block's `{kex_return, Tag, V}` (kexhq/kex#408) — and
+                // exits re-raise untouched. Rescuing the tagged form turned a
+                // block's `return` into `Error({kex_return, ...})`.
                 std::string tryErr = uniq("_E"), erlErr = uniq("_E"), erlTrc = uniq("_TrcE");
+                std::string returned = uniq("_Ret"), retTrc = uniq("_TrcR");
+                std::string tag = uniq("_Tag"), tagged = uniq("_Ret"), taggedTrc = uniq("_TrcR");
+                std::string thrown = uniq("_E"), thrTrc = uniq("_TrcT");
                 std::string unrescuable = freshWild();
                 return "try\n    " + body + "\n"
                        "of <" + rv + "> -> " + rv + "\n"
@@ -604,6 +611,12 @@ struct Emitter {
                        "  case case <" + cls + ", " + rsn + ", " + trc + "> of\n"
                        "      <'throw', {'kex_try_error', " + tryErr + "}, " + trcAlias + "> when 'true' ->\n"
                        "        {'kex_rescuable', " + tryErr + "}\n"
+                       "      <'throw', {'kex_return', " + returned + "}, " + retTrc + "> when 'true' ->\n"
+                       "        'kex_unrescuable'\n"
+                       "      <'throw', {'kex_return', " + tag + ", " + tagged + "}, " + taggedTrc + "> when 'true' ->\n"
+                       "        'kex_unrescuable'\n"
+                       "      <'throw', " + thrown + ", " + thrTrc + "> when 'true' ->\n"
+                       "        {'kex_rescuable', " + thrown + "}\n"
                        "      <'error', " + erlErr + ", " + erlTrc + "> when 'true' ->\n"
                        "        {'kex_rescuable', " + erlErr + "}\n"
                        "      <" + c2 + ", " + r2 + ", " + tr2 + "> when 'true' -> 'kex_unrescuable'\n"

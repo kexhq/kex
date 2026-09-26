@@ -277,6 +277,10 @@ private:
                    const ast::MethodCall* methodCall = nullptr,
                    const ast::Expr* callExpr = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    // Whether `send`/`sendFrom` on this receiver is process messaging. A
+    // user type with its own `send` (a WebSocket `Connection`, say) goes
+    // through ordinary overload resolution instead (kexhq/kex#398).
+    auto isProcessSendTarget(const TypePtr& receiver) -> bool;
     // Whether `name` has an EXPLICIT `:>` contract for a receiver matching
     // `receiverType` (see m_annotatedReceiverKeys). m_annotatedMethods only
     // tracks NAMES, so an unrelated type's `:>` contract (Char's

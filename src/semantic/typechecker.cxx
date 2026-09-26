@@ -4880,7 +4880,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
             if ((node.name == "send" || node.name == "sendFrom") &&
-                argTypes.size() == 2) {
+                argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
@@ -5460,7 +5460,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
             // argTypes[0] = pid type, argTypes[1] = msg type.
             if ((node.method == "send" || node.method == "sendFrom") &&
-                argTypes.size() == 2) {
+                argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
@@ -6897,6 +6897,13 @@ auto TypeChecker::satisfiesTrait(const TypePtr& type,
             return true;
     }
     return false;
+}
+
+auto TypeChecker::isProcessSendTarget(const TypePtr& receiver) -> bool {
+    auto resolved = resolve(receiver);
+    if (auto* named = std::get_if<NamedType>(&resolved->kind))
+        return named->name == "Process" || named->name == "Pid";
+    return true;
 }
 
 auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {

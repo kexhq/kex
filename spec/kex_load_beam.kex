@@ -1,0 +1,30 @@
+# kex: run-beam
+#
+# `Kex.load` and `Kex.LoadedModule.call` (kexhq/kex#399): loading a module
+# compiled with `kex --compile` into the running program and calling it,
+# which a program used to do with `BEAM.code.load_abs`, `BEAM.rpc.call` and
+# checking raw tuples. Every failure is an `Error`, not a crash.
+
+main do
+  let root = "${FS.Directory.current}/.kex_spec_load"
+  FS.Directory.deleteAll(root)
+  FS.Directory.create("${root}/out")
+  FS.File.write("${root}/theme_3f2a.kex", `
+    let greet(name: String) -> String = "Hello, ${name}!"
+    let divide(x: Integer) -> Integer = 10 / x
+  `)
+  let build = Process.run("${FS.Directory.current}/build/kex",
+    ["--compile", "-o", "${root}/out", "${root}/theme_3f2a.kex"]).try
+  IO.printLine("compiled: ${build.exitCode}")
+
+  let theme = Kex.load("${root}/out/kex_theme_3f2a.beam").try
+  IO.printLine("loaded: ${theme.name}")
+  IO.printLine("call: ${theme.call(:greet, ["Ada"])}")
+  IO.printLine("raised: ${theme.call(:divide, [0])}")
+  IO.printLine("unexported: ${theme.call(:greet, [])}")
+  IO.printLine("already loaded: ${Kex.loaded(:kex_theme_3f2a) != None}")
+  IO.printLine("never loaded: ${Kex.loaded(:kex_theme_none) != None}")
+  IO.printLine("missing file: ${Kex.load("${root}/out/nope.beam").error?}")
+
+  FS.Directory.deleteAll(root)
+end

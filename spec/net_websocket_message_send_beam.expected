@@ -1,0 +1,5 @@
+binary: [1, 2, 3]
+sent ok: true
+text: typed
+unused result: [9]
+ok

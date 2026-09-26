@@ -7,6 +7,61 @@ namespace kex::interpreter {
 
 namespace {
 
+// Kex.hash: a structural hash over a value, so values that are equal hash
+// equal (kexhq/kex#403). Map and record entries are combined
+// order-independently, since neither has an order equality looks at.
+auto mixHash(uint64_t seed, uint64_t value) -> uint64_t {
+    return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+
+auto hashValue(const ValuePtr& value) -> uint64_t {
+    if (!value) return 0;
+    std::hash<std::string> text;
+    return std::visit([&](const auto& node) -> uint64_t {
+        using T = std::decay_t<decltype(node)>;
+        const uint64_t kind = value->data.index();
+        if constexpr (std::is_same_v<T, IntValue>) {
+            return mixHash(kind, std::hash<int64_t>{}(node.value));
+        } else if constexpr (std::is_same_v<T, BigIntValue>) {
+            return mixHash(kind, text(node.value.get_str(16)));
+        } else if constexpr (std::is_same_v<T, FloatValue>) {
+            return mixHash(kind, std::hash<double>{}(node.value));
+        } else if constexpr (std::is_same_v<T, StringValue>) {
+            return mixHash(kind, text(node.value));
+        } else if constexpr (std::is_same_v<T, BinaryValue>) {
+            return mixHash(kind, text(std::string(node.bytes.begin(), node.bytes.end())));
+        } else if constexpr (std::is_same_v<T, CharValue>) {
+            return mixHash(kind, node.value);
+        } else if constexpr (std::is_same_v<T, BoolValue>) {
+            return mixHash(kind, node.value ? 1 : 0);
+        } else if constexpr (std::is_same_v<T, AtomValue>) {
+            return mixHash(kind, text(node.name));
+        } else if constexpr (std::is_same_v<T, VariantValue>) {
+            uint64_t seed = mixHash(kind, text(node.tag));
+            for (const auto& arg : node.args) seed = mixHash(seed, hashValue(arg));
+            return seed;
+        } else if constexpr (std::is_same_v<T, ListValue> ||
+                             std::is_same_v<T, TupleValue>) {
+            uint64_t seed = kind;
+            for (const auto& element : node.elements)
+                seed = mixHash(seed, hashValue(element));
+            return seed;
+        } else if constexpr (std::is_same_v<T, MapValue>) {
+            uint64_t entries = 0;
+            for (const auto& [key, item] : node.entries)
+                entries += mixHash(hashValue(key), hashValue(item));
+            return mixHash(kind, entries);
+        } else if constexpr (std::is_same_v<T, RecordValue>) {
+            uint64_t fields = 0;
+            for (const auto& [name, item] : node.fields)
+                fields += mixHash(text(name), hashValue(item));
+            return mixHash(mixHash(kind, text(node.typeName)), fields);
+        } else {
+            return mixHash(kind, text(value->toString()));
+        }
+    }, value->data);
+}
+
 // An Erlang external term as a Kex value. The KexI chunk is a plain tree of
 // tuples, lists, atoms, integers and binaries, so it maps across directly and
 // a Kex program can walk it with ordinary pattern matching.
@@ -143,13 +198,32 @@ auto Evaluator::registerKexBuiltins() -> void {
         return Value::atom("other");
     });
 
+    // A non-negative Integer below 2^32, like `erlang:phash2/2` on BEAM.
+    defineIntrinsic("Kex::hash", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto hash = args.empty() ? 0 : hashValue(args[0]);
+        return Value::integer(static_cast<int64_t>((hash ^ (hash >> 32)) & 0xffffffffULL));
+    });
+
+    // Kex.Code (kexhq/kex#399): loading compiled modules is a BEAM matter.
+    defineIntrinsic("Code::load", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::error(Value::string(
+            "Kex.load needs the BEAM backend; the interpreter cannot load compiled modules"));
+    });
+    defineIntrinsic("Code::loaded?", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::boolean(false);
+    });
+    defineIntrinsic("Code::call", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::error(Value::string(
+            "Kex.LoadedModule.call needs the BEAM backend; the interpreter cannot call compiled modules"));
+    });
+
     defineIntrinsic("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         return makeVariant("Interpreter");
     });
 
     // The BEAM's JSON fast path (kex_intrinsic_json.erl). The interpreter has
     // none, so both answer None and json.kex runs its own parser/encoder.
-    for (const char* name : {"Json::decode", "Json::encode"})
+    for (const char* name : {"Json::decode", "Json::decodeCommented", "Json::encode"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
             return Value::none();
         });

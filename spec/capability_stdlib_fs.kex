@@ -38,6 +38,7 @@ make FakeFiles, implement: FS.File do
   foul absolute(path) = Just(path)
   foul canonical(path) = Ok(path)
   foul symlink?(path) = false
+  foul info(path) = Error(ReadFailed(path))
 end
 
 foul load(p: String) -> String = FS.File.read(p).or("(missing)")

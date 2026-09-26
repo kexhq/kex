@@ -1661,6 +1661,21 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
                     addOwn(vf->get());
     }
 
+    if (def.isServing) {
+        auto noteCast = [&](const ast::FunctionDef* fd) {
+            if (!fd || !fd->isSlot) return;
+            for (const auto& clause : fd->clauses)
+                if (clause.returnAnnotation && *clause.returnAnnotation)
+                    if (const auto* named = std::get_if<ast::TypeName>(
+                            &(*clause.returnAnnotation)->kind);
+                        named && named->parts == std::vector<std::string>{"Void"})
+                        m_castSlots.insert(fd->name);
+        };
+        for (const auto& item : def.body)
+            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                noteCast(fn->get());
+    }
+
     // A module-scoped `make` is import-gated when it patches a FOREIGN type:
     // remember which module its methods came from, so resolveMethodName can
     // skip them where that module is not in scope. A `make` for a type the
@@ -2336,13 +2351,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (node.method == "alive?") return Value::boolean(server->scheduler->isAlive(server->pid));
                 std::vector<ValuePtr> slotArgs;
                 for (const auto& arg : node.args) slotArgs.push_back(arg ? eval(*arg) : Value::none());
-                bool isCast = false;
+                std::optional<bool> isCastByType;
                 if (m_expressionTypes)
                     if (auto found = m_expressionTypes->find(&expr);
                         found != m_expressionTypes->end() && found->second) {
-                        const auto type = semantic::typeToString(found->second);
-                        isCast = type == "Void" || type == "Unit";
+                        const auto& kind = found->second->kind;
+                        if (!std::holds_alternative<semantic::UnknownType>(kind) &&
+                            !std::holds_alternative<semantic::TypeVar>(kind)) {
+                            const auto type = semantic::typeToString(found->second);
+                            isCastByType = type == "Void" || type == "Unit";
+                        }
                     }
+                const bool isCast = isCastByType ? *isCastByType
+                                                 : m_castSlots.count(node.method) > 0;
                 if (isCast) {
                     server->scheduler->castServer(server->pid, node.method,
                                                   std::move(slotArgs));
