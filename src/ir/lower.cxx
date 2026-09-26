@@ -312,6 +312,9 @@ struct Lowering {
     // Ordinary helpers share the compiled module but must never become OTP
     // request handlers merely because erlang:apply/3 can see them.
     std::unordered_map<std::string, std::vector<std::string>> servingSlotsByType;
+    // Slots declared to return Void: asynchronous casts, the rule the
+    // checker's `isServingCast` applies.
+    std::unordered_set<std::string> servingCastSlots;
     // Serving types whose block declares an `upgrade` method — the hook the
     // serving runtime runs on a live state after a hot reload.
     std::set<std::string> servingUpgradeTypes;
@@ -7669,6 +7672,48 @@ struct Lowering {
                             break;
                         }
             }
+            // A slot's implementation is also where a call on a `Server` the
+            // checker could not type ends up: one read back from
+            // `Process.Shared` or from BEAM interop is `Any` statically, so
+            // `server.broadcast(x)` lowers to this function and not to
+            // `server_call` (kexhq/kex#402). Send such a call to the server,
+            // as the typed call would have.
+            const bool isSlot = std::any_of(
+                servingSlotsByType.begin(), servingSlotsByType.end(),
+                [&](const auto& entry) {
+                    return std::find(entry.second.begin(), entry.second.end(),
+                                     first.name) != entry.second.end();
+                });
+            if (isSlot) {
+                FunClause toServer;
+                std::vector<ExprPtr> slotArgs;
+                for (int i = 0; i < def.arity; ++i) {
+                    auto param = std::make_unique<Pattern>();
+                    param->kind = PatKind::Var;
+                    param->name = "_serverSlot" + std::to_string(i);
+                    toServer.params.push_back(std::move(param));
+                    if (i > 0 && i < noReceiverArity)
+                        slotArgs.push_back(var("_serverSlot" + std::to_string(i)));
+                }
+                toServer.guard = callE("erlang", "is_record", 3,
+                    three(var("_serverSlot0"), lit(LitKind::Atom, "Server"),
+                          lit(LitKind::Int, "3")));
+                auto argsList = std::make_unique<Expr>();
+                argsList->node = MakeList{std::move(slotArgs), std::nullopt};
+                std::vector<ExprPtr> callArgs;
+                callArgs.push_back(var("_serverSlot0"));
+                callArgs.push_back(lit(LitKind::Atom, first.name));
+                callArgs.push_back(std::move(argsList));
+                if (servingCastSlots.count(first.name)) {
+                    toServer.body = callE("kex_intrinsic_process", "server_cast", 3,
+                                          std::move(callArgs));
+                } else {
+                    callArgs.push_back(lit(LitKind::Atom, "default"));
+                    toServer.body = callE("kex_intrinsic_process", "server_call", 4,
+                                          std::move(callArgs));
+                }
+                def.clauses.push_back(std::move(toServer));
+            }
             if (provider)
                 fallback.body = callE(provider->moduleAtom,
                                       provider->beamFunction, noReceiverArity,
@@ -8182,7 +8227,10 @@ struct Lowering {
                         pat->litText = tag;
                         mc.patterns.push_back(std::move(pat));
                     } else {
-                        // Payload variant: tuple pattern {Tag, _}.
+                        // Payload variant: tuple pattern {Tag, _, ...}, one
+                        // wildcard per field. A fixed {Tag, _} matched only
+                        // one-field constructors, so `Node(v, l, r)` fell
+                        // through to the next owner's clause.
                         auto pat = std::make_unique<Pattern>();
                         pat->kind = PatKind::Tuple;
                         auto tagPat = std::make_unique<Pattern>();
@@ -8190,9 +8238,13 @@ struct Lowering {
                         tagPat->litKind = LitKind::Atom;
                         tagPat->litText = tag;
                         pat->args.push_back(std::move(tagPat));
-                        auto wild = std::make_unique<Pattern>();
-                        wild->kind = PatKind::Wild;
-                        pat->args.push_back(std::move(wild));
+                        const auto fields = variantArity.count(tag)
+                            ? std::max(1, variantArity.at(tag)) : 1;
+                        for (int field = 0; field < fields; ++field) {
+                            auto wild = std::make_unique<Pattern>();
+                            wild->kind = PatKind::Wild;
+                            pat->args.push_back(std::move(wild));
+                        }
                         mc.patterns.push_back(std::move(pat));
                     }
                     std::vector<ExprPtr> args;
@@ -8837,6 +8889,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 auto& slots = L.servingSlotsByType[typeName];
                 if (std::find(slots.begin(), slots.end(), fd->name) == slots.end())
                     slots.push_back(fd->name);
+                for (const auto& clause : fd->clauses)
+                    if (clause.returnAnnotation && *clause.returnAnnotation)
+                        if (const auto* named = std::get_if<ast::TypeName>(
+                                &(*clause.returnAnnotation)->kind);
+                            named && named->parts == std::vector<std::string>{"Void"})
+                            L.servingCastSlots.insert(fd->name);
             }
             if (md.isServing && !fd->isSlot && fd->name == "upgrade")
                 L.servingUpgradeTypes.insert(typeName);

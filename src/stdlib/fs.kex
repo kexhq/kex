@@ -55,6 +55,24 @@ module FS do
     | ReadFailed(FilePath)
     | InvalidUtf8(FilePath, Integer)
 
+  # What a path names, as +FS.File.info+ reports it: a regular +:file+, a
+  # +:directory+, a +:symlink+ (the link itself, never what it points at), or
+  # +:other+ for devices, sockets and pipes.
+  type FileKind = :file | :directory | :symlink | :other
+
+  # What one +stat+ of a path says about it.
+  record FileInfo do
+    # Which kind of entry the path names.
+    kind : FileKind
+
+    # The size in bytes. For a symlink, the length of the path it holds.
+    size : Integer
+
+    # When the contents last changed, at UTC, to the whole second: the
+    # precision the BEAM reports.
+    modified : DateTime
+  end
+
   # Reading and writing files.
   #
   # A capability: every member reaches the real filesystem, so a test can
@@ -468,6 +486,32 @@ module FS do
     #   FS.File.symlink?("current")   # => true
     symlink? : FilePath -> Bool
     foul symlink?(path) = Kex.Intrinsic.File.symlink?(path)
+
+    # The kind, size and modification time of +path+, read in one +lstat+.
+    #
+    # One call answers what +file?+, +directory?+, +symlink?+ and +size+
+    # would otherwise ask separately, which is what walking a tree or
+    # fingerprinting it for changes wants. A symlink is described as itself,
+    # not followed.
+    #
+    # @param path [FilePath] the path to inspect
+    # @return [Result<FileInfo, FileError>] what the path names, or
+    #   +ReadFailed+ when it cannot be read
+    #
+    # @example
+    #   FS.File.info("hello.txt").try.size   # => 6
+    #   FS.File.info("src").try.kind         # => :directory
+    #   FS.File.info("nowhere")              # => Error(ReadFailed("nowhere"))
+    #
+    # @example Noticing that a file changed
+    #   let before = FS.File.info(path).try
+    #   ...
+    #   let changed = FS.File.info(path).try != before
+    info : FilePath -> Result<FileInfo, FileError>
+    foul info(path) = match Kex.Intrinsic.File.info(path) do
+      Just((kind, size, modified)) => Ok(FileInfo { kind: kind, size: size, modified: DateTime.fromEpochSeconds(modified) })
+      None => Error(ReadFailed(path))
+    end
   end
 
   # Path arithmetic: joining, splitting, normalising and comparing paths.

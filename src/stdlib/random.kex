@@ -15,6 +15,7 @@
 #   let (second, afterSecond) = afterFirst.integer(1..6)
 #
 # These generators are not cryptographic; do not use their output for secrets.
+# +Random.secureBytes+ and +Random.token+ are, and are what secrets come from.
 module Random do
   # Immutable state of a deterministic random sequence.
   #
@@ -147,6 +148,29 @@ module Random do
     let (value, _) = drawSample(fresh, items, items.count)
     value
   end
+
+  # Returns +count+ bytes from the operating system's cryptographically
+  # secure generator: the source for keys, session tokens and unguessable
+  # identifiers, which the generators above must never be used for.
+  #
+  # Nothing about it is reproducible, and there is no +Generator+ form.
+  #
+  # @param count [Integer] how many bytes; zero or less gives an empty binary
+  # @return [Binary] the random bytes
+  #
+  # @example A 256-bit key
+  #   let key = Random.secureBytes(32)
+  foul secureBytes(count: Integer) -> Binary = Kex.Intrinsic.Random.secureBytes(count)
+
+  # Returns an unguessable token: +bytes+ secure random bytes, as lowercase
+  # hex, so the text is twice as long as +bytes+.
+  #
+  # @param bytes [Integer] how many random bytes the token carries
+  # @return [String] the token
+  #
+  # @example A session identifier
+  #   let session = Random.token(32)   # => "9f86d081884c7d65..." (64 characters)
+  foul token(bytes: Integer = 32) -> String = secureBytes(bytes).hex
 
   private do
     let drawInteger(source: Generator, range: Range<Integer>) -> (Integer, Generator) do

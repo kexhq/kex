@@ -345,6 +345,8 @@ module Tey.Docgen.Index do
     let packageDir = FS.Path.join(out, model.package)
     ensureDirectory(packageDir)
     let _ = FS.File.write(FS.Path.join(packageDir, "index.html"),
+                          Tey.Docgen.Html.packageRedirectHtml(model.package, versions))
+    let _ = FS.File.write(FS.Path.join(packageDir, "versions.html"),
                           Tey.Docgen.Html.packageVersionsHtml(model.package, versions))
     let _ = FS.File.write(FS.Path.join(out, "llms.txt"), llmsTxt(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "llms-full.txt"), llmsFullTxt(pages, model))

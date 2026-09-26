@@ -1080,7 +1080,7 @@ private do
       status = outcome if outcome != 0
       let output = "${Tey.Commands.outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output)
+        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
           IO.printLine("  Target  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
@@ -1114,7 +1114,7 @@ private do
       status = outcome if outcome != 0
       let output = "${outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output)
+        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
           IO.printLine("  Target  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
@@ -1136,8 +1136,16 @@ private do
   # The result carries the same OTP floor as any other beam: it cannot be run
   # by an Erlang older than the one that compiled it, and that failure reads
   # as `corrupt atom table`.
-  foul writeEscript(from: String, output: String) -> Bool do
-    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_main\"}, {archive,B,[]}]), halt()."
+  #
+  # The escript starts in the runtime's `kex_escript`, not in the program:
+  # `escript` passes arguments as charlists, and `kex_escript` converts them
+  # to the `[String]` that `main(args)` gets under `kex --run` too
+  # (kexhq/kex#406). `-kex_entry` names the program's module, which is
+  # `kex_<stem>` for the entrypoint's file — `kex_main` only when that file
+  # is `main.kex`.
+  foul writeEscript(from: String, output: String, entrypoint: String) -> Bool do
+    let entry = "kex_${FS.Path.stem(entrypoint)}"
+    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_escript -kex_entry ${entry}\"}, {archive,B,[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
       Error(_) => return false
       Ok(result) => do

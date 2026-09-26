@@ -3,6 +3,7 @@
 #include "../../common/utf8.hxx"
 #include "lazy.hxx"
 #include <filesystem>
+#include <sys/stat.h>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -789,6 +790,29 @@ auto Evaluator::registerFileBuiltins() -> void {
         fileError->data = VariantValue{
             "ReadFailed", "FileError", {Value::string(path)}, {}, {}};
         return Value::error(fileError);
+    });
+
+    // File.info(path) -> ((Atom, Integer, Integer))?: kind, size and
+    // modification time in epoch seconds, from one lstat (kexhq/kex#401).
+    // Whole seconds, because that is all OTP's file_info reports on BEAM.
+    reg("File::info", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* pathStr = std::get_if<StringValue>(&args[0]->data);
+        if (!pathStr) return Value::none();
+        if (auto mocked = mockFileContent(pathStr->value))
+            return Value::just(Value::tuple(
+                {Value::atom("file"),
+                 Value::integer(static_cast<int64_t>(mocked->size())),
+                 Value::integer(0)}));
+        struct stat info {};
+        if (::lstat(pathStr->value.c_str(), &info) != 0) return Value::none();
+        const char* kind = S_ISREG(info.st_mode)   ? "file"
+                           : S_ISDIR(info.st_mode) ? "directory"
+                           : S_ISLNK(info.st_mode) ? "symlink"
+                                                   : "other";
+        return Value::just(Value::tuple(
+            {Value::atom(kind), Value::integer(static_cast<int64_t>(info.st_size)),
+             Value::integer(static_cast<int64_t>(info.st_mtime))}));
     });
 
     // File.symlink?(path) -> Bool, without following the link (lstat).

@@ -102,12 +102,12 @@ private do
 
     let allowComments = Kex.Intrinsic.Map.getWithDefault(options, allowCommentsKey(), false)
     # On BEAM, OTP's own decoder builds the same value in a fraction of the
-    # time (kexhq/kex#333). It answers None for anything it will not vouch
-    # for — invalid input, JSONC, the tree-walker — and this parser runs.
-    if !allowComments
-      if let Just(value) = Kex.Intrinsic.Json.decode(text)
-        return Ok(value)
-      end
+    # time (kexhq/kex#333), JSONC included once its comments are blanked out
+    # (kexhq/kex#405). It answers None for anything it will not vouch for —
+    # invalid input, the tree-walker — and this parser runs.
+    let fast = allowComments then Kex.Intrinsic.Json.decodeCommented(text) else Kex.Intrinsic.Json.decode(text)
+    if let Just(value) = fast
+      return Ok(value)
     end
     let cursor = skipIgnored(Input { input: text }, allowComments).try
     let (value, afterValue) = parseValue(cursor, allowComments).try

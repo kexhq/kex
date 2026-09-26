@@ -37,6 +37,7 @@ make FakeFiles, implement: FS.File do
   foul append(path, content) = false
   foul directory?(path) = false
   foul symlink?(path) = false
+  foul info(path) = Error(ReadFailed(path))
   foul delete(path) = false
   foul copy(src, dst) = false
   foul rename(src, dst) = false

@@ -1,3 +1,4 @@
 decoded Integer
 rescued :badarg
 rescued
+rescued thrown :oops
