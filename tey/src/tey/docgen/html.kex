@@ -175,12 +175,61 @@ module Tey.Docgen.Html do
     return "<div class=\"cards\">\n${cards}\n</div>"
   end
 
-  # <pkg>/index.html: the versions of one package, newest first — the page a
-  # reader lands on when they want a different release of what they are
+  # The version a reader gets by default: the highest release by semantic
+  # version, never an unreleased `-dev` build while a release exists.
+  # versions.json is in BUILD order, newest build first, and
+  # tools/build-docs.sh builds the working tree last, so its first entry is
+  # usually the -dev build rather than the latest release.
+  foul latestVersion(packageName: String, versions: [VersionEntry]) -> VersionEntry? do
+    let mine = versions.filter { |v| v.package == packageName }
+    let released = mine.filter { |v| !v.id.endsWith?("-dev") }
+    let pool = released.empty? then mine else released
+    match Tey.Semver.newestFirst(pool.map { |v| v.id }).first do
+      Just(id) => return pool.find { |v| v.id == id }
+      None => return None
+    end
+  end
+
+  # One package's versions, highest first by semantic version.
+  foul versionsNewestFirst(packageName: String, versions: [VersionEntry]) -> [VersionEntry] do
+    let mine = versions.filter { |v| v.package == packageName }
+    return Tey.Semver.newestFirst(mine.map { |v| v.id }).flatMap { |id|
+      mine.filter { |v| v.id == id }
+    }
+  end
+
+  # <pkg>/index.html: straight on to the latest version, so a link to a
+  # package lands on its reference rather than on a list of builds. Every
+  # other version stays one click away, at versions.html.
+  foul packageRedirectHtml(packageName: String, versions: [VersionEntry]) -> String do
+    match latestVersion(packageName, versions) do
+      None => return packageVersionsHtml(packageName, versions)
+      Just(latest) => do
+        let target = "${esc(latest.id)}/index.html"
+        return $`
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>${esc(packageName)} | kex docs</title>
+          <meta http-equiv="refresh" content="0; url=${target}">
+          <link rel="canonical" href="${target}">
+          </head>
+          <body>
+          <p><a href="${target}">${esc(latest.label)} ${esc(latest.id)}</a> · <a href="versions.html">all versions</a></p>
+          </body>
+          </html>
+        `
+      end
+    end
+  end
+
+  # <pkg>/versions.html: the versions of one package, newest first — the page
+  # a reader lands on when they want a different release of what they are
   # reading. What the ids MEAN is the package's own story: a library's own
   # releases, the stdlib's Kex releases. The page does not need to know.
   foul packageVersionsHtml(packageName: String, versions: [VersionEntry]) -> String do
-    let mine = versions.filter { |v| v.package == packageName }
+    let mine = versionsNewestFirst(packageName, versions)
     let cards = mine.map { |v| versionCard(v) }.join("\n")
     return $`
       <!DOCTYPE html>
@@ -421,10 +470,9 @@ module Tey.Docgen.Html do
   end
 
   foul packageCard(name: String, versions: [VersionEntry]) -> String do
-    let newest = versions.find { |v| v.package == name }
     let count = versions.filter { |v| v.package == name }.count
-    return match newest do
-      Just(v) => "<a class=\"card\" href=\"${esc(name)}/index.html\"><span class=\"card-title\">${esc(v.label)}</span><span class=\"card-meta\">${esc(name)} · latest ${esc(v.id)} · ${count} version(s)</span></a>"
+    return match latestVersion(name, versions) do
+      Just(v) => "<a class=\"card\" href=\"${esc(name)}/${esc(v.id)}/index.html\"><span class=\"card-title\">${esc(v.label)}</span><span class=\"card-meta\">${esc(name)} · latest ${esc(v.id)} · ${count} version(s)</span></a>"
       None => ""
     end
   end

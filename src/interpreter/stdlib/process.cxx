@@ -6,8 +6,8 @@
 #include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#if defined(__APPLE__)
-#include <sys/random.h>  // getentropy
+#if !defined(__EMSCRIPTEN__)
+#include <sys/random.h>  // getentropy: glibc, macOS, musl
 #endif
 #endif
 
@@ -164,11 +164,18 @@ auto Evaluator::registerProcessBuiltins() -> void {
     defineIntrinsic("Random::secureBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* count = args.empty() ? nullptr : std::get_if<IntValue>(&args[0]->data);
         std::vector<uint8_t> bytes(count && count->value > 0 ? static_cast<size_t>(count->value) : 0);
+#if defined(__EMSCRIPTEN__)
+        // Emscripten's random_device reads crypto.getRandomValues (or Node's
+        // crypto.randomFillSync): the host's CSPRNG.
+        std::random_device source;
+        for (auto& byte : bytes) byte = static_cast<uint8_t>(source() & 0xff);
+#else
         for (size_t offset = 0; offset < bytes.size(); offset += 256) {
             const auto chunk = std::min<size_t>(256, bytes.size() - offset);
             if (::getentropy(bytes.data() + offset, chunk) != 0)
                 throw std::runtime_error("Random.secureBytes: no entropy available");
         }
+#endif
         return Value::binary(std::move(bytes));
     });
 

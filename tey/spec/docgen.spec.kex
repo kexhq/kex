@@ -1,6 +1,6 @@
 using Tey.Docgen.Model
 using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?, parentTitleOf, topLevelPages, childPages, descendantPages]
-using Tey.Docgen.Html, only: [packageNames, linkType, linkTypeText, preludePaths]
+using Tey.Docgen.Html, only: [packageNames, latestVersion, packageRedirectHtml, packageVersionsHtml, rootIndexHtml, linkType, linkTypeText, preludePaths]
 using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle, functionEntries]
 using Tey.Docgen.Index, only: [upsertVersion]
 using Tey.Docgen.Rdoc, only: [parseDoc]
@@ -207,6 +207,41 @@ describe("Tey.Docgen.Html.packageNames") do
     let versions = [versionEntry("prelude", "0.4"), versionEntry("tey", "0.2"),
                     versionEntry("prelude", "0.3"), versionEntry("tey", "0.1")]
     assert(packageNames(versions) == ["prelude", "tey"])
+  end
+end
+
+# A reader following a link to a package gets its latest release, not a list
+# of every build: versions.json is in build order, and build-docs.sh builds
+# the unreleased -dev checkout last.
+describe("Tey.Docgen.Html.latestVersion") do
+  let versions = [versionEntry("prelude", "0.4.0-beta.2-dev"), versionEntry("tey", "0.2.0"),
+                  versionEntry("prelude", "0.3.4"), versionEntry("prelude", "0.4.0-beta.2"),
+                  versionEntry("prelude", "0.4.0-alpha")]
+
+  it("picks the highest release, not the newest build") do
+    assert(latestVersion("prelude", versions).map { |v| v.id } == Just("0.4.0-beta.2"))
+    assert(latestVersion("tey", versions).map { |v| v.id } == Just("0.2.0"))
+  end
+
+  it("falls back to a -dev build when nothing is released") do
+    let local = [versionEntry("prelude", "0.5.0-dev")]
+    assert(latestVersion("prelude", local).map { |v| v.id } == Just("0.5.0-dev"))
+    assert(latestVersion("missing", local) == None)
+  end
+
+  it("sends the package index and the root card to that version") do
+    let redirect = packageRedirectHtml("prelude", versions)
+    assert(redirect.contains?("url=0.4.0-beta.2/index.html"), redirect)
+    assert(redirect.contains?("href=\"versions.html\""), redirect)
+    assert(rootIndexHtml(versions).contains?("href=\"prelude/0.4.0-beta.2/index.html\""))
+  end
+
+  it("lists every version highest first on versions.html") do
+    let page = packageVersionsHtml("prelude", versions)
+    let beforeOld = page.split("\"0.3.4/index.html").first.or("")
+    assert(beforeOld != page, page)
+    assert(beforeOld.contains?("\"0.4.0-beta.2/index.html"), page)
+    assert(page.contains?("\"0.4.0-beta.2-dev/index.html"), page)
   end
 end
 
