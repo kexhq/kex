@@ -7,7 +7,7 @@ using Tey.Local, only: [Override, load, remove, set, validateAgainstLock]
 using Tey.Manifest, only: [Command, ManifestPackage, Plugin, read]
 using Tey.Resolver, only: [resolvePackage, resolveWorkspace]
 using Tey.Plugin, only: [approved?, Binding]
-using Tey.Programs, only: [Claim, GitSource, InstalledName, PathSource, Receipt]
+using Tey.Programs, only: [Claim, GitSource, InstallOptions, InstalledName, PathSource, Receipt]
 using Tey.PluginHost, only: [Invocation]
 using Tey.Toolchain, only: [kex]
 using Tey.Workspace, only: [Context, Member, discover, select]
@@ -150,20 +150,127 @@ foul fetchAll(dependencies: [Tey.Lockfile.Dependency]) -> Void or! String do
   return Tey.Commands.fetchAll(dependencies.drop(1))
 end
 
-# `tey install <argument>`: a program, from a path for now. A Git URL and an
-# installed program's name (reinstalling it) are the next steps of
-# docs/plan_tey_global_install.md.
-foul installProgram(argument: String, packageName: String, force?: Bool) -> Integer do
-  match Tey.Programs.classify(argument) do
-    PathSource(path) => return Tey.Commands.installFromPath(path, packageName, force?)
-    GitSource(url) => return Tey.Commands.fail("installing from a Git URL is not supported yet: ${url}")
-    InstalledName(name) => do
-      match Tey.Programs.load(name) do
-        Just(receipt) => return Tey.Commands.fail("`${name}` is already installed; reinstall it with `tey install ${receipt.sourcePath}`")
-        None => return Tey.Commands.fail("`${name}` is not a path, a Git URL, or an installed program")
-      end
+# `tey install <argument>...`: a program from a path or a Git URL, or
+# installed programs updated by name. Several arguments must all be names —
+# a source is one program, with its own options.
+foul installPrograms(arguments: [String], options: InstallOptions) -> Integer do
+  return Tey.Commands.installProgram(arguments.first.or(""), options) if arguments.count == 1
+  let sources = arguments.filter do |argument|
+    match Tey.Programs.classify(argument) do
+      InstalledName(_) => false
+      _ => true
     end
   end
+  if !sources.empty?
+    return Tey.Commands.fail("install one path or Git URL at a time; several arguments must all be installed programs' names (${sources.join(", ")})")
+  end
+  var failures: [String] = []
+  arguments.each do |name|
+    failures.push!(name) if Tey.Commands.reinstallProgram(name, options) != 0
+    ()
+  end
+  return 0 if failures.empty?
+  return Tey.Commands.fail("could not update ${failures.join(", ")}")
+end
+
+foul installProgram(argument: String, options: InstallOptions) -> Integer do
+  match Tey.Programs.classify(argument) do
+    PathSource(path) => return Tey.Commands.installFromPath(path, options)
+    GitSource(url) => return Tey.Commands.installFromGit(url, options)
+    InstalledName(name) => return Tey.Commands.reinstallProgram(name, options)
+  end
+end
+
+# `tey install <name>`: installs an installed program again from where its
+# receipt says it came from — which is what updating it means. A tag or an
+# exact commit stays pinned unless a new `--tag`/`--branch`/`--ref` is given;
+# a branch (or HEAD) and a path are rebuilt only when their commit or content
+# moved, unless `--rebuild` says to anyway (a new Erlang, a compiler fix).
+foul reinstallProgram(name: String, options: InstallOptions) -> Integer do
+  let receipt = match Tey.Programs.load(name) do
+    None => return Tey.Commands.fail("`${name}` is not a path, a Git URL, or an installed program")
+    Just(value) => value
+  end
+  match Tey.Programs.pinnedReason(receipt, options) do
+    Just(reason) => do
+      IO.printLine(reason)
+      return 0
+    end
+    None => ()
+  end
+  let base = InstallOptions {
+    ...options,
+    packageName: options.packageName == "" then receipt.name else options.packageName,
+    targets: options.targets.empty? then receipt.selectedTargets else options.targets
+  }
+  if receipt.sourceKind == "git"
+    let again = options.pinned? then base else InstallOptions {
+      ...base,
+      selector: receipt.sourceSelector == "" then "ref" else receipt.sourceSelector,
+      requested: receipt.sourceRequested == "" then "HEAD" else receipt.sourceRequested
+    }
+    if !options.rebuild?
+      let pin = match Tey.Git.pinRef(receipt.sourcePath, again.selector, again.requested) do
+        Error(error) => return Tey.Commands.fail(error.trim)
+        Ok(value) => value
+      end
+      let (_, commit) = pin
+      if commit == receipt.sourceCommit
+        IO.printLine("${name} is up to date at ${Tey.Programs.pinText(receipt)}")
+        return 0
+      end
+    end
+    return Tey.Commands.installFromGit(receipt.sourcePath, again)
+  end
+  if !FS.Directory.directory?(receipt.sourcePath)
+    return Tey.Commands.fail("`${name}` was installed from ${receipt.sourcePath}, which no longer exists")
+  end
+  if !options.rebuild? && receipt.sourceDigest != ""
+    let unchanged = Tey.Workspace.discover(receipt.sourcePath).flatMap do |context|
+      Tey.Snapshot.contentDigest(context.workspaceRoot)
+    end == Ok(receipt.sourceDigest)
+    if unchanged
+      IO.printLine("${name} is up to date with ${receipt.sourcePath}")
+      return 0
+    end
+  end
+  return Tey.Commands.installFromPath(receipt.sourcePath, base)
+end
+
+# `tey uninstall <name>...`: removes the programs each receipt owns, then the
+# receipt and the build tree it came from. A program that has since been
+# replaced by a file Tey did not write is left where it is, and said so.
+foul uninstallPrograms(names: [String]) -> Integer do
+  return Tey.Commands.fail("name the programs to uninstall; `tey list` shows them") if names.empty?
+  var failures = 0
+  names.each do |name|
+    let status = Tey.Commands.uninstallProgram(name)
+    failures = status if status != 0
+    ()
+  end
+  return failures
+end
+
+foul uninstallProgram(name: String) -> Integer do
+  let receipt = match Tey.Programs.load(name) do
+    None => return Tey.Commands.fail("`${name}` is not installed; `tey list` shows what is")
+    Just(value) => value
+  end
+  let binDirectory = Tey.Toolchain.binDirectory
+  receipt.targets.each do |target|
+    let path = FS.Path.join(binDirectory, target)
+    if FS.File.exists?(path) || FS.File.symlink?(path)
+      if Tey.Programs.teyBuilt?(path) && FS.File.delete(path)
+        IO.printLine("${Console.GREEN}Removed${Console.RESET} ${target} ${Console.DIM}from ${binDirectory}${Console.RESET}")
+      else
+        IO.printError("warning: left ${path}: it is no longer the program Tey installed\n")
+      end
+    end
+    ()
+  end
+  return Tey.Commands.fail("could not remove ${FS.Path.join(Tey.Programs.directory, name)}") if !Tey.Programs.remove(name)
+  IO.printLine("${Console.GREEN}Uninstalled${Console.RESET} ${name}")
+  return 0
 end
 
 # Installs the program at `path` without touching it: the workspace around it
@@ -171,7 +278,7 @@ end
 # and build, and only replaces the program's previous build tree once its
 # programs are in place. The user's checkout gains no `ebin/`, no `tey.lock`,
 # nothing.
-foul installFromPath(path: String, packageName: String, force?: Bool) -> Integer do
+foul installFromPath(path: String, options: InstallOptions) -> Integer do
   let home = ENV.get("HOME", "")
   let expanded = path == "~" || path.startsWith?("~/") then "${home}${path.drop(1)}" else path
   let source = FS.Path.absolute?(expanded) then FS.Path.normalize(expanded) else FS.Path.join(FS.Directory.current, expanded)
@@ -180,25 +287,50 @@ foul installFromPath(path: String, packageName: String, force?: Bool) -> Integer
     Error(error) => return Tey.Commands.fail("${path}: ${error}")
     Ok(value) => value
   end
-  let member = match Tey.Commands.programMember(context, packageName) do
+  let member = match Tey.Commands.programMember(context, options.packageName) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  let package: ManifestPackage = member.memberManifest
-  if package.targets.empty?
-    return Tey.Commands.fail("`${package.name}` declares no targets; it is a library. Add it to a project with `tey add`")
-  end
-  let staging = match Tey.Programs.stagingDirectory do
-    Error(error) => return Tey.Commands.fail(error)
-    Ok(value) => value
-  end
-  let status = Tey.Commands.installStaged(context, member, staging, force?)
-  FS.Directory.deleteAll(staging) if status != 0
-  return status
+  let origin = Receipt { name: "", sourceKind: "path", sourcePath: member.memberRoot }
+  return Tey.Commands.installProgramMember(context, member, options, origin)
 end
 
-# The member of `context` a path install means: the one `--package` names,
-# else the one the path is inside of.
+# Installs a program from a Git repository at the commit `--tag`, `--branch`
+# or `--ref` names (the default branch's HEAD otherwise). The commit is
+# fetched into the cache the way a dependency is, and installed from there as
+# a path is — the cache checkout itself is never built in.
+foul installFromGit(url: String, options: InstallOptions) -> Integer do
+  let pin = match Tey.Git.pinRef(url, options.selector, options.requested) do
+    Error(error) => return Tey.Commands.fail(error.trim)
+    Ok(value) => value
+  end
+  # The pin is recorded as it was asked for (`v1.0.0`), not as `ls-remote`
+  # spelled the ref it matched (`refs/tags/v1.0.0` for a lightweight tag).
+  let (_, commit) = pin
+  let requested = options.requested
+  let repository = FS.Path.stem(url.split("/").last.or(url).split(":").last.or(url))
+  let dependency = Tey.Lockfile.Dependency { name: repository, source: "git",
+                                             git: url, commit: commit }
+  let checkout = match Tey.Cache.fetch(dependency) do
+    Error(error) => return Tey.Commands.fail(error.trim)
+    Ok(value) => value
+  end
+  let context = match Tey.Workspace.discover(checkout) do
+    Error(error) => return Tey.Commands.fail("${url}: ${error}")
+    Ok(value) => value
+  end
+  let member = match Tey.Commands.programMember(context, options.packageName) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let origin = Receipt { name: "", sourceKind: "git", sourcePath: url,
+                         sourceSelector: options.selector,
+                         sourceRequested: requested, sourceCommit: commit }
+  return Tey.Commands.installProgramMember(context, member, options, origin)
+end
+
+# The member of `context` a program install means: the one `--package`
+# names, else the one the path is inside of.
 foul programMember(context: Context, packageName: String) -> Member or! String do
   if packageName != ""
     return Ok(Tey.Workspace.select(context, packageName, false).try.first.try)
@@ -224,8 +356,30 @@ foul programMember(context: Context, packageName: String) -> Member or! String d
   end
 end
 
+# The shared half of a path and a Git install, once the member is known:
+# refuse a library, check `--target`, stage, build, publish.
+foul installProgramMember(context: Context, member: Member,
+                          options: InstallOptions, origin: Receipt) -> Integer do
+  let package: ManifestPackage = member.memberManifest
+  if package.targets.empty?
+    return Tey.Commands.fail("`${package.name}` declares no targets; it is a library. Add it to a project with `tey add`")
+  end
+  let declared = package.targets.map { |target| target.name }
+  let unknown = options.targets.filter { |name| !declared.contains?(name) }
+  if !unknown.empty?
+    return Tey.Commands.fail("`${package.name}` has no target ${unknown.join(", ")} (it declares ${declared.join(", ")})")
+  end
+  let staging = match Tey.Programs.stagingDirectory do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
+  end
+  let status = Tey.Commands.installStaged(context, member, staging, options, origin)
+  FS.Directory.deleteAll(staging) if status != 0
+  return status
+end
+
 foul installStaged(context: Context, member: Member, staging: String,
-                   force?: Bool) -> Integer do
+                   options: InstallOptions, origin: Receipt) -> Integer do
   let package: ManifestPackage = member.memberManifest
   match Tey.Programs.stage(context.workspaceRoot, staging) do
     Error(error) => return Tey.Commands.fail(error)
@@ -250,7 +404,17 @@ foul installStaged(context: Context, member: Member, staging: String,
   # to the staging directory, and resolving snapshots it into the cache,
   # where the copy's install finds it. Nothing is written to the original.
   # The lock fingerprint is location-independent, so the copy reuses it.
-  let resolved = match Tey.Commands.installLock(context) do
+  #
+  # The program's committed `tey.lock` is used when it still fits — the
+  # dependency versions its author tested. `--fresh` resolves anew instead.
+  let locked = if options.fresh?
+    Tey.Toolchain.activeInfo.flatMap do |toolchain|
+      Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
+    end
+  else
+    Tey.Commands.installLock(context)
+  end
+  let resolved = match locked do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
@@ -262,15 +426,17 @@ foul installStaged(context: Context, member: Member, staging: String,
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
-  let origin = Receipt { name: package.name, sourceKind: "path",
-                         sourcePath: member.memberRoot, sourceDigest: digest }
-  let status = Tey.Commands.installMemberTargetsFrom(stagedMember, force?, origin)
+  let recorded = Receipt { ...origin, name: package.name, sourceDigest: digest,
+                           selectedTargets: options.targets }
+  let status = Tey.Commands.installMemberTargetsFrom(stagedMember, options.force?,
+                                                     recorded, options.targets)
   return status if status != 0
   match Tey.Programs.publishBuild(package.name, staging) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
-  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${package.name} ${package.version} ${Console.DIM}from ${member.memberRoot}${Console.RESET}")
+  let pin = recorded.sourceKind == "git" then " @ ${Tey.Programs.pinText(recorded)}" else ""
+  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${package.name} ${package.version} ${Console.DIM}from ${recorded.sourcePath}${pin}${Console.RESET}")
   return 0
 end
 
@@ -422,13 +588,20 @@ end
 foul installMemberTargets(member: Member, force?: Bool = false) -> Integer do
   return Tey.Commands.installMemberTargetsFrom(member, force?, Receipt {
     name: "", sourceKind: "path", sourcePath: member.memberRoot
-  })
+  }, [])
 end
 
 # `installMemberTargets`, recording `origin`'s source fields in the receipt —
 # a program built in a staging copy came from somewhere else.
-foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt) -> Integer do
-  let package: ManifestPackage = member.memberManifest
+#
+# `selected` limits the targets installed (`--target`); empty means all.
+foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt,
+                              selected: [String]) -> Integer do
+  let declaredPackage: ManifestPackage = member.memberManifest
+  let package = selected.empty? then declaredPackage else ManifestPackage {
+    ...declaredPackage,
+    targets: declaredPackage.targets.filter { |target| selected.contains?(target.name) }
+  }
   return 0 if package.targets.empty?
   let binDirectory = Tey.Toolchain.binDirectory
   let receipts = Tey.Programs.all
@@ -532,12 +705,12 @@ foul recordInstall(package: ManifestPackage, origin: Receipt, installed: [String
   let kept = declared.filter do |name|
     !installed.contains?(name) && previousTargets.contains?(name)
   end
+  # Every source field comes from `origin`, whatever kind of source it is.
   return Tey.Programs.save(Receipt {
+    ...origin,
     name: package.name, version: package.version,
-    sourceKind: origin.sourceKind, sourcePath: origin.sourcePath,
-    sourceDigest: origin.sourceDigest,
     targets: [...installed, ...kept],
-    kex: kex, otp: otp, installedAt: Time.now().iso
+    kex: kex, otp: otp, installedAt: DateTime.now().iso
   })
 end
 
