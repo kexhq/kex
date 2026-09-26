@@ -1,0 +1,17 @@
+# kex: check-only
+# kexhq/kex#408: a namespace call into a module that does not exist — or into
+# a local module that lacks the member — checked cleanly and failed only at
+# run time (`Web.Server.build`, left behind by the network rewrite, broke
+# `tey docs serve`). A module with a compiled interface (`IO`) already said so.
+module Shop do
+  let price(n: Integer) -> Integer = n * 2
+end
+
+main do
+  let a = Web.Server.build(18080)
+  let b = Nope.thing(1)
+  let c = Shop.cost(2)
+  let d = Shop.Inner.price(3)
+  let e = IO.nothing("x")
+  IO.printLine("${a} ${b} ${c} ${d} ${e}")
+end

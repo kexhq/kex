@@ -1,0 +1,4 @@
+spec/error_dotted_module_call_arguments.kex:13:42: error: `Shop.Catalog::price` expects argument 2 to be Integer, but got String
+
+Shop.Catalog::price : String -> Integer -> Integer
+spec/error_dotted_module_call_arguments.kex:14:3: error: Type mismatch: expected String, got Integer

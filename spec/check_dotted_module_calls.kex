@@ -1,0 +1,51 @@
+# kex: check-only
+# kexhq/kex#408: calls into a DOTTED local module (`Shop.Catalog.x(...)`)
+# checked the module receiver as argument 1. Every argument was compared one
+# parameter to the right, so an omitted trailing default was reported as a
+# mismatch (`expects argument 3 to be Bool, but got String`) — and calls that
+# did not happen to line up were not checked at all.
+#
+# The same change made forward references visible: a function checked before
+# the one it calls saw a placeholder result that its first use pinned for
+# everyone (`items.reduce` typed its element as Char). And a `reduce` block on
+# an untyped receiver took its parameter types from `String.reduce` alone.
+module Shop.Catalog do
+  record Item do
+    label : String
+  end
+
+  foul install(name: String, target: String = "", force?: Bool = false) -> Integer do
+    return 1 if force?
+    return target == "" then name.count else target.count
+  end
+
+  # `items` and `tag` are defined below this, so their results are only
+  # known from their declarations when this is checked.
+  foul summary -> String do
+    return Shop.Catalog.items.reduce("") do |text, item|
+      text + Shop.Catalog.tag(item)
+    end
+  end
+
+  foul items -> [Item] do
+    return [Item { label: "a" }, Item { label: "b" }]
+  end
+
+  let tag(item: Item) -> String = "[${item.label}]"
+end
+
+let describe(item: Integer) -> String = "#${item}"
+
+let joinAll(values) -> String do
+  return values.reduce("") do |text, value|
+    text + describe(value)
+  end
+end
+
+main do
+  IO.printLine("${Shop.Catalog.install("tey")}")
+  IO.printLine("${Shop.Catalog.install("tey", "bin")}")
+  IO.printLine("${Shop.Catalog.install("tey", "bin", true)}")
+  IO.printLine(Shop.Catalog.summary)
+  IO.printLine(joinAll([1, 2, 3]))
+end

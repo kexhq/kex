@@ -3471,12 +3471,16 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
         lp.type = std::move(param.type);
         params.push_back(std::move(lp));
       }
-      lambda->kind =
-          ast::Lambda{std::move(params), std::move(funcDef->clauses[0].body),
-                      std::move(funcDef->clauses[0].returnAnnotation),
-                      std::move(funcDef->clauses[0].rescue)};
+      ast::Lambda function{std::move(params),
+                           std::move(funcDef->clauses[0].body),
+                           std::move(funcDef->clauses[0].returnAnnotation),
+                           std::move(funcDef->clauses[0].rescue)};
+      function.namedFunction = true;
+      lambda->kind = std::move(function);
     } else {
-      lambda->kind = ast::Lambda{{}, {}, std::nullopt, std::nullopt};
+      ast::Lambda function{{}, {}, std::nullopt, std::nullopt};
+      function.namedFunction = true;
+      lambda->kind = std::move(function);
     }
 
     expr->kind = ast::LetExpr{std::move(pat), std::move(lambda)};

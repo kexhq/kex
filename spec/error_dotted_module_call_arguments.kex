@@ -1,0 +1,16 @@
+# kex: check-only
+# kexhq/kex#408: a call into a dotted local module counted the module itself as
+# argument 1, so a call with the wrong arguments either reported the wrong
+# position or — when the extra argument made no arity fit — was not checked at
+# all. Both of these passed before.
+module Shop.Catalog do
+  foul price(name: String, quantity: Integer) -> Integer do
+    return name.count * quantity
+  end
+end
+
+main do
+  let total: Integer = Shop.Catalog.price("tey", "two")
+  let label: String = Shop.Catalog.price("tey", 2)
+  IO.printLine("${total} ${label}")
+end

@@ -25,6 +25,13 @@ public:
     auto importAll(const Environment& other) -> void;
     // Names bound directly in this environment (not parents).
     auto names() const -> std::vector<std::string>;
+    // The function call a `return` evaluated in this scope leaves: the
+    // nearest one set on this environment or a parent. A block's environment
+    // chains to the function it was WRITTEN in, which is what makes a
+    // `return` in a block leave that function (kexhq/kex#408). The flag is
+    // true while the call runs; see ReturnException.
+    auto setReturnFrame(std::shared_ptr<bool> frame) -> void;
+    auto returnFrame() const -> std::shared_ptr<bool>;
 
 private:
     struct Binding {
@@ -34,6 +41,7 @@ private:
 
     std::unordered_map<std::string, Binding> m_bindings;
     std::shared_ptr<Environment> m_parent;
+    std::shared_ptr<bool> m_returnFrame;
 };
 
 } // namespace kex::interpreter

@@ -9,7 +9,7 @@
 %% whole item and `|K, V, I|` gets a Map entry spread. A 1-arity block ignores
 %% the index.
 -module(kex_intrinsic_fun).
--export([applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
+-export([applyFlexible/2, applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
          convertTo/2, convertTo/3, items/1]).
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
@@ -55,6 +55,43 @@ convertTo(V, 'Integer', Radix) when is_binary(V) ->
         error   -> 'None'
     end;
 convertTo(_, _, _) -> 'None'.
+
+%% A Kex call of a function VALUE whose arity differs from the argument count.
+%% Emitted code tries `apply F(Args...)` first when `is_function(F, N)` holds;
+%% this is the other case. A captured partial application (`~greet("Hello")`)
+%% is one fun over every remaining argument, the shape Erlang callers such as
+%% the HTTP server expect, so Kex code that fills it in over several calls
+%% lands here:
+%%
+%%   - fewer arguments than the fun takes: a fun over the rest;
+%%   - more: apply what it takes, then apply its result to the rest (a
+%%     function returning a function, called with both groups at once).
+%%
+%% A value that is not a fun is applied anyway, so it fails as `badfun` just as
+%% a direct call would.
+applyFlexible(F, Args) when is_function(F) ->
+    {arity, N} = erlang:fun_info(F, arity),
+    Count = length(Args),
+    if
+        Count =:= N -> erlang:apply(F, Args);
+        Count > N ->
+            {Now, Rest} = lists:split(N, Args),
+            applyFlexible(erlang:apply(F, Now), Rest);
+        true -> partial(F, Args, N - Count)
+    end;
+applyFlexible(F, Args) ->
+    erlang:apply(F, Args).
+
+%% Erlang funs have a fixed arity, so the remaining count picks the clause.
+partial(F, Got, 1) -> fun(A) -> erlang:apply(F, Got ++ [A]) end;
+partial(F, Got, 2) -> fun(A, B) -> erlang:apply(F, Got ++ [A, B]) end;
+partial(F, Got, 3) -> fun(A, B, C) -> erlang:apply(F, Got ++ [A, B, C]) end;
+partial(F, Got, 4) -> fun(A, B, C, D) -> erlang:apply(F, Got ++ [A, B, C, D]) end;
+partial(F, Got, 5) -> fun(A, B, C, D, E) -> erlang:apply(F, Got ++ [A, B, C, D, E]) end;
+partial(F, Got, 6) ->
+    fun(A, B, C, D, E, G) -> erlang:apply(F, Got ++ [A, B, C, D, E, G]) end;
+partial(F, Got, _) ->
+    erlang:error({badarity, {F, Got}}).
 
 applyItem(F, Item) ->
     {arity, N} = erlang:fun_info(F, arity),

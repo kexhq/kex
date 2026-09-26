@@ -2319,6 +2319,18 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
                            });
     };
 
+    // The result a caller checked BEFORE this definition sees. A declared
+    // `-> T` is known already; a fresh variable in its place is shared by
+    // every such caller, so the first one to use the result decides its type
+    // for the rest: `Shop.items.reduce("") do |text, item| ... end` above a
+    // `foul items -> [Item]` bound it to a String and typed `item` as Char.
+    const auto provisionalResult =
+        [&](const ast::FunctionClause& clause,
+            std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr {
+            return clause.returnAnnotation
+                ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
+                : freshTypeVar();
+        };
     std::vector<Signature> provisional;
     for (const auto& clause : def.clauses) {
         std::unordered_map<std::string, TypePtr> genericVars;
@@ -2337,7 +2349,8 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
                         ? resolveTypeExpr(**param.type, genericVars)
                         : freshTypeVar());
                 provisional.push_back(Signature{
-                    def.name, std::move(paramTypes), freshTypeVar(), false,
+                    def.name, std::move(paramTypes),
+                    provisionalResult(clause, genericVars), false,
                     clause.params.size()});
             }
             continue;
@@ -2350,7 +2363,8 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         std::size_t required = clause.params.size();
         while (required > 0 && clause.params[required - 1].defaultValue) required--;
         provisional.push_back(Signature{def.name, std::move(paramTypes),
-                                        freshTypeVar(), false, required});
+                                        provisionalResult(clause, genericVars),
+                                        false, required});
     }
     if (provisional.empty()) {
         m_declarationImports = previousImports;
@@ -3965,6 +3979,7 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
     struct Candidate {
         std::vector<TypePtr> hints;
         bool collection;
+        bool concreteReceiver;
     };
     std::vector<Candidate> candidates;
     auto hintsFrom = [&](const Signature& sig) -> void {
@@ -3976,15 +3991,21 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
             if (!argMatchesParam(nonBlockArgTypes[i], sig.params[i])) return;
         }
 
-        // Map negative-ID generic placeholders to concrete types from the actual args.
+        // Map the signature's type variables to concrete types from the actual
+        // args, whatever their ids. Negative ids are table generics; a make
+        // block's `:>` method compiled in this same unit (the prelude's own
+        // `reduce :> A -> ...`) carries ordinary variables instead, and one
+        // already bound by an unrelated caller would otherwise hand that
+        // caller's type to every later block (kexhq/kex#408). This only
+        // computes hints: nothing here is unified.
         std::unordered_map<int, TypePtr> sub;
         for (size_t i = 0; i < nonBlockArgTypes.size(); i++) {
             const auto& sigP = sig.params[i];
             const auto& argT = resolve(nonBlockArgTypes[i]);
-            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv && tv->id < 0)
+            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv)
                 sub.emplace(tv->id, argT);
             else if (auto* lt = std::get_if<ListType>(&sigP->kind))
-                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2 && tv2->id < 0)
+                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2)
                     if (auto* argLt = std::get_if<ListType>(&argT->kind))
                         sub.emplace(tv2->id, resolve(argLt->element));
         }
@@ -4002,7 +4023,9 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         auto result = resolve(blockParam->result);
         bool isCollection = blockParam->block &&
             std::holds_alternative<ListType>(result->kind);
-        candidates.push_back({std::move(hints), isCollection});
+        candidates.push_back({std::move(hints), isCollection,
+                              isMethodCall && !sig.params.empty() &&
+                                  !isOpenType(sig.params.front())});
     };
 
     if (methodIt != m_methodSignatures.end())
@@ -4012,6 +4035,15 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         for (const auto& sig : *sigs) hintsFrom(sig);
 
     if (candidates.empty()) return {};
+    // A receiver of known type is matched exactly by the overloads written for
+    // it; one that accepts anything (an untyped or trait-bounded receiver)
+    // only guesses, so it does not get a say once a concrete one fits.
+    if (isMethodCall && !nonBlockArgTypes.empty() &&
+        !isOpenType(nonBlockArgTypes.front()) &&
+        std::any_of(candidates.begin(), candidates.end(),
+                    [](const Candidate& c) { return c.concreteReceiver; }))
+        std::erase_if(candidates,
+                      [](const Candidate& c) { return !c.concreteReceiver; });
     // UFCS lets a plain call like `times(3) do ... end` match both a local
     // `times(n, block)` and an unrelated `Integer.times(block)` visible as a
     // free function. When such same-arity candidates disagree on the
@@ -4028,7 +4060,42 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
             return {};
         }
     if (collection) *collection = candidates.front().collection;
-    return candidates.front().hints;
+    std::vector<std::vector<TypePtr>> hintSets;
+    for (const auto& c : candidates) hintSets.push_back(c.hints);
+    return agreedHints(hintSets);
+}
+
+// A type that accepts anything a caller passes: not yet known (a variable,
+// Unknown), or only bounded by a trait.
+auto TypeChecker::isOpenType(const TypePtr& type) -> bool {
+    auto resolved = resolve(type);
+    return std::holds_alternative<TypeVar>(resolved->kind) ||
+           std::holds_alternative<UnknownType>(resolved->kind) ||
+           std::holds_alternative<ConstrainedType>(resolved->kind);
+}
+
+// The block-parameter hints every candidate agrees on. Candidates that agree
+// on a block's SHAPE can still disagree on its parameter types, and that is
+// the normal case when the receiver's type is not known: `items.reduce("")`
+// on an untyped `items` matches both `String.reduce` and the list `reduce`.
+// Taking the first one typed the element as Char and rejected a valid
+// program (kexhq/kex#408). A position they disagree on is left Unknown, which
+// inferBlock turns into a fresh variable.
+auto TypeChecker::agreedHints(const std::vector<std::vector<TypePtr>>& hintSets)
+    -> std::vector<TypePtr> {
+    if (hintSets.empty()) return {};
+    auto hints = hintSets.front();
+    for (size_t i = 0; i < hints.size(); ++i) {
+        auto first = resolve(hints[i]);
+        for (size_t c = 1; c < hintSets.size(); ++c) {
+            if (i >= hintSets[c].size() ||
+                !typesEqual(first, resolve(hintSets[c][i]))) {
+                hints[i] = Type::unknown();
+                break;
+            }
+        }
+    }
+    return hints;
 }
 
 auto TypeChecker::resolveArgHints(const std::string& name,
@@ -4068,10 +4135,10 @@ auto TypeChecker::resolveArgHints(const std::string& name,
             if (i == slArgIdx) continue;
             const auto& sigP = sig.params[i];
             const auto& argT = resolve(argTypes[i]);
-            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv && tv->id < 0)
+            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv)
                 sub.emplace(tv->id, argT);
             else if (auto* lt = std::get_if<ListType>(&sigP->kind))
-                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2 && tv2->id < 0)
+                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2)
                     if (auto* argLt = std::get_if<ListType>(&argT->kind))
                         sub.emplace(tv2->id, resolve(argLt->element));
         }
@@ -4089,21 +4156,29 @@ auto TypeChecker::resolveArgHints(const std::string& name,
         return hints;
     };
 
-    if (methodIt != m_methodSignatures.end())
-        for (const auto& sig : methodIt->second) {
-            auto hints = hintsFrom(sig);
-            if (!hints.empty()) return hints;
-        }
-    for (const auto& sig : imported) {
+    // Every candidate that fits, not the first: see agreedHints. As in
+    // resolveBlockHints, a known receiver silences the overloads that would
+    // accept any receiver.
+    std::vector<std::vector<TypePtr>> hintSets;
+    std::vector<std::vector<TypePtr>> concreteSets;
+    const bool knownReceiver =
+        isMethodCall && !argTypes.empty() && !isOpenType(argTypes.front());
+    const auto consider = [&](const Signature& sig) {
         auto hints = hintsFrom(sig);
-        if (!hints.empty()) return hints;
-    }
+        if (hints.empty()) return;
+        if (knownReceiver && !sig.params.empty() && !isOpenType(sig.params.front()))
+            concreteSets.push_back(hints);
+        hintSets.push_back(std::move(hints));
+    };
+    if (methodIt != m_methodSignatures.end())
+        for (const auto& sig : methodIt->second) consider(sig);
+    for (const auto& sig : imported) consider(sig);
     if (sigs)
-        for (const auto& sig : *sigs) {
-            auto hints = hintsFrom(sig);
-            if (!hints.empty()) return hints;
-        }
-    return {};
+        for (const auto& sig : *sigs) consider(sig);
+    if (!concreteSets.empty()) hintSets = std::move(concreteSets);
+    for (const auto& set : hintSets)
+        if (set.size() != hintSets.front().size()) return {};
+    return agreedHints(hintSets);
 }
 
 // A bare `~f` capture — no argument groups, no operator, unqualified. Like a
@@ -5019,6 +5094,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             const bool isLocalNamespace = importedPath &&
                 m_localModules.contains(*importedPath) &&
                 m_userSignatures.count(*importedPath + "::" + node.method) > 0;
+            // ...and, being a namespace, its receiver is not an argument. A
+            // dotted local module (`Tey.Commands`) is not a bare
+            // UpperIdentifier, so `isNamespaceReceiver` alone missed it and the
+            // receiver was checked as argument 1: every argument after it was
+            // compared one parameter to the right. That was invisible while
+            // the extra argument simply failed every arity (and an Unknown
+            // receiver waved the call through unchecked), until a defaulted
+            // parameter made the shifted count fit (kexhq/kex#408).
+            isNamespaceCall = isNamespaceCall || isLocalNamespace;
+            // A namespace path that names nothing, or a local module without
+            // the member called. The resolve pass leaves uppercase receivers
+            // to this checker, which only ever checked modules with a compiled
+            // interface — so a call into a module that no longer exists
+            // (`Web.Server.build`, removed by the network rewrite) checked
+            // cleanly and died at run time (kexhq/kex#408).
+            if (writtenPath && importedPath) {
+                if (auto problem = namespaceCallProblem(*writtenPath, *importedPath,
+                                                        node.method)) {
+                    error(node.receiver->location, *problem);
+                    for (const auto& a : node.args)
+                        if (a) inferExpr(*a);
+                    for (const auto& [_, a] : node.namedArgs)
+                        if (a) inferExpr(*a);
+                    if (node.block) inferExpr(**node.block);
+                    return Type::unknown();
+                }
+            }
             // A module with a compiled interface lists everything it exports,
             // so a name it does not export is a mistake the checker can name —
             // left alone, `Process.whereis` after the rename to `whereIs`
@@ -6394,6 +6496,185 @@ auto TypeChecker::typeNameReference(const ast::Expr& expr) -> TypePtr {
     asType.kind = std::move(typeName);
     std::unordered_map<std::string, TypePtr> generics;
     return resolveTypeExpr(asType, generics);
+}
+
+// What is wrong with `written.method(...)` as a namespace call, if anything:
+// `written` names no module or type at all, or names a local module that has
+// no member `method`. `resolved` is the same path after `using` expansion.
+//
+// Generous on purpose — a false error blocks a valid program. A path may mean
+// a module through a `using ..., as:` alias, relative to an enclosing module
+// (`Receipt` inside `Shop`), or through an `export` re-namespacing; it is fine
+// when ANY module could be what it means (equal to it, inside it, or
+// containing it: `Kex.VERSION.number` continues past its module), and when its
+// root is anything else an uppercase name can be: a type, a constructor, a
+// constant, a variable, a capability, a trait, or a syntax-level namespace.
+// Only a module compiled in this unit is checked for the member, since only
+// there is its whole source at hand.
+auto TypeChecker::namespaceCallProblem(const std::string& written,
+                                       const std::string& resolved,
+                                       const std::string& method)
+    -> std::optional<std::string> {
+    const auto rootEnd = written.find('.');
+    const auto root = written.substr(0, rootEnd);
+    const auto tail = rootEnd == std::string::npos ? std::string{} : written.substr(rootEnd);
+
+    // Each candidate with the enclosing scope it was spelled relative to: a
+    // relative spelling only means something BELOW that scope — `UserService`
+    // inside `App` is not "somewhere in App".
+    struct Candidate {
+        std::string path;
+        std::size_t scope = 0;
+    };
+    std::vector<Candidate> candidates{{resolved, 0}};
+    const auto addAliases = [&](const std::vector<ImportSelection>& imports) {
+        for (const auto& import : imports)
+            if (import.alias && *import.alias == root)
+                candidates.push_back({import.module + tail, 0});
+    };
+    addAliases(m_declarationImports);
+    for (const auto& scope : m_importScopeStack) addAliases(scope);
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        candidates.push_back({scope + "." + resolved, scope.size()});
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+
+    std::size_t minimumModule = 0;
+    const auto relatedTo = [&](const std::string& path, const std::string& module) {
+        if (module.size() <= minimumModule) return false;
+        return module == path || path.rfind(module + ".", 0) == 0 ||
+               module.rfind(path + ".", 0) == 0;
+    };
+    // `export Prelude, only: [...]` re-namespaces a module under its parent;
+    // its members are the original module's, so a path through one is left
+    // alone rather than checked against the parent.
+    const auto reexported = [&](const std::string& path) {
+        return std::any_of(m_moduleReexports.begin(), m_moduleReexports.end(),
+                           [&](const auto& entry) { return relatedTo(path, entry.first); });
+    };
+    const auto moduleKnown = [&](const std::string& path) {
+        for (const auto& module : m_localModules)
+            if (relatedTo(path, module)) return true;
+        for (const auto& module : m_importedModulePaths)
+            if (relatedTo(path, module)) return true;
+        if (reexported(path)) return true;
+        if (m_importedInterfaces)
+            for (const auto& [module, _] : m_importedInterfaces->modules)
+                if (relatedTo(path, module) ||
+                    (module.rfind("Kex.", 0) == 0 && relatedTo(path, module.substr(4))))
+                    return true;
+        return false;
+    };
+    const auto match = std::find_if(candidates.begin(), candidates.end(),
+                                    [&](const Candidate& candidate) {
+                                        minimumModule = candidate.scope;
+                                        const bool known = moduleKnown(candidate.path);
+                                        minimumModule = 0;
+                                        return known;
+                                    });
+
+    if (match == candidates.end()) {
+        // An uppercase CONSTANT (`let NUMS = [...]`, `let EARLIEST_YEAR =
+        // 1990`) is a zero-arity function, at the top level or in this module
+        // or one enclosing it; a method call on it (`NUMS.length`, the `show`
+        // behind "${EARLIEST_YEAR}") has it as the root.
+        const auto constantInScope = [&](const std::string& name) {
+            if (m_userSignatures.count(name) ||
+                m_scopedDeclaredSignatures.count(m_currentModulePath + "\n" + name))
+                return true;
+            for (auto scope = m_currentModulePath; !scope.empty();) {
+                if (m_userSignatures.count(scope + "::" + name)) return true;
+                const auto dot = scope.rfind('.');
+                if (dot == std::string::npos) break;
+                scope.resize(dot);
+            }
+            return false;
+        };
+        // `Supervisor.start(...) do ... end` is syntax both backends expand
+        // (see lower.cxx), with no module behind it.
+        const bool rootIsSomething =
+            root == "BEAM" || root == "Kex" || root == "This" || root == "Supervisor" ||
+            isPrimitiveTypeName(root) ||
+            m_recordFields.count(resolveRecordName(root)) ||
+            m_adtVariants.count(root) || m_typeAliases.count(root) ||
+            m_nullaryConstructors.contains(root) ||
+            constructorResultType(root, {}) != nullptr ||
+            m_capabilities.count(root) || m_traits.get(root) != nullptr ||
+            lookupVar(root) != nullptr || constantInScope(root) ||
+            std::any_of(m_moduleConstructors.begin(), m_moduleConstructors.end(),
+                        [&](const auto& entry) {
+                            return entry.first == root || entry.second.count(root);
+                        });
+        if (rootIsSomething) return std::nullopt;
+        return "Unknown module `" + written + "`";
+    }
+    const auto& path = match->path;
+    if (reexported(path)) return std::nullopt;
+
+    // Past the deepest local module it names, the next segment must be
+    // something that module holds: `Shop.Inner` is known only if `Shop`
+    // declares `Inner`.
+    std::string deepest;
+    for (const auto& module : m_localModules)
+        if (path.rfind(module + ".", 0) == 0 && module.size() > deepest.size())
+            deepest = module;
+    if (!deepest.empty() &&
+        !std::any_of(m_localModules.begin(), m_localModules.end(),
+                     [&](const std::string& module) {
+                         return module == path || module.rfind(path + ".", 0) == 0;
+                     })) {
+        const auto rest = path.substr(deepest.size() + 1);
+        const auto next = rest.substr(0, rest.find('.'));
+        // An uppercase module CONSTANT (`Console.RED`, which string
+        // interpolation calls a method on) is held like a nested module.
+        const bool held =
+            !std::isupper(static_cast<unsigned char>(next.front())) ||
+            m_userSignatures.count(deepest + "::" + next) ||
+            m_scopedDeclaredSignatures.count(deepest + "\n" + next) ||
+            m_recordFields.count(resolveRecordName(next)) ||
+            m_recordFields.count(deepest + "." + next) ||
+            m_adtVariants.count(next) || m_typeAliases.count(next) ||
+            m_nullaryConstructors.contains(next) ||
+            constructorResultType(next, {}) != nullptr ||
+            (m_moduleConstructors.count(deepest) &&
+             m_moduleConstructors.at(deepest).count(next));
+        if (!held)
+            return "`" + deepest + "` has no module `" + next + "`";
+    }
+
+    // A member of a module compiled here.
+    if (!m_localModules.contains(path) || method.empty() ||
+        !std::islower(static_cast<unsigned char>(method.front())))
+        return std::nullopt;
+    if (m_importedInterfaces && m_importedInterfaces->modules.count(path))
+        return std::nullopt;
+    // A module that shares its name with a type (`DateTime`) also answers
+    // for that type's static functions, which `make` blocks declare.
+    const auto lastDot = path.rfind('.');
+    const auto last = lastDot == std::string::npos ? path : path.substr(lastDot + 1);
+    if (isPrimitiveTypeName(last) || m_recordFields.count(resolveRecordName(last)) ||
+        m_recordFields.count(path) || m_adtVariants.count(last) ||
+        m_typeAliases.count(last))
+        return std::nullopt;
+    if (m_userSignatures.count(path + "::" + method) ||
+        m_scopedDeclaredSignatures.count(path + "\n" + method) ||
+        m_localModules.contains(path + "." + method))
+        return std::nullopt;
+    if (auto constructors = m_moduleConstructors.find(path);
+        constructors != m_moduleConstructors.end() &&
+        constructors->second.count(method))
+        return std::nullopt;
+    std::vector<std::string> members;
+    const auto prefix = path + "::";
+    for (const auto& [name, _] : m_userSignatures)
+        if (name.rfind(prefix, 0) == 0) members.push_back(name.substr(prefix.size()));
+    std::sort(members.begin(), members.end());
+    auto message = "`" + written + "` has no function `" + method + "`";
+    if (auto hint = closestName(method, members); !hint.empty())
+        message += " — did you mean `" + hint + "`?";
+    return message;
 }
 
 // The single signature of the function an expression NAMES, or null when the

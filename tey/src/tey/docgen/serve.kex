@@ -1,7 +1,10 @@
 # Serves a generated output directory over HTTP. Tey runs on the BEAM, so
-# Web.Server is available wherever `tey docs -- serve` runs.
+# Net.HTTP.Server is available wherever `tey docs -- serve` runs.
 
 module Tey.Docgen.Serve do
+  using Net.HTTP, only: [Context, Headers, Request, Response, Router, Server]
+  using Net.Socket, only: [TCP]
+
   record ServedFile do
     route : String
     path : String
@@ -19,12 +22,23 @@ module Tey.Docgen.Serve do
       IO.printError("docgen: no files to serve in ${out}")
       return 1
     end
+    let listenPort = match Net.Port.from(port) do
+      Ok(value) => value
+      Error(_) => do
+        IO.printError("docgen: invalid --port ${port}")
+        return 1
+      end
+    end
+    # One exact route per spelling of each file (see routesFor): the router
+    # matches paths exactly, so there is no directory fallback to lean on.
+    let router = files.reduce(Router.build) do |routes, file|
+      routes.get(file.route, ~serveFile(file.path))
+    end
     IO.printLine("docgen: serving ${files.count} file(s) on http://localhost:${port}")
-    let server = files.reduce(Web.Server.build(port), { |s, f| s.get(f.route, fileHandler(f.path)) })
-    match server.start() do
+    match Server.serve(TCP.Endpoint.loopback(listenPort), router) do
       Ok(_) => return 0
-      Error(msg) => do
-        IO.printError("docgen: server failed: ${msg}")
+      Error(error) => do
+        IO.printError("docgen: server failed: ${error.message}")
         return 1
       end
     end
@@ -53,16 +67,23 @@ module Tey.Docgen.Serve do
     return fileEntries + subEntries
   end
 
-  foul serveFile(req: Web.Request, filePath: String) -> Web.Response do
-    match FS.File.read(filePath) do
-      Ok(content) => do
-        let contentType = contentTypeFor(filePath)
-        # The site regenerates in place, so nothing here is immutable: send
-        # no-cache so a rebuild (or an accumulated versions.json) is never
-        # shadowed by a browser's cached copy.
-        return Web.Response { status: 200, headers: { "Content-Type": contentType, "Cache-Control": "no-cache" }, body: content }
-      end
-      Error(_) => return Web.Response.notFound()
+  # A route handler once `filePath` is applied: `~serveFile(path)`. Reads the
+  # file as bytes, not text: the site ships images and fonts beside its HTML,
+  # and decoding those as UTF-8 would turn them into a 404.
+  foul serveFile(filePath: String, _request: Request<Binary>,
+                 _context: Context) -> Response<Binary> do
+    let body = match FS.File.readBytes(filePath) do
+      Ok(bytes) => bytes
+      Error(_) => return Response.text(404, "not found")
+    end
+    # The site regenerates in place, so nothing here is immutable: send
+    # no-cache so a rebuild (or an accumulated versions.json) is never
+    # shadowed by a browser's cached copy.
+    let headers = Headers.empty.add("Content-Type", contentTypeFor(filePath))
+      .flatMap { |added| added.add("Cache-Control", "no-cache") }
+    match headers do
+      Ok(value) => return Response.binary(200, body, value)
+      Error(error) => return Response.text(500, error.message)
     end
   end
 
@@ -74,9 +95,5 @@ module Tey.Docgen.Serve do
     return "application/json" if path.endsWith?(".json")
     return "application/xml" if path.endsWith?(".xml")
     return "text/plain; charset=utf-8"
-  end
-
-  foul fileHandler(filePath: String) -> (Web.Request -> Web.Response) do
-    return { |req| serveFile(req, filePath) }
   end
 end

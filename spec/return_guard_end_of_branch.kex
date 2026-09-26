@@ -1,0 +1,54 @@
+# A `return X if COND` guard that is the LAST statement of an if branch only
+# returns when COND holds; otherwise control carries on after the `if`
+# (kexhq/kex#408). BEAM lowered it as `return (COND ? X : None)`, so a guard
+# that was not taken still left the function, returning None.
+let check(n: Integer) -> String or! String do
+  if n > 0
+    return Error("too big") if n > 100
+  else
+    ()
+  end
+  return Ok("checked ${n}")
+end
+
+# The same guard inside a block: not taken, it must not end the iteration or
+# skip what follows the loop. Taken, it leaves the function the block was
+# written in (see return_in_block_scope.kex).
+let firstLarge(items: [Integer]) -> String or! String do
+  items.each do |item|
+    if item > 0
+      return Error("large ${item}") if item > 100
+    else
+      ()
+    end
+    ()
+  end
+  return Ok("none large")
+end
+
+# The value-less `return if COND` form, last in its branch.
+foul greet(n: Integer) -> Void do
+  if n > 0
+    return if n > 100
+  else
+    IO.printLine("not positive")
+  end
+  IO.printLine("hello ${n}")
+end
+
+# And as a function's final statement, where a guard not taken yields None.
+let tail(n: Integer) -> Integer? do
+  return Just(n) if n > 1
+end
+
+main do
+  IO.printLine("${check(1)}")
+  IO.printLine("${check(500)}")
+  IO.printLine("${firstLarge([1, 2, 3])}")
+  IO.printLine("${firstLarge([1, 200, 3])}")
+  greet(5)
+  greet(500)
+  greet(-1)
+  IO.printLine("${tail(5)}")
+  IO.printLine("${tail(0).none?}")
+end
