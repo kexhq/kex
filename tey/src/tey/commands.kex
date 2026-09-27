@@ -100,17 +100,18 @@ end
 # LOCKFILE still lists them — what is omitted is the fetching, so switching
 # the flag off later needs no re-resolve.
 foul install(without: String, packageName: String = "") -> Integer do
-  return Tey.Commands.installWorkspace(without, packageName, false)
+  return Tey.Commands.installWorkspace(without, packageName, false, false)
 end
 
 # `install`, where `force?` lets targets replace programs Tey does not own
 # (see Tey.Programs.refusal).
-foul installWorkspace(without: String, packageName: String, force?: Bool) -> Integer do
+foul installWorkspace(without: String, packageName: String, force?: Bool,
+                      approveAll?: Bool) -> Integer do
   let context = match Tey.Workspace.discover(FS.Directory.current) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  match Tey.Commands.installDependencies(context, without) do
+  match Tey.Commands.installDependencies(context, without, approveAll?) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
@@ -120,7 +121,8 @@ end
 # Resolves (or reuses) the workspace's lock, fetches and verifies what it
 # names, approves plugins, and writes the lock back — everything `tey install`
 # does before building.
-foul installDependencies(context: Context, without: String) -> Void or! String do
+foul installDependencies(context: Context, without: String,
+                          approveAll?: Bool) -> Void or! String do
   let state = Tey.Commands.installLock(context).try
   let wanted = state.lockedDependencies.filter do |dependency|
     let external = dependency.source != "workspace"
@@ -129,7 +131,7 @@ foul installDependencies(context: Context, without: String) -> Void or! String d
     external && included
   end
   Tey.Commands.fetchAll(wanted).try
-  let approvedState = Tey.Commands.approvePlugins(context, state).try
+  let approvedState = Tey.Commands.approvePluginsWith(context, state, approveAll?).try
   Tey.Commands.publishLock(FS.Path.join(context.workspaceRoot, "tey.lock"),
                            approvedState).try
   let externalCount = state.lockedDependencies.filter do |dependency|
@@ -329,6 +331,19 @@ foul installFromGit(url: String, options: InstallOptions) -> Integer do
   return Tey.Commands.installProgramMember(context, member, options, origin)
 end
 
+# The plugin approvals the previous install of program `name` was built
+# with: its build tree's lock. None for a first install.
+foul previousApprovals(name: String) -> {String: String} do
+  let lock = FS.Path.join(Tey.Programs.buildDirectory(name), "tey.lock")
+  match FS.File.read(lock) do
+    Error(_) => return {}
+    Ok(text) => match Tey.Lockfile.decode(text) do
+      Error(_) => return {}
+      Ok(state) => return state.pluginApprovals
+    end
+  end
+end
+
 # The member of `context` a program install means: the one `--package`
 # names, else the one the path is inside of.
 foul programMember(context: Context, packageName: String) -> Member or! String do
@@ -418,11 +433,18 @@ foul installStaged(context: Context, member: Member, staging: String,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  match Tey.Commands.publishLock(FS.Path.join(staging, "tey.lock"), resolved) do
+  # Plugin approvals are the INSTALLER's. A program's committed lock records
+  # its author's, and honouring those would let a program approve its own
+  # plugins on someone else's machine. What carries over is what this user
+  # approved for the previous install of this program, so a reinstall asks
+  # again only about a plugin whose interface changed.
+  let approved = LockState { ...resolved,
+                             pluginApprovals: Tey.Commands.previousApprovals(package.name) }
+  match Tey.Commands.publishLock(FS.Path.join(staging, "tey.lock"), approved) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
-  match Tey.Commands.installDependencies(stagedContext, "") do
+  match Tey.Commands.installDependencies(stagedContext, "", options.approvePlugins?) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(_) => ()
   end
@@ -1351,6 +1373,13 @@ private do
   end
 
   foul approvePlugins(context: Context, state: LockState) -> LockState or! String do
+    return Tey.Commands.approvePluginsWith(context, state, false)
+  end
+
+  # `approveAll?` is `--approve-plugins`: grant every approval that is
+  # missing, saying which, instead of asking.
+  foul approvePluginsWith(context: Context, state: LockState,
+                          approveAll?: Bool) -> LockState or! String do
     let bindings = Tey.Commands.directPluginBindings(context, state).try
     let incompatible = bindings.filter do |binding|
       !Tey.Semver.satisfies(Tey.Version.number,
@@ -1366,23 +1395,50 @@ private do
     let valid = Tey.Plugin.validBindingApprovals(bindings,
                                                  state.pluginApprovals)
     let missing = Tey.Plugin.missingBindingApprovals(bindings, valid)
-    let approvals = Tey.Commands.requestApprovals(missing, valid).try
+    let approvals = if approveAll?
+      Tey.Commands.grantApprovals(missing, valid)
+    else
+      Tey.Commands.requestApprovals(missing, valid).try
+    end
     return Ok(LockState { ...state, pluginApprovals: approvals })
   end
 
-  foul requestApprovals(bindings: [Binding], approvals: {String: String}) -> {String: String} or! String do
-    return Ok(approvals) if bindings.empty?
-    let binding = bindings.first.try
-    let declaration = binding.declaration
-    let resources = declaration.pluginCapabilities.map do |resource|
+  foul grantApprovals(bindings: [Binding], approvals: {String: String}) -> {String: String} do
+    return bindings.reduce(approvals) do |granted, binding|
+      IO.printLine("${Console.GREEN}Approved${Console.RESET} plugin `${binding.approvalKey}` ${Console.DIM}with resources ${Tey.Commands.resourcesText(binding)}${Console.RESET}")
+      granted.put(binding.approvalKey, Tey.Plugin.fingerprint(binding.declaration))
+    end
+  end
+
+  let resourcesText(binding: Binding) -> String do
+    let resources = binding.declaration.pluginCapabilities.map do |resource|
       let detail = resource.capabilityValues.empty? then "" else " [${resource.capabilityValues.join(", ")}]"
       "${resource.capabilityKind}${detail}"
     end
-    IO.print("Approve plugin `${binding.approvalKey}` with resources ${resources.join(", ")}? [y/N] ")
-    let answer = IO.getLine.or("").trim.lowerCase
+    return resources.empty? then "(none)" else resources.join(", ")
+  end
+
+  # Asks about each binding in turn. With no input to answer from — CI, a
+  # Dockerfile, anything without a terminal — nothing can be approved, so it
+  # says everything that needs approving at once and how to grant it, rather
+  # than failing on the first plugin as a silent "no".
+  foul requestApprovals(bindings: [Binding], approvals: {String: String}) -> {String: String} or! String do
+    return Ok(approvals) if bindings.empty?
+    let binding = bindings.first.try
+    IO.print("Approve plugin `${binding.approvalKey}` with resources ${Tey.Commands.resourcesText(binding)}? [y/N] ")
+    let answer = match IO.getLine do
+      Just(line) => line.trim.lowerCase
+      None => do
+        IO.printLine("")
+        let wanted = bindings.map do |pending|
+          "  ${pending.approvalKey}: ${Tey.Commands.resourcesText(pending)}"
+        end
+        return Error("plugins need approval and there is no input to ask:\n${wanted.join("\n")}\npass --approve-plugins to approve them")
+      end
+    end
     return Error("plugin `${binding.approvalKey}` was not approved") if answer != "y" && answer != "yes"
     let updated = approvals.put(binding.approvalKey,
-                                Tey.Plugin.fingerprint(declaration))
+                                Tey.Plugin.fingerprint(binding.declaration))
     return Tey.Commands.requestApprovals(bindings.drop(1), updated)
   end
 

@@ -33,6 +33,7 @@ foul parser -> OptionConfig do
     .string("target", None, "Install only these targets of a program (comma-separated)", None, false)
     .flag("fresh", None, "Resolve a program's dependencies anew instead of using its tey.lock")
     .flag("rebuild", None, "Rebuild an installed program even when its source has not moved")
+    .flag("approve-plugins", None, "Approve plugins `tey install` would otherwise ask about")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("no-tey", None, "Skip installing the Tey a Kex release ships with on `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
@@ -423,12 +424,14 @@ private do
         pinned?: !pins.empty?,
         targets: targets,
         fresh?: options.flagEnabled?("fresh"),
-        rebuild?: options.flagEnabled?("rebuild")
+        rebuild?: options.flagEnabled?("rebuild"),
+        approvePlugins?: options.flagEnabled?("approve-plugins")
       })
     end
     return Tey.Commands.installWorkspace(options.value("without", ""),
                                          options.value("package", ""),
-                                         options.flagEnabled?("force"))
+                                         options.flagEnabled?("force"),
+                                         options.flagEnabled?("approve-plugins"))
   end
 
   foul kexList(options: ParsedOptions) -> Integer do

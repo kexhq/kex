@@ -55,6 +55,8 @@ record InstallOptions do
   targets : [String] = []
   fresh? : Bool = false
   rebuild? : Bool = false
+  # `--approve-plugins`: approve the program's plugins without asking.
+  approvePlugins? : Bool = false
 end
 
 # Why reinstalling `receipt` by name has nothing to do, or None when it must

@@ -337,4 +337,59 @@ describe("Tey program receipts integration") do
     let missing = tey(root, "uninstall alpha")
     assert(missing.exitCode != 0 && missing.stderr.contains?("not installed"), missing.stderr)
   end
+
+  # `app`, a program depending (by path) on `provider`, which declares a
+  # plugin — so installing `app` binds the plugin and needs its approval.
+  let writePluginProgram() -> Void do
+    FS.Directory.create("${root}/provider/src")
+    FS.File.write("${root}/provider/package.kex", `
+      package "provider" do
+        kex(">= 0.3.0")
+        plugin namespace: "github", tey: ">= 0.1" do
+          capabilities([Process.Run(["git"])])
+        end
+      end
+    `)
+    FS.File.write("${root}/provider/src/provider.kex", "module Provider\n\nlet name -> String = \"provider\"\n")
+    FS.Directory.create("${root}/app/src")
+    FS.File.write("${root}/app/package.kex", `
+      package "app" do
+        kex(">= 0.3.0")
+        tey("provider", path: "../provider")
+        target("app")
+      end
+    `)
+    FS.File.write("${root}/app/src/main.kex", "main do\n  IO.printLine(\"app\")\nend\n")
+    ()
+  end
+
+  it("asks for plugin approval, and takes --approve-plugins without asking") do
+    writePluginProgram()
+    let refused = tey(root, "install ./app < /dev/null")
+    assert(refused.exitCode != 0, "installed without approving its plugin")
+    assert(refused.stderr.contains?("github") && refused.stderr.contains?("--approve-plugins"),
+           refused.stderr)
+    assert(!FS.File.file?("${home}/bin/app"))
+
+    let approved = tey(root, "install ./app --approve-plugins < /dev/null")
+    assert(approved.exitCode == 0, approved.stdout + approved.stderr)
+    assert(approved.stdout.contains?("Approved plugin `github`"), approved.stdout)
+    assert(output("app") == "app", output("app"))
+
+    # What was approved for the previous install carries over.
+    let again = tey(root, "install app --rebuild < /dev/null")
+    assert(again.exitCode == 0, again.stdout + again.stderr)
+  end
+
+  it("does not take a program author's approvals as the installer's") do
+    writePluginProgram()
+    # The author approves inside the project, which records it in their lock.
+    let author = tey("${root}/app", "install --approve-plugins < /dev/null")
+    assert(author.exitCode == 0, author.stdout + author.stderr)
+    assert(FS.File.read("${root}/app/tey.lock").try.contains?("github"))
+
+    let installer = tey(root, "install ./app < /dev/null")
+    assert(installer.exitCode != 0, "took the author's approval as the installer's")
+    assert(installer.stderr.contains?("--approve-plugins"), installer.stderr)
+  end
 end
