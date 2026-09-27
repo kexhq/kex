@@ -1,6 +1,11 @@
-# Generates a Kex spec file from the Ruby calendar reference.
+# Generates Kex spec files from the Ruby calendar reference.
 #
-#   ruby tools/calendar_ref/gen_spec.rb > spec/prelude/time_generated.spec.kex
+#   ruby tools/calendar_ref/gen_spec.rb spec/prelude
+#
+# writes spec/prelude/time_generated_<n>.spec.kex. The sections are spread
+# over several files of about MAX_LINES_PER_FILE lines each: erlc's cost grows
+# faster than linearly with a module's size, and all of it in one file took two
+# minutes to compile — past the BEAM suite's timeout.
 #
 # Every assertion's expected value comes from Ruby's built-in calendar, so the
 # generated file is a differential test: it passes only where Kex's
@@ -17,6 +22,10 @@
 #   --cases N    Random cases per fuzz section (default 40).
 
 require_relative "calendar_ref"
+
+OUT_DIR = ARGV.find { |argument| !argument.start_with?("--") && !argument.match?(/\A\d+\z/) } or
+  abort "usage: ruby tools/calendar_ref/gen_spec.rb <output directory> [--seed N] [--cases N]"
+MAX_LINES_PER_FILE = 1200
 
 SEED = (ARGV[ARGV.index("--seed") + 1].to_i if ARGV.include?("--seed")) || 20_260_802
 CASES = (ARGV[ARGV.index("--cases") + 1].to_i if ARGV.include?("--cases")) || 40
@@ -47,18 +56,55 @@ def line(text = "")
   $out << text
 end
 
+# Where each section's lines begin in $out, so they can be dealt into files.
+$sections = []
+
 def describe(name)
+  $sections << $out.size
   line("describe(#{name.inspect}) do")
   yield
   line("end")
   line
 end
 
+# A big block is written as several: erlc's SSA optimiser grows faster than
+# linearly with a function's size, and one 720-assertion block made this spec
+# take two minutes to compile — past the BEAM suite's timeout. A statement
+# that is not an assertion (a `Time.freeze`) opens a group with the
+# assertions after it, and a group is never split across blocks.
+MAX_ASSERTIONS_PER_IT = 100
+
 def it(name)
-  line("  it(#{name.inspect}) do")
+  start = $out.size
   yield
-  line("  end")
-  line
+  body = $out.slice!(start..)
+  groups = []
+  leader_open = false
+  body.each do |text|
+    if !text.lstrip.start_with?("assert(")
+      groups << [text]
+      leader_open = true
+    elsif leader_open
+      groups.last << text
+    else
+      groups << [text]
+    end
+  end
+  parts = []
+  groups.each do |group|
+    if parts.empty? || parts.last.sum(&:size) + group.size > MAX_ASSERTIONS_PER_IT
+      parts << [group]
+    else
+      parts.last << group
+    end
+  end
+  parts.each_with_index do |part, index|
+    label = parts.size == 1 ? name : "#{name} (part #{index + 1}/#{parts.size})"
+    line("  it(#{label.inspect}) do")
+    part.flatten.each { |text| line(text) }
+    line("  end")
+    line
+  end
 end
 
 # One differential assertion. `expr` is Kex source; `expected` is the Ruby
@@ -129,7 +175,7 @@ line "#"
 line "# Every expected value below is Ruby's answer, taken from its built-in"
 line "# Date/Time classes via tools/calendar_ref/calendar_ref.rb. Regenerate with:"
 line "#"
-line "#   ruby tools/calendar_ref/gen_spec.rb > spec/prelude/time_generated.spec.kex"
+line "#   ruby tools/calendar_ref/gen_spec.rb spec/prelude"
 line "#"
 line "# seed: #{SEED}, cases per section: #{CASES}"
 line
@@ -741,4 +787,19 @@ describe "durations (vs Ruby)" do
   end
 end
 
-puts $out.join("\n")
+header = $out[0...$sections.first]
+bounds = $sections + [$out.size]
+sections = bounds.each_cons(2).map { |first, last| $out[first...last] }
+files = []
+sections.each do |section|
+  if files.empty? || files.last.sum(&:size) + section.size > MAX_LINES_PER_FILE
+    files << [section]
+  else
+    files.last << section
+  end
+end
+Dir.glob(File.join(OUT_DIR, "time_generated*.spec.kex")).each { |old| File.delete(old) }
+files.each_with_index do |file, index|
+  path = File.join(OUT_DIR, "time_generated_#{index + 1}.spec.kex")
+  File.write(path, (header + file.flatten).join("\n") + "\n")
+end

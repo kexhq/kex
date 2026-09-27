@@ -125,7 +125,7 @@ describe("Tey.Toolchain selection with a bundled Kex") do
   # means RUNNING it — `Mock.FS` can make a path exist but not answer
   # `--version`. A stub script pins the answer so the test does not depend on
   # whichever Kex built it.
-  let seedRoot = "/tmp/kex-tey-spec-seed"
+  let seedRoot = "/tmp/kex-tey-spec-seed_${DateTime.epochNanos()}"
   let seed = "${seedRoot}/bin/kex"
 
   it("offers the bundled version even though it is not installed") do

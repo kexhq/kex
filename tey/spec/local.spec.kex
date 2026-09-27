@@ -171,7 +171,7 @@ describe("Tey.Local") do
 end
 
 describe("Tey.Local Git protection") do
-  let root = "/tmp/tey_local_tracked_spec"
+  let root = "/tmp/tey_local_tracked_spec_${DateTime.epochNanos()}"
 
   before do
     FS.Directory.deleteAll(root)

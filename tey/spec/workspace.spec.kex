@@ -261,7 +261,7 @@ describe("Tey.Workspace.discover") do
 end
 
 describe("Tey.Workspace real filesystem integration") do
-  let root = "/tmp/tey_nested_workspace_spec"
+  let root = "/tmp/tey_nested_workspace_spec_${DateTime.epochNanos()}"
 
   before do
     FS.Directory.deleteAll(root)

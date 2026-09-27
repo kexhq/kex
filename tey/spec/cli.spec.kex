@@ -1,0 +1,14 @@
+using Tey.Cli
+using Tey.Manifest, only: [reservedCommands]
+
+describe("Tey.Cli built-in commands") do
+  # A package command may not redeclare a built-in (Tey.Manifest refuses the
+  # names in `reservedCommands`). The list is kept by hand, so it drifted:
+  # `upgrade` was a command a package could shadow. Read the names off the
+  # parser Tey actually runs instead of trusting the list.
+  it("reserves every built-in command's first word") do
+    let words = Tey.Cli.parser.commands.map { |command| command.name.split(" ").first.or("") }.uniq
+    let missing = words.filter { |word| !Tey.Manifest.reservedCommands.contains?(word) }
+    assert(missing.empty?, "not reserved: ${missing.join(", ")}")
+  end
+end

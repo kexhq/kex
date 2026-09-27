@@ -1,5 +1,5 @@
 describe("Tey workspace command scope integration") do
-  let root = "/tmp/tey_workspace_commands_spec"
+  let root = "/tmp/tey_workspace_commands_spec_${DateTime.epochNanos()}"
   let checkout = FS.Directory.current
   let compiler = FS.Path.join(checkout, "build/kex")
   let runner = "${root}/run-build.kex"

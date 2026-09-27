@@ -1,5 +1,5 @@
 describe("Tey build targets") do
-  let root = "/tmp/tey_targets_spec"
+  let root = "/tmp/tey_targets_spec_${DateTime.epochNanos()}"
   let checkout = FS.Directory.current
   let compiler = FS.Path.join(checkout, "build/kex")
 
