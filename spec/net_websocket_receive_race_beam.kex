@@ -1,0 +1,56 @@
+# kex: run-beam
+#
+# A handler polling `receiveMessage(timeout: Just(1ms))` must never lose a
+# message. The caller and the connection process used to time out on two
+# separate clocks; the caller's fired first, and a message landing in the
+# gap went to the request it had just abandoned, so the echo never came
+# (kexhq/kex#414's flaky spec/net_websocket_receive_timeout_beam.kex; this
+# spec loses most of its 300 messages that way). The connection process now
+# answers every bounded receive itself: data, or a Timeout that consumed
+# nothing.
+#
+# The client side's own bounded receive is exercised too: its 2s bound has
+# to be a real bound, not the 30s blocking read under it.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul serve(socket: Connection) -> Void do
+  loop do
+    match socket.receiveMessage(timeout: Just(1.milliseconds)) do
+      Ok(Text(text)) => socket.send(Text(text)).try
+      Ok(CloseMessage(_, _)) => break
+      Ok(_) => Void
+      Error(NetError { kind: Timeout }) => Void
+      Error(_) => break
+    end
+  end
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| serve(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let router = Router.build.get("/socket", ~socketRoute)
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+  let socket = WebSocket.connect("ws://127.0.0.1:${port}/socket").try
+  var got = 0
+  var i = 0
+  loop do
+    break if i >= 300
+    i = i + 1
+    Task.sleep((i % 3).milliseconds)
+    socket.send(Text("m${i}")).try
+    match socket.receiveMessage(timeout: Just(2.seconds)) do
+      Ok(Text(_)) => got = got + 1
+      _ => break
+    end
+  end
+  socket.close
+  let _ = server.stop
+  IO.printLine("echoed ${got}/300")
+end
