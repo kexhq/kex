@@ -78,7 +78,9 @@ jobs:
         run: |
           mkdir -p reference-out
           rm -rf reference-out/.git
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          # Tag pushes and hand-started runs rebuild every released version;
+          # only main pushes build just the unreleased reference.
+          if [[ "${{ github.ref }}" == refs/tags/* || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tools/build-docs.sh reference-out
           else
             SKIP_TAGS=1 tools/build-docs.sh reference-out
