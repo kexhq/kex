@@ -44,7 +44,7 @@ describe("Tey.Generator protocol") do
 end
 
 describe("Tey.Generator paths") do
-  let root = "/tmp/tey_generator_spec"
+  let root = "/tmp/tey_generator_spec_${DateTime.epochNanos()}"
 
   before do
     FS.Directory.deleteAll(root)

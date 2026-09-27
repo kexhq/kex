@@ -1,5 +1,5 @@
 describe("Tey program receipts integration") do
-  let root = "/tmp/tey_programs_install_spec"
+  let root = "/tmp/tey_programs_install_spec_${DateTime.epochNanos()}"
   let home = "${root}/home"
   let checkout = FS.Directory.current
   let compiler = FS.Path.join(checkout, "build/kex")

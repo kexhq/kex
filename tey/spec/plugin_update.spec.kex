@@ -1,5 +1,5 @@
 describe("Tey plugin update transaction integration") do
-  let root = "/tmp/tey_plugin_update_spec"
+  let root = "/tmp/tey_plugin_update_spec_${DateTime.epochNanos()}"
   let checkout = FS.Directory.current
   let compiler = FS.Path.join(checkout, "build/kex")
   let sources = FS.Path.join(checkout, "tey/src")

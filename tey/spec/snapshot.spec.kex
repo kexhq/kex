@@ -1,7 +1,7 @@
 using Tey.Snapshot, only: [cachedPath, create, verify]
 
 describe("Tey.Snapshot.create") do
-  let root = "/tmp/tey_snapshot_spec"
+  let root = "/tmp/tey_snapshot_spec_${DateTime.epochNanos()}"
 
   before do
     FS.Directory.deleteAll(root)
