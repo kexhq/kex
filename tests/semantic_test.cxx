@@ -3030,6 +3030,20 @@ int main() {
                 "main do IO.printLine(classify(5)) end\n"
             , "Branch type mismatch"));
         });
+
+        it("if/elif without else need not agree: the conditional is Void", []() {
+            assertTrue(noErrors(
+                "let f(x: Integer, m: {String: Integer}) -> Integer do\n"
+                "  if x > 1\n"
+                "    let _ = 1\n"
+                "  elif x < 0\n"
+                "    m.get(\"a\").map { |v| v > 0 }\n"
+                "  end\n"
+                "  return x\n"
+                "end\n"
+                "main do IO.printLine(f(2, {})) end\n"
+            ));
+        });
     });
 
     describe("ShorthandLambda typing", []() {

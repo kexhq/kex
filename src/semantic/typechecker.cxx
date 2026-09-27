@@ -5702,9 +5702,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 bool rePermissive = std::holds_alternative<TypeVar>(elifType->kind) ||
                                     std::holds_alternative<UnknownType>(elifType->kind) ||
                                     std::holds_alternative<VoidType>(elifType->kind);
+                // Without an `else` the conditional is Void whatever its
+                // branches produce (see below), so they have nothing to
+                // agree on: `if a ... x = 1 elif b ... opt.map(f) end`.
                 if (auto joined = siblingConstructorJoin(rt, elifType)) {
                     branchType = joined;
-                } else if (!rtPermissive && !rePermissive &&
+                } else if (node.elseBody && !rtPermissive && !rePermissive &&
                     !argMatchesParam(elifType, rt) && !argMatchesParam(rt, elifType)) {
                     error(expr.location, "Branch type mismatch: 'if' returns " +
                           typeToString(rt) + " but 'elif' returns " + typeToString(elifType));
