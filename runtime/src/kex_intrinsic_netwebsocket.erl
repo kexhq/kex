@@ -36,12 +36,18 @@ receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % exact same unbounded wait `receiveMessage/1` gives by default, spelled out
 % rather than left implicit in omitting an argument, and `Just(duration)`
 % asks for a real bound.
+%
+% The connection process alone enforces that bound and answers `Timeout`
+% itself, so the caller waits for its answer rather than timing out on its
+% own. With two clocks the caller's always fired first (the process arms
+% its timer only once the request reaches it), and a message landing in
+% between went to a request nobody was waiting on any more — lost, and the
+% handler's next receive never saw it.
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, 'None') ->
     call(Pid, {receive_message, infinity}, infinity);
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Duration', Seconds}})
   when is_number(Seconds), Seconds >= 0 ->
-    Timeout = timeout_ms(Seconds),
-    call(Pid, {receive_message, Timeout}, Timeout);
+    call(Pid, {receive_message, timeout_ms(Seconds)}, infinity);
 receiveMessageWithin(_, _) -> error_value('Parse', <<"invalid WebSocket receive timeout">>).
 session({'Net.HTTP.WebSocket.Connection', Pid}) ->
     case call(Pid, session) of
@@ -178,22 +184,16 @@ run_handler(HandlerFun, ConnPid) ->
 % socket at all.
 %
 % A bounded request (kexhq/kex#381's `receiveMessage(timeout: Just(_))`)
-% also arms its OWN deadline here (`arm_receive_deadline`/the
-% `{receive_timeout, Ref}` clause below), not just the caller's own
-% `call/3` wait: this process has no idea the caller gave up once its
-% `after` fires, so without an equivalent deadline of its own it stays
-% parked with the stale `{From, Ref}` in `Pending` — and a HANDLER LOOPING
-% ON A SHORT TIMEOUT (poll, keep going on Timeout) sends exactly one retry
-% per round, whose new `{call, ..., NewRef, ...}` arrives and overwrites
-% `Pending` unconditionally. Data that lands in the gap between the old
-% caller giving up and that retry arriving was being delivered to the
-% already-abandoned `{From, OldRef}` — lost to the handler, and to nobody,
-% since its caller had already stopped listening for `OldRef` (observed as
-% a flaky client-side hang in spec/net_websocket_receive_timeout_beam.kex).
-% Timing this process's own give-up to the same deadline the caller asked
-% for keeps `Pending` from ever outliving the window the caller is actually
-% still watching, so an in-between arrival is buffered (the `none` branch
-% below) for the retry to pick straight back up, correctly, instead.
+% arms its deadline here (`arm_receive_deadline`/the `{receive_timeout,
+% Ref}` clause below), and this process is the only one that enforces it:
+% the caller waits for this process's answer, data or `Timeout`, instead
+% of giving up on its own clock. When both sides timed out independently,
+% the caller's clock always fired first, and a message arriving in between
+% went to the request it had just abandoned. A handler polling on a short
+% timeout lost it for good (observed as a flaky client-side hang in
+% spec/net_websocket_receive_timeout_beam.kex). With one clock, `Pending`
+% is always a request someone is still waiting on, and data arriving after
+% a `Timeout` is buffered (the `none` branch below) for the next receive.
 server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending) ->
     receive
         {call, From, Ref, {send, _}} when Closed ->
@@ -404,21 +404,27 @@ loop(Transport, Buffer, Fragment, Maximum, Selected) ->
                 {'Error', _} -> transport_close(Transport);
                 _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
             end;
-        {call, From, Ref, {receive_message, _Wait}} ->
-            % `_Wait` isn't honored here yet: this loop reads via a
-            % blocking `gen_tcp:recv` with its own fixed `?TIMEOUT`
-            % (kexhq/kex#370's server-side fix — `{active, once}` — was
-            % never mirrored to the client side), so a caller-given bound
-            % shorter than that isn't actually enforced client-side. Left
-            % as a known gap rather than claiming a guarantee this loop
-            % cannot keep; matching the new `{receive_message, Wait}` shape
-            % here is only about not breaking dispatch.
-            case receive_message(Transport, client, Buffer, Fragment, Maximum) of
-                {Reply, NextBuffer, NextFragment, continue} ->
-                    From ! {Ref, Reply},
-                    loop(Transport, NextBuffer, NextFragment, Maximum, Selected);
-                {Reply, _, _, stop} ->
-                    From ! {Ref, Reply}, transport_close(Transport)
+        {call, From, Ref, {receive_message, Wait}} ->
+            % This loop reads frames with a blocking `gen_tcp:recv` (the
+            % server side's `{active, once}`, kexhq/kex#370, was never
+            % mirrored here), so a caller's bound is honored by waiting
+            % that long for the first bytes: a quiet peer is a `Timeout`
+            % that consumed nothing, and once bytes arrive the frame is
+            % read as before.
+            case await_bytes(Transport, Buffer, Wait) of
+                {ok, Ready} ->
+                    case receive_message(Transport, client, Ready, Fragment, Maximum) of
+                        {Reply, NextBuffer, NextFragment, continue} ->
+                            From ! {Ref, Reply},
+                            loop(Transport, NextBuffer, NextFragment, Maximum, Selected);
+                        {Reply, _, _, stop} ->
+                            From ! {Ref, Reply}, transport_close(Transport)
+                    end;
+                {error, timeout} ->
+                    From ! {Ref, native_error(timeout, timeout)},
+                    loop(Transport, Buffer, Fragment, Maximum, Selected);
+                {error, Reason} ->
+                    From ! {Ref, native_error('Closed', Reason)}, transport_close(Transport)
             end;
         {call, From, Ref, session} ->
             From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
@@ -427,6 +433,16 @@ loop(Transport, Buffer, Fragment, Maximum, Selected) ->
             _ = send_frame(Transport, client, 8, <<1000:16/big>>),
             transport_close(Transport), From ! {Ref, 'Kex.Unit'};
         _ -> loop(Transport, Buffer, Fragment, Maximum, Selected)
+    end.
+
+% Buffered bytes, or up to `Wait` for the first new ones. Unbounded (and
+% already-buffered) receives go straight to the frame reader.
+await_bytes(_, Buffer, infinity) -> {ok, Buffer};
+await_bytes(_, Buffer, _) when byte_size(Buffer) > 0 -> {ok, Buffer};
+await_bytes(Transport, Buffer, Wait) ->
+    case transport_recv(Transport, 0, Wait) of
+        {ok, Data} -> {ok, <<Buffer/binary, Data/binary>>};
+        Error -> Error
     end.
 
 send_message(Transport, Role, {'Text', Text}, Maximum) when is_binary(Text) ->
@@ -696,15 +712,24 @@ result(ok) -> {'Ok', 'Kex.Unit'}; result({error, Reason}) -> native_error('Close
 option(undefined) -> 'None'; option(Value) -> {'Just', Value}.
 lower(Value) -> string:lowercase(Value).
 transport_send({tcp, S}, Data) -> gen_tcp:send(S, Data); transport_send({tls, S}, Data) -> ssl:send(S, Data).
-transport_recv({tcp, S}, Count) -> gen_tcp:recv(S, Count, ?TIMEOUT); transport_recv({tls, S}, Count) -> ssl:recv(S, Count, ?TIMEOUT).
+transport_recv(Transport, Count) -> transport_recv(Transport, Count, ?TIMEOUT).
+transport_recv({tcp, S}, Count, Wait) -> gen_tcp:recv(S, Count, Wait); transport_recv({tls, S}, Count, Wait) -> ssl:recv(S, Count, Wait).
 transport_close({tcp, S}) -> gen_tcp:close(S); transport_close({tls, S}) -> ssl:close(S).
 % Bounded operations (send/session/close) keep the 31s default; a receive
-% with nothing to bound asks for `infinity` explicitly (see `receiveMessage`).
+% waits `infinity` for the connection's own answer (see `receiveMessage`).
+% The monitor is what makes that safe: a connection that dies instead of
+% answering is `Closed`, never a caller blocked for good.
 call(Pid, Message) -> call(Pid, Message, 31000).
 call(Pid, Message, Wait) ->
-    case is_process_alive(Pid) of
-        false -> error_value('Closed', <<"WebSocket is closed">>);
-        true -> Ref = make_ref(), Pid ! {call, self(), Ref, Message}, receive {Ref, Value} -> Value after Wait -> error_value('Timeout', <<"WebSocket operation timed out">>) end
+    Monitor = erlang:monitor(process, Pid),
+    Ref = make_ref(),
+    Pid ! {call, self(), Ref, Message},
+    receive
+        {Ref, Value} -> erlang:demonitor(Monitor, [flush]), Value;
+        {'DOWN', Monitor, process, Pid, _} -> error_value('Closed', <<"WebSocket is closed">>)
+    after Wait ->
+        erlang:demonitor(Monitor, [flush]),
+        error_value('Timeout', <<"WebSocket operation timed out">>)
     end.
 native_error(timeout, _) -> error_value('Timeout', <<"WebSocket operation timed out">>);
 native_error(Kind, Reason) -> error_value(Kind, unicode:characters_to_binary(io_lib:format("~p", [Reason]))).
