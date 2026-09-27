@@ -259,7 +259,9 @@ module Tey.Docgen.Highlight do
             "if", "elif", "else", "then", "unless", "trait", "foul", "implement",
             "main", "static", "using", "module", "in", "loop", "receive", "spawn",
             "where", "while", "for", "break", "next", "begin", "fn", "and", "or",
-            "not", "as", "is", "with", "from", "into"]
+            "not", "as", "is", "with", "from", "into", "serving", "slot", "compiled",
+            "after", "capability", "export", "final", "private", "public", "rescue",
+            "this", "timeout", "try", "trying", "when"]
   end
 
   foul constants() -> [String] do
