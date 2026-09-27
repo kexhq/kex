@@ -308,7 +308,9 @@ describe("Tey.Resolver Git monorepo dependencies") do
       let lock = Tey.Resolver.resolveWorkspace(context).try
       let dependency = lock.lockedDependencies.find { |dep| dep.name == "tey" }.try
       assert(dependency.subdir == "tey")
-      assert(dependency.version == "0.2.0")
+      # The checkout's own tey/package.kex, resolved at HEAD: whatever
+      # version Tey is at, not a number every bump would break.
+      assert(dependency.version == Tey.Version.number)
       assert(Tey.Cache.packagePath(dependency).endsWith?("/tey"))
       assert(FS.File.file?(FS.Path.join(Tey.Cache.packagePath(dependency),
                                        "package.kex")))
@@ -343,7 +345,7 @@ describe("Tey.Resolver Git monorepo dependencies") do
       let lock = Tey.Resolver.resolveWorkspace(context).try
       let dependency = lock.lockedDependencies.find { |dep| dep.name == "tey" }.try
       assert(dependency.subdir == "tey")
-      assert(dependency.version == "0.2.0")
+      assert(dependency.version == Tey.Version.number)
     end
   end
 
