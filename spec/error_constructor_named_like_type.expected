@@ -1,0 +1,3 @@
+spec/error_constructor_named_like_type.kex:11:1: error: Type mismatch: expected NetErrorKind, got Kex.Backend
+spec/error_constructor_named_like_type.kex:14:1: error: Type mismatch: expected Other, got Color
+Aborted: 2 type errors — fix before running (use --no-check to skip).

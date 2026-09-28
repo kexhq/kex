@@ -295,6 +295,8 @@ auto TypeChecker::check(const ast::Program& program,
     m_typeAliases.clear();
     m_distinctTypes.clear();
     m_recordFields.clear();
+    m_guessedReceiverTypes.clear();
+    m_constructorOwners.clear();
     m_requiredRecordFields.clear();
     if (m_importedInterfaces)
         m_distinctTypes = m_importedInterfaces->distinctTypes;
@@ -424,6 +426,12 @@ auto TypeChecker::check(const ast::Program& program,
         for (const auto& adt : m_importedInterfaces->adts) {
             m_adtVariants[adt.name] = adt.constructors;
             for (const auto& ctor : adt.constructors) {
+                const auto declared = adt.constructorArities.find(ctor);
+                m_constructorOwners[ctor].push_back(
+                    {adt.name,
+                     declared == adt.constructorArities.end()
+                         ? 0 : static_cast<size_t>(declared->second),
+                     adt.typeParamCount > 0});
                 auto [owner, fresh] = m_adtOfConstructor.try_emplace(ctor, adt.name);
                 if (!fresh && owner->second != adt.name) {
                     ambiguous.insert(ctor);
@@ -764,14 +772,15 @@ auto TypeChecker::reportUnknownMethods() -> void {
             return true;
         return importedHere(moduleName);
     };
-    auto knownSomewhere = [&](const std::string& name) {
+    auto knownSomewhere = [&](const std::string& name, bool fieldMayExist) {
         if (m_methodSignatures.count(name) || m_userSignatures.count(name) ||
             m_annotatedMethods.count(name) || m_makeMethodNames.count(name))
             return true;
-        for (const auto& [record, fields] : m_recordFields) {
-            (void)record;
-            if (fields.count(name)) return true;
-        }
+        if (fieldMayExist)
+            for (const auto& [record, fields] : m_recordFields) {
+                (void)record;
+                if (fields.count(name)) return true;
+            }
         for (const auto& [traitName, trait] : m_traits.all()) {
             (void)traitName;
             for (const auto& required : trait.requiredMethods)
@@ -808,16 +817,21 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 if (!moduleInReach(moduleName)) continue;
                 if (module.exports.count(name)) return true;
             }
-            for (const auto& [record, fields] :
-                 m_importedInterfaces->recordFieldNames) {
-                (void)record;
-                if (fields.count(name)) return true;
-            }
+            if (fieldMayExist)
+                for (const auto& [record, fields] :
+                     m_importedInterfaces->recordFieldNames) {
+                    (void)record;
+                    if (fields.count(name)) return true;
+                }
         }
         return false;
     };
     for (const auto& unresolved : m_unresolvedMethods) {
-        if (knownSomewhere(unresolved.name)) continue;
+        // Checked here, not at the call: the guess may come later in the file.
+        if (knownSomewhere(unresolved.name,
+                           unresolved.fieldMayExist ||
+                               m_guessedReceiverTypes.count(unresolved.receiver)))
+            continue;
         error(unresolved.location,
               "Undefined method `" + unresolved.name + "`" +
               (unresolved.receiver.empty() || unresolved.receiver == "Unknown"
@@ -912,8 +926,12 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
 
 auto TypeChecker::resolveRecordName(const std::string& name) const
     -> std::string {
+    // ADTs share the records' identity rule: one declared inside
+    // `module Kex` is `Kex.Backend`, so it can never be mistaken for a
+    // same-spelled type or constructor declared anywhere else.
     auto recordExists = [&](const std::string& candidate) {
         return m_recordFields.count(candidate) ||
+               m_adtVariants.count(candidate) ||
                (m_importedInterfaces &&
                 m_importedInterfaces->recordArities.count(candidate));
     };
@@ -953,10 +971,13 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     // stdlib records live in m_importedInterfaces whether or not they were
     // imported, so `record Request` in a plain script resolved to
     // `Net.HTTP.Request` and reported its fields instead.
-    if (m_recordFields.count(name)) return name;
+    if (m_recordFields.count(name) || m_adtVariants.count(name)) return name;
     if (m_importedInterfaces) {
         std::optional<std::string> unique;
         const auto suffix = "." + name;
+        // Records only. A module ADT is never guessed at: an unimported
+        // `Message` must not become Net.HTTP.WebSocket.Message over a local
+        // `type Message = :hello` that is resolved after this.
         for (const auto& [candidate, _] :
              m_importedInterfaces->recordArities) {
             if (candidate.size() <= suffix.size() ||
@@ -1103,11 +1124,15 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
     }
     if (names.empty()) return;
 
-    if (modulePath.empty()) {
-        m_adtVariants[def.name] = names;
+    // Inside a module the ADT's identity is qualified, like a record's. Its
+    // constructors stay out of the bare-name owner map: `Kex.Backend`'s
+    // `Beam` is reached through the module, never by spelling alone.
+    const auto identity =
+        modulePath.empty() ? def.name : modulePath + "." + def.name;
+    m_adtVariants[identity] = names;
+    if (modulePath.empty())
         for (const auto& name : names)
             m_adtOfConstructor[name] = def.name;
-    }
 
     // Record what each constructor produces, so `Just(1)` infers as an
     // Optional instead of `unknown` — without that, a mismatched pattern in
@@ -1116,7 +1141,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
         auto name = extractConstructorName(variant);
         if (!name) continue;
         ConstructorResult result;
-        result.adtName = def.name;
+        result.adtName = identity;
         result.typeParamCount = def.typeParams.size();
         if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {
             for (const auto& payload : generic->args) {
@@ -1173,13 +1198,54 @@ auto TypeChecker::siblingConstructorJoin(const TypePtr& a, const TypePtr& b) con
     if (!left || !right || left->name == right->name ||
         !left->typeArgs.empty() || !right->typeArgs.empty())
         return nullptr;
-    const auto leftOwner = m_adtOfConstructor.find(left->name);
-    const auto rightOwner = m_adtOfConstructor.find(right->name);
-    if (leftOwner == m_adtOfConstructor.end() ||
-        rightOwner == m_adtOfConstructor.end() ||
-        leftOwner->second != rightOwner->second)
+    const auto* leftOwner = constructorOwner(*left);
+    const auto* rightOwner = constructorOwner(*right);
+    if (!leftOwner || !rightOwner || *leftOwner != *rightOwner) return nullptr;
+    return Type::named(*leftOwner);
+}
+
+auto TypeChecker::scopedConstructorOwner(const std::string& name) const
+    -> const ConstructorOwner* {
+    // A spelling with one owner is already in m_adtOfConstructor.
+    if (m_adtOfConstructor.count(name)) return nullptr;
+    const auto owners = m_constructorOwners.find(name);
+    if (owners == m_constructorOwners.end()) return nullptr;
+    auto visible = [&](const std::string& adt) {
+        const auto dot = adt.rfind('.');
+        // A top-level stdlib ADT is file-level prelude: always in scope.
+        if (dot == std::string::npos) return true;
+        const auto module = adt.substr(0, dot);
+        if (m_currentModulePath == module ||
+            m_currentModulePath.starts_with(module + "."))
+            return true;
+        if (moduleMemberImported(module, name)) return true;
+        if (!m_importedInterfaces) return false;
+        const auto imported = m_importedInterfaces->modules.find(module);
+        return imported != m_importedInterfaces->modules.end() &&
+               imported->second.automaticImport;
+    };
+    const ConstructorOwner* chosen = nullptr;
+    for (const auto& owner : owners->second) {
+        if (!visible(owner.adt)) continue;
+        if (chosen && chosen->adt != owner.adt) return nullptr;
+        chosen = &owner;
+    }
+    return chosen;
+}
+
+auto TypeChecker::constructorOwner(const NamedType& named) const
+    -> const std::string* {
+    if (!named.typeArgs.empty()) return nullptr;
+    auto owner = m_adtOfConstructor.find(named.name);
+    if (owner == m_adtOfConstructor.end()) return nullptr;
+    // `Kex.Backend` is registered as the ADT `Backend`, and `Backend` is also
+    // a nullary NetErrorKind constructor. Looked up by spelling alone, every
+    // `Backend` value became a NetErrorKind.
+    if (owner->second != named.name &&
+        (m_adtVariants.count(named.name) || m_typeAliases.count(named.name) ||
+         isPrimitiveTypeName(named.name)))
         return nullptr;
-    return Type::named(leftOwner->second);
+    return &owner->second;
 }
 
 auto TypeChecker::constructorResultType(
@@ -1197,7 +1263,15 @@ auto TypeChecker::constructorResultType(
         module.resize(dot);
     }
     if (found == m_constructorResult.end()) found = m_constructorResult.find(name);
-    if (found == m_constructorResult.end()) return nullptr;
+    if (found == m_constructorResult.end()) {
+        // A payload constructor whose spelling two ADTs share (`Text(s)`):
+        // its ADT is the one in scope.
+        if (const auto* owner = scopedConstructorOwner(name);
+            owner && owner->arity > 0 && owner->arity == argTypes.size() &&
+            !owner->generic)
+            return Type::named(owner->adt);
+        return nullptr;
+    }
     const auto& info = found->second;
 
     std::vector<TypePtr> typeArgs;
@@ -1231,7 +1305,8 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
                 if (auto constructors = kex::typeConstructors(*node))
                     for (const auto& constructor : *constructors)
                         m_moduleConstructors[mod.name][constructor.name] = {
-                            node->name, constructor.arity, true};
+                            m_currentModulePath + "." + node->name,
+                            constructor.arity, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) registerAdtsInModule(*node);
             } else if constexpr (
@@ -1248,8 +1323,8 @@ auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
                             for (const auto& constructor : *constructors)
                                 m_moduleConstructors[mod.name]
                                                     [constructor.name] = {
-                                    (*type)->name, constructor.arity,
-                                    node->isPublic};
+                                    m_currentModulePath + "." + (*type)->name,
+                                    constructor.arity, node->isPublic};
                     }
             }
         }, item);
@@ -2588,10 +2663,11 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
             if (node.parts.size() > 1) {
                 m_referencedModules.insert(qualified);
-                const bool isRecord = m_recordFields.count(qualified) ||
+                const bool isNominal = m_recordFields.count(qualified) ||
+                    m_adtVariants.count(qualified) ||
                     (m_importedInterfaces &&
                      m_importedInterfaces->recordArities.count(qualified));
-                return Type::named(isRecord ? qualified : last);
+                return Type::named(isNominal ? qualified : last);
             }
             return Type::named(resolveRecordName(last));
         }
@@ -2615,7 +2691,14 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 alias != m_typeAliases.end() &&
                 !m_recordFields.count(resolveRecordName(name)))
                 return substituteInterfaceGenerics(alias->second, args);
-            return Type::named(name, std::move(args));
+            if (node.name.parts.size() > 1) {
+                std::string qualified;
+                for (const auto& part : node.name.parts)
+                    qualified += (qualified.empty() ? "" : ".") + part;
+                if (m_adtVariants.count(qualified))
+                    return Type::named(qualified, std::move(args));
+            }
+            return Type::named(resolveRecordName(name), std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
             // Same ambiguity as annotationToSignature: `A -> B -> C` and
@@ -2752,6 +2835,14 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
         return;
     }
 
+    // The matched ADT declaring the constructor settles it. The bare-name
+    // owner table cannot: `WorkQueue.Pending`'s own `Done` shares its
+    // spelling with Control.Retry's, which owns that entry.
+    if (const auto variants = m_adtVariants.find(adt);
+        variants != m_adtVariants.end() &&
+        std::find(variants->second.begin(), variants->second.end(),
+                  ctorName) != variants->second.end())
+        return;
     auto owner = m_adtOfConstructor.find(ctorName);
     // An unregistered constructor (imported or opaque) proves nothing.
     if (owner == m_adtOfConstructor.end() || owner->second == adt) return;
@@ -4443,6 +4534,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 function.signature.params.empty() &&
                                 importedFunctionVisible(function))
                                 return function.signature.result;
+            // A spelling two ADTs share: typed as whichever one is in scope,
+            // not left unknown. `x : Integer = Timeout` checked clean.
+            if (const auto* owner = scopedConstructorOwner(node.name);
+                owner && owner->arity == 0 && !owner->generic)
+                return Type::named(owner->adt);
             auto type = lookupVar(node.name);
             if (type) return type;
             // A bare TYPE NAME used as a value — `x.to(Integer)`, the argument
@@ -5433,10 +5529,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     [&](const TypePtr& type) -> TypePtr {
                     auto resolved = resolve(type);
                     if (auto* named = std::get_if<NamedType>(&resolved->kind)) {
-                        if (auto owner = m_adtOfConstructor.find(named->name);
-                            owner != m_adtOfConstructor.end() &&
-                            owner->second != named->name)
-                            return Type::named(owner->second);
+                        if (const auto* owner = constructorOwner(*named);
+                            owner && *owner != named->name)
+                            return Type::named(*owner);
                         return resolved;
                     }
                     if (auto* list = std::get_if<ListType>(&resolved->kind))
@@ -5592,16 +5687,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             // `[Comparison]` instead of rejecting it.
                             auto* lhs = std::get_if<NamedType>(&elemType->kind);
                             auto* rhs = std::get_if<NamedType>(&t->kind);
-                            auto lhsOwner = lhs
-                                ? m_adtOfConstructor.find(lhs->name)
-                                : m_adtOfConstructor.end();
-                            auto rhsOwner = rhs
-                                ? m_adtOfConstructor.find(rhs->name)
-                                : m_adtOfConstructor.end();
-                            if (lhsOwner != m_adtOfConstructor.end() &&
-                                rhsOwner != m_adtOfConstructor.end() &&
-                                lhsOwner->second == rhsOwner->second) {
-                                elemType = Type::named(lhsOwner->second);
+                            const auto* lhsOwner = lhs ? constructorOwner(*lhs) : nullptr;
+                            const auto* rhsOwner = rhs ? constructorOwner(*rhs) : nullptr;
+                            if (lhsOwner && rhsOwner && *lhsOwner == *rhsOwner) {
+                                elemType = Type::named(*lhsOwner);
                             } else {
                                 error(expr.location,
                                       "List elements must be the same type. Expected " +
@@ -6851,10 +6940,9 @@ auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
             // constructor occurrence.  In particular, Process<Message> must
             // not widen through the unrelated prelude constructor `Process`
             // to its owning `Feature` ADT in editor-facing types.
-            if (auto owner = m_adtOfConstructor.find(named->name);
-                named->typeArgs.empty() && owner != m_adtOfConstructor.end() &&
-                owner->second != named->name)
-                return Type::named(owner->second);
+            if (const auto* owner = constructorOwner(*named);
+                owner && *owner != named->name)
+                return Type::named(*owner);
             // Type ARGUMENTS are left alone: a phantom typestate parameter is
             // spelled with constructors too (`FileHandle<Write>`), and
             // widening those to their ADT (`FileHandle<WritePermission>`)
@@ -6887,8 +6975,8 @@ auto TypeChecker::satisfiesTrait(const TypePtr& type,
         return ownerName != named->name &&
                m_traits.satisfies(Type::named(ownerName), traitName);
     };
-    if (auto owner = m_adtOfConstructor.find(named->name);
-        owner != m_adtOfConstructor.end() && ownerSatisfies(owner->second))
+    if (const auto* owner = constructorOwner(*named);
+        owner && ownerSatisfies(*owner))
         return true;
     // Constructors of a `using`-imported module are registered per module
     // rather than in the file-local ADT map.
@@ -7118,15 +7206,21 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // trait-relaxation treatment (argMatchesParam, not typesEqual).
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
-        if (!argNamed || !namedTypesMatch(argNamed->name, paramNamed->name)) {
+        // A bare name suffix-matches a qualified one (`Version` is
+        // `Kex.Version`), but a constructor's singleton type is no spelling
+        // of a type at all: NetErrorKind's `Backend` is not a `Kex.Backend`.
+        const bool sameType = argNamed &&
+            (argNamed->name == paramNamed->name ||
+             (!constructorOwner(*argNamed) &&
+              namedTypesMatch(argNamed->name, paramNamed->name)));
+        if (!sameType) {
             // A nullary ADT constructor is a refined value of its parent
             // type. This relationship comes from the ADT registry rather
             // than from any constructor spelling.
             if (argNamed && argNamed->typeArgs.empty() &&
                 paramNamed->typeArgs.empty()) {
-                auto owner = m_adtOfConstructor.find(argNamed->name);
-                if (owner != m_adtOfConstructor.end() &&
-                    owner->second == paramNamed->name)
+                if (const auto* owner = constructorOwner(*argNamed);
+                    owner && *owner == paramNamed->name)
                     return true;
                 // m_adtOfConstructor keeps ONE owner per constructor, so a
                 // record named by two unions belongs only to whichever was
@@ -7965,9 +8059,28 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }();
         if (isMethodCall && concreteReceiver && !name.empty() &&
             name.find("::") == std::string::npos &&
-            !std::isupper(static_cast<unsigned char>(name.front())))
+            !std::isupper(static_cast<unsigned char>(name.front()))) {
+            // `Kex.BACKEND.major` checked clean because `major` is a field
+            // of Kex.Version, then died at runtime with badarg. The field
+            // lookup above already searched a known record receiver, and a
+            // primitive or ADT has no fields at all.
+            // Only a DECLARED receiver type counts. One reached through a
+            // guess may be wrong: `dep.name` binds `dep` to Weekday, the one
+            // type with a `name` method, and `dep.version` is then a record
+            // field after all — also once the guess has flowed on through
+            // `find` and `.try` and no inference variable is left to see.
+            const auto receiver = resolve(argTypes[0]);
+            const auto* named = std::get_if<NamedType>(&receiver->kind);
+            const bool fieldMayExist =
+                std::holds_alternative<TypeVar>(argTypes[0]->kind) ||
+                (!std::holds_alternative<PrimitiveType>(receiver->kind) &&
+                 !(named && (isPrimitiveTypeName(named->name) ||
+                             m_adtVariants.count(named->name) ||
+                             constructorOwner(*named) ||
+                             m_recordFields.count(resolveRecordName(named->name)))));
             m_unresolvedMethods.push_back(
-                {name, loc, typeToString(resolve(argTypes[0]))});
+                {name, loc, typeToString(receiver), fieldMayExist});
+        }
         return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
     }
 
@@ -8715,8 +8828,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 // unrelated signature's `A` mean whatever the last such call
                 // passed: after `args.at(i).or("")` (String), `(0..3).filter`
                 // returned [String] and its block param typed as String.
-                if (tv->id >= 0 && !typeContainsVar(param))
+                if (tv->id >= 0 && !typeContainsVar(param)) {
+                    // A receiver typed by nothing but the method's name is
+                    // a guess (`item.name` makes `item` a Weekday).
+                    if (i == 0) m_guessedReceiverTypes.insert(typeToString(param));
                     unifyVar(tv->id, param);
+                }
             }
         }
         // Instantiate interface-level generic placeholders in the result from

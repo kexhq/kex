@@ -1,0 +1,12 @@
+# A constructor spelling two ADTs share is typed as the one in scope, not
+# left unchecked. `Timeout` is Process.CallError's (always in scope) and
+# Net.NetErrorKind's (only after `using Net`); the checker used to drop the
+# spelling altogether, so both lines below checked clean.
+count : Integer
+let count = Timeout
+
+let describe(backend: Kex.Backend) -> Bool = backend.beam?
+
+main do
+  IO.inspect(describe(Timeout))
+end

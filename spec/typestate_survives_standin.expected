@@ -7,4 +7,4 @@ spec/typestate_survives_standin.kex:24:21: error: `read` expects argument 1 to b
 
 read : FileHandle<CanRead, A> -> Result<String, ReadError>
 
-read : String -> Result<String, FileError>
+read : String -> Result<String, FS.FileError>

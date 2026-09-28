@@ -788,6 +788,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                             {ctorName, c.traitName});
             }
 
+    kex::semantic::qualifyModuleAdtNames(interfaces);
     return interfaces;
 }
 

@@ -1,0 +1,5 @@
+spec/error_shared_constructor_in_scope.kex:6:1: error: Type mismatch: expected Integer, got CallError
+spec/error_shared_constructor_in_scope.kex:11:14: error: `describe` expects argument 1 to be Kex.Backend, but got CallError
+
+describe : Kex.Backend -> Bool
+Aborted: 2 type errors — fix before running (use --no-check to skip).

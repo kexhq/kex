@@ -431,9 +431,9 @@ int main() {
             assertTrue(result.find(R"("label":"File")") != std::string::npos,
                        "FS completion did not include its nested File module");
             assertTrue(result.find(R"("label":"foul read")") != std::string::npos &&
-                       result.find("read : String -> Result<String, FileError>") != std::string::npos,
+                       result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
                        "FS.File completion did not include read");
-            assertTrue(result.find("foul read : String -> Result<String, FileError>") !=
+            assertTrue(result.find("foul read : String -> Result<String, FS.FileError>") !=
                            std::string::npos,
                        "completion did not expose imported module foulness");
             assertTrue(result.find("(path, content)") != std::string::npos,
@@ -442,7 +442,7 @@ int main() {
                        result.find("(path, content) : String -> String -> Bool") !=
                            std::string::npos,
                        "foul completion did not use declaration order");
-            assertTrue(result.find("read : String -> Result<String, FileError>") != std::string::npos,
+            assertTrue(result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
                        "imported built-in function hover omitted its signature");
             assertTrue(result.find("Reads the KexI interface chunk") ==
                            std::string::npos,

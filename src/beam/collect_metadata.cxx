@@ -351,6 +351,24 @@ void addReceiverFunction(const kex::ast::FunctionDef& fd,
     iface.methods.push_back(std::move(method));
 }
 
+// Whether `name` is a type declared by `modulePath` itself, and so imported
+// under `modulePath.name`. An ADT answers exactly, by its qualified identity:
+// `make Weekday` inside `module Time` extends the file's top-level Weekday,
+// which is not `Time.Weekday`. A constructor-less type (an opaque type or an
+// alias) is known only by its spelling in the interface.
+auto ownedByModule(const std::string& name, const std::string& modulePath,
+                   const KexiTypeInterface& iface,
+                   const KexiStructuralMetadata& meta) -> bool {
+    const auto qualified = modulePath + "." + name;
+    if (std::any_of(meta.adts.begin(), meta.adts.end(),
+                    [&](const auto& adt) { return adt.name == qualified; }))
+        return true;
+    return std::any_of(iface.types.begin(), iface.types.end(),
+                       [&](const auto& type) {
+                           return type.name == name && type.constructors.empty();
+                       });
+}
+
 auto makeTargetName(const KexiTypePtr& type) -> std::string {
     if (!type) return "";
     if (type->kind == KexiType::Primitive || type->kind == KexiType::Named)
@@ -514,32 +532,28 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                         const std::string& modulePath = {}) {
     auto receiverType = convertTypeExpr(md.target);
     auto typeName = makeTargetName(receiverType);
-    // Records and opaque types declared inside a module are imported under
-    // their qualified nominal identity. Keep ADT receivers bare so their
-    // constructor variants continue to match the shared parent type.
+    // Every type declared inside a module — record, opaque type or ADT — is
+    // imported under its qualified identity, and the ADT's constructors are
+    // owned by that same qualified name, so the receiver follows it. A type
+    // declared elsewhere (`make Weekday` extending a top-level ADT) keeps
+    // the spelling it was declared with.
+    bool owned = false;
     if (!modulePath.empty() && receiverType &&
         receiverType->kind == KexiType::Named &&
         receiverType->name.find('.') == std::string::npos) {
-        const auto ownedNominal = std::find_if(
-            iface.types.begin(), iface.types.end(), [&](const auto& type) {
-                return type.name == receiverType->name &&
-                    type.constructors.empty();
-            });
-        if (ownedNominal != iface.types.end())
+        owned = ownedByModule(receiverType->name, modulePath, iface, meta);
+        if (owned)
             receiverType->name = modulePath + "." + receiverType->name;
     }
     for (const auto& trait : md.implements) {
         if (typeName.empty()) continue;
-        meta.traitConformances.push_back({typeName, trait});
-        // A record declared in a module is known by its QUALIFIED name, so the
-        // conformance has to be recorded under that too — otherwise `make
-        // Files, implement: FS.File` inside `module Mock` conformed a type
-        // called `Files` that nothing is, and a consumer's `with FS.File =
-        // Mock.Files { ... }` was rejected (kexhq/kex#143). Only the
-        // conformance is qualified: the RECEIVER type must stay as written,
-        // since qualifying it detaches an ADT's variants from their own
-        // methods (`Monday` stopped being a `Time.Weekday`).
-        if (!modulePath.empty())
+        meta.traitConformances.push_back(
+            {owned ? modulePath + "." + typeName : typeName, trait});
+        // A make block for a type declared elsewhere may still be naming one
+        // of this module's records by a spelling the lookup above missed;
+        // the qualified conformance covers it (kexhq/kex#143: `make Files,
+        // implement: FS.File` inside `module Mock`).
+        if (!owned && !modulePath.empty())
             meta.traitConformances.push_back(
                 {modulePath + "." + typeName, trait});
     }
@@ -656,7 +670,8 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
 }
 
 void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
-                        KexiStructuralMetadata& meta) {
+                        KexiStructuralMetadata& meta,
+                        const std::string& owner = std::string{}) {
     KexiTypeExport te;
     te.name = td.name;
     te.genericParams = td.typeParams;
@@ -682,8 +697,11 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.
     if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td)) {
+        // An ADT declared inside a module is known by its qualified name, as
+        // a record is: `Kex.Backend`, never a bare `Backend` that a same-named
+        // constructor elsewhere (NetErrorKind's) could be mistaken for.
         KexiADT adt;
-        adt.name = td.name;
+        adt.name = owner.empty() ? td.name : owner + "." + td.name;
         adt.typeParams = td.typeParams;
         for (const auto& v : *td.variants) {
             if (!v) continue;
@@ -779,13 +797,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                 ? convertTypeExpr(*first.type) : kexiUnknown();
             if (receiver && receiver->kind == KexiType::Named &&
                 receiver->name.find('.') == std::string::npos) {
-                const auto ownedNominal = std::find_if(
-                    iface.types.begin(), iface.types.end(),
-                    [&](const auto& type) {
-                        return type.name == receiver->name &&
-                            type.constructors.empty();
-                    });
-                if (ownedNominal != iface.types.end())
+                if (ownedByModule(receiver->name, modulePath, iface, meta))
                     receiver->name = modulePath + "." + receiver->name;
             }
             addReceiverFunction(fd, std::move(receiver), iface, meta,
@@ -820,7 +832,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                 collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
-                collectFromTypeDef(*ptr, iface, meta);
+                collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
                 collectFromRecordDef(*ptr, iface, meta, modulePath);
             }
@@ -954,7 +966,7 @@ void collectFlattenedModuleBody(
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                 collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
-                collectFromTypeDef(*ptr, iface, meta);
+                collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
                 collectFromRecordDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
