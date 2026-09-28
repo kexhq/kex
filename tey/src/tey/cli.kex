@@ -633,7 +633,7 @@ private do
           if includePre
             IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
           else
-            IO.printLine("Tey ${version} is newer than the newest stable release; nothing to do (`tey upgrade --pre` also considers pre-releases)")
+            IO.printLine("Tey ${version} is newer than the newest release; nothing to do (only stable releases were considered; `tey upgrade --pre` includes pre-releases)")
           end
           0
         end
