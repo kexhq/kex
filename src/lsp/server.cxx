@@ -7,6 +7,7 @@
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
+#include "../semantic/completion_at.hxx"
 #include "../semantic/db.hxx"
 #include "../semantic/types.hxx"
 #include "../module/resolver.hxx"
@@ -35,6 +36,10 @@
 
 namespace kex::lsp {
 namespace {
+
+using semantic::completionQualifierForType;
+using semantic::DotReceiver;
+using semantic::scanDotReceiver;
 
 struct Document {
     struct HoverEntry {
@@ -1681,25 +1686,6 @@ auto importedConstructorDetail(const semantic::ImportedADT& adt,
     return result + importedAdtType(adt, typeParameters);
 }
 
-auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
-    if (!type) return {};
-    return std::visit([&type](const auto& value) -> std::string {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, semantic::ListType>) return "List";
-        else if constexpr (std::is_same_v<T, semantic::MapType>) return "Map";
-        else if constexpr (std::is_same_v<T, semantic::OptionalType>)
-            return "Optional";
-        else if constexpr (std::is_same_v<T, semantic::NamedType>)
-            return value.typeArgs.empty() ? value.name
-                                          : semantic::typeToString(type);
-        else if constexpr (std::is_same_v<T, semantic::PrimitiveType> ||
-                           std::is_same_v<T, semantic::SizedIntType> ||
-                           std::is_same_v<T, semantic::SizedFloatType>)
-            return semantic::typeToString(type);
-        return {};
-    }, type->kind);
-}
-
 // The declared type of one field, read out of a record symbol's Kex-shaped
 // declaration text (`record Box do\n  size : Integer\n  ...`). Hovering a
 // field used to answer with whatever global function shared its name — `b.size`
@@ -1901,153 +1887,18 @@ auto documentImports(const std::string& source)
     return modules;
 }
 
-// Where the receiver of a member completion starts, and the dot it hangs off.
-// `completionPrefix` answers this too, but only for receivers made of
-// identifiers on the cursor's own line: it stops at `)`, so `makeBox(3).g`
-// yields the bare prefix ".g", and it is bounded by the line start, so a
-// builder chain continued on the next line yields ".g" as well. Both then
-// resolve to nothing. This walks the real shape instead — identifiers,
-// balanced `(...)`/`[...]`, and quoted strings, joined by dots, across line
-// breaks.
-struct DotReceiver {
-    size_t start = 0;  // first byte of the receiver expression
-    size_t dot = 0;    // the '.' the member being typed hangs off
-    // Where the AST records the OUTERMOST expression of the receiver. A call
-    // is recorded at its argument list's `(`, not at the receiver it hangs
-    // off: in a builder chain `Web.Server.new(0)\n  .get("/", ~h)` the last
-    // `.get(…)` call sits at that `(`. Zero when the receiver ends in no call.
-    size_t callOpen = 0;
-    bool valid = false;
-};
-
-auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
-    const auto isWord = [](unsigned char c) {
-        return std::isalnum(c) || c == '_' || c == '?' || c == '!';
-    };
-    const auto skipSpaceBack = [&](size_t i) {
-        while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1])))
-            --i;
-        return i;
-    };
-    // Offset of the delimiter opening the group that ends just before `end`.
-    const auto matchOpen = [&](size_t end, char close, char open) -> size_t {
-        int depth = 0;
-        for (size_t j = end; j > 0; --j) {
-            const char c = source[j - 1];
-            if (c == close) {
-                ++depth;
-            } else if (c == open) {
-                --depth;
-                if (depth == 0) return j - 1;
-            }
-        }
-        return std::string::npos;
-    };
-
-    size_t i = cursor;
-    while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
-    i = skipSpaceBack(i);
-    if (i == 0 || source[i - 1] != '.') return {};
-    const size_t dot = i - 1;
-
-    size_t callOpen = 0;
-    i = skipSpaceBack(dot);
-    while (i > 0) {
-        const char c = source[i - 1];
-        // A group is never the whole receiver: `makeBox(3)` continues into the
-        // name in front of it, and `[c][0]` into the list before the index.
-        if (c == ')' || c == ']') {
-            const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
-            if (open == std::string::npos) return {};
-            if (c == ')' && callOpen == 0) callOpen = open;
-            i = open;
-            continue;
-        }
-        if (c == '"' || c == '\'' || c == '`') {
-            size_t j = i - 1;
-            while (j > 0) {
-                --j;
-                if (source[j] == c && (j == 0 || source[j - 1] != '\\')) break;
-            }
-            i = j;
-            continue;
-        }
-        if (!isWord(static_cast<unsigned char>(c))) break;
-        while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
-        // `@size` is one expression and the AST records it starting at the
-        // `@`. Stopping at the sigil pointed one byte too far right, so the
-        // recorded type could not be found and every `@field.method` fell back
-        // to re-analyzing the whole buffer.
-        if (i > 0 && source[i - 1] == '@') --i;
-        // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
-        const size_t before = skipSpaceBack(i);
-        if (before == 0 || source[before - 1] != '.') break;
-        i = skipSpaceBack(before - 1);
-    }
-    if (i >= dot) return {};
-    return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
-}
-
-// The type of an arbitrary receiver expression, by re-parsing the buffer with
-// the half-typed member removed and asking the analyzer. Deleting through the
-// cursor rather than just the dot is what makes `makeBox(3).g` parse again.
+// The shared recovery analysis, through a SemanticDB kept between calls so
+// the module sources are parsed once rather than per keystroke.
 auto recoveredReceiverQualifier(
     const std::string& source, const std::string& path,
     const DotReceiver& receiver, size_t cursor,
     const semantic::ImportedInterfaces* interfaces,
     const std::vector<std::string>& moduleRoots) -> std::string {
-    if (!receiver.valid || cursor < receiver.dot) return {};
-    auto recovered = source;
-    recovered.erase(receiver.dot, cursor - receiver.dot);
-    // Through a SemanticDB with the file's own module roots, not a bare
-    // parse: `using Web` is resolved by loading that module's source, and
-    // without it every type from an opt-in module came back `unknown` — so a
-    // builder chain on `Web.Server` completed to nothing while the same shape
-    // on a local record worked. Kept between calls so the module sources are
-    // parsed once rather than per keystroke.
     static semantic::SemanticDB recoveryDb;
     recoveryDb.setImportedInterfaces(interfaces);
     recoveryDb.setModuleRoots(moduleRoots);
-    recoveryDb.updateFile(path, recovered);
-    auto* state = recoveryDb.fileState(path);
-    if (!state) return {};
-    semantic::Analyzer analyzer(interfaces);
-    analyzer.analyze(state->ast);
-    const auto& program = state->ast;
-    (void)program;
-
-    // Everything before the deletion keeps its position, so the receiver's
-    // line/column are the ones it had in the original buffer. A CALL is
-    // recorded at its argument list's `(`, so a builder chain
-    // (`Web.Server.new(0).get(…).post(…)`) has nothing at all at the start of
-    // the receiver — that position is where `Web` is, and the chain's own type
-    // lives at the last call's paren.
-    const auto positionOf = [&](size_t offset) {
-        int line = 1;
-        size_t lineStart = 0;
-        for (size_t i = 0; i < offset; ++i)
-            if (source[i] == '\n') { ++line; lineStart = i + 1; }
-        return std::pair<int, int>{
-            line, static_cast<int>(offset - lineStart) + 1};
-    };
-    std::vector<std::pair<int, int>> candidates;
-    if (receiver.callOpen) candidates.push_back(positionOf(receiver.callOpen));
-    candidates.push_back(positionOf(receiver.start));
-
-    // Several expressions can start at one column — `makeBox` the identifier
-    // and `makeBox(3)` the call both start at `m`. Only the call has a type
-    // worth completing against, so take the first that yields a qualifier.
-    for (const auto& [candidateLine, candidateColumn] : candidates)
-        for (const auto& [expression, _] : analyzer.typeMap()) {
-            if (!expression || expression->location.line != candidateLine ||
-                expression->location.column != candidateColumn)
-                continue;
-            if (auto qualifier =
-                    completionQualifierForType(analyzer.displayTypeOf(expression));
-                !qualifier.empty())
-                return qualifier;
-        }
-    return {};
+    return semantic::recoveredReceiverQualifier(recoveryDb, source, path,
+                                                receiver, cursor, interfaces);
 }
 
 // The receiver's type, cheaply where possible. `recoveredReceiverQualifier`

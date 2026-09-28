@@ -2,6 +2,8 @@
 #include "../src/semantic/db.hxx"
 #include "../src/semantic/analyzer.hxx"
 #include "../src/common/completion.hxx"
+#include "../src/common/prelude_interfaces.hxx"
+#include "../src/semantic/completion_at.hxx"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -21,6 +23,27 @@ static auto makePreludeDb() -> SemanticDB {
         db.updateFile(entry.path().string(), ss.str());
     }
     return db;
+}
+
+static auto interfaces() -> const kex::semantic::ImportedInterfaces& {
+#ifdef KEX_RUNTIME_BEAM_DIR
+    return kex::preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+#else
+    static const kex::semantic::ImportedInterfaces none;
+    return none;
+#endif
+}
+
+// What the editor and the REPL offer at the `<|>` in `marked`.
+static auto completeAt(const SemanticDB& db, const std::string& marked)
+    -> std::vector<std::string> {
+    const auto cursor = marked.find("<|>");
+    auto source = marked;
+    source.erase(cursor, 3);
+    SemanticDB analysisDb;
+    analysisDb.setImportedInterfaces(&interfaces());
+    return kex::semantic::completeAt(db, analysisDb, "<completion>", source,
+                                     cursor, &interfaces()).matches;
 }
 
 static auto has(const std::vector<std::string>& v, const std::string& s) -> bool {
@@ -159,96 +182,70 @@ int main() {
         });
     });
 
-    // ── inferLambdaParamType ────────────────────────────────────────────────
-    describe("inferLambdaParamType", []() {
-        it("integer list → Integer", []() {
-            assertEqual(kex::inferLambdaParamType("[23,324,23].filter { |x| x.", "x"),
-                        std::string("Integer"));
+    // ── completeAt: receivers typed by analysis ───────────────────────────
+    describe("completeAt", []() {
+        it("types a variable from its binding", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  let s = \"x\"\n  s.upp<|>\nend\n");
+            assertTrue(has(r, "upperCase"), "String member missing");
         });
-        it("float list → Float", []() {
-            assertEqual(kex::inferLambdaParamType("[1.0, 2.5].map { |n| n.", "n"),
-                        std::string("Float"));
+        it("types a call result", []() {
+            auto db = makePreludeDb();
+            db.updateFile("<defs>", "let words() = [\"a\"]\n");
+            auto r = completeAt(db, "let words() = [\"a\"]\nmain do\n  words().ma<|>\nend\n");
+            assertTrue(has(r, "map"), "List member missing");
         });
-        it("mixed list → List (no elem type)", []() {
-            std::string r = kex::inferLambdaParamType("[1, \"a\"].each { |e| e.", "e");
-            assertTrue(r == "List" || r.empty());
+        it("types a chain", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  [1, 2].map { |x| x + 1 }.fil<|>\nend\n");
+            assertTrue(has(r, "filter"), "List member missing");
         });
-        it("string literal → Char", []() {
-            assertEqual(kex::inferLambdaParamType("\"hello\".each { |c| c.", "c"),
-                        std::string("Char"));
+        it("types a lambda parameter", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  [\"a\"].map { |w| w.upp<|> }\nend\n");
+            assertTrue(has(r, "upperCase"), "String member missing");
         });
-        it("no pipe pattern → empty", []() {
-            assertEqual(kex::inferLambdaParamType("IO.printLine(x)", "x"),
+        it("types a lambda parameter on a half-typed line", []() {
+            auto db = makePreludeDb();
+            const std::string line = "  [\"a\"].map { |w| w.";
+            auto source = "main do\n" + line + "<|>" +
+                          kex::semantic::completionClosers(line) + "\nend\n";
+            auto r = completeAt(db, source);
+            assertTrue(has(r, "upperCase"), "String member missing");
+        });
+        it("types a literal", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  [1, 2, 3].<|>\nend\n");
+            assertTrue(has(r, "map") && has(r, "count"), "List members missing");
+        });
+        it("types a make-block parameter", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db,
+                "make String do\n"
+                "  let shout(s: String) -> String = s.upp<|>\n"
+                "end\n");
+            assertTrue(has(r, "upperCase"), "String member missing");
+        });
+        it("falls back to module paths", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  IO.pr<|>\nend\n");
+            assertTrue(has(r, "printLine"), "IO member missing");
+        });
+        it("offers bindings in scope for a bare name", []() {
+            auto db = makePreludeDb();
+            auto r = completeAt(db, "main do\n  let localValue = 1\n  loc<|>\nend\n");
+            assertTrue(has(r, "localValue"), "local binding missing");
+        });
+    });
+
+    describe("completionClosers", []() {
+        it("closes delimiters and blocks in order", []() {
+            assertEqual(kex::semantic::completionClosers("xs.map { |x| f(x"),
+                        std::string(")}"));
+            assertEqual(kex::semantic::completionClosers("make String do\n  [1, \"]\""),
+                        std::string("]\nend"));
+            assertEqual(kex::semantic::completionClosers("f(1) do end"),
                         std::string(""));
-        });
-        it("receiver is plain ident → that ident", []() {
-            // `xs.each { |v| v.` where xs is a named collection
-            std::string r = kex::inferLambdaParamType("xs.each { |v| v.", "v");
-            assertEqual(r, std::string("xs"));
-        });
-        it("integer receiver 234.times { |x| x. → Integer", []() {
-            assertEqual(kex::inferLambdaParamType("234.times { |x| x.", "x"),
-                        std::string("Integer"));
-        });
-    });
-
-    // ── inferPatternParamType ───────────────────────────────────────────────
-    describe("inferPatternParamType", []() {
-        it("head of cons in String make block → Char", []() {
-            assertEqual(kex::inferPatternParamType(
-                "  let capitalize(@[x|xs]) = x.", "x", "String"),
-                std::string("Char"));
-        });
-        it("tail of cons in String make block → String", []() {
-            assertEqual(kex::inferPatternParamType(
-                "  let capitalize(@[x|xs]) = xs.", "xs", "String"),
-                std::string("String"));
-        });
-        it("simple named param in make block → receiver type", []() {
-            assertEqual(kex::inferPatternParamType(
-                "  let shout(s) = s.", "s", "String"),
-                std::string("String"));
-        });
-        it("no make target → empty", []() {
-            assertEqual(kex::inferPatternParamType(
-                "  let shout(s) = s.", "s", ""),
-                std::string(""));
-        });
-        it("unrelated param → empty", []() {
-            assertEqual(kex::inferPatternParamType(
-                "  let capitalize(@[x|xs]) = x.", "y", "String"),
-                std::string(""));
-        });
-    });
-
-    // ── resolveCompletionQuery — lambda param (Case B) ─────────────────────
-    describe("resolveCompletionQuery — lambda param", []() {
-        it("x. in integer list filter — Case B trailing ident", []() {
-            const char* line = "[23,324,23].filter { |x| x.";
-            auto cq = kex::resolveCompletionQuery(line, 0, line);
-            assertEqual(cq.dbQuery,     std::string("Integer."));
-            assertEqual(cq.rewriteFrom, std::string("Integer."));
-            // rewriteTo: the full "[23,324,23].filter { |x| x."
-            assertEqual(cq.rewriteTo,   std::string("[23,324,23].filter { |x| x."));
-        });
-        it("n. in float list map — Case B trailing ident", []() {
-            const char* line = "[1.0, 2.5].map { |n| n.";
-            auto cq = kex::resolveCompletionQuery(line, 0, line);
-            assertEqual(cq.dbQuery,     std::string("Float."));
-        });
-        it("c. in string each — Case B char", []() {
-            const char* line = "\"hello\".each { |c| c.";
-            auto cq = kex::resolveCompletionQuery(line, 0, line);
-            assertEqual(cq.dbQuery,     std::string("Char."));
-        });
-        // Case A (readline splits on last dot)
-        it("x. in integer list filter — Case A split", []() {
-            const char* linebuf = "[23,324,23].filter { |x| x.";
-            // text="" start=27 (after the last dot)
-            auto cq = kex::resolveCompletionQuery(linebuf, 27, "");
-            assertEqual(cq.dbQuery,     std::string("Integer."));
-            assertEqual(cq.rewriteFrom, std::string("Integer."));
-            assertEqual(cq.rewriteTo,   std::string(""));
         });
     });
 
