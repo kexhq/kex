@@ -2,4 +2,4 @@ exit 3
 out [to-stdout]
 err [to-stderr]
 args [a b; rm -rf / $HOME `whoami`]
-missing: executable not found
+missing: executable not found: definitely-not-a-real-program

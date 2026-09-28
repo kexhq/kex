@@ -4,9 +4,9 @@ using Tey.Host, only: [gitHint]
 
 foul execute(args: [String]) -> ProcessResult or! String do
   match Process.run("git", args) do
-    # Not starting at all is almost always git not being installed, and the
-    # bare runtime error ("executable not found") does not even say which
-    # executable — on a fresh Ubuntu, that was the whole of `tey kex install`.
+    # Not starting at all is almost always git not being installed. The
+    # runtime's error names the program but not why Tey wanted it or how to
+    # get it — on a fresh Ubuntu, that was the whole of `tey kex install`.
     Error(error) => Error("could not run `git` (${error}); Tey needs it to list Kex releases and fetch packages. Install it with: ${Tey.Host.gitHint}")
     Ok(result) => result.exitCode == 0 then Ok(result) else Error(result.stderr + result.stdout)
   end

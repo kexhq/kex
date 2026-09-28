@@ -230,7 +230,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
 
         if (!executableExists(strings.front()))
-            return Value::error(Value::string("executable not found"));
+            return Value::error(Value::string("executable not found: " + strings.front()));
 
         // Both streams come back over PIPES rather than through temporary
         // files: nothing the child prints touches the disk, and there is no
@@ -458,7 +458,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
 
         if (!executableExists(strings.front()))
-            return Value::error(Value::string("executable not found"));
+            return Value::error(Value::string("executable not found: " + strings.front()));
 
         // The parent's own buffers are flushed first: anything printed
         // before this call is still sitting in them, and the child writes

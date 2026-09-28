@@ -248,6 +248,38 @@ int main() {
                        "explicit source root should discover sibling module");
         });
 
+        it("discovers a module whose call is chained or interpolated", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_chained_deps_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            const auto modules = src / "app";
+            fs::create_directories(modules);
+
+            // Nothing `using`s App.Helper: the qualified calls below are the
+            // only thing that can make it load. A lowercase segment used to
+            // be taken for part of the module path (`App.Helper.hint`).
+            std::ofstream(modules / "helper.kex")
+                << "module App.Helper\n"
+                   "let hint -> String = \"hi\"\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "main do\n"
+                   "  IO.printLine(\"say ${App.Helper.hint}\")\n"
+                   "  IO.printLine(App.Helper.hint.count)\n"
+                   "end\n";
+
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
+                entry.string() + " 2>&1");
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(beam, std::string("say hi\n2\n"));
+            assertEqual(walker, std::string("say hi\n2\n"));
+        });
+
         it("lowers named imported-record parameter patterns", []() {
             namespace fs = std::filesystem;
             char rootTemplate[] = "/tmp/kex_imported_record_test_XXXXXX";

@@ -2,6 +2,7 @@
 #include "analyzer.hxx"
 #include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
+#include <cctype>
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -5120,6 +5121,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
                 if (!segment || !segment->receiver || !segment->args.empty() ||
                     !segment->namedArgs.empty() || segment->block)
+                    return std::nullopt;
+                // Module segments are capitalized; a lowercase one is a call.
+                // Without this, `App.Helper.hint.upcase` (and every
+                // `"${App.Helper.hint}"`, which desugars to the same shape)
+                // recorded `App.Helper.hint` as the module to load, the
+                // resolver found no such file, and `App.Helper` itself was
+                // never discovered: "Unknown module `App.Helper.hint`".
+                if (segment->method.empty() ||
+                    !std::isupper(static_cast<unsigned char>(segment->method.front())))
                     return std::nullopt;
                 auto parent = importedModulePath(*segment->receiver);
                 return parent ? std::optional<std::string>{*parent + "." + segment->method}

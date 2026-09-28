@@ -2634,7 +2634,8 @@ auto printUsage(const char *progName) -> void {
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "      --info        Print this build's details as JSON, for tools\n"
-      << "  --no-colors       Disable ANSI color output\n";
+      << "  --colors          Use ANSI colors even when output is not a terminal\n"
+      << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n";
 }
 
 auto printVersion() -> void {
@@ -2706,6 +2707,7 @@ int main(int argc, char *argv[]) {
       // tools, and a short flag would invite it into shell prompts.
       {"info", no_argument, nullptr, 1009},
       {"no-colors", no_argument, nullptr, 'N'},
+      {"colors", no_argument, nullptr, 1020},
       {"no-prelude", no_argument, nullptr, 1003},
       {"source-root", required_argument, nullptr, 1008},
       {"sname", required_argument, nullptr, 1017},
@@ -2766,7 +2768,7 @@ int main(int argc, char *argv[]) {
 #ifndef __EMSCRIPTEN__
   // Styling is for a terminal: escape codes in a pipe, a log or a CI capture
   // are noise, and NO_COLOR (https://no-color.org) asks for none at all.
-  // `--no-colors` below can still turn it off on a terminal. (The wasm
+  // `--colors` / `--no-colors` below override it either way. (The wasm
   // build's output is the web REPL's own terminal, so it keeps colors.)
   if (!isatty(STDOUT_FILENO))
     kex::color::enabled = false;
@@ -2967,6 +2969,9 @@ int main(int argc, char *argv[]) {
       return 0;
     case 'N':
       kex::color::enabled = false;
+      break;
+    case 1020:
+      kex::color::enabled = true;
       break;
     default:
       printUsage(argv[0]);
