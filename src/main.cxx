@@ -272,6 +272,31 @@ static auto splitReplClauses(const std::string &source,
   return clauses;
 }
 
+auto preludeSemanticInterfaces() -> const kex::semantic::ImportedInterfaces &;
+
+// Whether `type` — as the REPL displays it — is usable as the annotation of a
+// replayed binding: it must parse and check as `let x : <type> = <untyped>`
+// against the session's definitions. Displayed types are not always source
+// (`Unknown`, free type variables), and a replay line that failed to check
+// would break every later input, so anything doubtful is refused.
+static auto replTypeAnnotates(const std::string &definitions,
+                              const std::string &type) -> bool {
+  if (type.empty() || type.find("Unknown") != std::string::npos) return false;
+  try {
+    const auto source = definitions + "main do\n  let __replTyped : " + type +
+                        " = BEAM.erlang.get(:kexreplprobe)\n" +
+                        "  __replTyped\nend\n";
+    kex::Lexer lexer(source, "<repl>");
+    kex::Parser parser(lexer.tokenizeAll(), "<repl>");
+    auto program = parser.parseProgram();
+    if (!parser.diagnostics().empty()) return false;
+    kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
+    return analyzer.analyze(program);
+  } catch (...) {
+    return false;
+  }
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
@@ -3317,6 +3342,7 @@ int main(int argc, char *argv[]) {
         mutableBinds.clear();
         beamSemanticBinds.clear();
         g_replVarTypes.clear();
+        beamReplDb.removeFile("<repl>");
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
         continue;
@@ -3626,6 +3652,11 @@ int main(int argc, char *argv[]) {
           // `using M` is an import, not a definition — it is kept in topDefs
           // so it persists across inputs, but saying "defined M" is wrong.
           const bool isImport = source.rfind("using ", 0) == 0;
+          // Completion reads the session's own definitions from here: without
+          // it the BEAM REPL completed nothing it defined itself — no `make`
+          // methods, no serving slots after `pa.` (the tree-walker REPL
+          // already indexes its `<repl>` source the same way).
+          beamReplDb.updateFile("<repl>", topDefsStr());
           std::cout << kex::color::apply(kex::color::gray) << "=> "
                     << kex::color::apply(kex::color::reset)
                     << (isImport ? "using " : "defined ") << fname << "\n";
@@ -3948,11 +3979,25 @@ int main(int argc, char *argv[]) {
               localBinds += "  " + source + "\n";
             else
               for (const auto &name : replayNames) {
+                // The replayed value comes back from the process dictionary
+                // untyped, so lowering could not see what `pa` holds and
+                // dispatched `pa.get(k)` dynamically by name — where a slot
+                // called `get` lost to every other `get` ("Undefined method:
+                // get for Server") while the checker, which replays the
+                // original source, had accepted it. Carrying the type the
+                // binding was checked at restores the static dispatch a file
+                // gets. Only a type that checks as an annotation is carried;
+                // anything else (type variables, Unknown) replays untyped.
+                std::string annotation;
+                if (patternLetNames.empty() && beamSemanticType &&
+                    replTypeAnnotates(topDefsStr(), *beamSemanticType))
+                  annotation = " : " + *beamSemanticType;
                 // A `var` replays as `var`: replaying it as `let` would make
                 // every later line see an immutable binding and reject both
                 // `name = v` and `name.foo!(v)`.
                 localBinds += std::string("  ") +
                               (isMutableLet ? "var " : "let ") + name +
+                              annotation +
                               " = BEAM.erlang.get(:kexrepl" + name + ")\n";
                 if (isMutableLet && !isMutableBind(name))
                   mutableBinds.push_back(name);

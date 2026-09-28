@@ -878,6 +878,68 @@ int main() {
         });
     });
 
+    describe("BEAM REPL — serving", []() {
+        const std::string entries =
+            "record Entries do\n"
+            "  values : {String: String} = {}\n"
+            "end\n"
+            "serving Entries do\n"
+            "  slot put(key: String, value: String) -> Reply<Integer> do\n"
+            "    new.values = @values.put(key, value)\n"
+            "    return { new, reply: new.values.count }\n"
+            "  end\n"
+            "  slot get(key: String) -> Reply<String?> = { reply: @values.get(key) }\n"
+            "  slot keys -> Reply<[String]> = { reply: @values.keys.sort }\n"
+            "end\n"
+            "let pa = Process.spawn(Entries {})\n";
+
+        it("accepts a serving block entered after its record", [entries]() {
+            auto out = runBeamRepl(entries);
+            assertTrue(out.find("defined serving Entries") != std::string::npos, out);
+            assertTrue(out.find(": Server<Entries>") != std::string::npos, out);
+        });
+
+        // The replayed binding used to come back untyped, so `pa.get` was
+        // dispatched by name and lost to every other `get`.
+        it("calls a slot that shares a name with other functions", [entries]() {
+            auto out = runBeamRepl(entries +
+                                   "pa.put(\"name\", \"kex\")\n"
+                                   "pa.get(\"name\")\n");
+            assertTrue(out.find("Ok(Just(\"kex\")) : Result<String?, CallError>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
+        it("completes a binding's slots and the server's own methods", [entries]() {
+            auto out = runBeamRepl(entries + "/complete pa.\n");
+            for (const auto* member : {"get", "keys", "put", "alive?", "within"})
+                assertTrue(out.find(std::string("Server<Entries>.") + member) !=
+                               std::string::npos,
+                           out);
+        });
+    });
+
+    describe("CLI — spawning a serving record", []() {
+        it("rejects the record's name where its initial state belongs", []() {
+            auto out = runBeamFile(
+                "record Entries do\n"
+                "  values : {String: String} = {}\n"
+                "end\n"
+                "serving Entries do\n"
+                "  slot keys -> Reply<[String]> = { reply: @values.keys }\n"
+                "end\n"
+                "main do\n"
+                "  let p = Process.spawn(Entries)\n"
+                "end\n",
+                "");
+            assertTrue(out.find("`Process.spawn(Entries)` passes the type, not a value") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("`Process.spawn(Entries {})`") != std::string::npos, out);
+        });
+    });
+
     describe("BEAM REPL — Kex Value Display", []() {
         it("renders file results and typestates like the tree REPL", []() {
             auto out = runBeamRepl(
