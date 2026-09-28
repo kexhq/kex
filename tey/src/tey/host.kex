@@ -1,0 +1,59 @@
+module Tey.Host
+
+# The machine Tey runs on, as far as telling someone how to fix it goes: which
+# package manager installs what is missing. Tey never runs these commands —
+# installing system packages needs privileges Tey should not ask for — it only
+# prints the one line that does it, so the advice is exact rather than
+# "install GMP somehow".
+
+# The package manager this system uses: "brew", "apt", "dnf", "pacman", or
+# "" when it cannot be told. Linux is judged by /etc/os-release's ID plus
+# everything ID_LIKE names, which is what gives Linux Mint and Pop!_OS
+# Ubuntu's answer.
+foul packageManager -> String do
+  return "brew" if System.OS == :macos
+  let release = FS.File.read("/etc/os-release").or("")
+  let family = release.lines.filter { |line| line.startsWith?("ID=") || line.startsWith?("ID_LIKE=") }
+    .map { |line| line.split("=").drop(1).join("=").replace("\"", "") }
+    .join(" ")
+    .split(" ")
+  return "apt" if family.contains?("debian") || family.contains?("ubuntu")
+  return "dnf" if family.contains?("fedora") || family.contains?("rhel")
+  return "pacman" if family.contains?("arch")
+  return ""
+end
+
+# The command installing `packages` with this system's package manager, or
+# None when there is no manager to name. Package names differ between
+# managers, so the caller passes the right list for `packageManager`.
+foul installCommand(manager: String, packages: [String]) -> String? do
+  let names = packages.join(" ")
+  match manager do
+    "brew" => return Just("brew install ${names}")
+    "apt" => return Just("sudo apt install ${names}")
+    "dnf" => return Just("sudo dnf install ${names}")
+    "pacman" => return Just("sudo pacman -S ${names}")
+    _ => return None
+  end
+end
+
+# The shared libraries a released Kex binary loads: readline, GMP, PCRE2 and
+# (on Linux) OpenSSL 3. Checked against each distro's own package names.
+foul librariesHint -> String do
+  let manager = Tey.Host.packageManager
+  let packages = match manager do
+    "brew" => ["gmp", "pcre2", "readline"]
+    "apt" => ["libreadline8", "libgmp10", "libpcre2-8-0", "libssl3"]
+    "dnf" => ["readline", "gmp", "pcre2", "openssl-libs"]
+    "pacman" => ["readline", "gmp", "pcre2", "openssl"]
+    _ => []
+  end
+  return Tey.Host.installCommand(manager, packages).or("your system's packages for readline 8, GMP, PCRE2 (8-bit) and OpenSSL 3")
+end
+
+# Git: Tey lists Kex releases and fetches every Git dependency with it.
+foul gitHint -> String do
+  let manager = Tey.Host.packageManager
+  return "xcode-select --install" if manager == "brew"
+  return Tey.Host.installCommand(manager, ["git"]).or("Git for your system: https://git-scm.com/downloads")
+end

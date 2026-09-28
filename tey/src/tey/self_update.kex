@@ -113,6 +113,33 @@ let tagFor(tags: [String], version: String) -> String? do
   return None
 end
 
+# The oldest Tey with an `upgrade` command. Pinning an older one would strand
+# the install — 0.2.0 cannot run `tey upgrade` to come back — so it is
+# refused, with the installer as the deliberate way there.
+let firstSelfUpgrading = "0.2.1"
+
+# The version of the Tey installed at `prefix`, which is not always the one
+# running: with a Kex selected whose own Tey is unpacked beside it (see
+# `installPaired`), the launcher runs that one instead. Comparing the running
+# version against a release then answers "already the newest" while the
+# install itself stays old. The installed launcher is asked directly, pointed
+# at its own runtime; if that cannot be read, the running version is the
+# answer — the behaviour before, and never a reason to downgrade.
+foul installedVersion(prefix: String) -> String do
+  let own = "${prefix}/lib/kex/tey/ebin"
+  return Tey.Version.number if ENV.get("TEY_EBIN", own) == own
+  match Process.run("env", ["TEY_EBIN=${own}", "${prefix}/bin/tey", "--version"]) do
+    Error(_) => return Tey.Version.number
+    Ok(result) => do
+      return Tey.Version.number if result.exitCode != 0
+      # "tey 0.2.1 (Kex ...)", with colour codes wrapped around the words
+      # but not the number, which is the second word.
+      let version = result.stdout.trim.split(" ").second.or("")
+      return Tey.Semver.parseVersion(version) == None then Tey.Version.number else version
+    end
+  end
+end
+
 # `tey upgrade` — the newest released Tey: the one the newest Kex release's
 # manifest declares. Stable Kex releases unless `includePre` (`--pre`), which
 # is how a pre-release Tey is reached without knowing its number.
@@ -123,9 +150,10 @@ foul upgradeLatest(includePre: Bool) -> UpgradeOutcome or! String do
       Error(error) => return Error(error)
       Ok(found) => do
         let (tag, version) = found
-        let order = Tey.SelfUpdate.compareVersions(Tey.Version.number, version)
-        return Ok(AlreadyNewest(Tey.Version.number)) if order == Equal
-        return Ok(NewerThanRelease(Tey.Version.number)) if order == Greater
+        let installed = Tey.SelfUpdate.installedVersion(prefix)
+        let order = Tey.SelfUpdate.compareVersions(installed, version)
+        return Ok(AlreadyNewest(installed)) if order == Equal
+        return Ok(NewerThanRelease(installed)) if order == Greater
         match Tey.SelfUpdate.installFrom(prefix, tag, version, "Upgraded") do
           Error(error) => return Error(error)
           Ok(_) => return Ok(Upgraded(version, prefix))
@@ -140,10 +168,14 @@ end
 # allowed: pinning is explicit, and it is the way back from a bad release.
 foul upgradePinned(version: String) -> UpgradeOutcome or! String do
   return Error("'${version}' is not a Tey version") if Tey.Semver.parseVersion(version) == None
+  if Tey.SelfUpdate.compareVersions(version, Tey.SelfUpdate.firstSelfUpgrading) == Less
+    return Error("Tey ${version} has no `tey upgrade`, so nothing could bring you back from it; to install it anyway, run the installer for the Kex release that ships it: curl -fsSL https://raw.githubusercontent.com/kexhq/kex/main/install.sh | sh -s -- --kex <kex version>")
+  end
   match Tey.SelfUpdate.installPrefix do
     Error(error) => return Error(error)
     Ok(prefix) => do
-      return Ok(AlreadyNewest(Tey.Version.number)) if Tey.SelfUpdate.compareVersions(Tey.Version.number, version) == Equal
+      let installed = Tey.SelfUpdate.installedVersion(prefix)
+      return Ok(AlreadyNewest(installed)) if Tey.SelfUpdate.compareVersions(installed, version) == Equal
       match Tey.SelfUpdate.tagCarrying(version) do
         Error(error) => return Error(error)
         Ok(tag) => match Tey.SelfUpdate.installFrom(prefix, tag, version, "Installed") do

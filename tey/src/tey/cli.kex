@@ -225,7 +225,7 @@ private do
         IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
         Tey.Cli.syncTey(version, options)
         Tey.Cli.reportShim(version)
-        0
+        Tey.Cli.reportStartup(version, prefix)
       end
       Error(error) => do
         IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
@@ -243,6 +243,30 @@ private do
     Tey.Cli.syncTey(version, options)
     Tey.Cli.reportShim(version)
     return 0
+  end
+
+  # A toolchain that is installed and selected but cannot start is a failed
+  # install as far as the user is concerned, so it exits non-zero with the
+  # command that fixes it. `install.sh` sets TEY_INSTALL_SH because it runs
+  # the same check itself — it also has to for the older Teys it installs —
+  # and one explanation is clearer than two.
+  foul reportStartup(version: String, prefix: String) -> Integer do
+    return 0 if ENV.get("TEY_INSTALL_SH") != None
+    match Tey.Toolchain.startupProblem(prefix) do
+      None => return 0
+      Just(problem) => do
+        IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is installed but cannot start on this system:")
+        problem.lines.each { |line| IO.printError("  ${line}") }
+        if problem.contains?("GLIBC")
+          IO.printError("The release binaries need glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39 or later).")
+        else
+          IO.printError("Install the libraries it needs with:")
+          IO.printError("  ${Tey.Host.librariesHint}")
+          IO.printError("then check with `kex --version`; there is no need to install Kex again.")
+        end
+        return 1
+      end
+    end
   end
 
   # Kex and Tey are released as a pair, so installing a Kex release brings the
@@ -593,7 +617,11 @@ private do
           0
         end
         NewerThanRelease(version) => do
-          IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
+          if includePre
+            IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
+          else
+            IO.printLine("Tey ${version} is newer than the newest stable release; nothing to do (`tey upgrade --pre` also considers pre-releases)")
+          end
           0
         end
       end
