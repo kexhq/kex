@@ -38,7 +38,7 @@ module Tey.Docgen.Cli do
     match options().parse(args) do
       Error(error) => do
         let message = OptionParser.errorMessage(error)
-        IO.printError("docgen: ${message}\n\n${options().help}\n")
+        IO.printError("docgen: ${message}\n\n${options().help}")
         return 1
       end
       Ok(parsed) => runCommand(parsed)

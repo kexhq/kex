@@ -45,7 +45,7 @@ normalize_timeout(_) ->
 
 run_with(Command, Args, Timeout) ->
     case os:find_executable(unicode:characters_to_list(Command)) of
-        false -> {'Error', <<"executable not found">>};
+        false -> {'Error', <<"executable not found: ", (unicode:characters_to_binary(Command))/binary>>};
         Executable ->
             Arguments = [unicode:characters_to_list(A) || A <- Args],
             case {os:find_executable("sh"), os:find_executable("mkfifo")} of
@@ -191,7 +191,7 @@ timeout_message(Ms) ->
 %% worth that; a child whose colours matter can be told explicitly.
 stream(Command, Args) ->
     case os:find_executable(unicode:characters_to_list(Command)) of
-        false -> {'Error', <<"executable not found">>};
+        false -> {'Error', <<"executable not found: ", (unicode:characters_to_binary(Command))/binary>>};
         Executable ->
             Arguments = [unicode:characters_to_list(A) || A <- Args],
             Port = open_port({spawn_executable, Executable},

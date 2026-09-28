@@ -98,6 +98,27 @@ describe("Tey.SelfUpdate.compareVersions") do
   end
 end
 
+describe("Tey.SelfUpdate.upgradePinned") do
+  it("refuses a Tey too old to upgrade itself back, before touching anything") do
+    match Tey.SelfUpdate.upgradePinned("0.2.0") do
+      Ok(_) => assert(false)
+      Error(error) => assert(error.contains?("has no `tey upgrade`"))
+    end
+  end
+end
+
+describe("Tey.SelfUpdate.installedVersion") do
+  it("is the running version when the launcher runs its own install") do
+    Mock.ENV.set("TEY_EBIN", "/usr/local/lib/kex/tey/ebin")
+    assert(Tey.SelfUpdate.installedVersion("/usr/local") == Tey.Version.number)
+  end
+
+  it("falls back to the running version when the install cannot be asked") do
+    Mock.ENV.set("TEY_EBIN", "/home/ada/.local/share/tey/tey/0.4.0/ebin")
+    assert(Tey.SelfUpdate.installedVersion("/nonexistent/prefix") == Tey.Version.number)
+  end
+end
+
 describe("Tey.SelfUpdate.tagFor") do
   it("prefers the tag as written, then the v-prefixed one") do
     assert(Tey.SelfUpdate.tagFor(["v0.3.0", "0.3.0"], "0.3.0") == Just("0.3.0"))

@@ -58,6 +58,20 @@
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+// The type each REPL binding was given (`let pa = Process.spawn(...)` →
+// "Server<Entries>"), so `pa.` completes that type's members. The completer
+// only sees the line being typed; without this, a variable's name was taken
+// for a type name and nothing completed after any `let`.
+static std::unordered_map<std::string, std::string> g_replVarTypes;
+
+// The completion qualifier for a displayed type: collections are indexed by
+// their stdlib names, everything else by the type as the REPL prints it.
+static auto completionQualifierForType(const std::string &type) -> std::string {
+  if (type.empty()) return type;
+  if (type.front() == '[') return "List";
+  if (type.front() == '{') return "Map";
+  return type;
+}
 
 // Lexical incompleteness shared by both REPLs. Block (`do`/`end`) continuation
 // is tracked separately because it is Kex grammar rather than delimiter state.
@@ -258,6 +272,31 @@ static auto splitReplClauses(const std::string &source,
   return clauses;
 }
 
+auto preludeSemanticInterfaces() -> const kex::semantic::ImportedInterfaces &;
+
+// Whether `type` — as the REPL displays it — is usable as the annotation of a
+// replayed binding: it must parse and check as `let x : <type> = <untyped>`
+// against the session's definitions. Displayed types are not always source
+// (`Unknown`, free type variables), and a replay line that failed to check
+// would break every later input, so anything doubtful is refused.
+static auto replTypeAnnotates(const std::string &definitions,
+                              const std::string &type) -> bool {
+  if (type.empty() || type.find("Unknown") != std::string::npos) return false;
+  try {
+    const auto source = definitions + "main do\n  let __replTyped : " + type +
+                        " = BEAM.erlang.get(:kexreplprobe)\n" +
+                        "  __replTyped\nend\n";
+    kex::Lexer lexer(source, "<repl>");
+    kex::Parser parser(lexer.tokenizeAll(), "<repl>");
+    auto program = parser.parseProgram();
+    if (!parser.diagnostics().empty()) return false;
+    kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
+    return analyzer.analyze(program);
+  } catch (...) {
+    return false;
+  }
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
@@ -268,6 +307,19 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   else if (source.rfind("module ", 0) == 0) off = 7;
   else if (source.rfind("make ", 0) == 0) off = 5;
   else if (source.rfind("using ", 0) == 0) off = 6;
+  else if (source.rfind("serving ", 0) == 0) {
+    // Keyed apart from the record it serves: both would otherwise be
+    // "Entries", and defining the protocol would drop the record itself.
+    // A second `serving Entries` still replaces the first.
+    off = 8;
+    while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+    size_t end = off;
+    while (end < source.size() &&
+           (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+            source[end] == '.'))
+      end++;
+    return "serving " + source.substr(off, end - off);
+  }
   while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
   if (source.compare(off, 6, "final:") == 0) {
     off += 6;
@@ -704,6 +756,18 @@ static char **kexCompletion(const char *text, int start, int end) {
           // cq.rewriteTo keeps the original "x." so readline inserts correctly
         }
       }
+    }
+  }
+
+  // `pa.` — a REPL binding: complete the members of the type it holds.
+  if (auto dotPos = cq.dbQuery.rfind('.'); dotPos != std::string::npos) {
+    const std::string qualifier = cq.dbQuery.substr(0, dotPos);
+    if (auto bound = g_replVarTypes.find(qualifier);
+        bound != g_replVarTypes.end()) {
+      const auto type = completionQualifierForType(bound->second);
+      cq.dbQuery = type + "." + cq.dbQuery.substr(dotPos + 1);
+      cq.rewriteFrom = type + ".";
+      if (cq.rewriteTo.empty() && start == 0) cq.rewriteTo = qualifier + ".";
     }
   }
 
@@ -2634,7 +2698,9 @@ auto printUsage(const char *progName) -> void {
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "      --info        Print this build's details as JSON, for tools\n"
-      << "  --no-colors       Disable ANSI color output\n";
+      << "  --colors          Use ANSI colors even when output is not a terminal\n"
+      << "                    (also: FORCE_COLOR=1)\n"
+      << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n";
 }
 
 auto printVersion() -> void {
@@ -2706,6 +2772,7 @@ int main(int argc, char *argv[]) {
       // tools, and a short flag would invite it into shell prompts.
       {"info", no_argument, nullptr, 1009},
       {"no-colors", no_argument, nullptr, 'N'},
+      {"colors", no_argument, nullptr, 1020},
       {"no-prelude", no_argument, nullptr, 1003},
       {"source-root", required_argument, nullptr, 1008},
       {"sname", required_argument, nullptr, 1017},
@@ -2763,6 +2830,22 @@ int main(int argc, char *argv[]) {
   bool allowMocks = false;
   auto testReportMode = kex::interpreter::Evaluator::TestReportMode::Pretty;
   std::vector<std::string> testFilters;
+#ifndef __EMSCRIPTEN__
+  // Styling is for a terminal: escape codes in a pipe, a log or a CI capture
+  // are noise, and NO_COLOR (https://no-color.org) asks for none at all.
+  // `--colors` / `--no-colors` below override it either way. (The wasm
+  // build's output is the web REPL's own terminal, so it keeps colors.)
+  // FORCE_COLOR is the same convention's way back on, for output that is
+  // piped but still ends up on a screen — a parent that relays it (Tey runs
+  // `kex` behind a pipe), or a CI log viewer.
+  if (!isatty(STDOUT_FILENO))
+    kex::color::enabled = false;
+  if (const char *force = std::getenv("FORCE_COLOR");
+      force && *force && std::string(force) != "0")
+    kex::color::enabled = true;
+  if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
+    kex::color::enabled = false;
+#endif
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -2957,6 +3040,9 @@ int main(int argc, char *argv[]) {
       return 0;
     case 'N':
       kex::color::enabled = false;
+      break;
+    case 1020:
+      kex::color::enabled = true;
       break;
     default:
       printUsage(argv[0]);
@@ -3255,6 +3341,8 @@ int main(int argc, char *argv[]) {
         localBinds.clear();
         mutableBinds.clear();
         beamSemanticBinds.clear();
+        g_replVarTypes.clear();
+        beamReplDb.removeFile("<repl>");
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
         continue;
@@ -3266,6 +3354,13 @@ int main(int argc, char *argv[]) {
       }
       if (input.substr(0, 10) == "/complete ") {
         auto prefix = input.substr(10);
+        // Same binding lookup as Tab completion: `/complete pa.` asks for
+        // the members of the type `pa` holds.
+        if (auto dot = prefix.rfind('.'); dot != std::string::npos)
+          if (auto bound = g_replVarTypes.find(prefix.substr(0, dot));
+              bound != g_replVarTypes.end())
+            prefix = completionQualifierForType(bound->second) +
+                     prefix.substr(dot);
         auto results = beamReplDb.completionsFor(prefix);
         if (results.empty())
           std::cout << "  (no completions for \"" << prefix << "\")\n";
@@ -3500,7 +3595,7 @@ int main(int argc, char *argv[]) {
       }
       if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
           source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0 ||
-          source.rfind("using ", 0) == 0)
+          source.rfind("serving ", 0) == 0 || source.rfind("using ", 0) == 0)
         isFuncDef = true;
 
       try {
@@ -3557,6 +3652,11 @@ int main(int argc, char *argv[]) {
           // `using M` is an import, not a definition — it is kept in topDefs
           // so it persists across inputs, but saying "defined M" is wrong.
           const bool isImport = source.rfind("using ", 0) == 0;
+          // Completion reads the session's own definitions from here: without
+          // it the BEAM REPL completed nothing it defined itself — no `make`
+          // methods, no serving slots after `pa.` (the tree-walker REPL
+          // already indexes its `<repl>` source the same way).
+          beamReplDb.updateFile("<repl>", topDefsStr());
           std::cout << kex::color::apply(kex::color::gray) << "=> "
                     << kex::color::apply(kex::color::reset)
                     << (isImport ? "using " : "defined ") << fname << "\n";
@@ -3848,6 +3948,12 @@ int main(int argc, char *argv[]) {
                       << output;
           }
 
+          if (isLocalLet && evalStatus == "ok" && patternLetNames.empty()) {
+            if (beamSemanticType)
+              g_replVarTypes[letVarName] = *beamSemanticType;
+            else
+              g_replVarTypes.erase(letVarName);
+          }
           if (isLocalLet && evalStatus == "ok") {
             const auto equals = source.find('=');
             const auto rhs = equals == std::string::npos
@@ -3873,11 +3979,25 @@ int main(int argc, char *argv[]) {
               localBinds += "  " + source + "\n";
             else
               for (const auto &name : replayNames) {
+                // The replayed value comes back from the process dictionary
+                // untyped, so lowering could not see what `pa` holds and
+                // dispatched `pa.get(k)` dynamically by name — where a slot
+                // called `get` lost to every other `get` ("Undefined method:
+                // get for Server") while the checker, which replays the
+                // original source, had accepted it. Carrying the type the
+                // binding was checked at restores the static dispatch a file
+                // gets. Only a type that checks as an annotation is carried;
+                // anything else (type variables, Unknown) replays untyped.
+                std::string annotation;
+                if (patternLetNames.empty() && beamSemanticType &&
+                    replTypeAnnotates(topDefsStr(), *beamSemanticType))
+                  annotation = " : " + *beamSemanticType;
                 // A `var` replays as `var`: replaying it as `let` would make
                 // every later line see an immutable binding and reject both
                 // `name = v` and `name.foo!(v)`.
                 localBinds += std::string("  ") +
                               (isMutableLet ? "var " : "let ") + name +
+                              annotation +
                               " = BEAM.erlang.get(:kexrepl" + name + ")\n";
                 if (isMutableLet && !isMutableBind(name))
                   mutableBinds.push_back(name);
@@ -4258,6 +4378,7 @@ int main(int argc, char *argv[]) {
       }
       if (source.substr(0, 7) == "module " || source.substr(0, 5) == "type " ||
           source.substr(0, 7) == "record " || source.substr(0, 5) == "make " ||
+          source.substr(0, 8) == "serving " ||
           source.substr(0, 12) == "foul module " ||
           source.substr(0, 6) == "using ") {
         isFuncDef = true;
@@ -4387,6 +4508,12 @@ int main(int argc, char *argv[]) {
 
           auto result = execProgram(program);
           showResult(result, semanticType);
+          if (bindingName) {
+            if (semanticType)
+              g_replVarTypes[*bindingName] = *semanticType;
+            else
+              g_replVarTypes.erase(*bindingName);
+          }
           if (bindingName) {
             replBindings.erase(
                 std::remove_if(

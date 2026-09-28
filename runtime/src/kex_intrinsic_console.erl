@@ -31,8 +31,44 @@
 'Home'() -> code(<<27, "[H">>).
 'ClearLine'() -> code(<<27, "[2K", "\r">>).
 
+%% Whether styling is on, in this order:
+%%   * NO_COLOR set to anything non-empty turns it off (https://no-color.org);
+%%   * KEX_COLORS, which the `kex` launcher always sets from its own decision
+%%     (a terminal, `--no-colors`) — authoritative, because the BEAM REPL runs
+%%     behind pipes and could not tell a terminal from here;
+%%   * otherwise — Tey, an escript, `erl` by hand — FORCE_COLOR (set, and
+%%     not "0") turns it on, and failing that, whether stdout is a terminal,
+%%     so escape codes never land in a pipe or a log file by accident.
+%% The environment is read on every call (tests and programs change it);
+%% only the terminal probe, which cannot change, is remembered.
 enabled() ->
-    os:getenv("KEX_COLORS", "1") =/= "0".
+    case os:getenv("NO_COLOR", "") of
+        "" ->
+            case os:getenv("KEX_COLORS") of
+                "0" -> false;
+                "1" -> true;
+                _ ->
+                    case os:getenv("FORCE_COLOR", "") of
+                        "" -> stdout_terminal();
+                        "0" -> stdout_terminal();
+                        _ -> true
+                    end
+            end;
+        _ -> false
+    end.
+
+stdout_terminal() ->
+    case persistent_term:get({?MODULE, stdout_terminal}, undefined) of
+        undefined ->
+            %% OTP 27+ reports it in the standard_io options; without the
+            %% key there is no way to tell, and the old default (on) stays.
+            Terminal = try proplists:get_value(stdout, io:getopts(standard_io), true)
+                       catch _:_ -> true
+                       end,
+            persistent_term:put({?MODULE, stdout_terminal}, Terminal =:= true),
+            Terminal =:= true;
+        Known -> Known
+    end.
 
 'enabled?'() -> enabled().
 

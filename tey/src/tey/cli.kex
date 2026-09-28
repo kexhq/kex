@@ -181,6 +181,7 @@ end
 # to `run` as well: reporting it with the help text is the one policy every
 # tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
+  Tey.Cli.relayColors
   match Tey.Cli.parser.parse(args) do
     Error(_) => do
       Tey.Cli.announceToolchain
@@ -188,6 +189,18 @@ foul dispatch(args: [String]) -> Integer do
     end
     Ok(options) => Tey.Cli.dispatchParsed(args, options)
   end
+end
+
+# `kex` colors only a terminal, and every `kex` Tey starts — `tey test`,
+# `tey run`, a package command — writes through a pipe (`Process.stream` is a
+# port), even when that pipe ends on this same terminal. So when Tey itself is
+# coloring, it tells its children to as well. NO_COLOR, when set, is left to
+# win in every child; `Kex.AST` passes `--no-colors`, which outranks this, so
+# nothing Tey parses back picks up escape codes.
+foul relayColors -> Void do
+  return () if !Console.enabled? || ENV.get("NO_COLOR", "") != ""
+  ENV.set("FORCE_COLOR", "1")
+  return ()
 end
 
 # Tells the rest of the process which compiler Tey selected.
@@ -225,10 +238,10 @@ private do
         IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
         Tey.Cli.syncTey(version, options)
         Tey.Cli.reportShim(version)
-        0
+        Tey.Cli.reportStartup(version, prefix)
       end
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
     end
@@ -245,6 +258,30 @@ private do
     return 0
   end
 
+  # A toolchain that is installed and selected but cannot start is a failed
+  # install as far as the user is concerned, so it exits non-zero with the
+  # command that fixes it. `install.sh` sets TEY_INSTALL_SH because it runs
+  # the same check itself — it also has to for the older Teys it installs —
+  # and one explanation is clearer than two.
+  foul reportStartup(version: String, prefix: String) -> Integer do
+    return 0 if ENV.get("TEY_INSTALL_SH") != None
+    match Tey.Toolchain.startupProblem(prefix) do
+      None => return 0
+      Just(problem) => do
+        IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is installed but cannot start on this system:")
+        problem.lines.each { |line| IO.printError("  ${line}") }
+        if problem.contains?("GLIBC")
+          IO.printError("The release binaries need glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39 or later).")
+        else
+          IO.printError("Install the libraries it needs with:")
+          IO.printError("  ${Tey.Host.librariesHint}")
+          IO.printError("then check with `kex --version`; there is no need to install Kex again.")
+        end
+        return 1
+      end
+    end
+  end
+
   # Kex and Tey are released as a pair, so installing a Kex release brings the
   # Tey it ships along, for `bin/tey` to run while that Kex is selected. Quiet
   # when it is already there; a failure never fails the Kex install, it only
@@ -258,7 +295,7 @@ private do
         return ()
       end
       Error(error) => do
-        IO.printError("warning: Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}\n")
+        IO.printError("warning: Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}")
         return ()
       end
     end
@@ -300,7 +337,7 @@ private do
       IO.printLine(line)
     end
     if !Tey.Toolchain.selectionHealthy?
-      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`")
     end
     Tey.Cli.reportShim(selected)
     0
@@ -410,7 +447,7 @@ private do
     if !options.arguments.empty?
       let pins = ["tag", "branch", "ref"].filter { |key| options.value(key).present? }
       if pins.count > 1
-        IO.printError("${Console.RED}error:${Console.RESET} choose only one of --tag, --branch or --ref\n")
+        IO.printError("${Console.RED}error:${Console.RESET} choose only one of --tag, --branch or --ref")
         return 1
       end
       let selector = pins.first.or("ref")
@@ -440,7 +477,7 @@ private do
     # has asked to consume. Saying so beats half-doing it.
     if options.flagEnabled?("json")
       if !options.flagEnabled?("installed")
-        IO.printError("${Console.RED}error:${Console.RESET} --json needs --installed; released versions have no JSON form\n")
+        IO.printError("${Console.RED}error:${Console.RESET} --json needs --installed; released versions have no JSON form")
         return 1
       end
       return Tey.Cli.listInstalledJson()
@@ -450,7 +487,7 @@ private do
       Error(error) => do
         # A release list needs the network; the installed ones do not, and
         # they are the half a user can still act on.
-        IO.printError("${Console.RED}error:${Console.RESET} could not read released versions: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} could not read released versions: ${error}")
         []
       end
       Ok(versions) => versions
@@ -475,7 +512,7 @@ private do
       IO.printLine(Tey.Cli.versionLine(version, installed, selected))
     end
     if !Tey.Toolchain.selectionHealthy?
-      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`")
     end
     let hidden = all.count - versions.count
     IO.printLine("") if hidden > 0
@@ -520,14 +557,14 @@ private do
           return 0
         end
         Error(error) => do
-          IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+          IO.printError("${Console.RED}error:${Console.RESET} ${error}")
           return 1
         end
       end
     end
     match Tey.Cli.newestVersion(options) do
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
       Ok(version) => Tey.Cli.installKex(version, options)
@@ -537,7 +574,7 @@ private do
   foul kexInstallLatest(options: ParsedOptions) -> Integer do
     match Tey.Cli.newestVersion(options) do
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
       Ok(version) => do
@@ -559,7 +596,7 @@ private do
         0
       end
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
     end
@@ -581,7 +618,7 @@ private do
   foul upgradeToNewest(includePre: Bool) -> Integer do
     match Tey.SelfUpdate.upgradeLatest(includePre) do
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
       # Already announced inside `installFrom`, before the runtime swap made
@@ -593,7 +630,11 @@ private do
           0
         end
         NewerThanRelease(version) => do
-          IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
+          if includePre
+            IO.printLine("Tey ${version} is newer than the newest release; nothing to do")
+          else
+            IO.printLine("Tey ${version} is newer than the newest release; nothing to do (only stable releases were considered; `tey upgrade --pre` includes pre-releases)")
+          end
           0
         end
       end
@@ -603,7 +644,7 @@ private do
   foul upgradeToPinned(version: String) -> Integer do
     match Tey.SelfUpdate.upgradePinned(version) do
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
       # Already announced inside `installFrom`, before the runtime swap made
@@ -630,7 +671,7 @@ private do
         0
       end
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         1
       end
     end
@@ -647,7 +688,7 @@ private do
         0
       end
       None => do
-        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed\n")
+        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed")
         1
       end
     end
@@ -656,7 +697,7 @@ private do
   foul kexUse(selector: String) -> Integer do
     match Tey.Toolchain.resolveSelector(selector) do
       None => do
-        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed; install one with `tey kex install`\n")
+        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed; install one with `tey kex install`")
         1
       end
       Just(version) => do
@@ -673,7 +714,7 @@ private do
           Tey.Cli.reportShim(version)
           0
         else
-          IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is not installed\n")
+          IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is not installed")
           1
         end
       end
@@ -716,7 +757,7 @@ private do
       Error(error) when error == "package.kex not found" => []
       Error(error) when error == "this workspace directory is not inside a package" => []
       Error(error) => do
-        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}")
         []
       end
       Ok(package) => package.commands
@@ -743,12 +784,12 @@ private do
 
 
   foul incomplete(command: String, missing: String) -> Integer do
-    IO.printError("${Console.RED}error:${Console.RESET} `tey ${command}` needs ${missing}\n")
+    IO.printError("${Console.RED}error:${Console.RESET} `tey ${command}` needs ${missing}")
     1
   end
 
   foul unknown(command: String) -> Integer do
-    IO.printError("${Console.RED}error:${Console.RESET} unknown or incomplete command '${command}'\n")
+    IO.printError("${Console.RED}error:${Console.RESET} unknown or incomplete command '${command}'")
     1
   end
 end

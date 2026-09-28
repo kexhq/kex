@@ -267,7 +267,7 @@ foul all -> [Receipt] do
       Ok(text) => match Tey.Programs.decode(text) do
         Ok(receipt) => [receipt]
         Error(error) => do
-          IO.printError("warning: ignoring ${path}: ${error}\n")
+          IO.printError("warning: ignoring ${path}: ${error}")
           []
         end
       end

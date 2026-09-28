@@ -369,9 +369,9 @@ mock_take_char() ->
 -define(WHITE, color("\e[97m")).
 
 color(Code) ->
-    case os:getenv("KEX_COLORS", "1") of
-        "0" -> "";
-        _ -> Code
+    case kex_intrinsic_console:'enabled?'() of
+        true -> Code;
+        false -> ""
     end.
 
 inspect(X) ->

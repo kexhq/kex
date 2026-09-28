@@ -16,8 +16,11 @@ using namespace test;
 
 namespace {
 
+// Output is captured through a pipe, where colors are off by default, so
+// every run asks for them with `--colors`. A test's own `--no-colors` comes
+// later on the command line and still wins.
 auto runKex(const std::vector<std::string>& args, const std::string& standardIn) -> std::string {
-    std::string cmd = std::string(KEX_BINARY_PATH);
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --colors";
     for (const auto& a : args) { cmd += " "; cmd += a; }
 
     std::string tmpPath;
@@ -58,7 +61,7 @@ auto runKexStreams(const std::vector<std::string>& args) -> CapturedStreams {
     close(outFd);
     close(errFd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH);
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --colors";
     for (const auto& arg : args) cmd += " " + arg;
     cmd += " > " + std::string(outPath) + " 2> " + errPath;
     std::system(cmd.c_str());

@@ -152,7 +152,7 @@ module Process do
   #   Process.run("false", [])   # => Ok(ProcessResult { exitCode: 1, ... })
   #
   # @example A command that does not exist is an Error
-  #   Process.run("no-such-command", [])   # => Error("executable not found")
+  #   Process.run("no-such-command", [])   # => Error("executable not found: no-such-command")
   #
   # @example Reading a command's output as data
   #   Process.run("git", ["rev-parse", "HEAD"])
@@ -171,7 +171,7 @@ module Process do
   # whole call, so a hung child cannot hang the caller.
   #
   # A child that finishes in time answers exactly as +run+ would; a missing
-  # program still reports +executable not found+ without waiting.
+  # program still reports +executable not found: <command>+ without waiting.
   #
   # @param command [String] the executable to run
   # @param args [[String]] its arguments, one per element

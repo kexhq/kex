@@ -335,13 +335,29 @@ end
 # Falling back to a source build rather than failing keeps the platforms
 # without a published archive working, and covers a release whose upload is
 # incomplete.
+# Why an installed toolchain's `kex` cannot start on this machine, or None
+# when it runs. A release archive is a prebuilt binary that loads readline,
+# GMP, PCRE2 and OpenSSL from the system (and needs glibc 2.38+ on Linux);
+# "installed" followed by a loader error on the first `kex` is the worst way
+# to learn one of those is missing.
+foul startupProblem(prefix: String) -> String? do
+  match Process.run("${prefix}/bin/kex", ["--version"]) do
+    Error(error) => return Just(error)
+    Ok(result) => do
+      return None if result.exitCode == 0
+      let said = result.stderr.trim
+      return Just(said.empty? then "`kex --version` exited with status ${result.exitCode}" else said)
+    end
+  end
+end
+
 foul installRelease(version: String) -> String or! String do
   match Tey.Toolchain.installArchive(version) do
     Ok(prefix) => return Ok(prefix)
     # An archive that is not there is a platform Kex does not publish for, or
     # a release still uploading; building is a reasonable answer to both.
     Error(Unavailable(reason)) => do
-      IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source\n")
+      IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source")
       let source = Tey.Toolchain.fetchRelease(version).try
       return Tey.Toolchain.installSource(source, version)
     end
@@ -349,6 +365,10 @@ foul installRelease(version: String) -> String or! String do
     # could be a truncated download or a tampered mirror, and neither is
     # something to shrug off by quietly compiling instead.
     Error(Corrupt(reason)) => return Error(reason)
+    # Not even the release's tag could be looked up — no git, no network.
+    # Building from source needs that same lookup, so falling back would only
+    # repeat the failure under a misleading "no archive for this machine".
+    Error(Unreachable(reason)) => return Error(reason)
   end
 end
 
@@ -357,6 +377,7 @@ end
 type ArchiveFailure =
   | Unavailable(String)
   | Corrupt(String)
+  | Unreachable(String)
 
 # Where the release archives live. Derived from the repository so a fork only
 # has to set TEY_KEX_REPO, and overridable on its own for a mirror.
@@ -580,7 +601,7 @@ private do
       Ok(value) => value
     end
     let tag = match Tey.Toolchain.releaseTag(version) do
-      Error(error) => return Error(Unavailable(error))
+      Error(error) => return Error(Unreachable(error))
       Ok(value) => value
     end
     let name = "kex-${version}-${target}"
