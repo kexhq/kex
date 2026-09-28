@@ -303,9 +303,14 @@ auto exactValidatorSignature(
         if (!signatures || signatures->empty()) return false;
         for (const auto& signature : *signatures) {
             found = true;
+            // The spelling was checked above; the checked type is qualified
+            // when the analyzer knows the prelude's TaggedValidation module
+            // and bare when it does not (an imported module is analyzed
+            // without interfaces).
+            const auto result = semantic::typeToString(signature.result);
             if (signature.isFoul || signature.params.size() != 1 ||
                 semantic::typeToString(signature.params[0]) != "String" ||
-                semantic::typeToString(signature.result) != "[Issue]")
+                (result != "[TaggedValidation.Issue]" && result != "[Issue]"))
                 return false;
         }
     }

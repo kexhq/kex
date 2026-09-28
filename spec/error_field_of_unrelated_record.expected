@@ -1,0 +1,4 @@
+spec/error_field_of_unrelated_record.kex:15:22: error: Undefined method `zork` for `Integer`
+spec/error_field_of_unrelated_record.kex:16:27: error: Undefined method `major` for `Color`
+spec/error_field_of_unrelated_record.kex:17:33: error: Undefined method `major` for `Kex.Backend`
+Aborted: 3 type errors — fix before running (use --no-check to skip).

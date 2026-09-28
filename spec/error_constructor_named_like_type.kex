@@ -1,0 +1,19 @@
+# A nullary constructor that shares its spelling with a type is still only a
+# constructor. NetErrorKind has a `Backend` constructor and Kex.Backend is a
+# type: looked up by spelling, every Backend value was a NetErrorKind, so the
+# REPL printed `Beam : NetErrorKind` and this assignment checked clean.
+using Net
+
+type Color = Red | Blue
+type Other = Foo | Color
+
+kind : NetErrorKind
+let kind = Kex.BACKEND
+
+other : Other
+let other = Red
+
+main do
+  IO.inspect(kind)
+  IO.inspect(other)
+end

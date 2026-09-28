@@ -1,0 +1,18 @@
+# A field of one record is not a method of every other type. `major` is a
+# field of Kex.Version, and that alone let `Kex.BACKEND.major` (a Backend,
+# which has no fields) check clean and die at runtime with badarg. The
+# receivers here are all fully known, so each access is a check-time error.
+record Point do
+  zork : Integer
+end
+
+type Color = Red | Blue
+
+color : Color
+let color = Red
+
+main do
+  IO.printLine(3.zork)
+  IO.printLine(color.major)
+  IO.printLine(Kex.BACKEND.major)
+end

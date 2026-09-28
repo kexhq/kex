@@ -167,8 +167,14 @@ private:
         std::string name;
         SourceLocation location;
         std::string receiver;
+        // False when the receiver is a type whose fields are fully known (a
+        // primitive, an ADT, a record already searched): a field of some
+        // OTHER record with this name then says nothing about the call.
+        bool fieldMayExist = true;
     };
     std::vector<UnresolvedMethod> m_unresolvedMethods;
+    // Types an unknown receiver was bound to by a method's name alone.
+    std::unordered_set<std::string> m_guessedReceiverTypes;
     // Every name any `make` block defines, private methods included.
     std::unordered_set<std::string> m_makeMethodNames;
     // The receiver types each of those names answers on, recorded when the
@@ -403,6 +409,15 @@ private:
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
+    // Every imported ADT that declares a constructor spelling. The maps above
+    // drop a spelling two ADTs share (`Timeout` is Process.CallError's and
+    // Net.NetErrorKind's); this keeps them all, for resolution by scope.
+    struct ConstructorOwner {
+        std::string adt;
+        size_t arity = 0;
+        bool generic = false;
+    };
+    std::unordered_map<std::string, std::vector<ConstructorOwner>> m_constructorOwners;
     // What applying a constructor produces. `slots[i]` is the index of the
     // ADT type parameter the i-th payload IS (`Just(X)` → slot 0), or -1 when
     // the payload is some other type expression and tells us nothing about
@@ -446,6 +461,15 @@ private:
     // The type `Ctor(args...)` produces, or nullptr when the name is not a
     // registered ADT constructor.
     auto siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const -> TypePtr;
+    // The ADT owning the nullary constructor a NamedType spells, or nullptr.
+    // A name that is itself a declared type is that type, never a constructor
+    // singleton that happens to share its spelling.
+    auto constructorOwner(const NamedType& named) const -> const std::string*;
+    // The one ADT a shared constructor spelling means from here: declared by
+    // an enclosing module, an imported one, or an automatically imported
+    // one. Nullptr when none or several are visible.
+    auto scopedConstructorOwner(const std::string& name) const
+        -> const ConstructorOwner*;
     auto constructorResultType(const std::string& name,
                                const std::vector<TypePtr>& argTypes)
         -> TypePtr;

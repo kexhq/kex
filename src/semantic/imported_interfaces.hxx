@@ -1,6 +1,8 @@
 #pragma once
 
 #include "traits.hxx"
+#include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -169,6 +171,88 @@ inline auto isExportFoul(const ImportedInterfaces& ifaces,
     for (const auto& overload : exported->second)
         if (overload.signature.isFoul) return true;
     return false;
+}
+
+// Gives every module ADT its qualified identity inside the signatures that
+// spell it. A signature is read from its spelling, so `BACKEND : Backend`
+// inside `module Kex` carries a bare `Backend`, while the ADT, and the
+// constructors it owns, are `Kex.Backend`. Left bare, that name could only be
+// matched by spelling, and NetErrorKind has a constructor spelled `Backend`
+// too. A bare name means the ADT declared by the innermost enclosing module
+// of the signature's own module that declares one; anything else is left as
+// written.
+inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
+    std::unordered_set<std::string> moduleAdts;
+    for (const auto& adt : ifaces.adts)
+        if (adt.name.find('.') != std::string::npos) moduleAdts.insert(adt.name);
+    if (moduleAdts.empty()) return;
+    auto adtIn = [&](std::string scope, const std::string& name) -> std::string {
+        while (!scope.empty()) {
+            if (auto candidate = scope + "." + name; moduleAdts.count(candidate))
+                return candidate;
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+        return "";
+    };
+    // Types are shared between signatures, so every rewrite is of a copy.
+    std::function<void(TypePtr&, const std::string&)> qualify =
+        [&](TypePtr& type, const std::string& scope) {
+            if (!type) return;
+            auto copy = std::make_shared<Type>(*type);
+            bool changed = false;
+            std::visit([&](auto& kind) {
+                using K = std::decay_t<decltype(kind)>;
+                auto visit = [&](TypePtr& inner) {
+                    const auto before = inner;
+                    qualify(inner, scope);
+                    changed = changed || inner != before;
+                };
+                if constexpr (std::is_same_v<K, NamedType>) {
+                    if (kind.name.find('.') == std::string::npos)
+                        if (auto owned = adtIn(scope, kind.name); !owned.empty()) {
+                            kind.name = owned;
+                            changed = true;
+                        }
+                    for (auto& arg : kind.typeArgs) visit(arg);
+                } else if constexpr (std::is_same_v<K, ListType>) {
+                    visit(kind.element);
+                } else if constexpr (std::is_same_v<K, OptionalType>) {
+                    visit(kind.inner);
+                } else if constexpr (std::is_same_v<K, MapType>) {
+                    visit(kind.key);
+                    visit(kind.value);
+                } else if constexpr (std::is_same_v<K, TupleType>) {
+                    for (auto& element : kind.elements) visit(element);
+                } else if constexpr (std::is_same_v<K, FuncType>) {
+                    for (auto& param : kind.params) visit(param);
+                    visit(kind.result);
+                } else if constexpr (std::is_same_v<K, UnionType>) {
+                    for (auto& member : kind.members) visit(member);
+                }
+            }, copy->kind);
+            if (changed) type = copy;
+        };
+    auto qualifySignature = [&](ImportedFunction& function) {
+        if (function.sourceModule.empty()) return;
+        for (auto& param : function.signature.params)
+            qualify(param, function.sourceModule);
+        qualify(function.signature.result, function.sourceModule);
+    };
+    for (auto& [_, module] : ifaces.modules)
+        for (auto& [__, functions] : module.exports)
+            for (auto& function : functions) qualifySignature(function);
+    for (auto& [_, functions] : ifaces.receiverFunctions)
+        for (auto& function : functions) qualifySignature(function);
+    // A record's field types are spelled in the record's own module:
+    // `operation : NetOperation` in `Net.NetError` is `Net.NetOperation`.
+    for (auto& [record, fields] : ifaces.recordFields) {
+        const auto dot = record.rfind('.');
+        if (dot == std::string::npos) continue;
+        const auto scope = record.substr(0, dot);
+        for (auto& [__, fieldType] : fields) qualify(fieldType, scope);
+    }
 }
 
 } // namespace kex::semantic

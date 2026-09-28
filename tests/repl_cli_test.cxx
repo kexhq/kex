@@ -697,7 +697,7 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
-            assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
+            assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=
                            std::string::npos,
                        out);
             assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
@@ -857,7 +857,7 @@ int main() {
                 "opened.close\n");
             assertTrue(
                 out.find("Ok(<FileHandle: \"typed.txt\">) : "
-                         "Result<FileHandle<CannotRead, CanWrite>, FileError>")
+                         "Result<FileHandle<CannotRead, CanWrite>, FS.FileError>")
                     != std::string::npos,
                 out);
             assertTrue(
@@ -878,7 +878,7 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
-            assertTrue(out.find("Ok(\"contents\") : Result<String, FileError>") !=
+            assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=
                            std::string::npos,
                        out);
             assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
@@ -933,7 +933,7 @@ int main() {
                 "let kilowatts = &.kilo.watt.to(String)\n"
                 "kilowatts(54)\n"
                 "kilowatts(99)\n");
-            assertTrue(out.find("=> B : DataUnit") !=
+            assertTrue(out.find("=> B : Units.Data.DataUnit") !=
                            std::string::npos,
                        out);
             assertTrue(out.find("\"3000.0 W\"") != std::string::npos, out);

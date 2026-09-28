@@ -463,8 +463,32 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // read (a `make` block may precede the type it targets). Without this a
     // trait-typed param rejects values from an opt-in module — the KexI path
     // does the same expansion for prebuilt artifacts.
-    std::vector<std::pair<std::string, std::string>> traitClaims;
+    // Each claim keeps the module its `make` block sits in, since the
+    // target's identity is only known once every type has been read.
+    struct TraitClaim {
+        std::string owner;
+        std::string typeName;
+        std::string traitName;
+    };
+    std::vector<TraitClaim> traitClaims;
     std::unordered_map<std::string, std::vector<std::string>> adtConstructors;
+    // Qualified identities of the ADTs declared inside a module
+    // (`Kex.Backend`). A signature spelling `Backend` inside `module Kex`
+    // means this type, and nothing named `Backend` anywhere else.
+    std::unordered_set<std::string> moduleAdts;
+    // The ADT a bare spelling means from inside `scope`: the innermost
+    // enclosing module declaring it, or nothing.
+    auto moduleAdtIn = [&moduleAdts](std::string scope,
+                                     const std::string& name) -> std::string {
+        while (!scope.empty()) {
+            if (auto candidate = scope + "." + name; moduleAdts.count(candidate))
+                return candidate;
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+        return "";
+    };
 
     auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
         return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
@@ -597,7 +621,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             auto typeName = makeTargetName(make);
             if (!typeName.empty())
                 for (const auto& trait : make.implements)
-                    traitClaims.push_back({typeName, trait});
+                    traitClaims.push_back({owner, typeName, trait});
             // `make Set<A> do ... end` sits directly in a file-header
             // module's body (`module Data`), not inside the nested
             // `module Set do ... end` that provides the qualified static
@@ -748,16 +772,21 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             // from collectArities below — without it nothing knows `MB`
             // belongs to `DataUnit`, so passing it to a `DataUnit` param is
             // rejected.
+            const auto identity = moduleName + "." + td.name;
             kex::semantic::ImportedADT adt;
-            adt.name = td.name;
+            adt.name = identity;
             adt.typeParamCount = td.typeParams.size();
             adt.typeParamNames = td.typeParams;
+            // Both spellings are declared type NAMES, the way a record's are;
+            // identity is decided by `adt.name`, not by this set.
             ifaces.typeNames.insert(td.name);
+            ifaces.typeNames.insert(identity);
+            moduleAdts.insert(identity);
             for (const auto& constructor : *constructors) {
                 adt.constructors.push_back(constructor.name);
                 adt.constructorArities[constructor.name] =
                     static_cast<int>(constructor.arity);
-                adtConstructors[td.name].push_back(constructor.name);
+                adtConstructors[identity].push_back(constructor.name);
                 kex::semantic::ImportedFunction function;
                 function.sourceName = constructor.name;
                 function.sourceModule = moduleName;
@@ -765,7 +794,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 function.signature.name = constructor.name;
                 function.signature.result =
                     kex::semantic::Type::named(constructor.name);
-                function.constructorOwner = td.name;
+                function.constructorOwner = identity;
                 if (td.variants)
                     for (const auto& variant : *td.variants) {
                         const auto* generic =
@@ -1105,7 +1134,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
 
     // `make Animal, implement: Speaker` makes every Animal constructor a
     // Speaker too, since a nullary constructor's value type is its own name.
-    for (const auto& [typeName, traitName] : traitClaims) {
+    for (const auto& [owner, spelled, traitName] : traitClaims) {
+        const auto owned = moduleAdtIn(owner, spelled);
+        const auto& typeName = owned.empty() ? spelled : owned;
         ifaces.traitConformances.push_back({typeName, traitName});
         if (auto constructors = adtConstructors.find(typeName);
             constructors != adtConstructors.end())
@@ -1116,6 +1147,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // defining module's alias, the same way the KexI path carries them.
     for (auto& [name, body] : typeAliases)
         ifaces.typeAliases.try_emplace(name, body);
+    kex::semantic::qualifyModuleAdtNames(ifaces);
     resolveSharedNullaryConstructors(ifaces);
     return ifaces;
 }

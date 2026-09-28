@@ -1,0 +1,18 @@
+# A receiver typed only by a guess keeps its record fields reachable.
+# `item.name` binds the unannotated `item` to Weekday, the one prelude type
+# with a `name` method, and the guess flows on through `find` and `.try` —
+# `.url` was then reported as undefined for Weekday, though `url` is this
+# record's field (found building Marqraft's version switcher).
+record Release do
+  name : String
+  url : String
+end
+
+let urlOf(releases, wanted: String) -> String do
+  let current = releases.find { |item| item.name == wanted }
+  current.try.url
+end
+
+main do
+  IO.printLine(urlOf([Release { name: "0.9", url: "/prelude/0.9/" }], "0.9"))
+end
