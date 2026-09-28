@@ -5097,6 +5097,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
             }
+            // `Process.spawn(Entries)` — the record's NAME, not a value of it.
+            // A bare type name is typed as the type it names (that is what
+            // lets `x.to(Integer)` dispatch), so this checked as a clean
+            // `Server<Entries>` and the server then started with the atom
+            // `Entries` as its state, dying on the first `@field`. Spawning
+            // takes the initial state, so say how to write one.
+            if (node.method == "spawn" && node.receiver && node.args.size() == 1 &&
+                node.args.front()) {
+                auto* ns = std::get_if<ast::UpperIdentifier>(&node.receiver->kind);
+                auto* arg = std::get_if<ast::UpperIdentifier>(&node.args.front()->kind);
+                if (ns && ns->name == "Process" && arg &&
+                    !lookupVar(arg->name) &&
+                    !m_nullaryConstructors.contains(arg->name) &&
+                    m_recordFields.count(resolveRecordName(arg->name)))
+                    error(node.args.front()->location,
+                          "`Process.spawn(" + arg->name + ")` passes the type, "
+                          "not a value; spawn a server with its initial state: "
+                          "`Process.spawn(" + arg->name + " {})`");
+            }
             // Namespace call: `Integer.parse(s)` or `Web.Response.text(s)`.
             // A chain made entirely of uppercase segments is a qualified
             // namespace, not a UFCS receiver value, so don't include it as

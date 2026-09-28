@@ -181,6 +181,7 @@ end
 # to `run` as well: reporting it with the help text is the one policy every
 # tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
+  Tey.Cli.relayColors
   match Tey.Cli.parser.parse(args) do
     Error(_) => do
       Tey.Cli.announceToolchain
@@ -188,6 +189,18 @@ foul dispatch(args: [String]) -> Integer do
     end
     Ok(options) => Tey.Cli.dispatchParsed(args, options)
   end
+end
+
+# `kex` colors only a terminal, and every `kex` Tey starts — `tey test`,
+# `tey run`, a package command — writes through a pipe (`Process.stream` is a
+# port), even when that pipe ends on this same terminal. So when Tey itself is
+# coloring, it tells its children to as well. NO_COLOR, when set, is left to
+# win in every child; `Kex.AST` passes `--no-colors`, which outranks this, so
+# nothing Tey parses back picks up escape codes.
+foul relayColors -> Void do
+  return () if !Console.enabled? || ENV.get("NO_COLOR", "") != ""
+  ENV.set("FORCE_COLOR", "1")
+  return ()
 end
 
 # Tells the rest of the process which compiler Tey selected.

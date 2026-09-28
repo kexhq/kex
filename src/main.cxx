@@ -58,6 +58,20 @@
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+// The type each REPL binding was given (`let pa = Process.spawn(...)` →
+// "Server<Entries>"), so `pa.` completes that type's members. The completer
+// only sees the line being typed; without this, a variable's name was taken
+// for a type name and nothing completed after any `let`.
+static std::unordered_map<std::string, std::string> g_replVarTypes;
+
+// The completion qualifier for a displayed type: collections are indexed by
+// their stdlib names, everything else by the type as the REPL prints it.
+static auto completionQualifierForType(const std::string &type) -> std::string {
+  if (type.empty()) return type;
+  if (type.front() == '[') return "List";
+  if (type.front() == '{') return "Map";
+  return type;
+}
 
 // Lexical incompleteness shared by both REPLs. Block (`do`/`end`) continuation
 // is tracked separately because it is Kex grammar rather than delimiter state.
@@ -268,6 +282,19 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   else if (source.rfind("module ", 0) == 0) off = 7;
   else if (source.rfind("make ", 0) == 0) off = 5;
   else if (source.rfind("using ", 0) == 0) off = 6;
+  else if (source.rfind("serving ", 0) == 0) {
+    // Keyed apart from the record it serves: both would otherwise be
+    // "Entries", and defining the protocol would drop the record itself.
+    // A second `serving Entries` still replaces the first.
+    off = 8;
+    while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+    size_t end = off;
+    while (end < source.size() &&
+           (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+            source[end] == '.'))
+      end++;
+    return "serving " + source.substr(off, end - off);
+  }
   while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
   if (source.compare(off, 6, "final:") == 0) {
     off += 6;
@@ -704,6 +731,18 @@ static char **kexCompletion(const char *text, int start, int end) {
           // cq.rewriteTo keeps the original "x." so readline inserts correctly
         }
       }
+    }
+  }
+
+  // `pa.` — a REPL binding: complete the members of the type it holds.
+  if (auto dotPos = cq.dbQuery.rfind('.'); dotPos != std::string::npos) {
+    const std::string qualifier = cq.dbQuery.substr(0, dotPos);
+    if (auto bound = g_replVarTypes.find(qualifier);
+        bound != g_replVarTypes.end()) {
+      const auto type = completionQualifierForType(bound->second);
+      cq.dbQuery = type + "." + cq.dbQuery.substr(dotPos + 1);
+      cq.rewriteFrom = type + ".";
+      if (cq.rewriteTo.empty() && start == 0) cq.rewriteTo = qualifier + ".";
     }
   }
 
@@ -2635,6 +2674,7 @@ auto printUsage(const char *progName) -> void {
       << "  -v, --version     Show version\n"
       << "      --info        Print this build's details as JSON, for tools\n"
       << "  --colors          Use ANSI colors even when output is not a terminal\n"
+      << "                    (also: FORCE_COLOR=1)\n"
       << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n";
 }
 
@@ -2770,8 +2810,14 @@ int main(int argc, char *argv[]) {
   // are noise, and NO_COLOR (https://no-color.org) asks for none at all.
   // `--colors` / `--no-colors` below override it either way. (The wasm
   // build's output is the web REPL's own terminal, so it keeps colors.)
+  // FORCE_COLOR is the same convention's way back on, for output that is
+  // piped but still ends up on a screen — a parent that relays it (Tey runs
+  // `kex` behind a pipe), or a CI log viewer.
   if (!isatty(STDOUT_FILENO))
     kex::color::enabled = false;
+  if (const char *force = std::getenv("FORCE_COLOR");
+      force && *force && std::string(force) != "0")
+    kex::color::enabled = true;
   if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
     kex::color::enabled = false;
 #endif
@@ -3270,6 +3316,7 @@ int main(int argc, char *argv[]) {
         localBinds.clear();
         mutableBinds.clear();
         beamSemanticBinds.clear();
+        g_replVarTypes.clear();
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
         continue;
@@ -3281,6 +3328,13 @@ int main(int argc, char *argv[]) {
       }
       if (input.substr(0, 10) == "/complete ") {
         auto prefix = input.substr(10);
+        // Same binding lookup as Tab completion: `/complete pa.` asks for
+        // the members of the type `pa` holds.
+        if (auto dot = prefix.rfind('.'); dot != std::string::npos)
+          if (auto bound = g_replVarTypes.find(prefix.substr(0, dot));
+              bound != g_replVarTypes.end())
+            prefix = completionQualifierForType(bound->second) +
+                     prefix.substr(dot);
         auto results = beamReplDb.completionsFor(prefix);
         if (results.empty())
           std::cout << "  (no completions for \"" << prefix << "\")\n";
@@ -3515,7 +3569,7 @@ int main(int argc, char *argv[]) {
       }
       if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
           source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0 ||
-          source.rfind("using ", 0) == 0)
+          source.rfind("serving ", 0) == 0 || source.rfind("using ", 0) == 0)
         isFuncDef = true;
 
       try {
@@ -3863,6 +3917,12 @@ int main(int argc, char *argv[]) {
                       << output;
           }
 
+          if (isLocalLet && evalStatus == "ok" && patternLetNames.empty()) {
+            if (beamSemanticType)
+              g_replVarTypes[letVarName] = *beamSemanticType;
+            else
+              g_replVarTypes.erase(letVarName);
+          }
           if (isLocalLet && evalStatus == "ok") {
             const auto equals = source.find('=');
             const auto rhs = equals == std::string::npos
@@ -4273,6 +4333,7 @@ int main(int argc, char *argv[]) {
       }
       if (source.substr(0, 7) == "module " || source.substr(0, 5) == "type " ||
           source.substr(0, 7) == "record " || source.substr(0, 5) == "make " ||
+          source.substr(0, 8) == "serving " ||
           source.substr(0, 12) == "foul module " ||
           source.substr(0, 6) == "using ") {
         isFuncDef = true;
@@ -4402,6 +4463,12 @@ int main(int argc, char *argv[]) {
 
           auto result = execProgram(program);
           showResult(result, semanticType);
+          if (bindingName) {
+            if (semanticType)
+              g_replVarTypes[*bindingName] = *semanticType;
+            else
+              g_replVarTypes.erase(*bindingName);
+          }
           if (bindingName) {
             replBindings.erase(
                 std::remove_if(
