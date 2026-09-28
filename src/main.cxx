@@ -2763,6 +2763,16 @@ int main(int argc, char *argv[]) {
   bool allowMocks = false;
   auto testReportMode = kex::interpreter::Evaluator::TestReportMode::Pretty;
   std::vector<std::string> testFilters;
+#ifndef __EMSCRIPTEN__
+  // Styling is for a terminal: escape codes in a pipe, a log or a CI capture
+  // are noise, and NO_COLOR (https://no-color.org) asks for none at all.
+  // `--no-colors` below can still turn it off on a terminal. (The wasm
+  // build's output is the web REPL's own terminal, so it keeps colors.)
+  if (!isatty(STDOUT_FILENO))
+    kex::color::enabled = false;
+  if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
+    kex::color::enabled = false;
+#endif
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {

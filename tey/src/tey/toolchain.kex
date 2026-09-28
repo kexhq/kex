@@ -357,7 +357,7 @@ foul installRelease(version: String) -> String or! String do
     # An archive that is not there is a platform Kex does not publish for, or
     # a release still uploading; building is a reasonable answer to both.
     Error(Unavailable(reason)) => do
-      IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source\n")
+      IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source")
       let source = Tey.Toolchain.fetchRelease(version).try
       return Tey.Toolchain.installSource(source, version)
     end

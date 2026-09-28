@@ -1948,7 +1948,8 @@ All Enumerable methods (`map`, `filter`, `each`, etc.) are inherited.
 
 ### 23.11 Console
 
-ANSI styling constants (all become `""` under `--no-colors`): `Reset`, `Bold`,
+ANSI styling constants (all become `""` under `--no-colors`, when `NO_COLOR`
+is set, and when stdout is not a terminal): `Reset`, `Bold`,
 `Dim`, `Italic`, `Underline`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`,
 `Cyan`, `White`, `Gray`, etc.
 

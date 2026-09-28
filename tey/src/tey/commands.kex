@@ -30,7 +30,7 @@ foul lock -> Integer do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
   let resolved = match Tey.Resolver.resolveWorkspace(context) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -265,7 +265,7 @@ foul uninstallProgram(name: String) -> Integer do
       if Tey.Programs.teyBuilt?(path) && FS.File.delete(path)
         IO.printLine("${Console.GREEN}Removed${Console.RESET} ${target} ${Console.DIM}from ${binDirectory}${Console.RESET}")
       else
-        IO.printError("warning: left ${path}: it is no longer the program Tey installed\n")
+        IO.printError("warning: left ${path}: it is no longer the program Tey installed")
       end
     end
     ()
@@ -761,7 +761,7 @@ foul dependencyRootsAt(start: String) -> [String] do
       match context.currentMember do
         Just(member) => do
           let package: ManifestPackage = member.memberManifest
-          IO.printError("${Console.RED}error:${Console.RESET} no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+          IO.printError("${Console.RED}error:${Console.RESET} no tey.lock; run `tey install`") if !package.manifestDependencies.empty?
         end
         None => ()
       end
@@ -771,14 +771,14 @@ foul dependencyRootsAt(start: String) -> [String] do
   end
   let overrides = match Tey.Local.load(context) do
     Error(error) => do
-      IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+      IO.printError("${Console.RED}error:${Console.RESET} ${error}")
       return []
     end
     Ok(value) => value
   end
   match Tey.Local.validateAgainstLock(overrides, state) do
     Error(error) => do
-      IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
+      IO.printError("${Console.RED}error:${Console.RESET} ${error}")
       return []
     end
     Ok(_) => ()
@@ -807,7 +807,7 @@ foul dependencyRootsAt(start: String) -> [String] do
     ()
   end
   if !missing.empty?
-    IO.printError("${Console.RED}error:${Console.RESET} ${missing.join(", ")} not in the cache; run `tey install`\n")
+    IO.printError("${Console.RED}error:${Console.RESET} ${missing.join(", ")} not in the cache; run `tey install`")
   end
   return roots
 end
@@ -981,7 +981,7 @@ foul buildSelected(packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
   let jobs = match Tey.Commands.concurrency(requestedJobs) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -1069,7 +1069,7 @@ foul testSelected(requested: [String], packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}\n") }
+  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
   let jobs = match Tey.Commands.concurrency(requestedJobs) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -1332,7 +1332,7 @@ private do
       let dependencies = Tey.Workspace.memberDependencies(member).filter do |name|
         state.failedMembers.contains?(name)
       end
-      IO.printError("Skipping ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed\n")
+      IO.printError("Skipping ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed")
     end
     let ready = members.filter { |member| !blocked.contains?(member) }
     let failed = [...state.failedMembers,
@@ -1540,7 +1540,7 @@ private do
                                         ...Tey.Commands.sourceRoots, target.entrypoint]) do
         Error(error) => Tey.Commands.fail(error)
         Ok(result) => do
-          IO.printError(result.stderr) if result.stderr != ""
+          IO.error.print(result.stderr) if result.stderr != ""
           result.exitCode
         end
       end
@@ -1574,7 +1574,7 @@ private do
                                         ...Tey.Commands.sourceRootsAt(packageRoot), target.entrypoint]) do
         Error(error) => Tey.Commands.fail(error)
         Ok(result) => do
-          IO.printError(result.stderr) if result.stderr != ""
+          IO.error.print(result.stderr) if result.stderr != ""
           result.exitCode
         end
       end
@@ -1946,7 +1946,7 @@ private do
   # stderr competing with a compiler's own output has to be findable at a
   # glance, and `tey:` alone reads like a prefix rather than a problem.
   foul fail(message: String) -> Integer do
-    IO.printError("${Console.RED}error:${Console.RESET} ${message}\n")
+    IO.printError("${Console.RED}error:${Console.RESET} ${message}")
     1
   end
 end
