@@ -154,8 +154,7 @@ make Type do
   #
   # @example The fields a decoder may leave out
   #   Type.of(user).fields.filter { |f| f.optional? || f.default? }.map(&.name)
-  fields :> [Type.Field]
-  let fields = Kex.Intrinsic.Type.fieldLayoutsOf(this.name).map do |layout|
+  let fields -> [Type.Field] = Kex.Intrinsic.Type.fieldLayoutsOf(this.name).map do |layout|
     let (name, valueType, optional, defaulted) = layout
     Type.Field { name: name, valueType: valueType, optional?: optional, default?: defaulted }
   end
@@ -184,8 +183,7 @@ make Type do
   #   Type.of(Circle(1.0)).constructors.map(&.name)    # => ["Circle", "Square"]
   #   Type.of(Circle(1.0)).constructors.map(&.arity)   # => [1, 2]
   #   Type.of(42).constructors                         # => []
-  constructors :> [Type.Constructor]
-  let constructors = Kex.Intrinsic.Type.constructorLayoutsOf(this.name).map do |layout|
+  let constructors -> [Type.Constructor] = Kex.Intrinsic.Type.constructorLayoutsOf(this.name).map do |layout|
     let (name, argTypes) = layout
     Type.Constructor { name: name, arity: argTypes.count, argTypes: argTypes }
   end

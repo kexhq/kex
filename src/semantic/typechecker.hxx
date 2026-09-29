@@ -431,6 +431,13 @@ private:
         // type was previously discarded, so destructuring it in a pattern gave
         // the binding a fresh variable and nothing knew `b` was a Box.
         std::vector<TypePtr> payloadTypes;
+        // The same payloads as WRITTEN, and the module that declared them. A
+        // sum type is registered before its module's records are, so a
+        // payload naming one of them (`RecordDecl(RecordEntry)`) resolved to
+        // the bare, unqualified name; a pattern binding re-resolves it here,
+        // in the declaring module, once every declaration is known.
+        std::vector<const ast::TypeExpr*> payloadExprs;
+        std::string modulePath;
     };
     std::unordered_map<std::string, ConstructorResult> m_constructorResult;
     // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to

@@ -1179,8 +1179,10 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
                         declared = nullptr;
                 }
                 result.payloadTypes.push_back(std::move(declared));
+                result.payloadExprs.push_back(payload.get());
             }
         }
+        result.modulePath = modulePath;
         const auto key = modulePath.empty() ? *name : modulePath + "::" + *name;
         m_constructorResult[key] = std::move(result);
     }
@@ -2962,6 +2964,35 @@ auto TypeChecker::bindPatternVars(
             if (auto found = m_constructorResult.find(node.name);
                 found != m_constructorResult.end())
                 declaration = &found->second;
+            // A constructor declared inside a module is registered as
+            // `Module::Name`. Find it the way a call does — through the
+            // enclosing modules — and otherwise by the ADT being matched on,
+            // which is how an imported one (`using Model`) is reached. Left
+            // unfound, the payload stayed untyped, and `entry.fields` on a
+            // record held in it resolved to whichever `fields` METHOD existed
+            // rather than the record's own field.
+            for (auto module = m_currentModulePath;
+                 !declaration && !module.empty();) {
+                if (auto found = m_constructorResult.find(module + "::" + node.name);
+                    found != m_constructorResult.end()) {
+                    declaration = &found->second;
+                    break;
+                }
+                const auto dot = module.rfind('.');
+                if (dot == std::string::npos) break;
+                module.resize(dot);
+            }
+            if (!declaration && expected)
+                if (const auto* scrutinee =
+                        std::get_if<NamedType>(&resolve(expected)->kind)) {
+                    const auto suffix = "::" + node.name;
+                    for (const auto& [key, candidate] : m_constructorResult)
+                        if (key.size() > suffix.size() && key.ends_with(suffix) &&
+                            namedTypesMatch(candidate.adtName, scrutinee->name)) {
+                            declaration = &candidate;
+                            break;
+                        }
+                }
             for (size_t i = 0; i < node.args.size(); ++i) {
                 if (!node.args[i]) continue;
                 TypePtr payload;
@@ -2997,6 +3028,19 @@ auto TypeChecker::bindPatternVars(
                     // unrelated use had unified it with: `let Just(i) = ...`
                     // came out `Char` in the merged prelude (kexhq/kex#249).
                     payload = declaration->payloadTypes[i];
+                    if (!declaration->modulePath.empty() &&
+                        i < declaration->payloadExprs.size() &&
+                        declaration->payloadExprs[i]) {
+                        const auto previousModule = m_currentModulePath;
+                        m_currentModulePath = declaration->modulePath;
+                        std::unordered_map<std::string, TypePtr> generics;
+                        auto resolved =
+                            resolveTypeExpr(*declaration->payloadExprs[i], generics);
+                        m_currentModulePath = previousModule;
+                        if (resolved &&
+                            !std::holds_alternative<UnknownType>(resolved->kind))
+                            payload = std::move(resolved);
+                    }
                 }
                 // The built-in carriers come from the prelude interface, not a
                 // local declaration, so they have no slot above. Left untyped,

@@ -1,0 +1,33 @@
+# A constructor pattern of a sum type declared in a MODULE types its payload
+# from the declaration, as it already did at the top level. The binding was
+# left untyped, so `entry.fields` on a record held in it resolved to the
+# prelude's `Type.fields` method rather than the record's own field, and
+# `entry.name` to an unrelated global `name` function.
+module Model do
+  record FieldEntry do
+    typeName : String
+  end
+
+  record RecordEntry do
+    name : String
+    fields : [FieldEntry]
+  end
+
+  type Entity = RecordDecl(RecordEntry) | Other
+end
+
+module Report do
+  using Model, only: [Entity, RecordDecl, Other]
+
+  let describe(e: Entity) -> String do
+    match e do
+      RecordDecl(entry) => "${entry.name}: ${entry.fields.map { |f| f.typeName }.join(", ")}"
+      Other => "other"
+    end
+  end
+end
+
+main do
+  let entry = Model.RecordEntry { name: "Point", fields: [Model.FieldEntry { typeName: "Integer" }] }
+  IO.printLine(Report.describe(Model.RecordDecl(entry)))
+end
