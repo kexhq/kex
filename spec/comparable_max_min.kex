@@ -1,0 +1,34 @@
+# `max`, `min` and `clamp` for every Comparable type (kexhq/kex#99), as
+# trait defaults built on `compare`: `max(3, 7)` and `3.max(7)` alike.
+record Version do
+  major : Integer
+  minor : Integer
+end
+
+make Version, implement: Comparable do
+  let compare(other: Version) -> Ordering = @major.compare(other.major).thenBy { @minor.compare(other.minor) }
+end
+
+let show(v: Version) -> String = "${v.major}.${v.minor}"
+
+main do
+  IO.printLine(max(3, 7).inspected)
+  IO.printLine(min(3, 7).inspected)
+  IO.printLine(1.5.max(2.5).inspected)
+  IO.printLine(max(1, 2.5).inspected)
+  IO.printLine("pear".max("apple").inspected)
+  IO.printLine("pear".min("apple").inspected)
+  IO.printLine(15.clamp(0, 10).inspected)
+  IO.printLine((-3).clamp(0, 10).inspected)
+  IO.printLine(5.clamp(0, 10).inspected)
+  # The collection spellings are unchanged: the largest element, if any.
+  IO.printLine([3, 1, 2].max.inspected)
+  IO.printLine([].min.inspected)
+
+  # Any type that implements Comparable gets them from `compare` alone.
+  let a = Version { major: 1, minor: 2 }
+  let b = Version { major: 1, minor: 10 }
+  IO.printLine(show(max(a, b)))
+  IO.printLine(show(a.min(b)))
+  IO.printLine(show(Version { major: 3, minor: 0 }.clamp(a, b)))
+end

@@ -1,4 +1,5 @@
 #include "lower.hxx"
+#include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
@@ -337,6 +338,19 @@ struct Lowering {
         std::unordered_map<std::string, std::string> aliases;
     };
     std::unordered_map<std::string, RecordInfo> records;
+    // What `Type.fields` and `Type.constructors` answer with at runtime: each
+    // record's fields and each sum type's variants as declared, in order,
+    // with their declared types. Ordered maps keep the emitted Core
+    // reproducible.
+    struct FieldLayout {
+        std::string name;
+        semantic::StructuredType type;
+        bool hasDefault = false;
+    };
+    std::map<std::string, std::vector<FieldLayout>> recordLayouts;
+    std::map<std::string,
+             std::vector<std::pair<std::string, std::vector<semantic::StructuredType>>>>
+        adtLayouts;
 
     // The inverse of `canonicalRecordName` for MANGLED SYMBOL spellings: given
     // a type as the checker names it (qualified — `Srv.Server`), the spelling
@@ -4717,6 +4731,50 @@ struct Lowering {
                                  one(mapFrom(std::move(ownerPairs)))),
                            std::move(body));
         }
+        if (!recordLayouts.empty() || !adtLayouts.empty()) {
+            auto binaryLit = [&](const std::string& text) {
+                return lit(LitKind::String, text);
+            };
+            auto listOf = [](std::vector<ExprPtr> items) {
+                auto list = std::make_unique<Expr>();
+                list->node = MakeList{std::move(items), std::nullopt};
+                return list;
+            };
+            auto tupleOf = [](std::vector<ExprPtr> items) {
+                auto tuple = std::make_unique<Expr>();
+                tuple->node = MakeTuple{std::move(items)};
+                return tuple;
+            };
+            std::vector<ExprPtr> recordEntries;
+            for (const auto& [name, fields] : recordLayouts) {
+                std::vector<ExprPtr> described;
+                for (const auto& field : fields) {
+                    std::vector<ExprPtr> parts;
+                    parts.push_back(binaryLit(field.name));
+                    parts.push_back(structuredTypeLiteral(field.type));
+                    parts.push_back(litBool(field.type.name == "Option"));
+                    parts.push_back(litBool(field.hasDefault));
+                    described.push_back(tupleOf(std::move(parts)));
+                }
+                recordEntries.push_back(tupleOf(two(atomLit(name), listOf(std::move(described)))));
+            }
+            std::vector<ExprPtr> adtEntries;
+            for (const auto& [owner, variants] : adtLayouts) {
+                std::vector<ExprPtr> described;
+                for (const auto& [tag, argTypes] : variants) {
+                    std::vector<ExprPtr> types;
+                    for (const auto& type : argTypes)
+                        types.push_back(structuredTypeLiteral(type));
+                    described.push_back(tupleOf(two(binaryLit(tag), listOf(std::move(types)))));
+                }
+                adtEntries.push_back(tupleOf(two(atomLit(owner), listOf(std::move(described)))));
+            }
+            body = makeLet(fresh("Layouts"),
+                           callE("kex_intrinsic_type", "register_layouts", 2,
+                                 two(mapFrom(std::move(recordEntries)),
+                                     mapFrom(std::move(adtEntries)))),
+                           std::move(body));
+        }
         return makeLet(fresh("Disp"),
             callE("kex_io", "register_display", 2,
                   two(mapFrom(std::move(recPairs)), mapFrom(std::move(varPairs)))),
@@ -6976,6 +7034,13 @@ struct Lowering {
                              static_cast<int>(rec.fields.size()) + 1, true);
         }
         records[name] = std::move(info);
+        auto& layout = recordLayouts[name];
+        layout.clear();
+        for (const auto& field : rec.fields)
+            layout.push_back({field.name,
+                              field.type ? semantic::structuredTypeOfDeclared(*field.type)
+                                         : semantic::StructuredType{"Any", {}},
+                              field.defaultValue.has_value()});
     }
 
     // The BEAM module providing `name/arity` as a plain prefix call, or "" if
@@ -7578,6 +7643,33 @@ struct Lowering {
             }
             fallback.body = callE("kex_prelude", "to", def.arity,
                                   std::move(args));
+            def.clauses.push_back(std::move(fallback));
+            forwarded = true;
+        }
+        // The prelude's own per-type conversions — `make Atom do let
+        // to(String)`, `make Type do let to(String)` — are mangled to
+        // `to/Atom` and reached through a dispatcher that routes on the
+        // receiver alone, so `:a.to(Integer)` entered the Atom clause, failed
+        // its `String` pattern and died with `function_clause`. What it does
+        // not match continues to the generic conversion, which the dispatcher
+        // keeps in this module as `to$generic`.
+        // Only a plain definition: a trait default (`to/Showable`) carries a
+        // hidden dictionary and already forwards through its own fallback.
+        if (first.name == "to" && def.name != "to" &&
+            preferExternalReceivers && collidingMethods.count("to") &&
+            static_cast<size_t>(def.arity) == sourceArity) {
+            FunClause fallback;
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < def.arity; ++i) {
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = "_toFallback" + std::to_string(i);
+                fallback.params.push_back(std::move(param));
+                args.push_back(var("_toFallback" + std::to_string(i)));
+            }
+            auto body = std::make_unique<Expr>();
+            body->node = Call{"", "to$generic", def.arity, std::move(args), false};
+            fallback.body = std::move(body);
             def.clauses.push_back(std::move(fallback));
             forwarded = true;
         }
@@ -8871,9 +8963,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.structuralTypeAliases[td.name] =
                 renderDispatchType(*(*td.variants)[0]);
         if (kex::isTransparentTypeAlias(td)) return;
+        auto& layout = L.adtLayouts[td.name];
+        layout.clear();
         for (const auto& v : *td.variants) {
             auto t = Lowering::simpleTypeName(v);
             if (t.empty()) continue;
+            std::vector<semantic::StructuredType> argTypes;
+            if (auto* g = std::get_if<ast::GenericType>(&v->kind))
+                for (const auto& arg : g->args)
+                    argTypes.push_back(arg ? semantic::structuredTypeOfDeclared(*arg)
+                                           : semantic::StructuredType{"Any", {}});
+            layout.emplace_back(t, std::move(argTypes));
             L.variantTagSet.insert(t);
             if (auto* g = std::get_if<ast::GenericType>(&v->kind))
                 L.variantArity[t] = static_cast<int>(g->args.size());

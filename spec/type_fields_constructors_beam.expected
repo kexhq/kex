@@ -1,0 +1,14 @@
+[x, y, label, tags, onClick]
+x : Integer, optional? false, default? false
+y : Integer, optional? false, default? true
+label : String?, optional? true, default? false
+tags : [String], optional? false, default? true
+onClick : Integer -> Bool, optional? false, default? false
+[y, label, tags]
+[Circle, Square, Dot]
+Circle/1 [Float]
+Square/2 [Float, {String: Integer}]
+Dot/0 []
+[major, minor, patch, revision, preRelease]
+[Integer, Integer, Integer, Integer]
+0 0

@@ -910,8 +910,11 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     }
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
+        auto& declared = m_adtVariants[def.name];
+        declared.clear();
         for (const auto& variant : *def.variants) {
             if (!variant) continue;
+            declared.push_back(variant.get());
             std::string variantName;
             size_t arity = 0;
             if (auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {

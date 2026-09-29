@@ -86,19 +86,17 @@ describe("Type") do
 
   it("reports a record's fields and an ADT's constructors") do
     let point = Type.of(Point { x: 1, y: 2 })
-    assert(point.fields == ["x", "y"])
+    assert(point.fieldNames == ["x", "y"])
     assert(point.record?)
     assert(point.adt? == false)
 
     let shade = Type.of(Light)
-    assert(shade.constructors.count == 2)
-    assert(shade.constructors.contains?("Light"))
-    assert(shade.constructors.contains?("Dark"))
+    assert(shade.constructorNames == ["Light", "Dark"])
     assert(shade.adt?)
     assert(shade.record? == false)
 
     # A prelude record answers the same way.
-    assert(Type.of(Time.midnight()).fields ==
+    assert(Type.of(Time.midnight()).fieldNames ==
            ["hour", "minute", "second", "nanosecond"])
   end
 

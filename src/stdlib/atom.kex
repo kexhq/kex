@@ -41,4 +41,15 @@ make Atom do
   #   :"b@host.example.com".string  # => "b@host.example.com"
   string :> String
   let string = Kex.Intrinsic.Atom.name(this)
+
+  # Returns the atom's name as text, like +string+, through the universal
+  # conversion. The name, not the displayed form: +:ok+ converts to +"ok"+,
+  # not +":ok"+, so +text.to(Atom)+ and this are inverses.
+  #
+  # @return [String?] the name, always +Just+
+  #
+  # @example
+  #   :hello.to(String)                       # => Just("hello")
+  #   "hello".to(Atom).flatMap { |a| a.to(String) }   # => Just("hello")
+  let to(String) = Just(this.string)
 end

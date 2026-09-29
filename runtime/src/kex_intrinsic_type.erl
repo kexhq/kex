@@ -6,7 +6,8 @@
 %% answer can be taken apart. Both consult the same display registry, which is
 %% what lets a tagged tuple be recognised as a record or an ADT variant.
 -module(kex_intrinsic_type).
--export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1, 'updateRecord'/3]).
+-export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1, 'updateRecord'/3,
+         'fieldLayoutsOf'/1, 'constructorLayoutsOf'/1, register_layouts/2]).
 
 'updateRecord'(Record, Field, Value) when is_tuple(Record), tuple_size(Record) > 0 ->
     Tag = element(1, Record),
@@ -88,16 +89,58 @@ element_type([H | T]) ->
     case record_fields(binary_to_atom(Name, utf8)) of
         Fields when is_list(Fields) ->
             [atom_to_binary(F, utf8) || F <- Fields];
-        _ -> []
+        _ -> [FieldName || {FieldName, _, _, _} <- 'fieldLayoutsOf'(Name)]
     end.
 
-%% The inverse of the variant registry: every tag whose owner is this type,
-%% in registration order.
+%% A sum type's constructor names, in declaration order.
 'constructorsOf'(Name) ->
-    Owner = binary_to_atom(Name, utf8),
-    Variants = persistent_term:get(kex_display_variants, #{}),
-    [atom_to_binary(Tag, utf8)
-     || {Tag, {_Arity, TagOwner}} <- maps:to_list(Variants), TagOwner =:= Owner].
+    [Tag || {Tag, _ArgTypes} <- 'constructorLayoutsOf'(Name)].
+
+%% register_layouts/2 — called when a module loads, with each record's fields
+%% (#{Tag => [{Name, Type, Optional, HasDefault}, …]}) and each sum type's
+%% variants (#{Owner => [{Tag, [ArgType, …]}, …]}), in declaration order and
+%% with the declared types as `Type` records. Only the compiler knows these;
+%% they are what `Type.fields` and `Type.constructors` answer with.
+register_layouts(Records, Adts) ->
+    persistent_term:put(kex_record_layouts,
+                        maps:merge(persistent_term:get(kex_record_layouts, #{}), Records)),
+    persistent_term:put(kex_adt_layouts,
+                        maps:merge(persistent_term:get(kex_adt_layouts, #{}), Adts)),
+    ok.
+
+'fieldLayoutsOf'(Name) ->
+    [{FieldName, Type, Optional, HasDefault}
+     || {FieldName, Type, Optional, HasDefault}
+            <- layout(persistent_term:get(kex_record_layouts, #{}), Name)].
+
+'constructorLayoutsOf'(Name) ->
+    layout(persistent_term:get(kex_adt_layouts, #{}), Name).
+
+%% A type's layout by the name `Type.of` reports. A type declared inside a
+%% module is registered under one spelling ('Kex.Version') while a value may
+%% report the other ("Version"): a qualified name also matches its bare last
+%% segment, and a bare name the one qualified entry ending in it.
+layout(Layouts, Name) ->
+    Key = binary_to_atom(Name, utf8),
+    case maps:find(Key, Layouts) of
+        {ok, Found} -> Found;
+        error ->
+            Bare = lists:last(binary:split(Name, <<".">>, [global])),
+            case maps:find(binary_to_atom(Bare, utf8), Layouts) of
+                {ok, Found} when Bare =/= Name -> Found;
+                _ ->
+                    Suffix = <<".", Name/binary>>,
+                    case [V || {K, V} <- maps:to_list(Layouts),
+                               ends_with(atom_to_binary(K, utf8), Suffix)] of
+                        [Only] -> Only;
+                        _ -> []
+                    end
+            end
+    end.
+
+ends_with(Binary, Suffix) ->
+    Size = byte_size(Binary) - byte_size(Suffix),
+    Size >= 0 andalso binary:part(Binary, Size, byte_size(Suffix)) =:= Suffix.
 
 record_fields(Tag) when is_atom(Tag) ->
     maps:get(Tag, persistent_term:get(kex_display_records, #{}), undefined);

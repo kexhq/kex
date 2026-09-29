@@ -48,6 +48,46 @@ trait Comparable do
   # A total order: `compare` answers Less, Equal or Greater. `==` stays
   # independent: a type may be Equatable without being ordered.
   compare :> This -> Ordering
+
+  # What every ordered type gets from +compare+ alone.
+  # Returns the larger of this value and +other+; this value when they are
+  # equal.
+  #
+  # Written either way round, since a call and a method are the same thing:
+  # +max(3, 7)+ is +3.max(7)+.
+  #
+  # @param other [This] the value to compare against
+  # @return [This] the larger of the two
+  #
+  # @example
+  #   max(3, 7)             # => 7
+  #   1.5.max(2.5)          # => 2.5
+  #   "pear".max("apple")   # => "pear"
+  let max(other) = this.compare(other) == Less then other else this
+
+  # Returns the smaller of this value and +other+; this value when they are
+  # equal.
+  #
+  # @param other [This] the value to compare against
+  # @return [This] the smaller of the two
+  #
+  # @example
+  #   min(3, 7)             # => 3
+  #   "pear".min("apple")   # => "apple"
+  let min(other) = this.compare(other) == Greater then other else this
+
+  # Returns this value limited to the range +low+ to +high+: +low+ when it is
+  # below, +high+ when it is above, and itself otherwise.
+  #
+  # @param low [This] the smallest value allowed
+  # @param high [This] the largest value allowed
+  # @return [This] the value, clamped into +low+ to +high+
+  #
+  # @example
+  #   15.clamp(0, 10)      # => 10
+  #   (-3).clamp(0, 10)    # => 0
+  #   0.5.clamp(0.0, 1.0)  # => 0.5
+  let clamp(low, high) = this.max(low).min(high)
 end
 
 # Number carries the implementation, so Integer and Float both inherit it

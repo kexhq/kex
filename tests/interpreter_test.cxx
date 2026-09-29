@@ -2774,7 +2774,9 @@ int main() {
                 "  end\n"
                 "end\n"
             );
-            assertEqual(out, std::string("error :timeout\n"));
+            // An atom converts to its name (kexhq/kex#92): `:timeout` is
+            // "timeout", the inverse of `"timeout".to(Atom)`.
+            assertEqual(out, std::string("error timeout\n"));
         });
 
         it("Task.awaitAll awaits multiple tasks in order, each as Ok(result)", []() {

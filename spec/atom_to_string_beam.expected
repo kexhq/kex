@@ -1,0 +1,6 @@
+Just("hello") : Optional<String>
+Just("b@host.example.com") : Optional<String>
+Just(:hello) : Optional<Atom>
+Just("hello") : Optional<String>
+None : Optional
+None : Optional

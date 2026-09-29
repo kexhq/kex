@@ -243,13 +243,29 @@ Type.of([1, 2]).to(String)              # "[Integer]"
 Type.of((1, "a")).to(String)            # "(Integer, String)"
 Type.of(Date.of(2026, 7, 30))         # Result<Date, TimeError>
 Type.of(x) == Type.named("Date")      # ordinary record equality
-Type.of(point).fields                 # ["x", "y"]
-Type.of(Light).constructors           # ["Light", "Dark"]
+Type.of(point).fieldNames             # ["x", "y"]
+Type.of(Light).constructorNames       # ["Light", "Dark"]
 Type.returnedBy(Date.parse).to(String)  # "Result<Date, TimeError>"
 
 "34".to(Type.of(234))                 # Just(34) — `.to` takes a Type value
 5.to(String)                          # Just("5") — or a bare type name
 ```
+
+`fields` and `constructors` describe a type's shape as declared, for code that
+derives something from it — a decoder, a form, a schema:
+
+```kex
+Type.of(point).fields.map { |f| (f.name, f.valueType.to(String)) }
+# [("x", "Integer"), ("label", "String?")]
+Type.of(user).fields.filter { |f| f.optional? || f.default? }   # may be left out
+Type.of(Light).constructors.map { |c| (c.name, c.arity) }
+# [("Light", 0), ("Dark", 1)]
+```
+
+Each `Type.Field` has `name`, `valueType` (the declared type as a `Type`),
+`optional?` (declared `T?`) and `default?` (has a declared default). Each
+`Type.Constructor` has `name`, `arity` and `argTypes`. Both come in declaration
+order.
 
 The answer comes from the compiler where it has one: a checked expression
 knows things a value cannot carry, such as the unused half of a `Result` or
