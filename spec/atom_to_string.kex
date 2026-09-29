@@ -1,0 +1,13 @@
+# Atom <-> String through `to` (kexhq/kex#92): an atom converts to its name,
+# not its displayed `:name` form, so `to(Atom)` and `to(String)` invert.
+main do
+  IO.inspect(:hello.to(String))
+  IO.inspect(:"b@host.example.com".to(String))
+  IO.inspect("hello".to(Atom))
+  IO.inspect("hello".to(Atom).flatMap { |a| a.to(String) })
+  # A conversion the per-type `to(String)` does not handle still reaches the
+  # generic one, instead of failing to match (it used to raise
+  # `function_clause` on BEAM, for Atom and Type alike).
+  IO.inspect(:hello.to(Integer))
+  IO.inspect(Type.of(1).to(Integer))
+end

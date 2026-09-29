@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../semantic/declared_type.hxx"
 
 namespace kex::interpreter {
 
@@ -93,6 +94,29 @@ auto typeOfValue(const ValuePtr& value) -> ValuePtr {
     }, value->data);
 }
 
+// A type's entry by the name `Type.of` reports. A type declared inside a
+// module is registered under one spelling (`Kex.Version`) while a value may
+// report the other (`Version`), so a qualified name also matches its bare
+// last segment, and a bare name the one qualified entry ending in it.
+template <typename Map>
+auto findByTypeName(const Map& map, const std::string& name)
+    -> const typename Map::mapped_type* {
+    if (auto exact = map.find(name); exact != map.end()) return &exact->second;
+    const auto dot = name.rfind('.');
+    if (dot != std::string::npos)
+        if (auto bare = map.find(name.substr(dot + 1)); bare != map.end())
+            return &bare->second;
+    const typename Map::mapped_type* found = nullptr;
+    for (const auto& [key, value] : map) {
+        const auto keyDot = key.rfind('.');
+        if (keyDot == std::string::npos || key.compare(keyDot + 1, std::string::npos, name) != 0)
+            continue;
+        if (found) return nullptr;  // ambiguous: two modules declare it
+        found = &value;
+    }
+    return found;
+}
+
 auto stringArg(const std::vector<ValuePtr>& args) -> std::string {
     if (args.empty()) return "";
     auto* s = std::get_if<StringValue>(&args[0]->data);
@@ -112,21 +136,79 @@ auto Evaluator::registerTypeBuiltins() -> void {
 
     defineIntrinsic("Type::fieldsOf", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> fields;
-        auto record = m_recordDefs.find(stringArg(args));
-        if (record != m_recordDefs.end() && record->second)
-            for (const auto& field : record->second->fields)
+        const auto* record = findByTypeName(m_recordDefs, stringArg(args));
+        if (record && *record)
+            for (const auto& field : (*record)->fields)
                 fields.push_back(Value::string(field.name));
         return Value::list(std::move(fields));
     });
 
+    // `Type.fields`: one `(name, type, optional, hasDefault)` tuple per field,
+    // in declaration order, the declared type read from the source as written
+    // (semantic::structuredTypeOfDeclared) — the same shape the BEAM runtime
+    // is handed by the compiler.
+    defineIntrinsic("Type::fieldLayoutsOf",
+                    [this](std::vector<ValuePtr> args) -> ValuePtr {
+        std::vector<ValuePtr> fields;
+        const auto* record = findByTypeName(m_recordDefs, stringArg(args));
+        if (record && *record)
+            for (const auto& field : (*record)->fields) {
+                const auto type = field.type
+                    ? semantic::structuredTypeOfDeclared(*field.type)
+                    : semantic::StructuredType{"Any", {}};
+                fields.push_back(Value::tuple({
+                    Value::string(field.name),
+                    structuredTypeValue(type),
+                    Value::boolean(type.name == "Option"),
+                    Value::boolean(field.defaultValue.has_value()),
+                }));
+            }
+        return Value::list(std::move(fields));
+    });
+
+    // `Type.constructors`: one `(name, [argument type])` tuple per variant,
+    // in declaration order.
+    defineIntrinsic("Type::constructorLayoutsOf",
+                    [this](std::vector<ValuePtr> args) -> ValuePtr {
+        std::vector<ValuePtr> constructors;
+        const auto* variants = findByTypeName(m_adtVariants, stringArg(args));
+        if (variants)
+            for (const auto* variant : *variants) {
+                std::string name;
+                std::vector<ValuePtr> argTypes;
+                if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {
+                    if (generic->name.parts.empty()) continue;
+                    name = generic->name.parts.back();
+                    for (const auto& arg : generic->args)
+                        argTypes.push_back(structuredTypeValue(
+                            arg ? semantic::structuredTypeOfDeclared(*arg)
+                                : semantic::StructuredType{"Any", {}}));
+                } else if (const auto* plain = std::get_if<ast::TypeName>(&variant->kind)) {
+                    if (plain->parts.empty()) continue;
+                    name = plain->parts.back();
+                } else {
+                    continue;
+                }
+                constructors.push_back(Value::tuple({
+                    Value::string(name), Value::list(std::move(argTypes))}));
+            }
+        return Value::list(std::move(constructors));
+    });
+
     defineIntrinsic("Type::constructorsOf",
                     [this](std::vector<ValuePtr> args) -> ValuePtr {
-        // m_variantParent maps constructor -> owning ADT; this is its
-        // inverse, which is only needed here.
-        const auto owner = stringArg(args);
+        // In declaration order, as written: iterating m_variantParent (a
+        // hash map) answered in whatever order it happened to hold them.
         std::vector<ValuePtr> constructors;
-        for (const auto& [constructor, parent] : m_variantParent)
-            if (parent == owner) constructors.push_back(Value::string(constructor));
+        if (const auto* variants = findByTypeName(m_adtVariants, stringArg(args)))
+            for (const auto* variant : *variants) {
+                if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind);
+                    generic && !generic->name.parts.empty())
+                    constructors.push_back(Value::string(generic->name.parts.back()));
+                else if (const auto* plain = std::get_if<ast::TypeName>(&variant->kind);
+                         plain && !plain->parts.empty())
+                    constructors.push_back(Value::string(plain->parts.back()));
+            }
         return Value::list(std::move(constructors));
     });
 }

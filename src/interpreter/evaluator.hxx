@@ -492,6 +492,9 @@ private:
     // `make Option<A> do let map(@Just(x), f) = ... end` (registered under
     // "Option::map") when called on a `Just(...)` value (tagged "Just").
     std::unordered_map<std::string, std::string> m_variantParent;
+    // Each sum type's variants as declared, in order: what
+    // `Type.constructors` answers with, names and argument types alike.
+    std::unordered_map<std::string, std::vector<const ast::TypeExpr*>> m_adtVariants;
     // Record definitions, keyed by name, so RecordConstruction can apply
     // declared field defaults (e.g. `pos : Int = 0`) for fields the
     // constructor call doesn't specify explicitly.

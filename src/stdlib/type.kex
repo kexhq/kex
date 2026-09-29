@@ -6,7 +6,7 @@
 #   Type.of(42)                     # Type { name: "Integer", args: [] }
 #   Type.of([1, 2]).to(String)        # "[Integer]"
 #   Type.of(x) == Type.of(y)        # structural equality, like any record
-#   Type.of(due).fields             # ["year", "month", "day"]
+#   Type.of(due).fieldNames         # ["year", "month", "day"]
 #
 # The answer comes from the compiler where it can: a checked expression knows
 # things a value cannot carry, such as the unused half of a `Result` or the
@@ -98,6 +98,34 @@ module Type do
   #   Type.returnedBy(Date.parse).to(String)   # => "Result<Date, TimeError>"
   let returnedBy(function: Any) -> Type = Kex.Intrinsic.Type.ofValue(function)
 
+  # A record field, as +Type.fields+ describes it.
+  record Field do
+    # The field's name.
+    name : String
+
+    # The field's declared type, as written: +Integer?+ is an +Option+ of
+    # +Integer+, and a type parameter keeps its own name.
+    valueType : Type
+
+    # Whether the field is declared optional (+T?+), so a value may be +None+.
+    optional? : Bool
+
+    # Whether the field has a declared default, so construction may omit it.
+    default? : Bool
+  end
+
+  # A sum type's constructor, as +Type.constructors+ describes it.
+  record Constructor do
+    # The constructor's name: its tag.
+    name : String
+
+    # How many arguments it takes. Zero for a bare tag such as +None+.
+    arity : Integer
+
+    # The declared types of its arguments, in order.
+    argTypes : [Type]
+  end
+
   # No `nameOf`/`argsOf`: `type.name` and `type.args` are the record's own
   # fields and read the same on both backends, while a module function taking
   # a Type collides with the `name` receiver dispatcher on BEAM.
@@ -107,34 +135,71 @@ end
 # only reachable through UFCS in the interpreter, so `Type.of(x).fields`
 # worked there and raised on BEAM.
 make Type do
-  # Returns a record type's field names, in declaration order. Anything that
-  # is not a record answers with an empty list.
+  # Returns a record type's fields, in declaration order: each one's name,
+  # declared type, and whether a value may leave it out. Anything that is not
+  # a record answers with an empty list.
   #
-  # Reads the layout the compiler already ships to the runtime for display;
-  # there is no separate metadata to keep in step.
+  # The types are the DECLARED ones, as written: +Integer?+ is
+  # +Type { name: "Option", args: [Integer] }+ and a type parameter keeps its
+  # own name. That is what a decoder derived from a record needs: which parser
+  # each field takes, and which fields it may skip.
+  #
+  # @return [[Type.Field]] the fields, or +[]+
+  #
+  # @example
+  #   Type.of(Point { x: 1, y: 2 }).fields.map(&.name)   # => ["x", "y"]
+  #   Type.of(Point { x: 1, y: 2 }).fields.first.map { |f| f.valueType.name }
+  #   # => Just("Integer")
+  #   Type.of(42).fields                                 # => []
+  #
+  # @example The fields a decoder may leave out
+  #   Type.of(user).fields.filter { |f| f.optional? || f.default? }.map(&.name)
+  let fields -> [Type.Field] = Kex.Intrinsic.Type.fieldLayoutsOf(this.name).map do |layout|
+    let (name, valueType, optional, defaulted) = layout
+    Type.Field { name: name, valueType: valueType, optional?: optional, default?: defaulted }
+  end
+
+  # Returns a record type's field names, in declaration order: +fields+ when
+  # only the names matter. Anything that is not a record answers with an
+  # empty list.
   #
   # @return [[String]] the field names, or +[]+
   #
   # @example
-  #   Type.of(Point { x: 1, y: 2 }).fields   # => ["x", "y"]
-  #   Type.of(42).fields                     # => []
+  #   Type.of(Point { x: 1, y: 2 }).fieldNames   # => ["x", "y"]
+  #   Type.of(due).fieldNames                    # => ["year", "month", "day"]
   #
   # @example Rendering a record generically
-  #   Type.of(value).fields.map { |name| "${name}: ..." }.join(", ")
-  let fields -> [String] = Kex.Intrinsic.Type.fieldsOf(this.name)
+  #   Type.of(value).fieldNames.map { |name| "${name}: ..." }.join(", ")
+  let fieldNames -> [String] = Kex.Intrinsic.Type.fieldsOf(this.name)
 
-  # Returns an ADT's constructor names. Anything that is not an ADT answers
-  # with an empty list.
+  # Returns a sum type's constructors, in declaration order: each one's name
+  # and the declared types of its arguments. Anything that is not a sum type
+  # answers with an empty list.
+  #
+  # @return [[Type.Constructor]] the constructors, or +[]+
+  #
+  # @example
+  #   Type.of(Circle(1.0)).constructors.map(&.name)    # => ["Circle", "Square"]
+  #   Type.of(Circle(1.0)).constructors.map(&.arity)   # => [1, 2]
+  #   Type.of(42).constructors                         # => []
+  let constructors -> [Type.Constructor] = Kex.Intrinsic.Type.constructorLayoutsOf(this.name).map do |layout|
+    let (name, argTypes) = layout
+    Type.Constructor { name: name, arity: argTypes.count, argTypes: argTypes }
+  end
+
+  # Returns a sum type's constructor names, in declaration order:
+  # +constructors+ when only the names matter. Anything that is not a sum
+  # type answers with an empty list.
   #
   # @return [[String]] the constructor names, or +[]+
   #
   # @example
-  #   Type.of(Circle(1)).constructors   # => ["Circle", "Square"]
-  #   Type.of(42).constructors          # => []
+  #   Type.of(Circle(1.0)).constructorNames   # => ["Circle", "Square"]
   #
   # @example Listing what a sum type can be
-  #   IO.printLine("one of: ${Type.of(shape).constructors.join(", ")}")
-  let constructors -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
+  #   IO.printLine("one of: ${Type.of(shape).constructorNames.join(", ")}")
+  let constructorNames -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
 
   # Returns +true+ when the type is a record: that is, when it has fields.
   #
@@ -143,7 +208,7 @@ make Type do
   # @example
   #   Type.of(Point { x: 1, y: 2 }).record?   # => true
   #   Type.of(42).record?                     # => false
-  let record? -> Bool = this.fields.count > 0
+  let record? -> Bool = this.fieldNames.count > 0
 
   # Returns +true+ when the type is a sum type: that is, when it has
   # constructors.
@@ -153,7 +218,7 @@ make Type do
   # @example
   #   Type.of(Circle(1)).adt?   # => true
   #   Type.of(42).adt?          # => false
-  let adt? -> Bool = this.constructors.count > 0
+  let adt? -> Bool = this.constructorNames.count > 0
 
   # Renders the type the way it is written in SOURCE, not the way it is
   # stored.

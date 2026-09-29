@@ -1,0 +1,11 @@
+# `collect`: map and filter fused into one pass, keeping the present values
+# of an optional-returning block (kexhq/kex#100 — Ruby's `filter_map`).
+main do
+  # Filter and map in one pass: the block answers an optional, and only the
+  # present values come back, unwrapped.
+  IO.inspect([1, 2, 3, 4].collect { |n| n.even? then Just(n * 10) else None })
+  IO.inspect(["1", "x", "3"].collect { |s| s.to(Integer) })
+  IO.inspect([1, 3].collect { |n| n.even? then Just(n) else None }.count)
+  let config = { host: "localhost", port: "8080" }
+  IO.inspect([:host, :user, :port].collect { |key| config.get(key) })
+end

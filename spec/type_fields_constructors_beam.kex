@@ -1,0 +1,36 @@
+# kex: run-beam
+# Typed `Type.fields`/`Type.constructors` on BEAM (kexhq/kex#107, #108);
+# see type_fields_constructors.kex.
+record Point do
+  x : Integer
+  y : Integer = 0
+  label : String?
+  tags : [String] = []
+  onClick : Integer -> Bool
+end
+
+type Shape = Circle(Float) | Square(Float, {String: Integer}) | Dot
+
+main do
+  let point = Type.of(Point { x: 1, label: None, onClick: { |n| n > 0 } })
+  IO.printLine(point.fieldNames)
+  point.fields.each do |f|
+    IO.printLine("${f.name} : ${f.valueType.to(String)}, optional? ${f.optional?}, default? ${f.default?}")
+  end
+  # The fields a decoder may leave out.
+  IO.printLine(point.fields.filter { |f| f.optional? || f.default? }.map { |f| f.name })
+
+  # Constructors come back in declaration order, with their argument types.
+  let shape = Type.of(Circle(1.0))
+  IO.printLine(shape.constructorNames)
+  shape.constructors.each do |c|
+    IO.printLine("${c.name}/${c.arity} ${c.argTypes.map { |t| t.to(String) }}")
+  end
+
+  # A standard-library record answers too, declared inside a module or not.
+  IO.printLine(Type.of(Version { major: 1, minor: 2, patch: 3 }).fieldNames)
+  IO.printLine(Type.of(Time.midnight()).fields.map { |f| f.valueType.name })
+
+  # Anything else has neither.
+  IO.printLine("${Type.of(42).fields.count} ${Type.of(42).constructors.count}")
+end
