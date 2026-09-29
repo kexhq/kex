@@ -1,0 +1,64 @@
+using Units.Dynamic
+
+module DynamicUnitFixtures do
+  record Length do
+  end
+  record Time do
+  end
+  record Mass do
+  end
+end
+
+describe("compositional runtime measures") do
+  it("rejects squared seconds as a time and cancels dimensions") do
+    let seconds = unit(1.0, Dimensions.base(DynamicUnitFixtures.Time {}), "s").try
+    let elapsed = measure(2.0, seconds)
+    assert(elapsed.pow(2).try.convertTo(seconds).ok? == false)
+    assert((elapsed / elapsed).try.scalar.try == 1.0)
+    assert(elapsed.pow(0).try.scalar.try == 1.0)
+    assert(elapsed.pow(-1).try.unit.dimension == Dimensions.one / seconds.dimension)
+  end
+
+  it("preserves both preferred scale and canonical speed") do
+    let meters = unit(1.0, Dimensions.base(DynamicUnitFixtures.Length {}), "m").try
+    let seconds = unit(1.0, Dimensions.base(DynamicUnitFixtures.Time {}), "s").try
+    let kilometers = meters.scaled(1000.0, "km").try
+    let hours = seconds.scaled(3600.0, "h").try
+    let speed = (measure(36.0, kilometers) / measure(1.0, hours)).try
+    assert(Math.abs(speed.value - 36.0) < 0.000000001)
+    assert(speed.convertTo((meters / seconds).try).try.value == 10.0)
+    let distance = (speed * measure(1.0, hours)).try
+    assert(distance.convertTo(meters).try.value == 36000.0)
+  end
+
+  it("derives pressure from area and multiplication is commutative") do
+    let meters = unit(1.0, Dimensions.base(DynamicUnitFixtures.Length {}), "m").try
+    let seconds = unit(1.0, Dimensions.base(DynamicUnitFixtures.Time {}), "s").try
+    let kilograms = unit(1.0, Dimensions.base(DynamicUnitFixtures.Mass {}), "kg").try
+    let newtons = ((kilograms * meters).try / seconds.pow(2).try).try.named("N")
+    let pascals = (newtons / meters.pow(2).try).try.named("Pa")
+    let force = measure(10.0, newtons)
+    let length = measure(2.0, meters)
+    assert((force / length).try.convertTo(pascals).ok? == false)
+    assert((force / length.pow(2).try).try.convertTo(pascals).try.value == 2.5)
+    let forward = (force * length).try
+    let reverse = (length * force).try
+    assert(forward.compareTo(reverse).try == Equal)
+  end
+
+  it("compares compatible quantities without comparing their display units") do
+    let meters = unit(1.0, Dimensions.base(DynamicUnitFixtures.Length {}), "m").try
+    let kilometers = meters.scaled(1000.0, "km").try
+    assert(measure(1.0, kilometers).compareTo(measure(1000.0, meters)).try == Equal)
+    assert((measure(1.0, kilometers) + measure(500.0, meters)).try.value == 1.5)
+  end
+
+  it("rejects invalid scales, including overflow and underflow in composition") do
+    assert(unit(0.0, Dimensions.one, "x").ok? == false)
+    assert(unit(-1.0, Dimensions.one, "x").ok? == false)
+    let large = unit(1.0e300, Dimensions.one, "large").try
+    let small = unit(1.0e-300, Dimensions.one, "small").try
+    assert((large * large).ok? == false)
+    assert((small * small).ok? == false)
+  end
+end

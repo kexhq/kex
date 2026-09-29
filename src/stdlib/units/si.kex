@@ -6,23 +6,23 @@
 #   using Units.SI
 #
 #   main do
-#     IO.printLine(3.kilo.watt.to(String))          # prints: 3000.0 W
+#     IO.printLine(3.kilowatt.to(String))           # prints: 3.0 kW
 #     IO.printLine(5000.meter.kilo.to(String))      # prints: 5.0 km
-#     IO.printLine((100.meter / 10.sec).to(String)) # prints: 10.0 m/s
+#     IO.printLine((100.meter / 10.second).to(String)) # prints: 10.0 m/s
 #   end
 #
 # Every value is a +Measure+ from the prelude, so the arithmetic, conversion
 # and comparison described there apply unchanged. What this module adds is the
 # SI vocabulary, the prefixes, and a table of which dimension results from
 # multiplying or dividing two others, so +2.newton * 3.meter+ answers in
-# joules and +100.meter / 10.sec+ in metres per second.
+# joules and +100.meter / 10.second+ in metres per second.
 module Units.SI
 
 # The SI units this module names.
 #
 # Each carries its dimension (+:length+, +:mass+, +:power+, …) and its symbol,
 # which is what a +Measure+ built from it displays with.
-type SIUnit = Meter | Gram | Kilogram | Kelvin | Liter | Newton | Joule | Watt
+type SIUnit = Meter | Gram | Kelvin | Liter | Newton | Joule | Watt
             | Volt | Ampere | Ohm | Coulomb
 
 # A decimal prefix applied to a unit, for display.
@@ -59,10 +59,11 @@ make SIPrefix, implement: Unit do
 end
 
 make SIUnit, implement: Unit do
-  let factor = 1.0
+  let factor(@Gram) = 0.001
+  let factor(@Liter) = 0.001
+  let factor(_) = 1.0
   let kind(@Meter) = :length
   let kind(@Gram) = :mass
-  let kind(@Kilogram) = :mass
   let kind(@Kelvin) = :temperature
   let kind(@Liter) = :volume
   let kind(@Newton) = :force
@@ -75,7 +76,6 @@ make SIUnit, implement: Unit do
 
   let symbol(@Meter) = "m"
   let symbol(@Gram) = "g"
-  let symbol(@Kilogram) = "kg"
   let symbol(@Kelvin) = "K"
   let symbol(@Liter) = "L"
   let symbol(@Newton) = "N"
@@ -116,14 +116,6 @@ let meter(value: Number) -> Measure = measure(value, Meter)
 # @example
 #   500.gram.to(String)   # => "500.0 g"
 let gram(value: Number) -> Measure = measure(value, Gram)
-# +value+ kilograms, as a +Measure+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the mass
-#
-# @example
-#   1.kilogram.to(String)   # => "1.0 kg"
-let kilogram(value: Number) -> Measure = measure(value, Kilogram)
 # +value+ kelvin, as a +Measure+.
 #
 # @param value [Number] the quantity
@@ -162,11 +154,11 @@ let joule(value: Number) -> Measure = measure(value, Joule)
 # @return [Measure] the power
 #
 # @example
-#   3.kilo.watt.to(String)                 # => "3000.0 W"
+#   3.kilowatt.to(String)                  # => "3.0 kW"
 #   1500.watt.to(String, in: Kilo(Watt))   # => Just("1.5 kW")
 #
 # @example Power times time is energy
-#   (3.kilo.watt * 2.hour).to(String)   # => "21600000.0 J"
+#   (3.kilowatt * 2.hour).to(String)   # => "21600000.0 J"
 let watt(value: Number) -> Measure = measure(value, Watt)
 # +value+ volts, as a +Measure+.
 #
@@ -200,6 +192,32 @@ let ohm(value: Number) -> Measure = measure(value, Ohm)
 # @example
 #   3.coulomb.to(String)   # => "3.0 C"
 let coulomb(value: Number) -> Measure = measure(value, Coulomb)
+
+# Generate the fused SI spellings (+kilometer+, +kilogram+, +millivolt+, ...).
+compiled do
+  let prefixes = [
+    ("kilo", 1000.0, "k"),
+    ("mega", 1000000.0, "M"),
+    ("giga", 1000000000.0, "G"),
+    ("milli", 0.001, "m"),
+    ("micro", 0.000001, "μ"),
+    ("nano", 0.000000001, "n")
+  ]
+  let units = [
+    ("meter", Meter), ("gram", Gram), ("kelvin", Kelvin),
+    ("liter", Liter), ("newton", Newton), ("joule", Joule),
+    ("watt", Watt), ("volt", Volt), ("ampere", Ampere),
+    ("ohm", Ohm), ("coulomb", Coulomb)
+  ]
+
+  prefixes.each do |prefixName, factor, notation|
+    units.each do |unitName, unit|
+      let %{prefixName + unitName}(value: Number) -> Measure do
+        prefixedMeasure(value, factor, notation, unit)
+      end
+    end
+  end
+end
 
 make SIUnit do
   let *(@Watt, @Hour) -> UnitDefinition = UnitDefinition {
@@ -280,8 +298,8 @@ let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
 
 # Divides one measure by another, naming the resulting dimension.
 #
-# The spelled-out form of +/+: +100.meter.per(10.sec)+ and
-# +100.meter / 10.sec+ are the same call. Metres over seconds is speed, energy
+# The spelled-out form of +/+: +100.meter.per(10.second)+ and
+# +100.meter / 10.second+ are the same call. Metres over seconds is speed, energy
 # over time is power, force over area is pressure: the dimension table
 # decides, and the symbol follows it.
 #
@@ -290,7 +308,7 @@ let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
 # @return [Measure] the quotient, in its derived unit
 #
 # @example
-#   100.meter.per(10.sec).to(String)   # => "10.0 m/s"
+#   100.meter.per(10.second).to(String)   # => "10.0 m/s"
 per : Measure -> Measure -> Measure
 let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
 
@@ -309,8 +327,7 @@ let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
 times : Measure -> Measure -> Measure
 let times(measure: Measure, other: Measure) = multiplyMeasures(measure, other)
 
-# Prefixes work both on an existing measure (`5000.meter.kilo`) and at the
-# beginning of a postfix unit expression (`3.kilo.watt`).
+# Prefixes on an existing measure select its display unit.
 make Measure do
   # The same measure, displayed with the kilo- prefix.
   #
@@ -327,14 +344,6 @@ make Measure do
       notation: "k${this.symbol}"
     }
   }
-end
-
-make Integer do
-  let kilo -> Float = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 1000.0
-end
-
-make Float do
-  let kilo -> Float = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 1000.0
 end
 
 make Measure do
@@ -416,10 +425,9 @@ private do
   let displayWithPrefix(measure, prefixFactor, prefix) = "${prefixScaled(measure.canonical, measure.factor * prefixFactor)} ${prefix}${measure.symbol}"
 
   let displayFactor(@Meter) = 1.0
-  let displayFactor(@Gram) = 1.0
-  let displayFactor(@Kilogram) = 1.0
+  let displayFactor(@Gram) = 0.001
   let displayFactor(@Kelvin) = 1.0
-  let displayFactor(@Liter) = 1.0
+  let displayFactor(@Liter) = 0.001
   let displayFactor(@Newton) = 1.0
   let displayFactor(@Joule) = 1.0
   let displayFactor(@Watt) = 1.0
@@ -431,7 +439,6 @@ private do
 
   let displayKind(@Meter) = :length
   let displayKind(@Gram) = :mass
-  let displayKind(@Kilogram) = :mass
   let displayKind(@Kelvin) = :temperature
   let displayKind(@Liter) = :volume
   let displayKind(@Newton) = :force
@@ -445,7 +452,6 @@ private do
 
   let displaySymbol(@Meter) = "m"
   let displaySymbol(@Gram) = "g"
-  let displaySymbol(@Kilogram) = "kg"
   let displaySymbol(@Kelvin) = "K"
   let displaySymbol(@Liter) = "L"
   let displaySymbol(@Newton) = "N"
@@ -458,6 +464,16 @@ private do
   let displaySymbol(unit) = unit.symbol
 
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+  let prefixedMeasure(value, prefixFactor, prefix, unit: SIUnit) = Measure {
+    canonical: amount(value) * prefixFactor * unit.factor,
+    value: amount(value),
+    unit: UnitDefinition {
+      conversionFactor: prefixFactor * unit.factor,
+      dimension: unit.kind,
+      notation: "${prefix}${unit.symbol}"
+    }
+  }
+
   let measure(value, unit: SIUnit) = Measure {
     canonical: amount(value) * unit.factor,
     value: amount(value),

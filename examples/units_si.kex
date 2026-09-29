@@ -3,7 +3,7 @@ using Units.SI
 
 main do
   let distance = 100.meter
-  let elapsed = 9.58.sec
+  let elapsed = 9.58.second
   let speed = distance / elapsed
 
   IO.printLine("distance: ${distance.to(String)}")

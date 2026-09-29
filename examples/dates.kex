@@ -21,7 +21,7 @@ main do
 
   IO.printLine("")
   IO.printLine("=== Calendar arithmetic ===")
-  # Durations are the plural spellings; the singular ones (5.sec) build unit
+  # Durations are the plural spellings; the singular ones (5.second) build unit
   # Measures instead, which is a different thing on purpose.
   IO.printLine("in ten days:   ${(launch + 10.days).iso}")
   IO.printLine("a week before: ${(launch - 1.weeks).iso}")

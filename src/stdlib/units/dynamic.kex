@@ -1,0 +1,107 @@
+# Runtime dimensional quantities. Unit dimensions use nominal Type identities,
+# and all arithmetic composes the same normalized exponent maps.
+module Units.Dynamic
+
+using Dimensions, only: [Dimension]
+
+record DynamicUnit do
+  scale     : Float
+  dimension : Dimension
+  notation  : String
+end
+
+record DynamicMeasure do
+  canonical : Float
+  unit      : DynamicUnit
+end
+
+type UnitError = InvalidScale(Float)
+               | DimensionMismatch(Dimension, Dimension)
+
+# Define a positive, finite scale to the dimension's canonical unit.
+let unit(scale: Float, dimension: Dimension, notation: String) -> Result<DynamicUnit, UnitError> do
+  return Error(InvalidScale(scale)) if !(scale > 0.0) || scale > 1.7976931348623157e308
+  Ok(DynamicUnit { scale: scale, dimension: dimension, notation: notation })
+end
+
+# Build a quantity in its preferred display unit.
+let measure(value: Float, unit: DynamicUnit) -> DynamicMeasure = DynamicMeasure {
+  canonical: value * unit.scale,
+  unit: unit
+}
+
+make DynamicUnit do
+  # Preserve grouping in display expressions as well as dimensions and scale.
+  let *(other: DynamicUnit) -> Result<DynamicUnit, UnitError> = unit(
+    @scale * other.scale, @dimension * other.dimension,
+    "(${@notation})·(${other.notation})"
+  )
+
+  let /(other: DynamicUnit) -> Result<DynamicUnit, UnitError> = unit(
+    @scale / other.scale, @dimension / other.dimension,
+    "(${@notation})/(${other.notation})"
+  )
+
+  let pow(exponent: Integer) -> Result<DynamicUnit, UnitError> = unit(
+    Math.pow(@scale, exponent), @dimension ^ exponent,
+    "(${@notation})^${exponent}"
+  )
+
+  let named(notation: String) -> DynamicUnit = DynamicUnit {
+    scale: @scale, dimension: @dimension, notation: notation
+  }
+
+  let scaled(factor: Float, notation: String) -> Result<DynamicUnit, UnitError> = unit(
+    @scale * factor, @dimension, notation
+  )
+end
+
+make DynamicMeasure do
+  # Display magnitude is derived, never a second independently stored value.
+  let value -> Float = @canonical / @unit.scale
+
+  let convertTo(target: DynamicUnit) -> Result<DynamicMeasure, UnitError> do
+    return Error(DimensionMismatch(@unit.dimension, target.dimension)) if @unit.dimension != target.dimension
+    Ok(DynamicMeasure { canonical: @canonical, unit: target })
+  end
+
+  let +(other: DynamicMeasure) -> Result<DynamicMeasure, UnitError> do
+    return Error(DimensionMismatch(@unit.dimension, other.unit.dimension)) if @unit.dimension != other.unit.dimension
+    Ok(DynamicMeasure { canonical: @canonical + other.canonical, unit: @unit })
+  end
+
+  let -(other: DynamicMeasure) -> Result<DynamicMeasure, UnitError> do
+    return Error(DimensionMismatch(@unit.dimension, other.unit.dimension)) if @unit.dimension != other.unit.dimension
+    Ok(DynamicMeasure { canonical: @canonical - other.canonical, unit: @unit })
+  end
+
+  let *(other: DynamicMeasure) -> Result<DynamicMeasure, UnitError> do
+    let composed = (@unit * other.unit).try
+    Ok(DynamicMeasure { canonical: @canonical * other.canonical, unit: composed })
+  end
+
+  let /(other: DynamicMeasure) -> Result<DynamicMeasure, UnitError> do
+    let composed = (@unit / other.unit).try
+    Ok(DynamicMeasure { canonical: @canonical / other.canonical, unit: composed })
+  end
+
+  let pow(exponent: Integer) -> Result<DynamicMeasure, UnitError> do
+    let composed = @unit.pow(exponent).try
+    Ok(DynamicMeasure { canonical: Math.pow(@canonical, exponent), unit: composed })
+  end
+
+  let scale(factor: Float) -> DynamicMeasure = DynamicMeasure {
+    canonical: @canonical * factor, unit: @unit
+  }
+
+  # Ordering ignores display preferences but requires compatible dimensions.
+  let compareTo(other: DynamicMeasure) -> Result<Ordering, UnitError> do
+    return Error(DimensionMismatch(@unit.dimension, other.unit.dimension)) if @unit.dimension != other.unit.dimension
+    Ok(@canonical.compare(other.canonical))
+  end
+
+  let scalar -> Result<Float, UnitError> do
+    return Error(DimensionMismatch(@unit.dimension, Dimensions.one)) if !@unit.dimension.dimensionless?
+    Ok(@canonical)
+  end
+end

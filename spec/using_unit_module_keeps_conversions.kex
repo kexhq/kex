@@ -22,6 +22,6 @@ main do
   # ...while the unit module's own formatting still works, positionally and
   # by name. This is what `using Units.SI` is FOR, so a fix that restores the
   # conversions by breaking these is not a fix.
-  IO.printLine("${3.kilo.watt.to(String)}")
-  IO.printLine("${3.kilo.watt.to(String, in: Mega)}")
+  IO.printLine("${3.kilowatt.to(String)}")
+  IO.printLine("${3.kilowatt.to(String, in: Mega)}")
 end

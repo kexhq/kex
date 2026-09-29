@@ -1,12 +1,12 @@
 # Numbers that carry a unit.
 #
-# Writing +5.sec+ or +90.minute+ gives you a +Measure+: a number, the unit it
+# Writing +5.second+ or +90.minute+ gives you a +Measure+: a number, the unit it
 # was written in, and the same quantity in that dimension's base unit. Adding,
 # subtracting and converting all go through the canonical value, so the
 # arithmetic is right regardless of which units the operands were written in,
 # and mixing dimensions is an +Error+ rather than a silently wrong number.
 #
-#   5.sec.to(String)                     # => "5.0 s"
+#   5.second.to(String)                     # => "5.0 s"
 #   1.5.hour.to(String)                  # => "1.5 h"
 #   (1.hour + 30.minute).map(~to(String))  # => Ok("1.5 h")
 #   90.minute.convert(Hour)              # => Ok(1.5 h)
@@ -15,7 +15,7 @@
 # dimensions live in opt-in modules under +Units+, and every one of them
 # measures against the same machinery here.
 #
-# A +Measure+ is a measurement, not an elapsed span: +5.sec+ describes a
+# A +Measure+ is a measurement, not an elapsed span: +5.second+ describes a
 # quantity, while +Duration+ is what +Time+ and +Date+ use for a span between
 # two moments.
 
@@ -55,7 +55,7 @@ end
 # @return [Atom] the dimension tag
 #
 # @example
-#   measureKind(5.sec)   # => :time
+#   measureKind(5.second)   # => :time
 let measureKind(measure: Measure) -> Atom = measure.unit.dimension
 
 # The symbol a measure displays with.
@@ -128,7 +128,7 @@ end
 # An elapsed span of time, in seconds.
 #
 # Duration is an elapsed span used by Time, Date, and DateTime. A time Measure
-# is deliberately not a Duration: `5.sec` describes a measurement.
+# is deliberately not a Duration: `5.second` describes a measurement.
 record Duration do
   # The length of the span, in seconds.
   seconds : Float
@@ -160,7 +160,7 @@ make TimeUnit, implement: Unit do
   let symbol(@Week) = "wk"
 end
 
-# Time-unit constructors on +Integer+: +5.sec+, +90.minute+, +2.week+.
+# Time-unit constructors on +Integer+: +5.second+, +90.minute+, +2.week+.
 #
 # Each answers a +Measure+ whose display unit is the one you named, so
 # +90.minute+ prints as minutes even though it is stored as 5400 seconds.
@@ -195,8 +195,8 @@ make Integer do
   # @return [Measure] the quantity, displayed in seconds
   #
   # @example
-  #   5.sec.to(String)   # => "5.0 s"
-  let sec -> Measure = this.timeMeasure(Second)
+  #   5.second.to(String)   # => "5.0 s"
+  let second -> Measure = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
   #
@@ -247,7 +247,7 @@ make Integer do
 end
 
 # The same time-unit constructors on +Float+, for fractional quantities:
-# +1.5.hour+, +0.25.sec+.
+# +1.5.hour+, +0.25.second+.
 make Float do
   # This many nanoseconds, as a +Measure+.
   #
@@ -272,8 +272,8 @@ make Float do
   # @return [Measure] the quantity, displayed in seconds
   #
   # @example
-  #   0.25.sec.to(String)   # => "0.25 s"
-  let sec -> Measure = this.timeMeasure(Second)
+  #   0.25.second.to(String)   # => "0.25 s"
+  let second -> Measure = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
   #
@@ -341,7 +341,7 @@ make Measure, implement: Showable do
   # @return [Measure] the scaled measure
   #
   # @example
-  #   2.sec.scale(3).to(String)     # => "6.0 s"
+  #   2.second.scale(3).to(String)     # => "6.0 s"
   #   1.hour.scale(0.5).to(String)  # => "0.5 h"
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
@@ -363,7 +363,7 @@ make Measure, implement: Showable do
   # @return [Measure] the raised measure
   #
   # @example
-  #   (2.sec ^ 2).to(String)   # => "4.0 s^2"
+  #   (2.second ^ 2).to(String)   # => "4.0 s^2"
   let ^(exponent: Number) -> Measure do
     return Measure {
       canonical: Kex.Intrinsic.Math.pow(this.canonical, exponent),
