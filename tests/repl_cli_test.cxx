@@ -911,12 +911,33 @@ int main() {
             assertTrue(out.find("Undefined method") == std::string::npos, out);
         });
 
+        // Both REPLs complete through the editor's analysis: the receiver is
+        // typed from the session's program, not guessed from the line.
         it("completes a binding's slots and the server's own methods", [entries]() {
-            auto out = runBeamRepl(entries + "/complete pa.\n");
-            for (const auto* member : {"get", "keys", "put", "alive?", "within"})
-                assertTrue(out.find(std::string("Server<Entries>.") + member) !=
-                               std::string::npos,
-                           out);
+            for (const auto& out : {runRepl(entries + "/complete pa.\n"),
+                                    runBeamRepl(entries + "/complete pa.\n")})
+                for (const auto* member : {"get", "keys", "put", "alive?",
+                                           "link", "monitor", "unlink", "within"})
+                    assertTrue(out.find(std::string("  pa.") + member + "\n") !=
+                                   std::string::npos,
+                               out);
+        });
+
+        it("completes call results, chains, lambda parameters and literals", []() {
+            const std::string input =
+                "let s = \"x\"\n"
+                "/complete s.upp\n"
+                "/complete [1, 2].map { |x| x }.fil\n"
+                "/complete [\"a\"].map { |w| w.upp\n"
+                "/complete \"a\".upp\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                for (const auto* expected : {
+                         "  s.upperCase\n",
+                         "  [1, 2].map { |x| x }.filter\n",
+                         "  [\"a\"].map { |w| w.upperCase\n",
+                         "  \"a\".upperCase\n"})
+                    assertTrue(out.find(expected) != std::string::npos, out);
+            }
         });
     });
 

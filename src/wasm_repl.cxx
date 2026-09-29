@@ -9,7 +9,7 @@
 // reachable from a later call" test — a `let`/`spawn` on one call stays
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
-#include "common/completion.hxx"
+#include "semantic/completion_at.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
@@ -28,6 +28,7 @@
 #define EMSCRIPTEN_KEEPALIVE
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <new>
 #include <sstream>
@@ -56,6 +57,10 @@ struct KexReplSession {
     // prelude- and user-defined names the native REPL's <TAB> does.
     kex::semantic::SemanticDB replDb;
     std::string replAccumSource;
+    // Local bindings entered so far, replayed ahead of the line being
+    // completed so `x.` is typed by analysis (see kex_repl_complete).
+    std::string replBindings;
+    kex::semantic::SemanticDB analysisDb;
     std::string lastCompletions;
 };
 
@@ -180,6 +185,7 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             session->evaluator.setMocksAllowed(true);
             session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
             session->replAccumSource.clear();
+            session->replBindings.clear();
             g_programs.clear();
             session->lastResult = "  (bindings cleared)\n";
             return;
@@ -218,6 +224,8 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             session->replAccumSource += source + "\n";
             session->replDb.updateFile("<repl>", session->replAccumSource);
         }
+        else if (source.rfind("let ", 0) == 0 || source.rfind("var ", 0) == 0)
+            session->replBindings += source + "\n";
 
         // Matches main.cxx's real REPL showResult lambda exactly (gray "=>"
         // and ":", plain value, cyan type — showTypes defaults to on there
@@ -271,15 +279,16 @@ const char* kex_repl_last_result(KexReplSession* session) {
     return session->lastResult.c_str();
 }
 
-// Tab completion, reusing the exact same header-only logic main.cxx's real
-// readline integration uses (kex::resolveCompletionQuery/rewriteCompletions,
-// see src/common/completion.hxx) — `line` is the current input line up to
-// the cursor's containing word, `start` is where that word begins (as
-// GNU readline's own word-break-character scan would find it — web/index.html
-// ports that scan to JS using the same break-char set main.cxx configures
-// via rl_completer_word_break_characters), and `text` is the word itself.
-// A plain synchronous call — never touches evaluator.execute()/Asyncify —
-// so unlike kex_repl_eval this can return its result directly.
+// Tab completion through the same analysis main.cxx's REPLs and the LSP use
+// (kex::semantic::completeAt): the line is spliced into the session's program
+// — its definitions, then `main do` with its bindings replayed — so the
+// receiver of `x.` is typed rather than guessed. `line` is the current input
+// line, `start` where the word being completed begins (as GNU readline's own
+// word-break scan would find it — web/index.html ports that scan to JS using
+// the break-char set main.cxx configures), and `text` the word up to the
+// cursor. Each result is a whole replacement for that word. A plain
+// synchronous call — never touches evaluator.execute()/Asyncify — so unlike
+// kex_repl_eval this can return its result directly.
 EMSCRIPTEN_KEEPALIVE
 const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
                                int start, const char* textIn) {
@@ -287,13 +296,23 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
 
     std::string line(lineIn ? lineIn : "");
     std::string text(textIn ? textIn : "");
-    auto cq = resolveCompletionQuery(line.c_str(), start, text.c_str());
-    auto raw = session->replDb.completionsFor(cq.dbQuery);
-    auto rewritten = rewriteCompletions(std::move(raw), cq.rewriteFrom, cq.rewriteTo);
+    const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
+                                    line.size());
+    const auto prefix =
+        session->replAccumSource + "main do\n" + session->replBindings;
+    const auto program = prefix + line + semantic::completionClosers(line) +
+                         "\nend\n";
+    auto completion = semantic::completeAt(
+        session->replDb, session->analysisDb, "<repl-completion>", program,
+        prefix.size() + std::min(wordStart + text.size(), line.size()),
+        nullptr);
+    const auto replaceFrom =
+        std::max(completion.replaceFrom - prefix.size(), wordStart);
+    const auto lead = line.substr(wordStart, replaceFrom - wordStart);
 
     std::string joined;
-    for (auto& m : rewritten) {
-        joined += m;
+    for (auto& m : completion.matches) {
+        joined += lead + m;
         joined += '\n';
     }
     session->lastCompletions = std::move(joined);

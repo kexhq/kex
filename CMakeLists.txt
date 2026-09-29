@@ -157,6 +157,7 @@ add_library(kex_lib
     src/semantic/traits.cxx
     src/semantic/typechecker.cxx
     src/semantic/db.cxx
+    src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
     src/ast/clone.cxx
@@ -700,6 +701,14 @@ add_test(NAME examples_test COMMAND examples_test WORKING_DIRECTORY ${CMAKE_SOUR
 add_executable(completion_test tests/completion_test.cxx)
 target_link_libraries(completion_test PRIVATE kex_lib)
 target_include_directories(completion_test PRIVATE tests)
+if(TARGET kex_prelude_beam)
+    target_compile_definitions(completion_test PRIVATE
+        KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+    add_dependencies(completion_test kex_prelude_beam)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_definitions(completion_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    target_link_options(completion_test PRIVATE -sNODERAWFS=1)
+endif()
 add_test(NAME completion_test COMMAND completion_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_executable(repl_test tests/repl_test.cxx)

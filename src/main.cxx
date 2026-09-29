@@ -55,22 +55,87 @@
 #include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
-// Set to the type name while the user is typing inside a `make X do` block,
-// so the completer can infer parameter types from pattern signatures.
-static std::string g_currentMakeTarget;
-// The type each REPL binding was given (`let pa = Process.spawn(...)` →
-// "Server<Entries>"), so `pa.` completes that type's members. The completer
-// only sees the line being typed; without this, a variable's name was taken
-// for a type name and nothing completed after any `let`.
-static std::unordered_map<std::string, std::string> g_replVarTypes;
+#include "semantic/completion_at.hxx"
+#include <functional>
 
-// The completion qualifier for a displayed type: collections are indexed by
-// their stdlib names, everything else by the type as the REPL prints it.
-static auto completionQualifierForType(const std::string &type) -> std::string {
-  if (type.empty()) return type;
-  if (type.front() == '[') return "List";
-  if (type.front() == '{') return "Map";
-  return type;
+// What Tab and `/complete` complete against: the program each REPL builds to
+// type-check an input — its top-level definitions, then `main do` with the
+// local bindings replayed — with the input being typed spliced in, so the
+// receiver of `x.` is typed by the analyzer exactly as the editor types it.
+struct ReplCompletionContext {
+  std::string definitions;
+  std::string bindings;
+};
+static std::function<ReplCompletionContext()> g_replCompletionContext;
+// The index members are listed from (prelude + the session's definitions),
+// and the one the spliced program is analyzed through.
+static kex::semantic::SemanticDB *g_replCompletionDb = nullptr;
+static kex::semantic::SemanticDB *g_replAnalysisDb = nullptr;
+// Earlier lines of a multi-line input still being typed (`make X do` …), so a
+// line inside a block completes with the block around it.
+static std::string g_replPendingInput;
+
+auto preludeSemanticInterfaces() -> const kex::semantic::ImportedInterfaces &;
+
+// Whether an input is a top-level declaration rather than code for `main`.
+static auto replInputIsDeclaration(const std::string &input) -> bool {
+  size_t i = input.find_first_not_of(" \t\n");
+  if (i == std::string::npos) return false;
+  size_t end = i;
+  while (end < input.size() &&
+         (std::isalnum((unsigned char)input[end]) || input[end] == '_'))
+    ++end;
+  const auto word = input.substr(i, end - i);
+  for (const char *keyword : {"module", "capability", "type", "distinct",
+                              "record", "trait", "make", "serving",
+                              "compiled", "using"})
+    if (word == keyword) return true;
+  if (word != "let" && word != "foul") return false;
+  // `let f(x) = …` defines a function; `let x = …` binds a local.
+  i = input.find_first_not_of(" \t", end);
+  if (i == std::string::npos || !std::islower((unsigned char)input[i]))
+    return false;
+  while (i < input.size() &&
+         (std::isalnum((unsigned char)input[i]) || input[i] == '_' ||
+          input[i] == '?' || input[i] == '!'))
+    ++i;
+  i = input.find_first_not_of(" \t", i);
+  return i != std::string::npos && input[i] != '=';
+}
+
+// Completions for `line` at byte offset `point`. `replaceFrom` is where, in
+// `line`, the word each match replaces starts.
+static auto replCompleteAt(const std::string &line, size_t point)
+    -> kex::semantic::CompletionAt {
+  if (!g_replCompletionDb || !g_replAnalysisDb) return {};
+  const auto context = g_replCompletionContext ? g_replCompletionContext()
+                                               : ReplCompletionContext{};
+  const auto input = g_replPendingInput.empty()
+                         ? line
+                         : g_replPendingInput + "\n" + line;
+  const bool declaration = replInputIsDeclaration(input);
+  const auto prefix = context.definitions +
+                      (declaration ? "" : "main do\n" + context.bindings);
+  const auto program = prefix + input + kex::semantic::completionClosers(input) +
+                       (declaration ? "\n" : "\nend\n");
+  const size_t lineStart = prefix.size() + (input.size() - line.size());
+  auto completion = kex::semantic::completeAt(
+      *g_replCompletionDb, *g_replAnalysisDb, "<repl-completion>", program,
+      lineStart + std::min(point, line.size()), &preludeSemanticInterfaces());
+  completion.replaceFrom -= lineStart;
+  return completion;
+}
+
+// `/complete <prefix>`: each completed word, in full.
+static auto printReplCompletions(const std::string &prefix) -> void {
+  const auto completion = replCompleteAt(prefix, prefix.size());
+  if (completion.matches.empty()) {
+    std::cout << "  (no completions for \"" << prefix << "\")\n";
+    return;
+  }
+  for (const auto &match : completion.matches)
+    std::cout << "  " << prefix.substr(0, completion.replaceFrom) << match
+              << "\n";
 }
 
 // Lexical incompleteness shared by both REPLs. Block (`do`/`end`) continuation
@@ -655,12 +720,7 @@ struct BeamVm {
 
 // Completion state — populated before the REPL loop, read by the C callback.
 
-static kex::semantic::SemanticDB *g_replDb = nullptr;
 static std::vector<std::string> g_completionMatches;
-static std::string g_completionWord;
-static std::string g_completionStripPrefix;
-static std::string g_completionRewriteTo;
-static bool g_completionPreloaded = false;
 
 extern "C" {
 // Display hook: strip the shared "Qualifier." prefix from every entry so the
@@ -707,17 +767,6 @@ static void kexDisplayMatches(char **matches, int num_matches,
 }
 
 static char *kexCompletionEntry(const char * /*text*/, int state) {
-  if (state == 0) {
-    if (!g_completionPreloaded) {
-      g_completionMatches.clear();
-      if (g_replDb) {
-        auto raw = g_replDb->completionsFor(g_completionWord);
-        g_completionMatches = kex::rewriteCompletions(
-            std::move(raw), g_completionStripPrefix, g_completionRewriteTo);
-      }
-    }
-    g_completionPreloaded = false;
-  }
   if (state < static_cast<int>(g_completionMatches.size()))
     return strdup(g_completionMatches[state].c_str());
   return nullptr;
@@ -728,65 +777,31 @@ static char **kexCompletion(const char *text, int start, int end) {
 
   if (start == 0 && text[0] == '/') {
     g_completionMatches = kex::replCommandCompletions(text);
-    g_completionPreloaded = true;
     return rl_completion_matches(text, kexCompletionEntry);
   }
 
-  auto cq = kex::resolveCompletionQuery(rl_line_buffer, start, text);
-
-  // If the DB query still has an unresolved lowercase qualifier (e.g. "x.")
-  // and we're inside a `make X` block, try to resolve it via parameter
-  // pattern inference (handles `@[x|xs]` head/tail and simple named params).
-  if (!g_currentMakeTarget.empty()) {
-    auto dotPos = cq.dbQuery.rfind('.');
-    if (dotPos != std::string::npos) {
-      std::string qualifier = cq.dbQuery.substr(0, dotPos);
-      bool looksUnresolved =
-          !qualifier.empty() && std::islower((unsigned char)qualifier[0]) &&
-          std::all_of(qualifier.begin(), qualifier.end(), [](char c) {
-            return std::isalnum((unsigned char)c) || c == '_';
-          });
-      if (looksUnresolved) {
-        std::string inferred = kex::inferPatternParamType(
-            rl_line_buffer, qualifier, g_currentMakeTarget);
-        if (!inferred.empty()) {
-          std::string memberPart = cq.dbQuery.substr(dotPos + 1);
-          cq.dbQuery = inferred + "." + memberPart;
-          cq.rewriteFrom = inferred + ".";
-          // cq.rewriteTo keeps the original "x." so readline inserts correctly
-        }
-      }
-    }
-  }
-
-  // `pa.` — a REPL binding: complete the members of the type it holds.
-  if (auto dotPos = cq.dbQuery.rfind('.'); dotPos != std::string::npos) {
-    const std::string qualifier = cq.dbQuery.substr(0, dotPos);
-    if (auto bound = g_replVarTypes.find(qualifier);
-        bound != g_replVarTypes.end()) {
-      const auto type = completionQualifierForType(bound->second);
-      cq.dbQuery = type + "." + cq.dbQuery.substr(dotPos + 1);
-      cq.rewriteFrom = type + ".";
-      if (cq.rewriteTo.empty() && start == 0) cq.rewriteTo = qualifier + ".";
-    }
-  }
-
-  g_completionWord = cq.dbQuery;
-  g_completionStripPrefix = cq.rewriteFrom;
-  g_completionRewriteTo = cq.rewriteTo;
+  // readline's word starts at `start`; the completed word at `replaceFrom`
+  // (after the dot of a member). Readline inserts whole words, so carry the
+  // text between the two — `pa.` — in front of every match.
+  const std::string line(rl_line_buffer);
+  const auto completion = replCompleteAt(line, static_cast<size_t>(end));
+  const auto from = std::max(completion.replaceFrom, static_cast<size_t>(start));
+  const auto lead = line.substr(static_cast<size_t>(start),
+                                from - static_cast<size_t>(start));
+  g_completionMatches.clear();
+  for (const auto &match : completion.matches)
+    if (from == completion.replaceFrom)
+      g_completionMatches.push_back(lead + match);
+    else if (match.size() >= from - completion.replaceFrom)
+      g_completionMatches.push_back(
+          match.substr(from - completion.replaceFrom));
 
   static bool debugCompl = (std::getenv("KEX_DEBUG_COMPLETE") != nullptr);
   if (debugCompl) {
-    fprintf(stderr,
-            "\n[complete] linebuf=%s start=%d end=%d text=%s"
-            " -> query=%s rewriteFrom=%s rewriteTo=%s\n",
-            rl_line_buffer, start, end, text, cq.dbQuery.c_str(),
-            cq.rewriteFrom.c_str(), cq.rewriteTo.c_str());
-    auto preview = g_replDb ? g_replDb->completionsFor(cq.dbQuery)
-                            : std::vector<std::string>{};
-    auto rewritten =
-        kex::rewriteCompletions(preview, cq.rewriteFrom, cq.rewriteTo);
-    for (const auto &c : rewritten)
+    fprintf(stderr, "\n[complete] linebuf=%s start=%d end=%d text=%s"
+                    " -> qualifier=%s\n",
+            rl_line_buffer, start, end, text, completion.qualifier.c_str());
+    for (const auto &c : g_completionMatches)
       fprintf(stderr, "  [match] %s\n", c.c_str());
   }
 
@@ -3215,8 +3230,13 @@ int main(int argc, char *argv[]) {
       beamReplDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(beamReplDb);
     }
+    kex::semantic::SemanticDB beamAnalysisDb;
+    beamAnalysisDb.setImportedInterfaces(&preludeSemanticInterfaces());
+    beamAnalysisDb.setModuleRoots(
+        moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
+    g_replCompletionDb = &beamReplDb;
+    g_replAnalysisDb = &beamAnalysisDb;
 #ifdef HAS_READLINE
-    g_replDb = &beamReplDb;
     rl_attempted_completion_function = kexCompletion;
     rl_completion_display_matches_hook = kexDisplayMatches;
     rl_completer_word_break_characters = (char *)" \t\n\\@$><=;|&{(";
@@ -3253,6 +3273,12 @@ int main(int argc, char *argv[]) {
       for (auto &[n, src] : topDefs)
         s += src + "\n";
       return s;
+    };
+    g_replCompletionContext = [&]() {
+      ReplCompletionContext context{topDefsStr(), {}};
+      for (const auto &[name, binding] : beamSemanticBinds)
+        context.bindings += "  " + binding + "\n";
+      return context;
     };
 
     // Counts unmatched do/end block keywords (word-delimited) to decide
@@ -3341,7 +3367,6 @@ int main(int argc, char *argv[]) {
         localBinds.clear();
         mutableBinds.clear();
         beamSemanticBinds.clear();
-        g_replVarTypes.clear();
         beamReplDb.removeFile("<repl>");
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
@@ -3353,19 +3378,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
       if (input.substr(0, 10) == "/complete ") {
-        auto prefix = input.substr(10);
-        // Same binding lookup as Tab completion: `/complete pa.` asks for
-        // the members of the type `pa` holds.
-        if (auto dot = prefix.rfind('.'); dot != std::string::npos)
-          if (auto bound = g_replVarTypes.find(prefix.substr(0, dot));
-              bound != g_replVarTypes.end())
-            prefix = completionQualifierForType(bound->second) +
-                     prefix.substr(dot);
-        auto results = beamReplDb.completionsFor(prefix);
-        if (results.empty())
-          std::cout << "  (no completions for \"" << prefix << "\")\n";
-        else
-          for (const auto& r : results) std::cout << "  " << r << "\n";
+        printReplCompletions(input.substr(10));
         continue;
       }
       if (input.substr(0, 6) == "/load ") {
@@ -3501,6 +3514,7 @@ int main(int argc, char *argv[]) {
       int dc = countBlocks(source);
       bool cancelled = false;
       while (dc > 0 || replHasOpenDelimiter(source)) {
+        g_replPendingInput = source;
         auto [cont, contOk] = readLine("  ...> ");
         if (takeReplInputCancelled()) {
           cancelled = true;
@@ -3511,6 +3525,7 @@ int main(int argc, char *argv[]) {
         source += "\n" + cont;
         dc = countBlocks(source);
       }
+      g_replPendingInput.clear();
       if (cancelled) {
         std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
                   << kex::color::apply(kex::color::reset) << "\n";
@@ -3948,12 +3963,6 @@ int main(int argc, char *argv[]) {
                       << output;
           }
 
-          if (isLocalLet && evalStatus == "ok" && patternLetNames.empty()) {
-            if (beamSemanticType)
-              g_replVarTypes[letVarName] = *beamSemanticType;
-            else
-              g_replVarTypes.erase(letVarName);
-          }
           if (isLocalLet && evalStatus == "ok") {
             const auto equals = source.find('=');
             const auto rhs = equals == std::string::npos
@@ -4051,8 +4060,13 @@ int main(int argc, char *argv[]) {
       replDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(replDb);
     }
+    kex::semantic::SemanticDB analysisDb;
+    analysisDb.setImportedInterfaces(&preludeSemanticInterfaces());
+    analysisDb.setModuleRoots(
+        moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
+    g_replCompletionDb = &replDb;
+    g_replAnalysisDb = &analysisDb;
 #ifdef HAS_READLINE
-    g_replDb = &replDb;
     rl_attempted_completion_function = kexCompletion;
     rl_completion_display_matches_hook = kexDisplayMatches;
     // Exclude '.' so "IO.pr<TAB>" is one token; exclude '"' so readline
@@ -4085,6 +4099,12 @@ int main(int argc, char *argv[]) {
     // Local bindings are evaluated one input at a time, but their source is
     // retained here so semantic analysis can infer the type of later inputs.
     std::vector<std::pair<std::string, std::string>> replBindings;
+    g_replCompletionContext = [&]() {
+      ReplCompletionContext context{replAccumSource, {}};
+      for (const auto &[name, binding] : replBindings)
+        context.bindings += binding + "\n";
+      return context;
+    };
 
     // Keep parsed programs alive so function closures can reference AST nodes
     std::vector<kex::ast::Program *> replPrograms;
@@ -4191,14 +4211,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
       if (line.substr(0, 10) == "/complete ") {
-        auto prefix = line.substr(10);
-        auto results = replDb.completionsFor(prefix);
-        if (results.empty()) {
-          std::cout << "  (no completions for \"" << prefix << "\")\n";
-        } else {
-          for (const auto &c : results)
-            std::cout << "  " << c << "\n";
-        }
+        printReplCompletions(line.substr(10));
         continue;
       }
       if (line.substr(0, 6) == "/load ") {
@@ -4271,16 +4284,9 @@ int main(int argc, char *argv[]) {
       bool implicitDo = isMakeWithoutDo(source);
       int doCount = implicitDo ? 1 : countBlocks(source);
 
-      // Track which make block we're inside so the completer can infer
-      // parameter types from `@[x|xs]` patterns, etc.
-      if (doCount > 0 && source.rfind("make ", 0) == 0) {
-        std::string rest = source.substr(5);
-        auto sp = rest.find_first_of(" \n\t");
-        g_currentMakeTarget =
-            (sp != std::string::npos) ? rest.substr(0, sp) : rest;
-      }
       bool cancelled = false;
       while (doCount > 0 || replHasOpenDelimiter(source)) {
+        g_replPendingInput = source;
         auto [contLine, contOk] = readLine("...> ");
         if (takeReplInputCancelled()) {
           cancelled = true;
@@ -4292,6 +4298,7 @@ int main(int argc, char *argv[]) {
         source += "\n" + line;
         doCount = implicitDo ? 1 + countBlocks(source) : countBlocks(source);
       }
+      g_replPendingInput.clear();
       if (cancelled) {
         std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
                   << kex::color::apply(kex::color::reset) << "\n";
@@ -4407,7 +4414,6 @@ int main(int argc, char *argv[]) {
           // visible for tab completion, not just the latest one.
           replAccumSource += source + "\n";
           replDb.updateFile("<repl>", replAccumSource);
-          g_currentMakeTarget.clear(); // block is complete
           const bool isImport = source.rfind("using ", 0) == 0;
           std::cout << kex::color::apply(kex::color::gray) << "=> "
                     << kex::color::apply(kex::color::reset)
@@ -4508,12 +4514,6 @@ int main(int argc, char *argv[]) {
 
           auto result = execProgram(program);
           showResult(result, semanticType);
-          if (bindingName) {
-            if (semanticType)
-              g_replVarTypes[*bindingName] = *semanticType;
-            else
-              g_replVarTypes.erase(*bindingName);
-          }
           if (bindingName) {
             replBindings.erase(
                 std::remove_if(
