@@ -1911,7 +1911,7 @@ int main() {
         it("loads measures, durations, and numeric time constructors", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  let measure: Measure = 2.5.sec\n"
+                "  let measure: Measure = 2.5.second\n"
                 "  let duration: Duration = Duration { seconds: measure.canonical }\n"
                 "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
                 "end\n"

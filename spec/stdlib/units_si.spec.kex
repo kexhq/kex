@@ -3,7 +3,7 @@ using Units.SI
 describe("Units.SI") do
   it("constructs the shared Measure type") do
     let distance = 5.meter
-    let elapsed = 2.sec
+    let elapsed = 2.second
     assert(distance.value == 5.0)
     assert(distance.kind == :length)
     assert(elapsed.kind == :time)
@@ -13,6 +13,8 @@ describe("Units.SI") do
     assert(1.meter.symbol == "m")
     assert(1.gram.symbol == "g")
     assert(1.kilogram.symbol == "kg")
+    assert(1.gram.canonical == 0.001)
+    assert(1.kilogram.canonical == 1.0)
     assert(1.kelvin.symbol == "K")
     assert(1.liter.symbol == "L")
     assert(1.newton.kind == :force)
@@ -28,8 +30,9 @@ describe("Units.SI") do
   it("applies decimal prefixes and formats composite display units") do
     assert(5000.meter.kilo.value == 5.0)
     assert(1.meter.milli.value == 1000.0)
-    assert(3.kilo.watt.canonical == 3000.0)
-    assert(3.kilo.watt.to(String) == "3000.0 W")
+    assert(3.kilowatt.canonical == 3000.0)
+    assert(3.kilowatt.to(String) == "3.0 kW")
+    assert(1.kilometer.to(String) == "1.0 km")
     assert((31544.watt * 1.hour).to(String, in: Mega) == Just("113.5584 MJ"))
     let energy = 31544.watt * 1.hour
     assert(energy.to(String, in: Kilo(Joule)) == Just("113558.4 kJ"))
@@ -46,6 +49,7 @@ describe("Units.SI") do
     # Wh already carries 3600, and the prefix multiplies onto it.
     assert(target.factor == 3600000.0)
     assert(Micro(Watt).symbol == "μW")
+    assert(Kilo(Gram).factor == 1.0)
   end
 
   it("accepts the Units-qualified spelling of a shared time unit") do
@@ -62,8 +66,8 @@ describe("Units.SI") do
   end
 
   it("derives speed and acceleration with /") do
-    let speed = 100.meter / 10.sec
-    let acceleration = speed / 2.sec
+    let speed = 100.meter / 10.second
+    let acceleration = speed / 2.second
     assert(speed.kind == :speed)
     assert(speed.value == 10.0)
     assert(acceleration.kind == :acceleration)
@@ -78,7 +82,7 @@ describe("Units.SI") do
   end
 
   it("derives force and electrical units") do
-    let acceleration = 10.meter / 1.sec / 1.sec
+    let acceleration = 10.meter / 1.second / 1.second
     let force = 5.kilogram * acceleration
     let voltage = 2.ampere * 100.ohm
     assert(force.kind == :force)
@@ -89,8 +93,8 @@ describe("Units.SI") do
 
   it("derives energy, power, charge, pressure, and resistance") do
     let energy = 10.newton * 3.meter
-    let power = energy / 2.sec
-    let charge = 3.ampere * 2.sec
+    let power = energy / 2.second
+    let charge = 3.ampere * 2.second
     let pressure = 10.newton / 2.meter
     let resistance = 12.volt / 3.ampere
     assert(energy.kind == :energy)
@@ -107,7 +111,7 @@ describe("Units.SI") do
 
   it("provides times and per helpers") do
     let voltage = Units.SI.times(2.ampere, 100.ohm)
-    let speed = per(100.meter, 10.sec)
+    let speed = per(100.meter, 10.second)
     assert(voltage.value == 200.0)
     assert(speed.kind == :speed)
     assert(speed.value == 10.0)

@@ -4,7 +4,7 @@
 # is fragile — adding a SECOND `to(String)` anywhere in the prelude (a
 # `make Version do let to(String) ... end` in kex.kex was the case that found
 # this) silently rerouted every prelude type's `to(String)` to the universal
-# value conversion, so `3.kilo.watt.to(String)` started answering
+# value conversion, so `3.kilowatt.to(String)` started answering
 # `Just(Measure { ... })` instead of "3000.0 W".
 #
 # Nothing in the gating spec suite covered that, so it only showed up in a REPL
@@ -22,7 +22,7 @@ end
 
 main do
   # A prelude type's own implementation, not the universal fallback.
-  IO.printLine(3.kilo.watt.to(String))
+  IO.printLine(3.kilowatt.to(String))
   IO.printLine(1500.gram.to(String))
 
   # A local type's, in the same program.

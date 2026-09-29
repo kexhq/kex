@@ -221,7 +221,7 @@ available directly from the prelude and produce time measures stored
 canonically in seconds:
 
 ```kex
-let elapsed: Measure = 2.5.sec
+let elapsed: Measure = 2.5.second
 
 elapsed.canonical                 # 2.5
 elapsed.kind                      # :time
@@ -229,7 +229,7 @@ elapsed.to(String)                # "2.5 s"
 ```
 
 `Duration` is a separate elapsed-span concept, used by `Date`, `Time`, and
-`DateTime` (below); a value such as `5.sec` is a `Measure`, not a `Duration`.
+`DateTime` (below); a value such as `5.second` is a `Measure`, not a `Duration`.
 The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
 
 ## Types as values
@@ -342,7 +342,7 @@ import or to resolve an ambiguous name:
 using Units.SI
 
 let distance = 100.meter  # Measure
-let speed = distance / 9.58.sec
+let speed = distance / 9.58.second
 distance.kilo.to(String)  # "0.1 km"
 let energy = 31544.watt * 1.hour
 energy.to(String, in: Kilo(Watt * Hour))  # Just("31.544 kWh")

@@ -50,7 +50,7 @@ describe("Units.Data") do
     assert(size.to(String, in: Mega) == Just("5.0 MB"))
     assert(size.to(String, in: Giga) == Just("0.005 GB"))
     assert(5.megabytes.to(String, in: Mega) == Just("5.0 MB"))
-    assert(1.sec.to(String, in: Mega) == None)
+    assert(1.second.to(String, in: Mega) == None)
   end
 
   it("adds data measures using canonical bytes") do
@@ -64,7 +64,7 @@ describe("Units.Data") do
   end
 
   it("rejects converting a non-data measure") do
-    match 1.sec.convertTo(KB) do
+    match 1.second.convertTo(KB) do
       Ok(_) => assert(false)
       Error(_) => assert(true)
     end

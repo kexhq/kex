@@ -204,7 +204,7 @@ Task.sleep(500.milliseconds)
 
 Provide one numeric constructor per unit, using its plural name: `.seconds`,
 `.minutes`, `.meters`, and so on. Do not add singular or abbreviated synonyms;
-migrate existing `.sec`, `.minute`, and `.meter` calls to those spellings.
+migrate existing `.second`, `.minute`, and `.meter` calls to those spellings.
 The spelling does not depend on magnitude: `1.seconds` and `0.5.seconds` are
 valid. Unit values retain conventional names such as `Second` and `Meter`,
 and display symbols remain `s` and `m`. Existing list/string accessors such as

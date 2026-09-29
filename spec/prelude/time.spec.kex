@@ -179,6 +179,8 @@ describe("Time") do
   end
 
   it("builds durations from plural spellings") do
+    assert(1.nanoseconds.wholeNanoseconds == 1)
+    assert(1.microseconds.wholeMicroseconds == 1)
     assert(1.seconds.seconds == 1.0)
     assert(2.minutes.wholeSeconds == 120)
     assert(3.hours.wholeMinutes == 180)
@@ -186,6 +188,8 @@ describe("Time") do
     assert(1.weeks.wholeDays == 7)
     assert(500.milliseconds.seconds == 0.5)
     assert(1.5.hours.wholeMinutes == 90)
+    assert(Duration.nanoseconds(2).wholeNanoseconds == 2)
+    assert(Duration.microseconds(3).wholeMicroseconds == 3)
     # Truncation is toward zero, both ways.
     assert(90.minutes.wholeHours == 1)
     assert((0 - 90).minutes.wholeHours == -1)

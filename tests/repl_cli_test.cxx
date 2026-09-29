@@ -1044,16 +1044,16 @@ int main() {
             auto out = runBeamRepl(
                 "Units.Data.B\n"
                 "using Units.SI\n"
-                "3.kilo.watt.to(String)\n"
-                "let kilowatts = &.kilo.watt.to(String)\n"
+                "3.kilowatt.to(String)\n"
+                "let kilowatts = &.kilowatt.to(String)\n"
                 "kilowatts(54)\n"
                 "kilowatts(99)\n");
             assertTrue(out.find("=> B : Units.Data.DataUnit") !=
                            std::string::npos,
                        out);
-            assertTrue(out.find("\"3000.0 W\"") != std::string::npos, out);
-            assertTrue(out.find("\"54000.0 W\"") != std::string::npos, out);
-            assertTrue(out.find("\"99000.0 W\"") != std::string::npos, out);
+            assertTrue(out.find("\"3.0 kW\"") != std::string::npos, out);
+            assertTrue(out.find("\"54.0 kW\"") != std::string::npos, out);
+            assertTrue(out.find("\"99.0 kW\"") != std::string::npos, out);
             assertTrue(out.find("badfun") == std::string::npos, out);
         });
 

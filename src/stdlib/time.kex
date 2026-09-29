@@ -16,7 +16,7 @@
 # particular month turns out to be. So `date + 1.months` clamps January 31st
 # to the last day of February, while `date + 30.days` counts thirty days.
 #
-# A time `Measure` such as `5.sec` is a third thing and deliberately NOT a
+# A time `Measure` such as `5.second` is a third thing and deliberately NOT a
 # Duration: a Measure describes a measurement, a Duration describes elapsed
 # time. The plural `5.seconds` builds the Duration.
 #
@@ -1039,9 +1039,12 @@ module DateTime do
 
 end
 # The plural spellings build a Duration; the singular ones from units.kex
-# build a time Measure. `5.seconds` is an elapsed span, `5.sec` a measurement.
+# build a time Measure. `5.seconds` is an elapsed span, `5.second` a measurement.
 
 make Integer do
+  let nanoseconds -> Duration = Duration { seconds: this / 1000000000.0 }
+  let microseconds -> Duration = Duration { seconds: this / 1000000.0 }
+
   # This many milliseconds, as a +Duration+.
   #
   # @return [Duration] the elapsed span
@@ -1052,7 +1055,7 @@ make Integer do
 
   # This many seconds, as a +Duration+.
   #
-  # Note the plural: +5.seconds+ is an elapsed span, while +5.sec+ from
+  # Note the plural: +5.seconds+ is an elapsed span, while +5.second+ from
   # +units.kex+ is a measurement.
   #
   # @return [Duration] the elapsed span
@@ -1123,6 +1126,9 @@ end
 # The same +Duration+ constructors on +Float+, for fractional spans:
 # +1.5.hours+, +0.25.seconds+.
 make Float do
+  let nanoseconds -> Duration = Duration { seconds: this / 1000000000.0 }
+  let microseconds -> Duration = Duration { seconds: this / 1000000.0 }
+
   # This many milliseconds, as a +Duration+.
   #
   # @return [Duration] the elapsed span
@@ -1161,6 +1167,9 @@ make Float do
 end
 
 make Duration do
+  let wholeNanoseconds -> Integer = Time.truncatedBy(this.seconds, 0.000000001)
+  let wholeMicroseconds -> Integer = Time.truncatedBy(this.seconds, 0.000001)
+
   # Adds two spans.
   #
   # @param other [Duration] the span to add
@@ -1349,6 +1358,9 @@ module Duration do
   #   Duration.zero().zero?   # => true
   #   date.at(time, Duration.zero()).iso   # => "...T09:00:00Z"
   let zero() -> Duration = Duration { seconds: 0.0 }
+
+  let nanoseconds(count: Number) -> Duration = Duration { seconds: count / 1000000000.0 }
+  let microseconds(count: Number) -> Duration = Duration { seconds: count / 1000000.0 }
 
   # A span of +count+ milliseconds.
   #

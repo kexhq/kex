@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../beam/kexi_registry.hxx"
+#include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/imported_interfaces.hxx"
@@ -403,6 +404,18 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         Lexer lexer(std::move(src), filePath);
         Parser parser(lexer.tokenizeAll(), filePath);
         programs.push_back(parser.parseProgram());
+        // Generated declarations are part of the public interface too. The
+        // BEAM pre-check reads this table before loading dependency bodies.
+        std::vector<semantic::Diagnostic> diagnostics;
+        compiled::ExpandOptions options;
+        options.sourcePath = filePath;
+        if (!compiled::expand(programs.back(), diagnostics, options)) {
+            const auto reason = diagnostics.empty()
+                ? std::string("unknown expansion error")
+                : diagnostics.front().message;
+            throw std::runtime_error("cannot expand standard-library interface " +
+                                     filePath + ": " + reason);
+        }
     }
 
     std::unordered_set<std::string> traitNames;
