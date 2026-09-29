@@ -23,5 +23,6 @@ main do
   # by name. This is what `using Units.SI` is FOR, so a fix that restores the
   # conversions by breaking these is not a fix.
   IO.printLine("${3.kilowatt.to(String)}")
-  IO.printLine("${3.kilowatt.to(String, in: Mega)}")
+  # Name the target unit: bare Mega would prefix the current kW unit.
+  IO.printLine("${3.kilowatt.to(String, in: Mega(Watt))}")
 end

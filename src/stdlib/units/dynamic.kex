@@ -16,6 +16,7 @@ record DynamicMeasure do
 end
 
 type UnitError = InvalidScale(Float)
+               | ScaleOverflow
                | DimensionMismatch(Dimension, Dimension)
 
 # Define a positive, finite scale to the dimension's canonical unit.
@@ -32,10 +33,11 @@ let measure(value: Float, unit: DynamicUnit) -> DynamicMeasure = DynamicMeasure 
 
 make DynamicUnit do
   # Preserve grouping in display expressions as well as dimensions and scale.
-  let *(other: DynamicUnit) -> Result<DynamicUnit, UnitError> = unit(
-    @scale * other.scale, @dimension * other.dimension,
-    "(${@notation})·(${other.notation})"
-  )
+  let *(other: DynamicUnit) -> Result<DynamicUnit, UnitError> do
+    let scale = multiplyScales(@scale, other.scale).try
+    unit(scale, @dimension * other.dimension,
+      "(${@notation})·(${other.notation})")
+  end
 
   let /(other: DynamicUnit) -> Result<DynamicUnit, UnitError> = unit(
     @scale / other.scale, @dimension / other.dimension,
@@ -51,9 +53,22 @@ make DynamicUnit do
     scale: @scale, dimension: @dimension, notation: notation
   }
 
-  let scaled(factor: Float, notation: String) -> Result<DynamicUnit, UnitError> = unit(
-    @scale * factor, @dimension, notation
-  )
+  let scaled(factor: Float, notation: String) -> Result<DynamicUnit, UnitError> do
+    let scale = multiplyScales(@scale, factor).try
+    unit(scale, @dimension, notation)
+  end
+end
+
+private do
+  # Float arithmetic raises on overflow, so validate before multiplying.
+  let multiplyScales(left: Float, right: Float) -> Result<Float, UnitError> do
+    return Error(InvalidScale(left)) if left <= 0.0
+    return Error(InvalidScale(right)) if right <= 0.0
+    if right > 1.0
+      return Error(ScaleOverflow) if left > 1.7976931348623157e308 / right
+    end
+    Ok(left * right)
+  end
 end
 
 make DynamicMeasure do

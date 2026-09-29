@@ -59,6 +59,8 @@ describe("compositional runtime measures") do
     let large = unit(1.0e300, Dimensions.one, "large").try
     let small = unit(1.0e-300, Dimensions.one, "small").try
     assert((large * large).ok? == false)
+    assert(large.scaled(1.0e300, "overflow").ok? == false)
+    assert(large.scaled(-1.0, "negative").ok? == false)
     assert((small * small).ok? == false)
   end
 end
