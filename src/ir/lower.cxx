@@ -2295,41 +2295,6 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
-        // Supervisor child helpers are syntax-level builders because their
-        // blocks become zero-arity start functions rather than ordinary
-        // trailing function arguments.
-        if (n.name == "worker" && !knownFns.count("worker")) {
-            std::vector<Binding> binds;
-            ExprPtr startFn;
-            if (n.block && n.args.empty() && n.namedArgs.empty()) {
-                startFn = atomize(*n.block, binds);
-            } else if (!n.args.empty()) {
-                auto* module = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
-                if (module) {
-                    std::string beamModule = "kex_";
-                    for (char c : module->name)
-                        beamModule += static_cast<char>(
-                            std::tolower(static_cast<unsigned char>(c)));
-                    std::vector<ExprPtr> startArgs;
-                    for (const auto& [name, value] : n.namedArgs) {
-                        if (name != "args") continue;
-                        if (auto* list = std::get_if<ast::ListExpr>(&value->kind))
-                            for (const auto& item : list->elements)
-                                startArgs.push_back(lower(item));
-                    }
-                    Lambda start;
-                    const int startArity = static_cast<int>(startArgs.size());
-                    start.body = callE(beamModule, "start",
-                        startArity, std::move(startArgs));
-                    auto fn = std::make_unique<Expr>();
-                    fn->node = std::move(start);
-                    startFn = atomize_ir(std::move(fn), binds);
-                }
-            }
-            if (startFn)
-                return wrapLets(binds, callE("kex_supervisor", "worker", 1,
-                                             one(std::move(startFn))));
-        }
         // Named args → reorder into the callee's positional slots by param
         // name; then positional args (and a trailing block) fill remaining
         // slots in order, leftovers default to None. Mirrors the string
@@ -3976,32 +3941,6 @@ struct Lowering {
             }
             std::vector<ExprPtr> args;
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            // Supervisor.start(restart: strat) do children end →
-            // kex_supervisor:start_link(#{strategy => strat, children => Kids}).
-            if (uid->name == "Supervisor" && n.method == "start" && n.block) {
-                ExprPtr strat = lit(LitKind::Atom, "only_crashed");
-                for (const auto& [k, v] : n.namedArgs)
-                    if (k == "restart" || k == "strategy") strat = lower(v);
-                ExprPtr children;
-                if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind))
-                    children = lowerBody(lam->body);
-                else
-                    children = lower(*n.block);
-                auto stratA = atomize_ir(std::move(strat), binds);
-                auto childA = atomize_ir(std::move(children), binds);
-                auto pair = [&](const char* key, ExprPtr val) {
-                    auto t = std::make_unique<Expr>();
-                    t->node = MakeTuple{two(lit(LitKind::Atom, key), std::move(val))};
-                    return t;
-                };
-                std::vector<ExprPtr> pairs;
-                pairs.push_back(pair("strategy", std::move(stratA)));
-                pairs.push_back(pair("children", std::move(childA)));
-                auto lst = std::make_unique<Expr>();
-                lst->node = MakeList{std::move(pairs), std::nullopt};
-                auto map = callE("maps", "from_list", 1, one(std::move(lst)));
-                return wrapLets(binds, callE("kex_supervisor", "start_link", 1, one(std::move(map))));
-            }
             // Static method dispatch: `Type.method(args)` on a user type whose
             // `method` is a local function/make-method. If that method has an
             // implicit `this`, pass a placeholder receiver (the type tag).

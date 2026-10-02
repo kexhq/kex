@@ -13,7 +13,7 @@ strategy(Bad) ->
     error({unknown_kex_restart_strategy, Bad,
            [only_crashed, all, crashed_and_newer]}).
 
-%% start_link/1 — entry point from Kex codegen.
+%% start_link/1 — entry point from Kex.Intrinsic.Supervisor.start.
 %% Spec is #{strategy => atom, children => [ChildSpec]}.
 %% Returns Ok(Pid) | Error(Reason) to match Kex Result conventions.
 start_link(Spec) ->
@@ -61,13 +61,13 @@ to_otp_child(Child) ->
     to_otp_child(Child#{id => make_ref()}).
 
 %% worker(Fun) — build a child-spec from a 0-arity fun.
-%% Called from Kex codegen for `worker { block }` form.
+%% Called by Kex.Intrinsic.Supervisor.worker for `worker { block }`.
 worker(Fun) ->
     #{start_fun => Fun}.
 
 %% supervisor(Spec) — a nested supervisor as a child-spec. Spec has the
 %% same shape start_link/1 takes; the parent starts it (and restarts it)
 %% through start_link_otp/1.
-%% Called from Kex codegen for `supervisor(restart: ...) do [...] end`.
+%% Called by Kex.Intrinsic.Supervisor.nested for `supervisor(restart:)`.
 supervisor(Spec) ->
     #{supervisor => Spec}.

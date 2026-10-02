@@ -1389,7 +1389,15 @@ auto toolchainFingerprint() -> const std::string & {
               std::to_string(static_cast<unsigned long long>(size)) + "|" +
               std::to_string(static_cast<long long>(modified)) + "\n";
     }
-    for (const auto &file : kex::standardLibrarySourceFiles()) {
+    // Both halves of the stdlib: standardLibrarySourceFiles() is only the
+    // opt-in set. Editing a prelude file rebuilds the prelude artifact
+    // without relinking this binary, so its own fingerprint above doesn't
+    // move either — a run then reused beams compiled against the old
+    // prelude, and died with `undef` when a function's arity had changed.
+    auto files = kex::preludeSourceFiles();
+    for (auto &file : kex::standardLibrarySourceFiles())
+      files.push_back(std::move(file));
+    for (const auto &file : files) {
       std::error_code ec;
       const auto size = std::filesystem::file_size(file, ec);
       const auto modified =

@@ -2847,8 +2847,22 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
                   ctorName) != variants->second.end())
         return;
     auto owner = m_adtOfConstructor.find(ctorName);
-    // An unregistered constructor (imported or opaque) proves nothing.
-    if (owner == m_adtOfConstructor.end() || owner->second == adt) return;
+    if (owner == m_adtOfConstructor.end()) {
+        // A name no type declares at all can't be one of the matched ADT's
+        // variants, whose list is complete — `Some(p)` against an `X?`
+        // otherwise compiled and failed at runtime with "no matching
+        // clause". A qualified name may resolve elsewhere; leave it be.
+        if (ctorName.find('.') != std::string::npos) return;
+        const auto& variants = m_adtVariants.at(adt);
+        std::string known;
+        for (const auto& variant : variants)
+            known += (known.empty() ? "`" : ", `") + variant + "`";
+        error(pattern.location,
+              "`" + ctorName + "` is not a constructor of `" + adt +
+                  "` (it has " + known + ") — this pattern can never match");
+        return;
+    }
+    if (owner->second == adt) return;
 
     error(pattern.location,
           "`" + ctorName + "` is a constructor of `" + owner->second +
@@ -6757,10 +6771,8 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
             }
             return false;
         };
-        // `Supervisor.start(...) do ... end` is syntax both backends expand
-        // (see lower.cxx), with no module behind it.
         const bool rootIsSomething =
-            root == "BEAM" || root == "Kex" || root == "This" || root == "Supervisor" ||
+            root == "BEAM" || root == "Kex" || root == "This" ||
             isPrimitiveTypeName(root) ||
             m_recordFields.count(resolveRecordName(root)) ||
             m_adtVariants.count(root) || m_typeAliases.count(root) ||

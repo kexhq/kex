@@ -1847,59 +1847,6 @@ int main() {
             assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
-        it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "foul startWorker do\n"
-                "  spawn do receive do :stop => \"done\" end end\n"
-                "end\n"
-                "main do\n"
-                "  Supervisor.start(strategy: :only_crashed) do\n"
-                "    [worker { startWorker() }]\n"
-                "  end\n"
-                "end\n"
-            );
-            assertTrue(contains(out, "call 'kex_supervisor':'start_link'"), out);
-            assertTrue(contains(out, "'strategy'"), out);
-        });
-
-        it("worker { block } emits kex_supervisor:worker/1", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "foul w do\n"
-                "  worker { spawn do receive do :stop => \"done\" end end }\n"
-                "end\n"
-                "main do w() end\n"
-            );
-            assertTrue(contains(out, "call 'kex_supervisor':'worker'"), out);
-        });
-
-        it("worker(Module) MPA form emits kex_MODULE:start with no args", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "main do\n"
-                "  Supervisor.start(strategy: :only_crashed) do\n"
-                "    [worker(Cache)]\n"
-                "  end\n"
-                "end\n"
-            );
-            assertTrue(contains(out, "call 'kex_cache':'start'()"), out);
-            assertTrue(contains(out, "call 'kex_supervisor':'worker'"), out);
-        });
-
-        it("worker(Module, args: [...]) MPA form passes args to kex_MODULE:start", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "main do\n"
-                "  Supervisor.start(strategy: :only_crashed) do\n"
-                "    [worker(Database, args: [\"postgres://localhost\"])]\n"
-                "  end\n"
-                "end\n"
-            );
-            assertTrue(contains(out, "call 'kex_database':'start'"), out);
-            assertTrue(contains(out, "#<112>"), out);
-        });
-
         it("Process.self without parens emits call through companion module", []() {
             kex::ir::ExternalModules ext;
             ext.nameToAtom["Process"] = "Kex.Process";

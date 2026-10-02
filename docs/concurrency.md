@@ -101,23 +101,21 @@ end
 
 ```kex
 foul startShop = Supervisor.start(restart: :only_crashed) do
-  [
-    worker { startMetrics() },
-    supervisor(restart: :crashed_and_newer) do
-      worker { startDatabase() }
-      worker { startCache() }
-    end,
-    supervisor(restart: :all) do
-      worker { startSessions() }
-      worker { startAcceptor() }
-    end
-  ]
+  worker { startMetrics() }
+  supervisor(restart: :crashed_and_newer) do
+    worker { startDatabase() }
+    worker { startCache() }
+  end
+  supervisor(restart: :all) do
+    worker { startSessions() }
+    worker { startAcceptor() }
+  end
 end
 ```
 
 A `worker` block spawns the child and returns its pid; the supervisor calls
-the same block again to restart it. `supervisor(restart:)` nests a
-supervisor, whose block lists its children one per line. When a child
+the same block again to restart it, and `supervisor(restart:)` nests a
+supervisor. Both blocks list their children one per line. When a child
 crashes, its supervisor's strategy decides which siblings restart with it:
 
 | Strategy | Restarts | OTP |

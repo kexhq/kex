@@ -697,18 +697,18 @@ auto Evaluator::registerProcessBuiltins() -> void {
 
     defineModule("Supervisor");
 
-    // worker { startFn() } — wraps a zero-arg block (expected to call
-    // `spawn` and return the child's pid, matching
-    // examples/beam/proc_supervisor.kex's `worker { startCounter("A") }`)
-    // into a spec Supervisor.start can both call now (to start it) and
-    // recall later (to restart it, from the exact same start function).
-    definePublic("worker", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // Kex.Intrinsic.Supervisor.worker(start) — the prelude's
+    // `worker { startFn() }`. Wraps a zero-arg block (expected to call
+    // `spawn` and return the child's pid) into a spec Supervisor.start can
+    // both call now (to start it) and recall later (to restart it, from the
+    // exact same start function).
+    defineIntrinsic("Supervisor::worker", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         return Value::tuple({Value::atom("worker"), args[0]});
     });
 
     // Kex.Intrinsic.Supervisor.nested(restart, children) — the prelude's
-    // `supervisor(restart:) do [...] end`, a nested supervisor spec. The
+    // `supervisor(restart:) do ... end`, a nested supervisor spec. The
     // interpreter's polling supervisor can't nest; Supervisor.start rejects
     // a spec carrying this tag with an Error(...).
     defineIntrinsic("Supervisor::nested", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -716,26 +716,25 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::tuple({Value::atom("supervisor"), args[1]});
     });
 
-    // Supervisor.start(restart: :only_crashed) do [worker { ... }, ...] end
-    // — see Scheduler::startSupervisor for the actual poll/restart loop.
-    // args[0] is the do-block (a deferred zero-arg FunctionValue evaluating
-    // to the list of worker specs); args[1], if present, is the `restart:`
-    // atom (named args land positionally-appended here — see `await`'s
-    // comment on why). Only :only_crashed is supported — anything else is
-    // a clear Error(...) pointing at the BEAM backend instead of a silent
-    // wrong behavior.
-    definePublic("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) {
-            return Value::error(Value::string("Supervisor.start requires a do...end block"));
+    // Supervisor.start(restart: :only_crashed) do worker { ... } ... end —
+    // see Scheduler::startSupervisor for the actual poll/restart loop. The
+    // arguments are the `restart:` atom and the children block (a zero-arg
+    // FunctionValue collecting the specs into a list), taken by kind rather
+    // than position: the public fallback sees them in call order (named args
+    // land positionally-appended — see `await`'s comment on why), the
+    // intrinsic in the prelude wrapper's. Walker-native for the same reason
+    // as Task.start. Only :only_crashed is supported — anything else is a
+    // clear Error(...) pointing at the BEAM backend instead of a silent wrong
+    // behavior.
+    defineDual("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        const FunctionValue* specsBlockFn = nullptr;
+        std::string strategy = "only_crashed";
+        for (const auto& arg : args) {
+            if (auto* fn = std::get_if<FunctionValue>(&arg->data)) specsBlockFn = fn;
+            else if (auto* av = std::get_if<AtomValue>(&arg->data)) strategy = av->name;
         }
-        auto* specsBlockFn = std::get_if<FunctionValue>(&args[0]->data);
         if (!specsBlockFn || !specsBlockFn->native) {
             return Value::error(Value::string("Supervisor.start requires a do...end block"));
-        }
-
-        std::string strategy = "only_crashed";
-        if (args.size() > 1) {
-            if (auto* av = std::get_if<AtomValue>(&args[1]->data)) strategy = av->name;
         }
         if (strategy != "only_crashed") {
             return Value::error(Value::string(
