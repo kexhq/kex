@@ -2625,7 +2625,8 @@ auto collectPatternNames(const kex::ast::Pattern &pattern,
 
 // Offset of the `=` separating a binding's pattern from its right-hand side,
 // or npos. Bracket depth keeps a `=` inside the pattern from matching, and the
-// comparison operators (`==`, `!=`, `<=`, `>=`) are skipped.
+// comparison operators (`==`, `!=`, `<=`, `>=`) and the arm arrow `=>` are
+// skipped.
 auto replBindingEqualsPos(const std::string &source, size_t from) -> size_t {
   int depth = 0;
   for (size_t i = from; i < source.size(); i++) {
@@ -2637,7 +2638,8 @@ auto replBindingEqualsPos(const std::string &source, size_t from) -> size_t {
       for (i++; i < source.size() && source[i] != quote; i++)
         if (source[i] == '\\') i++;
     } else if (c == '=' && depth == 0) {
-      if (i + 1 < source.size() && source[i + 1] == '=') { i++; continue; }
+      if (i + 1 < source.size() &&
+          (source[i + 1] == '=' || source[i + 1] == '>')) { i++; continue; }
       if (i > from && (source[i - 1] == '!' || source[i - 1] == '<' ||
                        source[i - 1] == '>' || source[i - 1] == ':'))
         continue;
@@ -3273,6 +3275,15 @@ int main(int argc, char *argv[]) {
     std::vector<std::pair<std::string, std::string>> beamSemanticBinds;
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
     int iteration = 0;
+    // Each input's session module gets a name of its own. Reloading one stable
+    // name on every input meant the BEAM purged the version two inputs back —
+    // killing any process spawned there that was still blocked in `receive`,
+    // and turning every fun created there into a badfun.
+    int sessionVersion = 0;
+    // The Core Erlang last loaded for each companion module (a `module`
+    // defined in the session). One is reloaded only when its code changed,
+    // so its processes are purged only by redefinition, as in Erlang.
+    std::map<std::string, std::string> loadedCompanionCore;
     std::vector<std::string> loadedBeamFiles; // .kex paths loaded via /load
     kex::beam::KexiRegistry kexiRegistry;
 
@@ -3588,7 +3599,23 @@ int main(int argc, char *argv[]) {
           if (!isLocalLet) isFuncDef = true;
         } else if (off != std::string::npos) {
           auto parenPos = source.find('(', off);
-          auto eqPos = source.find('=', off);
+          // Not a bare find('='): the `=>` of a receive or match arm in a
+          // `let name do ... end` body read as a binding, so the 0-arity
+          // definition became a local holding a lambda — which turned into a
+          // badfun once the session module had been reloaded twice.
+          auto eqPos = replBindingEqualsPos(source, off);
+          size_t nameEnd = off;
+          while (nameEnd < source.size() &&
+                 (std::isalnum((unsigned char)source[nameEnd]) ||
+                  source[nameEnd] == '_' || source[nameEnd] == '?' ||
+                  source[nameEnd] == '!'))
+            nameEnd++;
+          const auto afterName = source.find_first_not_of(" \t", nameEnd);
+          const bool doBody = afterName != std::string::npos &&
+                              source.compare(afterName, 2, "do") == 0 &&
+                              (afterName + 2 == source.size() ||
+                               !std::isalnum((unsigned char)source[afterName + 2]));
+          if (doBody) eqPos = std::string::npos;
           bool hasParenBeforeEq =
               parenPos != std::string::npos &&
               (eqPos == std::string::npos || parenPos < eqPos);
@@ -3632,6 +3659,7 @@ int main(int argc, char *argv[]) {
           throwOnParseErrors(parser);
 
           std::string fname = replDefinitionName(source);
+          const auto previousTopDefs = topDefs;
 
           // A new clause of a function already defined EXTENDS it; anything
           // else replaces what was there. Redefinition still takes effect
@@ -3670,6 +3698,37 @@ int main(int argc, char *argv[]) {
                                [&](const auto &p) { return p.first == fname; }),
                 topDefs.end());
             topDefs.push_back({fname, source});
+          }
+
+          // A parse is not enough: a definition the checker rejects (a pure
+          // `let` that receives, say) was kept anyway, and every later input
+          // — which replays all definitions — then failed with its error.
+          {
+            const auto checkSource = topDefsStr() + "main do\nend\n";
+            kex::Lexer checkLexer(checkSource, "<repl>");
+            kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
+            auto checkProgram = checkParser.parseProgram();
+            std::vector<kex::ast::TopLevelItem> checkItems;
+            for (const auto &f : loadedBeamFiles) {
+              kex::Lexer fl(readFile(f), f);
+              kex::Parser fp(fl.tokenizeAll(), f);
+              auto fprog = fp.parseProgram();
+              for (auto &item : fprog.items)
+                if (!std::holds_alternative<
+                        std::unique_ptr<kex::ast::MainBlock>>(item))
+                  checkItems.push_back(std::move(item));
+            }
+            for (auto &item : checkProgram.items)
+              checkItems.push_back(std::move(item));
+            checkProgram.items = std::move(checkItems);
+            kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
+            if (!checkAnalyzer.analyze(checkProgram)) {
+              topDefs = previousTopDefs;
+              for (const auto &diagnostic : checkAnalyzer.diagnostics())
+                if (diagnostic.level == kex::semantic::Diagnostic::Level::Error)
+                  throw std::runtime_error(diagnostic.message);
+              throw std::runtime_error("semantic analysis failed");
+            }
           }
 
           // `using M` is an import, not a definition — it is kept in topDefs
@@ -3897,7 +3956,8 @@ int main(int argc, char *argv[]) {
           auto replRecordLayouts = loadPreludeRecordLayouts();
           auto replVariantTags = loadPreludeVariantTags();
           auto irModules = kex::ir::lowerModules(
-              program, "kex_repl_session", "", &replRecordLayouts,
+              program, "kex_repl_session_" + std::to_string(++sessionVersion),
+              "", &replRecordLayouts,
               extMods.nameToAtom.empty() ? nullptr : &extMods,
               &replAnalyzer.resolvedCalls(),
               /*preferExternalReceivers=*/false, &replVariantTags,
@@ -3919,14 +3979,19 @@ int main(int argc, char *argv[]) {
           // `erlc` per module and load the .beam it wrote: a whole BEAM
           // starting up to compile one small module, ~150 ms a line, which a
           // sampling profile put at 93% of this REPL's wall time
-          // (kexhq/kex#318). The stable module name means each load is a new
-          // version superseding the previous — code:load_binary's native
-          // code-upgrade path.
+          // (kexhq/kex#318).
           //
           // Companion modules go first, in reverse: the session entry can
           // then call their functions the moment it is loaded itself.
           bool loaded = true;
+          std::vector<std::pair<std::string, std::string>> newlyLoaded;
           for (auto it = results.rbegin(); it != results.rend(); ++it) {
+            if (it != std::prev(results.rend())) {
+              auto previous = loadedCompanionCore.find(it->moduleName);
+              if (previous != loadedCompanionCore.end() &&
+                  previous->second == it->source)
+                continue;
+            }
             std::string corePath = beamDir + "/" + it->moduleName + ".core";
             std::ofstream cf(corePath);
             if (!cf) {
@@ -3946,12 +4011,20 @@ int main(int argc, char *argv[]) {
             std::string diagnostics = vm.readUntilSentinel(
                 "KEX_REPL_DONE " + loadNonce + " ", loadStatus);
             std::filesystem::remove(corePath);
+            // A successful compile prints nothing, so what arrived here is
+            // output a spawned process wrote after the previous input's
+            // sentinel — it was dropped, losing a child's first printLine.
+            if (loadStatus == "ok") std::cout << diagnostics;
             if (loadStatus != "ok") {
               if (!diagnostics.empty()) std::cerr << diagnostics;
               loaded = false;
               break;
             }
+            if (it != std::prev(results.rend()))
+              newlyLoaded.emplace_back(it->moduleName, it->source);
           }
+          for (auto &[name, core] : newlyLoaded)
+            loadedCompanionCore[name] = std::move(core);
           if (!loaded) {
             std::cerr << "  " << kex::color::apply(kex::color::red)
                       << "error:" << kex::color::apply(kex::color::reset)
@@ -3976,10 +4049,11 @@ int main(int argc, char *argv[]) {
             const auto rhs = equals == std::string::npos
                 ? std::string::npos
                 : source.find_first_not_of(" \t", equals + 1);
-            // An anonymous fun belongs to the currently loaded session
-            // module. Keeping it in the process dictionary turns it into a
-            // badfun after that module is hot-reloaded, so retain its source
-            // and recreate it on every REPL evaluation instead.
+            // A lambda literal is replayed from its source rather than read
+            // back from the process dictionary. This used to be what kept it
+            // from turning into a badfun when the session module reloaded;
+            // each input now has a session module of its own, so a stored
+            // fun stays valid either way.
             const bool isLambda = rhs != std::string::npos &&
                 (source[rhs] == '&' ||
                  (source[rhs] == '{' &&
