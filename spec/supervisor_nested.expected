@@ -1,0 +1,16 @@
+start :solo
+start :first
+start :second
+start :left
+start :right
+true
+crash :solo
+start :solo
+crash :second
+start :second
+crash :first
+start :first
+start :second
+crash :right
+start :left
+start :right

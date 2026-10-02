@@ -1,0 +1,218 @@
+# A supervision tree for a small shop backend. BEAM backend only — the
+# tree-walking interpreter can't nest supervisors (`kex -R` says so).
+#
+#   shop                       restart: :only_crashed
+#   ├── metrics                counts what happens
+#   ├── storage                restart: :crashed_and_newer
+#   │   ├── database           owns the orders
+#   │   └── cache              started after, warmed from, the database
+#   └── web                    restart: :all
+#       ├── sessions           who is logged in
+#       └── acceptor           takes requests, needs sessions
+#
+# Each strategy says which siblings go down with a crashed child:
+#   :only_crashed       just the child          (OTP one_for_one)
+#   :crashed_and_newer  it and those after it   (OTP rest_for_one)
+#   :all                every sibling           (OTP one_for_all)
+#
+# The cache is only as good as the database it was warmed from, so a
+# database crash takes the cache with it — but a cache crash leaves the
+# database alone. The acceptor holds session ids, which mean nothing to a
+# fresh session table, so the web half restarts as a unit.
+#
+# A worker is a block that spawns the process and returns its pid; the
+# supervisor calls the same block again to restart it. Workers register a
+# name, so the rest of the system finds the current incarnation by name
+# instead of holding a pid that dies with it.
+
+# --------------------------------------------------------------------
+# Workers
+# --------------------------------------------------------------------
+
+
+# Every reply is tagged `(:reply, value)`, so a worker waiting for an answer
+# never mistakes it for a request that happens to be in its mailbox too.
+
+type MetricsMessage = Count(Atom) | Total(Pid)
+
+foul metrics(events: Integer) do
+  receive do
+    Count(_) => metrics(events + 1)
+    Total(caller) => do
+      caller.send((:reply, events))
+      metrics(events)
+    end
+  end
+end
+
+type DatabaseMessage = Insert(String) | Orders(Pid)
+
+foul database(orders: [String]) do
+  receive do
+    Insert(order) => database(orders + [order])
+    Orders(caller) => do
+      caller.send((:reply, orders))
+      database(orders)
+    end
+  end
+end
+
+type CacheMessage = Lookup(Pid)
+
+foul cache(hot: [String]) do
+  receive do
+    Lookup(caller) => do
+      caller.send((:reply, hot))
+      cache(hot)
+    end
+  end
+end
+
+type SessionsMessage = Login(String, Pid)
+
+foul sessions(users: [String]) do
+  receive do
+    Login(user, caller) => do
+      caller.send((:reply, users.length))
+      sessions(users + [user])
+    end
+  end
+end
+
+type AcceptorMessage = Order(String, String)
+
+# `sessions` holds the ids this remembers — which is why the two restart
+# together: a fresh session table would not know them.
+foul acceptor(sessionIds: {String: Integer}) do
+  receive do
+    Order(user, item) => do
+      let id = match sessionIds.get(user) do
+        Just(id) => id
+        None => login(user)
+      end
+      tell(:database, Insert("${user}: ${item}"))
+      tell(:metrics, Count(:order))
+      acceptor(sessionIds.put(user, id))
+    end
+  end
+end
+
+foul login(user: String) -> Integer do
+  let id = ask(:sessions) { |me| Login(user, me) }
+  IO.printLine("  ${user} logs in, session ${id}")
+  id
+end
+
+# --------------------------------------------------------------------
+# Talking to a worker by name
+# --------------------------------------------------------------------
+
+foul tell(name: Atom, message: X) do
+  match Process.whereIs(name) do
+    Just(pid) => pid.send(message)
+    None => IO.printLine("  (nobody is ${name} right now)")
+  end
+end
+
+# Sends the request `build` makes from our own pid, and waits for the reply.
+foul ask(name: Atom, build: Pid -> X) do
+  tell(name, build(Process.self))
+  receive do
+    (:reply, answer) => answer
+  end
+end
+
+# Spawns `body`, registers it as `name`, and returns its pid — the shape a
+# `worker` block has to have.
+foul start(name: Atom, body: Block<Void>) do
+  IO.printLine("  start ${name}")
+  let pid = spawn do
+    body()
+  end
+  Process.register(pid, name)
+  pid
+end
+
+foul startCache do
+  let hot = ask(:database) { |me| Orders(me) }
+  start(:cache) { cache(hot) }
+end
+
+# --------------------------------------------------------------------
+# The tree
+# --------------------------------------------------------------------
+
+foul startShop do
+  # Only these two: `Supervisor.start` would shadow our own `start`.
+  using Supervisor, only: [worker, supervisor]
+  Supervisor.start(restart: :only_crashed) do
+    worker { start(:metrics) { metrics(0) } }
+    supervisor(restart: :crashed_and_newer) do
+      worker { start(:database) { database([]) } }
+      worker { startCache() }
+    end
+    supervisor(restart: :all) do
+      worker { start(:sessions) { sessions([]) } }
+      worker { start(:acceptor) { acceptor({}) } }
+    end
+  end
+end
+
+# --------------------------------------------------------------------
+# Chaos — kill a worker, then look at what came back
+# --------------------------------------------------------------------
+
+foul crash(name: Atom) do
+  IO.printLine("")
+  IO.printLine("-- crash ${name}")
+  match Process.whereIs(name) do
+    Just(pid) => Process.exit(pid, :chaos)
+    None => IO.printLine("  (nobody is ${name} right now)")
+  end
+  Task.sleep(100.milliseconds)
+end
+
+foul status do
+  let orders = ask(:database) { |me| Orders(me) }
+  let cached = ask(:cache) { |me| Lookup(me) }
+  let events = ask(:metrics) { |me| Total(me) }
+  IO.printLine("  orders ${orders.length}, cached ${cached.length}, events ${events}")
+end
+
+main do
+  # OTP logs every restart as a multi-line SUPERVISOR REPORT. Real systems
+  # want those; here they would bury the output.
+  BEAM.logger.set_primary_config(:level, :critical)
+
+  IO.printLine("-- boot")
+  match startShop() do
+    Ok(_) => Void
+    Error(reason) => IO.printLine("shop failed to start: ${reason}")
+  end
+
+  tell(:acceptor, Order("ada", "keyboard"))
+  tell(:acceptor, Order("alan", "mouse"))
+  tell(:acceptor, Order("ada", "monitor"))
+  Task.sleep(100.milliseconds)
+  status()
+
+  # Only the cache restarts, and warms up again from the database.
+  crash(:cache)
+  status()
+
+  # The database and the cache after it restart. The orders lived in the
+  # database process, so they're gone — supervision restores a known-good
+  # state, not the state at the crash.
+  crash(:database)
+  status()
+
+  # Sessions and acceptor restart together; ada logs in again.
+  crash(:sessions)
+  tell(:acceptor, Order("ada", "cable"))
+  Task.sleep(100.milliseconds)
+  status()
+
+  # Nothing else notices.
+  crash(:metrics)
+  status()
+end

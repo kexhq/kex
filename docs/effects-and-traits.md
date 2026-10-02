@@ -25,8 +25,8 @@ foul readConfig(path: String) -> Result<Config, AppError> do
 end
 
 foul startApp do
-  Supervisor.start(strategy: :one_for_one) do
-    worker(Database)
+  Supervisor.start(restart: :only_crashed) do
+    Supervisor.worker { startDatabase() }
   end
 end
 

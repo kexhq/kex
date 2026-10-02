@@ -1,0 +1,41 @@
+# kex: check-only
+# A constructor pattern that names no constructor at all, against a value of a
+# known ADT, can never match. It used to be accepted silently — `Some(p)`
+# against an `X?` compiled, then failed at runtime with "no matching clause".
+
+type Light = Red | Amber | Green
+
+let fromOptional(x: Integer?) -> String do
+  match x do
+    Some(v) => "some"
+    None => "none"
+  end
+end
+
+let fromIfLet(x: Integer?) -> String do
+  if let Some(v) = x
+    "some"
+  else
+    "no"
+  end
+end
+
+let fromUserType(light: Light) -> String do
+  match light do
+    Red => "stop"
+    Yellow => "slow"
+    _ => "go"
+  end
+end
+
+# The correct spellings stay accepted.
+let fine(x: Integer?) -> String do
+  match x do
+    Just(v) => "just"
+    None => "none"
+  end
+end
+
+main do
+  IO.printLine(fine(Just(1)))
+end

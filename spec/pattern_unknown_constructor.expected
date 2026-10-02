@@ -1,0 +1,3 @@
+spec/pattern_unknown_constructor.kex:10:5: error: `Some` is not a constructor of `Optional` (it has `Just`, `None`) — this pattern can never match
+spec/pattern_unknown_constructor.kex:16:10: error: `Some` is not a constructor of `Optional` (it has `Just`, `None`) — this pattern can never match
+spec/pattern_unknown_constructor.kex:26:5: error: `Yellow` is not a constructor of `Light` (it has `Red`, `Amber`, `Green`) — this pattern can never match

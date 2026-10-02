@@ -1373,6 +1373,76 @@ int main() {
         });
     });
 
+    describe("BEAM REPL — code that outlives its input", []() {
+        it("keeps a stored lambda callable after later inputs", []() {
+            // Every input reloaded one stable session module, so the version
+            // a fun was created in was purged two inputs later: badfun.
+            auto out = runBeamRepl("let f = { 42 }\n1\n2\nf()\n");
+            assertTrue(out.find("badfun") == std::string::npos, out);
+            assertTrue(out.find("=> 42 : Integer") != std::string::npos, out);
+        });
+
+        it("keeps a process blocked in receive alive across inputs", []() {
+            // The same purge killed any process still waiting in a receive
+            // it entered on the purged version.
+            auto out = runBeamRepl(
+                "foul echo do\n"
+                "  loop do\n"
+                "    receive do\n"
+                "      msg => IO.printLine(\"got ${msg}\")\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "let p = spawn do echo() end\n"
+                "1\n2\n3\n"
+                "p.send(\"one\")\n"
+                "Task.sleep(100.milliseconds)\n"
+                "p.alive?\n");
+            assertTrue(out.find("got one") != std::string::npos, out);
+            assertTrue(out.find("=> true : Bool") != std::string::npos, out);
+        });
+
+        it("shows output a spawned process writes between inputs", []() {
+            // Output arriving after an input's sentinel was read as the next
+            // compile's diagnostics and dropped.
+            auto out = runBeamRepl(
+                "spawn do IO.printLine(\"from child\") end\n"
+                "Task.sleep(100.milliseconds)\n"
+                "1\n");
+            assertTrue(out.find("from child") != std::string::npos, out);
+        });
+
+        it("reads `let name do ... end` with an arm arrow as a definition",
+           []() {
+            // The `=` of `=>` was taken for a binding, so this became a local
+            // holding a lambda rather than a function.
+            auto out = runBeamRepl(
+                "let pick do\n"
+                "  match 1 do\n"
+                "    1 => 10\n"
+                "    _ => 0\n"
+                "  end\n"
+                "end\n"
+                "pick\n");
+            assertTrue(out.find("defined pick") != std::string::npos, out);
+            assertTrue(out.find("=> 10 : Integer") != std::string::npos, out);
+        });
+
+        it("rejects a definition the checker rejects and keeps going", []() {
+            // A definition was only parsed, so a pure `let` that receives was
+            // kept and every later input failed with its error.
+            auto out = runBeamRepl(
+                "let wait do\n"
+                "  receive do\n"
+                "    msg => msg\n"
+                "  end\n"
+                "end\n"
+                "1 + 1\n");
+            assertTrue(out.find("pure context") != std::string::npos, out);
+            assertTrue(out.find("=> 2 : Integer") != std::string::npos, out);
+        });
+    });
+
     describe("CLI — inspect on both backends", []() {
         it("supports postfix .inspect on BEAM", []() {
             // A top-level prelude function was only registered for UFCS with

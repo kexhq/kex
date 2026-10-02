@@ -3793,6 +3793,24 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     if (m_functionDefs.count(captured))
                         defLookupKey = std::move(captured);
                 }
+                // A bare name a `using` imported: the definition is filed
+                // under its module (`Supervisor::supervisor`), so find the
+                // qualified entry bound to this very function. Without it the
+                // named argument was appended after the positional ones —
+                // `supervisor(restart: :all, [...])` passed the list as
+                // `restart`.
+                if (!m_functionDefs.count(defLookupKey) &&
+                    defLookupKey.find("::") == std::string::npos) {
+                    const auto suffix = "::" + defLookupKey;
+                    for (const auto& [key, _] : m_functionDefs)
+                        if (key.size() > suffix.size() &&
+                            key.compare(key.size() - suffix.size(),
+                                        suffix.size(), suffix) == 0 &&
+                            m_env->get(key) == val) {
+                            defLookupKey = key;
+                            break;
+                        }
+                }
                 auto it = m_functionDefs.find(defLookupKey);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
                     const auto* selected = findNamedClause(defLookupKey, namedArgs);

@@ -1554,9 +1554,11 @@ Process.exit(pid, reason)        # send an exit signal
 
 ### Supervision
 
-`Supervisor.start` starts a supervisor over a list of worker specs returned by
-its block. Each worker wraps a zero-argument block that should `spawn` the child
-and return its pid:
+`Supervisor.start` starts a supervisor over the children its block lists, one
+per line — or over a list passed in place of the block. Each
+`Supervisor.worker` wraps a zero-argument block that should `spawn` the child
+and return its pid; `Supervisor.supervisor(restart:)` nests a supervisor,
+taking its children either way:
 
 ```kex
 foul startCounter(name: String) do
@@ -1565,7 +1567,7 @@ end
 
 main do
   let result = Supervisor.start(restart: :only_crashed) do
-    [worker { startCounter("counter-A") }]
+    Supervisor.worker { startCounter("counter-A") }
   end
   match result do
     Ok(pid)    => IO.printLine("supervisor started: ${pid}")
@@ -1574,13 +1576,10 @@ main do
 end
 ```
 
-> **Note:** `worker` and `Supervisor.start` are runtime intrinsics not known to
-> the semantic checker — use `--no-check` if the checker reports `worker` as
-> undefined, or run on the BEAM backend.
-
-> **Backend note:** the interpreter supports only `restart: :only_crashed`. The
-> `:all` and `:crashed_and_newer` strategies require the BEAM backend
-> (the default runner) and produce an `Error` on the interpreter.
+> **Backend note:** the interpreter supports only a flat
+> `restart: :only_crashed` supervisor. Nesting and the `:all` and
+> `:crashed_and_newer` strategies require the BEAM backend (the default
+> runner) and produce an `Error` on the interpreter.
 
 ---
 
@@ -2104,7 +2103,7 @@ See §18 for the full process API. Summary:
 - `Pid.send(msg)`, `Pid.link`, `Pid.unlink`, `Pid.monitor`, `Pid.alive?`
 - `Reference.demonitor`
 - `Task.start { expr }`, `task.await(timeout)`, `Task.awaitAll([tasks])`
-- `Supervisor.start(restart: atom) do [worker { spawnFn }] end`
+- `Supervisor.start(restart: atom) do Supervisor.worker { spawnFn } end` — children one per line, or `Supervisor.start(restart: atom, [children])`; `Supervisor.supervisor` nests the same two ways
 
 ### 23.18 AST (Introspection)
 

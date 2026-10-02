@@ -1,6 +1,6 @@
-# Supervision tree with a crashing child. Runs on both the tree-walking
-# interpreter (`kex`, :only_crashed only) and the BEAM backend (`kex -R`,
-# all restart strategies).
+# Supervision with a crashing child. Runs on both the BEAM backend (`kex`,
+# all restart strategies) and the tree-walking interpreter (`kex -R`,
+# :only_crashed only). For a nested tree, see supervision_tree.kex.
 
 foul counter(name: String, n: Int) do
   receive do
@@ -20,7 +20,7 @@ end
 
 main do
   let result = Supervisor.start(restart: :only_crashed) do
-    [worker { startCounter("counter-A") }]
+    Supervisor.worker { startCounter("counter-A") }
   end
   match result do
     Ok(pid) => IO.printLine("supervisor started: " + pid.to(String).or(""))
