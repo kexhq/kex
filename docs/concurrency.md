@@ -6,8 +6,8 @@ Kex uses an Elixir-style process model with lightweight, isolated processes comm
 
 > **Status.** Process primitives and typed `Process<Message>` handles run on
 > both the interpreter and BEAM. Typed record-backed servers are documented in
-> [Typed Servers](serving.md). The richer supervision DSL shown below remains
-> forward-looking.
+> [Typed Servers](serving.md). Supervision trees run on BEAM; the interpreter
+> supervises flat `:only_crashed` only.
 
 ## Spawning Processes
 
@@ -100,17 +100,35 @@ end
 ## Supervision
 
 ```kex
-foul app = Supervisor.start(restart: :only_crashed) do
-  worker(Database, args: [config.db_url])
-  worker(Cache)
-  supervisor(restart: :all) do
-    worker(WebServer, args: [config.port])
-    worker(WebSocket)
-  end
+foul startShop = Supervisor.start(restart: :only_crashed) do
+  [
+    worker { startMetrics() },
+    supervisor(restart: :crashed_and_newer) do
+      worker { startDatabase() }
+      worker { startCache() }
+    end,
+    supervisor(restart: :all) do
+      worker { startSessions() }
+      worker { startAcceptor() }
+    end
+  ]
 end
 ```
 
-When a child crashes, the supervisor restarts it based on its restart policy.
+A `worker` block spawns the child and returns its pid; the supervisor calls
+the same block again to restart it. `supervisor(restart:)` nests a
+supervisor, whose block lists its children one per line. When a child
+crashes, its supervisor's strategy decides which siblings restart with it:
+
+| Strategy | Restarts | OTP |
+|----------|----------|-----|
+| `:only_crashed` | the crashed child | `one_for_one` |
+| `:crashed_and_newer` | it and the children started after it | `rest_for_one` |
+| `:all` | every child | `one_for_all` |
+
+The interpreter supports a flat `:only_crashed` supervisor only; nesting and
+the other strategies need the BEAM backend. See
+`examples/supervision_tree.kex`.
 
 ## Receive with Timeout
 

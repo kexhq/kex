@@ -1,0 +1,51 @@
+# kex: run-beam
+# Nested supervisors and each restart strategy (kex_supervisor.erl). A
+# crashed child must actually come back — the supervisor links each child
+# it starts, since a Kex `spawn` is unlinked — and a nested supervisor is a
+# child spec its parent starts, not a second tree started on the spot.
+
+foul idle do
+  receive do
+    _ => idle()
+  end
+end
+
+foul start(name: Atom) do
+  IO.printLine("start ${name}")
+  let pid = spawn do
+    idle()
+  end
+  Process.register(pid, name)
+  pid
+end
+
+foul crash(name: Atom) do
+  IO.printLine("crash ${name}")
+  match Process.whereIs(name) do
+    Just(pid) => Process.exit(pid, :crashed)
+    None => IO.printLine("nobody is ${name}")
+  end
+  Task.sleep(50.milliseconds)
+end
+
+main do
+  BEAM.logger.set_primary_config(:level, :critical)
+  let started = Supervisor.start(restart: :only_crashed) do
+    [
+      worker { start(:solo) },
+      supervisor(restart: :crashed_and_newer) do
+        worker { start(:first) }
+        worker { start(:second) }
+      end,
+      supervisor(restart: :all) do
+        worker { start(:left) }
+        worker { start(:right) }
+      end
+    ]
+  end
+  IO.printLine(started.ok?.to(String).or(""))
+  crash(:solo)
+  crash(:second)
+  crash(:first)
+  crash(:right)
+end

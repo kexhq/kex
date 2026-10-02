@@ -2330,32 +2330,6 @@ struct Lowering {
                 return wrapLets(binds, callE("kex_supervisor", "worker", 1,
                                              one(std::move(startFn))));
         }
-        if (n.name == "supervisor" && n.block && !knownFns.count("supervisor")) {
-            std::vector<Binding> binds;
-            ExprPtr strategy = lit(LitKind::Atom, "only_crashed");
-            for (const auto& [name, value] : n.namedArgs)
-                if (name == "strategy" || name == "restart")
-                    strategy = lower(value);
-            ExprPtr children;
-            if (auto* lambda = std::get_if<ast::Lambda>(&(*n.block)->kind))
-                children = lowerBody(lambda->body);
-            else
-                children = lower(*n.block);
-            auto pair = [&](const char* key, ExprPtr value) {
-                auto tuple = std::make_unique<Expr>();
-                tuple->node = MakeTuple{two(lit(LitKind::Atom, key),
-                                            std::move(value))};
-                return tuple;
-            };
-            std::vector<ExprPtr> pairs;
-            pairs.push_back(pair("strategy", atomize_ir(std::move(strategy), binds)));
-            pairs.push_back(pair("children", atomize_ir(std::move(children), binds)));
-            auto list = std::make_unique<Expr>();
-            list->node = MakeList{std::move(pairs), std::nullopt};
-            auto spec = callE("maps", "from_list", 1, one(std::move(list)));
-            return wrapLets(binds, callE("kex_supervisor", "start_link", 1,
-                                         one(std::move(spec))));
-        }
         // Named args → reorder into the callee's positional slots by param
         // name; then positional args (and a trailing block) fill remaining
         // slots in order, leftovers default to None. Mirrors the string

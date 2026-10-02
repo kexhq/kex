@@ -1900,27 +1900,6 @@ int main() {
             assertTrue(contains(out, "#<112>"), out);
         });
 
-        it("supervisor(strategy:) do block end as free fn emits nested start_link", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "main do\n"
-                "  Supervisor.start(strategy: :only_crashed) do\n"
-                "    [supervisor(strategy: :all) do\n"
-                "      [worker(WebServer)]\n"
-                "    end]\n"
-                "  end\n"
-                "end\n"
-            );
-            // The nested supervisor should also call start_link
-            auto count = 0;
-            std::string::size_type pos = 0;
-            while ((pos = out.find("kex_supervisor':'start_link'", pos)) != std::string::npos) {
-                count++;
-                pos++;
-            }
-            assertTrue(count >= 2, "expected at least 2 start_link calls (outer + nested)");
-        });
-
         it("Process.self without parens emits call through companion module", []() {
             kex::ir::ExternalModules ext;
             ext.nameToAtom["Process"] = "Kex.Process";

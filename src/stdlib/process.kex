@@ -634,6 +634,27 @@ end
 # @return [(Atom, Block<Pid>)] the worker spec
 worker : Block<Pid> -> (Atom, Block<Pid>)
 
+# Nests a supervisor inside +Supervisor.start+ (or another +supervisor+).
+# Its parent starts it, and restarts it — with all its children — when the
+# parent's restart strategy says so. Takes the same +restart:+ strategies
+# as +Supervisor.start+. BEAM backend only.
+#
+# @param restart [Atom] +:only_crashed+, +:all+ or +:crashed_and_newer+
+# @param children [Block<[(Atom, Block<Pid>)]>] the block listing its children
+# @return [(Atom, Block<Pid>)] the supervisor spec
+#
+# @example
+#   Supervisor.start(restart: :only_crashed) do
+#     [
+#       worker { startCache() },
+#       supervisor(restart: :all) do
+#         [worker { startPool() }, worker { startListener() }]
+#       end
+#     ]
+#   end
+supervisor : Atom -> Block<[(Atom, Block<Pid>)]> -> (Atom, Block<Pid>)
+foul supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
+
 make Reference do
   # Stops the monitor this reference identifies.
   #

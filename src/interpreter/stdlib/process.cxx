@@ -707,6 +707,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::tuple({Value::atom("worker"), args[0]});
     });
 
+    // Kex.Intrinsic.Supervisor.nested(restart, children) — the prelude's
+    // `supervisor(restart:) do [...] end`, a nested supervisor spec. The
+    // interpreter's polling supervisor can't nest; Supervisor.start rejects
+    // a spec carrying this tag with an Error(...).
+    defineIntrinsic("Supervisor::nested", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::unit();
+        return Value::tuple({Value::atom("supervisor"), args[1]});
+    });
+
     // Supervisor.start(restart: :only_crashed) do [worker { ... }, ...] end
     // — see Scheduler::startSupervisor for the actual poll/restart loop.
     // args[0] is the do-block (a deferred zero-arg FunctionValue evaluating
@@ -731,7 +740,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         if (strategy != "only_crashed") {
             return Value::error(Value::string(
                 "Supervisor restart strategy :" + strategy + " isn't supported by the interpreter — "
-                "only :only_crashed is; use the BEAM backend (kex -R) for :all/:crashed_and_newer."));
+                "only :only_crashed is; use the BEAM backend (plain `kex`) for :all/:crashed_and_newer."));
         }
 
         auto specsVal = specsBlockFn->native({});
@@ -744,6 +753,12 @@ auto Evaluator::registerProcessBuiltins() -> void {
         for (const auto& spec : specsList->elements) {
             auto* tup = std::get_if<TupleValue>(&spec->data);
             if (tup && tup->elements.size() == 2) {
+                auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
+                if (tag && tag->name == "supervisor") {
+                    return Value::error(Value::string(
+                        "Nested supervisors aren't supported by the interpreter — "
+                        "run on the BEAM backend (plain `kex`) instead of --run-walker."));
+                }
                 childBlocks.push_back(tup->elements[1]);
             }
         }
