@@ -7959,8 +7959,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
 
     std::vector<Signature> importedSigs;
-    for (const auto* function : importedFunctions)
+    for (const auto* function : importedFunctions) {
         importedSigs.push_back(function->signature);
+        // The labels live on the import, not its signature. Without them an
+        // overloaded import never counts as a uniform layout below, so
+        // `Supervisor.start(restart: :all, [...])` put the list in the
+        // `restart` slot instead of the one the named argument left free.
+        auto& copied = importedSigs.back();
+        if (copied.paramNames.empty() &&
+            function->paramNames.size() == copied.params.size())
+            copied.paramNames = function->paramNames;
+    }
 
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;

@@ -103,24 +103,22 @@ end
 foul startShop do
   using Supervisor
   start(restart: :only_crashed) do
-    [
-      worker { startMetrics() },
-      supervisor(restart: :crashed_and_newer) do
-        [worker { startDatabase() }, worker { startCache() }]
-      end,
-      supervisor(restart: :all) do
-        [worker { startSessions() }, worker { startAcceptor() }]
-      end
-    ]
+    worker { startMetrics() }
+    supervisor(restart: :crashed_and_newer) do
+      worker { startDatabase() }
+      worker { startCache() }
+    end
+    supervisor(restart: :all, [worker { startSessions() }, worker { startAcceptor() }])
   end
 end
 ```
 
-The block returns the list of children. A `Supervisor.worker` block spawns
-the child and returns its pid; the supervisor calls the same block again to
-restart it. `Supervisor.supervisor(restart:)` nests a supervisor over the
-list its own block returns. A `using Supervisor` scoped to the function, as
-here, saves spelling out the module on each child. When a child crashes, its
+The block lists the children, one per line; a list argument works too, and
+the two mix freely, as the last line shows. A `Supervisor.worker` block
+spawns the child and returns its pid; the supervisor calls the same block
+again to restart it. `Supervisor.supervisor(restart:)` nests a supervisor. A
+`using Supervisor` scoped to the function, as here, saves spelling out the
+module on each child. When a child crashes, its
 supervisor's strategy decides which siblings restart with it:
 
 | Strategy | Restarts | OTP |

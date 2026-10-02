@@ -708,7 +708,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     });
 
     // Kex.Intrinsic.Supervisor.nested(restart, children) — the prelude's
-    // `Supervisor.supervisor(restart:) do [...] end`, a nested supervisor spec. The
+    // `Supervisor.supervisor(restart:) do ... end`, a nested supervisor spec. The
     // interpreter's polling supervisor can't nest; Supervisor.start rejects
     // a spec carrying this tag with an Error(...).
     defineIntrinsic("Supervisor::nested", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -716,36 +716,35 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::tuple({Value::atom("supervisor"), args[1]});
     });
 
-    // Supervisor.start(restart: :only_crashed) do [Supervisor.worker { ... }] end —
-    // see Scheduler::startSupervisor for the actual poll/restart loop. The
-    // arguments are the `restart:` atom and the children block (a zero-arg
-    // FunctionValue returning the list of specs), taken by kind rather
-    // than position: the public fallback sees them in call order (named args
-    // land positionally-appended — see `await`'s comment on why), the
-    // intrinsic in the prelude wrapper's. Walker-native for the same reason
-    // as Task.start. Only :only_crashed is supported — anything else is a
-    // clear Error(...) pointing at the BEAM backend instead of a silent wrong
-    // behavior.
+    // Supervisor.start(restart: :only_crashed) do Supervisor.worker { ... } end,
+    // or with the children as a list argument — see
+    // Scheduler::startSupervisor for the actual poll/restart loop. The
+    // arguments are the `restart:` atom and the children (a zero-arg
+    // FunctionValue collecting the specs into a list, or the list itself),
+    // taken by kind rather than position: the public fallback sees them in
+    // call order (named args land positionally-appended — see `await`'s
+    // comment on why), the intrinsic in the prelude wrapper's. Walker-native
+    // for the same reason as Task.start. Only :only_crashed is supported —
+    // anything else is a clear Error(...) pointing at the BEAM backend
+    // instead of a silent wrong behavior.
     defineDual("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        const FunctionValue* specsBlockFn = nullptr;
+        ValuePtr specsVal;
         std::string strategy = "only_crashed";
         for (const auto& arg : args) {
-            if (auto* fn = std::get_if<FunctionValue>(&arg->data)) specsBlockFn = fn;
+            if (auto* fn = std::get_if<FunctionValue>(&arg->data); fn && fn->native)
+                specsVal = fn->native({});
+            else if (std::holds_alternative<ListValue>(arg->data)) specsVal = arg;
             else if (auto* av = std::get_if<AtomValue>(&arg->data)) strategy = av->name;
-        }
-        if (!specsBlockFn || !specsBlockFn->native) {
-            return Value::error(Value::string("Supervisor.start requires a do...end block"));
         }
         if (strategy != "only_crashed") {
             return Value::error(Value::string(
                 "Supervisor restart strategy :" + strategy + " isn't supported by the interpreter — "
                 "only :only_crashed is; use the BEAM backend (plain `kex`) for :all/:crashed_and_newer."));
         }
-
-        auto specsVal = specsBlockFn->native({});
-        auto* specsList = std::get_if<ListValue>(&specsVal->data);
+        auto* specsList = specsVal ? std::get_if<ListValue>(&specsVal->data) : nullptr;
         if (!specsList) {
-            return Value::error(Value::string("Supervisor.start's block must evaluate to a list of worker specs"));
+            return Value::error(Value::string(
+                "Supervisor.start needs its children as a do...end block or a list"));
         }
 
         std::vector<ValuePtr> childBlocks;

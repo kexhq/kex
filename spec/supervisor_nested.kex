@@ -31,16 +31,15 @@ end
 main do
   BEAM.logger.set_primary_config(:level, :critical)
   using Supervisor, only: [worker, supervisor]
+  # The block form for the root and the first subtree, the list form for
+  # the second: the two spellings mix freely.
   let started = Supervisor.start(restart: :only_crashed) do
-    [
-      worker { start(:solo) },
-      supervisor(restart: :crashed_and_newer) do
-        [worker { start(:first) }, worker { start(:second) }]
-      end,
-      supervisor(restart: :all) do
-        [worker { start(:left) }, worker { start(:right) }]
-      end
-    ]
+    worker { start(:solo) }
+    supervisor(restart: :crashed_and_newer) do
+      worker { start(:first) }
+      worker { start(:second) }
+    end
+    supervisor(restart: :all, [worker { start(:left) }, worker { start(:right) }])
   end
   IO.printLine(started.ok?.to(String).or(""))
   crash(:solo)

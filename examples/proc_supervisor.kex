@@ -20,7 +20,7 @@ end
 
 main do
   let result = Supervisor.start(restart: :only_crashed) do
-    [Supervisor.worker { startCounter("counter-A") }]
+    Supervisor.worker { startCounter("counter-A") }
   end
   match result do
     Ok(pid) => IO.printLine("supervisor started: " + pid.to(String).or(""))
