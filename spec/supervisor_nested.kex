@@ -30,16 +30,17 @@ end
 
 main do
   BEAM.logger.set_primary_config(:level, :critical)
+  using Supervisor, only: [worker, supervisor]
   let started = Supervisor.start(restart: :only_crashed) do
-    worker { start(:solo) }
-    supervisor(restart: :crashed_and_newer) do
-      worker { start(:first) }
-      worker { start(:second) }
-    end
-    supervisor(restart: :all) do
-      worker { start(:left) }
-      worker { start(:right) }
-    end
+    [
+      worker { start(:solo) },
+      supervisor(restart: :crashed_and_newer) do
+        [worker { start(:first) }, worker { start(:second) }]
+      end,
+      supervisor(restart: :all) do
+        [worker { start(:left) }, worker { start(:right) }]
+      end
+    ]
   end
   IO.printLine(started.ok?.to(String).or(""))
   crash(:solo)

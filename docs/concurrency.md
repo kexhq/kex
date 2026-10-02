@@ -100,23 +100,28 @@ end
 ## Supervision
 
 ```kex
-foul startShop = Supervisor.start(restart: :only_crashed) do
-  worker { startMetrics() }
-  supervisor(restart: :crashed_and_newer) do
-    worker { startDatabase() }
-    worker { startCache() }
-  end
-  supervisor(restart: :all) do
-    worker { startSessions() }
-    worker { startAcceptor() }
+foul startShop do
+  using Supervisor
+  start(restart: :only_crashed) do
+    [
+      worker { startMetrics() },
+      supervisor(restart: :crashed_and_newer) do
+        [worker { startDatabase() }, worker { startCache() }]
+      end,
+      supervisor(restart: :all) do
+        [worker { startSessions() }, worker { startAcceptor() }]
+      end
+    ]
   end
 end
 ```
 
-A `worker` block spawns the child and returns its pid; the supervisor calls
-the same block again to restart it, and `supervisor(restart:)` nests a
-supervisor. Both blocks list their children one per line. When a child
-crashes, its supervisor's strategy decides which siblings restart with it:
+The block returns the list of children. A `Supervisor.worker` block spawns
+the child and returns its pid; the supervisor calls the same block again to
+restart it. `Supervisor.supervisor(restart:)` nests a supervisor over the
+list its own block returns. A `using Supervisor` scoped to the function, as
+here, saves spelling out the module on each child. When a child crashes, its
+supervisor's strategy decides which siblings restart with it:
 
 | Strategy | Restarts | OTP |
 |----------|----------|-----|

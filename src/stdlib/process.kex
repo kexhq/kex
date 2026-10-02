@@ -631,9 +631,9 @@ end
 # Supervision trees: processes that restart the processes under them when
 # they crash.
 module Supervisor do
-  # Starts a supervisor over the children its block lists, one per line —
-  # +worker+s and nested +supervisor+s. When a child crashes, +restart+
-  # decides which of its siblings restart with it:
+  # Starts a supervisor over the children its block returns: a list of
+  # +Supervisor.worker+s and nested +Supervisor.supervisor+s. When a child
+  # crashes, +restart+ decides which of its siblings restart with it:
   #
   # - +:only_crashed+ — just the crashed child
   # - +:crashed_and_newer+ — it and the children listed after it
@@ -642,49 +642,54 @@ module Supervisor do
   # The interpreter supports +:only_crashed+ without nesting only.
   #
   # @param restart [Atom] the restart strategy
-  # @param children [Block<[(Atom, Block<Pid>)]>] the block listing the children
+  # @param children [Block<C>] the block returning the list of children
   # @return [Result<Pid, Any>] the supervisor, or why it failed to start
   #
   # @example
   #   Supervisor.start(restart: :only_crashed) do
-  #     worker { startCache() }
-  #     supervisor(restart: :all) do
-  #       worker { startPool() }
-  #       worker { startListener() }
-  #     end
+  #     [
+  #       Supervisor.worker { startCache() },
+  #       Supervisor.supervisor(restart: :all) do
+  #         [
+  #           Supervisor.worker { startPool() },
+  #           Supervisor.worker { startListener() }
+  #         ]
+  #       end
+  #     ]
   #   end
-  start : Atom -> Block<[(Atom, Block<Pid>)]> -> Result<Pid, Any>
+  start : Atom -> Block<C> -> Result<Pid, Any>
   foul start(restart, children) = Kex.Intrinsic.Supervisor.start(restart, children)
+
+  # A child that runs the block to start, and again to restart. The block
+  # must spawn the worker and return its +Pid+.
+  #
+  # @param start [Block<Pid>] the block that spawns the worker
+  # @return [(Atom, Block<Pid>)] the worker spec
+  #
+  # @example
+  #   Supervisor.worker { spawn do cacheLoop([]) end }
+  worker : Block<Pid> -> (Atom, Block<Pid>)
+  let worker(start) = Kex.Intrinsic.Supervisor.worker(start)
+
+  # A child that is itself a supervisor over the children its block returns.
+  # Its parent starts it, and restarts it — with all its children — when the
+  # parent's restart strategy says so. Takes the same +restart:+ strategies
+  # as +Supervisor.start+. BEAM backend only.
+  #
+  # @param restart [Atom] +:only_crashed+, +:all+ or +:crashed_and_newer+
+  # @param children [Block<C>] the block returning the list of children
+  # @return [(Atom, Block<Pid>)] the supervisor spec
+  #
+  # @example
+  #   Supervisor.supervisor(restart: :all) do
+  #     [
+  #       Supervisor.worker { startPool() },
+  #       Supervisor.worker { startListener() }
+  #     ]
+  #   end
+  supervisor : Atom -> Block<C> -> (Atom, Block<Pid>)
+  let supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
 end
-
-# Wraps a spawn block into a worker spec for +Supervisor.start+. The block
-# must spawn the worker and return its +Pid+; the supervisor calls it again
-# to restart the worker.
-#
-# @param start [Block<Pid>] the block that spawns the worker
-# @return [(Atom, Block<Pid>)] the worker spec
-worker : Block<Pid> -> (Atom, Block<Pid>)
-let worker(start) = Kex.Intrinsic.Supervisor.worker(start)
-
-# Nests a supervisor inside +Supervisor.start+ (or another +supervisor+).
-# Its parent starts it, and restarts it — with all its children — when the
-# parent's restart strategy says so. Takes the same +restart:+ strategies
-# as +Supervisor.start+. BEAM backend only.
-#
-# @param restart [Atom] +:only_crashed+, +:all+ or +:crashed_and_newer+
-# @param children [Block<[(Atom, Block<Pid>)]>] the block listing its children
-# @return [(Atom, Block<Pid>)] the supervisor spec
-#
-# @example
-#   Supervisor.start(restart: :only_crashed) do
-#     worker { startCache() }
-#     supervisor(restart: :all) do
-#       worker { startPool() }
-#       worker { startListener() }
-#     end
-#   end
-supervisor : Atom -> Block<[(Atom, Block<Pid>)]> -> (Atom, Block<Pid>)
-let supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
 
 make Reference do
   # Stops the monitor this reference identifies.

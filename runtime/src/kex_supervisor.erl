@@ -61,13 +61,13 @@ to_otp_child(Child) ->
     to_otp_child(Child#{id => make_ref()}).
 
 %% worker(Fun) — build a child-spec from a 0-arity fun.
-%% Called by Kex.Intrinsic.Supervisor.worker for `worker { block }`.
+%% Called by Kex.Intrinsic.Supervisor.worker for `Supervisor.worker { block }`.
 worker(Fun) ->
     #{start_fun => Fun}.
 
 %% supervisor(Spec) — a nested supervisor as a child-spec. Spec has the
 %% same shape start_link/1 takes; the parent starts it (and restarts it)
 %% through start_link_otp/1.
-%% Called by Kex.Intrinsic.Supervisor.nested for `supervisor(restart:)`.
+%% Called by Kex.Intrinsic.Supervisor.nested for `Supervisor.supervisor`.
 supervisor(Spec) ->
     #{supervisor => Spec}.

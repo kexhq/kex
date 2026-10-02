@@ -665,6 +665,9 @@ struct Lowering {
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
+    // Bare name → `Module.name` for what a `using` imported from a separately
+    // compiled module (see importExternalModule). Scoped like moduleImports.
+    std::unordered_map<std::string, std::string> externalImports;
     // Lexically visible `using Source, as: Alias` mappings. The receiver's
     // first path segment is expanded before qualified module lookup.
     std::unordered_map<std::string, std::string> moduleAliases;
@@ -2295,6 +2298,13 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        // A `using` import from a separately compiled module. A local binding
+        // or an import from this unit still wins; anything else follows the
+        // rule that a `using` import outranks a same-named function.
+        if (!subst.count(n.name) && !moduleImports.count(n.name))
+            if (auto ext = externalImports.find(n.name);
+                ext != externalImports.end())
+                return lowerExternalImportCall(n, ext->second);
         // Named args → reorder into the callee's positional slots by param
         // name; then positional args (and a trailing block) fill remaining
         // slots in order, leftovers default to None. Mirrors the string
@@ -6010,7 +6020,71 @@ struct Lowering {
         std::unordered_map<std::string, std::string> imports;
         std::unordered_map<std::string, std::string> aliases;
         std::set<std::string> using_;
+        std::unordered_map<std::string, std::string> externalImports;
     };
+
+    // `using M` where M is a separately compiled module — the prelude's
+    // `Supervisor`, `Task`, `Process` — imports its exports under their bare
+    // names. `moduleImports` only ever sees modules of this unit, so a bare
+    // `worker { ... }` after `using Supervisor` used to lower to a local call
+    // nothing defines, and died with "Undefined function" at runtime while
+    // the tree-walker ran it fine. A module of this unit with the same name
+    // keeps its own import.
+    auto importExternalModule(const std::string& srcMod,
+                              const std::vector<std::string>& only,
+                              const std::vector<std::string>& except) -> void {
+        if (!externalModules) return;
+        const auto prefix = srcMod + ".";
+        for (const auto& [qualKey, _] : externalModules->exportToBeamFn) {
+            if (qualKey.rfind(prefix, 0) != 0) continue;
+            const auto bare = qualKey.substr(prefix.size());
+            if (bare.find('.') != std::string::npos) continue;
+            if (!only.empty() &&
+                std::find(only.begin(), only.end(), bare) == only.end())
+                continue;
+            if (std::find(except.begin(), except.end(), bare) != except.end())
+                continue;
+            if (moduleImports.count(bare)) continue;
+            externalImports[bare] = qualKey;
+        }
+    }
+
+    // A bare call to a name `using` imported from a separately compiled
+    // module, lowered exactly as its qualified spelling `M.name(...)` is.
+    auto lowerExternalImportCall(const ast::FunctionCall& n,
+                                 const std::string& qualKey) -> ExprPtr {
+        const auto owner = qualKey.substr(0, qualKey.rfind('.'));
+        const auto atom = externalModules->nameToAtom.at(owner);
+        const auto beamFn = externalModules->exportToBeamFn.at(qualKey);
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> args;
+        if (!n.namedArgs.empty()) {
+            auto pit = externalModules->exportParamNames.find(qualKey);
+            if (pit == externalModules->exportParamNames.end())
+                throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+            const auto& pnames = pit->second;
+            args.resize(pnames.size());
+            for (const auto& [an, av] : n.namedArgs)
+                for (size_t i = 0; i < pnames.size(); i++)
+                    if (pnames[i] == an) { args[i] = atomize(av, binds); break; }
+            std::vector<ExprPtr> positional;
+            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+            if (n.block) positional.push_back(atomize(*n.block, binds));
+            size_t next = 0;
+            for (auto& p : positional) {
+                while (next < args.size() && args[next]) next++;
+                if (next >= args.size()) break;
+                args[next] = std::move(p);
+            }
+            for (auto& a : args) if (!a) a = lit(LitKind::None, "none");
+        } else {
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            if (n.block) args.push_back(atomize(*n.block, binds));
+        }
+        const int ar = static_cast<int>(args.size());
+        return wrapLets(binds, externalCallExpr(qualKey, atom, beamFn, ar,
+                                                std::move(args)));
+    }
 
     // Applies one `using Module[, as: Alias][, only:/except: ...]` statement's
     // import/alias bindings, returning the pre-existing state for the caller
@@ -6022,7 +6096,8 @@ struct Lowering {
     // of the enclosing block, so `lowerBodyFrom`'s bare-statement case below
     // calls this the same way and treats what follows as that scope.
     auto applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved {
-        UsingBindingsSaved saved{moduleImports, moduleAliases, usingModules};
+        UsingBindingsSaved saved{moduleImports, moduleAliases, usingModules,
+                                 externalImports};
         std::string srcMod;
         for (size_t i = 0; i < n.module.parts.size(); i++) {
             if (i) srcMod += ".";
@@ -6054,12 +6129,14 @@ struct Lowering {
                         moduleImports[bare] = val;
                 }
         }
+        importExternalModule(srcMod, n.onlyNames, n.exceptNames);
         return saved;
     }
     auto restoreUsingBindings(UsingBindingsSaved saved) -> void {
         moduleImports = std::move(saved.imports);
         moduleAliases = std::move(saved.aliases);
         usingModules = std::move(saved.using_);
+        externalImports = std::move(saved.externalImports);
     }
 
     // ---- Body lowering ----------------------------------------------------
@@ -9670,6 +9747,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 L.moduleImports[bare] = val;
                         }
                 }
+                L.importExternalModule(srcMod, node->onlyNames, node->exceptNames);
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
                                  + typeid(T).name());

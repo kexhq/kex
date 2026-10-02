@@ -1554,10 +1554,10 @@ Process.exit(pid, reason)        # send an exit signal
 
 ### Supervision
 
-`Supervisor.start` starts a supervisor over the children its block lists, one
-per line. Each worker wraps a zero-argument block that should `spawn` the child
-and return its pid; `supervisor(restart:) do ... end` nests a supervisor the
-same way:
+`Supervisor.start` starts a supervisor over the list of children its block
+returns. Each `Supervisor.worker` wraps a zero-argument block that should
+`spawn` the child and return its pid; `Supervisor.supervisor(restart:) do
+... end` nests a supervisor over the list its own block returns:
 
 ```kex
 foul startCounter(name: String) do
@@ -1566,7 +1566,7 @@ end
 
 main do
   let result = Supervisor.start(restart: :only_crashed) do
-    worker { startCounter("counter-A") }
+    [Supervisor.worker { startCounter("counter-A") }]
   end
   match result do
     Ok(pid)    => IO.printLine("supervisor started: ${pid}")
@@ -2102,7 +2102,7 @@ See §18 for the full process API. Summary:
 - `Pid.send(msg)`, `Pid.link`, `Pid.unlink`, `Pid.monitor`, `Pid.alive?`
 - `Reference.demonitor`
 - `Task.start { expr }`, `task.await(timeout)`, `Task.awaitAll([tasks])`
-- `Supervisor.start(restart: atom) do worker { spawnFn } end` — children one per line; `supervisor(restart: atom) do ... end` nests
+- `Supervisor.start(restart: atom) do [Supervisor.worker { spawnFn }] end` — `Supervisor.supervisor(restart: atom) do [...] end` nests
 
 ### 23.18 AST (Introspection)
 

@@ -1,5 +1,5 @@
 %% Kex.Intrinsic.Supervisor — the prelude's `Supervisor.start(restart:)`,
-%% nested `supervisor(restart:)` and `worker { ... }`.
+%% `Supervisor.supervisor(restart:)` and `Supervisor.worker { ... }`.
 -module(kex_intrinsic_supervisor).
 -export([start/2, nested/2, worker/1]).
 

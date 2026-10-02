@@ -101,7 +101,7 @@ main do
 
   # --- Supervision tree ---
   let supResult = Supervisor.start(restart: :only_crashed) do
-    worker { startCounterWorker() }
+    [Supervisor.worker { startCounterWorker() }]
   end
   match supResult do
     Ok(pid) => IO.printLine("supervisor pid: " + pid.to(String).or(""))

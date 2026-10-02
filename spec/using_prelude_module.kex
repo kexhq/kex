@@ -1,0 +1,36 @@
+# `using` a prelude module — function-scoped, `only:`, and the block form —
+# brings its functions in under their bare names on both backends. BEAM used
+# to import only modules of the program itself, so a bare call after
+# `using Task` compiled to a local call nothing defined, and failed at runtime
+# with "Undefined function".
+
+foul scoped do
+  using Task
+  sleep(1.milliseconds)
+  IO.printLine("scoped")
+end
+
+foul selected -> Float do
+  using Math, only: [pow]
+  pow(2.0, 3.0)
+end
+
+foul blockForm do
+  using Task do
+    sleep(1.milliseconds)
+  end
+  IO.printLine("block")
+end
+
+foul named? -> Bool do
+  using Process
+  register(Process.self, :spec_main)
+  whereIs(:spec_main).set?
+end
+
+main do
+  scoped()
+  IO.printLine(selected())
+  blockForm()
+  IO.printLine(named?())
+end

@@ -143,16 +143,24 @@ end
 # --------------------------------------------------------------------
 
 foul startShop do
+  # Only these two: `Supervisor.start` would shadow our own `start`.
+  using Supervisor, only: [worker, supervisor]
   Supervisor.start(restart: :only_crashed) do
-    worker { start(:metrics) { metrics(0) } }
-    supervisor(restart: :crashed_and_newer) do
-      worker { start(:database) { database([]) } }
-      worker { startCache() }
-    end
-    supervisor(restart: :all) do
-      worker { start(:sessions) { sessions([]) } }
-      worker { start(:acceptor) { acceptor({}) } }
-    end
+    [
+      worker { start(:metrics) { metrics(0) } },
+      supervisor(restart: :crashed_and_newer) do
+        [
+          worker { start(:database) { database([]) } },
+          worker { startCache() }
+        ]
+      end,
+      supervisor(restart: :all) do
+        [
+          worker { start(:sessions) { sessions([]) } },
+          worker { start(:acceptor) { acceptor({}) } }
+        ]
+      end
+    ]
   end
 end
 

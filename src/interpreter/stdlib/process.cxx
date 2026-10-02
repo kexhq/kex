@@ -698,7 +698,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     defineModule("Supervisor");
 
     // Kex.Intrinsic.Supervisor.worker(start) — the prelude's
-    // `worker { startFn() }`. Wraps a zero-arg block (expected to call
+    // `Supervisor.worker { startFn() }`. Wraps a zero-arg block (expected to call
     // `spawn` and return the child's pid) into a spec Supervisor.start can
     // both call now (to start it) and recall later (to restart it, from the
     // exact same start function).
@@ -708,7 +708,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     });
 
     // Kex.Intrinsic.Supervisor.nested(restart, children) — the prelude's
-    // `supervisor(restart:) do ... end`, a nested supervisor spec. The
+    // `Supervisor.supervisor(restart:) do [...] end`, a nested supervisor spec. The
     // interpreter's polling supervisor can't nest; Supervisor.start rejects
     // a spec carrying this tag with an Error(...).
     defineIntrinsic("Supervisor::nested", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -716,10 +716,10 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::tuple({Value::atom("supervisor"), args[1]});
     });
 
-    // Supervisor.start(restart: :only_crashed) do worker { ... } ... end —
+    // Supervisor.start(restart: :only_crashed) do [Supervisor.worker { ... }] end —
     // see Scheduler::startSupervisor for the actual poll/restart loop. The
     // arguments are the `restart:` atom and the children block (a zero-arg
-    // FunctionValue collecting the specs into a list), taken by kind rather
+    // FunctionValue returning the list of specs), taken by kind rather
     // than position: the public fallback sees them in call order (named args
     // land positionally-appended — see `await`'s comment on why), the
     // intrinsic in the prelude wrapper's. Walker-native for the same reason

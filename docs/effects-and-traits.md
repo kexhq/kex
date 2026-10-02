@@ -26,7 +26,7 @@ end
 
 foul startApp do
   Supervisor.start(restart: :only_crashed) do
-    worker { startDatabase() }
+    [Supervisor.worker { startDatabase() }]
   end
 end
 
