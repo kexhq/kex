@@ -2,7 +2,7 @@
 
 ## Primitives
 
-- `Integer` — arbitrary-precision integer (backed by GMP); the default for plain integer literals. `Int` is an alias for `Integer`; use `Int64` for a fixed-width 64-bit integer.
+- `Integer` — arbitrary-precision integer; the default for plain integer literals. `Int` is an alias for `Integer`; use `Int64` for a fixed-width 64-bit integer.
 - `Float` — 64-bit floating point (the default for a plain float literal, e.g. `3.14`)
 - `String` — UTF-8 string
 - `Char` — a single character, written `'a'`, `'\n'`, etc.
@@ -38,23 +38,26 @@ signature to see whether a conversion needs optional handling:
 "x".to(Integer)              # None      : Integer?
 ```
 
-Concatenation is the exception, and deliberately so: `+` asks "what text does this contribute", which is a different question from "is this the same type".
+`+` can concatenate characters and strings without an explicit conversion:
 
 ```kex
 'a' + 'b'                    # "ab"  — two Chars build a String
 "ab" + 'c'                   # "abc"
 ```
 
-`String` owns its own sequence methods rather than borrowing List's, so `"hi".first`, `.take`, `.drop`, `.sort` and friends work directly and answer in String's terms — `take` returns a `String`, `first` returns a `Char?`. Reach for `chars` when you want list semantics instead.
+Strings support sequence methods such as `first`, `take`, `drop`, and `sort`.
+`take` returns a `String`; `first` returns a `Char?`. Use `chars` to work with
+a list of characters instead.
 
-`map` is the one place the two readings genuinely differ, so they get separate names: `map` is `Enumerable`'s and collects into a list, while `mapChars` is String-in/String-out.
+`map` collects its results into a list. Use `mapChars` when the callback returns
+characters and you want a string:
 
 ```kex
 "hi".map(&.upperCase)        # ['H', 'I'] : [Char]
 "hi".mapChars(&.upperCase)   # "HI"       : String
 "hi".map(&.codepoint)        # [104, 105] : [Integer]
 ```
- The distinction is load-bearing for the operations whose meaning differs between the two:
+`contains?` searches for a substring on a string and an element on a list:
 
 ```kex
 "hello".contains?("ell")         # true  — String: substring

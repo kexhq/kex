@@ -280,6 +280,12 @@ sticks.
   platforms still finish building (the matrix does not cancel siblings, so one
   run shows every failure), but `publish` needs the whole `build` job, and a
   release missing a platform is not a release.
+- **A BEAM spec timed out twice** — `make spec-beam` retries a timed-out spec
+  once to handle an intermittent startup or shutdown stall. A second timeout
+  fails even when the program printed the expected output. Reproduce the
+  named spec with `make -o build spec-beam BEAM_SPEC_FILES=spec/list_extras.kex`
+  on the failing platform; `BEAM_SPEC_TIMEOUT` sets the deadline in seconds
+  (default: 30). Output mismatches are not retried.
 - **`formula` failed** — the release itself is complete; only the tap is
   behind. Re-running updates the same pull request rather than opening another.
 - **`npm` failed** — the release itself is complete; only the npm package is

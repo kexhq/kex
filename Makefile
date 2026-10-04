@@ -27,6 +27,11 @@ TIMEOUT_CMD := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/
 # catch a HUNG backend, so it can be generous.
 TIMEOUT_SPEC := $(if $(TIMEOUT_CMD),$(TIMEOUT_CMD) 30,)
 TIMEOUT_SUITE := $(if $(TIMEOUT_CMD),$(TIMEOUT_CMD) 90,)
+BEAM_SPEC_TIMEOUT ?= 30
+# A timed-out VM gets one fresh run; a second timeout fails regardless of output.
+# Kill after five more seconds if it does not respond to TERM.
+TIMEOUT_BEAM_SPEC := $(if $(TIMEOUT_CMD),$(TIMEOUT_CMD) --kill-after=5 $(BEAM_SPEC_TIMEOUT),)
+BEAM_SPEC_FILES ?= $(wildcard spec/*.kex)
 
 help:
 	@echo "Kex Language Compiler"
@@ -126,7 +131,10 @@ test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-ex
           spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
 
 # Harness and generator regressions, including simulated crashes/timeouts.
-.PHONY: test-fuzz
+.PHONY: test-fuzz test-spec-beam-runner
+test-spec-beam-runner:
+	@python3 tools/test-spec-beam-runner.py
+
 test-fuzz: build
 	@"$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
 	@python3 tools/test-fuzz.py "$(KEX)"
@@ -284,13 +292,24 @@ spec-beam: build
 	@failed=0; passed=0; \
 	beam_out=$$(mktemp); beam_err=$$(mktemp); \
 	trap 'rm -f "$$beam_out" "$$beam_err"' EXIT INT TERM; \
-	for f in spec/*.kex; do \
+	for f in $(BEAM_SPEC_FILES); do \
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: skip-beam" "$$f" 2>/dev/null; then continue; fi; \
-		$(TIMEOUT_SPEC) $(KEX) --run --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
+		rc=0; \
+		$(TIMEOUT_BEAM_SPEC) $(KEX) --run --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || rc=$$?; \
+		if [ $$rc -eq 124 ] || [ $$rc -eq 137 ]; then \
+			printf "  Retrying %s after a timeout\n" "$$(basename $$f)"; \
+			rc=0; \
+			$(TIMEOUT_BEAM_SPEC) $(KEX) --run --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || rc=$$?; \
+		fi; \
+		if [ $$rc -eq 124 ] || [ $$rc -eq 137 ]; then \
+			printf "  \033[31m✗\033[0m %s (BEAM timed out twice)\n" "$$(basename $$f)"; \
+			failed=$$((failed + 1)); \
+			continue; \
+		fi; \
 		actual=$$(cat "$$beam_out" "$$beam_err"); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
