@@ -212,14 +212,6 @@ module Kex do
     #
     # This is what +kex --version+ and the REPL banner print.
     #
-    # `to(String)`: the language's conversion protocol, and what this
-    # should really be: is deliberately NOT defined here: a second
-    # `to(String)` implementation anywhere in the prelude breaks
-    # type-directed `to` dispatch for every prelude type on BEAM, so adding
-    # one here silently broke `3.kilowatt.to(String)`. Pinned by
-    # spec/prelude_to_string_dispatch.kex; restore this as `to(String)` once
-    # that dispatcher is fixed.
-    #
     # @return [String] the full version string
     #
     # @example
@@ -256,8 +248,7 @@ module Kex do
   # For a program that decides at run time what code it needs: a site
   # generator rendering a theme's templates, a plugin host. Compile the source
   # with `kex --compile -o <dir>` once, then load the `.beam` and call it as
-  # often as needed, without starting another VM for every call
-  # (kexhq/kex#399).
+  # often as needed in the same running VM.
   #
   # Every entry module is named after its file (`kex_<stem>.beam` for
   # `<stem>.kex`), and so is everything declared at the top level of that
@@ -384,11 +375,8 @@ end
 # Returns the pretty-printed representation of any value as a STRING: the
 # same form the REPL echoes. Universal: reachable on every type through UFCS.
 #
-# Named apart from `inspect`, which prints and returns its INPUT so it can be
-# dropped into a pipeline. Both spellings used to be called `inspect`, and
-# which one a call reached depended on whether it was written `x.inspect` or
-# `IO.inspect(x)`, so `[1, 2].inspect.count` answered 24, the length of the
-# rendered string, rather than 2.
+# Use +inspected+ to obtain text, and +IO.inspect+ to print a value and
+# return it unchanged in a pipeline.
 #
 # @param value [A] any value
 # @return [String] its rendered form

@@ -256,6 +256,22 @@ describe("Tey.Docgen.Index.upsertVersion") do
 end
 
 describe("Tey.Docgen.Rdoc.parseDoc") do
+  it("preserves bullet lists and their continuation lines") do
+    let doc = parseDoc("Choose:\n\n- +map+ transforms a value\n  without unwrapping it.\n- +flatMap+ flattens the result.").or(emptyDoc())
+    let html = Tey.Docgen.Html.plainDocHtml(doc)
+    assert(html.contains?("<ul>"))
+    assert(html.contains?("<li><code>map</code> transforms a value without unwrapping it.</li>"))
+    assert(html.contains?("<li><code>flatMap</code> flattens the result.</li>"))
+  end
+
+  it("keeps directive descriptions and their continuation lines") do
+    let doc = parseDoc("Reads.\n\n@param path [String] the +path+\n  to read\n@return [String] the text\n  without a newline\n@deprecated Use +read+ instead.\n  It handles errors.").or(emptyDoc())
+    Assert.equal(doc.params.first.try.description, "the `path` to read")
+    Assert.equal(doc.returns.try.description, "the text without a newline")
+    Assert.equal(doc.deprecated, Just("Use `read` instead. It handles errors."))
+    assert(Tey.Docgen.Html.deprecatedHtml(doc).contains?("<code>read</code>"))
+  end
+
   it("parses consecutive @param lines as separate parameters") do
     # The Bits module's own shape: directives on consecutive lines, no blank
     # line between them — each must start its own paragraph or the second
@@ -403,5 +419,26 @@ describe("Tey.Docgen.Extract receiver methods") do
   it("continues to treat module-level bindings as constants") do
     let body = [Kex.AST.FunctionDef(aBinding("answer", false))]
     Assert.equal(functionEntries(body, "Example", false).count, 0)
+  end
+end
+
+describe("Tey.Docgen.Html reference cards") do
+  it("renders code markup and escapes HTML in module summaries") do
+    let entry = ModuleIndexEntry {
+      qualifiedName: "Sample", summary: "Use `Sample` with <text>.",
+      urlPath: "sample", members: []
+    }
+    let html = Tey.Docgen.Html.moduleCard(entry, true)
+    assert(html.contains?("<code>Sample</code>"))
+    assert(html.contains?("&lt;text&gt;"))
+  end
+
+  it("omits repeated namespace cards while keeping their child modules") do
+    let model = aModel([], [
+      aPage([aModule("Data", "Data", [aModule("Queue", "Data.Queue", [])])], "queue"),
+      aPage([aModule("Data", "Data", [aModule("Stack", "Data.Stack", [])])], "stack")
+    ])
+    let indexed = PackageModel { ...model, modules: buildModules(model.pages) }
+    Assert.equal(Tey.Docgen.Html.cardModules(indexed).map { |m| m.qualifiedName }, ["Data.Queue", "Data.Stack"])
   end
 end

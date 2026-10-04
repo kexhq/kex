@@ -128,7 +128,12 @@ module Tey.Docgen.Html do
   # Float: listing them beside `Net` and `FS` made the index read as if the
   # stdlib had a dozen integer libraries. They are on their file's page.
   foul cardModules(model: PackageModel) -> [Tey.Docgen.Model.ModuleIndexEntry] do
-    return model.modules.reject { |m| constantsOnly?(model, m) }
+    return model.modules.reject { |m|
+      let declarations = model.modules.count { |other|
+        other.qualifiedName == m.qualifiedName
+      }
+      constantsOnly?(model, m) || declarations > 1
+    }
   end
 
   foul constantsOnly?(model: PackageModel, m: Tey.Docgen.Model.ModuleIndexEntry) -> Bool do
@@ -593,7 +598,7 @@ module Tey.Docgen.Html do
     let summary = if m.summary.empty?
       ""
     else
-      "<span class=\"card-meta\">${esc(m.summary)}</span>"
+      "<span class=\"card-meta\">${inlineCode(m.summary)}</span>"
     end
     return "<a class=\"card\" href=\"${href}\"><span class=\"card-title\">${esc(m.qualifiedName)}</span>${summary}</a>"
   end
@@ -1211,7 +1216,7 @@ module Tey.Docgen.Html do
 
   foul deprecatedHtml(doc: Doc) -> String do
     match doc.deprecated do
-      Just(msg) => "<p class=\"deprecated\"><strong>Deprecated.</strong> ${esc(msg)}</p>\n"
+      Just(msg) => "<p class=\"deprecated\"><strong>Deprecated.</strong> ${inlineCode(msg)}</p>\n"
       None => ""
     end
   end

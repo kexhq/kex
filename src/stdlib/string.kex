@@ -493,11 +493,6 @@ make String, implement: Enumerable, Foldable do
   #
   # @example
   #   "hi".split   # => ["h", "i"]
-  # Separator-less: one part per character, as the example above shows. Only
-  # the intrinsic had this form, so the walker answered `"hi".split` with
-  # "'this' used outside of a method context" while BEAM returned the parts.
-  # Declared BEFORE the separator form, as `sort` is in list.kex: the walker
-  # resolves a no-argument call against the first clause of that name.
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 
@@ -701,24 +696,6 @@ make String, implement: Enumerable, Foldable do
   #   "the quick brown fox".split(" ").map(~capitalize).join(" ")
   #   # => "The Quick Brown Fox"
   capitalize :> String
-  # Destructures the characters rather than using `"${at(0).upperCase}${rest}"`:
-  # `rest` returns an empty LIST instead of an empty String when nothing
-  # remains, so that spelling gave "A[]" for "a".capitalize on the BEAM
-  # backend. See the note on `rest`: the bug is there, not here.
-  # The natural spelling is a RECEIVER pattern, matching on `this` directly:
-  #
-  #     let capitalize(@[])       = ""
-  #     let capitalize(@[c | cs]) = "${c.upperCase}${cs.lowerCase}"
-  #
-  # It parses and works in the interpreter, but the backends disagree on what
-  # the tail binds to: a String in the interpreter, a [Char] on BEAM.
-  #
-  # Re-encoding the BEAM side to a binary looks like the fix and is NOT: the
-  # `[Char]`-is-String equivalence is load-bearing for composition. Making
-  # `filter` hand back a binary breaks `["hello","world"].flatMap { |s|
-  # s.filter(~alpha?) }` (spec/list_hof.kex) with a badarg, because flatMap
-  # needs a list to flatten. Any real fix has to keep both readings working.
-  # Until then `chars` is explicit on both backends.
   let capitalize do
     match this.chars do
       []       => ""

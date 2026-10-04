@@ -27,20 +27,8 @@
 # Reach for +Set+ when you will read the elements back out, and for
 # +UnorderedSet+ when the set exists to answer +contains?+ quickly.
 #
-# +==+ between two sets needs no overload of its own: each flavour keeps its
-# backing canonical (sorted and duplicate free, or a map) so comparing the
-# records structurally already IS set equality.
-#
-# Both wrap structures the runtime already has (a list and a map), so no set
-# is opaque: `.items` is always a real list you can hand to anything.
-#
-# Those two backings are also the ones the BEAM's own set libraries use: a
-# `Set` is laid out exactly like an `ordsets` term and an `UnorderedSet`
-# exactly like a `sets` v2 term, so the operations here can be routed to the
-# native BIFs later without changing what a set IS. What rules out adopting
-# `gb_sets` instead is the other backend: a tree-walk interpreter cannot
-# produce an opaque BEAM term, and a set that only one backend can build is
-# not a set the prelude can offer.
+# Sets compare by their elements. Use +items+ to obtain a list;
+# +UnorderedSet.items+ has no guaranteed order.
 module Data
 
 # A set whose elements are kept sorted and duplicate free.

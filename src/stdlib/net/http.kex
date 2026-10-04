@@ -3,7 +3,7 @@
 #
 #   using Net.HTTP
 #
-#   let response = HTTP.get("https://example.test/").try
+#   let response = Net.HTTP.HTTP.get("https://example.test/").try
 #   response.status.success?   # => true
 #
 # For connection reuse and statistics, own a client explicitly:
@@ -215,7 +215,10 @@ end
 # The empty starting point for an immutable route declaration chain.
 module Router do
   # @return [Router] a router with no routes
-  # @example +Router.build.get("/health", { |request, context| Response.text(200, "ok") })+
+  # @example Build a health endpoint
+  #   Router.build.get("/health", do |request, context|
+  #     Response.text(200, "ok")
+  #   end)
   build : Router
   let build = Router { routes: [] }
 end
@@ -436,11 +439,12 @@ module HTTP do
   #
   # @example A one-off authenticated request in a command-line tool
   #   let headers = Headers.empty.add("Authorization", "Bearer ${token}").try
-  #   HTTP.request("GET", url, headers).try
+  #   Net.HTTP.HTTP.request("GET", url, headers).try
   request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
   # Sends one stateless buffered GET.
-  # @example +HTTP.get("https://example.test/").try+
+  # @example
+  #   Net.HTTP.HTTP.get("https://example.test/").try
   get : String -> Result<Response<Binary>, NetError>
   let get(url) = Kex.Intrinsic.NetHTTP.get(url)
   # Sends one stateless DELETE with an empty body.

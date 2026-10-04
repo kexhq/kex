@@ -77,9 +77,8 @@ module FS do
   #
   # A capability: every member reaches the real filesystem, so a test can
   # replace the whole thing for a lexical region with `with FS.File = ...`
-  # instead of mutating global mock state (kexhq/kex#143). The boundary is here
-  # rather than on `FS`, because `FS.Path` below is pure string work with no
-  # implementation to substitute.
+  # to test file operations without touching the filesystem. +FS.Path+
+  # operations only manipulate path strings.
   capability File do
     # Opens +path+ and returns a +FileHandle+ for it.
     #
@@ -452,11 +451,6 @@ module FS do
     #
     # @example Reporting a file unambiguously
     #   IO.printError("failed: ${FS.File.absolute(path).or(path)}")
-    # Path manipulation lives in FS.Path: `basename`, `dirname`,
-    # `extension` and `join` used to be here too, but a name cannot sit in
-    # both modules: FilePath IS String, so two same-named receiver functions
-    # on it are indistinguishable at every call site. `absolute` stays
-    # because it is not lexical: it asks the process where it is.
     absolute : FilePath -> String?
     foul absolute(path) = Kex.Intrinsic.File.absolute(path)
 

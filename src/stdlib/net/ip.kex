@@ -30,7 +30,8 @@ module Address do
   # Parses IPv4 or IPv6 text and canonicalizes its spelling.
   # @param text [String] an IPv4 dotted quad or IPv6 address
   # @return [Result<Address, NetError>] the address, or +Parse+
-  # @example +Address.parse("2001:db8::42").try.string+.
+  # @example Canonicalize an IPv6 address
+  #   Address.parse("2001:db8::42").try.string   # => "2001:db8::42"
   parse : String -> Result<Address, NetError>
   let parse(text) = Kex.Intrinsic.NetIP.address(text)
 end
@@ -40,7 +41,8 @@ module Network do
   # Parses a CIDR and clears host bits.
   # @param text [String] an address followed by a prefix length
   # @return [Result<Network, NetError>] the network, or +Parse+
-  # @example +Network.parse("192.0.2.9/24").try.string+ is +"192.0.2.0/24"+.
+  # @example Normalize a host address to its network
+  #   Network.parse("192.0.2.9/24").try.string   # => "192.0.2.0/24"
   parse : String -> Result<Network, NetError>
   let parse(text) = Kex.Intrinsic.NetIP.network(text)
 end

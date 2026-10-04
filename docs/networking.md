@@ -164,7 +164,7 @@ by the name as written.
 
 ## Buffered HTTP/1.1
 
-`HTTP.get` and the other `HTTP` module helpers create stateless requests. Use an
+`Net.HTTP.HTTP.get` and the other `HTTP` module helpers create stateless requests. Use an
 explicit `Client` to own connection reuse, statistics, and close behavior:
 
 ```kex
@@ -196,8 +196,9 @@ shutdown:
 using Net.HTTP
 using Net.Socket
 
-let health(request: Request<Binary>, context: Context) -> Response<Binary> =
-  Response.text(200, "ok")
+foul health(request: Request<Binary>, context: Context) -> Response<Binary> do
+  return Response.text(200, "ok")
+end
 
 let router = Router.build.get("/health", ~health)
 let server = Server.start(
@@ -311,7 +312,7 @@ let schedule = Retry.Schedule {
   maximumDelay: 2.seconds, maximumTotalDelay: Just(5.seconds), jitter: 0.25
 }
 let result = Retry.run(schedule: schedule) do
-  HTTP.get("https://api.example.com/inventory")
+  Net.HTTP.HTTP.get("https://api.example.com/inventory")
 end
 ```
 

@@ -1,123 +1,103 @@
-# Streams, Feeds, and Enumerable
+# Streams, feeds, and collections
 
-## Enumerable Hierarchy
+Use a list for values already in memory, a range for consecutive integers or
+characters, a stream for a lazy sequence you may revisit, and a feed for a
+source that is consumed once.
 
-`Range` and `[A]` (lists) implement the `Enumerable` trait —
-structural trait membership via `make implement:`, not nominal type
-inheritance (see `docs/types.md`'s Type Hierarchy / Enumerable Hierarchy
-sections for the full pattern):
+## Collection traversal
 
-```kex
-trait Enumerable do
-  each : (This, A -> Void) -> Void
-end
-
-make Range implement: Enumerable do
-  let each(f) = ...
-end
-
-make [A] implement: Enumerable do
-  let each(f) = ...
-end
-```
-
-`Stream` and `Feed` are not `Enumerable`: reducing an unbounded stream need
-not terminate, and a feed can only be walked once. Both provide their own
-`map`, `filter`, `take` and `each`.
-
-Functions that accept any `Enumerable` work with all of these — the
-parameter is constrained by the trait, not a concrete type:
+Lists, strings, maps, and ranges implement `Foldable` and `Enumerable` by
+providing `reduce`. `Foldable` supplies traversal methods such as `each`,
+`find`, `all?`, and `any?`. `Enumerable` supplies transformations such as
+`map`, `filter`, and `flatMap`.
 
 ```kex
-let sumAll(xs: Enumerable) -> Int = ...
+[1, 2, 3].reduce(0) { |sum, n| sum + n }   # => 6
+[1, 2, 3].map { |n| n * 2 }               # => [2, 4, 6]
+[1, 2, 3].filter(~even?)                   # => [2]
 ```
 
-## Stream — Pure and Lazy
+Streams and feeds provide their own traversal methods. They do not implement
+these collection traits: a stream may be infinite, and a feed changes as it
+is read.
 
-Immutable, reusable lazy sequences created with `Stream.Sequence(from:, step_fn)`:
+## Streams: lazy and reusable
+
+`Stream.Sequence` creates an infinite sequence from a starting value and a
+step function. `map`, `filter`, and `drop` return streams; `take` produces a
+list with at most the requested number of elements.
 
 ```kex
 let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
-let evens = Stream.Sequence(from: 0) { |n| n + 2 }
-let powers = Stream.Sequence(from: 1) { |n| n * 2 }
+naturals.take(5)                         # => [0, 1, 2, 3, 4]
+naturals.map { |n| n * n }.take(4)       # => [0, 1, 4, 9]
+naturals.filter(~even?).take(3)          # => [0, 2, 4]
+naturals.drop(5).take(3)                 # => [5, 6, 7]
+naturals.take(3)                         # => [0, 1, 2]
 ```
 
-A stream remembers the elements it produces, so walking one twice costs one
-walk and `take(n)` is n steps rather than n².
+A stream remembers the elements already read, so reading it again starts at
+the same position. Keeping the start of a stream also keeps its cached values
+in memory. A filter may never produce a result if an infinite source has no
+matching elements.
 
-Taking from a stream materializes elements into a list:
+## Ranges
+
+Integer and character ranges include both endpoints. Their collection methods
+materialize the elements, so use care with large ranges. `min`, `max`, and
+`first` return optionals because a range can be empty.
 
 ```kex
-let first_ten = naturals.take(10)   # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-let from5 = naturals.drop(5).take(5) # [5, 6, 7, 8, 9]
-
-# Streams are reusable — naturals hasn't changed
-let another_ten = naturals.take(10)
+let numbers = 1..4
+numbers.items                  # => [1, 2, 3, 4]
+numbers.min                    # => Just(1)
+numbers.max                    # => Just(4)
+numbers.map { |n| n * 2 }      # => [2, 4, 6, 8]
+(4..1).items                    # => []
+('a'..'c').items                # => ['a', 'b', 'c']
 ```
 
-## Range
+Float ranges describe continuous bounds and cannot be enumerated with these
+methods. To check continuous bounds, compare with both endpoints explicitly.
 
-`1..10` creates a `Range<Int>`:
+## Feeds: consumed once
+
+Reading a feed advances its cursor. `Feed.Elements` lets you try that behavior
+without opening a file:
 
 ```kex
-let r = 1..10
-r.min    # 1
-r.max    # 10
-r.map { |x| x * 2 }
+let feed = Feed.Elements(["one", "two", "three"])
+feed.take(2)   # => ["one", "two"]
+feed.take(2)   # => ["three"]
+feed.take(2)   # => []
+feed.spent?    # => true
 ```
 
-## Feed — One-Shot and Stateful
+`map`, `filter`, and `drop` share the source cursor. Reading either the original
+feed or a derived feed consumes that source. These transformations allow a
+single pass without retaining every element.
 
-For an IO resource that can only be read once. `FS.File.feed` and
-`handle.feed` answer one:
-
-```kex
-let lines = FS.File.feed("big.txt").or(Feed.empty)
-```
-
-Feeds are consumed — once you read from them, the data is gone:
+For files, `FS.File.feed` returns `None` when the source cannot be opened.
+Handle that case explicitly rather than treating a missing file as empty:
 
 ```kex
+using FS
+
 main do
-  let feed = FS.File.feed("log.txt").or(Feed.empty)
-  feed.each do |line|
-    IO.printLine(line) if line.contains?("ERROR")
+  match FS.File.feed("app.log") do
+    Just(lines) => do
+      let errors = lines.filter { |line| line.contains?("ERROR") }.take(10)
+      errors.each { |line| IO.printLine(line) }
+    end
+    None => IO.printError("Could not open app.log")
   end
 end
 ```
 
-Taking twice walks forward rather than repeating, which is the whole
-difference from `Stream`:
+`collect` drains the remaining feed into a list. Use it only when the source
+is finite and fits in memory. `toStream` makes the values read from a feed
+replayable by caching them. `Stream.toFeed` gives a consuming cursor over a
+stream; release references to the stream's start when you do not need replay.
 
-```kex
-let feed = FS.File.feed("log.txt").or(Feed.empty)
-feed.take(2)   # the first two lines
-feed.take(2)   # the NEXT two
-feed.spent?    # true once the source has run out
-```
-
-`map`, `filter` and `drop` answer a feed over the same cursor, so a pipeline
-is a single pass and a file of any size costs the same memory to walk:
-
-```kex
-FS.File.feed("app.log").or(Feed.empty)
-  .filter { |line| line.contains?("ERROR") }
-  .take(10)
-```
-
-`collect` drains a feed into a list, and `toStream` answers a `Stream` that
-remembers what it reads — replay, at the cost of holding it. Going the other
-way, `Stream.toFeed` walks a long stream without retaining its start.
-
-Feed methods are `let` rather than `foul`, because a feed over anything
-outside the program can only come from a foul call (`FS.File.feed`,
-`handle.feed`) — the effect is tracked where it enters.
-
-## Summary
-
-| Type | Pure? | Reusable? | Use Case |
-|------|-------|-----------|----------|
-| `Stream<A>` | Yes | Yes | Computed sequences, infinite lists |
-| `Range<A>` | Yes | Yes | Numeric ranges, iteration |
-| `[A]` | Yes | Yes | Materialized collections |
-| `Feed<A>` | No | No | IO resources larger than memory, event sources |
+Opening a file-backed feed is `foul`. Consuming an existing feed uses ordinary
+methods, but still advances its cursor.
