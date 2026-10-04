@@ -164,7 +164,7 @@ by the name as written.
 
 ## Buffered HTTP/1.1
 
-`Net.HTTP.HTTP.get` and the other `HTTP` module helpers create stateless requests. Use an
+`HTTP.get` and the other `HTTP` module helpers create stateless requests. Use an
 explicit `Client` to own connection reuse, statistics, and close behavior:
 
 ```kex
@@ -312,7 +312,7 @@ let schedule = Retry.Schedule {
   maximumDelay: 2.seconds, maximumTotalDelay: Just(5.seconds), jitter: 0.25
 }
 let result = Retry.run(schedule: schedule) do
-  Net.HTTP.HTTP.get("https://api.example.com/inventory")
+  HTTP.get("https://api.example.com/inventory")
 end
 ```
 

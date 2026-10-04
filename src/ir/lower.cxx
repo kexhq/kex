@@ -3,6 +3,7 @@
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
+#include "../common/named_arguments.hxx"
 #include "../lexer/token.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -602,6 +603,7 @@ struct Lowering {
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
     std::unordered_map<std::string, std::vector<std::string>> fnParamNames;
+    std::unordered_map<std::string, std::vector<const ast::FunctionClause*>> fnNamedClauses;
     // Every parameter name ANY overload of that function declares. fnParamNames
     // keeps one clause set, which is all the positional reordering needs but
     // not enough to judge a label unknown: `render(text:)` is valid for the
@@ -2265,15 +2267,49 @@ struct Lowering {
         return wrapLets(binds, std::move(ex));
     }
 
+    template <typename NamedArgs>
+    auto namedClause(const std::string& name, const NamedArgs& named,
+                     std::size_t positionalCount) -> const ast::FunctionClause* {
+        auto found = fnNamedClauses.find(name);
+        if (found == fnNamedClauses.end()) return nullptr;
+        std::vector<std::string> labels;
+        for (const auto& [label, _] : named) labels.push_back(label);
+        for (const auto* clause : found->second)
+            if (namedArgumentsFit(*clause, labels, positionalCount)) return clause;
+        throw LowerError("IR lower: no overload of " + name +
+                         " accepts these named arguments and argument count");
+    }
+
+    auto clauseNames(const ast::FunctionClause* clause,
+                     const std::vector<std::string>& fallback) -> std::vector<std::string> {
+        if (!clause) return fallback;
+        std::vector<std::string> names;
+        for (const auto& param : clause->params)
+            names.push_back(param.name.value_or(""));
+        return names;
+    }
+
     auto fillDefaultSlots(const std::string& name,
                           std::vector<ExprPtr>& slots,
-                          std::vector<Binding>& binds) -> void {
+                          std::vector<Binding>& binds,
+                          const ast::FunctionClause* clause = nullptr) -> void {
         auto defaults = fnDefaults.find(name);
         auto names = fnParamNames.find(name);
-        if (defaults == fnDefaults.end() || names == fnParamNames.end()) {
-            for (auto& slot : slots)
-                if (!slot) slot = lit(LitKind::None, "none");
-            return;
+        std::vector<const ast::ExprPtr*> selectedDefaults;
+        std::vector<std::string> selectedNames;
+        if (clause) {
+            for (const auto& param : clause->params) {
+                selectedDefaults.push_back(param.defaultValue ? &*param.defaultValue : nullptr);
+                selectedNames.push_back(param.name.value_or(""));
+            }
+        } else {
+            if (defaults == fnDefaults.end() || names == fnParamNames.end()) {
+                for (auto& slot : slots)
+                    if (!slot) slot = lit(LitKind::None, "none");
+                return;
+            }
+            selectedDefaults = defaults->second;
+            selectedNames = names->second;
         }
         const auto savedSubst = subst;
         const auto savedModule = currentModulePath;
@@ -2281,8 +2317,8 @@ struct Lowering {
             currentModulePath = name.substr(0, dot);
         for (size_t i = 0; i < slots.size(); ++i) {
             if (!slots[i]) {
-                if (i < defaults->second.size() && defaults->second[i])
-                    slots[i] = atomize(*defaults->second[i], binds);
+                if (i < selectedDefaults.size() && selectedDefaults[i])
+                    slots[i] = atomize(*selectedDefaults[i], binds);
                 else
                     slots[i] = lit(LitKind::None, "none");
             }
@@ -2290,8 +2326,8 @@ struct Lowering {
             const auto bound = fresh("DefaultArg");
             binds.push_back({bound, std::move(slots[i])});
             slots[i] = var(bound);
-            if (i < names->second.size() && !names->second[i].empty())
-                subst[names->second[i]] = bound;
+            if (i < selectedNames.size() && !selectedNames[i].empty())
+                subst[selectedNames[i]] = bound;
         }
         subst = savedSubst;
         currentModulePath = savedModule;
@@ -2406,7 +2442,9 @@ struct Lowering {
                 for (const auto& [label, _] : n.namedArgs)
                     if (!declared->second.count(label))
                         return unknownNamedArgument(n.name, label);
-            const auto& pnames = it->second;
+            const auto* selected = namedClause(
+                it->first, n.namedArgs, n.args.size() + bool(n.block));
+            const auto pnames = clauseNames(selected, it->second);
             std::vector<Binding> binds;
             std::vector<ExprPtr> slots(pnames.size());
             for (const auto& [an, av] : n.namedArgs)
@@ -2421,7 +2459,7 @@ struct Lowering {
                 if (next >= slots.size()) break;
                 slots[next] = std::move(p);
             }
-            fillDefaultSlots(n.name, slots, binds);
+            fillDefaultSlots(it->first, slots, binds, selected);
             auto ex = std::make_unique<Expr>();
             ex->node = localCall(emittedName, std::move(slots));
             return wrapLets(binds, std::move(ex));
@@ -3688,7 +3726,9 @@ struct Lowering {
                             auto pit = fnParamNames.find(qualKey);
                             if (pit == fnParamNames.end())
                                 throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
-                            const auto& pnames = pit->second;
+                            const auto* selected = namedClause(
+                                qualKey, n.namedArgs, n.args.size() + bool(n.block));
+                            const auto pnames = clauseNames(selected, pit->second);
                             std::vector<ExprPtr> slots(pnames.size());
                             for (const auto& [an, av] : n.namedArgs)
                                 for (size_t i = 0; i < pnames.size(); i++)
@@ -3702,7 +3742,7 @@ struct Lowering {
                                 if (next >= slots.size()) break;
                                 slots[next] = std::move(p);
                             }
-                            fillDefaultSlots(qualKey, slots, binds);
+                            fillDefaultSlots(qualKey, slots, binds, selected);
                             int ar = static_cast<int>(slots.size());
                             return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                         }
@@ -3857,7 +3897,9 @@ struct Lowering {
                     auto pit = fnParamNames.find(qualKey);
                     if (pit == fnParamNames.end())
                         throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
-                    const auto& pnames = pit->second;
+                    const auto* selected = namedClause(
+                        qualKey, n.namedArgs, n.args.size() + bool(n.block));
+                    const auto pnames = clauseNames(selected, pit->second);
                     std::vector<ExprPtr> slots(pnames.size());
                     for (const auto& [an, av] : n.namedArgs)
                         for (size_t i = 0; i < pnames.size(); i++)
@@ -3871,7 +3913,7 @@ struct Lowering {
                         if (next >= slots.size()) break;
                         slots[next] = std::move(p);
                     }
-                    fillDefaultSlots(qualKey, slots, binds);
+                    fillDefaultSlots(qualKey, slots, binds, selected);
                     int ar = static_cast<int>(slots.size());
                     return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                 }
@@ -8905,6 +8947,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.variantOwner[variant.tag] = variant.owner;
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
+        for (const auto& clause : fd.clauses)
+            L.fnNamedClauses[fd.name].push_back(&clause);
         definedFns.insert(fd.name);
         if (fd.isFoul) L.foulFns.insert(fd.name);
         if (!fd.clauses.empty()) {
@@ -9155,6 +9199,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 L.pureFnArities.insert(emitted + "/" + arity);
             }
             L.moduleFunctions[path + "." + fd->name] = emitted;
+            for (const auto& clause : fd->clauses)
+                L.fnNamedClauses[path + "." + fd->name].push_back(&clause);
             if (!fd->clauses.empty() && fd->clauses[0].params.empty()) {
                 L.moduleZeroArgFns.insert(path + "." + fd->name);
                 L.emittedModuleZeroArg.insert(emitted);

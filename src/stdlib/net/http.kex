@@ -3,7 +3,7 @@
 #
 #   using Net.HTTP
 #
-#   let response = Net.HTTP.HTTP.get("https://example.test/").try
+#   let response = HTTP.get("https://example.test/").try
 #   response.status.success?   # => true
 #
 # For connection reuse and statistics, own a client explicitly:
@@ -439,12 +439,12 @@ module HTTP do
   #
   # @example A one-off authenticated request in a command-line tool
   #   let headers = Headers.empty.add("Authorization", "Bearer ${token}").try
-  #   Net.HTTP.HTTP.request("GET", url, headers).try
+  #   HTTP.request("GET", url, headers).try
   request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
   # Sends one stateless buffered GET.
   # @example
-  #   Net.HTTP.HTTP.get("https://example.test/").try
+  #   HTTP.get("https://example.test/").try
   get : String -> Result<Response<Binary>, NetError>
   let get(url) = Kex.Intrinsic.NetHTTP.get(url)
   # Sends one stateless DELETE with an empty body.

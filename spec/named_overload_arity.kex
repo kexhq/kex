@@ -1,0 +1,24 @@
+# A labelled call must select an overload whose required arguments are supplied.
+let greet(name: String, from: String) -> String = "two: ${name} from ${from}"
+let greet(name: String, from: String, mood: String?) -> String = "three: ${name} from ${from}"
+
+# Reversing the declaration order must make no difference.
+let reverse(name: String, from: String, mood: String?) -> String = "three: ${name} from ${from}"
+let reverse(name: String, from: String) -> String = "two: ${name} from ${from}"
+
+module Greetings do
+  let hello(name: String, from: String) -> String = "two: ${name} from ${from}"
+  let hello(name: String, from: String, mood: String?) -> String = "three: ${name} from ${from}"
+end
+
+let fallback(name: String, from: String, mood: String = "happy") -> String = "${name} from ${from}: ${mood}"
+
+main do
+  IO.printLine(greet("Ada", "Kex"))
+  IO.printLine(greet("Ada", from: "Kex"))
+  IO.printLine(greet(from: "Kex", name: "Ada"))
+  IO.printLine(greet("Ada", from: "Kex", mood: None))
+  IO.printLine(reverse("Ada", from: "Kex"))
+  IO.printLine(Greetings.hello("Ada", from: "Kex"))
+  IO.printLine(fallback("Ada", from: "Kex"))
+end

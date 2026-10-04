@@ -291,7 +291,8 @@ private:
                          std::vector<ValuePtr> boundArgs) -> ValuePtr;
     auto checkDeadline() const -> void;
     auto findNamedClause(const std::string& functionName,
-                         const NamedArgs& namedArgs) const
+                         const NamedArgs& namedArgs,
+                         std::optional<std::size_t> positionalCount = std::nullopt) const
         -> const ast::FunctionClause*;
     // The first label no clause of `functionName` declares, if any.
     auto unknownNamedArgument(const std::string& functionName,

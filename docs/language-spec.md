@@ -2045,7 +2045,7 @@ do not currently track whether a handle has been closed.
 
 ### 23.14 HTTP (`foul`)
 
-Networking is opt-in: import `Net.HTTP`. `Net.HTTP.HTTP.get(url)` returns
+Networking is opt-in: import `Net.HTTP`. `HTTP.get(url)` returns
 `Result<Response<Binary>, NetError>`. Response bodies are bytes; convert them
 with `to(String)` when expecting UTF-8 text. The validated status value is
 available as `response.status.code`.
@@ -2053,7 +2053,7 @@ available as `response.status.code`.
 ```kex
 using Net.HTTP
 
-match Net.HTTP.HTTP.get("https://example.com") do
+match HTTP.get("https://example.com") do
   Ok(response) => IO.printLine(response.status.code)
   Error(error) => IO.printError(error.message)
 end

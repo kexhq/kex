@@ -883,6 +883,51 @@ int main() {
             ));
         });
 
+        it("imports public nested modules for namespace calls", []() {
+            assertTrue(noErrors(
+                "module Protocol do\n"
+                "  module HTTP do\n"
+                "    let get(url: String) -> String = url\n"
+                "  end\n"
+                "end\n"
+                "using Protocol\n"
+                "let fetch -> String = HTTP.get(\"local\")\n"
+            ));
+        });
+
+        it("does not include a nested module excluded by using", []() {
+            assertTrue(hasError(
+                "module Protocol do\n"
+                "  module HTTP do\n"
+                "    let get(url: String) -> String = url\n"
+                "  end\n"
+                "end\n"
+                "using Protocol, except: [HTTP]\n"
+                "let fetch = HTTP.get(\"local\")\n",
+                "Unknown module"
+            ));
+        });
+
+        it("checks the signature of an imported nested module", []() {
+            assertTrue(hasError(
+                "module Protocol do\n"
+                "  module HTTP do\n"
+                "    let get(url: String) -> String = url\n"
+                "  end\n"
+                "end\n"
+                "using Protocol\n"
+                "let fetch = HTTP.get(42)\n"
+            ));
+        });
+
+        it("rejects named calls that omit a required overload argument", []() {
+            assertTrue(hasError(
+                "let greet(name: String, from: String) -> String = name\n"
+                "let greet(name: String, from: String, mood: String?) -> String = name\n"
+                "let bad = greet(\"Ada\", mood: None)\n"
+            ));
+        });
+
         it("does not treat capitalized module values as namespaces", []() {
             assertTrue(noErrors(
                 "record Temperature do\n"
