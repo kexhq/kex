@@ -12,3 +12,24 @@ describe("Tey.Cli built-in commands") do
     assert(missing.empty?, "not reserved: ${missing.join(", ")}")
   end
 end
+
+describe("Tey.Cli --no-color") do
+  it("recognises both spellings, anywhere among Tey's own arguments") do
+    assert(Tey.Cli.plain?(["--no-color", "list"]), "--no-color before the command")
+    assert(Tey.Cli.plain?(["docs", "build", "--no-color"]), "--no-color after it")
+    assert(Tey.Cli.plain?(["--no-colors", "test"]), "kex's spelling")
+    assert(!Tey.Cli.plain?(["list"]), "no flag, no change")
+  end
+
+  it("leaves a program's own flag alone, past a bare --") do
+    assert(!Tey.Cli.plain?(["run", "--", "--no-color"]), "that one is the program's")
+    Assert.equal(Tey.Cli.withoutColorFlags(["run", "--", "--no-color"]), ["run", "--", "--no-color"])
+  end
+
+  it("takes the flag out before the line is parsed") do
+    Assert.equal(Tey.Cli.withoutColorFlags(["--no-color", "docs", "build", "--out", "site"]),
+                 ["docs", "build", "--out", "site"])
+    Assert.equal(Tey.Cli.withoutColorFlags(["test", "--no-colors", "--", "--no-color"]),
+                 ["test", "--", "--no-color"])
+  end
+end

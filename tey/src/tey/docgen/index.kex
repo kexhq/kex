@@ -8,7 +8,7 @@ module Tey.Docgen.Index do
   foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
     let out = optString(parsed.values.get("out"))
     if out.empty?
-      IO.printError("docgen: --out is required")
+      IO.printError("${Console.RED}error:${Console.RESET} --out is required")
       return 1
     end
     # What docgen documents is a NAMED, VERSIONED unit. A package.kex in the
@@ -22,24 +22,24 @@ module Tey.Docgen.Index do
     let pkg = defaultPackage(optString(parsed.values.get("package")))
     let version = defaultVersion(optString(parsed.values.get("release")))
     if pkg.empty?
-      IO.printError("docgen: --package is required (no package.kex in ${FS.Directory.current} to take a name from)")
+      IO.printError("${Console.RED}error:${Console.RESET} --package is required (no package.kex in ${FS.Directory.current} to take a name from)")
       return 1
     end
     if version.empty?
-      IO.printError("docgen: --release is required (no package.kex in ${FS.Directory.current} to take a version from)")
+      IO.printError("${Console.RED}error:${Console.RESET} --release is required (no package.kex in ${FS.Directory.current} to take a version from)")
       return 1
     end
     let files = Tey.Docgen.Scan.sourceFiles(source)
     if files.empty?
-      IO.printError("docgen: no .kex files found in ${source}")
+      IO.printError("${Console.RED}error:${Console.RESET} no .kex files found in ${source}")
       return 1
     end
     let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
     let _ = FS.Directory.create(versionDir)
-    IO.printLine("docgen: ${files.count} file(s) => ${versionDir}")
+    IO.printLine("${Console.BOLD}Documenting${Console.RESET} ${files.count} file(s) ${Console.DIM}into ${versionDir}${Console.RESET}")
     let pages = buildPages(files, source)
     if pages.empty?
-      IO.printError("docgen: no files parsed successfully")
+      IO.printError("${Console.RED}error:${Console.RESET} no files parsed successfully")
       return 1
     end
     let (preludeFile, preludeNames, preludeText) = preludeInfo(source)
@@ -73,16 +73,16 @@ module Tey.Docgen.Index do
     if format == "fragments"
       let fragments = Tey.Docgen.Fragments.write(pages, versionDir, model)
       writeUnitIndexFiles(pages, model, out)
-      IO.printLine("docgen: wrote ${fragments} fragment(s), ${written} Markdown page(s), nav.json")
+      IO.printLine("${Console.GREEN}Wrote${Console.RESET} ${fragments} fragment(s), ${written} Markdown page(s), nav.json")
       return 0
     end
     if format != "site" && !format.empty?
-      IO.printError("docgen: unknown --format ${format} (site or fragments)")
+      IO.printError("${Console.RED}error:${Console.RESET} unknown --format ${format} (site or fragments)")
       return 1
     end
     writeHtml(pages, versionDir, out, model)
     writeIndexFiles(pages, model, out)
-    IO.printLine("docgen: wrote ${written} page(s), model.json and search.json")
+    IO.printLine("${Console.GREEN}Wrote${Console.RESET} ${written} page(s), model.json and search.json")
     return 0
   end
 
@@ -95,12 +95,12 @@ module Tey.Docgen.Index do
     return paths.split(",").map { |p| p.trim }.reject { |p| p.empty? }.flatMap { |path|
       match FS.File.read(path) do
         Error(_) => do
-          IO.printError("docgen: cannot read --link-model ${path}; skipped")
+          IO.printError("${Console.YELLOW}warning:${Console.RESET} cannot read --link-model ${path}; skipped")
           []
         end
         Ok(text) => match JSON.parse(text) do
           Error(_) => do
-            IO.printError("docgen: --link-model ${path} is not JSON; skipped")
+            IO.printError("${Console.YELLOW}warning:${Console.RESET} --link-model ${path} is not JSON; skipped")
             []
           end
           Ok(root) => do
@@ -143,11 +143,11 @@ module Tey.Docgen.Index do
           None => ""
         end
         let same = normalizeType(documented) == normalizeType(f.returnType)
-        (documented.empty? || f.returnType.empty? || same) then [] else ["  note: ${page.source}:${f.line} ${f.name}: @return [${documented}] but the signature returns ${f.returnType}"]
+        (documented.empty? || f.returnType.empty? || same) then [] else ["  ${Console.CYAN}note:${Console.RESET} ${page.source}:${f.line} ${f.name}: @return [${documented}] but the signature returns ${f.returnType}"]
       }
     }
     drifts.each { |line| IO.printError(line) }
-    IO.printLine("docgen: ${drifts.count} @return tag(s) disagree with their signature") if !drifts.empty?
+    IO.printLine("${Console.YELLOW}warning:${Console.RESET} ${drifts.count} @return tag(s) disagree with their signature") if !drifts.empty?
     return ()
   end
 
@@ -272,11 +272,11 @@ module Tey.Docgen.Index do
       Ok(Kex.AST.Program { items }) => do
         let header = fileHeader(FS.File.readLines(fullPath).or([]))
         let page = Tey.Docgen.Extract.pageFor(fileName, items, header)
-        IO.printLine("  ok ${fileName} (${page.entities.count} entities)")
+        IO.printLine("  ${Console.GREEN}ok${Console.RESET} ${fileName} ${Console.DIM}(${page.entities.count} entities)${Console.RESET}")
         return buildPagesLoop(rest, sourceDir, pages + [page])
       end
       Error(Kex.AST.ParseError { message: msg }) => do
-        IO.printError("  fail ${fileName}: ${msg}")
+        IO.printError("  ${Console.RED}fail${Console.RESET} ${fileName}: ${msg}")
         return buildPagesLoop(rest, sourceDir, pages)
       end
     end
@@ -306,7 +306,7 @@ module Tey.Docgen.Index do
     ensureDirectory(FS.Path.join(out, "assets"))
     let _ = FS.File.write(FS.Path.join(out, "assets/style.css"), Tey.Docgen.Css.siteCss())
     let _ = FS.File.write(FS.Path.join(out, "assets/site.js"), Tey.Docgen.Assets.siteJs())
-    IO.printLine("docgen: wrote HTML pages and assets/style.css")
+    IO.printLine("${Console.GREEN}Wrote${Console.RESET} HTML pages and assets/style.css")
     return ()
   end
 
@@ -352,7 +352,7 @@ module Tey.Docgen.Index do
     let _ = FS.File.write(FS.Path.join(out, "llms-full.txt"), llmsFullTxt(pages, model))
     let _ = FS.File.write(FS.Path.join(out, "robots.txt"), robotsTxt(model.baseUrl))
     let _ = FS.File.write(FS.Path.join(out, "sitemap.xml"), sitemapXml(pages, model))
-    IO.printLine("docgen: wrote index files")
+    IO.printLine("${Console.GREEN}Wrote${Console.RESET} index files")
     return ()
   end
 

@@ -16,6 +16,7 @@ foul parser -> OptionConfig do
   OptionParser.define("tey", "Package and Kex toolchain manager")
     .flag("help", Just('h'), "Show this help")
     .flag("version", Just('V'), "Show Tey and active Kex versions")
+    .flag("no-color", None, "Print without colors; `--no-colors` and NO_COLOR do the same")
     .flag("lib", None, "Create a library package, without being asked")
     .flag("app", None, "Create an application package, without being asked")
     .string("git", None, "Git URL for `tey add`", None, false)
@@ -181,6 +182,33 @@ end
 # to `run` as well: reporting it with the help text is the one policy every
 # tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
+  ENV.set("NO_COLOR", "1") if Tey.Cli.plain?(args)
+  return Tey.Cli.dispatchArguments(Tey.Cli.withoutColorFlags(args))
+end
+
+# Whether an argument turns colors off. `--no-colors` is how `kex` spells it,
+# and somebody switching between the two tools should not have to remember
+# which one takes the `s`.
+let colorFlag?(argument: String) -> Bool = argument == "--no-color" || argument == "--no-colors"
+
+# Whether the line asks for plain output. Only Tey's own arguments count: past
+# a bare `--` they belong to the program being run, which may well have a
+# `--no-color` of its own.
+let plain?(args: [String]) -> Bool do
+  return args.takeWhile { |argument| argument != "--" }.any? { |argument| colorFlag?(argument) }
+end
+
+# The line without the color flags, which are answered before parsing — by
+# setting NO_COLOR, the one switch `Console`, every child `kex`, and this
+# parser's own error text all read. Taking them out here rather than leaving
+# them to the parser is what makes the flag work wherever it is written:
+# `tey docs` is a passthrough command whose own parser has never heard of it.
+let withoutColorFlags(args: [String]) -> [String] do
+  let own = args.takeWhile { |argument| argument != "--" }
+  return own.filter { |argument| !colorFlag?(argument) } + args.drop(own.count)
+end
+
+foul dispatchArguments(args: [String]) -> Integer do
   Tey.Cli.relayColors
   match Tey.Cli.parser.parse(args) do
     Error(_) => do
@@ -295,7 +323,7 @@ private do
         return ()
       end
       Error(error) => do
-        IO.printError("warning: Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}")
+        IO.printError("${Console.YELLOW}warning:${Console.RESET} Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}")
         return ()
       end
     end
@@ -707,9 +735,9 @@ private do
         let alreadyInstalled = Tey.Toolchain.installed?(version)
         if Tey.Toolchain.use(version)
           if alreadyInstalled
-            IO.printLine("Using Kex ${version}")
+            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET}")
           else
-            IO.printLine("Using Kex ${version} — installed from the bundled copy")
+            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}installed from the bundled copy${Console.RESET}")
           end
           Tey.Cli.reportShim(version)
           0

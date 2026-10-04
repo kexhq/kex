@@ -17,12 +17,12 @@ module Tey.Docgen.Prose do
   foul proseCommand(parsed: OptionParser.ParsedOptions) -> Integer do
     let out = Tey.Docgen.Index.optString(parsed.values.get("out"))
     if out.empty?
-      IO.printError("docgen: --out is required")
+      IO.printError("${Console.RED}error:${Console.RESET} --out is required")
       return 1
     end
     let source = Tey.Docgen.Index.optString(parsed.values.get("source"))
     if source.empty?
-      IO.printError("docgen: --source is required (the directory of .md files)")
+      IO.printError("${Console.RED}error:${Console.RESET} --source is required (the directory of .md files)")
       return 1
     end
     # A prose tree is never a package, so neither identity can be discovered
@@ -30,26 +30,26 @@ module Tey.Docgen.Prose do
     let pkg = Tey.Docgen.Index.optString(parsed.values.get("package"))
     let version = Tey.Docgen.Index.optString(parsed.values.get("release"))
     if pkg.empty?
-      IO.printError("docgen: --package is required")
+      IO.printError("${Console.RED}error:${Console.RESET} --package is required")
       return 1
     end
     if version.empty?
-      IO.printError("docgen: --release is required")
+      IO.printError("${Console.RED}error:${Console.RESET} --release is required")
       return 1
     end
 
     let files = Tey.Docgen.Scan.proseFiles(source)
     if files.empty?
-      IO.printError("docgen: no .md files found in ${source}")
+      IO.printError("${Console.RED}error:${Console.RESET} no .md files found in ${source}")
       return 1
     end
     let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
     Tey.Docgen.Index.ensureDirectory(versionDir)
-    IO.printLine("docgen: ${files.count} prose file(s) => ${versionDir}")
+    IO.printLine("${Console.BOLD}Documenting${Console.RESET} ${files.count} prose file(s) ${Console.DIM}into ${versionDir}${Console.RESET}")
 
     let read = readPages(files, source, [])
     if read.empty?
-      IO.printError("docgen: no .md files could be read")
+      IO.printError("${Console.RED}error:${Console.RESET} no .md files could be read")
       return 1
     end
     # Frontmatter `order` is the author's running order; ties keep the
@@ -71,7 +71,7 @@ module Tey.Docgen.Prose do
     }
     writeProse(ordered, versionDir, out, model)
     Tey.Docgen.Index.writeIndexFiles(model.pages, model, out)
-    IO.printLine("docgen: wrote ${ordered.count} prose page(s)")
+    IO.printLine("${Console.GREEN}Wrote${Console.RESET} ${ordered.count} prose page(s)")
     return 0
   end
 
@@ -94,11 +94,11 @@ module Tey.Docgen.Prose do
     let rest = files.drop(1)
     match FS.File.read(FS.Path.join(source, fileName)) do
       Error(_) => do
-        IO.printError("  fail ${fileName}: cannot read")
+        IO.printError("  ${Console.RED}fail${Console.RESET} ${fileName}: cannot read")
         return readPages(rest, source, accum)
       end
       Ok(text) => do
-        IO.printLine("  ok ${fileName}")
+        IO.printLine("  ${Console.GREEN}ok${Console.RESET} ${fileName}")
         return readPages(rest, source, accum + [pageOf(fileName, text)])
       end
     end

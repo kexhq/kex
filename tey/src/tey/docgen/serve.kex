@@ -14,18 +14,18 @@ module Tey.Docgen.Serve do
     let out = parsed.values.get("out").or("")
     let port = Integer.parse(parsed.values.get("port").or("4322")).or(4322)
     if out.empty?
-      IO.printError("docgen: --out is required")
+      IO.printError("${Console.RED}error:${Console.RESET} --out is required")
       return 1
     end
     let files = collectServeFiles(out, "/")
     if files.empty?
-      IO.printError("docgen: no files to serve in ${out}")
+      IO.printError("${Console.RED}error:${Console.RESET} no files to serve in ${out}")
       return 1
     end
     let listenPort = match Net.Port.from(port) do
       Ok(value) => value
       Error(_) => do
-        IO.printError("docgen: invalid --port ${port}")
+        IO.printError("${Console.RED}error:${Console.RESET} invalid --port ${port}")
         return 1
       end
     end
@@ -34,11 +34,11 @@ module Tey.Docgen.Serve do
     let router = files.reduce(Router.build) do |routes, file|
       routes.get(file.route, ~serveFile(file.path))
     end
-    IO.printLine("docgen: serving ${files.count} file(s) on http://localhost:${port}")
+    IO.printLine("${Console.GREEN}Serving${Console.RESET} ${files.count} file(s) ${Console.DIM}on${Console.RESET} http://localhost:${port}")
     match Server.serve(TCP.Endpoint.loopback(listenPort), router) do
       Ok(_) => return 0
       Error(error) => do
-        IO.printError("docgen: server failed: ${error.message}")
+        IO.printError("${Console.RED}error:${Console.RESET} server failed: ${error.message}")
         return 1
       end
     end

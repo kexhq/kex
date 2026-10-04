@@ -33,7 +33,7 @@ foul apply(operations: [Operation], workspaceRoot: String,
       Tey.Generator.confirm("write", path, existing, force?).try
       return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
       return Error("could not write `${path}`") if !FS.File.write(target, content)
-      IO.printLine("write ${path}")
+      IO.printLine("${Console.GREEN}write${Console.RESET} ${path}")
     end
     DeleteFile(path) => do
       let target = Tey.Generator.safePath(workspaceRoot, path).try
@@ -43,7 +43,7 @@ foul apply(operations: [Operation], workspaceRoot: String,
         return Error("generator may only delete files: `${path}`") if FS.Directory.directory?(target)
         return Error("could not delete `${path}`") if !FS.File.delete(target)
       end
-      IO.printLine("delete ${path}")
+      IO.printLine("${Console.YELLOW}delete${Console.RESET} ${path}")
     end
   end
   return Tey.Generator.apply(operations.drop(1), workspaceRoot, force?)
