@@ -30,7 +30,7 @@ foul lock -> Integer do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
+  context.warnings.each { |warning| IO.printError("${Console.YELLOW}warning:${Console.RESET} ${warning}") }
   let resolved = match Tey.Resolver.resolveWorkspace(context) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -86,13 +86,13 @@ foul localOverride(name: String, path: String, remove?: Bool,
     return Tey.Commands.fail("tey local --remove needs a package name") if name == ""
     match Tey.Local.remove(context, name) do
       Error(error) => return Tey.Commands.fail(error)
-      Ok(_) => do IO.printLine("Removed local override ${name}") return 0 end
+      Ok(_) => do IO.printLine("${Console.GREEN}Removed${Console.RESET} local override ${name}") return 0 end
     end
   end
   return Tey.Commands.fail("tey local needs a package name and path") if name == "" || path == ""
   match Tey.Local.set(context, name, path) do
     Error(error) => return Tey.Commands.fail(error)
-    Ok(_) => do IO.printLine("Using local ${name} at ${path}") return 0 end
+    Ok(_) => do IO.printLine("${Console.GREEN}Using${Console.RESET} local ${name} ${Console.DIM}at ${path}${Console.RESET}") return 0 end
   end
 end
 
@@ -265,7 +265,7 @@ foul uninstallProgram(name: String) -> Integer do
       if Tey.Programs.teyBuilt?(path) && FS.File.delete(path)
         IO.printLine("${Console.GREEN}Removed${Console.RESET} ${target} ${Console.DIM}from ${binDirectory}${Console.RESET}")
       else
-        IO.printError("warning: left ${path}: it is no longer the program Tey installed")
+        IO.printError("${Console.YELLOW}warning:${Console.RESET} left ${path}: it is no longer the program Tey installed")
       end
     end
     ()
@@ -934,7 +934,7 @@ end
 foul list -> Integer do
   let programs = Tey.Programs.all
   if Tey.Workspace.discover(FS.Directory.current).error?
-    IO.printLine("No programs installed.") if programs.empty?
+    IO.printLine("${Console.DIM}No programs installed${Console.RESET}") if programs.empty?
     Tey.Commands.listPrograms(programs)
     return 0
   end
@@ -981,7 +981,7 @@ foul buildSelected(packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
+  context.warnings.each { |warning| IO.printError("${Console.YELLOW}warning:${Console.RESET} ${warning}") }
   let jobs = match Tey.Commands.concurrency(requestedJobs) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -1069,7 +1069,7 @@ foul testSelected(requested: [String], packageName: String, workspace?: Bool,
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
   end
-  context.warnings.each { |warning| IO.printError("warning: ${warning}") }
+  context.warnings.each { |warning| IO.printError("${Console.YELLOW}warning:${Console.RESET} ${warning}") }
   let jobs = match Tey.Commands.concurrency(requestedJobs) do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -1137,7 +1137,7 @@ foul setupMergeDriver(remove?: Bool) -> Integer do
   let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey install --merge-driver %O %A %B"]
   match Tey.Commands.runStatus("git", arguments) do
     0 => do
-      IO.printLine(remove? then "Removed Tey merge driver" else "Configured Tey merge driver")
+      IO.printLine("${Console.GREEN}${remove? then "Removed" else "Configured"}${Console.RESET} Tey merge driver")
       0
     end
     _ => Tey.Commands.fail("could not update global Git configuration")
@@ -1332,7 +1332,7 @@ private do
       let dependencies = Tey.Workspace.memberDependencies(member).filter do |name|
         state.failedMembers.contains?(name)
       end
-      IO.printError("Skipping ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed")
+      IO.printError("${Console.YELLOW}Skipping${Console.RESET} ${Tey.Workspace.memberName(member)} because ${dependencies.join(", ")} failed")
     end
     let ready = members.filter { |member| !blocked.contains?(member) }
     let failed = [...state.failedMembers,
@@ -1548,7 +1548,7 @@ private do
       let output = "${Tey.Commands.outputDirectory}/${target.name}"
       if outcome == 0
         if Tey.Commands.writeEscript(staging, output, target.entrypoint)
-          IO.printLine("  Target  ${output}")
+          IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
         end
@@ -1582,7 +1582,7 @@ private do
       let output = "${outputDirectory}/${target.name}"
       if outcome == 0
         if Tey.Commands.writeEscript(staging, output, target.entrypoint)
-          IO.printLine("  Target  ${output}")
+          IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
         else
           status = Tey.Commands.fail("could not write ${output}")
         end

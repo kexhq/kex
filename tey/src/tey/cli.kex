@@ -295,7 +295,7 @@ private do
         return ()
       end
       Error(error) => do
-        IO.printError("warning: Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}")
+        IO.printError("${Console.YELLOW}warning:${Console.RESET} Kex ${kexVersion} will run with Tey ${Tey.Version.number}; its own Tey could not be installed: ${error}")
         return ()
       end
     end
@@ -707,9 +707,9 @@ private do
         let alreadyInstalled = Tey.Toolchain.installed?(version)
         if Tey.Toolchain.use(version)
           if alreadyInstalled
-            IO.printLine("Using Kex ${version}")
+            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET}")
           else
-            IO.printLine("Using Kex ${version} — installed from the bundled copy")
+            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}installed from the bundled copy${Console.RESET}")
           end
           Tey.Cli.reportShim(version)
           0
