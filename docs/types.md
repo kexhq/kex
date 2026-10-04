@@ -2,19 +2,19 @@
 
 ## Primitives
 
-- `Integer` — arbitrary-precision integer (backed by GMP); the default for plain integer literals. `Int` is an alias for the fixed-width 64-bit form.
+- `Integer` — arbitrary-precision integer (backed by GMP); the default for plain integer literals. `Int` is an alias for `Integer`; use `Int64` for a fixed-width 64-bit integer.
 - `Float` — 64-bit floating point (the default for a plain float literal, e.g. `3.14`)
 - `String` — UTF-8 string
 - `Char` — a single character, written `'a'`, `'\n'`, etc.
 - `Bool` — `true` or `false`
-- `None` — absence of value (not falsy, must be pattern matched)
+- `None` — the absent case of an optional; it is falsy in conditions. Use `match`, `or`, or `set?` to handle presence explicitly.
 
 ### `String`, `Char`, and `[Char]` are three distinct types
 
 A `String` is not a list. `Char` is not a 1-character `String`. And `[Char]` — a list of `Char` — is an ordinary list, not a `String`. Convert between the two with `chars` and `join("")`:
 
 ```kex
-let c = "hello".at(1)        # Char: 'e'
+let c = "hello".at(1).try    # Char: 'e'
 c == 'e'                     # true (Char == Char)
 c == "e"                     # false — Char is not a String
 
@@ -25,7 +25,11 @@ c == "e"                     # false — Char is not a String
 IO.printLine(['h', 'i'])     # prints "[h, i]" — it is a list
 ```
 
-`to` is the **fallible** conversion protocol and always answers an `Optional`, whatever the source type. A `Char` converts to a `String` totally — a character is always one character of text — so that conversion gets its own name rather than bending the protocol:
+The generic `to` conversion returns an optional: `None` means the value cannot
+be converted. A `Char` also has `.string`, which always returns a `String`.
+Some library types, including `Type` and `Measure`, define a total
+`to(String)` overload that returns `String` directly. Check the receiver's
+signature to see whether a conversion needs optional handling:
 
 ```kex
 'a'.string                   # "a"       : String   — total, no .or("") needed
@@ -206,11 +210,12 @@ let { "alice": a } = ages
 
 ## Range
 
-`1..10` is a `Range<Int>`, which is `Enumerable`. Has `.min` and `.max`.
+`1..10` is a `Range<Integer>`, which implements `Enumerable` and `Foldable`.
+Its `.min` and `.max` return optionals; a range such as `10..1` is empty.
 
 ```kex
 let r = 1..10
-r.max   # 10
+r.max   # Just(10)
 r.map { |x| x * 2 }
 ```
 
@@ -280,7 +285,7 @@ is a side effect:
 ```kex
 Type.of(helloWorld).to(String)    # "String -> String"
 Type.of(shout).to(String)         # "foul String -> String"
-Type.of(shout).pure           # true
+Type.of(shout).pure           # false
 ```
 
 `Type.returnedBy` is answered by the compiler alone, so it needs the NAME of a
@@ -308,11 +313,11 @@ time and no zone, `Time` a time of day with no date and no zone, and
 `DateTime` both plus a fixed offset from UTC.
 
 ```kex
-let due = Date.of(2026, 7, 30).try   # Result<Date, Time.Error>
+let due = Date.of(2026, 7, 30).try   # Date
 due.iso                                  # "2026-07-30"
 due.weekday.name                         # "Thursday"
 (due + 10.days).iso                    # "2026-08-09"
-due.addMonths(1).iso                     # clamps into the target month
+due.addMonths(1).iso                     # "2026-08-30"; clamps when needed
 
 let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
 moment.utc.iso                           # "2026-07-30T12:03:00Z"

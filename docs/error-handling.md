@@ -1,63 +1,84 @@
-# Error Handling
+# Error handling
 
-## No Exceptions
+Kex uses values to represent missing data and expected failures:
 
-Kex has no exceptions. Errors are values.
+- `A?` is shorthand for `Optional<A>`: `Just(value)` or `None`.
+- `A or! E` is shorthand for `Result<A, E>`: `Ok(value)` or `Error(reason)`.
 
-## Two Error Types
+Use an optional when absence is enough information. Use a result when callers
+need to know why an operation failed.
 
-- `Optional<A>` (aka `A?`) — value might not exist
-- `Result<A, E>` — operation might fail with an error
+## Handling an optional
 
-## Optional
-
-```kex
-let find(list: [A], f: A -> Bool) -> A? do
-  ...
-end
-
-# Handle with pattern matching
-match findUser(users, "alice") do
-  Just(user) => "Found ${user.name}"
-  None => "Not found"
-end
-
-# Or with map/flatMap
-findUser(users, "alice")
-  .map(&.name)
-  .or("Unknown")
-```
-
-## Result
+Supply a default with `or`, or match when each case needs different work:
 
 ```kex
-type ParseError = InvalidFormat(String) | Overflow | EmptyInput
+let names = ["Ada", "Grace"]
+names.first.or("unknown")   # => "Ada"
+[].first.or("unknown")      # => "unknown"
 
-let parseInt(s: String) -> Result<Int, ParseError> do
-  return Error(EmptyInput) if s.empty?
-  ...
+match names.first do
+  Just(name) => IO.printLine("Hello, ${name}")
+  None => IO.printLine("No names supplied")
 end
 ```
 
-## Checking Without Unwrapping
-
-`ok?`/`error?` (on `Result`) and `present?`/`none?` (on `Optional`) ask "did this succeed" without a `match`:
+`map` transforms a present value and leaves `None` unchanged:
 
 ```kex
-if parseInt(input).ok? do
-  ...
+["Ada"].first.map(~upperCase).or("UNKNOWN")   # => "ADA"
+```
+
+Use `set?` and `none?` to check presence without extracting the value.
+
+## Handling a result
+
+Match to retain the error, or use `or` when discarding it is intentional:
+
+```kex
+match Integer.parse("42") do
+  Ok(number) => IO.printLine(number)
+  Error(reason) => IO.printError("Invalid number: ${reason}")
+end
+
+Integer.parse("invalid").or(8080)   # => 8080
+```
+
+`ok?` and `error?` check which case a result contains. They do not unwrap it.
+
+## Chaining fallible steps
+
+Use `map` when the next step returns a plain value. Use `flatMap` when it
+returns another result or optional, to avoid nested wrappers:
+
+```kex
+Integer.parse("21").map { |n| n * 2 }   # => Ok(42)
+
+Integer.parse("21").flatMap { |n|
+  n > 0 then Ok(n) else Error("must be positive")
+}   # => Ok(21)
+
+Just("42").flatMap { |text| Integer.parse(text).optional }   # => Just(42)
+```
+
+An `Error` or `None` skips the remaining callbacks in its chain.
+
+## Unwrapping with `try`
+
+`.try` extracts a value from `Just` or `Ok`. On `None` or `Error`, it raises a
+failure; it does not supply a default. Use `trying` and `rescue` to handle that
+failure around a sequence of operations:
+
+```kex
+main do
+  trying do
+    let number = Integer.parse("invalid").try
+    IO.printLine(number * 2)
+  rescue
+    reason => IO.printError("Could not parse: ${reason}")
+  end
 end
 ```
 
-## Combining
-
-Chain `Result`/`Optional` computations with `flatMap`:
-
-```kex
-foul getUserEmail(id: Int) -> Result<String, AppError> do
-  fetchUser(id).flatMap { |user| match user.email do
-    Just(email) => Ok(email)
-    None => Error(AppError(:no_email))
-  end}
-end
-```
+Use `match`, `or`, or `flatMap` when handling a single missing value or failure
+is clearer at the call site.

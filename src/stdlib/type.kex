@@ -69,8 +69,6 @@ module Type do
   #
   # @example
   #   Type.of([1]) == Type.generic("List", [Type.named("Integer")])   # => true
-  # Renamed from `Type.with` when `with` became the capability-substitution
-  # keyword (kexhq/kex#143).
   let generic(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
 
   # Builds a function type from its parameter types and its result type: in
@@ -126,14 +124,9 @@ module Type do
     argTypes : [Type]
   end
 
-  # No `nameOf`/`argsOf`: `type.name` and `type.args` are the record's own
-  # fields and read the same on both backends, while a module function taking
-  # a Type collides with the `name` receiver dispatcher on BEAM.
 end
 
-# Everything else is a METHOD, not a module function: a module function is
-# only reachable through UFCS in the interpreter, so `Type.of(x).fields`
-# worked there and raised on BEAM.
+# Reflection methods on runtime type values.
 make Type do
   # Returns a record type's fields, in declaration order: each one's name,
   # declared type, and whether a value may leave it out. Anything that is not

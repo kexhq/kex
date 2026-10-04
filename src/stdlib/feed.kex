@@ -52,21 +52,9 @@ module Feed do
   let Elements(xs) = Kex.Intrinsic.Feed.elements(xs)
 end
 
-# Every method below is `let`, not `foul`, though reading a feed plainly is an
-# effect. Two reasons, one principled and one practical.
-#
-# The effect is already tracked where it enters: a feed over anything outside
-# the program comes from `FS.File.feed` or `handle.feed`, both foul, so a pure
-# function cannot obtain one. What `Feed.Elements` and `Stream.toFeed` build
-# from data in hand mutates only a cursor the caller just made.
-#
-# And a foul method takes the hidden capability context, which puts it one BEAM
-# arity above the pure `take`/`map`/`filter` every other receiver has. A feed
-# usually arrives with no static type: `FS.File.feed(p).or(Feed.empty)`, or a
-# `Just(f) =>` binding, and such a call has to go through the runtime
-# dispatcher, which is built per arity and so could never reach a method one
-# arity up. Marking these foul made every dynamically-typed feed call fail with
-# "Undefined method: take for Tuple".
+# Reading a feed consumes its cursor. Obtain a new feed when you need to
+# traverse the same data again. Opening a file-backed feed is +foul+;
+# consuming an existing feed does not require another capability.
 make Feed<A> do
   # Answers the next element and consumes it, or +None+ once the source is
   # spent.

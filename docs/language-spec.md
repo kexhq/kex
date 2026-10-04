@@ -1819,7 +1819,8 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | Method | Description |
 |---|---|
 | `none?` | `True` iff `None` |
-| `present?` | `True` iff `Just` (from `Blankable`) |
+| `set?` | `true` when the value is `Just` |
+| `present?` | Same presence test through `Blankable` |
 | `or(default)` | Unwrap or `default` |
 | `map(f)` | `Just(x).map(f) = Just(f(x))`; `None` passes through |
 | `flatMap(f)` | Chain Optional-returning functions |
@@ -1992,12 +1993,13 @@ modules. Paths use the `FilePath` type.
 | `FS.File.writeBytes(path, binary)` | `Bool` — overwrite with raw bytes |
 | `FS.File.append(path, content)` | `Bool` — append |
 | `FS.File.readLines(path)` | `[String]?` — lines |
-| `FS.File.feed(path)` | `Stream<String>?` — lazy lines |
+| `FS.File.feed(path)` | `Feed<String>?` — lazy lines |
 | `FS.File.exists?(path)`, `file?`, `directory?` | `Bool` |
 | `FS.File.size(path)` | `Integer?` — bytes |
 | `FS.File.delete(path)`, `copy(src, dst)`, `rename(src, dst)` | `Bool` |
 | `FS.File.open(path, mode)` | Mode-specific `Result<FileHandle<R, W>, FileError>` |
-| `FS.File.basename`, `dirname`, `extension`, `join`, `absolute` | Path ops |
+| `FS.File.absolute(path)` | `String?` — absolute path |
+| `FS.Path.basename(path)`, `dirname(path)`, `extension(path)`, `join(a, b)` | Pure path operations |
 
 `open` refines the handle capabilities from its mode:
 
@@ -2014,7 +2016,7 @@ information:
 ```kex
 trying do
   let file = FS.File.open("notes.txt", Read).try
-  let first = file.readLine
+  let first = file.readLine.try
   file.close
   first
 rescue
@@ -2037,56 +2039,55 @@ do not currently track whether a handle has been closed.
 
 **FileHandle** methods:
 
-- Read-capable: `getLine`, `get`, `readLine`, `read`, `eof?`, `atEnd?`, `feed`.
+- Read-capable: `getLine`, `get`, `readLine`, `read`, `readBytes`, `eof?`, `atEnd?`, `feed`.
 - Write-capable: `printLine`, `print`, `writeLine`, `write`.
 - All handles: `close`.
 
-### 23.14 Http (`foul`)
+### 23.14 HTTP (`foul`)
 
-Types (defined in the prelude):
-
-- `HttpResponse` — fields: `status: Integer`, `body: String`, `headers: Map<String, String>`
-- `HttpError` — fields: `kind: NetworkError`, `message: String`
-- `HttpOptions` — fields: `headers: Map<String, String> = {}`, `timeout: Integer = 30000`
-- `NetworkError = ConnectionRefused | Timeout | DnsError | SslError | NotImplemented | MockEmpty | Unknown`
-
-Each verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `options`) has a
-1-arg and a 2-arg (with `HttpOptions`) overload, returning
-`Result<HttpResponse, HttpError>`:
+Networking is opt-in: import `Net.HTTP`. `Net.HTTP.HTTP.get(url)` returns
+`Result<Response<Binary>, NetError>`. Response bodies are bytes; convert them
+with `to(String)` when expecting UTF-8 text. The validated status value is
+available as `response.status.code`.
 
 ```kex
-match Http.get("https://example.com") do
-  Ok(res)   => IO.printLine(res.status)
-  Error(e)  => IO.printLine("failed: ${e.message}")
+using Net.HTTP
+
+match Net.HTTP.HTTP.get("https://example.com") do
+  Ok(response) => IO.printLine(response.status.code)
+  Error(error) => IO.printError(error.message)
 end
 ```
 
-### 23.15 Web Server
+HTTP 4xx and 5xx responses are `Ok` exchanges, rather than transport errors.
+Requests do not follow redirects or retry automatically. Use `Client.open`
+when several requests should share a connection pool, and close the client
+when finished. Real network I/O requires the BEAM backend; the interpreter
+returns `UnsupportedBackend`.
 
-Types (defined in the prelude):
+See [Networking](networking.md) for client options and error handling.
 
-- `Request` — fields: `method`, `path`, `queryString`, `query: Map`, `headers: Map`, `body: String`
-- `Response` — fields: `status: Integer = 200`, `headers: Map = {}`, `body: String = ""`
+### 23.15 HTTP servers
 
-Build a server immutably, then `start`:
+Build an immutable `Router`, then pass it to `Server.serve` for a foreground
+server. Handlers receive a request and context and return a response:
 
 ```kex
-main do
-  let server = Web.Server.build(8080)
-    .get("/") { |req| Web.Response.text("hello") }
-    .get("/api") { |req| Web.Response.json("{\"ok\":true}") }
-  match server.start() do
-    Ok(_) => IO.printLine("serving")
-    Error(e) => IO.printLine("failed: ${e}")
-  end
+using Net.HTTP
+using Net.Socket
+
+foul health(request: Request<Binary>, context: Context) -> Response<Binary> do
+  return Response.text(200, "ok")
 end
+
+let router = Router.build.get("/health", ~health)
+let endpoint = TCP.Endpoint.loopback(Net.Port.from(8080).try)
+Server.serve(endpoint, router).try
 ```
 
-`Web.Response` builders: `text(body)`, `textWithStatus(body, status)`,
-`html(body)`, `json(body)`, `redirect(location)`, `notFound`.
-
-Route methods on `Web.Server`: `get`, `post`, `put`, `patch`, `delete`,
-`mount(path, handler)` — each returns a new `Server`.
+Use `Server.start` to return immediately with a running-server handle, and
+`server.stop` for graceful shutdown. Routes are checked in declaration order.
+See [Networking](networking.md) for route patterns and resource limits.
 
 ### 23.16 System (`foul`)
 

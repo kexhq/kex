@@ -14,7 +14,7 @@ module Regex
 #   main do
 #     let line = "order #4271 shipped"
 #     IO.printLine(line.matches?(re`#\d+`))                     # => true
-#     IO.printLine(line.matches(re`#(\d+)`).map { |m| m.get(1) })  # => 4271
+#     IO.printLine(line.matches(re`#(\d+)`).flatMap { |m| m.get(1) }.or(""))  # => 4271
 #   end
 #
 # The call form takes a pattern built at run time and answers a +Result+,
@@ -30,10 +30,10 @@ module Regex
 
 # A compiled regular expression.
 #
-# +Regex+ carries only its pattern source. The compiled engine object lives in
-# a runtime cache keyed by that source, deliberately: a compiled pattern bakes
-# in the host's PCRE version and must never be embedded in a distributed
-# artifact, so the source string is the value's identity.
+# Create one with a +re+ tagged literal or +regex(source)+.
+#
+#   let digits = re`[0-9]+`
+#   "item 42".matches(digits).flatMap { |m| m.get(0) }   # => Just("42")
 record Regex do
   # The pattern text this regex was built from.
   source : String
@@ -58,13 +58,6 @@ record RegexError do
   # A human-readable description of what was wrong.
   message  : String
 end
-
-# NOTE: deliberately does NOT `implement: Errorable`, even though the trait
-# exists for exactly this shape. Declaring a `message` method alongside the
-# `message` field makes `e.message` dispatch to the method instead of reading
-# the field, which fails with `undef` on the BEAM backend. `ParseError`: the
-# prelude's equivalent error record: carries a bare `message` field for the
-# same reason; nothing in the tree implements Errorable today.
 
 # Compiles +source+ into a +Regex+.
 #
@@ -193,14 +186,6 @@ record Match do
   # The captured text, keyed by group number and by group name.
   captures : Map<Any, String>
 end
-
-# NOTE: the accessor is +get+, not +get+. A `make` block on a user type that
-# defines a method name the prelude also uses breaks that name's dispatch for
-# every OTHER type on the BEAM backend: with `get` here, merely saying
-# `using Regex` made a plain `someMap.get(k)` fail with function_clause.
-# `get` also matches Python's `m.get(1)` and Java's `matcher.get(1)`.
-# A plain Map's `get` is unaffected: resolution picks a local method by
-# receiver type, name and arity.
 
 make Match do
   # Returns the text captured by a group, by number or by name.
@@ -335,12 +320,8 @@ let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement
 # backends), and follows Ruby's semantics: trailing empty fields are dropped,
 # leading ones are kept, and capture groups are interleaved into the result.
 #
-# Only the limit form needs a name, and it deliberately is NOT `split`: this
-# module must not export that name. On BEAM, a module in scope via `using`
-# captures a method name for EVERY receiver, so exporting `split` here would
-# route `"a,b".split(",")` and even the no-argument `"hi".split` through this
-# module and break them.
-#
+# Use +Regex.splitWithLimit+ to control the number of fields.
+
 # @param s [String] the text to split
 # @param re [Regex] the separator pattern
 # @param limit [Integer] the field cap; negative keeps trailing empty fields

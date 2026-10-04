@@ -149,9 +149,7 @@ make Connection do
   # and +Just(duration)+ gives up and answers +Timeout+ once +duration+
   # elapses without a message.
   #
-  # A real disconnect is still reported as +Closed+, not +Timeout+: the two
-  # are distinguishable, unlike a bare +receiveMessage+ that assumes a
-  # failed read always means the peer is gone (kexhq/kex#381).
+  # A disconnect returns +Closed+; a deadline expiring returns +Timeout+.
   #
   # @param timeout [Duration?] how long to wait before giving up, or +None+
   #   to wait as long as the peer stays connected

@@ -191,7 +191,7 @@ module Process do
   # appears as it is produced rather than in one block when it exits.
   #
   # Answers the exit code; nothing is captured: that is the trade, and it is
-  # what a long-running child a person is watching needs (kexhq/kex#187).
+  # useful for commands whose progress should appear in the terminal.
   #
   # +run+ remains the one to use when the output is data to be READ.
   #

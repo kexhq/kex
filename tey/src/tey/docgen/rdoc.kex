@@ -246,14 +246,20 @@ module Tey.Docgen.Rdoc do
       return classifyBlocks(rest, summary, params, returns, examples + [parseExample(block)], deprecated)
     end
     if first.startsWith?("@deprecated")
-      return classifyBlocks(rest, summary, params, returns, examples, Just(block.drop(1).join(" ")))
+      return classifyBlocks(rest, summary, params, returns, examples, Just(directiveBody(block, 11)))
     end
     if first.startsWith?("@")
       return classifyBlocks(rest, summary, params, returns, examples, deprecated)
     end
     # Prose block: the first becomes the summary, later ones join it as
     # further paragraphs. Verbatim blocks keep their layout.
-    let joined = verbatim?(block) then fenceVerbatim(block) else block.join(" ")
+    let joined = if verbatim?(block)
+      fenceVerbatim(block)
+    elif first.trim.startsWith?("- ") || first.trim.startsWith?("* ")
+      block.join("\n")
+    else
+      block.join(" ")
+    end
     let nextSummary = if summary.empty?
       joined
     else
@@ -262,9 +268,15 @@ module Tey.Docgen.Rdoc do
     return classifyBlocks(rest, nextSummary, params, returns, examples, deprecated)
   end
 
+  foul directiveBody(lines: [String], prefixLength: Integer) -> String do
+    let first = (lines.first.or("")).drop(prefixLength).trim
+    let continuation = lines.drop(1).map { |line| line.trim }
+    return ([first] + continuation).join(" ").trim
+  end
+
   # @param name [Type] description
   foul parseParam(lines: [String]) -> Param do
-    let body = (lines.first.or("")).drop(7).trim
+    let body = directiveBody(lines, 7)
     match body.indexOf(' ') do
       None => Param { name: body, typeName: "", description: "" }
       Just(nameEnd) => do
@@ -283,7 +295,7 @@ module Tey.Docgen.Rdoc do
 
   # Reads a `@return [Type] description` directive.
   foul parseReturn(lines: [String]) -> Return do
-    let body = (lines.first.or("")).drop(8).trim
+    let body = directiveBody(lines, 8)
     match parseBracketed(body) do
       None => Return { typeName: "", description: body }
       Just(parsed) => Return { typeName: parsed.content, description: parsed.rest.trim }

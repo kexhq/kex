@@ -109,9 +109,6 @@ before : Block<Void> -> Void
 #   before(:each) do
 #     counter = 0
 #   end
-# The scoped form the runtime has always accepted, and the paragraph above has
-# always documented, but which was never declared, so every spec using
-# `before(:all)` had to be `# kex: no-check` (kexhq/kex#143).
 before : Atom -> Block<Void> -> Void
 
 # Registers cleanup to run after the current group's tests.

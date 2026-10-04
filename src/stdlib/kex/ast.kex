@@ -137,7 +137,7 @@ module Kex.AST do
   #
   # Where +parse+ gives a program's meaning, +parseSyntax+ gives its text:
   # nothing is normalised or dropped, so +toSource+ reprints the file byte for
-  # byte. It is the tree a formatter or a linter works on (kexhq/kex#136).
+  # byte. Use it when building a formatter or a linter.
   record SyntaxToken do
     # The lexer's name for the token: +LowerIdent+, +Newline+, +Eof+, ...
     kind : String

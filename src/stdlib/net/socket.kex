@@ -141,7 +141,8 @@ module TCP do
   # The delimiter is included in the returned bytes. An empty delimiter is a
   # +Parse+ error; reaching the bound first is a +Limit+ error.
   #
-  # @example +connection.receiveUntil("\r\n\r\n".to(Binary).try, 65536).try+
+  # @example Read through the end of an HTTP header section
+  #   connection.receiveUntil("\r\n\r\n".to(Binary).try, 65536).try
   foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntil(connection, delimiter, limit)
   foul receiveUntil(connection: TCPConnection, delimiter: Binary, limit: Integer, timeout: Duration) -> Result<Binary, NetError> = Kex.Intrinsic.NetTCP.receiveUntilWithin(connection, delimiter, limit, timeout)
   # Receives through a newline without exceeding +limit+ bytes.
@@ -362,7 +363,8 @@ module Unix do
   # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
   foul receiveExactly(connection: UnixConnection, count: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveExactly(connection, count)
   # Receives through +delimiter+, including it, within an explicit bound.
-  # @example +connection.receiveUntil("\n".to(Binary).try, 4096).try+
+  # @example Read through the next newline
+  #   connection.receiveUntil("\n".to(Binary).try, 4096).try
   foul receiveUntil(connection: UnixConnection, delimiter: Binary, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveUntil(connection, delimiter, limit)
   # Receives through a newline without exceeding +limit+ bytes.
   foul receiveLine(connection: UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveLine(connection, limit)
