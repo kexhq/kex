@@ -9,9 +9,9 @@
 > placeholders for free runtime variables, and `--collapse-report`.
 >
 > Deviations worth knowing before trusting the text below:
-> - **`.emit()` is not a special name.** Any method of a `compiled` block
+> - **`.emit()` is not a special name.** Any function of a `compiled` block
 >   terminating an all-known expression collapses; the trigger is "fully
->   determined", not the chain shape or the method's name.
+>   determined", not the chain shape or the function's name.
 > - **Placeholder misuse is not an error.** Where this doc specifies a hard
 >   error at the call site, the implementation falls back to building at
 >   runtime and reports it under `--collapse-report`. Failing the build for a
@@ -21,13 +21,13 @@
 
 ## Summary
 
-Modules can define methods inside `compiled do...end` blocks, marking them as compile-time evaluable. When user code calls `.emit()` (or `.compile()`) on a method chain where that method was defined inside a `compiled` block, the compiler evaluates the entire chain at compile time. The result is spliced into the program as a literal value. Free variables from the enclosing runtime scope are auto-detected and become parameterized placeholders.
+Modules can define functions inside `compiled do...end` blocks, marking them as compile-time evaluable. When user code calls `.emit()` (or `.compile()`) on a function chain where that function was defined inside a `compiled` block, the compiler evaluates the entire chain at compile time. The result is spliced into the program as a literal value. Free variables from the enclosing runtime scope are auto-detected and become parameterized placeholders.
 
 ## Mechanism
 
 ### Authoring (library side)
 
-A module defines its builder methods inside a `compiled do...end` block:
+A module defines its builder functions inside a `compiled do...end` block:
 
 ```kex
 module SQL do
@@ -75,7 +75,7 @@ User code looks completely normal:
 let q = SQL.select(:all).from(:users).where(id: eq(userId)).emit()
 ```
 
-This is a regular method chain. The compiler recognizes that `.emit()` was defined in a `compiled` block and triggers compile-time evaluation.
+This is a regular function chain. The compiler recognizes that `.emit()` was defined in a `compiled` block and triggers compile-time evaluation.
 
 ### What the compiler produces
 
@@ -85,7 +85,7 @@ At compile time, the chain evaluates to:
 Query { text: "SELECT * FROM users WHERE id = $1", params: [userId] }
 ```
 
-At runtime, `q` is just a record literal — no builder objects, no method dispatch, no allocations beyond the final result.
+At runtime, `q` is the resulting record value; the builder calls have already been evaluated.
 
 ## Free Variable Detection
 
@@ -114,23 +114,23 @@ The compiler sees that `userId` isn't available at compile time, so it:
 
 `.emit()` is not a language keyword — it's a naming convention. The actual rule is:
 
-> If a method was defined inside a `compiled do...end` block, and the entire chain from the root can be evaluated at compile time (modulo free variables), then calling that method triggers compile-time evaluation.
+> If a function was defined inside a `compiled do...end` block, and the entire chain from the root can be evaluated at compile time (modulo free variables), then calling that function triggers compile-time evaluation.
 
-In practice, DSL authors use `.emit()` for query-like builders and `.compile()` for things that produce functions (like routers). The compiler doesn't distinguish — any method in the compiled block can be the trigger.
+In practice, DSL authors use `.emit()` for query-like builders and `.compile()` for things that produce functions (like routers). The compiler doesn't distinguish — any function in the compiled block can be the trigger.
 
 ### Partial chains stay runtime
 
-Without calling a compiled-block method as the terminal:
+Without calling a compiled-block function as the terminal:
 
 ```kex
 let builder = SQL.select(:all).from(:users)
 # ^ This is a normal runtime value (QueryBuilder record).
 # No compile-time evaluation happens because the chain
-# doesn't terminate with a compiled-block method that
+# doesn't terminate with a compiled-block function that
 # produces a final result.
 ```
 
-All the methods (`select`, `from`, `where`) are in the compiled block, so what decides is the *expression*, not which method ends it:
+All the functions (`select`, `from`, `where`) are in the compiled block, so what decides is the *expression*, not which function ends it:
 
 > Compile-time evaluation is triggered when the **whole expression is determined** — every argument is a compile-time constant or a free runtime variable (which becomes a placeholder).
 
@@ -217,7 +217,7 @@ This extends the existing `compiled do...end` mechanism which currently supports
 
 The new capability adds:
 
-- **Module method definitions**: methods defined in `compiled` are compile-time evaluable
+- **Module function definitions**: functions defined in `compiled` are compile-time evaluable
 - **Expression evaluation**: `.emit()` triggers collapse of a complete chain
 - **Free variable detection**: runtime values flow through as placeholders
 

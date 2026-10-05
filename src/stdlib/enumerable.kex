@@ -1,9 +1,9 @@
 # Traversal operations that every foldable collection gets for free.
 #
-# A type becomes +Foldable+ by implementing one method, +reduce+; the rest:
+# A type becomes +Foldable+ by implementing one function, +reduce+; the rest:
 # +each+, +all?+, +any?+, +find+, +count+: are derived from it. +List+,
 # +String+, +Map+, +Range+ and both flavours of +Set+ all implement it, so
-# these methods read the same whatever you point them at.
+# these functions read the same whatever you point them at.
 #
 #   [1, 2, 3].all? { |n| n > 0 }        # => true
 #   "hello".any?(~digit?)               # => false
@@ -161,7 +161,7 @@ trait Enumerable do
 
   # Applies +f+ to each item and collects the results into a list.
   #
-  # The single most useful method here: it describes what each item becomes,
+  # The single most useful function here: it describes what each item becomes,
   # and leaves the walking of the collection implied.
   #
   # @param f [T -> B] applied to each item

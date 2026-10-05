@@ -18,8 +18,8 @@ A Kex program is a sequence of top-level declarations:
 | Function | `let` / `foul` | Named functions and multi-clause definitions |
 | Type | `type` | Union types, type aliases, abstract types |
 | Record | `record` | Named-field product types |
-| Trait | `trait` | Method contracts with optional defaults |
-| Make block | `make` | Attach methods to a type |
+| Trait | `trait` | Function contracts with optional defaults |
+| Make block | `make` | Attach functions to a type |
 | Module | `module` | Namespace declarations |
 | Compiled block | `compiled` | Group definitions evaluated at compile time |
 | Using | `using` | Import module members into scope |
@@ -96,22 +96,29 @@ names are unavailable; two-letter initialisms like `IO` are fine.
 
 Underscores in numeric literals are ignored (`1_000 == 1000`).
 
-An atom is a colon and a lowercase-led name. An `@` followed by a name
-character continues it, which spells a short node name: `:b@localhost`. Any
-other text takes the quoted form, `:"b@host.example.com"` or `:"two words"`.
-The quoted form has no interpolation, and only starts where an expression can,
-so `f(sep:"x")` still passes the named argument `sep`.
+An atom is a named value, often used as a label, a status, or a message tag.
+Write it with a leading colon: `:ok`, `:error`, or `:reset`. Atoms with the
+same name are equal; an atom and a string are different values.
 
-From text, there are three ways to get an atom, each saying what it does:
+```kex
+:ok == :ok        # true
+:ok == :error     # false
+:ok.string        # "ok"
+```
 
-| Form | When | Result |
+Node names can include `@`, as in `:app@localhost`. Use quotes for spaces or punctuation:
+`:"two words"` or `:"app@host.example.com"`. Quoted atoms do not interpolate.
+
+To convert text to an atom:
+
+| Form | Behavior | Result |
 |---|---|---|
-| `"hello".as(Atom)` | compile time, string literals only | `Atom` |
-| `Atom.from(text)` | run time; creates the atom | `Atom` |
-| `text.to(Atom)` | run time; finds an atom that already exists | `Atom?` |
+| `"hello".as(Atom)` | Converts a string literal at compile time | `Atom` |
+| `Atom.from(text)` | Creates or finds an atom at run time | `Atom` |
+| `text.to(Atom)` | Finds an existing atom, or returns `None` | `Atom?` |
 
-On the BEAM atoms are never freed, so text from outside a program should go
-through `.to(Atom)`. `atom.string` gives an atom's name back.
+On the BEAM, atoms are never freed. Use `text.to(Atom)` for external input to
+avoid creating an unbounded number of atoms.
 
 ### String Interpolation
 
@@ -384,7 +391,7 @@ end
 ### Type Hierarchy (parsed, not yet enforced)
 
 The parser accepts `<` for type inheritance, but the hierarchy is currently
-stored without semantic effect — there is no subtype checking, no method
+stored without semantic effect — there is no subtype checking, no function
 inheritance from parent types, and no enforcement that subtypes implement
 required signatures. This syntax is reserved for future use.
 
@@ -919,15 +926,15 @@ Rule: `{ |params| expr }` for one-liners, `do |params| ... end` for multi-line.
 
 ### Shorthand Lambda (`&`)
 
-`&` is receiver shorthand: `&.method` expands to `{ |x| x.method }`.
+`&` is receiver shorthand: `&.function` expands to `{ |x| x.function }`.
 
 ```kex
 list.filter(&.even?)             # { |x| x.even? }
 list.map(&.to(String).or(""))    # { |x| x.to(String).or("") }
 ```
 
-The method name is always an identifier. To capture a *named* function or an
-operator rather than call a method on the receiver, use `~` (below): `&f` and
+The function name is always an identifier. To capture a *named* function or an
+operator rather than call a function on the receiver, use `~` (below): `&f` and
 `&.+` are not valid syntax, and the parser will point you at `~f` and `~(+)`.
 
 ### Currying (`~`)
@@ -992,8 +999,7 @@ applyTwice(~add(1), 5)           # 7
 ## 11. Uniform Function Call Syntax (UFCS)
 
 Any function `f(x, ...)` can be called as `x.f(...)`. The receiver becomes the
-first argument. This enables method-chaining pipelines and erases the
-distinction between free functions and methods:
+first argument. Each call in a chain passes its result to the next function:
 
 ```kex
 let result = requests
@@ -1004,13 +1010,13 @@ let result = requests
 let result = map(filter(requests, { |req| req.path.startsWith?("/admin") }), { |req| req.path })
 ```
 
-Free functions, make-block methods, and trait methods are all callable via UFCS.
+Free functions, make-block functions, and trait functions are all callable via UFCS.
 
 ---
 
 ## 12. Mutating Calls (`!`)
 
-The `!` suffix rebinds a `var` to the result of a method call. It is syntactic
+The `!` suffix rebinds a `var` to the result of a function call. It is syntactic
 sugar — `list.push!(6)` is equivalent to `list = list.push(6)`:
 
 ```kex
@@ -1070,10 +1076,11 @@ let other = User { name, age: 41 }         # the two forms mix freely
 
 ## 14. Make Blocks
 
-`make` attaches methods to a type. Inside a make block, `this` refers to the
-receiver and `@field` is shorthand for `this.field`.
+`make` groups functions by the type of their first argument. Inside a make
+block, this implicit argument is named `this`; the value before the dot supplies
+it at the call site. `@field` is shorthand for `this.field`.
 
-Parameterless make methods automatically receive `this`, giving access to
+Functions with no explicit parameters still receive `this`, giving access to
 `@field`:
 
 ```kex
@@ -1100,11 +1107,11 @@ main do
 end
 ```
 
-> **Note:** make methods that take **explicit parameters** beyond the implicit
+> **Note:** make functions that take **explicit parameters** beyond the implicit
 > `this` are dispatched with the caller's receiver as `this`. This is supported
 > for prelude types (e.g. `[X].push(x)`, `Map.put(k, v)`) but, for **user
-> records**, `@field` access in parameterized make methods is not yet supported —
-> use `match this do ... end` or a parameterless method in those cases.
+> records**, `@field` access in parameterized make functions is not yet supported —
+> use `match this do ... end` or a parameterless function in those cases.
 
 ### Make Targets
 
@@ -1121,7 +1128,7 @@ end
 ```
 
 A more specific block wins over a broader one, so a type that defines the
-method itself keeps its own version:
+function itself keeps its own version:
 
 ```kex
 make Number do  let level = "number"  end
@@ -1140,13 +1147,13 @@ make Float | Integer do
 end
 ```
 
-The union's receiver is typed as the union, so a method there may be declared
+The union's receiver is typed as the union, so a function there may be declared
 at any trait all members satisfy (`Number`, above).
 
 ### `@` Shorthand
 
-Inside make blocks, `@field` is shorthand for `this.field`, and `@method(args)`
-is shorthand for `this.method(args)`:
+Inside make blocks, `@field` is shorthand for `this.field`, and `@function(args)`
+is shorthand for `this.function(args)`:
 
 ```kex
 make Circle do
@@ -1197,7 +1204,7 @@ paths such as `value.owner.name = "Ada"` are not supported.
 
 ### Pattern Matching on `this` (`@` patterns)
 
-Make methods can pattern-match on `this` directly using `@`:
+Make functions can pattern-match on `this` directly using `@`:
 
 ```kex
 make [A] do
@@ -1244,8 +1251,8 @@ end
 
 ## 15. Traits
 
-Traits declare method contracts. Required methods use `:>` (implicit `this` as
-first parameter). Default implementations may call other trait methods via
+Traits declare function contracts. Required functions use `:>` (implicit `this` as
+first parameter). Default implementations may call other trait functions via
 `this`:
 
 ```kex
@@ -1290,7 +1297,7 @@ main do
 end
 ```
 
-A trait may require foul methods:
+A trait may require foul functions:
 
 ```kex
 trait Logger do
@@ -1644,7 +1651,7 @@ let primes = Stream.Sequence(from: 2) { |n| n + 1 }
 primes.take(5)                          # [2, 3, 5, 7, 11]
 ```
 
-`Stream.Iterate(seed, step)` is an alias for `Sequence`. Stream methods:
+`Stream.Iterate(seed, step)` is an alias for `Sequence`. Stream functions:
 `take(n)` → list, `drop(n)` → stream, `map(f)` → stream, `filter(pred)` →
 stream.
 
@@ -1745,8 +1752,8 @@ Test files use the `.spec.kex` convention — `foo.spec.kex` auto-loads
 
 ## 23. Standard Library (Prelude)
 
-The prelude is loaded automatically. Prelude methods are **sealed** — user code
-can extend types with new methods but cannot redefine prelude methods.
+The prelude is loaded automatically. Prelude functions are **sealed** — user code
+can extend types with new functions but cannot redefine prelude functions.
 
 The prelude is built on several core traits. `Enumerable` provides `map`,
 `filter`, `each`, `reduce`, `find`, `any?`, `all?`, `flatMap`, `collect`, and
@@ -1757,7 +1764,7 @@ The prelude is built on several core traits. `Enumerable` provides `map`,
 
 String implements `Enumerable` (over characters) and `Blankable`.
 
-| Method | Signature | Description |
+| Function | Signature | Description |
 |---|---|---|
 | `count`, `length` | `-> Integer` | Character count |
 | `empty?` | `-> Bool` | No characters |
@@ -1778,7 +1785,7 @@ String implements `Enumerable` (over characters) and `Blankable`.
 
 ### 23.2 Char
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `upperCase` / `lowerCase` | Case conversion (returns `Char`) |
 | `digit?` | `0`–`9` |
@@ -1791,7 +1798,7 @@ String implements `Enumerable` (over characters) and `Blankable`.
 List implements `Enumerable`, `Blankable`. Numeric lists (`[Number]`) have
 `sum`/`product`/`min`/`max`; `[String | Char]` lists have `join`.
 
-| Method | Signature | Description |
+| Function | Signature | Description |
 |---|---|---|
 | `first`, `second`, `third`, `last` | `-> X?` | Positional access |
 | `rest` | `-> [X]` | All but first |
@@ -1828,7 +1835,7 @@ List implements `Enumerable`, `Blankable`. Numeric lists (`[Number]`) have
 
 Map implements `Enumerable` (over `(key, value)` pairs), `Blankable`.
 
-| Method | Signature | Description |
+| Function | Signature | Description |
 |---|---|---|
 | `get(key)` | `-> V?` | Value or `None` |
 | `get(key, default)` | `-> V` | Value or default |
@@ -1860,7 +1867,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 
 **Optional:**
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `none?` | `True` iff `None` |
 | `set?` | `true` when the value is `Just` |
@@ -1871,7 +1878,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 
 **Result:**
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `ok?`, `error?` | Variant tests |
 | `or(default)` | Unwrap `Ok` or `default` |
@@ -1879,7 +1886,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | `flatMap(f)` | Chain Result-returning functions |
 | `toOptional` | `Ok(x)` → `Just(x)`; `Error(_)` → `None` |
 
-**Either:** marker type; no methods beyond construction and pattern matching.
+**Either:** marker type; no functions beyond construction and pattern matching.
 
 ### 23.6 Integer / Float / Number
 
@@ -1901,7 +1908,7 @@ homogeneous — `[1, 2.0]` is still a type error.
 
 **Integer** (implements `Blankable`, `Monoid`, `Group`):
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `even?`, `odd?` | Parity |
 | `abs` | Absolute value |
@@ -1913,7 +1920,7 @@ homogeneous — `[1, 2.0]` is still a type error.
 
 **Float** (implements `Blankable`, `Truthyable`):
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `abs` | Absolute value |
 | `sqrt` | Square root |
@@ -1970,18 +1977,19 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 
 `a..b` constructs a `Range`. Implements `Enumerable`.
 
-| Method | Description |
+| Function | Description |
 |---|---|
 | `reduce(init, f)` | Left fold (Enumerable primitive) |
 | `sum`, `product` | Aggregate |
 | `contains?(x)` | Membership (inclusive) |
 | `items` | Materialize as a list |
 
-All Enumerable methods (`map`, `filter`, `each`, etc.) are inherited.
+Implementing Enumerable provides its default functions (`map`, `filter`,
+`each`, etc.).
 
 ### 23.10 Stream
 
-| Constructor / Method | Description |
+| Constructor / Function | Description |
 |---|---|
 | `Stream.Sequence(from, step)` | Infinite stream from `from` |
 | `Stream.Iterate(seed, step)` | Alias for `Sequence` |
@@ -2068,7 +2076,7 @@ rescue
 end
 ```
 
-Read methods are only available on `FileHandle<CanRead, W>`, and write methods
+Read functions are only available on `FileHandle<CanRead, W>`, and write functions
 are only available on `FileHandle<R, CanWrite>`. For example, calling
 `readLine` on a handle opened with `Write` is a compile-time error. Capabilities
 do not currently track whether a handle has been closed.
@@ -2081,7 +2089,7 @@ do not currently track whether a handle has been closed.
 | `FS.Directory.list(path)`, `files`, `directories` | `[String]?` |
 | `FS.Directory.exists?`, `current`, `home` | Existence / paths |
 
-**FileHandle** methods:
+**FileHandle** functions:
 
 - Read-capable: `getLine`, `get`, `readLine`, `read`, `readBytes`, `eof?`, `atEnd?`, `feed`.
 - Write-capable: `printLine`, `print`, `writeLine`, `write`.
@@ -2235,7 +2243,7 @@ on this (issue #141); `Mock.IO.stop()` hands real output back.
 
 ### 23.22 Conversion
 
-The universal `to(value, Type)` method converts between types, returning an
+The universal `to(value, Type)` function converts between types, returning an
 `Optional`:
 
 ```kex
@@ -2254,7 +2262,7 @@ The prelude defines several reusable traits:
 
 ### Enumerable
 
-Provides all higher-order traversal methods in terms of a single `reduce`.
+Provides all higher-order traversal functions in terms of a single `reduce`.
 Conformances: String, List, Map, Range, Stream.
 
 ```

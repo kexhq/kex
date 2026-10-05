@@ -1,11 +1,79 @@
 using Units.Data
 
+let checkFileSize(file: FS.FileInfo) -> String do
+  if file.size > 30.megabyte
+    return "FileTooBig"
+  end
+  return "Accepted"
+end
+
 describe("Units.Data") do
   it("constructs data using the shared Measure type") do
     let size = 5.size(MB)
     assert(size.canonical == 5000000.0)
     assert(size.value == 5.0)
     assert(size.kind == :data)
+  end
+
+  it("uses singular unit constructors and preserves the plural aliases") do
+    assert(1.byte == 1.byteSize)
+    assert(1.kilobyte == 1.kilobytes)
+    assert(1.megabyte == 1.megabytes)
+    assert(1.gigabyte == 1.gigabytes)
+    assert(1.terabyte == 1.terabytes)
+    assert(1.kibibyte == 1.kibibytes)
+    assert(1.mebibyte == 1.mebibytes)
+    assert(1.gibibyte == 1.gibibytes)
+    assert(1.tebibyte == 1.tebibytes)
+  end
+
+  it("compares byte counts with decimal thresholds at the boundary") do
+    assert(30000001 > 30.megabyte)
+    assert(!(30000000 > 30.megabyte))
+    assert(29999999 < 30.megabyte)
+    assert(!(30000000 < 30.megabyte))
+    assert(30000000 <= 30.megabyte)
+    assert(30000000 >= 30.megabyte)
+    assert(!(30000001 <= 30.megabyte))
+    assert(!(29999999 >= 30.megabyte))
+  end
+
+  it("uses an integer file-size field directly in a conditional") do
+    let file = FS.FileInfo {
+      kind: :file, size: 30000001,
+      modified: DateTime.fromEpochSeconds(0)
+    }
+    assert(checkFileSize(file) == "FileTooBig")
+    assert(checkFileSize(FS.FileInfo { ...file, size: 30000000 }) == "Accepted")
+  end
+
+  it("supports reversed comparisons and binary units") do
+    assert(1.mebibyte < 1048577)
+    assert(1.mebibyte > 1048575)
+    assert(1.mebibyte <= 1048576)
+    assert(1.mebibyte >= 1048576)
+    assert(1048576 > 1.megabyte)
+    assert(!(1048576 > 1.mebibyte))
+    assert(1025 > 1.kibibyte)
+    assert(512 <= 0.5.kibibyte)
+  end
+
+  it("compares payload sizes without changing the integer byte count") do
+    let payload = Binary.fromBytes([104, 105])
+    assert(payload.length == 2)
+    assert(payload.length < 1.kibibyte)
+    assert("é".count == 1)
+    assert("é".bytes.count == 2)
+    assert("é".bytes.count > 1.byte)
+  end
+
+  it("keeps ordinary numeric comparisons unchanged") do
+    assert(5 > 4)
+    assert(4 < 5.0)
+    assert(5 >= 5.0)
+    assert(5 <= 5)
+    assert("a" < "b")
+    assert('a' < 'b')
   end
 
   it("distinguishes decimal and binary units") do

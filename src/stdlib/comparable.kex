@@ -53,7 +53,7 @@ trait Comparable do
   # Returns the larger of this value and +other+; this value when they are
   # equal.
   #
-  # Written either way round, since a call and a method are the same thing:
+  # UFCS lets you put the first argument before the dot:
   # +max(3, 7)+ is +3.max(7)+.
   #
   # @param other [This] the value to compare against

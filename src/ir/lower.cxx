@@ -1611,6 +1611,45 @@ struct Lowering {
                     userCall->node = Call{
                         std::move(userModule), std::move(userFunction),
                         2, std::move(ua), false};
+                    // Numeric receivers can overload an operator for a
+                    // nonnumeric RHS (for example, Integer > Measure).
+                    // Keep numeric/numeric pairs on the builtin path.
+                    ExprPtr numericOwnerGuard;
+                    auto addNumericOwner = [&](const std::string& owner) {
+                        if (owner != "Integer" && owner != "Float" &&
+                            owner != "Number")
+                            return;
+                        auto guard = typeGuard(owner, lRef.get());
+                        numericOwnerGuard = numericOwnerGuard
+                            ? callE("erlang", "or", 2,
+                                    two(std::move(numericOwnerGuard),
+                                        std::move(guard)))
+                            : std::move(guard);
+                    };
+                    if (auto owners = methodOwners.find(sym);
+                        owners != methodOwners.end())
+                        for (const auto& owner : owners->second)
+                            addNumericOwner(owner);
+                    if (externalModules)
+                        if (auto candidates = externalModules->receiverFunctions.find(sym);
+                            candidates != externalModules->receiverFunctions.end())
+                            for (const auto& candidate : candidates->second)
+                                if (candidate.beamArity == 2)
+                                    addNumericOwner(candidate.receiverType);
+                    if (numericOwnerGuard)
+                        numericOwnerGuard = callE("erlang", "and", 2,
+                            two(std::move(numericOwnerGuard),
+                                callE("erlang", "not", 1,
+                                    one(callE("erlang", "is_number", 1,
+                                              one(rRef.get()))))));
+                    ExprPtr numericUserCall;
+                    if (numericOwnerGuard) {
+                        const auto& call = std::get<Call>(userCall->node);
+                        numericUserCall = std::make_unique<Expr>();
+                        numericUserCall->node = Call{
+                            call.module, call.name, 2,
+                            two(lRef.get(), rRef.get()), false};
+                    }
                     // Nullary ADT values such as `Watt` are atoms rather
                     // than tuples. If their declared type owns this operator,
                     // statically select that overload instead of falling
@@ -1679,6 +1718,10 @@ struct Lowering {
                                   builtinOp(lRef.get(), rRef.get()),
                                   std::move(userCall)),
                         std::move(builtin));
+                    if (numericOwnerGuard)
+                        dispatch = matchBool(std::move(numericOwnerGuard),
+                                             std::move(numericUserCall),
+                                             std::move(dispatch));
                     return wrapLets(binds, std::move(dispatch));
                 }
                 return wrapLets(binds, builtinOp(std::move(l), std::move(r)));

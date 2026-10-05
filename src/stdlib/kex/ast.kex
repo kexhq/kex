@@ -415,7 +415,7 @@ module Kex.AST do
   # Structured representation of expression AST nodes.
   #
   # Expressions retain syntax-level distinctions that matter to tools: a
-  # method call is not flattened into a generic call, +var+ is distinct from
+  # receiver call is not flattened into a generic call, +var+ is distinct from
   # +let+, and a trailing +if+ remains recognizable. Walk these constructors
   # when writing a linter or code search; use +Evaluator+ when the goal is to
   # execute an expression rather than inspect it.
@@ -581,9 +581,9 @@ module Kex.AST do
     location : Location
   end
 
-  # A standalone function or method type signature.
+  # A standalone function type signature.
   #
-  # +implicitThis+ distinguishes +:>+ methods from module-level +:+ functions
+  # +implicitThis+ distinguishes +:>+ receiver signatures from module-level +:+ signatures
   # without making a tool inspect punctuation in the original source.
   record AnnotationInfo do
     name : String
@@ -628,7 +628,7 @@ module Kex.AST do
     location : Location
   end
 
-  # A trait declaration and the signatures or default methods in its body.
+  # A trait declaration and the signatures or default functions in its body.
   record TraitInfo do
     name : String
     doc : String?
@@ -640,7 +640,7 @@ module Kex.AST do
   # A +make+ implementation block.
   #
   # +target+ is the receiver type, +implements+ lists explicit traits, and
-  # +body+ retains methods and visibility sections in declaration order.
+  # +body+ retains functions and visibility sections in declaration order.
   record MakeInfo do
     target : TypeRef
     doc : String?

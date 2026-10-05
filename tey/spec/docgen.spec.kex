@@ -1,4 +1,5 @@
 using Tey.Docgen.Model
+using Tey.Docgen.Markdown
 using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?, parentTitleOf, topLevelPages, childPages, descendantPages]
 using Tey.Docgen.Html, only: [packageNames, latestVersion, packageRedirectHtml, packageVersionsHtml, rootIndexHtml, linkType, linkTypeText, preludePaths]
 using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle, functionEntries]
@@ -407,8 +408,8 @@ let noLocation() -> Kex.AST.Location do
   return Kex.AST.Location { file: "io.kex", line: 1, column: 1, startOffset: 0, endOffset: 0 }
 end
 
-describe("Tey.Docgen.Extract receiver methods") do
-  it("keeps a zero-argument receiver method in the API documentation") do
+describe("Tey.Docgen.Extract receiver functions") do
+  it("keeps a zero-argument receiver function in the API documentation") do
     let body = [Kex.AST.FunctionDef(aBinding("boolean", false))]
     let methods = functionEntries(body, "Random.Generator", true)
     Assert.equal(methods.count, 1)
@@ -441,4 +442,46 @@ describe("Tey.Docgen.Html reference cards") do
     let indexed = PackageModel { ...model, modules: buildModules(model.pages) }
     Assert.equal(Tey.Docgen.Html.cardModules(indexed).map { |m| m.qualifiedName }, ["Data.Queue", "Data.Stack"])
   end
+end
+
+
+describe("Tey.Docgen function terminology") do
+  it("labels receiver functions consistently in HTML and Markdown") do
+    let entry = MakeEntry {
+      target: "Sample", isFinal: false, implements: [],
+      functions: [], doc: emptyDoc(), line: 1
+    }
+    let page = aPage([MakeDecl(entry)], "sample")
+    let model = aModel([], [page])
+    let html = Tey.Docgen.Html.makeGroupHtml(entry, "Sample", page, model)
+    let markdown = Tey.Docgen.Markdown.typeBodyMd("Sample", [entry], page, model)
+    assert(html.contains?("<h3>Functions</h3>"))
+    assert(markdown.contains?("### Functions"))
+    assert(!html.contains?("Methods"))
+    assert(!markdown.contains?("Methods"))
+  end
+
+  it("labels required and provided trait functions in both formats") do
+    let required = FunctionEntry {
+      name: "size", qualifiedName: "Sized.size", signatures: ["size :> Integer"],
+      clauseCount: 0, doc: emptyDoc(), line: 1
+    }
+    let provided = FunctionEntry {
+      name: "empty?", qualifiedName: "Sized.empty?", signatures: ["empty? :> Bool"],
+      clauseCount: 1, doc: emptyDoc(), line: 2
+    }
+    let entry = TraitEntry {
+      name: "Sized", qualifiedName: "Sized", typeParams: [],
+      functions: [required, provided], doc: emptyDoc(), line: 1
+    }
+    let page = aPage([TraitDecl(entry)], "sized")
+    let model = aModel([], [page])
+    let html = Tey.Docgen.Html.traitSection(entry, page, model)
+    let markdown = Tey.Docgen.Markdown.traitSection(entry, page, model)
+    assert(html.contains?("<h3>Required functions</h3>"))
+    assert(html.contains?("<h3>Provided functions</h3>"))
+    assert(markdown.contains?("### Required functions"))
+    assert(markdown.contains?("### Provided functions"))
+  end
+
 end

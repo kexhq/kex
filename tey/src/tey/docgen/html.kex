@@ -605,7 +605,7 @@ module Tey.Docgen.Html do
 
   # A page's declarations in source order — except that a type's `make`
   # blocks on the same page are pulled into the type's own section, so
-  # `List` reads as one thing (the type, then its methods, grouped by the
+  # `List` reads as one thing (the type, then its functions, grouped by the
   # receiver they need) rather than a type followed by three loose "make"
   # sections.
   foul entitiesHtml(entities: [Entity], page: SourcePage, model: PackageModel) -> String do
@@ -728,20 +728,20 @@ module Tey.Docgen.Html do
   end
 
   # Everything about a type beyond its declaration: the traits it
-  # implements (from every file), its methods grouped by receiver, the
-  # methods it gets from those traits for free, and the other modules that
-  # add methods to it.
+  # implements (from every file), its functions grouped by receiver, the
+  # functions it gets from those traits for free, and the other modules that
+  # add functions to it.
   foul typeBodyHtml(name: String, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
-    # The plain receiver's methods first; `[Number]`-only extras after.
+    # The plain receiver's functions first; `[Number]`-only extras after.
     let (plain, special) = makes.partition { |m| genericReceiver?(m.target, name) }
     let groups = (plain + special).map { |m| makeGroupHtml(m, name, page, model) }.join("\n")
     return "${implementsHtml(name, page, model)}${groups}${providedHtml(name, page, model)}${elsewhereHtml(name, page, model)}"
   end
 
-  # "Methods" for the plain receiver, "On `[Number]`" for a specialised one.
+  # "Functions" for the plain receiver, "On `[Number]`" for a specialised one.
   foul makeGroupHtml(m: MakeEntry, base: String, page: SourcePage, model: PackageModel) -> String do
     let title = if genericReceiver?(m.target, base)
-      "Methods"
+      "Functions"
     else
       "On <code>${esc(m.target)}</code>"
     end
@@ -776,8 +776,8 @@ module Tey.Docgen.Html do
     return links.join(", ")
   end
 
-  # The trait methods a type gets without writing them: a trait's provided
-  # methods, minus any the type defines itself somewhere. This is the
+  # The trait functions a type gets without writing them: a trait's provided
+  # functions, minus any the type defines itself somewhere. This is the
   # answer to "where does `List.eachIndexed` come from?".
   foul providedHtml(name: String, page: SourcePage, model: PackageModel) -> String do
     match Tey.Docgen.Relations.typeFactsFor(model, name) do
@@ -812,7 +812,7 @@ module Tey.Docgen.Html do
     end
   end
 
-  # Other modules that add methods to this type: `make Integer` in
+  # Other modules that add functions to this type: `make Integer` in
   # time.kex is where `5.seconds` comes from.
   foul elsewhereHtml(name: String, page: SourcePage, model: PackageModel) -> String do
     match Tey.Docgen.Relations.typeFactsFor(model, name) do
@@ -869,13 +869,13 @@ module Tey.Docgen.Html do
     let requiredHtml = if required.empty?
       ""
     else
-      "<h3>Required methods</h3>\n<p class=\"group-note\">An implementor writes these.</p>\n${functionsHtml(required, owner, 4, [], page, model)}\n"
+      "<h3>Required functions</h3>\n<p class=\"group-note\">An implementor writes these.</p>\n${functionsHtml(required, owner, 4, [], page, model)}\n"
     end
     let providedHtml = if provided.empty?
       ""
     else
-      let note = required.empty? then "" else "<p class=\"group-note\">Every implementor gets these, written in terms of the required methods.</p>\n"
-      "<h3>Provided methods</h3>\n${note}${functionsHtml(provided, owner, 4, [], page, model)}\n"
+      let note = required.empty? then "" else "<p class=\"group-note\">Every implementor gets these, written in terms of the required functions.</p>\n"
+      "<h3>Provided functions</h3>\n${note}${functionsHtml(provided, owner, 4, [], page, model)}\n"
     end
     let head = "<h2><span class=\"kind kind-trait\">trait</span> <code>${esc(e.name)}${esc(typeParamSuffix(e.typeParams))}</code></h2>"
     return "<section class=\"entity\" id=\"${anchorOf(TraitDecl(e))}\">\n${head}\n${entityDocHtml(e.doc, page, model)}${implementedByHtml(e, page, model)}${requiredHtml}${providedHtml}\n</section>"
@@ -934,7 +934,7 @@ module Tey.Docgen.Html do
     match Tey.Docgen.Relations.traitFactsFor(model, base) do
       Just(t) => do
         let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, t.urlPath, t.anchor)
-        return "<p class=\"home-note\">Methods every <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a> gets, defined by this module.</p>\n"
+        return "<p class=\"home-note\">Functions for <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a>, defined by this module.</p>\n"
       end
       None => ()
     end
@@ -942,14 +942,14 @@ module Tey.Docgen.Html do
       Just(f) => do
         return "" if f.homePath.empty? || f.homePath == page.urlPath
         let href = Tey.Docgen.Nav.hrefFrom(page.urlPath, f.homePath, f.homeAnchor)
-        return "<p class=\"home-note\">More methods of <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a>, added by this module.</p>\n"
+        return "<p class=\"home-note\">More functions for <a class=\"xref\" href=\"${href}\"><code>${esc(base)}</code></a>, added by this module.</p>\n"
       end
       None => ""
     end
   end
 
   # A module's own functions and constants are its API, listed under it
-  # (h3) like a type's methods. Types, traits and nested modules it declares
+  # (h3) like a type's functions. Types, traits and nested modules it declares
   # stand as sections of their own after that.
   foul moduleSection(e: ModuleEntry, page: SourcePage, model: PackageModel) -> String do
     let (members, declarations) = e.children.partition { |c| memberEntity?(c) }
@@ -995,9 +995,9 @@ module Tey.Docgen.Html do
   end
 
   # Members of a trait or make block, one heading per NAME: overloads
-  # (`count` and `count(pred)`) are one method with several signatures, not
+  # (`count` and `count(pred)`) are one function with several signatures, not
   # two unrelated entries. `owner` scopes the anchors; `implements` lets a
-  # member that fulfils a trait method say which trait.
+  # member that fulfils a trait function say which trait.
   foul functionsHtml(functions: [FunctionEntry], owner: String, level: Integer, implements: [String],
                      page: SourcePage, model: PackageModel) -> String do
     return "" if functions.empty?
@@ -1017,7 +1017,7 @@ module Tey.Docgen.Html do
     return "<div class=\"fn\" id=\"${anchor}\">\n${head}\n${body}\n</div>"
   end
 
-  # "from Enumerable": this member is the type's own version of a method the
+  # "from Enumerable": this member is the type's own version of a function the
   # trait declares, linked to the trait's description of it.
   foul traitTag(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do
     let hits = implements.flatMap { |t|
@@ -1058,7 +1058,7 @@ module Tey.Docgen.Html do
   end
 
   # A declaration's doc: prose, then its examples and any deprecation —
-  # a type's @example is as much a part of it as a method's.
+  # a type's @example is as much a part of it as a function's.
   foul entityDocHtml(doc: Doc, page: SourcePage, model: PackageModel) -> String do
     return "${docHtml(doc, page, model)}${examplesHtml(doc)}${deprecatedHtml(doc)}"
   end

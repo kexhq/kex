@@ -90,9 +90,9 @@ let process(nums: [Int]) -> [Int] =
 
 No changes to `map`'s signature needed — it accepts any closure. Purity is checked at the context level, not the closure level.
 
-### Foul trait methods
+### Foul trait functions
 
-Traits can declare foul methods:
+Traits can declare foul functions:
 
 ```kex
 trait Serializable do
@@ -101,7 +101,7 @@ trait Serializable do
 end
 ```
 
-A trait can mix pure and foul methods. Implementors must match the foul marker.
+A trait can mix pure and foul functions. Implementors must match the foul marker.
 
 ### Granular capabilities
 
@@ -111,7 +111,7 @@ Not in the syntax. The compiler infers capabilities from the body. If granular r
 
 ## Traits
 
-Traits declare type contracts. They use type signatures (`:`) for required methods and `let` for default implementations.
+Traits declare type contracts. They use type signatures (`:`) for required functions and `let` for default implementations.
 
 ### Syntax
 
@@ -173,7 +173,7 @@ end
 ## Higher-Kinded Types (HKTs)
 
 > **Forward-looking.** HKTs (`F<_>`), the `Monad`/`Functor` traits above, and
-> foul trait methods describe the intended design. They are **not yet
+> foul trait functions describe the intended design. They are **not yet
 > implemented** — `trait` today is `trait Name (<params>)? do … end` with no
 > `for:` clause and no `<_>` hole. The concrete traits that work today are
 > covered in `docs/types.md` (`Comparable`, `Equatable`, `Enumerable`,

@@ -1,0 +1,6 @@
+data-size comparison dimensions
+  ✗ rejects a time threshold: assertion failed: Byte counts require a data-size threshold
+  ✗ rejects a time measure on the left: assertion failed: Byte counts require a data-size threshold
+  ✗ rejects an SI threshold: assertion failed: Byte counts require a data-size threshold
+
+0 passed, 3 failed

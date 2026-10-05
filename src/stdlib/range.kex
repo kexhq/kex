@@ -3,7 +3,7 @@
 # A range stores its endpoints on both backends without building a list.
 # Integer and character ranges can be enumerated with both ends included.
 # Float ranges describe continuous bounds, for example +(-1.0..1.0)+ for
-# random sampling; +items+ and traversal methods cannot enumerate them.
+# random sampling; +items+ and traversal functions cannot enumerate them.
 # A range whose lower endpoint exceeds its upper endpoint enumerates as an
 # empty list.
 #
@@ -12,7 +12,7 @@
 #   5.in?(1..10)          # => true
 #   ('a'..'e').items      # => ['a', 'b', 'c', 'd', 'e']
 #
-# It is +Enumerable+ and +Foldable+, so the traversal methods work directly,
+# It is +Enumerable+ and +Foldable+, so the traversal functions work directly,
 # and the list operations below answer in list terms. Use +items+ when you
 # want a real list to hand to something else.
 #
@@ -23,7 +23,7 @@ type Range
 make Range, implement: Enumerable, Foldable do
   # Folds over the range's elements in ascending order.
   #
-  # This is +Range+'s +Enumerable+ primitive; the traversal methods are built
+  # This is +Range+'s +Enumerable+ primitive; the traversal functions are built
   # on it. A range stays structurally minimal, so the fold runs over its
   # materialized items.
   #
@@ -54,7 +54,7 @@ make Range, implement: Enumerable, Foldable do
 
   # Returns +true+ when +value+ is one of the enumerated elements.
   #
-  # This method materializes the range and supports integer and character
+  # This function materializes the range and supports integer and character
   # ranges only. For continuous bounds, compare the value with each endpoint:
   # +value >= lower && value <= upper+.
   #

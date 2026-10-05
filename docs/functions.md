@@ -33,14 +33,23 @@ element : String -> [String] -> Element
 
 ## UFCS (Uniform Function Call Syntax)
 
-`a.f(b)` desugars to `f(a, b)`. This enables:
-- IDE code completion (type `.` to see available functions)
-- Method-call syntax on any type
-- Chaining: `input.parse.transform.format`
+`a.f(b)` calls `f(a, b)`: the value before the dot supplies the first
+argument. This syntax is called Uniform Function Call Syntax (UFCS).
+
+```kex
+let add(a: Integer, b: Integer) = a + b
+
+add(2, 3)   # 5
+2.add(3)    # 5 — the same function call
+```
+
+Calls can be chained: `items.filter(...).map(...).take(10)`. Each result
+becomes the first argument of the next function.
 
 ## Make Blocks
 
-Group functions by their first parameter:
+Group functions by the type of their first parameter. Inside `make`, that
+parameter is named `this` and is supplied by the receiver at the call site:
 
 ```kex
 make Integer do
@@ -140,13 +149,13 @@ let v = Vector2D.Polar(5.0, Math.PI / 4.0)
 let origin = Vector2D.Zero
 ```
 
-One name carries three declarations, each owning a different half of the type:
+One name carries three declarations, each serving a different purpose:
 `record Vector2D` (its data), `module Vector2D` (its type-level functions) and
-`make Vector2D` (its instance methods).
+`make Vector2D` (functions whose first argument is a `Vector2D`).
 
 Convention:
 - **Capitalized** — constructors and constants (`Polar`, `Zero`, `UnitX`)
-- **Lowercase** — instance methods in `make` blocks (`add`, `length`, `normalize`)
+- **Lowercase** — functions in `make` blocks (`add`, `length`, `normalize`)
 
 Type-level functions have no `this` — they create or return values of the type.
 They are reachable only under the module name: bare `Polar(...)` is an
@@ -224,7 +233,7 @@ end
 # Zero-arg
 let thunk = { 42 }
 
-# Receiver shorthand — `&.` calls a method on the argument
+# Receiver shorthand — `&.` calls a function on the argument
 arr.map(&.name)           # { |x| x.name }
 arr.filter(&.adult?)      # { |x| x.adult? }
 

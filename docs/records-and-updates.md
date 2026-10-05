@@ -30,7 +30,8 @@ end
 
 ## Several updates: implicit `new`
 
-Record methods and slots also receive a local named `new`, initially equal to
+Functions in a record’s `make` block and slots also receive a local named
+`new`, initially equal to
 `this`. Assigning a field rebuilds the record and rebinds this local; it does
 not mutate the original value.
 

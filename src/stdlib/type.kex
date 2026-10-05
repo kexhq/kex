@@ -126,7 +126,7 @@ module Type do
 
 end
 
-# Reflection methods on runtime type values.
+# Reflection functions on runtime type values.
 make Type do
   # Returns a record type's fields, in declaration order: each one's name,
   # declared type, and whether a value may leave it out. Anything that is not

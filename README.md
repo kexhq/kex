@@ -6,7 +6,7 @@
 <img src="./docs/assets/logo.png" height="340" style="align: center" />
 </p>
 
-Kex is a functional programming language with Ruby-like syntax, immutable data by default, UFCS method chains, type-directed `make` blocks, pattern matching, and explicit side-effect boundaries.
+Kex is a functional programming language with Ruby-like syntax, immutable data by default, UFCS for chaining function calls, type-directed `make` blocks, pattern matching, and explicit side-effect boundaries.
 
 It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
@@ -96,7 +96,7 @@ end
 
 Kex tries to make the common path feel light:
 
-- Functions compose through method syntax with UFCS: `items.filter(...).map(...).take(10)`.
+- UFCS chains function calls, passing each result as the next call’s first argument: `items.filter(...).map(...).take(10)`.
 - Domain behavior lives near the type through `make`, without classes or inheritance-heavy hierarchies. `@field` is shorthand for `this.field` inside those blocks, and operators (`+`, `==`, ...) can be overloaded the same way.
 - Pattern matching works in function clauses, `match` expressions, and receiver patterns.
 - Effects are visible: functions are pure unless marked `foul`, and `main` is the effect boundary.
@@ -126,7 +126,7 @@ map(requests, ~normalize)
 
 ### Type-Directed Behavior Without Classes
 
-`make` blocks attach behavior to a type. The same method name — even an operator — can exist for different receiver types; dispatch is based on the receiver. Inside a `make` block, `@field` is shorthand for `this.field`.
+`make` blocks group functions by the type of their first argument. The same function name — even an operator — can exist for different receiver types; dispatch is based on the receiver. Inside a `make` block, `@field` is shorthand for `this.field`.
 
 ```rb
 record Vector2D do
@@ -304,7 +304,7 @@ let bad(path: String) = readConfig(path)
 
 ### Local Mutation With `var` and `!`
 
-Bindings are immutable by default. `var` opts into local mutation, and `!` is reassignment sugar for methods that return an updated value — it rebinds the variable rather than mutating the underlying value in place, so aliases never see the change.
+Bindings are immutable by default. `var` opts into local mutation, and `!` is reassignment sugar for functions that return an updated value — it rebinds the variable rather than mutating the underlying value in place, so aliases never see the change.
 
 ```rb
 let frozen = [1, 2, 3]
@@ -360,7 +360,7 @@ end
 
 ### Traits
 
-Traits declare required methods and can provide default implementations. Implementing types get the defaults for free.
+Traits declare required functions and can provide default implementations. Implementing types get the defaults for free.
 
 ```rb
 trait Shape do
@@ -432,7 +432,7 @@ Constructors and constants for a type live in a `module` of the same name,
 declared alongside the type. Constructors are capitalized `let`s that build an
 instance; constants are capitalized `let`s that just hold a value. One name thus
 carries up to three declarations — `record` for the data, `module` for the
-type-level functions, `make` for the instance methods.
+type-level functions, `make` for functions taking a value of the type.
 
 ```rb
 record Temperature do
@@ -580,14 +580,14 @@ use on a small runner.
 Good starting points:
 
 - `examples/basics.kex` - core syntax
-- `examples/traits.kex` - Shape trait, required/default/overridden methods, multiple traits
-- `examples/vectors_advanced.kex` - records, type-level constructors, UFCS methods
+- `examples/traits.kex` - Shape trait, required/default/overridden functions, multiple traits
+- `examples/vectors_advanced.kex` - records, type-level constructors, functions called through UFCS
 - `examples/streams.kex` - lazy ranges and streams
 - `examples/html_dsl.kex` - DSL-oriented blocks
 - `examples/error_handling.kex` - `Result`, optional values, and `?`
 - `spec/type_dispatch.kex` - dispatch through `make` and receiver patterns
 - `spec/operator_overloading.kex` - overloading `+`, `*`, `==` per receiver type
-- `spec/at_field_shorthand.kex` - `@field`/`@method(...)` inside `make` blocks
+- `spec/at_field_shorthand.kex` - `@field`/`@function(...)` inside `make` blocks
 - `spec/mutating_calls.kex` - `var`/`let` and `!` mutation semantics
 - `spec/record_module_constructors.kex` - constructors/constants in a `module` of the record's name stay namespaced under it
 - `spec/math.kex` - the `Math` module (`Math.PI`, `Math.sqrt`, trig, logs, ...)
@@ -652,7 +652,7 @@ Key implementation choices:
 
 - AST nodes and runtime values use `std::variant`.
 - `make Vec2 do let add(...) end` registers behavior as `Vec2::add`.
-- UFCS resolves by checking the receiver type and looking up the mangled method name.
+- UFCS resolves by checking the receiver type and looking up the mangled function name.
 - Purity is enforced in a semantic pass before evaluation.
 
 ## Status
@@ -666,7 +666,7 @@ Working today:
 - Records, sum types, functions, lambdas, pattern matching, destructuring
 - Lists, maps, ranges, streams, strings, chars, numbers, optional values, result values
 - UFCS, `make` dispatch, `to` conversion convention, operator overloading
-- `@field`/`@method(...)` shorthand for `this` inside `make` blocks
+- `@field`/`@function(...)` shorthand for `this` inside `make` blocks
 - `foul` purity boundaries, and local `var` mutation enforced at runtime
 - Traits: `trait ... do end`, `make X implement: Trait do end`, `Comparable`, `Equatable`
 - Currying and partial application with `~func(args)`, `~(op)`, and `_` placeholders

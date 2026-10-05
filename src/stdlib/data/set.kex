@@ -7,7 +7,7 @@
 #
 # Membership is decided by structural equality: the same equality +==+ and
 # map keys use, so records and tuples are compared by value, not identity.
-# Every method answers with a new set; the +!+ forms (+add!+, +delete!+) build
+# Updates return a new set; the +!+ forms (+add!+, +delete!+) build
 # a new set and rebind the receiver variable rather than modifying anything in
 # place.
 #
@@ -34,7 +34,7 @@ module Data
 # A set whose elements are kept sorted and duplicate free.
 #
 # Build one with +Set.from+ rather than by hand: the record literal does no
-# deduplication and no sorting, and every method here relies on both. Reading
+# deduplication and no sorting, and every function here relies on both. Reading
 # +items+ back is the field itself, so handing a set's elements to list code
 # costs nothing.
 #
@@ -335,7 +335,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # Unions with another set, or with a plain list.
   #
   # The list form is the everyday way to add one element without naming a
-  # method: +s + [x]+.
+  # function: +s + [x]+.
   #
   # @param other [Set<A> | [A]] the elements to add
   # @return [Set<A>] the union

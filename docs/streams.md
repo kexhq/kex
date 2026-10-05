@@ -7,7 +7,7 @@ source that is consumed once.
 ## Collection traversal
 
 Lists, strings, maps, and ranges implement `Foldable` and `Enumerable` by
-providing `reduce`. `Foldable` supplies traversal methods such as `each`,
+providing `reduce`. `Foldable` supplies traversal functions such as `each`,
 `find`, `all?`, and `any?`. `Enumerable` supplies transformations such as
 `map`, `filter`, and `flatMap`.
 
@@ -17,7 +17,7 @@ providing `reduce`. `Foldable` supplies traversal methods such as `each`,
 [1, 2, 3].filter(~even?)                   # => [2]
 ```
 
-Streams and feeds provide their own traversal methods. They do not implement
+Streams and feeds provide their own traversal functions. They do not implement
 these collection traits: a stream may be infinite, and a feed changes as it
 is read.
 
@@ -43,7 +43,7 @@ matching elements.
 
 ## Ranges
 
-Integer and character ranges include both endpoints. Their collection methods
+Integer and character ranges include both endpoints. Their collection functions
 materialize the elements, so use care with large ranges. `min`, `max`, and
 `first` return optionals because a range can be empty.
 
@@ -58,7 +58,7 @@ numbers.map { |n| n * 2 }      # => [2, 4, 6, 8]
 ```
 
 Float ranges describe continuous bounds and cannot be enumerated with these
-methods. To check continuous bounds, compare with both endpoints explicitly.
+functions. To check continuous bounds, compare with both endpoints explicitly.
 
 ## Feeds: consumed once
 
@@ -100,4 +100,4 @@ replayable by caching them. `Stream.toFeed` gives a consuming cursor over a
 stream; release references to the stream's start when you do not need replay.
 
 Opening a file-backed feed is `foul`. Consuming an existing feed uses ordinary
-methods, but still advances its cursor.
+functions, but still advances its cursor.

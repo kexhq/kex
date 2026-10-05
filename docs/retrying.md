@@ -260,7 +260,7 @@ sequences, recovery, exhaustion, schedule reuse, and HTTP classification.
 
 ## Replacing the former API
 
-`Policy`, `fixed`, `exponential`, builder methods, predicates, `runWith`, and
+`Policy`, `fixed`, `exponential`, builder functions, predicates, `runWith`, and
 `runWithRandom` are removed. Use `Schedule` fields or named `run` options,
 `backoff: 1.0` for fixed delays, and `sleeper:` / `random:` for testing.
 `maximumTotalDelay` names the cumulative-sleep limit explicitly. Express custom

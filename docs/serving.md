@@ -111,7 +111,7 @@ A server keeps running across a reload of the module that implements it:
   state is rebuilt in the new layout by field name before the next request.
   A kept field keeps its value, and a new field takes its declared default.
   A new field without a default cannot be filled in, so that request fails.
-- **The `upgrade` hook.** If the serving block declares an `upgrade` method,
+- **The `upgrade` hook.** If the serving block declares an `upgrade` function,
   it runs once on the rebuilt state, for anything a default cannot express.
   This is the `code_change/3` of a hand-written gen_server, and OTP's
   `sys:change_code` takes the same path.
@@ -138,7 +138,7 @@ end
 On BEAM, a Kex server is an OTP `gen_server`. Slots use ordinary tuple request
 terms, so foreign callers can send `{add, <<"coffee">>}` with
 `gen_server:call/2` or the atom `clear` with `gen_server:cast/2`. Only declared
-slots are exposed; ordinary helper methods are not request handlers.
+slots are exposed; ordinary helper functions are not request handlers.
 
 The full rationale, rejected alternatives, and deferred supervision work live
 in [the serving design plan](serving-plan.md).

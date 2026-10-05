@@ -27,7 +27,7 @@
 # with a +Bool+, so a missing file or a failed write is an ordinary value you
 # handle rather than an exception you catch.
 module FS do
-  # A filesystem path. An alias for +String+, so every +String+ method applies
+  # A filesystem path. An alias for +String+, so every +String+ function applies
   # to one; +FS.Path+ adds the path-aware operations.
   type FilePath = String
 

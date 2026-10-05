@@ -2,8 +2,8 @@
 using Units.Data
 
 main do
-  let download = 5.megabytes
-  let cache = 2.gibibytes
+  let download = 5.megabyte
+  let cache = 2.gibibyte
 
   IO.printLine("download: ${download.to(String)}")
   match download.convertTo(MiB) do
