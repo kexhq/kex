@@ -388,7 +388,7 @@ asset.to(String, in: Mega)  # Just("5.0 MB")
 
 Data constructors use singular names, just like SI: `byte`, `kilobyte`,
 `megabyte`, `gigabyte`, `terabyte`, `kibibyte`, `mebibyte`, `gibibyte`, and
-`tebibyte`. The plural names remain aliases; `byteSize` is an alias for `byte`.
+`tebibyte`. `byteSize` is an alias for `byte`.
 `KB` means 1000 bytes, while `KiB` means 1024 bytes. Likewise, `MB` is
 1000000 bytes and `MiB` is 1048576 bytes.
 

@@ -14,7 +14,7 @@
 # in bytes underneath, so +1.gibibyte.convertTo(MiB)+ answers 1024 MiB.
 #
 # Numeric constructors use singular names, as in +Units.SI+: +5.megabyte+
-# and +2.mebibyte+. The plural forms, such as +megabytes+, are aliases.
+# and +2.mebibyte+.
 # +byteSize+ is an alias for +byte+.
 #
 # File and payload APIs return integer byte counts. Wrap those counts with
@@ -253,54 +253,6 @@ let gibibyte(value: Number) -> Measure = size(value, GiB)
 # @example
 #   1.tebibyte.to(String)   # => "1.0 TiB"
 let tebibyte(value: Number) -> Measure = size(value, TiB)
-
-# Plural alias for +kilobyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let kilobytes(value: Number) -> Measure = kilobyte(value)
-
-# Plural alias for +megabyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let megabytes(value: Number) -> Measure = megabyte(value)
-
-# Plural alias for +gigabyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let gigabytes(value: Number) -> Measure = gigabyte(value)
-
-# Plural alias for +terabyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let terabytes(value: Number) -> Measure = terabyte(value)
-
-# Plural alias for +kibibyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let kibibytes(value: Number) -> Measure = kibibyte(value)
-
-# Plural alias for +mebibyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let mebibytes(value: Number) -> Measure = mebibyte(value)
-
-# Plural alias for +gibibyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let gibibytes(value: Number) -> Measure = gibibyte(value)
-
-# Plural alias for +tebibyte+.
-#
-# @param value [Number] the quantity
-# @return [Measure] the size
-let tebibytes(value: Number) -> Measure = tebibyte(value)
 
 # Compares an integer byte count with a data-size threshold.
 #

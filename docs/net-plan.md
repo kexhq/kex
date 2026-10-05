@@ -319,7 +319,7 @@ let listener = TCP.listen(
 ).try
 
 listener.serve(maxHandlers: 1024) do |connection|
-  let line = connection.receiveLine(limit: 1.mebibytes).try
+  let line = connection.receiveLine(limit: 1.mebibyte).try
   connection.sendAll(line).try
 end.try
 ```
@@ -330,7 +330,7 @@ let address = Unix.Address.path("/tmp/kex-agent.sock").try
 let server = Unix.start(address,
   Unix.ListenOptions { removeStale: true }
 ) do |connection|
-  connection.sendAll(connection.receiveChunk(64.kibibytes).try).try
+  connection.sendAll(connection.receiveChunk(64.kibibyte).try).try
 end.try
 
 Unix.connect(address).try do |connection|
@@ -352,7 +352,7 @@ server.stop(grace: 10.seconds).try
 ```kex
 # Proposed low-level UDP operations.
 let socket = UDP.bind(UDP.Endpoint.any(5353)).try
-let packet = socket.receiveFrom(limit: 64.kibibytes).try
+let packet = socket.receiveFrom(limit: 64.kibibyte).try
 socket.sendTo(packet.source, packet.data).try
 
 # Proposed high-level request/reply server.
@@ -594,15 +594,15 @@ server.events.each { |event| recordServerEvent(event) }
 ```kex
 # Proposed bounded forms and streaming multipart.
 router.post("/profile") do |request, context|
-  let form = request.body.form(limit: 64.kibibytes).try
+  let form = request.body.form(limit: 64.kibibyte).try
   updateProfile(form.get("display_name").try)
     .map { |_| Response.redirect("/profile", status: 303) }
 end
 
 router.post("/upload") do |request, context|
   request.body.multipart(
-    totalLimit: 20.mebibytes,
-    partLimit: 10.mebibytes
+    totalLimit: 20.mebibyte,
+    partLimit: 10.mebibyte
   ).try.eachPart do |part|
     match part do
       FilePart(name, filename, headers, body) => storeUpload(name, filename, body).try

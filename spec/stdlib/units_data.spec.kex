@@ -15,18 +15,6 @@ describe("Units.Data") do
     assert(size.kind == :data)
   end
 
-  it("uses singular unit constructors and preserves the plural aliases") do
-    assert(1.byte == 1.byteSize)
-    assert(1.kilobyte == 1.kilobytes)
-    assert(1.megabyte == 1.megabytes)
-    assert(1.gigabyte == 1.gigabytes)
-    assert(1.terabyte == 1.terabytes)
-    assert(1.kibibyte == 1.kibibytes)
-    assert(1.mebibyte == 1.mebibytes)
-    assert(1.gibibyte == 1.gibibytes)
-    assert(1.tebibyte == 1.tebibytes)
-  end
-
   it("compares byte counts with decimal thresholds at the boundary") do
     assert(30000001 > 30.megabyte)
     assert(!(30000000 > 30.megabyte))
@@ -79,8 +67,8 @@ describe("Units.Data") do
   it("distinguishes decimal and binary units") do
     assert(1.size(KB).canonical == 1000.0)
     assert(1.size(KiB).canonical == 1024.0)
-    assert(1.megabytes.canonical == 1000000.0)
-    assert(1.mebibytes.canonical == 1048576.0)
+    assert(1.megabyte.canonical == 1000000.0)
+    assert(1.mebibyte.canonical == 1048576.0)
   end
 
   it("constructs every decimal and binary data unit") do
@@ -94,15 +82,15 @@ describe("Units.Data") do
     assert(1.size(GiB).canonical == 1073741824.0)
     assert(1.size(TiB).canonical == 1099511627776.0)
     assert(1.byteSize.symbol == "B")
-    assert(1.gigabytes.symbol == "GB")
-    assert(1.terabytes.symbol == "TB")
-    assert(1.kibibytes.symbol == "KiB")
-    assert(1.gibibytes.symbol == "GiB")
-    assert(1.tebibytes.symbol == "TiB")
+    assert(1.gigabyte.symbol == "GB")
+    assert(1.terabyte.symbol == "TB")
+    assert(1.kibibyte.symbol == "KiB")
+    assert(1.gibibyte.symbol == "GiB")
+    assert(1.tebibyte.symbol == "TiB")
   end
 
   it("converts display units without losing the canonical value") do
-    match 10.megabytes.convertTo(MiB) do
+    match 10.megabyte.convertTo(MiB) do
       Ok(size) => do
         assert(size.canonical == 10000000.0)
         assert(size.value == 9.5367431640625)
@@ -117,12 +105,12 @@ describe("Units.Data") do
     assert(size.to(String, in: Kilo) == Just("5000.0 KB"))
     assert(size.to(String, in: Mega) == Just("5.0 MB"))
     assert(size.to(String, in: Giga) == Just("0.005 GB"))
-    assert(5.megabytes.to(String, in: Mega) == Just("5.0 MB"))
+    assert(5.megabyte.to(String, in: Mega) == Just("5.0 MB"))
     assert(1.second.to(String, in: Mega) == None)
   end
 
   it("adds data measures using canonical bytes") do
-    match 1.megabytes + 500.kilobytes do
+    match 1.megabyte + 500.kilobyte do
       Ok(total) => do
         assert(total.canonical == 1500000.0)
         assert(total.value == 1.5)
