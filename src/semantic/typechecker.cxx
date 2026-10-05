@@ -2,6 +2,7 @@
 #include "analyzer.hxx"
 #include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/named_arguments.hxx"
 #include <cctype>
 #include <functional>
 #include <set>
@@ -1052,7 +1053,6 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
 auto TypeChecker::resolveModulePath(const std::string& name,
                                     const std::string& member) const
     -> std::string {
-    if (!m_importedInterfaces) return name;
     // A `make X<A> do ... end` block unconditionally creates a placeholder
     // `ifaces.modules[typeName]` entry while scanning its own methods
     // (`prelude_interfaces.hxx`'s `collectMakeMember`), keyed by the type's
@@ -1062,33 +1062,55 @@ auto TypeChecker::resolveModulePath(const std::string& name,
     // `Data.Set`. A mere key match is therefore not enough to trust `name`
     // literally; the literal module must actually export `member`.
     auto exportsMember = [&](const std::string& module) {
+        if (m_localModules.contains(module) &&
+            m_userSignatures.contains(module + "::" + member))
+            return true;
+        if (!m_importedInterfaces) return false;
         auto found = m_importedInterfaces->modules.find(module);
         if (found == m_importedInterfaces->modules.end()) return false;
         auto exported = found->second.exports.find(member);
         return exported != found->second.exports.end() && !exported->second.empty();
     };
-    if (exportsMember(name)) return name;
+    const auto canonicalModule = [&](const std::string& module) {
+        if (exportsMember(module)) return module;
+        const auto backend = "Kex." + module;
+        return exportsMember(backend) ? backend : module;
+    };
+    if (exportsMember(canonicalModule(name))) return canonicalModule(name);
     auto lastSegmentOf = [](const std::string& module) {
         const auto dot = module.rfind('.');
         return dot == std::string::npos ? module : module.substr(dot + 1);
     };
-    auto consider = [&](const std::string& module,
+    auto consider = [&](const ImportSelection& import,
                         std::vector<std::string>& candidates) {
-        if (lastSegmentOf(module) == name && exportsMember(module))
-            candidates.push_back(module);
+        if (import.alias) return;
+        const auto& module = import.module;
         const auto child = module + "." + name;
-        if (exportsMember(child)) candidates.push_back(child);
+        const auto root = name.substr(0, name.find('.'));
+        const bool included = import.onlyNames.empty() ||
+            std::find(import.onlyNames.begin(), import.onlyNames.end(), root) !=
+                import.onlyNames.end();
+        const bool excluded =
+            std::find(import.exceptNames.begin(), import.exceptNames.end(), root) !=
+                import.exceptNames.end();
+        if (included && !excluded && exportsMember(canonicalModule(child))) {
+            candidates.push_back(canonicalModule(child));
+            return;
+        }
+        if (lastSegmentOf(module) == name && exportsMember(canonicalModule(module)))
+            candidates.push_back(canonicalModule(module));
     };
     std::vector<std::string> candidates;
-    for (const auto& import : m_declarationImports) consider(import.module, candidates);
+    for (const auto& import : m_declarationImports) consider(import, candidates);
     for (const auto& scope : m_importScopeStack)
-        for (const auto& import : scope) consider(import.module, candidates);
+        for (const auto& import : scope) consider(import, candidates);
     std::sort(candidates.begin(), candidates.end());
     candidates.erase(std::unique(candidates.begin(), candidates.end()),
                      candidates.end());
     if (candidates.size() == 1) return candidates.front();
     if (!candidates.empty()) return name;
 
+    if (!m_importedInterfaces) return name;
     std::optional<std::string> unique;
     const auto suffix = "." + name;
     for (const auto& [candidate, _] : m_importedInterfaces->modules) {
@@ -8425,6 +8447,36 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::vector<const Signature*> arityMatches;
     std::vector<const Signature*> fullMatches;
     for (const auto& sig : *sigs) {
+        const auto* functionCall = callExpr
+            ? std::get_if<ast::FunctionCall>(&callExpr->kind) : nullptr;
+        const auto* named = functionCall ? &functionCall->namedArgs
+                                        : methodCall ? &methodCall->namedArgs : nullptr;
+        if (named && !named->empty() &&
+            (!isMethodCall || name.find("::") != std::string::npos) &&
+            sig.paramNames.size() == sig.params.size()) {
+            std::vector<std::string> labels;
+            for (const auto& [label, _] : *named) labels.push_back(label);
+            const bool labelsKnown = std::all_of(labels.begin(), labels.end(),
+                [&](const std::string& label) {
+                    return std::any_of(sigs->begin(), sigs->end(),
+                        [&](const Signature& candidate) {
+                            return std::find(candidate.paramNames.begin(),
+                                             candidate.paramNames.end(), label) !=
+                                   candidate.paramNames.end();
+                        });
+                });
+            const auto required = sig.requiredParams.value_or(sig.params.size());
+            std::vector<bool> defaulted(sig.params.size(), false);
+            for (std::size_t i = required; i < defaulted.size(); ++i)
+                defaulted[i] = true;
+            const auto positional = functionCall
+                ? functionCall->args.size() + bool(functionCall->block)
+                : methodCall->args.size() + bool(methodCall->block);
+            if (labelsKnown &&
+                !namedArgumentsFit(sig.paramNames, defaulted, labels, positional))
+                continue;
+        }
+
         // A trailing parameter with a default may be omitted, so the accepted
         // range is [requiredParams, params.size()] rather than one number.
         const std::size_t required =

@@ -632,15 +632,43 @@ end
 
 ### Named Arguments
 
-Parameters may have default values and callers may pass them by name:
+Use a parameter's name as a label to make a call clearer. Labels may appear in
+any order; positional arguments fill the remaining parameter slots in order.
+Only parameters with default values may be omitted:
 
 ```kex
-let connect(host: String, port: Integer, timeout: Integer = 5000) do
-  # ...
+let greet(name: String, from: String = "Kex") -> String do
+  "Hello, ${name} from ${from}"
 end
 
-connect(host: "localhost", port: 8080)
-connect(host: "localhost", port: 8080, timeout: 1000)
+greet("Ada")                       # => "Hello, Ada from Kex"
+greet("Ada", from: "London")       # => "Hello, Ada from London"
+greet(from: "London", name: "Ada") # => "Hello, Ada from London"
+```
+
+A type such as `String?` accepts `Just(text)` or `None`. It still requires an
+argument unless the parameter has a default, such as `note: String? = None`:
+
+```kex
+let describe(name: String, note: String?) -> String do
+  "${name}: ${note.or("no note")}"
+end
+
+describe("Ada", note: None)        # => "Ada: no note"
+# describe("Ada")                 # error: note is required
+```
+
+Labels do not change how many arguments an overload requires. A call must
+supply every required parameter of the selected overload:
+
+```kex
+let welcome(name: String, from: String) -> String = "${name} from ${from}"
+let welcome(name: String, from: String, note: String?) -> String do
+  "${name} from ${from}: ${note.or("no note")}"
+end
+
+welcome("Ada", from: "Kex")             # => "Ada from Kex"
+welcome("Ada", from: "Kex", note: None) # => "Ada from Kex: no note"
 ```
 
 ### Foul Functions
@@ -1306,6 +1334,22 @@ Geometry.Constants.tau
 ```
 
 ### Using (Import)
+
+`using` includes a module's public members in the current scope, including
+its nested modules. You can then use their names directly:
+
+```kex
+using Geometry
+
+square(5)       # => 25
+Constants.tau   # the public nested module Geometry.Constants
+```
+
+For example, `using Net.HTTP` includes `HTTP`, `Client`, and `Headers`.
+A request is written as `HTTP.get(url)`.
+
+Use `only` or `except` to control which members are included. Use `as` when
+you want an explicit module alias:
 
 ```kex
 using Math, only: [sqrt]          # selective import
@@ -2045,7 +2089,7 @@ do not currently track whether a handle has been closed.
 
 ### 23.14 HTTP (`foul`)
 
-Networking is opt-in: import `Net.HTTP`. `Net.HTTP.HTTP.get(url)` returns
+Networking is opt-in: import `Net.HTTP`. `HTTP.get(url)` returns
 `Result<Response<Binary>, NetError>`. Response bodies are bytes; convert them
 with `to(String)` when expecting UTF-8 text. The validated status value is
 available as `response.status.code`.
@@ -2053,7 +2097,7 @@ available as `response.status.code`.
 ```kex
 using Net.HTTP
 
-match Net.HTTP.HTTP.get("https://example.com") do
+match HTTP.get("https://example.com") do
   Ok(response) => IO.printLine(response.status.code)
   Error(error) => IO.printError(error.message)
 end

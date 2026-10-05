@@ -16,7 +16,7 @@ FROM alpine:3.22 AS build
 # the same /usr/lib/erlang.
 
 RUN apk add --no-cache \
-        build-base cmake git bash \
+        build-base cmake git bash coreutils \
         gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
         erlang27 erlang27-dev erlang27-odbc unixodbc-dev
 
@@ -37,7 +37,8 @@ RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
         ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \
     && cmake --build build --parallel "$BUILD_JOBS"
 
-# bash, because the spec runners use process substitution.
+# bash provides process substitution; coreutils provides GNU timeout, including
+# --kill-after and the timeout exit codes used by the BEAM runner's retries.
 RUN make spec && make spec-beam
 
 RUN cmake --install build --prefix /opt/kex

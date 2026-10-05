@@ -4,6 +4,7 @@
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
+#include "../common/named_arguments.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -1434,14 +1435,17 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                             m_env->define(*param.name, eval(**param.defaultValue));
                         }
                     }
-                    // No arg and no default: leave unbound (may cause runtime error if accessed)
+                    else {
+                        matched = false;
+                        break;
+                    }
                 }
 
                 // Reject a clause that can't consume all the (post-receiver)
                 // args, so a lower-arity overload doesn't silently drop them
                 // (e.g. `sort/1`/`count/1` swallowing `.sort(cmp)`/`.count(pred)`
-                // instead of dispatching to the /2 form). Fewer args than params
-                // is still fine (defaults / unbound).
+                // instead of dispatching to the /2 form). Missing arguments
+                // are accepted only when their parameters have defaults.
                 if (matched && args.size() > argOffset + clause.params.size())
                     matched = false;
 
@@ -3813,7 +3817,9 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                 }
                 auto it = m_functionDefs.find(defLookupKey);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
-                    const auto* selected = findNamedClause(defLookupKey, namedArgs);
+                    const auto offset = receiverArgumentOffset(defLookupKey, args);
+                    const auto* selected = findNamedClause(
+                        defLookupKey, namedArgs, args.size() - offset);
                     // No clause declares one of these labels. Falling back to
                     // clause 0 would drop it, turning `m.to(String, in: kWh)`
                     // into a plain `to(String)` whose answer looks fine and
@@ -3834,8 +3840,10 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                             }
                             throw RuntimeError(message, loc);
                         }
-                    const auto& clause = selected
-                        ? *selected : it->second[0]->clauses[0];
+                    if (!selected)
+                        throw RuntimeError("No overload of `" + defLookupKey +
+                                           "` accepts these named arguments and argument count", loc);
+                    const auto& clause = *selected;
                     const auto receiverOffset =
                         receiverArgumentOffset(defLookupKey, args);
                     // Build full arg list: place named args by matching
@@ -3896,7 +3904,8 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
 }
 
 auto Evaluator::findNamedClause(const std::string& functionName,
-                                const NamedArgs& namedArgs) const
+                                const NamedArgs& namedArgs,
+                                std::optional<std::size_t> positionalCount) const
     -> const ast::FunctionClause* {
     auto definitions = m_functionDefs.find(functionName);
     if (definitions == m_functionDefs.end()) return nullptr;
@@ -3911,6 +3920,11 @@ auto Evaluator::findNamedClause(const std::string& functionName,
                             return param.name && *param.name == named.first;
                         });
                 });
+            if (acceptsAll && positionalCount) {
+                std::vector<std::string> labels;
+                for (const auto& [label, _] : namedArgs) labels.push_back(label);
+                acceptsAll = namedArgumentsFit(clause, labels, *positionalCount);
+            }
             if (acceptsAll) return &clause;
         }
     }

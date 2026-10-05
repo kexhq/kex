@@ -1,0 +1,6 @@
+using Net.HTTP
+
+main do
+  # Invalid input returns an error without making a network request.
+  IO.printLine(HTTP.get("not-a-url").error?)
+end

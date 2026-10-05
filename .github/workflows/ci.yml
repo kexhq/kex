@@ -299,6 +299,9 @@ jobs:
       - name: Fuzzer regression checks
         run: make -o build test-fuzz
 
+      - name: BEAM spec runner regression checks
+        run: make test-spec-beam-runner
+
       # Fresh programs each workflow run; reruns keep the seed for replay.
       # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
       # includes failing seeds in artifact filenames (kexhq/kex#306).

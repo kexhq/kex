@@ -164,8 +164,28 @@ by the name as written.
 
 ## Buffered HTTP/1.1
 
-`Net.HTTP.HTTP.get` and the other `HTTP` module helpers create stateless requests. Use an
-explicit `Client` to own connection reuse, statistics, and close behavior:
+`using Net.HTTP` includes the public `HTTP` module along with types such as
+`Client`, `Headers`, and `Response`. For an occasional request, use `HTTP.get`:
+
+```kex
+using Net.HTTP
+
+match HTTP.get("https://example.com/") do
+  Ok(response) => do
+    IO.printLine("HTTP ${response.status.code}")
+    IO.printLine(response.body.to(String).or("Body is not UTF-8 text"))
+  end
+  Error(error) => IO.printError(error.message)
+end
+```
+
+These helpers open and close a short-lived client for each request. The body
+is a `Binary`; `to(String)` returns `None` if it is not valid UTF-8. An HTTP
+error status, such as 404, still returns `Ok(response)`. Inspect
+`response.status.success?` to check for a 2xx response.
+
+Use an explicit `Client` to reuse connections across requests and inspect
+connection statistics:
 
 ```kex
 using Net.HTTP
@@ -312,7 +332,7 @@ let schedule = Retry.Schedule {
   maximumDelay: 2.seconds, maximumTotalDelay: Just(5.seconds), jitter: 0.25
 }
 let result = Retry.run(schedule: schedule) do
-  Net.HTTP.HTTP.get("https://api.example.com/inventory")
+  HTTP.get("https://api.example.com/inventory")
 end
 ```
 
