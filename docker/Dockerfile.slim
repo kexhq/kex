@@ -16,7 +16,7 @@
 FROM alpine:3.22 AS build
 
 RUN apk add --no-cache \
-        build-base cmake git bash \
+        build-base cmake git bash coreutils \
         gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
         erlang27 erlang27-dev erlang27-odbc unixodbc-dev
 
@@ -36,6 +36,8 @@ RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
 # works, which is what the other image is for.
 RUN sh docker/prune-otp.sh
 
+# The BEAM runner needs GNU timeout's --kill-after and exit codes, supplied
+# by coreutils in the build stage.
 RUN make spec && make spec-beam
 
 RUN cmake --install build --prefix /opt/kex
