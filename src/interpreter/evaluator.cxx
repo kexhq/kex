@@ -886,10 +886,10 @@ auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block,
 
 auto Evaluator::execTypeDef(const ast::TypeDef& def,
                             const std::string& moduleScope) -> void {
-    if (def.isDistinct) {
-        m_distinctTypes.insert(def.name);
+    if (def.isDistinct || !def.variants) {
+        m_erasedReceiverTypes.insert(def.name);
         if (!moduleScope.empty())
-            m_distinctTypes.insert(moduleScope + "." + def.name);
+            m_erasedReceiverTypes.insert(moduleScope + "." + def.name);
     }
     // Register sum-type variant constructors. Zero-arg variants (Fizz,
     // None, ...) are stored directly as VariantValue in the environment.
@@ -2565,7 +2565,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
             auto specificMethod = resolveMethodName(receiver, node.method, &args);
-            // Erased distinct values have the backing value's runtime name,
+            // Distinct and opaque values have the backing value's runtime name,
             // but their receiver methods were selected using the static
             // nominal type. Prefer that method when semantic analysis kept a
             // concrete named receiver type for this exact expression.
@@ -2581,7 +2581,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             runtimeDot != std::string::npos &&
                             specificMethod == runtimeType.substr(runtimeDot + 1) +
                                 "::" + node.method;
-                        if ((m_distinctTypes.contains(named->name) ||
+                        if ((m_erasedReceiverTypes.contains(named->name) ||
                              named->name == runtimeType) &&
                             !resolvedShortRecordMethod &&
                             (m_functionValues.count(candidate) ||
