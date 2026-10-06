@@ -20,7 +20,7 @@
 # built at runtime.
 #
 # Both nodes need the same compiled code for anything that carries a function,
-# like a lambda or a record whose methods the receiver calls; +Node.spawn+
+# like a lambda or a record used as an argument to functions on the remote node; +Node.spawn+
 # sends its block's code along. Plain data — numbers, strings, lists, tuples,
 # records — needs nothing.
 #

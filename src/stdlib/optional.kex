@@ -58,7 +58,7 @@ type Either<L, R> = Left(L) | Right(R)
 #
 # The two operations below are what make the constraint worth having: an
 # empty trait would accept a value and then let you do nothing with it, since
-# there would be no method to call. +map+ is deliberately NOT required — its
+# there would be no function to call. +map+ is deliberately NOT required — its
 # result type differs per implementer (+Y?+ here, +Result<Y, E>+ for
 # +Resultable+), which needs a higher-kinded parameter Kex does not have.
 trait Optionable do

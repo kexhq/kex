@@ -20,7 +20,7 @@
 # Duration: a Measure describes a measurement, a Duration describes elapsed
 # time. The plural `5.seconds` builds the Duration.
 #
-# Values are built through their own module and used through methods:
+# Values are built through their own module and used through functions:
 #
 #   let due = Date.of(2026, 7, 30).try           # Date
 #   due.weekday.name                             # "Thursday"
@@ -286,7 +286,7 @@ module Time do
   # otherwise every later test in the run inherits the frozen clock.
 
   # Nanoseconds since the Unix epoch for a civil datetime. A plain function
-  # rather than a `DateTime` method: on BEAM a method named `epochNanos`
+  # rather than a `DateTime` function: on BEAM a function named `epochNanos`
   # flattens onto the same name as the `DateTime.epochNanos()` module
   # function, and the arity-0 one wins: silently, answering for the host
   # clock instead of for `moment`.
@@ -626,7 +626,7 @@ module Time do
   # Renders a +TimeError+ as a sentence for the user.
   #
   # A plain function rather than an `Errorable` implementation: a `message`
-  # method here joins the same BEAM dispatcher as ParseError's `message`
+  # function here joins the same BEAM dispatcher as ParseError's `message`
   # FIELD and breaks it (spec/record_field_method_collision.kex).
   #
   # @param error [TimeError] the failure to describe
@@ -1739,7 +1739,7 @@ make Date, implement: Inspectable, Showable do
   #   Date.of(2026, 7, 30).try.addWeeks(2).iso   # => "2026-08-13"
   let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
 
-  # No `date.tomorrow`/`date.yesterday` methods: on BEAM a make-block method
+  # No `date.tomorrow`/`date.yesterday` functions: on BEAM a make-block function
   # flattens onto the same name as the `Date.tomorrow()`/`Date.yesterday()`
   # module functions above and one of the two has to win. The module
   # functions win: `Date.tomorrow()` is the spelling people reach for, and
@@ -2116,7 +2116,7 @@ make DateTime, implement: Inspectable, Showable do
 
   # The day of the week this instant falls on, at its own offset.
   #
-  # No `year`/`hour`/... shorthands here: a method named after a record field
+  # No `year`/`hour`/... shorthands here: a function named after a record field
   # makes `value.year` inside a module function dispatch to it on BEAM and
   # fail with function_clause. Reach through `.date` and `.time`.
   #

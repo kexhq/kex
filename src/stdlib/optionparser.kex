@@ -96,7 +96,7 @@ end
 # commands.
 #
 # Build one with +OptionParser.define+ and add to it with the chainable
-# +string+, +integer+, +flag+ and +command+ methods. Each returns a new
+# +string+, +integer+, +flag+ and +command+ functions. Each returns a new
 # +OptionConfig+, so the chain reads as one declaration.
 record OptionConfig do
   # The tool's name, as it appears in the help text.
@@ -414,7 +414,7 @@ make OptionConfig do
       Just(found) => do
         let (spec, rest) = found
         # Bound first, then called: applying a function-valued field directly
-        # (`spec.handler(...)`) reads as a method call on the record and fails
+        # (`spec.handler(...)`) uses the record as the first argument rather than calling the field and fails
         # on both backends. Binding it is the working spelling.
         let handler = spec.handler
         return handler(ParsedOptions { values: options.values, arguments: rest })

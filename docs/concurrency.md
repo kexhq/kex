@@ -223,7 +223,7 @@ for a long one, or `Atom.from("a@" + host)` for one built at runtime.
 
 Plain data needs nothing on the other side: numbers, strings, lists, tuples
 and records arrive as themselves. Anything carrying a function needs the same
-compiled code on both nodes, such as a lambda, or a record whose methods the
+compiled code on both nodes, such as a lambda, or a record whose functions the
 receiver calls. `Node.spawn` sends its block's compiled module to a node that
 has not loaded it. It never replaces a module the other node already has,
 since processes there may be running it.

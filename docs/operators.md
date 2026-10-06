@@ -43,7 +43,7 @@ No pipe operator (`|>`) either — UFCS covers chaining: `input.parse.transform.
 | `...` | Spread into a list, a map, or a `Block<[A]>` body |
 | `!` (suffix) | Mutating call on var |
 | `~` (prefix) | Capture / partial application (`~func`, `~func(args)`, `~Mod.func`, `~(op)`) |
-| `&.` (prefix) | Receiver shorthand (`&.method` = `{ \|x\| x.method }`) |
+| `&.` (prefix) | Receiver shorthand (`&.function` = `{ \|x\| x.function }`) |
 
 `~` and `&.` are easy to confuse. `~name` captures the function `name` and
 passes it along; `&.name` builds a lambda that calls `.name` **on its

@@ -23,7 +23,7 @@ end
 
 ## The `!` Operator
 
-Calling `method!` on a `var` reassigns the result back to the variable:
+Calling `function!` on a `var` reassigns the result back to the variable:
 
 ```kex
 var list = [1, 2, 3, 4, 5]
@@ -33,7 +33,7 @@ list.filter!(&.even?)  # list is now [2, 4, 6]
 
 Rules:
 - `!` can only be called on `var` bindings — compile error on `let`
-- Sugar for `x = x.method(args)`
+- Sugar for `x = x.function(args)`
 - Any function that returns the same type as `this` can use `!`
 - Compiler can optimize to in-place mutation when sole owner
 

@@ -38,7 +38,7 @@ out every member by hand:
 
 The callback is for when a test wants a rule rather than a fixture — content
 derived from the path, a variable that only exists under a prefix, a failure on
-the third call. It governs the whole surface, not just the one method a test
+the third call. It governs the whole surface, not just the one function a test
 happens to call: `onRead` answers `exists?`, `size`, `readLines` and `feed`
 too. Returning `None` means "not there", so a callback can model absence as
 well as presence, which matters because absence is an answer programs act on —

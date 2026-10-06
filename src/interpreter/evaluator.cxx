@@ -886,6 +886,11 @@ auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block,
 
 auto Evaluator::execTypeDef(const ast::TypeDef& def,
                             const std::string& moduleScope) -> void {
+    if (def.isDistinct || !def.variants) {
+        m_erasedReceiverTypes.insert(def.name);
+        if (!moduleScope.empty())
+            m_erasedReceiverTypes.insert(moduleScope + "." + def.name);
+    }
     // Register sum-type variant constructors. Zero-arg variants (Fizz,
     // None, ...) are stored directly as VariantValue in the environment.
     // With-arg constructors (Just(A), Ok(A), ...) are registered as
@@ -2560,7 +2565,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
             auto specificMethod = resolveMethodName(receiver, node.method, &args);
-            // Erased distinct values have the backing value's runtime name,
+            // Distinct and opaque values have the backing value's runtime name,
             // but their receiver methods were selected using the static
             // nominal type. Prefer that method when semantic analysis kept a
             // concrete named receiver type for this exact expression.
@@ -2576,7 +2581,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             runtimeDot != std::string::npos &&
                             specificMethod == runtimeType.substr(runtimeDot + 1) +
                                 "::" + node.method;
-                        if (!resolvedShortRecordMethod &&
+                        if ((m_erasedReceiverTypes.contains(named->name) ||
+                             named->name == runtimeType) &&
+                            !resolvedShortRecordMethod &&
                             (m_functionValues.count(candidate) ||
                              m_env->get(candidate)))
                             specificMethod = candidate;
@@ -3448,12 +3455,19 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         case TokenType::GreaterEq:  opSymbol = ">="; break;
         default: break;
     }
-    if (!opSymbol.empty()) {
+    // Numeric pairs use primitive arithmetic and ordering, matching the
+    // type checker. A numeric receiver can still overload an operator for
+    // a nonnumeric RHS, such as an integer byte count and a Measure.
+    auto numeric = [](const ValuePtr& value) {
+        return std::holds_alternative<IntValue>(value->data) ||
+               std::holds_alternative<BigIntValue>(value->data) ||
+               std::holds_alternative<FloatValue>(value->data);
+    };
+    if (!opSymbol.empty() && !(numeric(left) && numeric(right))) {
         std::vector<ValuePtr> operatorArgs{left, right};
         auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
-        if (methodName != opSymbol) {
+        if (methodName != opSymbol)
             return callFunction(methodName, {left, right}, {}, loc);
-        }
     }
 
     // li/ri stay the int64_t fast path for the overwhelmingly common case;

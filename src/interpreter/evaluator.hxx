@@ -526,6 +526,8 @@ private:
     // dispatch to nothing: an annotated parameter simply never matched, and
     // the call fell through to None instead of reporting anything.
     std::unordered_map<std::string, const ast::TypeExpr*> m_typeAliases;
+    // Erased distinct and opaque types need static names for receiver dispatch.
+    std::unordered_set<std::string> m_erasedReceiverTypes;
 
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;

@@ -5,23 +5,46 @@
 #   using Units.Data
 #
 #   main do
-#     IO.printLine(1500.megabytes.to(String))              # prints: 1500.0 MB
+#     IO.printLine(1500.megabyte.to(String))              # prints: 1500.0 MB
 #     IO.printLine(1500000000.byteSize.to(String, in: Giga)) # prints: 1.5 GB
 #   end
 #
 # Both families are here and they are not the same: +KB+ is 1000 bytes, +KiB+
 # is 1024. Values built from either convert freely, because both are counted
-# in bytes underneath, so +1.gibibytes.convertTo(MiB)+ answers 1024 MiB.
+# in bytes underneath, so +1.gibibyte.convertTo(MiB)+ answers 1024 MiB.
 #
-# Every value is a +Measure+ from the prelude, so its arithmetic, comparison
-# and +to(String)+ apply unchanged.
+# Numeric constructors use singular names, as in +Units.SI+: +5.megabyte+
+# and +2.mebibyte+.
+# +byteSize+ is an alias for +byte+.
+#
+# File and payload APIs return integer byte counts. Wrap those counts with
+# +byte+ to convert or display them as measurements:
+#
+#   FS.File.size("report.pdf").map { |n| n.byte.to(String) }
+#   Binary.fromBytes([104, 105]).length.byte.to(String)  # => "2.0 B"
+#   "é".bytes.count.byte.to(String)                    # => "2.0 B"
+#
+# To display binary units, convert to +KiB+, +MiB+, +GiB+, or +TiB+:
+#
+#   1048576.byte.convertTo(MiB).map { |m| m.to(String) } # => Ok("1.0 MiB")
+#
+# Compare an integer byte count directly with a data-size threshold:
+#
+#   30000001 > 30.megabyte   # => true
+#   1048576 <= 1.mebibyte    # => true
+#
+# +<+, +>+, +<=+, and +>=+ work with the count on either side. A time or
+# SI measure is not a byte threshold and raises an error.
+#
+# Every value is a +Measure+ from the prelude, so its arithmetic and
+# +to(String)+ apply unchanged.
 module Units.Data
 
 # The data units this module names: decimal (+KB+, +MB+, +GB+, +TB+) and
 # binary (+KiB+, +MiB+, +GiB+, +TiB+), plus the plain byte +B+.
 #
-#   1.KB   # 1000 bytes
-#   1.KiB  # 1024 bytes
+#   size(1, KB).canonical    # => 1000.0 bytes
+#   size(1, KiB).canonical   # => 1024.0 bytes
 type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
 
 # A decimal prefix to render a size at: +Kilo+ means KB, +Mega+ means MB,
@@ -70,7 +93,7 @@ end
 # +value+ of the given data unit, as a +Measure+.
 #
 # The general constructor the named ones below are written on. Reach for
-# +megabytes+, +kibibytes+ and friends when the unit is known at the call
+# +megabyte+, +kibibyte+ and friends when the unit is known at the call
 # site.
 #
 # @param value [Number] the quantity
@@ -99,8 +122,8 @@ end
 # @return [Result<Measure, String>] the converted size, or why it could not be
 #
 # @example
-#   1.gibibytes.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
-#   2.gigabytes.convertTo(MB).map { |m| m.to(String) }    # => Ok("2000.0 MB")
+#   1.gibibyte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
+#   2.gigabyte.convertTo(MB).map { |m| m.to(String) }    # => Ok("2000.0 MB")
 let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   let target = definition(unit)
   match measure.kind == target.dimension do
@@ -152,75 +175,117 @@ end
 #   4096.byteSize.to(String)   # => "4096.0 B"
 #
 # @example Reporting a file's size
-#   FS.File.size(path).map { |n| n.byteSize.to(String, in: Mega) }
-let byteSize(value: Number) -> Measure = size(value, B)
+#   FS.File.size("report.pdf").map { |n| n.byte.to(String) }
+let byteSize(value: Number) -> Measure = byte(value)
+
+# +value+ bytes, as a +Measure+.
+#
+# Use this with byte counts from +FS.File.size+ or +Binary.length+.
+#
+# @param value [Number] the byte count
+# @return [Measure] the size
+#
+# @example A binary payload's size
+#   let payload = Binary.fromBytes([104, 105])
+#   payload.length.byte.to(String)   # => "2.0 B"
+let byte(value: Number) -> Measure = size(value, B)
 # +value+ kilobytes, 1000 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   5.kilobytes.to(String)   # => "5.0 KB"
-let kilobytes(value: Number) -> Measure = size(value, KB)
+#   5.kilobyte.to(String)   # => "5.0 KB"
+let kilobyte(value: Number) -> Measure = size(value, KB)
 # +value+ megabytes, 1000000 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   1500.megabytes.to(String)   # => "1500.0 MB"
-let megabytes(value: Number) -> Measure = size(value, MB)
+#   1500.megabyte.to(String)   # => "1500.0 MB"
+let megabyte(value: Number) -> Measure = size(value, MB)
 # +value+ gigabytes, 10^9 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   2.gigabytes.convertTo(MB).map { |m| m.to(String) }   # => Ok("2000.0 MB")
-let gigabytes(value: Number) -> Measure = size(value, GB)
+#   2.gigabyte.convertTo(MB).map { |m| m.to(String) }   # => Ok("2000.0 MB")
+let gigabyte(value: Number) -> Measure = size(value, GB)
 # +value+ terabytes, 10^12 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   2.terabytes.to(String)   # => "2.0 TB"
-let terabytes(value: Number) -> Measure = size(value, TB)
+#   2.terabyte.to(String)   # => "2.0 TB"
+let terabyte(value: Number) -> Measure = size(value, TB)
 # +value+ kibibytes, 1024 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   1024.kibibytes.to(String)   # => "1024.0 KiB"
-let kibibytes(value: Number) -> Measure = size(value, KiB)
+#   1024.kibibyte.to(String)   # => "1024.0 KiB"
+let kibibyte(value: Number) -> Measure = size(value, KiB)
 # +value+ mebibytes, 1024^2 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   3.mebibytes.to(String)   # => "3.0 MiB"
-let mebibytes(value: Number) -> Measure = size(value, MiB)
+#   3.mebibyte.to(String)   # => "3.0 MiB"
+let mebibyte(value: Number) -> Measure = size(value, MiB)
 # +value+ gibibytes, 1024^3 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   1.gibibytes.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
-let gibibytes(value: Number) -> Measure = size(value, GiB)
+#   1.gibibyte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
+let gibibyte(value: Number) -> Measure = size(value, GiB)
 # +value+ tebibytes, 1024^4 bytes each.
 #
 # @param value [Number] the quantity
 # @return [Measure] the size
 #
 # @example
-#   1.tebibytes.to(String)   # => "1.0 TiB"
-let tebibytes(value: Number) -> Measure = size(value, TiB)
+#   1.tebibyte.to(String)   # => "1.0 TiB"
+let tebibyte(value: Number) -> Measure = size(value, TiB)
+
+# Compares an integer byte count with a data-size threshold.
+#
+# File and binary sizes stay integers. Import this module to use data units
+# directly in comparisons; only data measures are accepted as thresholds.
+#
+# @example Rejecting an oversized file
+#   FS.File.size("report.pdf").map { |count| count > 30.megabyte }
+#
+# @example Checking a payload
+#   Binary.fromBytes([104, 105]).length < 1.kibibyte  # => true
+make Integer do
+  let <(other: Measure) -> Bool = this < byteThreshold(other)
+  let >(other: Measure) -> Bool = this > byteThreshold(other)
+  let <=(other: Measure) -> Bool = this <= byteThreshold(other)
+  let >=(other: Measure) -> Bool = this >= byteThreshold(other)
+end
+
+# The same comparison with the data-size threshold on the left.
+make Measure do
+  let <(other: Integer) -> Bool = byteThreshold(this) < other
+  let >(other: Integer) -> Bool = byteThreshold(this) > other
+  let <=(other: Integer) -> Bool = byteThreshold(this) <= other
+  let >=(other: Integer) -> Bool = byteThreshold(this) >= other
+end
 
 private do
-  let displayWithPrefix(measure, factor, symbol) = "${measure.canonical / factor} ${symbol}"
+  let byteThreshold(measure: Measure) -> Float do
+    assert(measure.kind == :data, "Byte counts require a data-size threshold")
+    return measure.canonical
+  end
+
+  let displayWithPrefix(measure, divisor, symbol) = "${measure.canonical / divisor} ${symbol}"
 
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
 

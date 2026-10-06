@@ -37,9 +37,9 @@ types).
 ## Common operations
 
 String is `Foldable`/`Enumerable`, so it has the collection operations plus
-string-specific ones. Selected methods (see `src/prelude/string.kex`):
+string-specific ones. Selected functions (see `src/stdlib/string.kex`):
 
-| Method | Result | Notes |
+| Function | Result | Notes |
 |---|---|---|
 | `s.count` / `s.length` | `Integer` | number of characters |
 | `s.empty?` | `Bool` | |
@@ -120,7 +120,7 @@ let text = myTag`raw body`
 - The tag identifier may be **bare** (`` regex`…` ``) or **module-qualified**
   (`` Regex.regex`…` ``); both resolve to the same tag function and behave
   identically. A qualifier must be a module path (a capitalised name or dotted
-  chain), so ordinary `value.method` access is never mistaken for a tag (see
+  chain), so ordinary `value.function` access is never mistaken for a tag (see
   `docs/regex.md`).
 
 ### Compile-time validation

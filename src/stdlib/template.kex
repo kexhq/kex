@@ -461,7 +461,7 @@ private do
   # Reads plain text up to the next tag opener or end of input. `<%%` is
   # consumed as a literal `<%` and folded into the text rather than ending it.
   #
-  # Hand-rolled rather than built on `Input#takeWhile`: that method's name
+  # Hand-rolled rather than built on `Input#takeWhile`: that function's name
   # collides with `List#takeWhile`, and calling it through an `Input` receiver
   # sends overload resolution down the wrong path (`json.kex`'s own scanners
   # hit the same thing and avoid it the same way).

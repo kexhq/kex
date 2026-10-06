@@ -15,7 +15,7 @@
 #   s.pop                 # => Just((3, Stack(1, 2)))
 #   Stack.empty.pop       # => None
 #
-# Every method answers with a new stack rather than changing the receiver.
+# Updates return a new stack rather than changing the receiver.
 # +push!+ and +pop!+ come free from the +!+ rebinding form, the same as
 # +add!+/+delete!+ do for +Data.Set+: they build a new stack and rebind the
 # receiver variable rather than modifying anything in place.

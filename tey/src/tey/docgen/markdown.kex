@@ -123,7 +123,7 @@ module Tey.Docgen.Markdown do
   foul typeBodyMd(name: String, makes: [MakeEntry], page: SourcePage, model: PackageModel) -> String do
     let (plain, special) = makes.partition { |m| Tey.Docgen.Html.genericReceiver?(m.target, name) }
     let groups = (plain + special).map { |m|
-      let title = Tey.Docgen.Html.genericReceiver?(m.target, name) then "Methods" else "On \`${m.target}\`"
+      let title = Tey.Docgen.Html.genericReceiver?(m.target, name) then "Functions" else "On \`${m.target}\`"
       "### ${title}\n\n${entityDocMd(m.doc)}${functionsMd(m.functions, m.target, 4, m.implements, page, model)}"
     }.join("\n\n")
     return [implementsMd(name, page, model), groups, providedMd(name, page, model), elsewhereMd(name, page, model)].reject { |x| x.empty? }.join("\n\n")
@@ -198,8 +198,8 @@ module Tey.Docgen.Markdown do
       Just(facts) => facts.implementors.empty? then "" else "Implemented by " + facts.implementors.map { |x| "[\`${x.target}\`](${hrefMd(page.urlPath, x.urlPath, x.anchor)})" }.join(", ") + ".\n\n"
       None => ""
     end
-    let req = required.empty? then "" else "### Required methods\n\n${functionsMd(required, owner, 4, [], page, model)}\n\n"
-    let prov = provided.empty? then "" else "### Provided methods\n\n${functionsMd(provided, owner, 4, [], page, model)}\n\n"
+    let req = required.empty? then "" else "### Required functions\n\n${functionsMd(required, owner, 4, [], page, model)}\n\n"
+    let prov = provided.empty? then "" else "### Provided functions\n\n${functionsMd(provided, owner, 4, [], page, model)}\n\n"
     return "## trait \`${e.name}${params}\`\n\n${entityDocMd(e.doc)}${implementors}${req}${prov}"
   end
 
@@ -217,7 +217,7 @@ module Tey.Docgen.Markdown do
       return "## type \`${e.target}\`\n\n${traits.empty? then "" else traits + "\n\n"}${entityDocMd(e.doc)}${fns}\n\n${rest}"
     end
     let homeLine = match facts do
-      Just(f) => f.homePath.empty? || f.homePath == page.urlPath then "" else "More methods of [\`${base}\`](${hrefMd(page.urlPath, f.homePath, f.homeAnchor)}), added by this module.\n\n"
+      Just(f) => f.homePath.empty? || f.homePath == page.urlPath then "" else "More functions for [\`${base}\`](${hrefMd(page.urlPath, f.homePath, f.homeAnchor)}), added by this module.\n\n"
       None => ""
     end
     let impls = e.implements.empty? then "" else "Implements ${traitLinksMd(e.implements, page, model)}.\n\n"

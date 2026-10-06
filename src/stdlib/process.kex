@@ -96,7 +96,7 @@ type CallError = Timeout | NoProcess | CallFailed
 # A running server and the default timeout for calls into it.
 #
 # Returned by +Process.spawn+. Every +slot+ declared in the type's +serving+
-# block becomes a method on it, answering a +Result+.
+# block exposes a function taking this +Server+ as its receiver and returning a +Result+.
 record Server<X> do
   # The underlying typed process handle.
   process : Process<X>
@@ -113,7 +113,7 @@ module Process do
   # type, and returns a handle on it.
   #
   # The state you pass is the server's initial state. Every +slot+ in the
-  # +serving+ block becomes a method on the returned +Server+, and each answers
+  # +serving+ block exposes a function taking the returned +Server+ as its receiver. Each returns
   # a +Result+: a call can time out or find the process gone.
   #
   # @param state [X] the server's initial state

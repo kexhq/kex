@@ -1,17 +1,25 @@
-# Atoms: the +:name+ values. An atom is its own name — two atoms with the same
-# text are the same value, and comparing them is as cheap as comparing numbers.
+# Atoms are named values such as +:ok+, +:error+, and +:reset+. Use them
+# for labels, statuses, and message tags. Atoms with the same name are equal;
+# an atom and a string are different values.
 #
-#   :ok
-#   :b@localhost                  # an interior `@` is part of a bare atom
-#   :"b@host.example.com"         # the quoted form spells any text
+#   :ok == :ok                    # => true
+#   :ok == :error                 # => false
+#   :ok.string                    # => "ok"
 #
-# Most atoms are written in the source. From text:
+# Write atoms with a leading colon. Node names can include +@+; use quotes for names containing spaces or punctuation:
 #
-#   "hello".as(Atom)     # at compile time, from a literal
-#   Atom.from(text)      # at run time, making the atom — a node name, say
-#   text.to(Atom)        # at run time, only an atom that already exists: Atom?
+#   :app@localhost
+#   :"app@host.example.com"
+#   :"two words"
 #
-# and +string+ gives the text back.
+# To convert text to an atom:
+#
+#   "hello".as(Atom)     # converts a string literal at compile time
+#   Atom.from("hello")  # creates or finds an atom at run time
+#   "hello".to(Atom)    # finds an existing atom: Just(:hello), or None
+#
+# On the BEAM, atoms are never freed. Use +text.to(Atom)+ for external input
+# to avoid creating an unbounded number of atoms.
 module Atom do
   # Returns the atom whose name is +text+.
   #
@@ -31,8 +39,7 @@ module Atom do
 end
 
 make Atom do
-  # Returns the atom's name as text, without the leading colon. Total, like
-  # +Char.string+: every atom has a name.
+  # Returns the atom's name as a string, without the leading colon.
   #
   # @return [String] the name
   #

@@ -1,6 +1,6 @@
 # Text. A +String+ is a sequence of Unicode characters, immutable like every
-# other Kex value: every method here answers with a new string rather than
-# changing the receiver.
+# other Kex value. Operations that transform text return a new string rather
+# than changing the receiver.
 #
 # A +String+ is its own type, not a list of characters. It is +Enumerable+, so
 # +each+, +reduce+, +find+ and friends walk it one +Char+ at a time, and the
@@ -403,7 +403,7 @@ make String, implement: Enumerable, Foldable do
 
   # Returns the string's characters as a list.
   #
-  # The bridge from +String+ to the +List+ methods that a string does not have
+  # The bridge from +String+ to the +List+ functions that a string does not have
   # of its own. Join back with +.join("")+.
   #
   # @return [[Char]] the characters, in order
@@ -769,7 +769,7 @@ end
 #
 # Character literals are written with single quotes (+'a'+) and are a
 # different type from the one-character string +"a"+. The classification
-# methods (+digit?+, +alpha?+, +space?+ and the rest) are what most character
+# functions (+digit?+, +alpha?+, +space?+ and the rest) are what most character
 # code needs; +codepoint+ and +String.fromCodepoint+ are the escape hatch to
 # raw Unicode values.
 #
@@ -975,7 +975,7 @@ end
 
 # A fixed-size group of values, written +(a, b)+. Unlike a list, a tuple's
 # size and the type of each position are part of its type, so the +List+
-# methods do not apply to it: destructure it, match on it, or convert it with
+# functions do not apply to it: destructure it, match on it, or convert it with
 # +items+.
 #
 #   let (name, age) = ("Ada", 36)
@@ -984,7 +984,7 @@ make Tuple do
   # Returns the tuple's elements as a list.
   #
   # A tuple is not a list (its arity is part of its type) so the +List+
-  # methods do not apply to it. This is the explicit conversion, and it loses
+  # functions do not apply to it. This is the explicit conversion, and it loses
   # the per-position typing in exchange.
   #
   # Destructuring is usually clearer when you know the shape:

@@ -1,0 +1,15 @@
+using Units.Data
+
+describe("data-size comparison dimensions") do
+  it("rejects a time threshold") do
+    5 > 1.second
+  end
+
+  it("rejects a time measure on the left") do
+    1.second < 5
+  end
+
+  it("rejects an SI threshold") do
+    5 > Units.SI.meter(1)
+  end
+end

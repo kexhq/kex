@@ -45,7 +45,7 @@ signature to see whether a conversion needs optional handling:
 "ab" + 'c'                   # "abc"
 ```
 
-Strings support sequence methods such as `first`, `take`, `drop`, and `sort`.
+Strings support sequence functions such as `first`, `take`, `drop`, and `sort`.
 `take` returns a `String`; `first` returns a `Char?`. Use `chars` to work with
 a list of characters instead.
 
@@ -77,7 +77,7 @@ let map(list: [A], f: A -> B) -> [B] = ...
 
 ## Traits
 
-Traits declare type contracts. A trait lists required method signatures; default implementations use `let`. Types opt in via `make X implement: Trait do`.
+Traits declare type contracts. A trait lists required function signatures; default implementations use `let`. Types opt in via `make X implement: Trait do`.
 
 ```kex
 trait Comparable do
@@ -335,7 +335,7 @@ Each type has a module of its own — `Date.of`, `Date.parse`, `Date.fromEpochDa
 `DateTime.fromEpochSeconds` — and all three answer `now()` and `utcNow()`
 (`Date.today()` reads better where you want a day). Shared calendar helpers
 (`Time.daysInMonth`, `Time.leapYear?`, `Time.formatDate`, `Time.errorMessage`)
-live in `module Time`. Values are then used through methods on the records.
+live in `module Time`. Use UFCS to call functions with these record values as their first argument.
 
 Zones are fixed offsets only — UTC, an explicit `+02:00`, or the system zone's
 offset at a given instant. Named IANA zones and DST rules are not modeled, so
@@ -380,11 +380,71 @@ values:
 ```kex
 using Units.Data
 
-let asset: Measure = 5.megabytes
+let asset: Measure = 5.megabyte
 let binary: Result<Measure, String> = asset.convertTo(MiB)
-let cache = 2.gibibytes
+let cache = 2.gibibyte
 asset.to(String, in: Mega)  # Just("5.0 MB")
 ```
+
+Data constructors use singular names, just like SI: `byte`, `kilobyte`,
+`megabyte`, `gigabyte`, `terabyte`, `kibibyte`, `mebibyte`, `gibibyte`, and
+`tebibyte`. `byteSize` is an alias for `byte`.
+`KB` means 1000 bytes, while `KiB` means 1024 bytes. Likewise, `MB` is
+1000000 bytes and `MiB` is 1048576 bytes.
+
+File and data APIs return integer byte counts. Import `Units.Data` to compare
+those counts directly with a data-size threshold:
+
+```kex
+using Units.Data
+
+type UploadCheck = Accepted | FileTooBig
+
+let checkSize(file: FS.FileInfo) -> UploadCheck do
+  if file.size > 30.megabyte
+    return FileTooBig
+  end
+  return Accepted
+end
+```
+
+`<`, `>`, `<=`, and `>=` work with the byte count on either side. They compare
+against the measure's size in bytes, so `1048576 > 1.megabyte` is true while
+`1048576 > 1.mebibyte` is false. Comparing a byte count with a time or SI
+measure raises an error.
+
+Use `.byte` when you want to display or convert a byte count:
+
+```kex
+using Units.Data
+
+main do
+  match FS.File.size("report.pdf") do
+    Just(count) => do
+      let fileSize = count.byte
+      IO.printLine(fileSize.to(String, in: Mega).or(""))  # decimal MB
+      IO.printLine(fileSize.convertTo(MiB).map { |m| m.to(String) }.or(""))
+    end
+    None => IO.printError("Cannot read the file size")
+  end
+end
+```
+
+For an in-memory payload, `Binary.length` counts bytes. `String.count` counts
+characters; use the UTF-8 byte count when measuring encoded text:
+
+```kex
+using Units.Data
+
+let payload = Binary.fromBytes([104, 105])
+payload.length.byte.to(String)  # "2.0 B"
+"é".count                      # 1 character
+"é".bytes.count.byte.to(String) # "2.0 B"
+1048576.byte.convertTo(MiB).map { |m| m.to(String) } # Ok("1.0 MiB")
+```
+
+Keep integer byte counts for file offsets, read lengths, and buffer sizes.
+`Measure` uses floating-point quantities for unit conversion and display.
 
 ## Foldable and Enumerable
 
@@ -420,12 +480,21 @@ things. See `docs/streams.md`.
 
 ## Atoms
 
-Lightweight identifiers, separate from enum variants. Can appear in type positions:
+Atoms are named values such as `:ok`, `:error`, and `:reset`. Use them for
+labels and message tags when you need a fixed name rather than arbitrary text.
+Two atoms with the same name are equal. An atom is distinct from a string:
+`:ok.string` returns `"ok"`.
+
+An atom can also be used as a type that accepts only that value. A union of
+atoms restricts a value to a set of names:
 
 ```kex
 let status: :ok | :error = :ok
 type CounterMsg = :increment | :reset | (:get, Process<Int>)
 ```
+
+Here `status` accepts only `:ok` or `:error`. `CounterMsg` accepts the two
+simple message tags or a tuple containing `:get` and a process identifier.
 
 ## Block Type
 

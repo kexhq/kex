@@ -80,7 +80,7 @@ end
 #   report(IO.error, warnings)
 #   report(FS.File.open("report.txt", Write).try, results)
 #
-# Write methods accept any +Showable+ value and return +Void+.
+# Write functions accept any +Showable+ value and return +Void+.
 trait Writable do
   # Writes +content+ followed by a newline.
   #
@@ -141,7 +141,7 @@ end
 # +FS.File.read+ and +FS.File.write+ are shorter and need no closing. To be
 # rid of the closing entirely, pass +FS.File.open+ a block.
 #
-# The handle methods are +foul+: obtaining a handle is not an effect, but
+# The handle functions are +foul+: obtaining a handle is not an effect, but
 # reading or writing through one is, so a function that does so is +foul+ no
 # matter where the handle came from. Injection makes a thing substitutable,
 # not pure.
@@ -254,7 +254,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #
   # NOT part of +Readable+: a feed is neither pure nor reusable, so requiring
   # it of every +Readable+ would put a foul, one-shot operation on types that
-  # have no such cursor to offer. It stays a FileHandle method.
+  # have no such cursor to offer. It stays a FileHandle function.
   #
   # @return [Feed<String>?] the lines as a feed, or +None+
   #
