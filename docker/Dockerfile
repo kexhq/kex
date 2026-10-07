@@ -17,10 +17,12 @@ FROM debian:trixie-slim AS build
 # `erlang` meta-package does not), and --no-install-recommends means it is
 # never pulled in as a side effect. Without it, `Digest.sha256` compiles fine
 # but is `undef` at BEAM runtime — spec-beam caught this the hard way.
+# Net.HTTP needs inets (httpc) and ssl too; Debian packages them separately.
+# Keep them in both stages so the tested HTTP runtime also ships in the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git \
+        build-essential cmake git ca-certificates \
         libgmp-dev libpcre2-dev libreadline-dev libboost-context-dev libssl-dev \
-        erlang-base erlang-dev erlang-odbc erlang-crypto \
+        erlang-base erlang-dev erlang-odbc erlang-crypto erlang-inets erlang-ssl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -69,7 +71,7 @@ FROM debian:trixie-slim
 # execute in this image, not just in the spec suite that built it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgmp10 libpcre2-8-0 libreadline8t64 libboost-context1.83.0 libssl3t64 \
-        erlang-base erlang-odbc erlang-crypto \
+        erlang-base erlang-odbc erlang-crypto erlang-inets erlang-ssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/kex /opt/kex
