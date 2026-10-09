@@ -1,0 +1,12 @@
+deep -> 2026-07-30 23:30:00 utc=2026-07-30T21:30:00Z
+2026-07-30T23:30:00+02:00
+1785447000000000000
+true
+true
+inner: 1999-12-31
+outer: 2026-07-30
+spawned inside: 1999-12-31
+spawned outside sees it: false
+running: 2026-07-30 advancing=true
+default: 1970-01-01T00:00:00Z
+2001-02-03 12:00:00 utc=2001-02-03T12:00:00Z

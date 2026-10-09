@@ -1,0 +1,99 @@
+# `Time.Clock` is a capability: the current instant can be replaced for a
+# lexical region, and `Mock.Clock` is the ready-made stand-in.
+#
+# Every reading (`Time.now`, `Date.today`, `DateTime.now`, `DateTime.utcNow`,
+# `DateTime.epochNanos`) comes from `Time.Clock.now`, so replacing that one
+# member replaces all of them. There is no global test clock: a replacement
+# nests, cannot outlive its block, and reaches only the processes spawned
+# inside it.
+#
+# `Time` is in the prelude and `Clock` is nested in it, so this also pins the
+# route a nested prelude capability takes through the compiled interface.
+
+type Msg = | Ask(Process)
+
+# A hand-written stand-in: one member is the whole interface.
+record NoonClock do
+  day : Date
+end
+
+make NoonClock, implement: Time.Clock do
+  foul now() -> DateTime = DateTime.parse("${@day.iso}T12:00:00Z").try
+end
+
+# Declares no dependency and threads nothing: written exactly as in production.
+foul stamp() -> String = "${Date.today().iso} ${Time.now().iso} utc=${DateTime.utcNow().iso}"
+foul deep() -> String = "deep -> ${stamp()}"
+
+main do
+  let launch = DateTime.parse("2026-07-30T23:30:00+02:00").try
+  let eve = DateTime.parse("1999-12-31T23:59:59Z").try
+
+  # Reaches through two calls that mention no capability. The offset of the
+  # frozen instant is kept: the local date is the 30th, the UTC one too, and
+  # neither depends on the zone of the machine running this.
+  with Time.Clock = Mock.Clock { at: launch } do
+    IO.printLine(deep())
+    IO.printLine(DateTime.now().iso)
+    IO.printLine(DateTime.epochNanos())
+    IO.printLine(DateTime.now() == DateTime.now())
+  end
+
+  # Gone again afterwards: the host clock is well past the frozen instant.
+  IO.printLine(DateTime.epochNanos() > 1785447000000000000)
+
+  # Nesting: the innermost replacement wins, and leaving it restores the outer.
+  with Time.Clock = Mock.Clock { at: launch } do
+    with Time.Clock = Mock.Clock { at: eve } do
+      IO.printLine("inner: ${Date.utcToday().iso}")
+    end
+    IO.printLine("outer: ${Date.utcToday().iso}")
+  end
+
+  # A process spawned INSIDE the region inherits the replacement.
+  with Time.Clock = Mock.Clock { at: eve } do
+    let inside = spawn do
+      receive do
+        Ask(who) => who.send(Date.utcToday().iso)
+      end
+    end
+    inside.send(Ask(Process.self))
+    receive do
+      answer => IO.printLine("spawned inside: ${answer}")
+    end
+  end
+
+  # One spawned OUTSIDE it does not: a `with` in one process never changes
+  # what time it is in another.
+  let outside = spawn do
+    receive do
+      Ask(who) => who.send(Date.utcToday().iso == "1999-12-31")
+    end
+  end
+  with Time.Clock = Mock.Clock { at: eve } do
+    outside.send(Ask(Process.self))
+    receive do
+      answer => IO.printLine("spawned outside sees it: ${answer}")
+    end
+  end
+
+  # `onNow` is a rule consulted instead of the fixture. A block keeps the
+  # clock of the region it was written in, so this one reads the REAL clock
+  # and shifts it: a clock that still runs, started at `launch`.
+  let ahead = DateTime.now().until(launch)
+  with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + ahead }) } do
+    let first = DateTime.epochNanos()
+    let second = DateTime.epochNanos()
+    IO.printLine("running: ${Date.utcToday().iso} advancing=${second >= first}")
+  end
+
+  # Left out, the fixture is the Unix epoch.
+  with Time.Clock = Mock.Clock {} do
+    IO.printLine("default: ${DateTime.utcNow().iso}")
+  end
+
+  # Any record that implements `now` is a clock.
+  with Time.Clock = NoonClock { day: Date.of(2001, 2, 3).try } do
+    IO.printLine(stamp())
+  end
+end

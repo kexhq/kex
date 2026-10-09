@@ -1,0 +1,84 @@
+# A block keeps the capability replacements of the region it was WRITTEN in,
+# not the ones in force wherever it is later called: replacement is lexical.
+#
+# BEAM has always done this, because the context is a value a closure captures.
+# The interpreter kept a dynamic stack instead, so a block written outside a
+# `with` and called inside one saw the replacement there and not on BEAM. A
+# helper that wraps `with` around a caller's block is the shape that hit it,
+# and it does NOT reach into that block on either backend.
+
+capability Clock do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+
+foul stamp() -> String = "at ${Clock.now()}"
+
+# Wraps `with` around a block it was handed.
+foul under(at: Integer, body) do
+  return with Clock = FrozenClock { at: at } do
+    body()
+  end
+end
+
+# Calls a block it was handed, from outside any region.
+foul later(body) = body()
+
+foul label(name: String) -> String = "${name} ${stamp()}"
+
+# The same two helpers, for a function reference that takes an argument.
+foul underWith(at: Integer, f) do
+  return with Clock = FrozenClock { at: at } do
+    f("x")
+  end
+end
+
+foul laterWith(f) = f("y")
+
+main do
+  # Written outside, called inside: the block's own region has no replacement.
+  IO.printLine(under(7, do stamp() end))
+
+  # The helper's own code is inside its `with`, so that still sees it.
+  IO.printLine(under(7, do "ignored" end) == "ignored")
+
+  # Written inside, called after the region ended: it kept the replacement.
+  let escaped = with Clock = FrozenClock { at: 7 } do
+    { stamp() }
+  end
+  IO.printLine(later(escaped))
+
+  # Written inside one region, called inside another: its own wins.
+  with Clock = FrozenClock { at: 1 } do
+    let inner = { stamp() }
+    IO.printLine(under(2, inner))
+  end
+
+  # A block handed to a library function in the same region is unaffected.
+  with Clock = FrozenClock { at: 7 } do
+    IO.printLine([1, 2].map { |n| "${n} ${stamp()}" }.join(", "))
+  end
+
+  # A local named function is a closure too.
+  with Clock = FrozenClock { at: 7 } do
+    let local() = stamp()
+    IO.printLine(under(9, local))
+  end
+
+  # A function reference is one as well: `~label` is taken where it is written.
+  let outside = ~label
+  IO.printLine(underWith(7, outside))
+  let inside = with Clock = FrozenClock { at: 7 } do
+    ~label
+  end
+  IO.printLine(laterWith(inside))
+end

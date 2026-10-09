@@ -32,8 +32,8 @@ CASES = (ARGV[ARGV.index("--cases") + 1].to_i if ARGV.include?("--cases")) || 40
 
 RNG = Random.new(SEED)
 
-# The test clock counts int64 nanoseconds, so it can only name instants
-# between 1677-09-21 and 2262-04-11. Clock cases draw from here; ordinary
+# Clock cases draw from the years a 64-bit nanosecond count can name
+# (1677-09-21 to 2262-04-11), which is what a host clock can read; ordinary
 # calendar cases use the much wider YEAR_RANGE.
 CLOCK_YEAR_RANGE = (1678..2261).freeze
 
@@ -70,7 +70,7 @@ end
 # A big block is written as several: erlc's SSA optimiser grows faster than
 # linearly with a function's size, and one 720-assertion block made this spec
 # take two minutes to compile — past the BEAM suite's timeout. A statement
-# that is not an assertion (a `Time.freeze`) opens a group with the
+# that is not an assertion opens a group with the
 # assertions after it, and a group is never split across blocks.
 MAX_ASSERTIONS_PER_IT = 100
 
@@ -116,6 +116,11 @@ end
 
 def assert_true(expr)
   line("    assert(#{expr}, \"#{expr.gsub('"', '\\"')}\")")
+end
+
+# Kex source for `expr` evaluated with the clock frozen at `instant`.
+def under_clock(instant, expr)
+  "(with Time.Clock = Mock.Clock { at: DateTime.parse(#{instant.inspect}).try } do #{expr} end)"
 end
 
 # ── Case generators ───────────────────────────────────────────────────────
@@ -319,88 +324,45 @@ describe "date arithmetic (vs Ruby)" do
   end
 
   # Date.today/tomorrow/yesterday read the clock, so they are only testable
-  # against a clock we chose. Freezing is what makes that possible — without
-  # it these three have no assertable answer at all.
-  it "steps to yesterday and tomorrow from a frozen clock" do
+  # against a clock we chose. `Time.Clock` is a capability, and replacing it
+  # with a `Mock.Clock` is what makes that possible — without it these three
+  # have no assertable answer at all.
+  it "steps to yesterday and tomorrow from a mocked clock" do
     CASES.times do
       date = random_clock_date
       time = random_time
       instant = CalendarRef.format_date_time(date, time, 0)
-      line("    Time.freeze(DateTime.parse(#{instant.inspect}).try).try")
-      # The UTC date is pinned absolutely. `today`/`tomorrow`/`yesterday` are
-      # this machine's zone, which the generator cannot know and a checked-in
-      # spec must not assume, so those are asserted by their relationship —
-      # which is the whole of what they mean.
-      assert_eq("Date.utcToday().iso", CalendarRef.format_date(*date))
-      assert_eq("Date.tomorrow().epochDay - Date.today().epochDay", 1)
-      assert_eq("Date.today().epochDay - Date.yesterday().epochDay", 1)
+      # The frozen instant keeps its own offset, so `today` is the date
+      # written here whatever zone the machine running the spec is in.
+      assert_eq(under_clock(instant, "Date.utcToday().iso"), CalendarRef.format_date(*date))
+      assert_eq(under_clock(instant, "Date.today().iso"), CalendarRef.format_date(*date))
+      assert_eq(under_clock(instant, "Date.tomorrow().epochDay - Date.today().epochDay"), 1)
+      assert_eq(under_clock(instant, "Date.today().epochDay - Date.yesterday().epochDay"), 1)
     end
-    line("    Time.release()")
   end
 
-  it "refuses instants the clock cannot represent" do
-    assert_true("Time.freeze(DateTime.parse(\"2500-01-01T00:00:00Z\").try).ok? == false")
-    assert_true("Time.freeze(DateTime.parse(\"1600-01-01T00:00:00Z\").try).ok? == false")
-    assert_true("Time.freeze(DateTime.parse(\"2026-01-01T00:00:00Z\").try).ok?")
-    line("    Time.release()")
-  end
-
-  it "leaves the clock alone once released" do
-    line("    Time.freeze(DateTime.parse(\"2026-07-30T14:03:00Z\").try)")
-    assert_true("Time.frozen?()")
-    assert_true("Time.controlled?()")
-    assert_eq("Date.utcToday().iso", "2026-07-30")
-    line("    Time.release()")
-    assert_true("!Time.controlled?()")
-    # Travelling still advances, so only the date it started from is pinned.
-    line("    Time.travel(DateTime.parse(\"2026-07-30T14:03:00Z\").try)")
-    assert_true("Time.controlled?()")
-    assert_true("!Time.frozen?()")
-    assert_eq("Date.utcToday().iso", "2026-07-30")
-    line("    Time.release()")
-  end
-
-  # The scoped form is the one to reach for: `freeze`/`release` have to be
-  # paired by hand, and a spec that fails between them leaves every later spec
-  # in the run on a frozen clock.
-  it "scopes a frozen clock to a block" do
+  it "scopes a mocked clock to a block" do
     CASES.times do
       date = random_clock_date
       time = random_time
       instant = CalendarRef.format_date_time(date, time, 0)
-      assert_eq("Time.frozenAt(DateTime.parse(#{instant.inspect}).try, " \
-                "do Date.utcToday().iso end).try",
+      assert_eq(under_clock(instant, "Date.utcToday().iso"), CalendarRef.format_date(*date))
+      # ...and the clock is the host's again the moment the block ends: no
+      # machine running this spec has a clock that reads the mocked instant.
+      assert_true("DateTime.utcNow().iso != #{instant.inspect}")
+    end
+  end
+
+  # `onNow` is the rule a `Mock.Clock` consults instead of its fixture.
+  it "answers from a rule" do
+    CASES.times do
+      date = random_clock_date
+      time = random_time
+      instant = CalendarRef.format_date_time(date, time, 0)
+      assert_eq("(with Time.Clock = Mock.Clock { onNow: Just({ DateTime.parse(#{instant.inspect}).try }) } " \
+                "do Date.utcToday().iso end)",
                 CalendarRef.format_date(*date))
-      # ...and the clock is the host's again the moment the block ends.
-      assert_true("!Time.controlled?()")
     end
-  end
-
-  it "scopes a travelling clock to a block" do
-    CASES.times do
-      date = random_clock_date
-      time = random_time
-      instant = CalendarRef.format_date_time(date, time, 0)
-      # Travelling advances, so the date it started from is what is pinned —
-      # a reading taken immediately still lands on that day.
-      assert_eq("Time.travellingFrom(DateTime.parse(#{instant.inspect}).try, " \
-                "do Date.utcToday().iso end).try",
-                CalendarRef.format_date(*date))
-      assert_true("!Time.controlled?()")
-    end
-  end
-
-  it "never touches the clock for an instant it cannot represent" do
-    assert_true("Time.frozenAt(DateTime.parse(\"2500-01-01T00:00:00Z\").try, " \
-                "do 1 end).ok? == false")
-    assert_true("Time.travellingFrom(DateTime.parse(\"1600-01-01T00:00:00Z\").try, " \
-                "do 1 end).ok? == false")
-    assert_true("!Time.controlled?()")
-    # The body does not run either — a failed freeze is not a silent no-op
-    # that still executes the block against the host clock.
-    line("    var ran = false")
-    line("    Time.frozenAt(DateTime.parse(\"2500-01-01T00:00:00Z\").try, do ran = true end)")
-    assert_true("!ran")
   end
 
   it "measures the distance between dates" do

@@ -326,38 +326,50 @@ describe("Time") do
     assert(59.minutes.shorterThan?(1.hours))
   end
 
-  # The scoped form is what makes clock-reading code testable without leaving
-  # a frozen clock behind for every spec that runs after this one.
+  # `Time.Clock` is a capability, so a mocked clock is scoped to its block:
+  # nothing is left behind for the specs that run after this one.
   it("scopes a mocked clock to a block") do
     let instant = DateTime.parse("2026-07-30T14:03:00Z").try
-    let seen = Time.frozenAt(instant, do Date.utcToday().iso end).try
+    let seen = with Time.Clock = Mock.Clock { at: instant } do
+      Date.utcToday().iso
+    end
     assert(seen == "2026-07-30")
-    assert(!Time.controlled?())
+    assert(DateTime.utcNow() != instant)
 
     # Frozen means frozen: two readings inside the block are the same instant.
-    let stable = Time.frozenAt(instant) do
-      DateTime.utcNow().epochSeconds == DateTime.utcNow().epochSeconds
+    with Time.Clock = Mock.Clock { at: instant } do
+      assert(DateTime.utcNow() == DateTime.utcNow())
+      assert(DateTime.epochNanos() == 1785420180000000000)
     end
-    assert(stable.try)
-
-    # Travelling starts there and keeps running.
-    assert(Time.travellingFrom(instant, do Date.utcToday().iso end).try ==
-           "2026-07-30")
-    assert(!Time.controlled?())
   end
 
-  it("refuses instants the int64 nanosecond clock cannot name") do
-    let tooLate = DateTime.parse("2500-01-01T00:00:00Z").try
-    let tooEarly = DateTime.parse("1600-01-01T00:00:00Z").try
-    assert(!Time.settable?(tooLate))
-    assert(!Time.settable?(tooEarly))
-    assert(Time.settable?(DateTime.parse("2026-01-01T00:00:00Z").try))
-    assert(Time.freeze(tooLate).ok? == false)
-    assert(Time.travel(tooEarly).ok? == false)
-    # The clock is untouched and the body never runs.
-    var ran = false
-    assert(Time.frozenAt(tooLate, do ran = true end).ok? == false)
-    assert(!ran)
-    assert(!Time.controlled?())
+  it("keeps the zone of the mocked instant") do
+    let lateEvening = DateTime.parse("2026-07-30T23:30:00+02:00").try
+    with Time.Clock = Mock.Clock { at: lateEvening } do
+      assert(Date.today().iso == "2026-07-30")
+      assert(Time.now().iso == "23:30:00")
+      assert(Time.utcNow().iso == "21:30:00")
+      assert(DateTime.now().iso == "2026-07-30T23:30:00+02:00")
+    end
+  end
+
+  # A rule written outside the `with` reads the real clock, so shifting it
+  # gives a clock that still runs: what code measuring elapsed time needs.
+  it("runs a mocked clock from a rule") do
+    let instant = DateTime.parse("2026-07-30T14:03:00Z").try
+    let ahead = DateTime.now().until(instant)
+    with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + ahead }) } do
+      assert(Date.utcToday().iso == "2026-07-30")
+      let first = DateTime.epochNanos()
+      assert(DateTime.epochNanos() >= first)
+    end
+  end
+
+  it("names instants far outside the range of a host clock") do
+    let farFuture = DateTime.parse("2500-01-01T00:00:00Z").try
+    with Time.Clock = Mock.Clock { at: farFuture } do
+      assert(Date.utcToday().iso == "2500-01-01")
+      assert(DateTime.epochNanos() == 16725225600000000000)
+    end
   end
 end

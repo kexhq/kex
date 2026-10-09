@@ -34,6 +34,7 @@ out every member by hand:
 | --- | --- | --- |
 | `FS.File` | `Mock.Files { files: … }` | `onRead` |
 | `ENV` | `Mock.Env { vars: … }` | `onGet` |
+| `Time.Clock` | `Mock.Clock { at: … }` | `onNow` |
 | `Http` | `Mock.Response { status:, body:, headers: }` | — |
 
 The callback is for when a test wants a rule rather than a fixture — content
@@ -73,10 +74,13 @@ cannot be hijacked by a dependency that calls `Mock.ENV.set` at load time.
 `Mock` is also no longer part of the automatic prelude. Qualified use
 (`Mock.FS.File(...)`) loads it on demand, like any other opt-in stdlib module.
 
-The gate covers the mock *functions*, which mutate global state. The stand-ins
-above are ordinary records and reach no intrinsic, so they need no grant — a
-program using `with FS.File = Mock.Files { … }` runs anywhere, which is what
-makes them usable in an example as well as a spec.
+The gate covers the stand-ins above as well as the mock functions. A stand-in
+is an ordinary record and reaches no intrinsic, but handing one to `with` lies
+to the rest of the program just as a mock function does, so *building* a
+`Mock.*` record is checked the same way and refused with the same error. A
+program that wants `with FS.File = Mock.Files { … }` outside a spec says so
+with `--allow-mocks`. A stand-in the program writes for itself is not a
+`Mock.*` and needs no grant.
 
 There is deliberately no `Mock.System`. Faking the reported OS only exercises a
 program's branching, not the platform behaviour behind it: the file semantics,

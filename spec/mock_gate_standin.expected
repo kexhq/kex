@@ -1,0 +1,2 @@
+own stand-in: 2026-07-30
+Internal error: Mock.Clock is test-only — Mock.* runs in spec files (*.spec.kex), the REPL, or with --allow-mocks

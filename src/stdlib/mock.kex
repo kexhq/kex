@@ -11,14 +11,18 @@
 # to one block. Use mocks when a test needs state shared across several calls,
 # and clear that state between tests.
 #
-# Import with +using Mock+. Mock operations are allowed in spec files, the
-# REPL, and programs run with +--allow-mocks+.
+# Import with +using Mock+. Everything here is test-only: the mock operations
+# and the stand-in records (+Mock.Files+, +Mock.Env+, +Mock.Clock+) alike are
+# allowed in spec files and the REPL, and need +--allow-mocks+ anywhere else.
 
 # A stand-in's read hook: a path in, its content or `None` out.
 type Reader = FS.FilePath -> String?
 
 # An environment stand-in's lookup hook: a name in, its value or `None` out.
 type Lookup = String -> String?
+
+# A clock stand-in's reading hook: nothing in, the instant out.
+type Tick = Block<DateTime>
 
 # An environment stand-in's WRITE hook: the name and the value a program set.
 # A `Mock.Env` is an immutable record, so a write cannot land in its `vars`,
@@ -69,6 +73,37 @@ module Mock do
 
     # Where a write goes. Without it, writes go quietly nowhere.
     onSet : Writer? = None
+  end
+
+  # A stand-in for the `Time.Clock` capability. Every reading in the region
+  # (`Time.now`, `Date.today`, `DateTime.utcNow`) answers from it.
+  #
+  #   with Time.Clock = Mock.Clock { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
+  #     assert(Date.today().iso == "2026-07-30")
+  #   end
+  #
+  # The clock is frozen: every reading is `at`, zone included, so
+  # `Date.today()` is the date in the zone you wrote and not in the zone of
+  # the machine running the test.
+  #
+  # `onNow` answers instead when a test wants a rule rather than a fixture. A
+  # block keeps the clock of the region it was written in, so a rule written
+  # outside the `with` reads the real one. That is how to get a clock that
+  # still runs, which code measuring elapsed time needs: a frozen clock makes
+  # every interval zero.
+  #
+  #   with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.days }) } do
+  #     let started = DateTime.epochNanos()
+  #     runTheThing()
+  #     assert(DateTime.epochNanos() > started)
+  #   end
+  record Clock do
+    # The fixture: the instant every reading answers. Left out, it is the
+    # Unix epoch.
+    at    : DateTime = DateTime.fromEpochSeconds(0)
+
+    # A rule consulted instead of `at`, when a test wants derived answers.
+    onNow : Tick? = None
   end
 
   # A stateful stand-in for the filesystem: files a test declares, that the
@@ -419,6 +454,13 @@ module Mock do
     foul unset(name) = match @onSet do
       Just(writer) => writer(name, "")
       None         => ()
+    end
+  end
+
+  make Clock, implement: Time.Clock do
+    foul now() = match @onNow do
+      Just(rule) => rule()
+      None       => @at
     end
   end
 

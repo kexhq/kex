@@ -1,0 +1,29 @@
+# The `Mock.*` stand-ins are refused outside a test too (issue #144).
+#
+# `Mock.Files`, `Mock.Env` and `Mock.Clock` are ordinary records that reach no
+# intrinsic, and for a while that meant they needed no grant. But handing one
+# to `with` lies to the rest of the program exactly as `Mock.FS.File` does, so
+# building one is checked the same way: allowed in a `*.spec.kex`, in the REPL,
+# or with --allow-mocks, and refused everywhere else.
+#
+# The file name is the point, as in `mock_gate.kex`: this is an ordinary
+# program, the golden output IS the refusal, and both backends must refuse
+# identically. A stand-in a program writes for itself is not a `Mock.*` and
+# needs no grant.
+
+record OwnClock do
+  at : DateTime
+end
+
+make OwnClock, implement: Time.Clock do
+  foul now() -> DateTime = @at
+end
+
+main do
+  with Time.Clock = OwnClock { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
+    IO.printLine("own stand-in: ${Date.utcToday().iso}")
+  end
+  with Time.Clock = Mock.Clock { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
+    IO.printLine("not reached: ${Date.utcToday().iso}")
+  end
+end
