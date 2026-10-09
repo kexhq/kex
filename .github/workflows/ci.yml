@@ -300,7 +300,7 @@ jobs:
         run: make -o build test-fuzz
 
       - name: BEAM spec runner regression checks
-        run: make test-spec-beam-runner
+        run: make -o build test-spec-beam-runner
 
       # Fresh programs each workflow run; reruns keep the seed for replay.
       # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
@@ -419,7 +419,7 @@ jobs:
           stage/bin/tey --help > /dev/null
           # The offline JSON listing an editor's toolchain picker reads
           # (kexhq/kex#160): valid JSON, an empty toolchains array, exit 0.
-          stage/bin/tey kex list --installed --json | python3 -m json.tool > /dev/null
+          stage/bin/tey kex list --installed --json | ruby -rjson -e 'JSON.parse(STDIN.read)'
           # --json without --installed would reach the network, so it must be
           # refused rather than half-answered.
           if stage/bin/tey kex list --json; then

@@ -1,0 +1,79 @@
+# Capabilities
+#
+# A capability is a module whose implementation can be replaced for a lexical
+# region with `with`. Code that uses it declares no dependency and threads no
+# parameter: `greeting` below calls `Notes.load` exactly as it would in
+# production, and the replacement still reaches it.
+#
+# The standard library's `FS.File`, `ENV` and `IO` are capabilities too. For
+# those, reach for the ready-made stand-ins (`Mock.Files`, `Mock.Env`) rather
+# than writing your own; the last part of this example does.
+
+# Every member of a capability is `foul`, and its body is what runs outside
+# any `with`. Here that is the real filesystem.
+capability Notes do
+  foul load(name: String) -> String? = match FS.File.read("notes/${name}.txt") do
+    Ok(text) => Just(text.trim)
+    Error(_) => None
+  end
+
+  foul save(name: String, text: String) -> Bool = FS.File.write("notes/${name}.txt", text)
+end
+
+# A stand-in is an ordinary record that implements the capability. It must
+# provide every member: the members are the interface, so a fake cannot
+# quietly omit one and let that call reach the real thing.
+record FakeNotes do
+  notes : Map<String, String>
+end
+
+make FakeNotes, implement: Notes do
+  foul load(name: String) -> String? = @notes.get(name)
+
+  # A fake is a value, so there is nowhere for a write to go. Refusing is the
+  # honest answer: a test that did not expect a write sees it fail.
+  foul save(name: String, text: String) -> Bool = false
+end
+
+foul greeting(who: String) -> String do
+  match Notes.load(who) do
+    Just(note) => "Hello ${who}: ${note}"
+    None => "Hello ${who}, no note for you"
+  end
+end
+
+# Two calls away from the capability, and still mentions nothing about it.
+foul greetAll(people: [String]) -> [String] = people.map { |who| greeting(who) }
+
+# Reads through the standard library's `FS.File` capability.
+foul firstLine(path: String) -> String = FS.File.readLines(path).or([]).first.or("(empty)")
+
+main do
+  # Outside any `with` the capability's own bodies run. There is no `notes/`
+  # directory here, so nobody has a note.
+  IO.printLine(greeting("ada"))
+
+  # Inside the region every `Notes` call answers from the fake, however deep
+  # the call that makes it.
+  with Notes = FakeNotes { notes: {"ada": "the engine is ready"} } do
+    greetAll(["ada", "grace"]).each { |line| IO.printLine(line) }
+    IO.printLine("saved? ${Notes.save("grace", "ship it")}")
+  end
+
+  # The replacement cannot outlive its block; there is nothing to clear.
+  IO.printLine(greeting("ada"))
+
+  # The innermost replacement wins, and leaving it restores the outer one.
+  with Notes = FakeNotes { notes: {"ada": "outer"} } do
+    with Notes = FakeNotes { notes: {"ada": "inner"} } do
+      IO.printLine(greeting("ada"))
+    end
+    IO.printLine(greeting("ada"))
+  end
+
+  # A standard-library capability, replaced with its ready-made stand-in.
+  with FS.File = Mock.Files { files: {"todo.txt": "write the example\nrun it\n"} } do
+    IO.printLine(firstLine("todo.txt"))
+    IO.printLine(firstLine("missing.txt"))
+  end
+end

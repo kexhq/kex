@@ -387,6 +387,8 @@ module Mock do
     foul delete(path) = false
     foul copy(src, dst) = false
     foul rename(src, dst) = false
+    foul changePermission(path, permissions) = false
+    foul changeMode(path, mode) = false
   end
 
   make Env, implement: ENV do

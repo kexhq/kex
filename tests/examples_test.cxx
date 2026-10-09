@@ -95,6 +95,7 @@ int main() {
         it("vectors.kex", []() { assertTrue(parseFile("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
         it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
+        it("capabilities.kex", []() { assertTrue(parseFile("examples/capabilities.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(parseFile("examples/fizzbuzz.kex")); });
         it("cluster/store_node.kex", []() { assertTrue(parseFile("examples/cluster/store_node.kex")); });
         it("cluster/client_node.kex", []() { assertTrue(parseFile("examples/cluster/client_node.kex")); });
@@ -146,6 +147,7 @@ int main() {
         it("compiled_sql.kex", []() { assertTrue(runFileOk("examples/compiled_sql.kex")); });
         it("compiled_css.kex", []() { assertTrue(runFileOk("examples/compiled_css.kex")); });
         it("env.kex", []() { assertTrue(runFileOk("examples/env.kex")); });
+        it("capabilities.kex", []() { assertTrue(runFileOk("examples/capabilities.kex")); });
         it("error_handling.kex", []() { assertTrue(runFileOk("examples/error_handling.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(runFileOk("examples/fizzbuzz.kex")); });
         it("fizzbuzz_functional.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_functional.kex")); });

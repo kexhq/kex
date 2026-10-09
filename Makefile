@@ -132,12 +132,12 @@ test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-ex
 
 # Harness and generator regressions, including simulated crashes/timeouts.
 .PHONY: test-fuzz test-spec-beam-runner
-test-spec-beam-runner:
-	@python3 tools/test-spec-beam-runner.py
+test-spec-beam-runner: build
+	@"$(KEX)" --run-walker --no-colors tools/spec_beam_runner.spec.kex
 
 test-fuzz: build
-	@"$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
-	@python3 tools/test-fuzz.py "$(KEX)"
+	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
+	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz_cli.spec.kex
 
 # Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
 # programs and requires the walker and BEAM backends to agree on every one.
