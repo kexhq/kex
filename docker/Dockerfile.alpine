@@ -9,7 +9,13 @@
 #
 #   docker build -f docker/Dockerfile.alpine -t kex:alpine .
 
-FROM alpine:3.22 AS build
+# The base image is an argument so CI can pull it from a mirror: anonymous
+# pulls from Docker Hub are rate-limited per IP, and GitHub's shared runners
+# hit that limit (a 429 before a single line of Kex is built). The default is
+# Docker Hub, so a local or release build is unchanged.
+ARG BASE_IMAGE=alpine:3.22
+
+FROM ${BASE_IMAGE} AS build
 
 # erlang27, not erlang: Alpine 3.22's plain `erlang` is OTP 26, and Kex needs
 # OTP 27+ (CMakeLists.txt refuses older). The versioned packages install to
@@ -49,7 +55,7 @@ RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
         INSTALL_NONINTERACTIVE=1 \
     && rm -f /opt/tey/bin/kex
 
-FROM alpine:3.22
+FROM ${BASE_IMAGE}
 
 # libgmpxx is its own package on Alpine: the binary links GMP's C++
 # wrapper, and `gmp` alone leaves the image failing to start.

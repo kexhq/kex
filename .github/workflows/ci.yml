@@ -328,11 +328,16 @@ jobs:
     needs: changes
     if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
+    # Docker Hub rate-limits anonymous pulls per IP and the shared runners
+    # hit it, failing this job with a 429 on `alpine:3.22` before anything is
+    # built. Amazon's public mirror of the official images is not behind it.
+    env:
+      BASE_IMAGE: public.ecr.aws/docker/library/alpine:3.22
     steps:
       - uses: actions/checkout@v4
 
       - name: Build the Alpine image (runs the suites on musl)
-        run: docker build -f docker/Dockerfile.alpine --build-arg BUILD_JOBS=4 -t kex:alpine .
+        run: docker build -f docker/Dockerfile.alpine --build-arg BUILD_JOBS=4 --build-arg BASE_IMAGE="$BASE_IMAGE" -t kex:alpine .
 
       - name: Smoke-test both backends in the image
         run: |
@@ -366,7 +371,7 @@ jobs:
       - name: Build and smoke-test the slim image
         run: |
           set -euo pipefail
-          docker build -f docker/Dockerfile.slim --build-arg BUILD_JOBS=4 -t kex:slim .
+          docker build -f docker/Dockerfile.slim --build-arg BUILD_JOBS=4 --build-arg BASE_IMAGE="$BASE_IMAGE" -t kex:slim .
           [ "$(docker run --rm -v /tmp:/work kex:slim smoke.kex)" = "ok" ]
           [ "$(docker run --rm -v /tmp:/work kex:slim --run-walker smoke.kex)" = "ok" ]
 
