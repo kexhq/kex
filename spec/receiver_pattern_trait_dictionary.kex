@@ -1,0 +1,44 @@
+# A trait method written as receiver-pattern clauses (`let price(@Penny)`)
+# still answers when its type is passed where the trait is expected. BEAM
+# merged those clauses into the bare `price/1` and dropped `price/Coin`,
+# the name the trait dictionary binds, so erlc saw an undefined function.
+#
+# The merged function must also leave other receivers to the prelude:
+# `symbol` on a Measure is the prelude's, not the local `symbol(@Penny)`.
+trait Priced do
+  price :> Float
+end
+
+type Coin = Penny | Dime
+type Note = Five | Ten
+
+make Coin, implement: Priced do
+  let price(@Penny) = 0.01
+  let price(@Dime) = 0.1
+end
+
+make Note, implement: Priced do
+  let price(@Five) = 5.0
+  let price(@Ten) = 10.0
+end
+
+make Coin, implement: Unit do
+  let factor(@Penny) = 1.0
+  let factor(@Dime) = 10.0
+
+  let kind = :money
+
+  let symbol(@Penny) = "p"
+  let symbol(@Dime) = "d"
+end
+
+let double(item: Priced) -> Float = item.price * 2.0
+
+main do
+  IO.printLine(double(Dime))
+  IO.printLine(double(Ten))
+  IO.printLine(Five.price)
+  IO.printLine(1.hour.convertTo(Dime))
+  IO.printLine(Dime.symbol)
+  IO.printLine(90.minute.symbol)
+end

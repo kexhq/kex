@@ -1,0 +1,99 @@
+# CSS lengths as measures.
+#
+# CSS absolute units have fixed ratios to one another (`96px = 72pt = 1in`),
+# so they fit the shared `Measure` model directly: the canonical value is CSS
+# pixels and each unit carries its factor. Their dimension is `:css_length`, a
+# base identity of its own. A CSS pixel is a reference unit, not a physical
+# length, and it is certainly not a duration, so mixing either in is an error.
+#
+# Font- and viewport-relative units (`rem`, `em`, `%`, `vh`) have no fixed
+# factor. They resolve against a context, which here is an explicit root font
+# size; see "Extensibility example: CSS" in docs/units-design.md for the typed
+# expression layer a real CSS library would add for the unresolved form.
+
+type CssUnit = Px | Pt | Pc | Inch | Cm | Mm
+
+make CssUnit, implement: Unit do
+  let factor(@Px) = 1.0
+  let factor(@Pt) = 96.0 / 72.0
+  let factor(@Pc) = 16.0
+  let factor(@Inch) = 96.0
+  let factor(@Cm) = 96.0 / 2.54
+  let factor(@Mm) = 96.0 / 25.4
+
+  let kind = :css_length
+
+  let symbol(@Px) = "px"
+  let symbol(@Pt) = "pt"
+  let symbol(@Pc) = "pc"
+  let symbol(@Inch) = "in"
+  let symbol(@Cm) = "cm"
+  let symbol(@Mm) = "mm"
+end
+
+let cssLength(value: Number, unit: CssUnit) -> Measure do
+  return Measure {
+    canonical: value * unit.factor,
+    value: value * 1.0,
+    unit: UnitDefinition {
+      conversionFactor: unit.factor,
+      dimension: unit.kind,
+      notation: unit.symbol
+    }
+  }
+end
+
+make Integer | Float do
+  let px -> Measure = cssLength(this, Px)
+  let pt -> Measure = cssLength(this, Pt)
+  let pc -> Measure = cssLength(this, Pc)
+  let inch -> Measure = cssLength(this, Inch)
+  let cm -> Measure = cssLength(this, Cm)
+  let mm -> Measure = cssLength(this, Mm)
+
+  # A root-relative length, resolved against the root font size it is given.
+  let rem(root: Measure) -> Measure = root.scale(this)
+end
+
+make Measure do
+  # The measure as a CSS value: no space between the number and its unit.
+  let css -> String = "${this.value}${this.symbol}"
+end
+
+let declaration(property: String, length: Result<Measure, String>) -> String do
+  match length do
+    Ok(measure) => return "  ${property}: ${measure.css};"
+    Error(reason) => return "  /* ${property}: ${reason} */"
+  end
+end
+
+main do
+  let rootFont = 16.px
+  let gutter = 0.25.inch
+
+  IO.printLine("root font: ${rootFont}")
+  IO.printLine("gutter: ${gutter}")
+
+  # Absolute units convert without knowing anything about the device.
+  IO.printLine(72.pt.convertTo(Px).map(&.css))
+  IO.printLine(gutter.convertTo(Px).map(&.css))
+  IO.printLine(1.inch.convertTo(Cm).map(&.css))
+
+  # Mixed units add through CSS pixels; the left operand picks the display unit.
+  IO.printLine((12.pt + 4.px).map(&.css))
+  IO.printLine((4.px + 12.pt).map(&.css))
+
+  # A CSS length is not a duration.
+  IO.printLine(300.millisecond + 8.px)
+
+  # Relative units need their context before they are a length.
+  let heading = 2.5.rem(rootFont)
+  IO.printLine("heading: ${heading.css}")
+
+  IO.printLine(".card {")
+  IO.printLine(declaration("font-size", Ok(rootFont)))
+  IO.printLine(declaration("padding", gutter.convertTo(Px)))
+  IO.printLine(declaration("margin-top", heading - 4.px))
+  IO.printLine(declaration("width", 60.pc + 1.second))
+  IO.printLine("}")
+end

@@ -10067,11 +10067,62 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (f.name.rfind(prefix, 0) == 0 && f.arity == arity) {
                         for (auto& c : f.clauses)
                             merged.clauses.push_back(std::move(c));
-                        // Remove the mangled function (avoid duplicate and keep
-                        // mod.functions clean).
-                        mod.functions.erase(mod.functions.begin() + i);
-                    } else {
-                        ++i;
+                        // The clauses now live in the merged function, but the
+                        // mangled name is still what a trait dictionary binds
+                        // (`makeTraitDictionaryFor` picks `name/Type` for any
+                        // colliding method). Erasing it left that reference
+                        // dangling, so passing such a type where a trait is
+                        // expected failed in erlc with an undefined function.
+                        // Keep the name as a forwarder into the merged one.
+                        f.clauses.clear();
+                        FunClause forward;
+                        std::vector<ExprPtr> args;
+                        for (int a = 0; a < arity; ++a) {
+                            auto param = std::make_unique<Pattern>();
+                            param->kind = PatKind::Var;
+                            param->name = "_mergedArg" + std::to_string(a);
+                            forward.params.push_back(std::move(param));
+                            args.push_back(
+                                var("_mergedArg" + std::to_string(a)));
+                        }
+                        auto body = std::make_unique<Expr>();
+                        body->node =
+                            Call{"", name, arity, std::move(args), false};
+                        forward.body = std::move(body);
+                        f.clauses.push_back(std::move(forward));
+                    }
+                    ++i;
+                }
+                // Merged variant clauses answer only for the local owners. A
+                // name the prelude answers for as well must keep going, or a
+                // receiver of any other type ends in `function_clause` where
+                // the walker reaches the prelude: with `let symbol(@Px)` in
+                // scope, `measure.symbol` on a Measure did exactly that.
+                if (preludeOwnsName) {
+                    const auto& providers =
+                        L.externalModules->receiverFunctions.at(name);
+                    auto provider = std::find_if(
+                        providers.begin(), providers.end(),
+                        [&](const ExternalModules::ReceiverFunction& fn) {
+                            return fn.moduleAtom == "kex_prelude" &&
+                                   fn.beamArity == arity &&
+                                   fn.beamFunction == name;
+                        });
+                    if (provider != providers.end()) {
+                        FunClause fallback;
+                        std::vector<ExprPtr> args;
+                        for (int a = 0; a < arity; ++a) {
+                            auto param = std::make_unique<Pattern>();
+                            param->kind = PatKind::Var;
+                            param->name =
+                                "_preludeArg" + std::to_string(a);
+                            fallback.params.push_back(std::move(param));
+                            args.push_back(
+                                var("_preludeArg" + std::to_string(a)));
+                        }
+                        fallback.body = L.callE("kex_prelude", name, arity,
+                                                std::move(args));
+                        merged.clauses.push_back(std::move(fallback));
                     }
                 }
                 mod.functions.push_back(std::move(merged));
