@@ -4439,6 +4439,18 @@ struct Lowering {
         };
         std::vector<LoweredEntry> entries;
         entries.reserve(n.fields.size());
+        // A `Mock.*` stand-in is test-only like the mock functions are
+        // (issue #144): building one is where a program starts to lie about
+        // the world, so that is where the grant is checked. Same wording as
+        // the interpreter, via the shared kex_test gate.
+        if (n.typeName != "This" && !fromReceiver &&
+            recordName.rfind("Mock.", 0) == 0) {
+            std::vector<ExprPtr> gateArgs;
+            gateArgs.push_back(lit(LitKind::String, recordName));
+            binds.push_back({fresh("gate"),
+                             callE("kex_test", "require_mocks_allowed", 1,
+                                   std::move(gateArgs))});
+        }
         for (const auto& field : n.fields) {
             auto value = atomize(field.value, binds);
             entries.push_back({&field, snap(value)});

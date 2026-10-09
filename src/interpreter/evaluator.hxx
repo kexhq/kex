@@ -468,6 +468,20 @@ private:
             if (it->first == name) return it->second;
         return nullptr;
     }
+    // Runs a closure under the substitutions of the region it was WRITTEN in
+    // and puts the caller's back however the closure leaves. Replacement is
+    // lexical: a block or function reference keeps its own region's
+    // capabilities, which is what BEAM does by capturing the threaded
+    // context. A helper that wraps `with` around a caller's block therefore
+    // does not reach into that block.
+    using CapabilityBindings = std::vector<std::pair<std::string, ValuePtr>>;
+    struct CapabilityScope {
+        CapabilityBindings& live;
+        CapabilityBindings saved;
+        CapabilityScope(CapabilityBindings& current, const CapabilityBindings& captured)
+            : live(current), saved(std::move(current)) { live = captured; }
+        ~CapabilityScope() { live = std::move(saved); }
+    };
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;
     std::vector<std::string> m_moduleRoots{"lib", "src"};

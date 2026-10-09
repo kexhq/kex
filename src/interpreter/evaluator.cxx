@@ -2875,11 +2875,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             const ast::RescueBlock* rescuePtr = node.rescue ? &*node.rescue : nullptr;
             const bool collection = node.collection;
             const bool namedFunction = node.namedFunction;
+            auto capturedCapabilities = m_capabilityBindings;
             auto collectionDepth = std::make_shared<int>(0);
             lambda->data = FunctionValue{"<lambda>",
                 [this, bodyPtr, paramNames, capturedEnv, rescuePtr,
                  collection, namedFunction,
-                 collectionDepth](std::vector<ValuePtr> args) -> ValuePtr {
+                 collectionDepth,
+                 capturedCapabilities](std::vector<ValuePtr> args) -> ValuePtr {
+                    CapabilityScope capabilityScope{m_capabilityBindings, capturedCapabilities};
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
                     // A named local function (`let f(x) do ... end` in a
@@ -3023,6 +3026,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 typeName = record->typeName;
             } else {
                 typeName = resolveRecordTypeName(node.typeName);
+                // A `Mock.*` stand-in is test-only like the mock functions are
+                // (issue #144): building one is where a program starts to
+                // lie about the world, so that is where the grant is checked.
+                // `This`/`New` above are a stand-in copying itself, which
+                // needed the grant to exist in the first place.
+                if (typeName.rfind("Mock.", 0) == 0)
+                    requireMocksAllowed(typeName);
             }
             std::unordered_map<std::string, ValuePtr> fields;
             if (node.typeName == "New")
@@ -3225,8 +3235,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // then applies (or, still short of arity, partially applies
             // again — makeCurriedCall).
             auto lambda = std::make_shared<Value>();
+            auto capturedCapabilities = m_capabilityBindings;
             lambda->data = FunctionValue{"~" + fnName,
-                [this, fnName, slots, isOp, isUnaryOp, opToken, arity](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
+                [this, fnName, slots, isOp, isUnaryOp, opToken, arity,
+                 capturedCapabilities](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
+                    CapabilityScope capabilityScope{m_capabilityBindings, capturedCapabilities};
                     std::vector<ValuePtr> finalArgs;
                     size_t fillIdx = 0;
                     for (const auto& s : slots) {

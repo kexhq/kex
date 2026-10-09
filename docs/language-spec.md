@@ -1488,11 +1488,36 @@ Rules:
   means.
 - Replacement is lexical and cannot outlive its block, including when an error
   escapes it.
+- A block or function reference keeps the replacements of the region it was
+  **written** in, not the ones in force where it is later called. A helper
+  that wraps `with` around a block it was handed does not reach into that
+  block, and a block written inside a region still sees the replacement after
+  the region has ended.
 - Both backends agree.
 
 The boundary is the innermost module that owns effectful members, so `FS.File`
 and `FS.Directory` are capabilities while `FS` is not — `FS.Path` is pure
 string manipulation with nothing to substitute.
+
+The clock follows the same rule. `Time.Clock` is a capability with one member,
+`now`, and every reading (`Time.now`, `Date.today`, `DateTime.now`,
+`DateTime.utcNow`, `DateTime.epochNanos`) comes from it, while `Time` itself
+stays a plain module. `Mock.Clock` is the ready-made stand-in, shaped like
+`Mock.Files` and `Mock.Env`: a fixture, and a rule consulted instead of it.
+
+```kex
+with Time.Clock = Mock.Clock { at: launch } do
+  Date.today()   # the date of `launch`, in its own zone
+end
+
+# The rule is written outside the region, so it reads the real clock: a
+# clock that still runs, three days ahead.
+with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.days }) } do
+  runTheThing()
+end
+```
+
+There is no global test clock: this is the only way to replace the time.
 
 > **Two senses of the word.** This is unrelated to the *target* capabilities in
 > `docs/compilation.md`, which are the effects a build target is allowed to
@@ -2229,11 +2254,11 @@ end
 | `Mock.ENV` | `set(name, value)`, `unset(name)`, `clear()` |
 | `Mock.System` | `OS(name)`, `BITWIDTH(bits)`, `clear()` |
 
-`Mock` is an opt-in module, not part of the prelude, and its functions are
-refused outside a test: a `*.spec.kex` entry file, a REPL session, or a run
-started with `--allow-mocks`. Everywhere else — including a compiled program
-booted straight from `erl` — every `Mock.*` call fails with an error naming
-it. See [testing.md](testing.md#mocks-are-test-only).
+`Mock` is an opt-in module, not part of the prelude, and it is refused outside
+a test: a `*.spec.kex` entry file, a REPL session, or a run started with
+`--allow-mocks`. Everywhere else — including a compiled program booted
+straight from `erl` — every `Mock.*` call, and building any `Mock.*` stand-in
+(`Mock.Files`, `Mock.Env`, `Mock.Clock`), fails with an error naming it. See [testing.md](testing.md#mocks-are-test-only).
 
 `Mock.IO` captures what the mocking process writes AND what the processes it
 spawns write — the capture is inherited across `spawn` and `Task.start`, the

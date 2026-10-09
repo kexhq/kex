@@ -8,17 +8,19 @@
 %% Mock.* is test-only (issue #144): a mock lets one part of a program lie
 %% to another about the filesystem, environment, platform, network or
 %% console, so the intrinsic backends (kex_intrinsic_fs/env/system/io/http)
-%% call require_mocks_allowed/1 before touching mock state. The flag is
-%% process-local like the mock state itself, and it is the RUNNER that grants
-%% it, never the emitted module: `kex -R` prepends kex_test:allow_mocks() to
+%% call require_mocks_allowed/1 before touching mock state, and so does the
+%% construction of any `Mock.*` stand-in record. The flag covers the whole
+%% run, as the tree-walker's does: a stand-in is a value, and a process a spec
+%% spawns may build one. It is the RUNNER that grants it, never the emitted
+%% module: `kex -R` prepends kex_test:allow_mocks() to
 %% its -eval for a *.spec.kex entry or --allow-mocks, and the BEAM REPL does
 %% the same before kex_repl_driver:loop() (both in src/main.cxx). So the very
 %% same .beam started by `erl -pa ebin` begins with mocks denied. Mirrors
 %% Evaluator::setMocksAllowed in the tree-walker, error line included — the
 %% -R parity suites diff the two backends' output.
-allow_mocks() -> put(kex_mocks_allowed, true), 'Kex.Unit'.
+allow_mocks() -> persistent_term:put(kex_mocks_allowed, true), 'Kex.Unit'.
 
-mocks_allowed() -> get(kex_mocks_allowed) =:= true.
+mocks_allowed() -> persistent_term:get(kex_mocks_allowed, false) =:= true.
 
 require_mocks_allowed(Api) ->
     case mocks_allowed() of

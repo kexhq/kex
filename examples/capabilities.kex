@@ -5,9 +5,11 @@
 # parameter: `greeting` below calls `Notes.load` exactly as it would in
 # production, and the replacement still reaches it.
 #
-# The standard library's `FS.File`, `ENV` and `IO` are capabilities too. For
-# those, reach for the ready-made stand-ins (`Mock.Files`, `Mock.Env`) rather
-# than writing your own; the last part of this example does.
+# The standard library's `FS.File`, `ENV`, `IO` and `Time.Clock` are
+# capabilities too, and the last part of this example replaces the clock. In a
+# spec, reach for the ready-made stand-ins (`Mock.Files`, `Mock.Env`,
+# `Mock.Clock`) rather than writing your own. They are test-only: an ordinary
+# program like this one would need `--allow-mocks` to build one.
 
 # Every member of a capability is `foul`, and its body is what runs outside
 # any `with`. Here that is the real filesystem.
@@ -45,8 +47,18 @@ end
 # Two calls away from the capability, and still mentions nothing about it.
 foul greetAll(people: [String]) -> [String] = people.map { |who| greeting(who) }
 
-# Reads through the standard library's `FS.File` capability.
-foul firstLine(path: String) -> String = FS.File.readLines(path).or([]).first.or("(empty)")
+# A stand-in for a standard-library capability. `Time.Clock` has one member,
+# and every reading of the time comes from it.
+record LaunchDay do
+  at : DateTime
+end
+
+make LaunchDay, implement: Time.Clock do
+  foul now() -> DateTime = @at
+end
+
+# Reads the clock through the standard library, as any program would.
+foul dateLine() -> String = "Today is ${Date.today().iso}, a ${Date.today().weekday.name}"
 
 main do
   # Outside any `with` the capability's own bodies run. There is no `notes/`
@@ -71,9 +83,8 @@ main do
     IO.printLine(greeting("ada"))
   end
 
-  # A standard-library capability, replaced with its ready-made stand-in.
-  with FS.File = Mock.Files { files: {"todo.txt": "write the example\nrun it\n"} } do
-    IO.printLine(firstLine("todo.txt"))
-    IO.printLine(firstLine("missing.txt"))
+  # A standard-library capability, replaced the same way.
+  with Time.Clock = LaunchDay { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
+    IO.printLine(dateLine())
   end
 end
