@@ -46,6 +46,26 @@ module FS do
   # writing to a read-only handle is a compile error.
   type WritePermission = CanWrite | CannotWrite
 
+  # Something a file may allow, for +FS.File.changePermission+. Named for the
+  # intent rather than for POSIX bits, so the same list means the right thing
+  # on every system.
+  type Permission = Readable | Writable | Executable
+
+  # The POSIX mode +FS.File.changePermission+ gives a file: the owner gets
+  # every listed permission, everyone else gets them without +Writable+.
+  #
+  # @param permissions [[Permission]] everything the file should allow
+  # @return [Integer] the permission bits
+  #
+  # @example
+  #   FS.permissionMode([FS.Readable, FS.Writable])   # => 420, which is 0o644
+  let permissionMode(permissions: [Permission]) -> Integer do
+    let read = permissions.contains?(Readable) then 0o444 else 0
+    let write = permissions.contains?(Writable) then 0o200 else 0
+    let execute = permissions.contains?(Executable) then 0o111 else 0
+    return read + write + execute
+  end
+
   # A file operation that failed, carrying the path it failed on.
   #
   # +OpenFailed+ and +ReadFailed+ mean the filesystem refused the operation.
@@ -359,6 +379,51 @@ module FS do
     #   FS.File.rename("${path}.tmp", path)
     rename : FilePath -> FilePath -> Bool
     foul rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
+
+    # Sets what may be done with the file at +path+, portably.
+    #
+    # The file ends up with exactly the listed permissions: anything left out
+    # is taken away. The owner gets all of them; everyone else gets the same
+    # without +Writable+. On POSIX that is +0o755+ for all three, +0o644+ for
+    # +[Readable, Writable]+ and +0o444+ for +[Readable]+. On Windows only
+    # +Writable+ has an effect, as the read-only attribute: files there are
+    # always readable, and whether one runs is decided by its extension.
+    #
+    # Use +changeMode+ when you need exact POSIX bits, such as a file only its
+    # owner may read.
+    #
+    # @param path [FilePath] the file whose permissions to change
+    # @param permissions [[Permission]] everything the file should allow
+    # @return [Bool] +true+ when the permissions were changed
+    #
+    # @example Making a file read-only
+    #   FS.File.changePermission("report.txt", [FS.Readable])   # => true
+    #
+    # @example Writing a script and running it
+    #   FS.File.write(script, "#!/bin/sh\necho hello\n")
+    #   FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable])
+    #   Process.run(script, [])
+    changePermission : FilePath -> [Permission] -> Bool
+    foul changePermission(path, permissions) = Kex.Intrinsic.File.changeMode(path, FS.permissionMode(permissions))
+
+    # Sets the POSIX permission bits of the file at +path+ to +mode+: what
+    # `chmod` does with a numeric mode.
+    #
+    # +mode+ is most readably written in octal: +0o600+ is a file only its
+    # owner may read and write. The bits are replaced, not added to, and a
+    # mode outside +0o0000..0o7777+ is refused. This is the POSIX escape hatch:
+    # on Windows only the owner-write bit means anything. Prefer
+    # +changePermission+, which says what you want rather than how POSIX
+    # spells it.
+    #
+    # @param path [FilePath] the file whose mode to change
+    # @param mode [Integer] the permission bits, as in `chmod`
+    # @return [Bool] +true+ when the mode was changed
+    #
+    # @example
+    #   FS.File.changeMode("secrets.txt", 0o600)   # => true
+    changeMode : FilePath -> Integer -> Bool
+    foul changeMode(path, mode) = Kex.Intrinsic.File.changeMode(path, mode)
 
     # Reads the file and returns its lines, without their newlines.
     #
@@ -1024,6 +1089,28 @@ module FS do
     #   FS.File.delete(scratch)
     temporary : String
     foul temporary = Kex.Intrinsic.Directory.temporary
+
+    # Creates a fresh, empty directory under +temporary+ and returns its path.
+    #
+    # The name is +prefix+ followed by a random suffix, so concurrent callers
+    # using the same prefix each get their own directory. Nothing removes it
+    # for you: +deleteAll+ it when you are done.
+    #
+    # @param prefix [String] the start of the directory name, to say whose it is
+    # @return [FilePath?] the new directory, or +None+ when it could not be created
+    #
+    # @example
+    #   FS.Directory.createTemporary("report")   # => Just("/tmp/report-9f2c41d07ab35e68")
+    #
+    # @example A scratch directory that cleans up after itself
+    #   let scratch = FS.Directory.createTemporary("build").or(die("no temporary directory"))
+    #   FS.File.write(FS.Path.join(scratch, "out.txt"), text)
+    #   FS.Directory.deleteAll(scratch)
+    createTemporary : String -> FilePath?
+    foul createTemporary(prefix) do
+      let path = FS.Path.join(FS.Directory.temporary, "${prefix}-${Random.token(8)}")
+      return FS.Directory.create(path) then Just(path) else None
+    end
   end
 end
 

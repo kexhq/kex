@@ -32,6 +32,8 @@ make FakeFiles, implement: FS.File do
   foul delete(path) = false
   foul copy(src, dst) = false
   foul rename(src, dst) = false
+  foul changePermission(path, permissions) = false
+  foul changeMode(path, mode) = false
   foul readLines(path) = [@canned]
   foul feed(path) = []
   foul size(path) = 0

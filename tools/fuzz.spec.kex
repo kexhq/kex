@@ -47,4 +47,31 @@ describe("fuzzer regression checks") do
     assert(intMiss)
     assert(stringMiss)
   end
+
+  # Runs every generated match on both backends as one program. This covers
+  # empty-list inference and real reads of singleton/head bindings.
+  it("agrees across backends on the generated match corpus") do
+    let kex = ENV.get("KEX", "./build/kex")
+    let root = FS.Directory.createTemporary("kex-fuzz-corpus").or("")
+    assert(!root.empty?, "cannot create a temporary directory")
+    let corpus = "${root}/matches.kex"
+    let empty = Env { ints: [], floats: [], strings: [], bools: [] }
+    var program = "main do\n"
+    var seed = 1
+    while seed <= 100 do
+      let ctx = Ctx { rng: Rng { seed: seed }, counter: 0, env: empty }
+      let (source, ignored) = genMatch(ctx, :int, 0)
+      program = "${program}let result${seed} = ${source}\nIO.printLine(result${seed})\n"
+      seed = seed + 1
+    end
+    assert(FS.File.write(corpus, "${program}end\n"))
+    let walker = Process.run(kex, ["--run-walker", "--no-colors", corpus], 90000)
+    let beam = Process.run(kex, ["--run", "--no-colors", corpus], 90000)
+    FS.Directory.deleteAll(root)
+    assert(walker.map { |result| result.exitCode }.or(-1) == 0, "walker: ${walker}")
+    assert(beam.map { |result| result.exitCode }.or(-1) == 0, "beam: ${beam}")
+    let answer = walker.map { |result| result.stdout }.or("")
+    Assert.equal(answer.lines.count, 100)
+    assert(answer == beam.map { |result| result.stdout }.or("no beam output"), "backends disagree")
+  end
 end

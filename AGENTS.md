@@ -45,6 +45,7 @@ make test-wasm    # + runs the interpreter test suite via Node
 
 ## Code Style
 
+- Never let Python, JavaScript, TypeScript into the repository.
 - C++20
 - File extensions: `.hxx` (headers), `.cxx` (source)
 - camelCase for function/method names

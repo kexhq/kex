@@ -1,0 +1,88 @@
+# Checks the Makefile's BEAM spec runner against controlled compiler outcomes.
+#
+# Run with: ./build/kex --run-walker tools/spec_beam_runner.spec.kex from the
+# repository root (`make test-spec-beam-runner` does). Each case hands
+# `make spec-beam` a fake compiler that counts its own invocations.
+
+# What one `make spec-beam` run did: its exit status, its output, and how many
+# times it invoked the compiler.
+record RunnerResult do
+  exitCode : Integer
+  output : String
+  attempts : Integer
+end
+
+foul timeoutAvailable? -> Bool do
+  match Process.run("sh", ["-c", "command -v timeout || command -v gtimeout"]) do
+    Ok(found) => found.exitCode == 0
+    Error(_) => false
+  end
+end
+
+foul runCase(body: String, expected: String) -> RunnerResult do
+  let root = match FS.Directory.createTemporary("kex-beam-runner") do
+    Just(path) => path
+    None => die("spec_beam_runner: cannot create a temporary directory")
+  end
+  let compiler = "${root}/compiler"
+  let tally = "${root}/count"
+  let counting = "count_file=\"${tally}\"\ncount=0\nif [ -f \"$count_file\" ]; then read -r count < \"$count_file\"; fi\ncount=$((count + 1))\necho \"$count\" > \"$count_file\""
+  FS.File.write("${root}/sample.kex", "")
+  FS.File.write("${root}/sample.expected", "${expected}\n")
+  FS.File.write(compiler, "#!/bin/bash\n${counting}\n${body}\n")
+  FS.File.changePermission(compiler, [FS.Readable, FS.Writable, FS.Executable])
+  let args = ["--no-print-directory", "-o", "build", "spec-beam", "KEX=${compiler}",
+    "BEAM_SPEC_FILES=${root}/sample.kex", "BEAM_SPEC_TIMEOUT=0.2"]
+  let ran = Process.run("make", args, 20000)
+  let attempts = Integer.parse(FS.File.read(tally).or("").trim).or(0)
+  FS.Directory.deleteAll(root)
+  match ran do
+    Ok(result) => RunnerResult { exitCode: result.exitCode, output: "${result.stdout}${result.stderr}", attempts: attempts }
+    Error(problem) => RunnerResult { exitCode: -1, output: problem, attempts: attempts }
+  end
+end
+
+describe("BEAM spec runner") do
+  if !timeoutAvailable?()
+    IO.printLine("  skipped: GNU timeout is required")
+  else
+    it("runs correct output once") do
+      let result = runCase("echo ok", "ok")
+      assert(result.exitCode == 0, result.output)
+      Assert.equal(result.attempts, 1)
+    end
+
+    it("does not retry an output mismatch") do
+      let result = runCase("echo wrong", "ok")
+      assert(result.exitCode != 0, result.output)
+      Assert.equal(result.attempts, 1)
+    end
+
+    it("lets an expected error exit nonzero") do
+      let result = runCase("echo rejected >&2; exit 1", "rejected")
+      assert(result.exitCode == 0, result.output)
+      Assert.equal(result.attempts, 1)
+    end
+
+    it("retries a transient timeout with fresh output") do
+      let result = runCase("if [ \"$count\" -eq 1 ]; then echo partial; sleep 10; fi\necho ok", "ok")
+      assert(result.exitCode == 0, result.output)
+      Assert.equal(result.attempts, 2)
+      assert(result.output.contains?("Retrying"), result.output)
+    end
+
+    it("fails a repeated timeout even with the expected output") do
+      let result = runCase("echo ok; sleep 10", "ok")
+      assert(result.exitCode != 0, result.output)
+      Assert.equal(result.attempts, 2)
+      assert(result.output.contains?("timed out twice"), result.output)
+    end
+
+    it("kills a process that ignores TERM, and fails") do
+      let result = runCase("trap \"\" TERM\necho ok\nwhile :; do sleep 1; done", "ok")
+      assert(result.exitCode != 0, result.output)
+      Assert.equal(result.attempts, 2)
+      assert(result.output.contains?("timed out twice"), result.output)
+    end
+  end
+end

@@ -1,0 +1,90 @@
+# Capabilities
+#
+# A capability is a module whose implementation can be replaced for a lexical
+# region with `with`. Code that uses it declares no dependency and threads no
+# parameter: `greeting` below calls `Notes.load` exactly as it would in
+# production, and the replacement still reaches it.
+#
+# The standard library's `FS.File`, `ENV`, `IO` and `Time.Clock` are
+# capabilities too, and the last part of this example replaces the clock. In a
+# spec, reach for the ready-made stand-ins (`Mock.Files`, `Mock.Env`,
+# `Mock.Clock`) rather than writing your own. They are test-only: an ordinary
+# program like this one would need `--allow-mocks` to build one.
+
+# Every member of a capability is `foul`, and its body is what runs outside
+# any `with`. Here that is the real filesystem.
+capability Notes do
+  foul load(name: String) -> String? = match FS.File.read("notes/${name}.txt") do
+    Ok(text) => Just(text.trim)
+    Error(_) => None
+  end
+
+  foul save(name: String, text: String) -> Bool = FS.File.write("notes/${name}.txt", text)
+end
+
+# A stand-in is an ordinary record that implements the capability. It must
+# provide every member: the members are the interface, so a fake cannot
+# quietly omit one and let that call reach the real thing.
+record FakeNotes do
+  notes : Map<String, String>
+end
+
+make FakeNotes, implement: Notes do
+  foul load(name: String) -> String? = @notes.get(name)
+
+  # A fake is a value, so there is nowhere for a write to go. Refusing is the
+  # honest answer: a test that did not expect a write sees it fail.
+  foul save(name: String, text: String) -> Bool = false
+end
+
+foul greeting(who: String) -> String do
+  match Notes.load(who) do
+    Just(note) => "Hello ${who}: ${note}"
+    None => "Hello ${who}, no note for you"
+  end
+end
+
+# Two calls away from the capability, and still mentions nothing about it.
+foul greetAll(people: [String]) -> [String] = people.map { |who| greeting(who) }
+
+# A stand-in for a standard-library capability. `Time.Clock` has one member,
+# and every reading of the time comes from it.
+record LaunchDay do
+  at : DateTime
+end
+
+make LaunchDay, implement: Time.Clock do
+  foul now() -> DateTime = @at
+end
+
+# Reads the clock through the standard library, as any program would.
+foul dateLine() -> String = "Today is ${Date.today().iso}, a ${Date.today().weekday.name}"
+
+main do
+  # Outside any `with` the capability's own bodies run. There is no `notes/`
+  # directory here, so nobody has a note.
+  IO.printLine(greeting("ada"))
+
+  # Inside the region every `Notes` call answers from the fake, however deep
+  # the call that makes it.
+  with Notes = FakeNotes { notes: {"ada": "the engine is ready"} } do
+    greetAll(["ada", "grace"]).each { |line| IO.printLine(line) }
+    IO.printLine("saved? ${Notes.save("grace", "ship it")}")
+  end
+
+  # The replacement cannot outlive its block; there is nothing to clear.
+  IO.printLine(greeting("ada"))
+
+  # The innermost replacement wins, and leaving it restores the outer one.
+  with Notes = FakeNotes { notes: {"ada": "outer"} } do
+    with Notes = FakeNotes { notes: {"ada": "inner"} } do
+      IO.printLine(greeting("ada"))
+    end
+    IO.printLine(greeting("ada"))
+  end
+
+  # A standard-library capability, replaced the same way.
+  with Time.Clock = LaunchDay { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
+    IO.printLine(dateLine())
+  end
+end

@@ -9,7 +9,7 @@
 -export([exists/1, lines/1, read/1, read_bytes/1, write/2, write_bytes/2, append/2, size/1, delete/1, feed/1,
          open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
-         canonical/1, 'symlink?'/1, info/1,
+         canonical/1, 'symlink?'/1, info/1, changeMode/2,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
@@ -217,6 +217,14 @@ rename(From, To) ->
             mock_file(To, Content),
             delete(From)
     end.
+
+%% File.changeMode(path, mode) → Bool: chmod with a numeric mode.
+changeMode(Path, Mode) when is_integer(Mode), Mode >= 0, Mode =< 8#7777 ->
+    case mock_content(Path) of
+        undefined -> file:change_mode(pth(Path), Mode) =:= ok;
+        _ -> true
+    end;
+changeMode(_, _) -> false.
 
 %% File.feed(path) → Just(Feed<String>) | None.
 %%
