@@ -664,6 +664,20 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::boolean(!ec);
     });
 
+    // File.changeMode(path, mode) -> Bool  (chmod with a numeric mode)
+    reg("File::changeMode", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto* pathStr = std::get_if<StringValue>(&args[0]->data);
+        auto* mode = std::get_if<IntValue>(&args[1]->data);
+        if (!pathStr || !mode || mode->value < 0 || mode->value > 07777) return Value::boolean(false);
+        if (m_mockFiles.count(pathStr->value)) return Value::boolean(true);
+        std::error_code ec;
+        std::filesystem::permissions(pathStr->value,
+            static_cast<std::filesystem::perms>(mode->value),
+            std::filesystem::perm_options::replace, ec);
+        return Value::boolean(!ec);
+    });
+
     // File.lines(path) -> [String]?
     reg("File::lines", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();

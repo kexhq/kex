@@ -1,0 +1,139 @@
+# Exercises the real fuzzer CLI against controlled backend failures.
+#
+# Run with: KEX=./build/kex ./build/kex --run-walker tools/fuzz_cli.spec.kex
+# from the repository root (`make test-fuzz` does). Generated programs, fake
+# compilers and findings all live in one temporary directory.
+
+foul scratchDirectory -> String do
+  match FS.Directory.createTemporary("kex-fuzz-test") do
+    Just(path) => path
+    None => die("fuzz_cli: cannot create a temporary directory")
+  end
+end
+
+# A stand-in compiler: answers `--version` like kex, then runs +body+.
+foul writeStub(compiler: String, body: String) do
+  let preflight = "if [ \"$1\" = --version ]; then echo \"kex test compiler\"; exit 0; fi"
+  FS.File.write(compiler, "#!/bin/sh\n${preflight}\n${body}\n")
+  FS.File.changePermission(compiler, [FS.Readable, FS.Writable, FS.Executable])
+end
+
+foul runFuzzer(kex: String, compiler: String, outDir: String, seed: String,
+  total: String, budget: String) -> ProcessResult do
+  let args = ["--run-walker", "--no-colors", "--", "tools/fuzz.kex",
+    seed, total, compiler, outDir, budget]
+  match Process.run(kex, args, 90000) do
+    Ok(result) => result
+    Error(problem) => ProcessResult { exitCode: -1, stdout: "", stderr: problem }
+  end
+end
+
+# One controlled compiler behaviour and the fuzzer exit status it must produce.
+record Outcome do
+  name : String
+  body : String
+  expected : Integer
+end
+
+# Fuzzer arguments that must be refused with a usage message.
+record Refused do
+  seed : String
+  total : String
+  budget : String
+end
+
+let transcript(result: ProcessResult) -> String = "exit=${result.exitCode}\n${result.stdout}${result.stderr}"
+
+describe("fuzzer CLI") do
+  let kex = ENV.get("KEX", "./build/kex")
+  let root = scratchDirectory()
+  let compiler = "${root}/fake compiler"
+
+  after(:all) do
+    FS.Directory.deleteAll(root)
+  end
+
+  describe("backend outcomes") do
+    let outcomes = [
+      Outcome { name: "agreement", body: "echo ok", expected: 0 },
+      Outcome { name: "warnings", body: "echo \"$1 warning\" >&2; echo ok", expected: 0 },
+      Outcome { name: "stdout mismatch", body: "echo \"$1\"", expected: 1 },
+      Outcome { name: "matching rejection", body: "echo rejected >&2; exit 1", expected: 1 },
+      Outcome { name: "matching crash", body: "kill -KILL $$", expected: 1 },
+      Outcome { name: "different failures",
+        body: "if [ \"$1\" = --run-walker ]; then exit 139; else exit 1; fi", expected: 1 },
+      Outcome { name: "one failure",
+        body: "if [ \"$1\" = --run-walker ]; then exit 1; else echo ok; fi", expected: 1 },
+      Outcome { name: "matching timeout", body: "sleep 5", expected: 1 },
+      Outcome { name: "one timeout",
+        body: "if [ \"$1\" = --run-walker ]; then sleep 5; else echo ok; fi", expected: 1 }
+    ]
+    outcomes.each do |outcome|
+      it(outcome.name) do
+        let outDir = "${root}/${outcome.name}"
+        writeStub(compiler, outcome.body)
+        let result = runFuzzer(kex, compiler, outDir, "42", "1", "1000")
+        assert(result.exitCode == outcome.expected, transcript(result))
+        if outcome.expected != 0
+          assert(FS.File.file?("${outDir}/fail_42.kex"), "no fail_42.kex")
+          assert(FS.File.file?("${outDir}/fail_42.txt"), "no fail_42.txt")
+        end
+      end
+    end
+  end
+
+  it("records diagnostics and replay metadata") do
+    let outDir = "${root}/diagnostics"
+    writeStub(compiler, "echo \"crash details\" >&2; exit 1")
+    let result = runFuzzer(kex, compiler, outDir, "42", "1", "1000")
+    assert(result.exitCode == 1, transcript(result))
+    let report = FS.File.read("${outDir}/fail_42.txt").or("")
+    let wanted = ["crash details", "stderr:", "stdout:", "exit=1", "kex test compiler",
+      "seed=42", "timeoutMs=1000", compiler, "--run-walker", "--run", "fail_42.kex"]
+    wanted.each do |text|
+      assert(report.contains?(text), "report lacks ${text}")
+    end
+  end
+
+  it("rejects a missing compiler") do
+    let result = runFuzzer(kex, "${root}/no such compiler", "${root}/missing", "42", "1", "1000")
+    assert(result.exitCode == 2, transcript(result))
+    assert(result.stderr.contains?("preflight failed"), transcript(result))
+  end
+
+  it("rejects an output path that is not a directory") do
+    let outDir = "${root}/not-a-directory"
+    writeStub(compiler, "echo ok")
+    FS.File.write(outDir, "not a directory")
+    let result = runFuzzer(kex, compiler, outDir, "42", "1", "1000")
+    assert(result.exitCode == 2, transcript(result))
+  end
+
+  it("reports every file it cannot write") do
+    writeStub(compiler, "exit 1")
+    ["run.txt", "case_0.kex", "fail_42.kex", "fail_42.txt"].each do |filename|
+      let outDir = "${root}/blocked-${filename}"
+      FS.Directory.create("${outDir}/${filename}")
+      let result = runFuzzer(kex, compiler, outDir, "42", "1", "1000")
+      assert(result.exitCode == 2, "${filename}: ${transcript(result)}")
+      assert(result.stderr.contains?("cannot write"), "${filename}: ${transcript(result)}")
+    end
+  end
+
+  it("rejects invalid arguments") do
+    writeStub(compiler, "echo ok")
+    let invalid = [
+      Refused { seed: "oops", total: "1", budget: "1000" },
+      Refused { seed: "0", total: "1", budget: "1000" },
+      Refused { seed: "42", total: "0", budget: "1000" },
+      Refused { seed: "42", total: "-1", budget: "1000" },
+      Refused { seed: "42", total: "1", budget: "0" },
+      Refused { seed: "42", total: "1", budget: "oops" }
+    ]
+    invalid.each do |given|
+      let result = runFuzzer(kex, compiler, "${root}/invalid", given.seed, given.total, given.budget)
+      assert(result.exitCode == 2, "${given}: ${transcript(result)}")
+      assert(result.stderr.contains?("usage:"), "${given}: ${transcript(result)}")
+    end
+  end
+end

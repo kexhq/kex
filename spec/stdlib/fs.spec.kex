@@ -271,3 +271,71 @@ describe("Mock.FS — lifecycle") do
     Mock.FS.clear()
   end
 end
+
+describe("Directory — createTemporary") do
+  it("creates a distinct, empty directory per call") do
+    let first = FS.Directory.createTemporary("kex-spec").or("")
+    let second = FS.Directory.createTemporary("kex-spec").or("")
+    assert(FS.Directory.directory?(first), "first exists")
+    assert(FS.Directory.directory?(second), "second exists")
+    assert(first != second, "names differ")
+    assert(first.startsWith?(FS.Path.join(FS.Directory.temporary, "kex-spec-")), "under temporary")
+    Assert.equal(FS.Directory.list(first).or(["?"]).count, 0)
+    FS.Directory.deleteAll(first)
+    FS.Directory.deleteAll(second)
+  end
+end
+
+describe("File — changePermission") do
+  it("lets a freshly written script run") do
+    let root = FS.Directory.createTemporary("kex-spec").or("")
+    let script = FS.Path.join(root, "hello script")
+    FS.File.write(script, "#!/bin/sh\necho hello\n")
+    assert(Process.run(script, []).map { |ran| ran.exitCode }.or(-1) != 0, "not runnable before")
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]), "permission changed")
+    assert(Process.run(script, []).map { |ran| ran.stdout }.or("") == "hello\n", "runs after")
+    FS.Directory.deleteAll(root)
+  end
+
+  it("replaces the bits rather than adding to them") do
+    let root = FS.Directory.createTemporary("kex-spec").or("")
+    let script = FS.Path.join(root, "script")
+    FS.File.write(script, "#!/bin/sh\necho hello\n")
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]))
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable]))
+    assert(Process.run(script, []).map { |ran| ran.exitCode }.or(-1) != 0, "no longer runnable")
+    FS.Directory.deleteAll(root)
+  end
+
+  it("maps permissions to the mode a file gets") do
+    Assert.equal(FS.permissionMode([FS.Readable, FS.Writable, FS.Executable]), 0o755)
+    Assert.equal(FS.permissionMode([FS.Readable, FS.Writable]), 0o644)
+    Assert.equal(FS.permissionMode([FS.Readable]), 0o444)
+    Assert.equal(FS.permissionMode([]), 0)
+  end
+
+  it("answers false for a missing file") do
+    assert(!FS.File.changePermission("/nonexistent/kex-spec-script", [FS.Readable]))
+  end
+end
+
+describe("File — changeMode") do
+  it("sets exact POSIX bits") do
+    let root = FS.Directory.createTemporary("kex-spec").or("")
+    let script = FS.Path.join(root, "script")
+    FS.File.write(script, "#!/bin/sh\necho hello\n")
+    assert(FS.File.changeMode(script, 0o700))
+    assert(Process.run(script, []).map { |ran| ran.stdout }.or("") == "hello\n", "owner may run it")
+    FS.Directory.deleteAll(root)
+  end
+
+  it("answers false for a missing file or an impossible mode") do
+    let root = FS.Directory.createTemporary("kex-spec").or("")
+    let file = FS.Path.join(root, "file")
+    FS.File.write(file, "")
+    assert(!FS.File.changeMode("/nonexistent/kex-spec-script", 0o644))
+    assert(!FS.File.changeMode(file, -1))
+    assert(!FS.File.changeMode(file, 0o10000))
+    FS.Directory.deleteAll(root)
+  end
+end
