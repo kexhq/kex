@@ -11,7 +11,24 @@ using Dsl.Migration, as: Migration
 using Dsl.Table, as: Table
 using Dsl.Migration, only: [createTable, addIndex, define]
 
+# The same DSL as a function body and as a top-level constant, both checked
+# before the module's `make` block is.
+let addPets() = Migration.define :add_pets, follows: :add_owners do
+  createTable(:pets) do |t|
+    [t.string(:name, nullable: true)]
+  end
+end
+
+let addToys = Migration.define :add_toys, follows: :add_pets do
+  createTable(:toys) do |t|
+    [t.string(:id, primaryKey: true)]
+  end
+end
+
 main do
+  IO.printLine(addPets().ops)
+  IO.printLine(addToys.ops)
+
   let change = Migration.define :add_owners, follows: :create_sessions do
     createTable(:owners) do |t|
       [t.string(:name, default: :null, nullable: true), t.string(:id, primaryKey: true)]

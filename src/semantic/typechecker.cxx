@@ -2204,6 +2204,13 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // pass — not checkFunctionDef — registered.
         for (const auto& param : clause.params)
             signature.paramNames.push_back(*param.name);
+        // Trailing defaults are optional from the start, not only once the
+        // body has been checked: a top-level function calling
+        // `t.string(:name, nullable: true)` is checked before the make block.
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue)
+            required--;
+        signature.requiredParams = required + 1;
         signature.makeModule = modulePath;
         auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
