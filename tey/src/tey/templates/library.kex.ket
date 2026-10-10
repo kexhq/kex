@@ -1,0 +1,6 @@
+---
+params: [moduleName: String]
+---
+module <%= moduleName %>
+
+foul greeting(name: String) = "Hello, ${name}!"

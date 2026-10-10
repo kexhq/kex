@@ -1,0 +1,8 @@
+---
+params: [moduleName: String]
+---
+describe "<%= moduleName %>" do
+  it "greets by name" do
+    Assert.equal(<%= moduleName %>.greeting("Kex"), "Hello, Kex!")
+  end
+end

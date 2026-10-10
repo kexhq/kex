@@ -1,0 +1,71 @@
+---
+params: [name: String, moduleName: String, library: Bool]
+---
+# <%= name %>
+
+A Kex package.
+
+## Develop
+
+```sh
+tey install   # fetch dependencies
+tey build     # compile into ebin/
+tey test      # run spec/*.spec.kex
+```
+
+<% if !library %>
+## Run it
+
+```sh
+tey install
+tey run
+```
+
+<% end %>
+## Add it to your project
+
+In your own package's `package.kex`:
+
+```kex
+tey("<%= name %>", git: "https://github.com/you/<%= name %>", tag: "~> 0.1")
+```
+
+Then `tey install`. The tag is the release, and `~> 0.1` takes the
+newest `0.1.x` — Tey resolves it against this repository's tags.
+
+<% if library %>
+## Use it
+
+```kex
+using <%= moduleName %>
+
+main(args) do
+  IO.printLine(<%= moduleName %>.greeting("world"))
+end
+```
+
+## Release it
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Keep the tag in step with `version` in `package.kex`.
+
+<% end %>
+## Your own commands
+
+A package can add commands to Tey. Declare them in `package.kex`:
+
+```kex
+command("bench", run: "script/bench.kex", description: "Run the benchmarks")
+command("fmt", run: "kex --format src", description: "Format the sources")
+```
+
+They run as `tey bench` and `tey fmt` from anywhere in the package, are
+listed under **Package commands** in `tey help`, and show up as tasks in
+editors that ask Tey what this project can do. A `run:` whose first word
+ends in `.kex` is run by Kex; anything else is a shell command line.
+
+Built-in names (`build`, `test`, `run`, ...) cannot be redeclared, so
+`tey test` means the same thing in every package.
