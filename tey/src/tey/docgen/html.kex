@@ -223,8 +223,10 @@ module Tey.Docgen.Html do
   foul packageVersionsHtml(packageName: String, versions: [VersionEntry]) -> String do
     let mine = versionsNewestFirst(packageName, versions)
     let cards = mine.map { |v| versionCard(v) }.join("\n")
-    let render = Template.html(Kex.embed("templates/package_versions.html.ket"))
-    return render(packageName, cards)
+    let content = Template.html(Kex.embed("templates/package_versions.html.ket"))
+    let nav = backLink("../index.html", "all packages")
+    let title = "${packageName} versions | kex docs"
+    return chrome(title, "../", false, nav, content(packageName, cards))
   end
 
   foul versionCard(v: VersionEntry) -> String do
@@ -236,8 +238,11 @@ module Tey.Docgen.Html do
   # than a state — the page reads the term back from the query string.
   foul searchPageHtml(model: PackageModel) -> String do
     let label = labelOf(model)
-    let render = Template.html(Kex.embed("templates/search.html.ket"))
-    return render(label, model.version)
+    let content = Template.html(Kex.embed("templates/search.html.ket"))
+    let version = model.version
+    let nav = backLink("index.html", "${label} ${version}")
+    let title = "Search | ${label} ${version} | kex docs"
+    return chrome(title, "../../", true, nav, content(label, version))
   end
 
   # Site root index.html: one card per PACKAGE (its newest build), not per
@@ -247,8 +252,9 @@ module Tey.Docgen.Html do
   foul rootIndexHtml(versions: [VersionEntry]) -> String do
     let packages = packageNames(versions)
     let cards = packages.map { |name| packageCard(name, versions) }.join("\n")
-    let render = Template.html(Kex.embed("templates/root_index.html.ket"))
-    return render(cards)
+    let content = Template.html(Kex.embed("templates/root_index.html.ket"))
+    let nav = backLink("https://kex.run/docs", "kex.run ↗")
+    return chrome("kex docs", "", false, nav, content(cards))
   end
 
   # Package names in first-seen order of their newest entry: versions arrive
@@ -267,22 +273,39 @@ module Tey.Docgen.Html do
     end
   end
 
+  # What every full page shares: the <head>, and the top bar with the brand on
+  # the left and `nav` on the right. `root` is the relative path back to the
+  # site root, and `script` says whether the page loads assets/site.js.
+  foul chrome(title: String, root: String, script: Bool, nav: String, content: String) -> String do
+    let render = Template.html(Kex.embed("templates/layout.html.ket"))
+    return render(title, root, script, nav, content)
+  end
+
+  foul backLink(href: String, text: String) -> String do
+    return "<a class=\"back\" href=\"${esc(href)}\">${esc(text)}</a>"
+  end
+
   foul layout(title: String, current: String, bodyContent: String, model: PackageModel) -> String do
     let label = labelOf(model)
     let root = rootPrefix(current)
-    let render = Template.html(Kex.embed("templates/layout.html.ket"))
-    return render(
-      title,
-      label,
-      model.version,
-      model.package,
+    let version = model.version
+    let nav = Template.html(Kex.embed("templates/page_nav.html.ket"))
+    let content = Template.html(Kex.embed("templates/page.html.ket"))
+    return chrome(
+      "${title} | ${label} ${version} | kex docs",
       root,
-      pageTarget(current),
-      versionPrefix(current),
-      sidebar(model, current),
-      bodyContent,
-      model.generatedAt,
-      markdownLink(current)
+      true,
+      nav(label, version, model.package, root, pageTarget(current)),
+      content(
+        title,
+        label,
+        root,
+        versionPrefix(current),
+        sidebar(model, current),
+        bodyContent,
+        model.generatedAt,
+        markdownLink(current)
+      )
     )
   end
 

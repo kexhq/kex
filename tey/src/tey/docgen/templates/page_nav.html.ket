@@ -1,0 +1,10 @@
+---
+params: [label: String, version: String, package: String, root: String, page: String]
+---
+<button class="search-trigger" id="search" aria-label="Search documentation"
+    data-root="<%== root %>" data-package="<%= package %>" data-version="<%= version %>"
+    data-page="<%= page %>">
+  <span>Search</span><kbd>/</kbd>
+</button>
+<span class="pkg-badge" id="version-badge" data-root="<%== root %>" data-package="<%= package %>" data-version="<%= version %>" data-page="<%= page %>"><%= label %> <%= version %></span>
+<a class="back" href="https://kex.run/docs">kex.run ↗</a>

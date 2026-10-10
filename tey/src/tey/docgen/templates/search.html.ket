@@ -1,37 +1,13 @@
 ---
 params: [label: String, version: String]
 ---
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Search | <%= label %> <%= version %> | kex docs</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="../../assets/style.css">
-    <link rel="icon" type="image/png" href="../../icon.png">
-    <script src="../../assets/site.js" defer></script>
-  </head>
-  <body>
-    <header class="top">
-      <div class="wrap top-inner">
-        <a class="brand" href="../../index.html">kex</a>
-        <span class="brand-sub">docs</span>
-        <span class="spacer"></span>
-        <a class="back" href="index.html"><%= label %> <%= version %></a>
-      </div>
-    </header>
-    <div class="wrap">
-      <main class="content search-page">
-        <h1>Search <%= label %> <span class="ver"><%= version %></span></h1>
-        <p class="lede">Names, types and signatures across the whole package.</p>
-        <div class="search-page-box">
-          <input id="sp-input" type="search" placeholder="Search names, types, signatures…" autocomplete="off">
-        </div>
-        <div id="sp-results" class="search-page-results"></div>
-      </main>
+<div class="wrap">
+  <main class="content search-page">
+    <h1>Search <%= label %> <span class="ver"><%= version %></span></h1>
+    <p class="lede">Names, types and signatures across the whole package.</p>
+    <div class="search-page-box">
+      <input id="sp-input" type="search" placeholder="Search names, types, signatures…" autocomplete="off">
     </div>
-  </body>
-</html>
+    <div id="sp-results" class="search-page-results"></div>
+  </main>
+</div>

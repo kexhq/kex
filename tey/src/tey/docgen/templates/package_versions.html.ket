@@ -1,35 +1,12 @@
 ---
 params: [packageName: String, cards: String]
 ---
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title><%= packageName %> versions | kex docs</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="../assets/style.css">
-    <link rel="icon" type="image/png" href="../icon.png">
-  </head>
-  <body>
-    <header class="top">
-      <div class="wrap top-inner">
-        <a class="brand" href="../index.html">kex</a>
-        <span class="brand-sub">docs</span>
-        <span class="spacer"></span>
-        <a class="back" href="../index.html">all packages</a>
-      </div>
-    </header>
-    <div class="wrap">
-      <main class="content prose">
-        <h1><%= packageName %></h1>
-        <p class="lede">Every published documentation build of the <strong><%= packageName %></strong> package, newest first.</p>
-        <div class="cards">
-          <%== cards %>
-        </div>
-      </main>
+<div class="wrap">
+  <main class="content prose">
+    <h1><%= packageName %></h1>
+    <p class="lede">Every published documentation build of the <strong><%= packageName %></strong> package, newest first.</p>
+    <div class="cards">
+      <%== cards %>
     </div>
-  </body>
-</html>
+  </main>
+</div>
