@@ -1,7 +1,7 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, generate, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
+using Tey.Commands, only: [add, build, generate, pluginCommand, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Programs, only: [InstallOptions]
 using Tey.Toolchain, only: [installSource, use]
@@ -119,6 +119,10 @@ foul parser -> OptionConfig do
     .passthroughCommand("generate", "<namespace>:<generator> [--option value ...] [--force]",
                         "run a generator provided by a dependency's plugin") do |options|
       Tey.Commands.generate(options.arguments)
+    end
+    .passthroughCommand("plugin", "<namespace>:<command> [--option value ...]",
+                        "run a command provided by a dependency's plugin") do |options|
+      Tey.Commands.pluginCommand(options.arguments)
     end
     .command("clean", "[--cache]", "inspect or remove the global cache") do |options|
       Tey.Commands.clean(options.flagEnabled?("cache"))

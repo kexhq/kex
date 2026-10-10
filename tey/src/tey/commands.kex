@@ -4,7 +4,7 @@ using Tey.Cache, only: [fetch, packagePath, root, verify]
 using Tey.Generator, only: [Operation]
 using Tey.Lockfile, only: [LockState, decode, encode]
 using Tey.Local, only: [Override, load, remove, set, validateAgainstLock]
-using Tey.Manifest, only: [Command, ManifestPackage, Plugin, read]
+using Tey.Manifest, only: [Command, ManifestPackage, Plugin, PluginOperation, read]
 using Tey.Resolver, only: [resolvePackage, resolveWorkspace]
 using Tey.Plugin, only: [approved?, Binding]
 using Tey.Programs, only: [Claim, GitSource, InstallOptions, InstalledName, PathSource, Receipt]
@@ -937,9 +937,19 @@ end
 # plugin is a child process: it is handed the invocation as one line of JSON
 # on stdin and answers with the files it wants written, which Tey — not the
 # plugin — then writes, inside the workspace and asking before it replaces
-# anything (`--force` answers yes).
+# anything (`--force` answers yes). The child itself runs in the operating
+# system's sandbox: it cannot write outside scratch space or use the network
+# (`--unconfined` lifts that, with a warning).
 foul generate(arguments: [String]) -> Integer do
   return Tey.Commands.report(Tey.Commands.generated(arguments))
+end
+
+# `tey plugin <namespace>:<command> [--option value ...]`
+#
+# Runs a command a direct dependency declares in its `plugin` block, confined
+# to what the plugin declared and the user approved.
+foul pluginCommand(arguments: [String]) -> Integer do
+  return Tey.Commands.report(Tey.Commands.pluginCommanded(arguments))
 end
 
 foul list -> Integer do
@@ -1805,16 +1815,74 @@ private do
   end
 
   foul generated(arguments: [String]) -> Integer or! String do
-    let usage = "usage: tey generate <namespace>:<generator> [--option value ...] [--force]"
-    let parts = arguments.first.or("").split(":")
+    let usage = "usage: tey generate <namespace>:<generator> [--option value ...] [--force] [--unconfined]"
+    let (namespace, name) = Tey.Commands.pluginTarget(arguments.first.or(""), usage).try
+    let (supplied, flags) = Tey.Commands.generatorOptions(arguments.drop(1), {}, []).try
+    let context = Tey.Workspace.discover(FS.Directory.current).try
+    let state = Tey.Commands.readLockAt(context).try
+    let binding = Tey.Commands.approvedBinding(context, state, namespace).try
+    let operation = Tey.Plugin.generator(binding, name).try
+    # A generator only reports what it wants written, so it is given nothing:
+    # no network, and no writing anywhere but scratch space.
+    let limits = Tey.Sandbox.Limits {}
+    let child = Tey.Commands.pluginChild(context, state, "generator", namespace, operation,
+                                         supplied, limits, flags.contains?("unconfined")).try
+    let (command, leftovers) = child
+    let outcome = Process.run(command.first.or("sh"), command.drop(1))
+    leftovers.each { |file| FS.File.delete(file) }
+    let result = outcome.try
+    if result.exitCode != 0
+      let reason = result.stderr.trim == "" then result.stdout.trim else result.stderr.trim
+      return Error("plugin `${namespace}:${name}` failed: ${reason}")
+    end
+    let answer = result.stdout.lines.reject { |line| line.trim == "" }.last.or("")
+    let operations = Tey.Generator.decode(answer).try
+    Tey.Generator.apply(operations, context.workspaceRoot, flags.contains?("force")).try
+    return Ok(0)
+  end
+
+  # `tey plugin <namespace>:<command> [--option value ...] [--unconfined]`
+  #
+  # Unlike a generator, a command does its work itself — so it runs with what
+  # its plugin declared and the user approved, and no more: it may write in
+  # the workspace only with `FS.Write.workspace`, and reach the network only
+  # with `Net.Connect`.
+  foul pluginCommanded(arguments: [String]) -> Integer or! String do
+    let usage = "usage: tey plugin <namespace>:<command> [--option value ...] [--unconfined]"
+    let (namespace, name) = Tey.Commands.pluginTarget(arguments.first.or(""), usage).try
+    let (supplied, flags) = Tey.Commands.generatorOptions(arguments.drop(1), {}, []).try
+    let context = Tey.Workspace.discover(FS.Directory.current).try
+    let state = Tey.Commands.readLockAt(context).try
+    let binding = Tey.Commands.approvedBinding(context, state, namespace).try
+    let operation = match binding.declaration.pluginCommands.find { |candidate| candidate.operationName == name } do
+      Just(found) => found
+      None => return Error("plugin `${namespace}` has no command `${name}`")
+    end
+    let declared = binding.declaration.pluginCapabilities.map { |resource| resource.capabilityKind }
+    let limits = Tey.Sandbox.Limits {
+      writable: declared.contains?("FS.Write.workspace") then [context.workspaceRoot] else [],
+      network?: declared.contains?("Net.Connect")
+    }
+    let child = Tey.Commands.pluginChild(context, state, "command", namespace, operation,
+                                         supplied, limits, flags.contains?("unconfined")).try
+    let (command, leftovers) = child
+    let outcome = Process.stream(command.first.or("sh"), command.drop(1))
+    leftovers.each { |file| FS.File.delete(file) }
+    return outcome
+  end
+
+  let pluginTarget(word: String, usage: String) -> (String, String) or! String do
+    let parts = word.split(":")
     return Error(usage) if parts.count != 2
     let namespace = parts.first.or("")
     let name = parts.last.or("")
     return Error(usage) if namespace == "" || name == ""
-    let (supplied, force?) = Tey.Commands.generatorOptions(arguments.drop(1), {}, false).try
+    return Ok((namespace, name))
+  end
 
-    let context = Tey.Workspace.discover(FS.Directory.current).try
-    let state = Tey.Commands.readLockAt(context).try
+  # The plugin `namespace` as this workspace sees it — and only if the user
+  # has approved it as it is declared now.
+  foul approvedBinding(context: Context, state: LockState, namespace: String) -> Binding or! String do
     let bindings = Tey.Commands.directPluginBindings(context, state).try
     let current: String? = match context.currentMember do
       None => None
@@ -1827,52 +1895,71 @@ private do
     if !Tey.Plugin.bindingApproved?(binding, state.pluginApprovals)
       return Error("plugin `${namespace}` is not approved; run `tey install` and approve it")
     end
-    let operation = Tey.Plugin.generator(binding, name).try
+    return Ok(binding)
+  end
+
+  # The command line that runs a plugin operation as a child — in the
+  # plugin's package directory, with the invocation on stdin, under `limits`
+  # — and the temporary files to delete when it has exited.
+  foul pluginChild(context: Context, state: LockState, kind: String, namespace: String,
+                   operation: PluginOperation, supplied: {String: String},
+                   limits: Tey.Sandbox.Limits, unconfined?: Bool) -> ([String], [String]) or! String do
     let options = Tey.PluginHost.typedOptions(operation, supplied).try
     let pluginRoot = Tey.Commands.pluginRoot(context, state, namespace).try
     let toolchain = Tey.Toolchain.activeInfo.try
-
+    let current: String? = match context.currentMember do
+      None => None
+      Just(member) => do
+        let manifest: ManifestPackage = member.memberManifest
+        Just(manifest.name)
+      end
+    end
     let invocation = Tey.PluginHost.encodeInvocation(Invocation {
-      invocationKind: "generator", invocationNamespace: namespace,
-      invocationOperation: name, workspaceRoot: context.workspaceRoot,
+      invocationKind: kind, invocationNamespace: namespace,
+      invocationOperation: operation.operationName, workspaceRoot: context.workspaceRoot,
       currentMember: current, lock: state, toolchain: toolchain,
       arguments: [], options: options
     })
     let input = FS.Path.join(ENV.get("TMPDIR").or("/tmp"),
                              "tey-invocation-${DateTime.now().iso.replace(":", "-")}.json")
     return Error("could not write the plugin invocation to `${input}`") if !FS.File.write(input, invocation)
-    # The plugin runs in its own package directory, with the module roots of
-    # the workspace that depends on it — which include the plugin's own.
-    let outcome = Process.run("sh", ["-c",
+    let (guard, profile) = if unconfined?
+      IO.printError("${Console.YELLOW}warning:${Console.RESET} running plugin `${namespace}` unconfined, with your full access")
+      ([], [])
+    else
+      match Tey.Sandbox.prefix(limits) do
+        Error(reason) => do
+          FS.File.delete(input)
+          return Error(reason)
+        end
+        Ok((words, file)) => (words, [file])
+      end
+    end
+    # The module roots are those of the workspace that depends on the
+    # plugin — which include the plugin's own.
+    let command = [...guard, "sh", "-c",
       "cd \"$1\" || exit 1; input=$2; shift 2; exec \"$@\" < \"$input\"",
       "tey", pluginRoot, input, Tey.Toolchain.kex,
       ...Tey.Commands.sourceRootsAt(context.workspaceRoot),
-      operation.operationEntrypoint])
-    FS.File.delete(input)
-    let result = outcome.try
-    if result.exitCode != 0
-      let reason = result.stderr.trim == "" then result.stdout.trim else result.stderr.trim
-      return Error("plugin `${namespace}:${name}` failed: ${reason}")
-    end
-    let answer = result.stdout.lines.reject { |line| line.trim == "" }.last.or("")
-    let operations = Tey.Generator.decode(answer).try
-    Tey.Generator.apply(operations, context.workspaceRoot, force?).try
-    return Ok(0)
+      operation.operationEntrypoint]
+    return Ok((command, [input, ...profile]))
   end
 
-  # `--name chat --force` as ({"name": "chat"}, true). Every option takes a
-  # value; `--force` is Tey's own and takes none.
+  # `--name chat --force` as ({"name": "chat"}, ["force"]). Every option
+  # takes a value; `--force` and `--unconfined` are Tey's own and take none.
   let generatorOptions(arguments: [String], collected: {String: String},
-                       force?: Bool) -> ({String: String}, Bool) or! String do
-    return Ok((collected, force?)) if arguments.empty?
+                       flags: [String]) -> ({String: String}, [String]) or! String do
+    return Ok((collected, flags)) if arguments.empty?
     let word = arguments.first.or("")
-    return Tey.Commands.generatorOptions(arguments.drop(1), collected, true) if word == "--force"
-    return Error("unexpected argument `${word}`; generator options are written `--name value`") if !word.startsWith?("--")
+    if word == "--force" || word == "--unconfined"
+      return Tey.Commands.generatorOptions(arguments.drop(1), collected, [...flags, word.drop(2)])
+    end
+    return Error("unexpected argument `${word}`; plugin options are written `--name value`") if !word.startsWith?("--")
     let value = match arguments.at(1) do
       None => return Error("option `${word}` needs a value")
       Just(given) => given
     end
-    return Tey.Commands.generatorOptions(arguments.drop(2), collected.put(word.drop(2), value), force?)
+    return Tey.Commands.generatorOptions(arguments.drop(2), collected.put(word.drop(2), value), flags)
   end
 
   # The package directory of the direct dependency that declares `namespace`:

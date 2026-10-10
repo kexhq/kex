@@ -1,0 +1,100 @@
+module Tey.Sandbox
+
+# What a plugin process is allowed to do beyond reading files and computing.
+#
+# A plugin is code from a dependency, run on the user's machine. Approval says
+# the user accepts what the plugin *asked* for; this is what makes the answer
+# true, by running the child inside the operating system's sandbox:
+#
+# - it can write only under `writable` (always the temporary directories and
+#   the Kex cache, which compiling and running its entrypoint need);
+# - it can use the network only when `network?`;
+# - it cannot read the places credentials are usually kept.
+#
+# Everything the child starts inherits the same limits.
+#
+# What this does NOT do, and must not be mistaken for: `Process.Run([...])`
+# is not enforced — the child can start any program, though that program is
+# held to the same limits — and `Net.Connect([...])` opens the network as a
+# whole rather than to the listed hosts, because the sandbox filters by
+# address and not by name.
+record Limits do
+  writable : [String] = []
+  network? : Bool = false
+end
+
+# macOS's `sandbox-exec`. The only mechanism supported so far; on any other
+# system `available?` is false and the caller has to refuse or be told to run
+# unconfined.
+let TOOL = "/usr/bin/sandbox-exec"
+
+foul available? -> Bool do
+  return FS.File.exists?(Tey.Sandbox.TOOL)
+end
+
+# The directories a Kex child always needs to write to: where the compiler
+# puts its scratch files and its run cache.
+foul scratch -> [String] do
+  let home = ENV.get("HOME").or("")
+  let cache = match ENV.get("KEX_CACHE") do
+    Just(configured) => configured
+    None => match ENV.get("XDG_CACHE_HOME") do
+      Just(xdg) => FS.Path.join(xdg, "kex")
+      None => FS.Path.join(home, ".cache/kex")
+    end
+  end
+  let named = ["/tmp", "/var/folders", ENV.get("TMPDIR").or("/tmp"), cache, "/dev"]
+  return named.map { |path| Tey.Sandbox.real(path) }.uniq
+end
+
+# The sandbox profile for `limits`. Later rules win, so: allow by default,
+# deny the dangerous classes, then allow back the exceptions.
+let profile(limits: Limits, home: String) -> String do
+  let writable = limits.writable.map { |path| "(subpath ${Tey.Sandbox.quoted(path)})" }.join(" ")
+  let secrets = [".ssh", ".aws", ".gnupg", ".config/gh", ".docker", "Library/Keychains"].map { |path|
+    "(subpath ${Tey.Sandbox.quoted(FS.Path.join(home, path))})"
+  }.join(" ")
+  let network = limits.network? then "" else "(deny network*)"
+  let lines = [
+    "(version 1)",
+    "(allow default)",
+    network,
+    "(deny file-write*)",
+    "(allow file-write* ${writable})",
+    "(deny file-read* ${secrets} (literal ${Tey.Sandbox.quoted(FS.Path.join(home, ".netrc"))}))"
+  ]
+  return lines.reject { |line| line == "" }.join("\n") + "\n"
+end
+
+# The words to put in front of a command line to run it under `limits`:
+# `sandbox-exec -f <profile file>`. The profile file is left for the caller
+# to delete once the child has exited.
+foul prefix(limits: Limits) -> ([String], String) or! String do
+  if !Tey.Sandbox.available?
+    return Error("this system has no sandbox Tey can use (macOS `sandbox-exec`), so the plugin cannot be confined; pass --unconfined to run it with your full access")
+  end
+  let confined = Limits { writable: [...Tey.Sandbox.scratch, ...limits.writable.map { |path| Tey.Sandbox.real(path) }],
+                          network?: limits.network? }
+  let file = FS.Path.join(ENV.get("TMPDIR").or("/tmp"), "tey-sandbox-${DateTime.now().iso.replace(":", "-")}.sb")
+  let text = Tey.Sandbox.profile(confined, ENV.get("HOME").or(""))
+  return Error("could not write the sandbox profile to `${file}`") if !FS.File.write(file, text)
+  return Ok(([Tey.Sandbox.TOOL, "-f", file], file))
+end
+
+private do
+  let quoted(path: String) -> String do
+    return "\"${path.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+  end
+
+  # The path with every symlink resolved: the sandbox matches real paths, and
+  # /tmp and /var are links on macOS. A path that does not exist is kept.
+  foul real(path: String) -> String do
+    match Process.run("realpath", ["--", path]) do
+      Ok(result) => do
+        let resolved = result.stdout.trim
+        return result.exitCode == 0 && resolved != "" then resolved else path
+      end
+      Error(_) => return path
+    end
+  end
+end
