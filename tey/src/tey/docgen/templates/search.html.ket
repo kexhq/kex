@@ -12,6 +12,7 @@ params: [label: String, version: String]
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="../../assets/style.css">
     <link rel="icon" type="image/png" href="../../icon.png">
+    <script src="../../assets/site.js" defer></script>
   </head>
   <body>
     <header class="top">
@@ -32,110 +33,5 @@ params: [label: String, version: String]
         <div id="sp-results" class="search-page-results"></div>
       </main>
     </div>
-    <script>
-      (function () {
-        var input = document.getElementById("sp-input");
-        var results = document.getElementById("sp-results");
-        var entries = null;
-
-        function term() { return input.value.trim().toLowerCase(); }
-
-        function rank(e, tokens) {
-          var name = (e.name || "").toLowerCase();
-          var qname = (e.qualifiedName || "").toLowerCase();
-          var types = (e.types || []).join(" ").toLowerCase();
-          var sigs = (e.signatures || []).join(" ").toLowerCase();
-          var summary = (e.summary || "").toLowerCase();
-          var total = 0;
-          var ok = tokens.every(function (t) {
-            var local = 0;
-            if (name === t) local = 100;
-            else if (name.indexOf(t) === 0) local = 50;
-            else if (name.indexOf(t) !== -1) local = 20;
-            if (qname === t) local = Math.max(local, 90);
-            else if (qname.indexOf(t) !== -1) local = Math.max(local, 30);
-            if (types === t) local = Math.max(local, 60);
-            else if (types.indexOf(t) !== -1) local = Math.max(local, 25);
-            if (sigs.indexOf(t) !== -1) local = Math.max(local, 10);
-            if (summary.indexOf(t) !== -1) local = Math.max(local, 5);
-            if (local === 0) return false;
-            total += local;
-            return true;
-          });
-          if (!ok) return -1;
-          if (tokens.indexOf("->") !== -1) total += e.kind === "function" ? 80 : -300;
-          return total;
-        }
-
-        function render(list) {
-          results.innerHTML = "";
-          if (list.length === 0) {
-            var empty = document.createElement("p");
-            empty.className = "search-empty";
-            empty.textContent = "No matches.";
-            results.appendChild(empty);
-            return;
-          }
-          list.forEach(function (e) {
-            var a = document.createElement("a");
-            a.className = "search-page-hit";
-            a.href = e.urlPath + ".html" + (e.anchor ? "#" + e.anchor : "");
-            var head = document.createElement("span");
-            head.className = "search-head";
-            var kind = document.createElement("span");
-            kind.className = "search-kind search-kind-" + e.kind; kind.textContent = e.kind;
-            var name = document.createElement("span");
-            name.className = "search-name"; name.textContent = e.name;
-            head.appendChild(kind); head.appendChild(name);
-            if (e.qualifiedName && e.qualifiedName !== e.name) {
-              var qual = document.createElement("span");
-              qual.className = "search-qual";
-              var dot = e.qualifiedName.lastIndexOf(".");
-              qual.textContent = dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot);
-              head.appendChild(qual);
-            }
-            a.appendChild(head);
-            var sig = document.createElement("span");
-            sig.className = "search-sig";
-            sig.textContent = (e.signatures && e.signatures[0]) || "";
-            a.appendChild(sig);
-            if (e.summary) {
-              var sum = document.createElement("span");
-              sum.className = "search-summary";
-              sum.textContent = e.summary;
-              a.appendChild(sum);
-            }
-            results.appendChild(a);
-          });
-        }
-
-        function run() {
-          if (term().length === 0) { results.innerHTML = ""; return; }
-          var tokens = term().split(" ").filter(function (t) { return t.length > 0; });
-          var scored = entries
-            .map(function (e) { return { e: e, s: rank(e, tokens) }; })
-            .filter(function (x) { return x.s >= 0; })
-            .sort(function (a, b) { return b.s - a.s; });
-          render(scored.slice(0, 200).map(function (x) { return x.e; }));
-        }
-
-        function syncUrl() {
-          var url = new URL(window.location.href);
-          if (term()) url.searchParams.set("q", input.value.trim()); else url.searchParams.delete("q");
-          window.history.replaceState({}, "", url);
-        }
-
-        input.addEventListener("input", function () { run(); syncUrl(); });
-
-        fetch("search.json", { cache: "no-store" })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            entries = d.entries || [];
-            var initial = new URLSearchParams(window.location.search).get("q") || "";
-            if (initial) { input.value = initial; run(); }
-          })
-          .catch(function () {});
-      })();
-    </script>
   </body>
 </html>
