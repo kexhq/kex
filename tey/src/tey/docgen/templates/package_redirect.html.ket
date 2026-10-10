@@ -1,0 +1,15 @@
+---
+params: [packageName: String, id: String, label: String]
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title><%= packageName %> | kex docs</title>
+    <meta http-equiv="refresh" content="0; url=<%= id %>/index.html">
+    <link rel="canonical" href="<%= id %>/index.html">
+  </head>
+  <body>
+    <p><a href="<%= id %>/index.html"><%= label %> <%= id %></a> · <a href="versions.html">all versions</a></p>
+  </body>
+</html>

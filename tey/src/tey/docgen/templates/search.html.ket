@@ -1,0 +1,13 @@
+---
+params: [label: String, version: String]
+---
+<div class="wrap">
+  <main class="content search-page">
+    <h1>Search <%= label %> <span class="ver"><%= version %></span></h1>
+    <p class="lede">Names, types and signatures across the whole package.</p>
+    <div class="search-page-box">
+      <input id="sp-input" type="search" placeholder="Search names, types, signatures…" autocomplete="off">
+    </div>
+    <div id="sp-results" class="search-page-results"></div>
+  </main>
+</div>

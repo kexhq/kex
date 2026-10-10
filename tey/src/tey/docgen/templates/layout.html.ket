@@ -1,0 +1,30 @@
+---
+params: [title: String, root: String, script: Bool, nav: String, content: String]
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %></title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Plus+Jakarta+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="<%== root %>assets/style.css">
+    <link rel="icon" type="image/png" href="<%== root %>icon.png">
+<% if script %>
+    <script src="<%== root %>assets/site.js" defer></script>
+<% end %>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap top-inner">
+        <a class="brand" href="<%== root %>index.html">kex</a>
+        <span class="brand-sub">docs</span>
+        <span class="spacer"></span>
+        <%== nav %>
+      </div>
+    </header>
+    <%== content %>
+  </body>
+</html>

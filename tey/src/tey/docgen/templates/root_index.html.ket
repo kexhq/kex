@@ -1,0 +1,12 @@
+---
+params: [cards: String]
+---
+<div class="wrap">
+  <main class="content prose">
+    <h1>kex documentation</h1>
+    <p class="lede">Reference documentation generated from source by docgen. Machine-readable entry points: <a href="llms.txt">llms.txt</a>, <a href="search.json">search.json</a>, <a href="versions.json">versions.json</a>.</p>
+    <div class="cards">
+      <%== cards %>
+    </div>
+  </main>
+</div>

@@ -18,86 +18,89 @@ module Tey.Docgen.Cli do
   # A function rather than a module-level constant: on BEAM, calling a
   # make-method (`.parse`, `.help`) on a module-level constant fails with
   # "Undefined function" — the dispatcher doesn't resolve the constant.
+  #
+  # The three subcommands are declared here, the way Tey declares its own, so
+  # `tey docs` help is generated from the same definitions that parse the
+  # line and reads like `tey help` does.
   foul options() -> OptionParser.OptionConfig do
-    return OptionParser.define("docgen", "Generate and serve Kex documentation")
-      .string("source", None, "Source directory (default: src/ of this package)", None, false)
+    return OptionParser.define("tey docs", "Generate and serve Kex documentation")
+      .flag("help", Just('h'), "Show this help")
+      .string("source", None, "Source directory: .kex files for build (default: this package's src/), .md files for prose", None, false)
       .string("out", None, "Site root; this package lands at <out>/<package>/<version>", None, false)
       # "release", not "version": Tey's own --version flag would otherwise
       # swallow this one on the way in (OptionParser passes a command's
       # UNKNOWN options through, not its known ones).
       .string("release", None, "Release being documented (default: package.kex's)", None, false)
       .string("package", None, "Package name (default: package.kex's, else prelude)", None, false)
-      .string("label", None, "Human-readable package label", None, false)
-      .string("base-url", None, "Documentation site base URL", Just("https://docs.kex.run"), false)
+      .string("label", None, "Human-readable package label (default: the name)", None, false)
+      .string("base-url", None, "Documentation site base URL, for the sitemap", Just("https://docs.kex.run"), false)
       .string("format", None, "site (a standalone site) or fragments (page bodies for a host site)", Just("site"), false)
       .string("link-model", None, "Another unit's model.json to link names into (comma-separated)", None, false)
-      .integer("port", None, "HTTP port", Just("4322"), false)
+      .integer("port", None, "HTTP port for serve", Just("4322"), false)
+      .command("build", "--out <dir> [--source <dir>] [options]",
+               "generate a package's reference from its .kex sources") do |parsed|
+        strict(parsed) then Tey.Docgen.Index.buildCommand(parsed) else 1
+      end
+      .command("prose", "--source <md-dir> --out <dir> --package <name> --release <v>",
+               "render a tree of Markdown pages into the same site") do |parsed|
+        strict(parsed) then Tey.Docgen.Prose.proseCommand(parsed) else 1
+      end
+      .command("serve", "--out <dir> [--port <n>]", "serve a generated site locally") do |parsed|
+        strict(parsed) then Tey.Docgen.Serve.serveCommand(parsed) else 1
+      end
   end
 
   foul dispatch(args: [String]) -> Integer do
-    match options().parse(args) do
-      Error(error) => do
-        let message = OptionParser.errorMessage(error)
+    return printUsage() if args.empty? || args.contains?("--help") || args.contains?("-h")
+    options().run(args)
+  end
+
+  # After a command word, OptionParser hands an option it does not know on to
+  # the command as an argument, for commands with a vocabulary of their own.
+  # These three have none beyond the options above, so one left over is a
+  # typo — and `--sorce src` silently documenting the wrong directory is
+  # worse than an error.
+  foul strict(parsed: OptionParser.ParsedOptions) -> Bool do
+    match parsed.arguments.find { |argument| argument.startsWith?("-") } do
+      None => true
+      Just(option) => do
+        let message = OptionParser.errorMessage(UnknownOption(option))
         IO.printError("${Console.RED}error:${Console.RESET} ${message}\n\n${options().help}")
-        return 1
+        false
       end
-      Ok(parsed) => runCommand(parsed)
     end
   end
 
-  foul runCommand(parsed: OptionParser.ParsedOptions) -> Integer do
-    let command = parsed.arguments.first.or("")
-    if command == "build"
-      return Tey.Docgen.Index.buildCommand(parsed)
-    end
-    if command == "prose"
-      return Tey.Docgen.Prose.proseCommand(parsed)
-    end
-    if command == "serve"
-      return Tey.Docgen.Serve.serveCommand(parsed)
-    end
-    return printUsage()
-  end
-
+  # The generated help, then what a build leaves behind — the one part of
+  # this command's story that no option or subcommand declares.
   foul printUsage() -> Integer do
-    IO.printLine("docgen - kex documentation generator")
-    IO.printLine("")
-    IO.printLine("Usage:")
-    IO.printLine("  tey docs build --source <dir> --out <dir> [options]")
-    IO.printLine("  tey docs prose --source <md-dir> --out <dir> --package <name> --release <v>")
-    IO.printLine("  tey docs serve --out <dir> [--port 4322]")
-    IO.printLine("")
-    IO.printLine("Build options:")
-    IO.printLine("  --source <dir>     source directory with .kex files (default: src/)")
-    IO.printLine("  --out <dir>        site root; pages land at <out>/<package>/<version>")
-    IO.printLine("  --release <v>      release being documented (default: package.kex's)")
-    IO.printLine("  --package <name>   package name (default: package.kex's, else required)")
-    IO.printLine("  --label <text>     human-readable package label (default: the name)")
-    IO.printLine("  --base-url <url>   site base URL for sitemap")
-    IO.printLine("  --format <f>       site (default) or fragments: page bodies plus")
-    IO.printLine("                     .page.json sidecars and nav.json, for a host site")
-    IO.printLine("  --link-model <p>   another unit's model.json whose names this unit's")
-    IO.printLine("                     pages may link to (comma-separated for several)")
-    IO.printLine("")
-    IO.printLine("Outputs (all derived from the canonical typed model):")
-    IO.printLine("  model.json         full documentation model")
-    IO.printLine("  search.json        flat search index (name/kind/signature)")
-    IO.printLine("  <pkg>/<ver>/*.md   one Markdown page per source file")
-    IO.printLine("  <pkg>/<ver>/*.html the same pages as a styled static site")
-    IO.printLine("  assets/style.css   the site's stylesheet (kex.run design tokens)")
-    IO.printLine("  manifest.json, versions.json, llms.txt, llms-full.txt,")
-    IO.printLine("  robots.txt, sitemap.xml")
-    IO.printLine("")
-    IO.printLine("Prose options (a tree of .md files, rendered into the same chrome):")
-    IO.printLine("  --source <dir>     directory of .md files (required)")
-    IO.printLine("  --out <dir>        site root; pages land at <out>/<package>/<release>")
-    IO.printLine("  --package <name>   package name (required -- prose is never a package)")
-    IO.printLine("  --release <v>      release being documented (required)")
-    IO.printLine("  --label <text>     human-readable label")
-    IO.printLine("")
-    IO.printLine("Serve options:")
-    IO.printLine("  --out <dir>        directory to serve")
-    IO.printLine("  --port <n>         port (default: 4322)")
+    IO.printLine("${options().help}\n\n${outputsHelp()}")
     return 0
+  end
+
+  # Styled like OptionParser's own blocks: a bold heading, then one aligned
+  # row per entry, padded on the unstyled name.
+  foul outputsHelp() -> String do
+    let outputs = [
+      ("<pkg>/<ver>/*.html", "one styled page per source file"),
+      ("<pkg>/<ver>/*.md", "the same pages as Markdown"),
+      ("assets/style.css, assets/site.js", "the site's stylesheet and script"),
+      ("model.json", "the full documentation model every page is derived from"),
+      ("search.json", "flat search index (name, kind, signature)"),
+      ("manifest.json, versions.json", "what was built, and every published version"),
+      ("llms.txt, llms-full.txt", "the documentation as plain text for language models"),
+      ("robots.txt, sitemap.xml", "for crawlers")
+    ]
+    let names = outputs.map do |output|
+      let (name, _) = output
+      name
+    end
+    let width = names.map { |name| name.count }.max.or(0)
+    let rows = outputs.map do |output|
+      let (name, description) = output
+      let padding = " ".repeat(width - name.count)
+      "  ${Console.CYAN}${name}${Console.RESET}${padding}  ${description}"
+    end
+    return "${Console.BOLD}Outputs:${Console.RESET}\n${rows.join("\n")}"
   end
 end

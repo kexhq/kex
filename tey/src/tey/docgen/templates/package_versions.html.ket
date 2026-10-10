@@ -1,0 +1,12 @@
+---
+params: [packageName: String, cards: String]
+---
+<div class="wrap">
+  <main class="content prose">
+    <h1><%= packageName %></h1>
+    <p class="lede">Every published documentation build of the <strong><%= packageName %></strong> package, newest first.</p>
+    <div class="cards">
+      <%== cards %>
+    </div>
+  </main>
+</div>

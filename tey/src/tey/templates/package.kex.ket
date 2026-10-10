@@ -1,0 +1,17 @@
+---
+params: [name: String, library: Bool]
+---
+package "<%= name %>" do
+  version("0.1.0")
+  description("A Kex package")
+  kex(">= 0.3.0")
+
+  # Project commands, run as "tey NAME" and listed by "tey help":
+  # command("bench", run: "script/bench.kex", description: "Run the benchmarks")
+
+<% if !library %>
+  entrypoint("src/main.kex")
+
+  target("<%= name %>", entrypoint: "src/main.kex")
+<% end %>
+end

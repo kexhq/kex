@@ -1,0 +1,6 @@
+---
+params: [name: String]
+---
+main(args) do
+  IO.printLine("Hello from <%= name %>!")
+end

@@ -1655,95 +1655,9 @@ private do
   # readers actually need and the thing an author is least likely to write
   # from memory, since it means knowing both the manifest line and the tag
   # convention. An application's shows how to run it.
-  let readme(fields: {String: String}, library: Bool) -> String do
-    # $T$ stands in for a backtick. A raw string is delimited by backticks,
-    # so a Markdown code fence cannot be written inside one — and Markdown
-    # without fences is not much of a README.
-
-    # What a visitor to the repository page needs first: how to get this
-    # package into THEIR package. Shared by both variants — an application is
-    # still a package somebody can depend on, and a README that only says how
-    # to run it locally leaves the reader to guess the manifest line.
-    let dependency = `
-      ## Add it to your project
-
-      In your own package's $T$package.kex$T$:
-
-      $T$$T$$T$kex
-      tey("$NAME$", git: "https://github.com/you/$NAME$", tag: "~> 0.1")
-      $T$$T$$T$
-
-      Then $T$tey install$T$. The tag is the release, and $T$~> 0.1$T$ takes the
-      newest $T$0.1.x$T$ — Tey resolves it against this repository's tags.
-    `
-    let libraryUsage = `
-      ## Use it
-
-      $T$$T$$T$kex
-      using $MODULE$
-
-      main(args) do
-        IO.printLine($MODULE$.greeting("world"))
-      end
-      $T$$T$$T$
-
-      ## Release it
-
-      $T$$T$$T$sh
-      git tag v0.1.0 && git push origin v0.1.0
-      $T$$T$$T$
-
-      Keep the tag in step with $T$version$T$ in $T$package.kex$T$.
-    `
-    let applicationUsage = `
-      ## Run it
-
-      $T$$T$$T$sh
-      tey install
-      tey run
-      $T$$T$$T$
-    `
-    # A library is USED by depending on it, so the manifest line comes first
-    # and the `using` example follows it. An application is run, so its own
-    # instructions lead and the dependency line is the footnote.
-    let usage = library then "${dependency}${libraryUsage}" else "${applicationUsage}${dependency}"
-    let body = `
-      # $NAME$
-
-      A Kex package.
-
-      ## Develop
-
-      $T$$T$$T$sh
-      tey install   # fetch dependencies
-      tey build     # compile into ebin/
-      tey test      # run spec/*.spec.kex
-      $T$$T$$T$
-
-      $USAGE$
-      ## Your own commands
-
-      A package can add commands to Tey. Declare them in $T$package.kex$T$:
-
-      $T$$T$$T$kex
-      command("bench", run: "script/bench.kex", description: "Run the benchmarks")
-      command("fmt", run: "kex --format src", description: "Format the sources")
-      $T$$T$$T$
-
-      They run as $T$tey bench$T$ and $T$tey fmt$T$ from anywhere in the package, are
-      listed under **Package commands** in $T$tey help$T$, and show up as tasks in
-      editors that ask Tey what this project can do. A $T$run:$T$ whose first word
-      ends in $T$.kex$T$ is run by Kex; anything else is a shell command line.
-
-      Built-in names ($T$build$T$, $T$test$T$, $T$run$T$, ...) cannot be redeclared, so
-      $T$tey test$T$ means the same thing in every package.`
-    # Two passes, and they cannot be one: substitution runs in sorted key
-    # order, so `$USAGE$` would be spliced in LAST — after the placeholders
-    # it contains had already been looked for — and the usage section would
-    # reach the file still full of `$NAME$` and `$T$`. Splice first, fill
-    # second.
-    return body.substitute({"$USAGE$": usage})
-               .substitute(fields.merge({"$T$": "`"}))
+  let readme(name: String, moduleName: String, library: Bool) -> String do
+    let render = Template.text(Kex.embed("templates/README.md.ket"))
+    return render(name, moduleName, library)
   end
 
   # The line above the file list: what is being made, and where. `tey new`
@@ -1824,49 +1738,20 @@ private do
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
-    # This fragment is spliced INTO the generated `package` block, so its
-    # two-space indent belongs to the generated file and has to survive.
-    # Block-shaped, it would be dedented away — every line shares it.
-    let entry = library then "" else `  entrypoint("src/main.kex")
-
-  target("$NAME$", entrypoint: "src/main.kex")
-`
-    # One substitution table for every template below, rather than a `.replace`
-    # chain per template. Substitution runs in sorted key order, so `$ENTRY$`
-    # lands before `$NAME$` is looked for and the placeholder INSIDE the
-    # inserted entry is filled by the same pass.
-    let fields = {"$NAME$": name, "$MODULE$": moduleName, "$ENTRY$": entry}
-    let libraryModule = `
-      module $MODULE$
-
-      foul greeting(name: String) = "Hello, ${name}!"
-    `
-    let application = `
-      main(args) do
-        IO.printLine("Hello from $NAME$!")
-      end
-    `
     # A library ships one function that works and one spec that proves it.
     # An empty `module X do end` with an empty spec/ meant a new package's
     # first `tey test` said "No specs found" — the on-ramp taught nothing and
     # left the author to discover the spec layout from a doc.
-    let source = (library then libraryModule else application).substitute(fields)
-    # The commented `command(...)` is the one line of this file that teaches
-    # something the author would otherwise never learn was possible: the
-    # scripts a project needs belong in the manifest, not in a Makefile beside
-    # it. Commented, because a scaffold must not ship a command that does not
-    # run.
-    let manifestText = `
-      package "$NAME$" do
-        version("0.1.0")
-        description("A Kex package")
-        kex(">= 0.3.0")
-
-        # Project commands, run as "tey NAME" and listed by "tey help":
-        # command("bench", run: "script/bench.kex", description: "Run the benchmarks")
-
-      $ENTRY$end
-    `.substitute(fields)
+    let libraryModule = Template.text(Kex.embed("templates/library.kex.ket"))
+    let application = Template.text(Kex.embed("templates/main.kex.ket"))
+    let source = library then libraryModule(moduleName) else application(name)
+    # The commented `command(...)` in the manifest template is the one line of
+    # that file that teaches something the author would otherwise never learn
+    # was possible: the scripts a project needs belong in the manifest, not in
+    # a Makefile beside it. Commented, because a scaffold must not ship a
+    # command that does not run.
+    let manifest = Template.text(Kex.embed("templates/package.kex.ket"))
+    let manifestText = manifest(name, library)
     # The resolver finds a module by lowercasing its name and looking for that
     # file (see sourcePath in src/module/resolver.cxx), so the file has to be
     # named after the MODULE, not after the package: `hello-world` produces
@@ -1880,13 +1765,8 @@ private do
       return Tey.Commands.fail("could not write project '${name}'")
     end
     if library
-      let spec = `
-        describe "$MODULE$" do
-          it "greets by name" do
-            Assert.equal($MODULE$.greeting("Kex"), "Hello, Kex!")
-          end
-        end
-      `.substitute(fields)
+      let librarySpec = Template.text(Kex.embed("templates/library.spec.kex.ket"))
+      let spec = librarySpec(moduleName)
       if !Tey.Commands.writeCreated(directory, "${directory}/spec/${moduleFile}.spec.kex", spec)
         return Tey.Commands.fail("could not write project '${name}'")
       end
@@ -1897,7 +1777,7 @@ private do
     # somewhere else. Generated with the manifest's own description so the two
     # start out saying the same thing.
     if !Tey.Commands.writeCreated(directory, "${directory}/README.md",
-                                  Tey.Commands.readme(fields, library))
+                                  Tey.Commands.readme(name, moduleName, library))
       return Tey.Commands.fail("could not write project '${name}'")
     end
     Tey.Commands.writeCreated(directory, "${directory}/.gitattributes", "tey.lock merge=tey\n")
