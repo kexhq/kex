@@ -61,6 +61,23 @@ auto snakeCased(const std::string& part) -> std::string {
     return result;
 }
 
+// A part that opens with a letter and a number — `N0001CreateUsers`, the
+// first of a directory of migrations — is a file somebody numbered so the
+// directory sorts, and the letter is only there because a module name cannot
+// start with a digit. Such a file is conventionally written with its capital,
+// `N0001_create_users.kex`, which the lowered spellings above only find on a
+// file system that ignores case. This is the snake_case spelling with that
+// leading capital kept; empty for a part that is not numbered.
+auto numberedSnakeCased(const std::string& part) -> std::string {
+    if (part.size() < 2
+        || !std::isupper(static_cast<unsigned char>(part[0]))
+        || !std::isdigit(static_cast<unsigned char>(part[1])))
+        return {};
+    auto result = snakeCased(part);
+    result[0] = part[0];
+    return result;
+}
+
 // Every file spelling a module name can take, most specific first. Each name
 // part contributes its own spellings, so `Web.MockData` reaches
 // `web/mock_data.kex` as readily as `web/mockdata.kex`.
@@ -73,6 +90,8 @@ auto sourcePaths(const std::string& moduleName)
         std::vector<std::string> spellings{lowered(part)};
         if (auto snake = snakeCased(part); snake != spellings.front())
             spellings.push_back(std::move(snake));
+        if (auto numbered = numberedSnakeCased(part); !numbered.empty())
+            spellings.push_back(std::move(numbered));
 
         std::vector<std::filesystem::path> extended;
         extended.reserve(paths.size() * spellings.size());

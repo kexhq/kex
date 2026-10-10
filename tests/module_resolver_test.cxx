@@ -46,6 +46,11 @@ int main() {
         std::ofstream(base / "snake/web/http_client.kex")
             << "module Web.HTTPClient\n";
         std::ofstream(base / "snake/plainname.kex") << "module PlainName\n";
+        fs::create_directories(base / "numbered/db/migrate");
+        std::ofstream(base / "numbered/db/migrate/N0001_create_users.kex")
+            << "module DB.Migrate.N0001CreateUsers\n";
+        std::ofstream(base / "numbered/db/migrate/n0002_add_names.kex")
+            << "module DB.Migrate.N0002AddNames\n";
         fs::create_directories(base / "duplicate_manifest");
         std::ofstream(base / "duplicate_manifest/prelude.kex")
             << "using Good\nusing Good\n";
@@ -78,6 +83,30 @@ int main() {
             assertTrue(resolved.has_value());
             assertEqual(resolved->moduleName, std::string("Shop.Cart"));
             assertEqual(resolved->path, (base / "lib/shop.kex").string());
+        });
+
+        it("finds a numbered file written with its capital", [&]() {
+            // `module DB.Migrate.N0001CreateUsers` in
+            // `db/migrate/N0001_create_users.kex`: the `N` is there because a
+            // module name cannot start with a digit, and people write it as
+            // a capital. Both lowered spellings miss that file wherever file
+            // names are case-sensitive, so the directory built on macOS and
+            // failed with "Unknown module" on Linux.
+            kex::module::Resolver resolver({(base / "numbered").string()});
+            const auto capital = base / "numbered/db/migrate/N0001_create_users.kex";
+            auto resolved = resolver.resolve("DB.Migrate.N0001CreateUsers");
+            assertTrue(resolved.has_value());
+            assertTrue(fs::equivalent(resolved->path, capital));
+
+            // The all-lowercase file name keeps working.
+            auto lower = resolver.resolve("DB.Migrate.N0002AddNames");
+            assertTrue(lower.has_value());
+            assertTrue(fs::equivalent(
+                lower->path, base / "numbered/db/migrate/n0002_add_names.kex"));
+
+            // Only a numbered part gets the capital spelling: an ordinary
+            // module is still found under its lowered names alone.
+            assertFalse(resolver.resolve("DB.Migrate.CreateUsers").has_value());
         });
 
         it("finds a snake_case file for a CamelCase module name", [&]() {

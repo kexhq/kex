@@ -9,6 +9,9 @@
           spawn/1, 'spawnServing'/3, server_call/4, server_cast/3, reply/1, cast/0,
           replyFrom/2, fromPid/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
+%% Not behind a `Process.*` stdlib function yet: Tey's plugin host reaches it
+%% as `BEAM.kex_intrinsic_process.converse(...)`.
+-export([converse/4]).
 
 %% Execute a program and capture its output with the streams KEPT APART, the
 %% same result the tree walker produces.
@@ -217,6 +220,54 @@ stream(Command, Args) ->
             erlang:exit(Feeder, kill),
             kex_child_guard:release(Guard),
             {'Ok', Status}
+    end.
+
+%% Runs a child and holds a conversation with it over its stdin and stdout,
+%% a line at a time: `First` is written to the child, then every line the
+%% child prints is handed to `Handler`, and whatever `Handler` answers — unless
+%% it answers nothing — is written back. Ends with the child's exit status.
+%%
+%% `run/2` only hears a child once it has exited and `stream/2` only relays
+%% it, so neither can answer a child that asks for something and waits. That
+%% is what a supervisor brokering a child's requests needs.
+%%
+%% The child's stderr is left alone: it is the child's own channel to the
+%% terminal, and stdout is spoken for.
+converse(Command, Args, First, Handler) ->
+    case os:find_executable(unicode:characters_to_list(Command)) of
+        false -> {'Error', <<"executable not found: ", (unicode:characters_to_binary(Command))/binary>>};
+        Executable ->
+            Arguments = [unicode:characters_to_list(A) || A <- Args],
+            Port = open_port({spawn_executable, Executable},
+                             [binary, exit_status, use_stdio, hide,
+                              {line, 65536}, {args, Arguments}]),
+            Guard = kex_child_guard:protect(Port),
+            say_to_port(Port, First),
+            Status = converse_with(Port, Handler, <<>>),
+            kex_child_guard:release(Guard),
+            {'Ok', Status}
+    end.
+
+%% A line longer than the port's buffer arrives in `noeol` pieces before its
+%% `eol`; a request carrying a file's contents easily is.
+converse_with(Port, Handler, Partial) ->
+    receive
+        {Port, {data, {noeol, Chunk}}} ->
+            converse_with(Port, Handler, <<Partial/binary, Chunk/binary>>);
+        {Port, {data, {eol, Chunk}}} ->
+            say_to_port(Port, Handler(<<Partial/binary, Chunk/binary>>)),
+            converse_with(Port, Handler, <<>>);
+        {Port, {exit_status, Status}} ->
+            Status
+    end.
+
+say_to_port(_Port, <<>>) -> ok;
+say_to_port(Port, Line) ->
+    %% Raises once the child has exited; there is then nobody to tell.
+    try erlang:port_command(Port, [Line, <<"\n">>]) of
+        _ -> ok
+    catch
+        _:_ -> ok
     end.
 
 feed_port(Port) ->
