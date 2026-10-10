@@ -1843,10 +1843,9 @@ private do
 
   # `tey plugin <namespace>:<command> [--option value ...] [--unconfined]`
   #
-  # Unlike a generator, a command does its work itself — so it runs with what
-  # its plugin declared and the user approved, and no more: it may write in
-  # the workspace only with `FS.Write.workspace`, and reach the network only
-  # with `Net.Connect`.
+  # A command has things to do in the world — write files, run git, call an
+  # API — and does none of them itself. It asks, a line at a time, and Tey
+  # carries out what the plugin's approved capabilities cover (`Tey.Broker`).
   foul pluginCommanded(arguments: [String]) -> Integer or! String do
     let usage = "usage: tey plugin <namespace>:<command> [--option value ...] [--unconfined]"
     let (namespace, name) = Tey.Commands.pluginTarget(arguments.first.or(""), usage).try
@@ -1858,17 +1857,31 @@ private do
       Just(found) => found
       None => return Error("plugin `${namespace}` has no command `${name}`")
     end
-    let declared = binding.declaration.pluginCapabilities.map { |resource| resource.capabilityKind }
-    let limits = Tey.Sandbox.Limits {
-      writable: declared.contains?("FS.Write.workspace") then [context.workspaceRoot] else [],
-      network?: declared.contains?("Net.Connect")
-    }
+    # The command itself is given nothing — no writing, no network — exactly
+    # as a generator is. What it was approved for it asks Tey to do, request
+    # by request, and `Tey.Broker` checks each one.
+    let grants = Tey.Broker.grants(binding.declaration, context.workspaceRoot)
     let child = Tey.Commands.pluginChild(context, state, "command", namespace, operation,
-                                         supplied, limits, flags.contains?("unconfined")).try
+                                         supplied, Tey.Sandbox.Limits {}, flags.contains?("unconfined")).try
     let (command, leftovers) = child
-    let outcome = Process.stream(command.first.or("sh"), command.drop(1))
+    let invocation = FS.File.read(leftovers.first.or("")).or("").trim
+    let outcome = BEAM.kex_intrinsic_process.converse(
+      command.first.or("sh"), command.drop(1), invocation,
+      do |line| Tey.Broker.answered(grants, line) end
+    )
     leftovers.each { |file| FS.File.delete(file) }
-    return outcome
+    match outcome do
+      Ok(status) => return Ok(status)
+      Error(reason) => return Error("could not run plugin `${namespace}:${name}`: ${reason}")
+    end
+  end
+
+  # Tey's plugin SDK (`TeyPlugin`), as a module root for plugin children: the
+  # sdk/ directory beside Tey's compiled modules, or `TEY_SDK`.
+  foul sdkRoot -> [String] do
+    let own = "${BEAM.unicode.characters_to_binary(BEAM.filename.dirname(BEAM.filename.dirname(BEAM.code.which(:kex_main))))}"
+    let directory = ENV.get("TEY_SDK").or(FS.Path.join(own, "sdk"))
+    return FS.Directory.directory?(directory) then ["--source-root", directory] else []
   end
 
   let pluginTarget(word: String, usage: String) -> (String, String) or! String do
@@ -1937,10 +1950,14 @@ private do
     end
     # The module roots are those of the workspace that depends on the
     # plugin — which include the plugin's own.
-    let command = [...guard, "sh", "-c",
-      "cd \"$1\" || exit 1; input=$2; shift 2; exec \"$@\" < \"$input\"",
+    # A generator is handed its invocation on stdin and left to finish; a
+    # command's stdin and stdout are its conversation with Tey, so the
+    # invocation is the first thing said to it instead.
+    let script = kind == "generator" then "cd \"$1\" || exit 1; input=$2; shift 2; exec \"$@\" < \"$input\"" else "cd \"$1\" || exit 1; shift 2; exec \"$@\""
+    let command = [...guard, "sh", "-c", script,
       "tey", pluginRoot, input, Tey.Toolchain.kex,
       ...Tey.Commands.sourceRootsAt(context.workspaceRoot),
+      ...Tey.Commands.sdkRoot,
       operation.operationEntrypoint]
     return Ok((command, [input, ...profile]))
   end

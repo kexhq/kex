@@ -1,0 +1,116 @@
+# What a plugin's entrypoint uses to talk to Tey.
+#
+# A plugin command runs where it can write nothing and reach no network; what
+# it needs done it asks Tey for, and Tey does it if the plugin's declared
+# capabilities — which the user approved — cover it. Every function here is
+# one such request.
+#
+#   main do
+#     let invocation = TeyPlugin.invocation()
+#     TeyPlugin.write("notes/hello.txt", "hi").try     # needs FS.Write.workspace
+#     let status = TeyPlugin.run("git", ["status"]).try  # needs Process.Run(["git"])
+#     TeyPlugin.print(status.stdout)
+#   end
+#
+# Tey puts this module on a plugin's module path; nothing needs installing.
+# A generator does not use it: it prints its operations and exits.
+module TeyPlugin
+
+using JSON
+
+# What a program Tey ran for the plugin did.
+record Ran do
+  exitCode : Integer
+  stdout : String
+  stderr : String
+end
+
+# What a URL Tey fetched for the plugin answered.
+record Fetched do
+  status : Integer
+  body : String
+end
+
+# The invocation: read it first, and once. `{"context": {"workspaceRoot": …,
+# "options": {…}}, …}`.
+foul invocation -> Any do
+  return JSON.parse(IO.getLine.or("")).or({})
+end
+
+# An option the plugin was invoked with, as text; "" when it was not given.
+let option(invocation: Any, name: String) -> String do
+  match invocation["context"] do
+    None => return ""
+    Just(context) => match context["options"] do
+      None => return ""
+      Just(options) => match options[name] do
+        Just(value) => return "${value}"
+        None => return ""
+      end
+    end
+  end
+end
+
+# Prints a line to the user. A plugin's own stdout is its line to Tey, so
+# this is how it says something.
+foul print(text: String) -> Void do
+  TeyPlugin.asked({ op: "print", text: text })
+  return ()
+end
+
+# A file of the workspace.
+foul read(path: String) -> String or! String do
+  let answer = TeyPlugin.asked({ op: "read", path: path }).try
+  return Ok(TeyPlugin.field(answer, "content"))
+end
+
+# Writes a file in the workspace. Needs `FS.Write.workspace`.
+foul write(path: String, content: String) -> Bool or! String do
+  TeyPlugin.asked({ op: "write", path: path, content: content }).try
+  return Ok(true)
+end
+
+# Deletes a file of the workspace. Needs `FS.Write.workspace`.
+foul delete(path: String) -> Bool or! String do
+  TeyPlugin.asked({ op: "delete", path: path }).try
+  return Ok(true)
+end
+
+# Runs a program in the workspace. Needs it listed in `Process.Run([...])`.
+foul run(command: String, arguments: [String]) -> Ran or! String do
+  let answer = TeyPlugin.asked({ op: "run", command: command, arguments: arguments }).try
+  return Ok(Ran {
+    exitCode: TeyPlugin.field(answer, "exitCode").to(Integer).or(0 - 1),
+    stdout: TeyPlugin.field(answer, "stdout"),
+    stderr: TeyPlugin.field(answer, "stderr")
+  })
+end
+
+# Fetches a URL. Needs its host listed in `Net.Connect([...])`. Redirects are
+# answered, not followed.
+foul fetch(method: String, url: String, body: String) -> Fetched or! String do
+  let answer = TeyPlugin.asked({ op: "fetch", method: method, url: url, body: body }).try
+  return Ok(Fetched { status: TeyPlugin.field(answer, "status").to(Integer).or(0), body: TeyPlugin.field(answer, "body") })
+end
+
+private do
+  let field(answer: Any, name: String) -> String do
+    match answer[name] do
+      Just(value) => return "${value}"
+      None => return ""
+    end
+  end
+
+  # One request, and Tey's answer to it — or why it was refused.
+  foul asked(request: Any) -> Any or! String do
+    IO.printLine(JSON.stringify(request))
+    let answer = match JSON.parse(IO.getLine.or("")) do
+      Ok(parsed) => parsed
+      Error(_) => return Error("Tey did not answer")
+    end
+    match answer["ok"] do
+      Just(true) => return Ok(answer)
+      _ => return Error(TeyPlugin.field(answer, "error"))
+    end
+  end
+end

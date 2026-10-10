@@ -1,0 +1,198 @@
+module Tey.Broker
+
+using JSON
+using Tey.Manifest, only: [Plugin]
+
+# The plugin host's side of a command's conversation.
+#
+# A plugin command runs in a sandbox where it can write nothing and reach no
+# network. Whatever it wants done in the world it asks for, one JSON object
+# per line on its stdout, and waits for the answer on its stdin:
+#
+#   {"op":"print","text":"…"}
+#   {"op":"read","path":"README.md"}
+#   {"op":"write","path":".github/workflows/ci.yml","content":"…"}
+#   {"op":"delete","path":"old.yml"}
+#   {"op":"run","command":"git","arguments":["status","--short"]}
+#   {"op":"fetch","method":"GET","url":"https://api.github.com/…","body":""}
+#
+# Each request is checked here against what the plugin declared and the user
+# approved, then carried out by Tey or refused:
+#
+#   {"ok":true, …}        {"ok":false,"error":"…"}
+#
+# So `Process.Run(["git"])` means git and nothing else, and
+# `Net.Connect(["api.github.com"])` means that host and no other — the
+# plugin never runs a program with the user's access or opens a socket; Tey
+# does, on its behalf, after looking.
+
+# What a plugin was approved for.
+record Grants do
+  workspaceRoot : String
+  writes? : Bool = false
+  commands : [String] = []
+  hosts : [String] = []
+end
+
+let grants(plugin: Plugin, workspaceRoot: String) -> Grants do
+  let values = do |kind|
+    plugin.pluginCapabilities.filter { |resource| resource.capabilityKind == kind }
+      .flatMap { |resource| resource.capabilityValues }
+  end
+  return Grants {
+    workspaceRoot: workspaceRoot,
+    writes?: plugin.pluginCapabilities.any? { |resource| resource.capabilityKind == "FS.Write.workspace" },
+    commands: values("Process.Run"),
+    hosts: values("Net.Connect").map { |host| host.lowerCase }
+  }
+end
+
+# One request line in, one response line out. Never raises: a request that
+# cannot be read or is refused is answered, so the plugin can say why.
+foul answered(grants: Grants, line: String) -> String do
+  let request = match JSON.parse(line) do
+    Ok(parsed) => parsed
+    Error(_) => return Tey.Broker.refused("a request must be one JSON object on a line")
+  end
+  return Tey.Broker.refused("a request must be a JSON object") if Kex.Intrinsic.Kex.kind(request) != :map
+  let outcome = match Tey.Broker.text(request, "op") do
+    "print" => Tey.Broker.printed(request)
+    "read" => Tey.Broker.read(grants, request)
+    "write" => Tey.Broker.written(grants, request)
+    "delete" => Tey.Broker.deleted(grants, request)
+    "run" => Tey.Broker.ran(grants, request)
+    "fetch" => Tey.Broker.fetched(grants, request)
+    other => Error("unknown operation `${other}`")
+  end
+  match outcome do
+    Ok(response) => return response
+    Error(reason) => return Tey.Broker.refused(reason)
+  end
+end
+
+# The host name of an http(s) URL, lower-cased; an error for anything else,
+# or for a URL that hides its host behind user information.
+let host(url: String) -> String or! String do
+  let rest = if url.startsWith?("https://")
+    url.drop(8)
+  elif url.startsWith?("http://")
+    url.drop(7)
+  else
+    return Error("only http and https URLs can be fetched")
+  end
+  let authority = rest.split("/").first.or("").split("?").first.or("").split("#").first.or("")
+  return Error("a URL with user information is not fetched") if authority.contains?("@")
+  let name = authority.split(":").first.or("").lowerCase
+  return Error("the URL has no host") if name == ""
+  return Ok(name)
+end
+
+private do
+  let refused(reason: String) -> String do
+    return JSON.stringify({ ok: false, error: reason })
+  end
+
+  let text(request: Any, key: String) -> String do
+    match request[key] do
+      Just(value) => return Kex.Intrinsic.Kex.kind(value) == :string then "${value}" else ""
+      None => return ""
+    end
+  end
+
+  let words(request: Any, key: String) -> [String] do
+    match request[key] do
+      Just(values) => do
+        return [] if Kex.Intrinsic.Kex.kind(values) != :list
+        return values.map { |value| "${value}" }
+      end
+      None => return []
+    end
+  end
+
+  foul announce(verb: String, what: String) -> Void do
+    IO.printError("${Console.DIM}${verb}${Console.RESET} ${what}")
+  end
+
+  foul printed(request: Any) -> String or! String do
+    IO.printLine(Tey.Broker.text(request, "text"))
+    return Ok(JSON.stringify({ ok: true }))
+  end
+
+  foul read(grants: Grants, request: Any) -> String or! String do
+    let path = Tey.Broker.text(request, "path")
+    let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
+    match FS.File.read(target) do
+      Ok(content) => return Ok(JSON.stringify({ ok: true, content: content }))
+      Error(_) => return Error("could not read `${path}`")
+    end
+  end
+
+  foul written(grants: Grants, request: Any) -> String or! String do
+    let path = Tey.Broker.text(request, "path")
+    return Error("the plugin was not approved to write in the workspace (FS.Write.workspace)") if !grants.writes?
+    let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
+    return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
+    return Error("could not write `${path}`") if !FS.File.write(target, Tey.Broker.text(request, "content"))
+    Tey.Broker.announce("write", path)
+    return Ok(JSON.stringify({ ok: true }))
+  end
+
+  foul deleted(grants: Grants, request: Any) -> String or! String do
+    let path = Tey.Broker.text(request, "path")
+    return Error("the plugin was not approved to write in the workspace (FS.Write.workspace)") if !grants.writes?
+    let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
+    return Error("only files can be deleted: `${path}`") if FS.Directory.directory?(target)
+    return Error("could not delete `${path}`") if FS.File.exists?(target) && !FS.File.delete(target)
+    Tey.Broker.announce("delete", path)
+    return Ok(JSON.stringify({ ok: true }))
+  end
+
+  foul ran(grants: Grants, request: Any) -> String or! String do
+    let command = Tey.Broker.text(request, "command")
+    let arguments = Tey.Broker.words(request, "arguments")
+    if !grants.commands.contains?(command)
+      return Error("the plugin was not approved to run `${command}` (Process.Run allows: ${grants.commands.join(", ")})")
+    end
+    Tey.Broker.announce("run", ([command] + arguments).join(" "))
+    let outcome = Process.run("sh", ["-c", "cd \"$1\" || exit 1; shift; exec \"$@\"",
+                                     "tey", grants.workspaceRoot, command, ...arguments])
+    match outcome do
+      Ok(result) => return Ok(JSON.stringify({ ok: true, exitCode: result.exitCode,
+                                                stdout: result.stdout, stderr: result.stderr }))
+      Error(reason) => return Error("could not run `${command}`: ${reason}")
+    end
+  end
+
+  foul fetched(grants: Grants, request: Any) -> String or! String do
+    let url = Tey.Broker.text(request, "url")
+    let name = Tey.Broker.host(url).try
+    if !grants.hosts.contains?(name)
+      return Error("the plugin was not approved to connect to `${name}` (Net.Connect allows: ${grants.hosts.join(", ")})")
+    end
+    let given = Tey.Broker.text(request, "method")
+    let method = given == "" then "GET" else given.upperCase
+    let body = Tey.Broker.text(request, "body")
+    Tey.Broker.announce("fetch", "${method} ${name}")
+    # No `-L`: a redirect is answered to the plugin, not followed to a host
+    # nobody approved.
+    let payload = FS.Path.join(ENV.get("TMPDIR").or("/tmp"), "tey-fetch-${DateTime.now().iso.replace(":", "-")}.body")
+    let sending = if body == ""
+      []
+    else
+      return Error("could not stage the request body") if !FS.File.write(payload, body)
+      ["--data-binary", "@${payload}"]
+    end
+    let outcome = Process.run("curl", ["-sS", "--max-time", "30", "-X", method, ...sending,
+                                       "-w", "\n%{http_code}", "--", url])
+    FS.File.delete(payload) if body != ""
+    match outcome do
+      Error(reason) => return Error("could not fetch: ${reason}")
+      Ok(result) => do
+        return Error("fetch failed: ${result.stderr.trim}") if result.exitCode != 0
+        let lines = result.stdout.lines
+        let status = lines.last.or("0").trim.to(Integer).or(0)
+        return Ok(JSON.stringify({ ok: true, status: status, body: lines.take(lines.count - 1).join("\n") }))
+      end
+    end
+  end
+end
