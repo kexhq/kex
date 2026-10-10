@@ -1,231 +1,425 @@
-(() => {
-  // el("span", "search-name", "map"), or an array of child nodes for content.
-  const el = (tag, className, content) => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (Array.isArray(content)) node.append(...content);
-    else if (content != null) node.textContent = content;
-    return node;
-  };
+// The docs site's script. Three independent features, each of which starts
+// only when its element is on the page:
+//
+//   #version-badge   the version switcher
+//   #search          the search modal, on every documentation page
+//   #sp-input        the full results page, search.html
+//
+// All of it is enhancement: without this script the pages still read.
 
-  const fetchJson = (url) => fetch(url, { cache: "no-store" }).then((res) => res.json());
+(function () {
+  "use strict";
+
+  // ── Helpers ─────────────────────────────────────────────────────────
+
+  // Markup below is built as text, so every value in it goes through this.
+  function escapeHtml(value) {
+    const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+    return String(value ?? "").replace(/[&<>"']/g, (char) => entities[char]);
+  }
+
+  async function fetchJson(url) {
+    const response = await fetch(url, { cache: "no-store" });
+    return response.json();
+  }
 
   // ── Version switcher ────────────────────────────────────────────────
-  const badge = document.getElementById("version-badge");
-  if (badge) versionSwitcher(badge).catch(() => {});
+  // Replaces the static version badge with a <select> of every published
+  // version of the same package.
 
-  async function versionSwitcher(badge) {
-    const { root, package: pkg, version, page } = badge.dataset;
+  async function startVersionSwitcher(badge) {
+    const { root, package: packageName, version: current, page } = badge.dataset;
+
     const data = await fetchJson(root + "versions.json");
-    const versions = (data.versions || []).filter((v) => v.package === pkg);
+    const versions = (data.versions || []).filter((v) => v.package === packageName);
     if (versions.length === 0) return;
-    const select = el("select", "version-select", versions.map((v) => {
-      const option = el("option", "", `${v.label} ${v.id}`);
-      option.value = v.id;
-      option.selected = v.id === version;
-      return option;
-    }));
-    select.setAttribute("aria-label", "Documentation version");
-    select.addEventListener("change", async () => {
-      const base = `${root}${pkg}/${select.value}/`;
-      // The same page may not exist in the target version (renamed module,
-      // or a source that no longer parses): fall back to the version's
-      // index rather than landing on a 404.
-      const found = await fetch(base + page, { method: "HEAD", cache: "no-store" })
-        .then((res) => res.ok, () => false);
-      window.location.href = base + (found ? page : "index.html");
+
+    const select = document.createElement("select");
+    select.className = "version-select";
+    select.ariaLabel = "Documentation version";
+    select.innerHTML = versions.map((v) => versionOption(v, current)).join("");
+    select.addEventListener("change", () => {
+      openVersion(`${root}${packageName}/${select.value}/`, page);
     });
+
     badge.replaceWith(select);
   }
 
-  // ── Search, shared by the modal and the full results page ───────────
+  function versionOption(version, current) {
+    const id = escapeHtml(version.id);
+    const selected = version.id === current ? " selected" : "";
+    return `<option value="${id}"${selected}>${escapeHtml(version.label)} ${id}</option>`;
+  }
 
-  // Fetches search.json once, on first use. A failed fetch is an empty index.
-  const indexLoader = (base) => {
-    let pending;
-    return () => pending ||= fetchJson(base + "search.json").then((data) => data.entries || [], () => []);
-  };
+  // Opens `page` in the version at `versionUrl`. The same page may not exist
+  // there (a renamed module, or a source that no longer parses), so this
+  // falls back to that version's index rather than landing on a 404.
+  async function openVersion(versionUrl, page) {
+    let exists = false;
+    try {
+      const response = await fetch(versionUrl + page, { method: "HEAD", cache: "no-store" });
+      exists = response.ok;
+    } catch (error) {
+      exists = false;
+    }
+    window.location.href = versionUrl + (exists ? page : "index.html");
+  }
 
-  // Rank, don't just filter: a name hit outranks a summary hit, an exact
-  // type outranks a mention in a signature, and an arrow in the query is a
-  // function's business, not a module's. Returns -1 when a token matches
-  // nowhere (all tokens must hit).
-  const rank = (entry, tokens) => {
-    const name = (entry.name || "").toLowerCase();
-    const qname = (entry.qualifiedName || "").toLowerCase();
-    const types = (entry.types || []).join(" ").toLowerCase();
-    const sigs = (entry.signatures || []).join(" ").toLowerCase();
-    const summary = (entry.summary || "").toLowerCase();
+  // ── Search index ────────────────────────────────────────────────────
+
+  // Returns a function that fetches `<baseUrl>search.json` on its first call
+  // and answers every later call from that one request. A failed fetch is an
+  // empty index, so search finds nothing instead of breaking.
+  function createIndexLoader(baseUrl) {
+    let request = null;
+    return function loadIndex() {
+      if (!request) {
+        request = fetchJson(baseUrl + "search.json")
+          .then((data) => data.entries || [])
+          .catch(() => []);
+      }
+      return request;
+    };
+  }
+
+  // ── Search ranking ──────────────────────────────────────────────────
+  // Rank, don't just filter: a name hit outranks a summary hit, and an exact
+  // type outranks a mention in a signature.
+  //
+  // Each row is a field of an entry and the points a query word earns for
+  // matching it exactly, at its start, or anywhere inside it. A word counts
+  // once, for the best field it matches.
+  const FIELD_POINTS = [
+    // field        exact  prefix  inside
+    ["name",          100,     50,     20],
+    ["qualifiedName",  90,     30,     30],
+    ["types",          60,     25,     25],
+    ["signatures",     10,     10,     10],
+    ["summary",         5,      5,      5],
+  ];
+
+  // An arrow in the query means the reader is looking for a function.
+  const ARROW_BONUS_FOR_FUNCTION = 80;
+  const ARROW_PENALTY_OTHERWISE = -300;
+
+  // The text of one field, lowercased. `types` and `signatures` are lists.
+  function fieldText(entry, field) {
+    const value = entry[field] || "";
+    const text = Array.isArray(value) ? value.join(" ") : value;
+    return text.toLowerCase();
+  }
+
+  function wordScore(word, texts) {
+    let best = 0;
+    for (const [field, exact, prefix, inside] of FIELD_POINTS) {
+      const text = texts[field];
+      let points = 0;
+      if (text === word) points = exact;
+      else if (text.startsWith(word)) points = prefix;
+      else if (text.includes(word)) points = inside;
+      best = Math.max(best, points);
+    }
+    return best;
+  }
+
+  // The entry's score for the query words, or -1 when any word matches
+  // nowhere: every word must hit.
+  function rank(entry, words) {
+    const texts = {};
+    for (const [field] of FIELD_POINTS) texts[field] = fieldText(entry, field);
+
     let total = 0;
-    for (const t of tokens) {
-      const score = Math.max(
-        name === t ? 100 : name.startsWith(t) ? 50 : name.includes(t) ? 20 : 0,
-        qname === t ? 90 : qname.includes(t) ? 30 : 0,
-        types === t ? 60 : types.includes(t) ? 25 : 0,
-        sigs.includes(t) ? 10 : 0,
-        summary.includes(t) ? 5 : 0
-      );
+    for (const word of words) {
+      const score = wordScore(word, texts);
       if (score === 0) return -1;
       total += score;
     }
-    if (tokens.includes("->")) total += entry.kind === "function" ? 80 : -300;
+    if (words.includes("->")) {
+      total += entry.kind === "function" ? ARROW_BONUS_FOR_FUNCTION : ARROW_PENALTY_OTHERWISE;
+    }
     return total;
-  };
+  }
 
   // The best `limit` entries for `query`, best first.
-  const search = (entries, query, limit) => {
-    const tokens = query.toLowerCase().split(" ").filter(Boolean);
-    return entries
-      .map((entry) => ({ entry, score: rank(entry, tokens) }))
-      .filter((scored) => scored.score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((scored) => scored.entry);
-  };
-
-  // A result row: kind, name, defining module, then whatever `details` adds.
-  const hit = (e, base, className, details) => {
-    const head = el("span", "search-head", [
-      el("span", `search-kind search-kind-${e.kind}`, e.kind),
-      el("span", "search-name", e.name),
-    ]);
-    if (e.qualifiedName && e.qualifiedName !== e.name) {
-      // The DEFINING module or entity, not the full qualified name —
-      // "Enumerable" for Enumerable.map, "[X]" for [X].map.
-      const dot = e.qualifiedName.lastIndexOf(".");
-      head.append(el("span", "search-qual", dot === -1 ? e.qualifiedName : e.qualifiedName.slice(0, dot)));
+  function search(entries, query, limit) {
+    const words = query.toLowerCase().split(" ").filter((word) => word !== "");
+    const matches = [];
+    for (const entry of entries) {
+      const score = rank(entry, words);
+      if (score >= 0) matches.push({ entry, score });
     }
-    const link = el("a", className, [head, ...details]);
-    link.href = `${base}${e.urlPath}.html${e.anchor ? "#" + e.anchor : ""}`;
-    return link;
-  };
+    matches.sort((a, b) => b.score - a.score);
+    return matches.slice(0, limit).map((match) => match.entry);
+  }
 
-  const signature = (e) => (e.signatures && e.signatures[0]) || "";
+  // ── Result rows ─────────────────────────────────────────────────────
+
+  // The module or type an entry is defined on, not its full qualified name:
+  // "Enumerable" for Enumerable.map, "[X]" for [X].map. Empty when the entry
+  // has no owner to show.
+  function ownerOf(entry) {
+    const qualified = entry.qualifiedName;
+    if (!qualified || qualified === entry.name) return "";
+    const lastDot = qualified.lastIndexOf(".");
+    return lastDot === -1 ? qualified : qualified.slice(0, lastDot);
+  }
+
+  // One result as a link: kind, name, owner, then its signature.
+  //
+  //   baseUrl      what the entry's page path is relative to
+  //   className    the row's class; the modal and the page style it apart
+  //   withSummary  the results page shows the summary under the signature;
+  //                the modal's compact rows show it only in place of a
+  //                missing signature
+  function resultRow(entry, { baseUrl, className, withSummary }) {
+    const anchor = entry.anchor ? "#" + entry.anchor : "";
+    const href = `${baseUrl}${entry.urlPath}.html${anchor}`;
+    const owner = ownerOf(entry);
+    const signature = (entry.signatures && entry.signatures[0]) || "";
+    const summary = entry.summary || "";
+
+    const ownerHtml = owner ? `<span class="search-qual">${escapeHtml(owner)}</span>` : "";
+    const detail = withSummary ? signature : signature || summary;
+    const summaryHtml = withSummary && summary
+      ? `<span class="search-summary">${escapeHtml(summary)}</span>`
+      : "";
+
+    return `
+      <a class="${className}" href="${escapeHtml(href)}">
+        <span class="search-head">
+          <span class="search-kind search-kind-${escapeHtml(entry.kind)}">${escapeHtml(entry.kind)}</span>
+          <span class="search-name">${escapeHtml(entry.name)}</span>
+          ${ownerHtml}
+        </span>
+        <span class="search-sig">${escapeHtml(detail)}</span>
+        ${summaryHtml}
+      </a>`;
+  }
 
   // ── Search modal ────────────────────────────────────────────────────
-  const trigger = document.getElementById("search");
-  if (trigger) searchModal(trigger);
+  // Opened by the header's search button, "/" or Cmd/Ctrl+K. It is built
+  // here rather than in the page so it never appears without the script
+  // that drives it.
 
-  function searchModal(trigger) {
-    const { root, package: pkg, version, page } = trigger.dataset;
-    const base = `${root}${pkg}/${version}/`;
-    const loadIndex = indexLoader(base);
-    // The urlPath of the page the trigger sits on ("fs.html" → "fs";
-    // "index.html" → "").
-    const here = page === "index.html" ? "" : (page || "").replace(/\.html$/, "");
-    let selected = 0;
+  const MODAL_RESULT_LIMIT = 50;
+  const EXAMPLE_QUERIES = ["map", "Integer", "String?", "String -> String -> String", "FS.File"];
 
-    // The modal is built here so the static page stays bare; it never
-    // appears without the script that drives it.
-    const input = el("input");
-    input.type = "search";
-    input.placeholder = `Search ${pkg} ${version}`;
-    input.autocomplete = "off";
-    const results = el("div", "search-modal-results");
-    const overlay = el("div", "search-modal", [el("div", "search-modal-panel", [input, results])]);
-    overlay.hidden = true;
-    document.body.append(overlay);
+  function startSearchModal(trigger) {
+    const { root, package: packageName, version, page } = trigger.dataset;
+    const baseUrl = `${root}${packageName}/${version}/`;
+    const loadIndex = createIndexLoader(baseUrl);
+    // The search index's path for the page we are on: "fs" for fs.html.
+    // The version's index page is not a source page, so it has none.
+    const currentPath = page === "index.html" ? "" : page.replace(/\.html$/, "");
 
-    const query = () => input.value.trim();
-    const row = (e) => hit(e, base, "search-hit", [el("span", "search-sig", signature(e) || e.summary || "")]);
-    const rows = () => results.querySelectorAll(".search-hit");
+    document.body.insertAdjacentHTML("beforeend", `
+      <div class="search-modal" hidden>
+        <div class="search-modal-panel">
+          <input type="search" autocomplete="off"
+                 placeholder="Search ${escapeHtml(packageName)} ${escapeHtml(version)}">
+          <div class="search-modal-results"></div>
+        </div>
+      </div>`);
+    const modal = document.body.lastElementChild;
+    const input = modal.querySelector("input");
+    const results = modal.querySelector(".search-modal-results");
 
-    const footer = () => {
-      const more = el("a", "", "Open full search results");
-      more.href = `${base}search.html${query() ? "?q=" + encodeURIComponent(query()) : ""}`;
-      return el("div", "search-modal-footer", [more]);
-    };
+    function row(entry) {
+      return resultRow(entry, { baseUrl, className: "search-hit", withSummary: false });
+    }
 
-    const select = (index) => {
-      const list = rows();
-      if (list.length === 0) return;
-      selected = (index + list.length) % list.length;
-      list.forEach((item, i) => item.classList.toggle("selected", i === selected));
-      list[selected].scrollIntoView({ block: "nearest" });
-    };
+    function rows() {
+      return Array.from(results.querySelectorAll(".search-hit"));
+    }
 
-    // The empty state: what a search can answer (name vs type), a few
-    // example terms, and the entities of the page you are on.
-    const showIdle = async () => {
-      const chips = ["map", "Integer", "String?", "String -> String -> String", "FS.File"].map((example) => {
-        const chip = el("button", "search-chip", example);
-        chip.addEventListener("click", () => { input.value = example; run(); input.focus(); });
-        return chip;
-      });
-      const hint = el("div", "search-hint", [
-        el("p", "search-hint-title", "Search by name or type."),
-        el("p", "search-hint-body", "A name finds what it is called; a type finds everything that uses it."),
-        el("div", "search-chips", chips),
-      ]);
-      results.replaceChildren(hint, footer());
-      if (!here) return;
-      const local = (await loadIndex()).filter((e) => e.urlPath === here).slice(0, 4);
-      // The reader may have typed, or closed the modal, while the index loaded.
-      if (local.length === 0 || query() || !hint.isConnected) return;
-      hint.after(el("div", "search-local", [el("p", "search-hint-title", "On this page"), ...local.map(row)]));
-    };
+    // What the modal shows before anything is typed: what a search can
+    // answer, a few example queries, and what is documented on this page.
+    function idleHtml(entries) {
+      const chips = EXAMPLE_QUERIES
+        .map((query) => `<button class="search-chip">${escapeHtml(query)}</button>`)
+        .join("");
+      const onThisPage = entries.filter((entry) => currentPath && entry.urlPath === currentPath).slice(0, 4);
+      const onThisPageHtml = onThisPage.length === 0 ? "" : `
+        <div class="search-local">
+          <p class="search-hint-title">On this page</p>
+          ${onThisPage.map(row).join("")}
+        </div>`;
 
-    const run = async () => {
-      const q = query();
-      if (!q) return showIdle();
-      const found = search(await loadIndex(), q, 50);
-      if (query() !== q) return;
-      results.replaceChildren(...(found.length ? found.map(row) : [el("div", "search-empty", "No matches")]), footer());
-      select(0);
-    };
+      return `
+        <div class="search-hint">
+          <p class="search-hint-title">Search by name or type.</p>
+          <p class="search-hint-body">A name finds what it is called; a type finds everything that uses it.</p>
+          <div class="search-chips">${chips}</div>
+        </div>
+        ${onThisPageHtml}`;
+    }
 
-    const open = () => {
-      overlay.hidden = false;
+    function resultsHtml(entries, query) {
+      const found = search(entries, query, MODAL_RESULT_LIMIT);
+      if (found.length === 0) return `<div class="search-empty">No matches</div>`;
+      return found.map(row).join("");
+    }
+
+    function footerHtml(query) {
+      const queryString = query ? "?q=" + encodeURIComponent(query) : "";
+      const href = `${baseUrl}search.html${queryString}`;
+      return `
+        <div class="search-modal-footer">
+          <a href="${escapeHtml(href)}">Open full search results</a>
+        </div>`;
+    }
+
+    async function render() {
+      const entries = await loadIndex();
+      const query = input.value.trim();
+      const body = query ? resultsHtml(entries, query) : idleHtml(entries);
+      results.innerHTML = body + footerHtml(query);
+      if (query) selectRow(0);
+    }
+
+    // ── Keyboard selection ──
+
+    function selectedIndex() {
+      return rows().findIndex((item) => item.classList.contains("selected"));
+    }
+
+    function selectRow(index) {
+      const all = rows();
+      if (all.length === 0) return;
+      all.forEach((item, i) => item.classList.toggle("selected", i === index));
+      all[index].scrollIntoView({ block: "nearest" });
+    }
+
+    // Moves the selection one row down (+1) or up (-1), wrapping at the
+    // ends. With nothing selected, down starts at the first row and up at
+    // the last.
+    function moveSelection(step) {
+      const count = rows().length;
+      if (count === 0) return;
+      const current = selectedIndex();
+      let next = current + step;
+      if (current === -1) next = step > 0 ? 0 : count - 1;
+      selectRow((next + count) % count);
+    }
+
+    function openSelected() {
+      const selected = rows()[selectedIndex()];
+      if (selected) window.location.href = selected.href;
+    }
+
+    // ── Opening and closing ──
+
+    function open() {
+      modal.hidden = false;
       input.value = "";
-      showIdle();
       input.focus();
-    };
-    const close = () => { overlay.hidden = true; trigger.focus(); };
+      render();
+    }
+
+    function close() {
+      modal.hidden = true;
+      trigger.focus();
+    }
+
+    function isTypingElsewhere(event) {
+      const target = event.target;
+      return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+    }
+
+    // ── Events ──
 
     trigger.addEventListener("click", open);
-    input.addEventListener("input", run);
-    input.addEventListener("keydown", (ev) => {
-      const current = results.querySelector(".search-hit.selected");
-      if (ev.key === "Escape") close();
-      else if (ev.key === "ArrowDown") { ev.preventDefault(); select(current ? selected + 1 : 0); }
-      else if (ev.key === "ArrowUp") { ev.preventDefault(); select(current ? selected - 1 : -1); }
-      else if (ev.key === "Enter" && current) window.location.href = current.href;
-    });
-    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+    input.addEventListener("input", render);
 
-    document.addEventListener("keydown", (ev) => {
-      const target = ev.target;
-      const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
-      const slash = ev.key === "/" && overlay.hidden && !typing;
-      if (slash || ((ev.metaKey || ev.ctrlKey) && ev.key === "k")) { ev.preventDefault(); open(); }
+    input.addEventListener("keydown", (event) => {
+      switch (event.key) {
+        case "Escape":
+          close();
+          break;
+        case "ArrowDown":
+          event.preventDefault();
+          moveSelection(+1);
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          moveSelection(-1);
+          break;
+        case "Enter":
+          openSelected();
+          break;
+      }
+    });
+
+    modal.addEventListener("click", (event) => {
+      const chip = event.target.closest(".search-chip");
+      if (chip) {
+        input.value = chip.textContent;
+        input.focus();
+        render();
+        return;
+      }
+      // A click on the dimmed backdrop, outside the panel.
+      if (event.target === modal) close();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      const slash = event.key === "/" && modal.hidden && !isTypingElsewhere(event);
+      const commandK = (event.metaKey || event.ctrlKey) && event.key === "k";
+      if (slash || commandK) {
+        event.preventDefault();
+        open();
+      }
     });
   }
 
   // ── Full results page (search.html) ─────────────────────────────────
-  const pageInput = document.getElementById("sp-input");
-  if (pageInput) searchPage(pageInput, document.getElementById("sp-results"));
+  // The modal links here with ?q=<query>. The query lives in the URL, so a
+  // results page is something to link to rather than a state to recreate.
 
-  function searchPage(input, results) {
-    const loadIndex = indexLoader("");
-    const row = (e) => hit(e, "", "search-page-hit", [
-      el("span", "search-sig", signature(e)),
-      ...(e.summary ? [el("span", "search-summary", e.summary)] : []),
-    ]);
+  const PAGE_RESULT_LIMIT = 200;
 
-    const run = async () => {
-      const q = input.value.trim();
-      // The term lives in the URL, so a results page is a link, not a state.
+  function startSearchPage(input, results) {
+    const loadIndex = createIndexLoader("");
+
+    function row(entry) {
+      return resultRow(entry, { baseUrl: "", className: "search-page-hit", withSummary: true });
+    }
+
+    function writeQueryToUrl(query) {
       const url = new URL(window.location.href);
-      if (q) url.searchParams.set("q", q); else url.searchParams.delete("q");
+      if (query) url.searchParams.set("q", query);
+      else url.searchParams.delete("q");
       window.history.replaceState({}, "", url);
-      if (!q) return results.replaceChildren();
-      const found = search(await loadIndex(), q, 200);
-      if (input.value.trim() !== q) return;
-      results.replaceChildren(...(found.length ? found.map(row) : [el("p", "search-empty", "No matches.")]));
-    };
+    }
 
-    input.addEventListener("input", run);
+    async function render() {
+      const entries = await loadIndex();
+      const query = input.value.trim();
+      writeQueryToUrl(query);
+
+      if (!query) {
+        results.innerHTML = "";
+        return;
+      }
+      const found = search(entries, query, PAGE_RESULT_LIMIT);
+      results.innerHTML = found.length === 0
+        ? `<p class="search-empty">No matches.</p>`
+        : found.map(row).join("");
+    }
+
+    input.addEventListener("input", render);
     input.value = new URLSearchParams(window.location.search).get("q") || "";
-    run();
+    render();
   }
+
+  // ── Start ───────────────────────────────────────────────────────────
+
+  const versionBadge = document.getElementById("version-badge");
+  if (versionBadge) startVersionSwitcher(versionBadge).catch(() => {});
+
+  const searchTrigger = document.getElementById("search");
+  if (searchTrigger) startSearchModal(searchTrigger);
+
+  const searchPageInput = document.getElementById("sp-input");
+  if (searchPageInput) startSearchPage(searchPageInput, document.getElementById("sp-results"));
 })();
