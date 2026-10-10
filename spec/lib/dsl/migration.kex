@@ -1,0 +1,37 @@
+module Dsl.Migration
+
+record Col do
+  label : String
+  nullable? : Bool = false
+  fallback : Any = :none
+end
+
+record TableBuilder do
+  table : String = ""
+end
+
+type Op = CreateTable(String, [Col]) | AddIndex(String, [String], Bool)
+
+record Migration do
+  name : String
+  parent : String = ""
+  ops : [Op] = []
+end
+
+make TableBuilder do
+  let string(label: Atom, default: Any = :none, nullable: Bool = false, primaryKey: Bool = false) -> Col do
+    Col { label: "${label}", nullable?: nullable || primaryKey, fallback: default }
+  end
+end
+
+let createTable(name: Atom, columns: TableBuilder -> [Col]) -> Op do
+  CreateTable("${name}", columns(TableBuilder {}))
+end
+
+let addIndex(name: Atom, columns: [Atom], unique: Bool = false) -> Op do
+  AddIndex("${name}", columns.map { |column| "${column}" }, unique)
+end
+
+let define(name: Atom, follows: Atom, ops: Block<[Op]>) -> Migration do
+  Migration { name: "${name}", parent: "${follows}", ops: ops() }
+end

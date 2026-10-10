@@ -658,6 +658,8 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
                 throw RuntimeError("cannot reference private name `" + requested
                                    + "` from " + moduleName, block.location);
         for (const auto& [name, value] : imported->second.exports) {
+            // `as:` alone imports nothing.
+            if (block.alias && block.onlyNames.empty()) break;
             if (!block.onlyNames.empty()
                 && std::find(block.onlyNames.begin(), block.onlyNames.end(), name)
                     == block.onlyNames.end()) continue;
@@ -1294,10 +1296,21 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 size_t requiredParams = 0;
                 for (const auto& param : clause.params)
                     if (!param.defaultValue) requiredParams++;
+                // Between those two counts — a call that passes some of the
+                // defaulted parameters and leaves the rest out — the count
+                // cannot say whether args[0] is the receiver. A first argument
+                // the first parameter's declared type rejects can only be one.
+                const bool receiverByType = [&] {
+                    if (args.size() <= requiredParams + 1 ||
+                        args.size() > clause.params.size())
+                        return false;
+                    const auto* declared = dispatchParamType(clause.params[0]);
+                    return declared && !runtimeTypeMatches(args[0], *declared);
+                }();
                 size_t argOffset = 0;
                 if (!firstParamIsThisPattern && isMethod && !args.empty() &&
                     (args.size() == requiredParams + 1 ||
-                     args.size() > clause.params.size()))
+                     args.size() > clause.params.size() || receiverByType))
                     argOffset = 1;
                 // See preferTypeMatched above: a fully type-matched clause
                 // somewhere in this name's definition set answers the call.
@@ -1405,7 +1418,8 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     // the extra arg is the receiver.
                     m_env->define("this", args[0]);
                     m_env->define("new", args[0], /*isMutable=*/true);
-                } else if (isMethod && args.size() > clause.params.size()) {
+                } else if (isMethod && (args.size() > clause.params.size() ||
+                                        receiverByType)) {
                     // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
                     m_env->define("new", args[0], /*isMutable=*/true);
@@ -3415,6 +3429,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         throw RuntimeError("cannot reference private name `" + requested
                                            + "` from " + moduleName, expr.location);
                 for (const auto& [name, value] : it->second.exports) {
+                    if (node.alias && node.onlyNames.empty()) break;
                     if (!node.onlyNames.empty() &&
                         std::find(node.onlyNames.begin(), node.onlyNames.end(), name) == node.onlyNames.end()) continue;
                     if (std::find(node.exceptNames.begin(), node.exceptNames.end(), name) != node.exceptNames.end()) continue;

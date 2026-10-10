@@ -1077,6 +1077,22 @@ auto TypeChecker::resolveModulePath(const std::string& name,
         return exportsMember(backend) ? backend : module;
     };
     if (exportsMember(canonicalModule(name))) return canonicalModule(name);
+    // `using M, as: A` binds `A` (and `A.Child`) to `M`. Innermost scope
+    // first, so a block-level alias shadows a file-level one.
+    auto aliased = [&](const ImportSelection& import) -> std::optional<std::string> {
+        if (!import.alias) return std::nullopt;
+        const auto& alias = *import.alias;
+        if (name != alias && !name.starts_with(alias + ".")) return std::nullopt;
+        const auto target = canonicalModule(import.module + name.substr(alias.size()));
+        return exportsMember(target) ? std::optional<std::string>{target}
+                                     : std::nullopt;
+    };
+    for (auto scope = m_importScopeStack.rbegin();
+         scope != m_importScopeStack.rend(); ++scope)
+        for (const auto& import : *scope)
+            if (auto target = aliased(import)) return *target;
+    for (const auto& import : m_declarationImports)
+        if (auto target = aliased(import)) return *target;
     auto lastSegmentOf = [](const std::string& module) {
         const auto dot = module.rfind('.');
         return dot == std::string::npos ? module : module.substr(dot + 1);

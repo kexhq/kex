@@ -525,6 +525,15 @@ struct Lowering {
     std::unordered_set<std::string> accessorFields;
     // Make-method trailing defaults, indexed by explicit parameter position.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
+    // Every make-block method by name, with the type its block targets and the
+    // module that block is written in. A receiver call that labels arguments
+    // or leaves defaulted ones out places them against the method it binds.
+    struct MakeMethod {
+        std::string owner;
+        std::string modulePath;
+        const ast::FunctionDef* def;
+    };
+    std::unordered_map<std::string, std::vector<MakeMethod>> makeMethods;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
     // same name, each type's version is emitted mangled (`name/Type`) and a
@@ -2376,6 +2385,87 @@ struct Lowering {
         currentModulePath = savedModule;
     }
 
+    // The qualified name a bare call reaches through a `using` import, ""
+    // when the name is a local or was not imported. The parameter tables file
+    // a module's function under this, not under the bare spelling.
+    auto importedKey(const std::string& name) const -> std::string {
+        if (subst.count(name)) return "";
+        auto imported = moduleImports.find(name);
+        if (imported == moduleImports.end()) return "";
+        for (const auto& [qualified, emitted] : moduleFunctions)
+            if (emitted == imported->second) return qualified;
+        return "";
+    }
+
+    // The make-block method a receiver call binds when it does not spell out
+    // every parameter in order: labels may name any subset, and defaulted
+    // parameters may be left out. `owner` is the receiver's type when it is
+    // known. A call already committed to this unit's methods may still take
+    // the first one its arguments fit when that type declares none (`strict`
+    // off); deciding whether the call is local at all may not.
+    auto makeMethodFor(const ast::MethodCall& n, std::string owner,
+                       bool strict) const -> const MakeMethod* {
+        auto found = makeMethods.find(n.method);
+        if (found == makeMethods.end()) return nullptr;
+        if (auto angle = owner.find('<'); angle != std::string::npos)
+            owner.resize(angle);
+        if (auto dot = owner.rfind('.'); dot != std::string::npos)
+            owner.erase(0, dot + 1);
+        std::vector<std::string> labels;
+        for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
+        const auto positional = n.args.size() + (n.block ? 1 : 0);
+        for (const auto& method : found->second) {
+            if (!owner.empty() && method.owner != owner) continue;
+            const auto& clause = method.def->clauses[0];
+            if (labels.empty() && positional >= clause.params.size()) continue;
+            if (namedArgumentsFit(clause, labels, positional)) return &method;
+        }
+        return strict || owner.empty() ? nullptr : makeMethodFor(n, "", false);
+    }
+
+    // The receiver type the checker settled on for this call, "" when it did
+    // not: the resolved target's own first, then the receiver's static type.
+    auto receiverOwner(const ast::MethodCall& n) const -> std::string {
+        if (resolvedCalls)
+            if (auto resolved = resolvedCalls->find(&n);
+                resolved != resolvedCalls->end() &&
+                !resolved->second.localDispatchTypes.empty())
+                return resolved->second.localDispatchTypes.front();
+        if (expressionTypes && n.receiver)
+            if (auto found = expressionTypes->find(n.receiver.get());
+                found != expressionTypes->end() && found->second)
+                return semantic::typeToString(found->second);
+        return "";
+    }
+
+    // A receiver call's explicit arguments in `method`'s parameter order:
+    // labels by name, positional arguments (then the block) in the slots left,
+    // and every slot still empty from its declared default.
+    auto placeMethodArguments(const ast::MethodCall& n, const MakeMethod& method,
+                              std::vector<Binding>& binds) -> std::vector<ExprPtr> {
+        const auto& clause = method.def->clauses[0];
+        std::vector<ExprPtr> slots(clause.params.size());
+        for (const auto& [label, value] : n.namedArgs)
+            for (size_t i = 0; i < slots.size(); i++)
+                if (clause.params[i].name && *clause.params[i].name == label) {
+                    slots[i] = atomize(value, binds);
+                    break;
+                }
+        std::vector<ExprPtr> positional;
+        for (const auto& arg : n.args) positional.push_back(atomize(arg, binds));
+        if (n.block) positional.push_back(atomize(*n.block, binds));
+        size_t next = 0;
+        for (auto& value : positional) {
+            while (next < slots.size() && slots[next]) next++;
+            if (next >= slots.size()) break;
+            slots[next++] = std::move(value);
+        }
+        fillDefaultSlots(method.modulePath.empty()
+                             ? n.method : method.modulePath + "." + n.method,
+                         slots, binds, &clause);
+        return slots;
+    }
+
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
         // A `using` import from a separately compiled module. A local binding
         // or an import from this unit still wins; anything else follows the
@@ -2433,6 +2523,15 @@ struct Lowering {
             }
             auto it = fnParamNames.find(n.name);
             std::string emittedName = n.name;
+            // The import this scope names, ahead of the scan below, which
+            // takes whichever module happens to declare the name first.
+            if (it == fnParamNames.end())
+                if (const auto key = importedKey(n.name); !key.empty())
+                    if (auto pit = fnParamNames.find(key);
+                        pit != fnParamNames.end()) {
+                        it = pit;
+                        emittedName = moduleFunctions.at(key);
+                    }
             if (it == fnParamNames.end()) {
                 for (const auto& [key, val] : moduleFunctions) {
                     auto dot = key.rfind('.');
@@ -2555,6 +2654,15 @@ struct Lowering {
             for (size_t i = n.args.size(); i < defaults->second.size(); ++i)
                 if (defaults->second[i])
                     args.push_back(atomize(*defaults->second[i], binds));
+        // A `using` import files its defaults under the qualified name, and
+        // they are written against the owning module's scope.
+        if (const auto key = importedKey(n.name); !n.block && !key.empty())
+            if (auto defaults = fnDefaults.find(key);
+                defaults != fnDefaults.end() &&
+                args.size() < defaults->second.size()) {
+                args.resize(defaults->second.size());
+                fillDefaultSlots(key, args, binds);
+            }
         if (auto requirements = fnTraitParams.find(n.name);
             requirements != fnTraitParams.end())
             for (const auto& [index, trait] : requirements->second) {
@@ -3336,7 +3444,16 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
                     args.push_back(atomize(n.receiver, binds));
-                if (!n.namedArgs.empty()) {
+                // A make method of this unit: its declaration says where each
+                // label goes and what an omitted parameter defaults to.
+                const MakeMethod* declared =
+                    resolved->second.backendModule.empty() &&
+                    resolved->second.passesReceiver
+                        ? makeMethodFor(n, receiverOwner(n), true) : nullptr;
+                if (declared) {
+                    for (auto& slot : placeMethodArguments(n, *declared, binds))
+                        args.push_back(std::move(slot));
+                } else if (!n.namedArgs.empty()) {
                     const auto& pnames = resolved->second.paramNames;
                     auto expected = static_cast<size_t>(
                         resolved->second.backendArity -
@@ -4165,6 +4282,8 @@ struct Lowering {
         // imported functions also appear in localMethods at this point.
         auto importedMethod = moduleImports.find(m);
         bool importedArityMatches = importedMethod != moduleImports.end();
+        const ast::FunctionClause* importedClause = nullptr;
+        std::string importedKey;
         if (importedArityMatches) {
             const auto actual = n.args.size() + n.namedArgs.size() + 1 +
                 (n.block ? 1 : 0);
@@ -4173,6 +4292,39 @@ struct Lowering {
                 if (auto names = fnParamNames.find(qualified);
                     names != fnParamNames.end())
                     importedArityMatches = names->second.size() == actual;
+                // Written shorter than the function it names: labels placed by
+                // name and defaulted parameters left out still fit a clause.
+                // Only when nothing answers at the arity as written — a local
+                // method or a provider's receiver function of that shape is
+                // the better reading (`ticket.to(String)` beside an imported
+                // `to(value, String, in: unit = ...)`).
+                const bool writtenArityAnswers =
+                    localMethodArities.count(m + "/" + std::to_string(actual)) ||
+                    (externalModules &&
+                     externalModules->receiverFunctions.count(m) &&
+                     std::any_of(
+                         externalModules->receiverFunctions.at(m).begin(),
+                         externalModules->receiverFunctions.at(m).end(),
+                         [&](const auto& candidate) {
+                             return candidate.beamArity ==
+                                    static_cast<int>(actual);
+                         }));
+                if (auto clauses = fnNamedClauses.find(qualified);
+                    !importedArityMatches && !writtenArityAnswers &&
+                    clauses != fnNamedClauses.end()) {
+                    std::vector<std::string> labels;
+                    for (const auto& [label, _] : n.namedArgs)
+                        labels.push_back(label);
+                    for (const auto* clause : clauses->second)
+                        if (namedArgumentsFit(
+                                *clause, labels,
+                                n.args.size() + 1 + (n.block ? 1 : 0))) {
+                            importedClause = clause;
+                            importedKey = qualified;
+                            importedArityMatches = true;
+                            break;
+                        }
+                }
                 break;
             }
         }
@@ -4188,7 +4340,30 @@ struct Lowering {
                 }
 
                 std::vector<ExprPtr> args;
-                if (!n.namedArgs.empty() && pnames) {
+                if (importedClause) {
+                    std::vector<ExprPtr> slots(importedClause->params.size());
+                    slots[0] = rv();
+                    for (const auto& [name, value] : n.namedArgs)
+                        for (size_t i = 1; i < slots.size(); i++)
+                            if (importedClause->params[i].name &&
+                                *importedClause->params[i].name == name) {
+                                slots[i] = atomize_ir(lower(value), rb);
+                                break;
+                            }
+                    size_t next = 1;
+                    for (const auto& value : n.args) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next++] = atomize_ir(lower(value), rb);
+                    }
+                    if (n.block) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next < slots.size())
+                            slots[next] = atomize_ir(lower(*n.block), rb);
+                    }
+                    fillDefaultSlots(importedKey, slots, rb, importedClause);
+                    args = std::move(slots);
+                } else if (!n.namedArgs.empty() && pnames) {
                     std::vector<ExprPtr> slots(pnames->size());
                     if (!slots.empty()) slots[0] = rv();
                     for (const auto& [name, value] : n.namedArgs) {
@@ -4254,9 +4429,15 @@ struct Lowering {
         // arity; otherwise the external/prelude receiver function handles it.
         // `this.map.get(k, default)` inside a `make Box do get(key) ... end`
         // block used to compile to a local get/3 that was never defined.
-        const int ufcsArity =
-            static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
-            (n.block ? 1 : 0);
+        // A call that labels arguments or leaves defaulted ones out is written
+        // shorter than the method it binds, whose arity is the one that counts.
+        const auto owner = receiverOwner(n);
+        const MakeMethod* declared =
+            owner.empty() ? nullptr : makeMethodFor(n, owner, true);
+        const int ufcsArity = declared
+            ? static_cast<int>(declared->def->clauses[0].params.size()) + 1
+            : static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+                  (n.block ? 1 : 0);
         const bool localArityExists =
             localMethodArities.empty() ||
             localMethodArities.count(m + "/" + std::to_string(ufcsArity)) > 0;
@@ -4394,16 +4575,23 @@ struct Lowering {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            // Make-block methods lower receiver-first. Named arguments follow
-            // positional ones in the common `method(Type, name: value)` form.
-            for (const auto& [_, value] : n.namedArgs)
-                args.push_back(atomize(value, binds));
-            if (n.block) {
-                args.push_back(atomize(*n.block, binds));
-            } else if (auto it = methodDefaults.find(n.method); it != methodDefaults.end()) {
-                for (size_t i = n.args.size(); i < it->second.size(); i++)
-                    if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
+            if (const auto* placed =
+                    declared ? declared : makeMethodFor(n, owner, false)) {
+                for (auto& slot : placeMethodArguments(n, *placed, binds))
+                    args.push_back(std::move(slot));
+            } else {
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                // Make-block methods lower receiver-first. Named arguments
+                // follow positional ones in the common `method(Type, name:
+                // value)` form.
+                for (const auto& [_, value] : n.namedArgs)
+                    args.push_back(atomize(value, binds));
+                if (n.block) {
+                    args.push_back(atomize(*n.block, binds));
+                } else if (auto it = methodDefaults.find(n.method); it != methodDefaults.end()) {
+                    for (size_t i = n.args.size(); i < it->second.size(); i++)
+                        if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
+                }
             }
             int arity = static_cast<int>(args.size());
             // The same competing-providers case as the package-provider path
@@ -6216,7 +6404,8 @@ struct Lowering {
                 if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
                     moduleImports[name] = it->second;
             }
-        } else {
+        } else if (!n.alias) {
+            // `as:` alone imports nothing; the alias above is all it binds.
             for (const auto& [key, val] : moduleFunctions)
                 if (key.rfind(srcMod + ".", 0) == 0) {
                     auto bare = key.substr(srcMod.size() + 1);
@@ -6226,7 +6415,8 @@ struct Lowering {
                         moduleImports[bare] = val;
                 }
         }
-        importExternalModule(srcMod, n.onlyNames, n.exceptNames);
+        if (!n.alias || !n.onlyNames.empty())
+            importExternalModule(srcMod, n.onlyNames, n.exceptNames);
         return saved;
     }
     auto restoreUsingBindings(UsingBindingsSaved saved) -> void {
@@ -9096,6 +9286,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             def.clauses.push_back(std::move(clause));
             return def;
         };
+    // The module the make block being collected is written in.
+    std::string makeModulePath;
     auto preMake = [&](const ast::MakeDef& md) {
         for (const auto& typeName : Lowering::makeTargetNameList(md.target)) {
         std::unordered_map<std::string,
@@ -9161,6 +9353,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     defaults.push_back(p.defaultValue ? &*p.defaultValue : nullptr);
                 if (std::any_of(defaults.begin(), defaults.end(), [](auto* d) { return d != nullptr; }))
                     L.methodDefaults[fd->name] = std::move(defaults);
+                L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
             }
         };
         for (const auto& bi : md.body) {
@@ -9298,7 +9491,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 if (*rd) preRecord(**rd, path);
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*md) {
+                    makeModulePath = path;
                     preMake(**md);
+                    makeModulePath.clear();
                     L.noteModuleScopedMake(**md, path, declaredTypes);
                     for (const auto& typeName :
                          Lowering::makeTargetNameList((*md)->target))
@@ -9314,7 +9509,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     else if (auto* crd = std::get_if<std::unique_ptr<ast::RecordDef>>(&ci)) {
                         if (*crd) preRecord(**crd, path);
                     } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
-                        if (*cmd) preMake(**cmd);
+                        if (*cmd) {
+                            makeModulePath = path;
+                            preMake(**cmd);
+                            makeModulePath.clear();
+                        }
                     } else if (auto* ctd = std::get_if<std::unique_ptr<ast::TypeDef>>(&ci)) {
                         if (*ctd) preType(**ctd);
                     }
@@ -9747,7 +9946,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 };
                                 if (!(*ub)->onlyNames.empty()) {
                                     for (const auto& name : (*ub)->onlyNames) importName(name);
-                                } else if ((*ub)->body.empty()) {
+                                } else if ((*ub)->body.empty() && !(*ub)->alias) {
                                     for (const auto& [key, val] : L.moduleFunctions)
                                         if (key.rfind(srcMod + ".", 0) == 0) {
                                             auto bare = key.substr(srcMod.size() + 1);
@@ -9837,7 +10036,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
                             L.moduleImports[name] = it->second;
                     }
-                } else {
+                } else if (!node->alias) {
                     for (const auto& [key, val] : L.moduleFunctions)
                         if (key.rfind(srcMod + ".", 0) == 0) {
                             auto bare = key.substr(srcMod.size() + 1);
@@ -9848,7 +10047,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 L.moduleImports[bare] = val;
                         }
                 }
-                L.importExternalModule(srcMod, node->onlyNames, node->exceptNames);
+                if (!node->alias || !node->onlyNames.empty())
+                    L.importExternalModule(srcMod, node->onlyNames, node->exceptNames);
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
                                  + typeid(T).name());

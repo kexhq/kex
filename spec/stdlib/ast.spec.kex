@@ -355,7 +355,7 @@ describe("Kex.AST") do
         private do
           let hidden() = 1
         end
-        using Math, as: M, only: [square]
+        using Math, as: Maths, only: [square]
         export Prelude, except: [subtract]
         compiled do
           let GENERATED = 42
@@ -372,7 +372,7 @@ describe("Kex.AST") do
             _ => assert(false, "private declaration was dropped")
           end
           assert(usingInfo.moduleName == "Math")
-          assert(usingInfo.alias == Just("M"))
+          assert(usingInfo.alias == Just("Maths"))
           assert(usingInfo.onlyNames == ["square"])
           assert(exportInfo.moduleName == "Prelude")
           assert(exportInfo.exceptNames == ["subtract"])

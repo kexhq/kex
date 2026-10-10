@@ -1361,8 +1361,8 @@ you want an explicit module alias:
 ```kex
 using Math, only: [sqrt]          # selective import
 using Math, except: [tan]         # exclusion import
-using Math, as: M                 # alias
-using Math, as: M, only: [sqrt]   # alias + selective
+using Math, as: Maths             # alias
+using Math, as: Maths, only: [sqrt] # alias + selective
 ```
 
 Scoped `using` block:

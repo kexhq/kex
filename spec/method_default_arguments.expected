@@ -1,0 +1,5 @@
+Col { fallback: :null, kind: TEXT, label: :a, nullable?: true }
+Col { fallback: :none, kind: TEXT, label: :b, nullable?: true }
+Col { fallback: :none, kind: TEXT, label: :c, nullable?: false }
+Col { fallback: :none, kind: TEXT, label: :d, nullable?: false }
+Col { fallback: :zero, kind: TEXT, label: :e, nullable?: false }

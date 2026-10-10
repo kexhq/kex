@@ -42,10 +42,10 @@ end
 
 # Using with alias
 module Aliased do
-  using Shapes, as: S
+  using Shapes, as: Sh
 
   let run do
-    let c = S.Circle { radius: 2.0 }
+    let c = Sh.Circle { radius: 2.0 }
     IO.printLine(c.radius.to(String).or(""))
   end
 end

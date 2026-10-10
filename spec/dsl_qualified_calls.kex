@@ -1,0 +1,42 @@
+# A migration DSL spread over two modules that both export `define`:
+#   - `using M, as: A` imports nothing, so the two `define`s do not collide
+#   - a qualified call takes paren-less arguments before its block
+#   - a call through an alias is checked like any other, so its block collects
+#   - a labelled argument may skip defaulted parameters, which keep their
+#     declared defaults; so may a call that simply leaves them out
+#   - a bare call to an imported function fills its omitted default, and
+#     takes labels its own module declares
+
+using Dsl.Migration, as: Migration
+using Dsl.Table, as: Table
+using Dsl.Migration, only: [createTable, addIndex, define]
+
+main do
+  let change = Migration.define :add_owners, follows: :create_sessions do
+    createTable(:owners) do |t|
+      [t.string(:name, default: :null, nullable: true), t.string(:id, primaryKey: true)]
+    end
+    addIndex(:owners, [:name])
+    addIndex(:owners, [:id], unique: true)
+  end
+  IO.printLine(change.name)
+  IO.printLine(change.parent)
+  change.ops.each { |op| IO.printLine(op) }
+
+  let builder = Dsl.Migration.TableBuilder {}
+  IO.printLine(builder.string(:email))
+  IO.printLine(builder.string(:email, nullable: true))
+
+  let table = Table.define :users do
+    "id"
+    "email"
+  end
+  IO.printLine(table)
+
+  # The same call bare, and the import called through a receiver.
+  let bare = define :index_owners, follows: :add_owners do
+    addIndex(:owners, [:name])
+  end
+  IO.printLine(bare.ops)
+  IO.printLine(:owners.addIndex([:id]))
+end

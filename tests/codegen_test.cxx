@@ -1169,8 +1169,8 @@ int main() {
                 "  let double(n) = n * 2\n"
                 "end\n"
                 "module App do\n"
-                "  using Utils, as: U\n"
-                "  let compute(x) = U.double(x) + 1\n"
+                "  using Utils, as: Tools\n"
+                "  let compute(x) = Tools.double(x) + 1\n"
                 "end\n"
                 "main do App.compute(10) end\n",
                 "using_alias_cross_module");
@@ -1183,8 +1183,8 @@ int main() {
                 "  let double(n) = n * 2\n"
                 "end\n"
                 "let compute(x) do\n"
-                "  using Utils, as: U do\n"
-                "    U.double(x)\n"
+                "  using Utils, as: Tools do\n"
+                "    Tools.double(x)\n"
                 "  end\n"
                 "end\n"
                 "main do compute(21) end\n",

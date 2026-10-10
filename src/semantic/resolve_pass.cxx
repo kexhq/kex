@@ -88,6 +88,25 @@ auto ResolvePass::declaredLabels(const std::string& name) const
                 merge(exported->second);
         }
     }
+    // A name a `using` brought in from a source module declares its labels in
+    // that module's file, which neither table above covers. Without this an
+    // unrelated prelude export of the same name decided what the call may say.
+    if (m_db)
+        for (const auto& scope : m_importScopes) {
+            auto origin = scope.find(name);
+            if (origin == scope.end()) continue;
+            const auto* symbol = m_db->symbolInModule(origin->second.module, name);
+            if (!symbol) continue;
+            known = true;
+            for (const auto& [label, _] : symbol->params) labels.insert(label);
+            if (const auto* state =
+                    m_db->fileState(std::string(symbol->definition.file))) {
+                LabelMap declared;
+                collectLabelsIn(state->ast.items, declared);
+                if (auto found = declared.find(name); found != declared.end())
+                    labels.insert(found->second.begin(), found->second.end());
+            }
+        }
     if (!known) return std::nullopt;
     return labels;
 }
@@ -274,6 +293,10 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         return;
     }
 
+    // `as:` binds the module to a name and imports nothing (docs/modules.md);
+    // an `only:` list beside it still asks for those names by hand.
+    const bool importsNames = !alias || !onlyNames.empty();
+
     std::string requested;
     for (size_t i = 0; i < module.parts.size(); ++i) {
         if (i) requested += ".";
@@ -309,6 +332,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
 
             const bool explicitImport = !onlyNames.empty();
             for (const auto& [name, overloads] : exports) {
+                if (!importsNames) break;
                 if (!onlyNames.empty()
                     && std::find(onlyNames.begin(), onlyNames.end(), name)
                         == onlyNames.end())
@@ -390,6 +414,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
 
     const bool explicitImport = !onlyNames.empty();
     for (auto* symbol : m_db->exportsFor(resolved)) {
+        if (!importsNames) break;
         if (!onlyNames.empty()
             && std::find(onlyNames.begin(), onlyNames.end(), symbol->name) == onlyNames.end()) continue;
         if (std::find(exceptNames.begin(), exceptNames.end(), symbol->name) != exceptNames.end()) continue;

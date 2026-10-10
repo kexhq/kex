@@ -1799,5 +1799,64 @@ int main() {
         });
     });
 
+    describe("Parser — Qualified paren-less calls", []() {
+        auto firstCall = [](const ast::Program& program) -> const ast::MethodCall* {
+            if (program.items.empty()) return nullptr;
+            auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(
+                &program.items[0]);
+            if (!main || (*main)->body.empty()) return nullptr;
+            return std::get_if<ast::MethodCall>(&(*main)->body[0]->kind);
+        };
+
+        it("takes bare arguments before a do block", [firstCall]() {
+            const std::string source =
+                "Migration.define :add_owner, follows: :create_sessions do\n  1\nend\n";
+            assertFalse(parseFails(source));
+            auto program = parse(source);
+            const auto* call = firstCall(program);
+            assertTrue(call != nullptr);
+            if (!call) return;
+            assertEqual(call->method, std::string("define"));
+            assertEqual(call->args.size(), size_t(1));
+            assertEqual(call->namedArgs.size(), size_t(1));
+            assertEqual(call->namedArgs[0].first, std::string("follows"));
+            assertTrue(call->block.has_value());
+        });
+
+        it("takes them on a dotted module path and on a value", []() {
+            assertFalse(parseFails("Lib.Mig.define :a, :b do\n  1\nend\n"));
+            assertFalse(parseFails("main do\n  builder.table :users do\n    1\n  end\nend\n"));
+        });
+
+        it("leaves a call without a do block on the line alone", [firstCall]() {
+            auto program = parse("Migration.count\n:done\n");
+            const auto* call = firstCall(program);
+            assertTrue(call != nullptr);
+            if (call) assertEqual(call->args.size(), size_t(0));
+        });
+
+        it("still ends a condition at its own do", []() {
+            assertFalse(parseFails(
+                "main do\n  while queue.size - 1 do\n    1\n  end\nend\n"));
+        });
+    });
+
+    describe("Parser — using aliases", []() {
+        it("rejects a type-parameter name as an alias", []() {
+            Lexer lexer("using Lib.Columns, as: T\n");
+            Parser parser(lexer.tokenizeAll());
+            parser.parseProgram();
+            assertEqual(parser.diagnostics().size(), size_t(1));
+            if (!parser.diagnostics().empty())
+                assertEqual(parser.diagnostics()[0].message,
+                            std::string("`T` is a type parameter, so it cannot "
+                                        "name a module, give it a longer name"));
+        });
+
+        it("accepts a longer alias", []() {
+            assertFalse(parseFails("using Lib.Columns, as: Columns\n"));
+        });
+    });
+
     return runAll();
 }
