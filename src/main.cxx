@@ -892,6 +892,33 @@ auto distributionArgsForShell() -> std::string {
   return out;
 }
 
+// What erl would reject as a node name, said before the VM is launched: left
+// to erl, a bad name kills the kernel during boot and the user gets a crash
+// dump instead of a reason. Empty when +name+ is acceptable.
+auto nodeNameProblem(const std::string &name, bool shortName) -> std::string {
+  const auto at = name.find('@');
+  const std::string local = name.substr(0, at);
+  const std::string host = at == std::string::npos ? "" : name.substr(at + 1);
+  const bool localOk =
+      !local.empty() && std::all_of(local.begin(), local.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+               c == '-';
+      });
+  if (!localOk) {
+    std::string why = "the part before '@' may only contain letters, digits, "
+                      "'_' and '-'";
+    if (shortName && at == std::string::npos &&
+        name.find('.') != std::string::npos)
+      why += " (for a short name, drop the domain: '" +
+             name.substr(0, name.find('.')) + "')";
+    return why;
+  }
+  if (shortName && host.find('.') != std::string::npos)
+    return "a short name's host cannot contain '.'; use --name for a "
+           "fully qualified host";
+  return "";
+}
+
 auto isIdentChar(char c) -> bool {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
 }
@@ -2904,6 +2931,12 @@ int main(int argc, char *argv[]) {
                        }) != cliDistributionArgs.end();
       if (alreadyNamed) {
         std::cerr << "error: give a node one name: --sname or --name, once\n";
+        return 1;
+      }
+      if (const auto problem = nodeNameProblem(optarg, opt == 1017);
+          !problem.empty()) {
+        std::cerr << "error: invalid node name '" << optarg << "': " << problem
+                  << "\n";
         return 1;
       }
       cliDistributionArgs.push_back(opt == 1017 ? "-sname" : "-name");
