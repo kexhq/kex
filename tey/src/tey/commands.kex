@@ -931,6 +931,17 @@ end
 # The locked dependencies, then the programs Tey has installed. Outside a
 # project there are no dependencies to show, so it is the programs alone
 # rather than an error about a missing package.kex.
+# `tey generate <namespace>:<generator> [--option value ...] [--force]`
+#
+# Runs a generator a direct dependency declares in its `plugin` block. The
+# plugin is a child process: it is handed the invocation as one line of JSON
+# on stdin and answers with the files it wants written, which Tey — not the
+# plugin — then writes, inside the workspace and asking before it replaces
+# anything (`--force` answers yes).
+foul generate(arguments: [String]) -> Integer do
+  return Tey.Commands.report(Tey.Commands.generated(arguments))
+end
+
 foul list -> Integer do
   let programs = Tey.Programs.all
   if Tey.Workspace.discover(FS.Directory.current).error?
@@ -1791,6 +1802,109 @@ private do
 
   foul readLock -> LockState or! String do
     return Tey.Commands.readLockAt(Tey.Workspace.discover(FS.Directory.current).try)
+  end
+
+  foul generated(arguments: [String]) -> Integer or! String do
+    let usage = "usage: tey generate <namespace>:<generator> [--option value ...] [--force]"
+    let parts = arguments.first.or("").split(":")
+    return Error(usage) if parts.count != 2
+    let namespace = parts.first.or("")
+    let name = parts.last.or("")
+    return Error(usage) if namespace == "" || name == ""
+    let (supplied, force?) = Tey.Commands.generatorOptions(arguments.drop(1), {}, false).try
+
+    let context = Tey.Workspace.discover(FS.Directory.current).try
+    let state = Tey.Commands.readLockAt(context).try
+    let bindings = Tey.Commands.directPluginBindings(context, state).try
+    let current: String? = match context.currentMember do
+      None => None
+      Just(member) => do
+        let manifest: ManifestPackage = member.memberManifest
+        Just(manifest.name)
+      end
+    end
+    let binding = Tey.Plugin.visibleBinding(bindings, namespace, current).try
+    if !Tey.Plugin.bindingApproved?(binding, state.pluginApprovals)
+      return Error("plugin `${namespace}` is not approved; run `tey install` and approve it")
+    end
+    let operation = Tey.Plugin.generator(binding, name).try
+    let options = Tey.PluginHost.typedOptions(operation, supplied).try
+    let pluginRoot = Tey.Commands.pluginRoot(context, state, namespace).try
+    let toolchain = Tey.Toolchain.activeInfo.try
+
+    let invocation = Tey.PluginHost.encodeInvocation(Invocation {
+      invocationKind: "generator", invocationNamespace: namespace,
+      invocationOperation: name, workspaceRoot: context.workspaceRoot,
+      currentMember: current, lock: state, toolchain: toolchain,
+      arguments: [], options: options
+    })
+    let input = FS.Path.join(ENV.get("TMPDIR").or("/tmp"),
+                             "tey-invocation-${DateTime.now().iso.replace(":", "-")}.json")
+    return Error("could not write the plugin invocation to `${input}`") if !FS.File.write(input, invocation)
+    # The plugin runs in its own package directory, with the module roots of
+    # the workspace that depends on it — which include the plugin's own.
+    let outcome = Process.run("sh", ["-c",
+      "cd \"$1\" || exit 1; input=$2; shift 2; exec \"$@\" < \"$input\"",
+      "tey", pluginRoot, input, Tey.Toolchain.kex,
+      ...Tey.Commands.sourceRootsAt(context.workspaceRoot),
+      operation.operationEntrypoint])
+    FS.File.delete(input)
+    let result = outcome.try
+    if result.exitCode != 0
+      let reason = result.stderr.trim == "" then result.stdout.trim else result.stderr.trim
+      return Error("plugin `${namespace}:${name}` failed: ${reason}")
+    end
+    let answer = result.stdout.lines.reject { |line| line.trim == "" }.last.or("")
+    let operations = Tey.Generator.decode(answer).try
+    Tey.Generator.apply(operations, context.workspaceRoot, force?).try
+    return Ok(0)
+  end
+
+  # `--name chat --force` as ({"name": "chat"}, true). Every option takes a
+  # value; `--force` is Tey's own and takes none.
+  let generatorOptions(arguments: [String], collected: {String: String},
+                       force?: Bool) -> ({String: String}, Bool) or! String do
+    return Ok((collected, force?)) if arguments.empty?
+    let word = arguments.first.or("")
+    return Tey.Commands.generatorOptions(arguments.drop(1), collected, true) if word == "--force"
+    return Error("unexpected argument `${word}`; generator options are written `--name value`") if !word.startsWith?("--")
+    let value = match arguments.at(1) do
+      None => return Error("option `${word}` needs a value")
+      Just(given) => given
+    end
+    return Tey.Commands.generatorOptions(arguments.drop(2), collected.put(word.drop(2), value), force?)
+  end
+
+  # The package directory of the direct dependency that declares `namespace`:
+  # a local override when there is one, the cache otherwise.
+  foul pluginRoot(context: Context, state: LockState,
+                  namespace: String) -> String or! String do
+    let overrides = Tey.Local.load(context).try
+    return Tey.Commands.pluginRootAmong(state.lockedDependencies, overrides, context, namespace)
+  end
+
+  foul pluginRootAmong(dependencies: [Tey.Lockfile.Dependency], overrides: [Tey.Local.Override],
+                       context: Context, namespace: String) -> String or! String do
+    return Error("no locked dependency provides plugin `${namespace}`") if dependencies.empty?
+    let dependency = dependencies.first.try
+    let local = overrides.find { |override| override.overrideName == dependency.name }
+    let root = match local do
+      Just(override) => override.overridePath
+      None => if dependency.source == "workspace"
+        FS.Path.join(context.workspaceRoot, dependency.path)
+      else
+        Tey.Cache.packagePath(dependency)
+      end
+    end
+    let provides = match FS.File.read(FS.Path.join(root, "package.kex")) do
+      Error(_) => false
+      Ok(text) => match Tey.Manifest.read(text) do
+        Error(_) => false
+        Ok(manifest) => manifest.plugins.any? { |plugin| plugin.pluginNamespace == namespace }
+      end
+    end
+    return Ok(root) if provides
+    return Tey.Commands.pluginRootAmong(dependencies.drop(1), overrides, context, namespace)
   end
 
   foul readLockAt(context: Context) -> LockState or! String do

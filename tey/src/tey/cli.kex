@@ -1,7 +1,7 @@
 module Tey.Cli
 
 using Tey.Docgen.Cli, only: [dispatch]
-using Tey.Commands, only: [add, build, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
+using Tey.Commands, only: [add, build, generate, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Programs, only: [InstallOptions]
 using Tey.Toolchain, only: [installSource, use]
@@ -112,6 +112,13 @@ foul parser -> OptionConfig do
     .passthroughCommand("docs", "<build|serve> [options]",
                         "generate or serve documentation for a source tree") do |options|
       Tey.Docgen.Cli.dispatch(options.arguments)
+    end
+    # `passthroughCommand` for the same reason as `docs`: what follows the
+    # generator's name is the generator's own options, declared in the
+    # plugin's manifest and not known here.
+    .passthroughCommand("generate", "<namespace>:<generator> [--option value ...] [--force]",
+                        "run a generator provided by a dependency's plugin") do |options|
+      Tey.Commands.generate(options.arguments)
     end
     .command("clean", "[--cache]", "inspect or remove the global cache") do |options|
       Tey.Commands.clean(options.flagEnabled?("cache"))
