@@ -483,6 +483,11 @@ if(KEX_HAS_RUNTIME_BEAMS)
 endif()
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Installing strips the build tree's run path, and with it the only record
+    # of where a shared dependency outside the system directories lives:
+    # Homebrew's Boost.Context on Linux left the installed kex unable to start.
+    # Keep the directories the link actually used.
+    set_target_properties(kex PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
     install(TARGETS kex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(DIRECTORY src/stdlib/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/stdlib

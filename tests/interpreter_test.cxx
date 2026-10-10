@@ -412,8 +412,8 @@ int main() {
                 "  let twice(n) = n * 2\n"
                 "end\n"
                 "main do\n"
-                "  using Util, as: U\n"
-                "  U.twice(21)\n"
+                "  using Util, as: Tools\n"
+                "  Tools.twice(21)\n"
                 "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });

@@ -1,0 +1,29 @@
+# A defaulted parameter a method call leaves out — skipped by a label naming a
+# later one, or simply not written — takes its declared default on both
+# backends.
+
+record Col do
+  label : String
+  kind : String
+  nullable? : Bool = false
+  fallback : String = ""
+end
+
+record TableBuilder do
+  table : String = ""
+end
+
+make TableBuilder do
+  let string(label: Atom, default: Any = :none, nullable: Bool = false, primaryKey: Bool = false) -> Col do
+    Col { label: "${label}", kind: "TEXT", nullable?: nullable, fallback: "${default}" }
+  end
+end
+
+main do
+  let t = TableBuilder {}
+  IO.printLine(t.string(:a, default: :null, nullable: true))
+  IO.printLine(t.string(:b, nullable: true))
+  IO.printLine(t.string(:c, primaryKey: true))
+  IO.printLine(t.string(:d))
+  IO.printLine(t.string(:e, :zero))
+end

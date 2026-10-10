@@ -1,0 +1,12 @@
+[CreateTable(:pets, [Dsl.Migration.Col { fallback: :none, label: :name, nullable?: true }])]
+[CreateTable(:toys, [Dsl.Migration.Col { fallback: :none, label: :id, nullable?: true }])]
+:add_owners
+:create_sessions
+CreateTable(:owners, [Dsl.Migration.Col { fallback: :null, label: :name, nullable?: true }, Dsl.Migration.Col { fallback: :none, label: :id, nullable?: true }])
+AddIndex(:owners, [:name], false)
+AddIndex(:owners, [:id], true)
+Dsl.Migration.Col { fallback: :none, label: :email, nullable?: false }
+Dsl.Migration.Col { fallback: :none, label: :email, nullable?: true }
+:users(id, email)
+[AddIndex(:owners, [:name], false)]
+AddIndex(:owners, [:id], false)

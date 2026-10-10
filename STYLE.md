@@ -361,7 +361,7 @@ used wholesale minus a name or two.
 When the list stops being short, the import is telling you something. Either
 the scope leans on `M` throughout, in which case a bare `using M` at the
 narrowest scope that needs it is honest about it, or the names belong to a module that
-wants splitting. `as:` is the third option: `using Pricing, as: P` keeps the
+wants splitting. `as:` is the third option: `using Pricing, as: Price` keeps the
 call sites qualified while shortening a long path, and imports nothing.
 
 Bare `using M` stays right for a DSL, whose whole point is that its vocabulary

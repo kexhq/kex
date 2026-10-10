@@ -124,6 +124,29 @@ div(id: "main", classes: ["container"]) do
 end
 ```
 
+A label binds to the parameter of that name, wherever it sits, so labels may
+name any subset of the defaulted parameters. Positional arguments fill the
+parameters left over, in order, and a defaulted parameter that receives
+neither takes its declared default. The same holds for a free function, a
+`make` method and a function reached through `using`, on both backends:
+
+```kex
+make TableBuilder do
+  let string(label: Atom, default: Any = :none, nullable: Bool = false, primaryKey: Bool = false) -> Col = ...
+end
+
+t.string(:id, primaryKey: true)   # default is :none, nullable is false
+t.string(:name)                   # all three defaults
+```
+
+Before a `do ... end` block the parentheses may be left out, on a bare name
+and on a qualified one alike:
+
+```kex
+define :add_owner, follows: :create_sessions do ... end
+Migration.define :add_owner, follows: :create_sessions do ... end
+```
+
 ## Type-Level Functions (Constructors)
 
 Constructors and constants for a type live in a `module` of the same name,

@@ -11,6 +11,16 @@ div classes: ["info"] do
 end
 ```
 
+The call may be qualified, through a module path or an `as:` alias, and keeps
+the paren-less form:
+
+```kex
+Migration.define :add_owner, follows: :create_sessions do
+  createTable(:owners) { |t| [t.string(:name)] }
+  addIndex(:owners, [:name])
+end
+```
+
 ## Rules for Block<[A]>
 
 1. Each expression contributes one `A` to the list

@@ -1971,6 +1971,26 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           } while (match(TokenType::Comma));
         }
         expect(TokenType::RParen, "Expected ')' after arguments");
+      } else if (methodTok.type == TokenType::LowerIdent && !m_noDoBlocks &&
+                 isAtExprStart() && !check(TokenType::Do) &&
+                 !check(TokenType::LBrace) && hasDoBeforeNewline()) {
+        // Qualified call with bare arguments (no parens): `Mod.name a, k: v
+        // do...end`. Same rule as the unqualified form in parsePrimary — only
+        // taken when a `do` follows at bracket depth 0 on this line.
+        m_noDoBlocks = true;
+        do {
+          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+               check(TokenType::Type) || check(TokenType::Match) ||
+               check(TokenType::Loop)) &&
+              peekNext().type == TokenType::Colon) {
+            auto name = advance().value;
+            advance(); // :
+            namedArgs.push_back({name, parseExpr()});
+          } else {
+            args.push_back(parseExpr());
+          }
+        } while (match(TokenType::Comma));
+        m_noDoBlocks = false;
       }
 
       // Block argument
@@ -4386,6 +4406,7 @@ auto Parser::parseUsingOptions(std::optional<std::string> &alias,
         error("Duplicate 'as' using option");
       alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'")
                   .value;
+      rejectSingleLetterTypeName(*alias, "module");
     } else if (key == "only" || key == "except") {
       auto &names = key == "only" ? onlyNames : exceptNames;
       if (!names.empty())

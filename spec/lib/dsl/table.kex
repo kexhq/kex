@@ -1,0 +1,5 @@
+module Dsl.Table
+
+let define(label: Atom, columns: Block<[String]>) -> String do
+  "${label}(${columns().join(", ")})"
+end

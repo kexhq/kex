@@ -1,0 +1,10 @@
+# kex: check-only
+# `using M, as: A` binds the alias and imports nothing: a bare name from M is
+# undefined. A call through the alias is checked against M's signatures.
+
+using Dsl.Migration, as: Migration
+
+main do
+  IO.printLine(addIndex(:owners, [:name]))
+  IO.printLine(Migration.addIndex(:owners))
+end

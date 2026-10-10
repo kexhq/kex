@@ -67,12 +67,16 @@ end
 
 `only:` takes just the names listed; `except:` takes everything but them. The
 two are mutually exclusive — using both is an error. `as:` binds the module to
-a shorter name and imports nothing, leaving call sites qualified.
+a shorter name and imports nothing, leaving call sites qualified — so two
+modules that export the same name can both be aliased in one file. Beside an
+`only:` list it still binds the alias, and the listed names are imported as
+usual. The alias is longer than one letter: a single capital such as `T` is a
+type parameter, and `using M, as: T` is rejected.
 
 ```kex
 using Math, only: [square, cube]     # square and cube, nothing else
 using Math, except: [cube]           # everything public but cube
-using Pricing, as: P                 # no names imported; call it P.total
+using Pricing, as: Price             # no names imported; call it Price.total
 ```
 
 A name in an `only:`/`except:` list is a function, a type, or an operator in

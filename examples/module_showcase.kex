@@ -34,7 +34,7 @@ main do
   IO.printLine(Shop.Pricing.subtotal(10.0, 3.0).to(String).or(""))
 
   # This alias exists only inside the block.
-  using Pricing, as: P do
-    IO.printLine(P.withTax(raw, 0.10).to(String).or(""))
+  using Pricing, as: Price do
+    IO.printLine(Price.withTax(raw, 0.10).to(String).or(""))
   end
 end

@@ -57,6 +57,8 @@ module_item
 using_statement = USING type_name ( COMMA using_opts )? ( DO body END )? ;
 using_opts = using_opt ( COMMA using_opt )* ;
 using_opt = LOWER_IDENT COLON ( UPPER_IDENT | name_list ) ;
+(* An `as:` alias is longer than one letter: a single capital is a type
+   parameter. *)
 name_list = LBRACKET name_entry ( COMMA name_entry )* RBRACKET ;
 name_entry = LOWER_IDENT | UPPER_IDENT | LPAREN binary_op RPAREN ;
 
@@ -276,6 +278,10 @@ expr
                                                       optional $, and opening ` must
                                                       be byte-adjacent *)
   | LOWER_IDENT block                            (* function call with block *)
+  | LOWER_IDENT args do_block                    (* paren-less call: `define :x, follows: :y do ... end`;
+                                                    only when a DO follows on the same line *)
+  | expr DOT LOWER_IDENT BANG? args do_block     (* the same on a qualified name or a receiver:
+                                                    `Migration.define :x, follows: :y do ... end` *)
   | LOWER_IDENT LPAREN args RPAREN block         (* function call with args and block *)
   | UPPER_IDENT LBRACE record_init? RBRACE       (* record construction; This/New resolve in make blocks *)
   | expr binary_op expr                          (* binary operation *)
@@ -489,6 +495,13 @@ operator
 spread = DOT_DOT_DOT expr ;
 
 (* ===== Blocks ===== *)
+
+(* The `do ... end` spelling of a block. A paren-less call's arguments end at
+   it, so the brace spelling cannot follow them. *)
+do_block
+  = DO body END
+  | DO PIPE params PIPE body END
+  ;
 
 block
   = DO body END
