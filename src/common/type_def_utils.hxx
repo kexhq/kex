@@ -21,12 +21,16 @@ struct TypeConstructorInfo {
 // A leading `|` opts out: `type SafeDivError = | DivideByZero` declares a
 // one-variant ADT with a nullary constructor. That marker is the only thing
 // separating the two readings, since both are a single capitalized name.
+// An applied generic is one too: `type Incoming = Request<Binary>` renames a
+// type, where `type Wrapped = Wrap(Binary)` declares a constructor.
 inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
-    return !def.isDistinct && !def.leadingPipe && def.variants &&
-           def.variants->size() == 1 &&
-           (*def.variants)[0] &&
-           std::holds_alternative<ast::TypeName>(
-               (*def.variants)[0]->kind);
+    if (def.isDistinct || def.leadingPipe || !def.variants ||
+        def.variants->size() != 1 || !(*def.variants)[0])
+        return false;
+    const auto& only = (*def.variants)[0]->kind;
+    if (std::holds_alternative<ast::TypeName>(only)) return true;
+    const auto* generic = std::get_if<ast::GenericType>(&only);
+    return generic && generic->applied;
 }
 
 // The dispatch names a `make` target covers. Normally one, but a union target

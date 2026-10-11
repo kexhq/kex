@@ -363,6 +363,10 @@ private:
         m_makeImports;
     std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
         m_mainImports;
+    std::unordered_map<const ast::RecordDef*, std::vector<ImportSelection>>
+        m_recordImports;
+    std::unordered_map<const ast::TypeDef*, std::vector<ImportSelection>>
+        m_typeImports;
     // Every module path any `using` in this program names, wherever it sits.
     // `reportUnknownMethods` is a whole-program pass, so a file-wide union is
     // the right granularity: it only ever decides whether a module's members
@@ -505,6 +509,11 @@ private:
         m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program,
                               bool namesOnly = false) -> void;
+    // A dotted type name's nominal identity — the record or ADT it spells,
+    // through an alias or a `using`-relative path if need be — or nullopt
+    // when it names no declared type.
+    auto qualifiedNominalType(const std::string& qualified) const
+        -> std::optional<std::string>;
     auto resolveRecordName(const std::string& name) const -> std::string;
     // Resolves a bare module segment written at a call site (`Set.from(…)`)
     // against the modules `using` brought into scope, when the literal name

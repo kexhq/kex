@@ -312,6 +312,8 @@ auto TypeChecker::check(const ast::Program& program,
     m_functionImports.clear();
     m_makeImports.clear();
     m_mainImports.clear();
+    m_recordImports.clear();
+    m_typeImports.clear();
     pushScope();
 
     m_importedModulePaths.clear();
@@ -344,6 +346,14 @@ auto TypeChecker::check(const ast::Program& program,
                              std::get_if<std::unique_ptr<ast::MakeDef>>(&visible);
                          make && *make)
                     m_makeImports[make->get()] = active;
+                else if (const auto* record =
+                             std::get_if<std::unique_ptr<ast::RecordDef>>(&visible);
+                         record && *record)
+                    m_recordImports[record->get()] = active;
+                else if (const auto* type =
+                             std::get_if<std::unique_ptr<ast::TypeDef>>(&visible);
+                         type && *type)
+                    m_typeImports[type->get()] = active;
             }
         };
     std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>)>
@@ -363,6 +373,12 @@ auto TypeChecker::check(const ast::Program& program,
                     std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                     if (node) m_makeImports[node.get()] = active;
                 } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                    if (node) m_recordImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                    if (node) m_typeImports[node.get()] = active;
+                } else if constexpr (
                     std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                     if (node) collectVisibilityImports(*node, active);
                 } else if constexpr (
@@ -373,12 +389,32 @@ auto TypeChecker::check(const ast::Program& program,
         }
     };
     std::vector<ImportSelection> topLevelImports;
+    // The file each top-level `using` was written in. A module merged in from
+    // another file is not in that `using`'s scope: the entry file's imports
+    // reached every dependency's declarations and resolved THEIR bare names
+    // against what the application happened to import (kexhq/kex#476).
+    std::vector<std::string_view> topLevelImportFiles;
+    auto importsVisibleIn = [&](const ast::ModuleDef& module) {
+        std::vector<ImportSelection> visible;
+        for (size_t i = 0; i < topLevelImports.size(); ++i)
+            if (topLevelImportFiles[i] == module.location.file)
+                visible.push_back(topLevelImports[i]);
+        return visible;
+    };
     for (const auto& item : program.items) {
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                if (node && node->body.empty())
+                if (node && node->body.empty()) {
                     topLevelImports.push_back(selectionFor(*node));
+                    topLevelImportFiles.push_back(node->location.file);
+                }
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (node) m_recordImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                if (node) m_typeImports[node.get()] = topLevelImports;
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 if (node) m_functionImports[node.get()] = topLevelImports;
@@ -393,7 +429,7 @@ auto TypeChecker::check(const ast::Program& program,
                 if (node) collectVisibilityImports(*node, topLevelImports);
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectModuleImports(*node, topLevelImports);
+                if (node) collectModuleImports(*node, importsVisibleIn(*node));
             }
         }, item);
     }
@@ -859,6 +895,11 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
         if (namesOnly) return;
         const auto previousModule = m_currentModulePath;
         m_currentModulePath = owner;
+        // A field's type is written against the names its module imported.
+        const auto previousImports = m_declarationImports;
+        if (auto imports = m_recordImports.find(&record);
+            imports != m_recordImports.end())
+            m_declarationImports = imports->second;
         // `record Box<A>` binds A to the parameter slot -1 for the whole
         // declaration, the convention `substituteInterfaceGenerics` reads and
         // the one the KexI reader rebuilds imported records with. A map
@@ -881,6 +922,7 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
                 m_requiredRecordFields[name].insert(field.name);
         }
         m_currentModulePath = previousModule;
+        m_declarationImports = previousImports;
     };
     std::function<void(const ast::ModuleDef&)> registerModule;
     registerModule = [&](const ast::ModuleDef& module) {
@@ -925,6 +967,22 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
                 if (node) registerModule(*node);
             }
         }, item);
+}
+
+auto TypeChecker::qualifiedNominalType(const std::string& qualified) const
+    -> std::optional<std::string> {
+    auto nominal = [&](const std::string& candidate) {
+        return m_recordFields.count(candidate) ||
+               m_adtVariants.count(candidate) ||
+               (m_importedInterfaces &&
+                m_importedInterfaces->recordArities.count(candidate));
+    };
+    // The spelling in full names exactly one type, whatever the module being
+    // checked declares under the same last segment.
+    if (nominal(qualified)) return qualified;
+    auto resolved = resolveRecordName(qualified);
+    if (nominal(resolved)) return resolved;
+    return std::nullopt;
 }
 
 auto TypeChecker::resolveRecordName(const std::string& name) const
@@ -1383,6 +1441,15 @@ auto TypeChecker::typeDefToType(const ast::TypeDef& def) -> TypePtr {
     std::unordered_map<std::string, TypePtr> aliasParams;
     for (size_t i = 0; i < def.typeParams.size(); ++i)
         aliasParams[def.typeParams[i]] = Type::typeVar(-static_cast<int>(i + 1));
+    // The body names types the way its own module imported them — an alias
+    // is expanded once, here, not re-read wherever it is used.
+    struct RestoreImports {
+        std::vector<ImportSelection>& target;
+        std::vector<ImportSelection> saved;
+        ~RestoreImports() { target = std::move(saved); }
+    } restoreImports{m_declarationImports, m_declarationImports};
+    if (auto imports = m_typeImports.find(&def); imports != m_typeImports.end())
+        m_declarationImports = imports->second;
     // Build variant types, then fold into a union if more than one.
     std::vector<TypePtr> parts;
     for (const auto& v : *def.variants) {
@@ -2697,6 +2764,9 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (node.parts.size() == 1) {
                 const auto recordName = resolveRecordName(last);
                 if (recordName != last) return Type::named(recordName);
+            } else if (auto nominal = qualifiedNominalType(qualified)) {
+                m_referencedModules.insert(qualified);
+                return Type::named(*nominal);
             }
             if (auto known = m_globals.get(last)) return known;
             // Trait-only names (Float, Number, Comparable, ...) have no
@@ -2726,6 +2796,17 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 args.push_back(arg ? resolveTypeExpr(*arg, genericVars) : Type::unknown());
             }
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
+            // A qualified name means the type it spells and no other:
+            // `Net.HTTP.Request<Binary>` written inside a module declaring
+            // its own `Request` resolved to that local record by its last
+            // segment alone (kexhq/kex#476).
+            if (node.name.parts.size() > 1) {
+                std::string qualified;
+                for (const auto& part : node.name.parts)
+                    qualified += (qualified.empty() ? "" : ".") + part;
+                if (auto nominal = qualifiedNominalType(qualified))
+                    return Type::named(*nominal, std::move(args));
+            }
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
             if (name == "Map" && args.size() == 2)
@@ -8837,6 +8918,34 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // because units.kex's `to` happened to sort first, and
             // `let show(x) = x.to(String)` inferred as `Measure -> String`,
             // rejecting `show(42)`.
+            // `x.route` on an unconstrained `x` is as much a read of some
+            // record's `route` FIELD as a call of this method, when a record
+            // in view declares one. Taking the method typed the receiver as
+            // the method's owner: a closure's `context.route` became a call
+            // on an unrelated record the moment that record gained a `route`
+            // method (kexhq/kex#476). Neither is evidence; leave both open.
+            if (receiverUnknown && isReceiver && argTypes.size() == 1 &&
+                !matched.params.empty()) {
+                const auto owner = typeToString(resolve(matched.params.front()));
+                const auto ownerBase = owner.substr(0, owner.find('<'));
+                auto inView = [&](const std::string& record) {
+                    if (m_programRecords.count(record)) return true;
+                    auto imports = [&](const std::vector<ImportSelection>& list) {
+                        return std::any_of(
+                            list.begin(), list.end(),
+                            [&](const ImportSelection& import) {
+                                return record.rfind(import.module + ".", 0) == 0;
+                            });
+                    };
+                    if (imports(m_declarationImports)) return true;
+                    return std::any_of(m_importScopeStack.begin(),
+                                       m_importScopeStack.end(), imports);
+                };
+                for (const auto& [record, fields] : m_recordFields)
+                    if (record != ownerBase && fields.count(name) &&
+                        inView(record))
+                        return Type::unknown();
+            }
             if (!ambiguousReceiver && receiverUnknown && fullMatches.size() > 1) {
                 std::string receiverType;
                 for (const auto* candidate : fullMatches) {

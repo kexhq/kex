@@ -788,6 +788,16 @@ target_compile_definitions(multi_module_check_cli_test PRIVATE KEX_BINARY_PATH="
 add_dependencies(multi_module_check_cli_test kex)
 add_test(NAME multi_module_check_cli_test COMMAND multi_module_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+# Names resolved against the whole program instead of the module's own
+# declarations and imports (kexhq/kex#476). Several modules in separate files,
+# run on both backends, so this too drives the real binary.
+add_executable(name_collision_test tests/name_collision_test.cxx)
+target_link_libraries(name_collision_test PRIVATE kex_lib)
+target_include_directories(name_collision_test PRIVATE tests)
+target_compile_definitions(name_collision_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(name_collision_test kex)
+add_test(NAME name_collision_test COMMAND name_collision_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # Regression test for #372: the `--run` cache used to key its fingerprint on
 # a git revision string and the stdlib sources' size/mtime only, never on the
 # `kex` binary itself — so a rebuild from uncommitted compiler changes with

@@ -3,6 +3,7 @@
 #include "../common/type_def_utils.hxx"
 
 #include <map>
+#include <set>
 #include <type_traits>
 #include <variant>
 #include <string>
@@ -338,6 +339,96 @@ auto findMethodFunctionCollisions(const ast::Program& program)
                 {function->location, "the function is here"});
             diagnostics.push_back(std::move(diagnostic));
         }
+    return diagnostics;
+}
+
+namespace {
+
+// One `make` method of a type its own module declares.
+struct OwnedMethod {
+    std::string module;
+    SourceLocation location;
+};
+
+class OwnedMethodCollector {
+public:
+    template <typename Items>
+    void walk(const Items& items, const std::string& module) {
+        std::set<std::string> declared;
+        collectDeclaredTypeNames(items, declared);
+        for (const auto& item : items) {
+            if (const auto* make =
+                    std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                if (*make && !module.empty()) collect(**make, module, declared);
+            } else if (const auto* child =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*child) walk((*child)->body, (*child)->name);
+            }
+        }
+    }
+
+    auto methods() const -> const std::map<Key, std::vector<OwnedMethod>>& {
+        return m_methods;
+    }
+
+private:
+    void collect(const ast::MakeDef& make, const std::string& module,
+                 const std::set<std::string>& declared) {
+        for (const auto& target : makeTargetNames(make.target)) {
+            if (!declared.count(target)) continue;
+            auto method = [&](const ast::FunctionDef& def) {
+                const auto arity = paramCount(def) +
+                    (receiverIsFirstParam(def) ? 0u : 1u);
+                auto& owners = m_methods[{target, def.name, arity}];
+                for (const auto& owner : owners)
+                    if (owner.module == module) return;
+                owners.push_back({module, def.location});
+            };
+            for (const auto& item : make.body) {
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                    if (*fn) method(**fn);
+                } else if (const auto* visibility =
+                               std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                                   &item)) {
+                    if (!*visibility) continue;
+                    for (const auto& inner : (*visibility)->items)
+                        if (const auto* fn =
+                                std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                            if (*fn) method(**fn);
+                }
+            }
+        }
+    }
+
+    std::map<Key, std::vector<OwnedMethod>> m_methods;
+};
+
+} // namespace
+
+auto findSameNamedTypeMethodCollisions(const ast::Program& program)
+    -> std::vector<Diagnostic> {
+    OwnedMethodCollector collector;
+    collector.walk(program.items, "");
+
+    std::vector<Diagnostic> diagnostics;
+    for (const auto& [key, owners] : collector.methods()) {
+        if (owners.size() < 2) continue;
+        const auto& [type, name, arity] = key;
+        (void)arity;
+        const auto& first = owners.front();
+        const auto& second = owners[1];
+        Diagnostic diagnostic;
+        diagnostic.level = Diagnostic::Level::Error;
+        diagnostic.location = second.location;
+        diagnostic.message = "`" + name + "` is a method of both `" +
+            first.module + "." + type + "` and `" + second.module + "." + type +
+            "` — a method is dispatched on its type's last name, so one of " +
+            "them would answer for the other's values; rename one of the " +
+            "types or one of the methods";
+        diagnostic.notes.push_back({first.location, "the other one is here"});
+        diagnostics.push_back(std::move(diagnostic));
+    }
     return diagnostics;
 }
 
