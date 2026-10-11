@@ -4179,7 +4179,8 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
             // (-1: builtins, function references) stays permissive.
             if (function->arity < 0) return true;
             if constexpr (std::is_same_v<T, ast::BlockType>)
-                return function->arity == 0;
+                return function->arity ==
+                       static_cast<int>(node.params.size());
             else
                 return function->arity == declaredFunctionArity(node);
         } else if constexpr (std::is_same_v<T, ast::ListType>) {

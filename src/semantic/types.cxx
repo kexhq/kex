@@ -258,7 +258,12 @@ auto typeToString(const TypePtr& type) -> std::string {
             return result;
         }
         else if constexpr (std::is_same_v<T, FuncType>) {
-            if (t.block) return "Block<" + typeToString(t.result) + ">";
+            if (t.block) {
+                std::string result = "Block<";
+                for (const auto& param : t.params)
+                    result += typeToString(param) + ", ";
+                return result + typeToString(t.result) + ">";
+            }
             // Kex function types are curried, so they print as
             // `A -> B -> R`, matching how they are written in source. A
             // parameter that is itself a function has to be parenthesised or

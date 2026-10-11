@@ -200,6 +200,16 @@ describe("Kex.AST") do
       Kex.AST.parseType("Block<[String]>").try ==
         BlockType(ListType(NamedType("String", [])))
     )
+    assert(
+      Kex.AST.parseType("Block<Builder, [String]>").try ==
+        ParameterBlockType(
+          [NamedType("Builder", [])], ListType(NamedType("String", []))
+        )
+    )
+    assert(
+      Kex.AST.parseType("Block<Builder, [String]>").try.to(String).or("") ==
+        "Block<Builder, [String]>"
+    )
     assert(Kex.AST.parseType(":ok").try == AtomType("ok"))
     assert(
       Kex.AST.parseType("Type.of(answer)").try ==

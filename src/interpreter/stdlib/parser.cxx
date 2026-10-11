@@ -54,7 +54,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     // Register TypeRef/PatternRef/Expression variant->parent mappings so UFCS dispatch works
     for (const auto& tag : {"NamedType", "FunctionType", "TupleType", "ListType",
                             "MapType", "UnionType", "NullableType", "TypeVar",
-                            "AnyType", "NoneType"}) {
+                            "AnyType", "NoneType", "ParameterBlockType"}) {
         m_variantParent[tag] = "Kex.AST.TypeRef";
     }
     for (const auto& tag : {"TokenElement", "NodeElement"}) {

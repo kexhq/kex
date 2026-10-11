@@ -577,7 +577,10 @@ public:
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 return variant("NullableType", {typeRef(*node.inner)});
             } else if constexpr (std::is_same_v<T, BlockType>) {
-                return variant("BlockType", {typeRef(*node.inner)});
+                if (node.params.empty())
+                    return variant("BlockType", {typeRef(*node.inner)});
+                return variant("ParameterBlockType",
+                               {typeList(node.params), typeRef(*node.inner)});
             } else if constexpr (std::is_same_v<T, AtomType>) {
                 return variant("AtomType", {m_builder.string(node.name)});
             } else if constexpr (std::is_same_v<T, GenericVar>) {

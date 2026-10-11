@@ -60,7 +60,10 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 out->kind = OptionalType{clone(node.inner)};
             } else if constexpr (std::is_same_v<T, BlockType>) {
-                out->kind = BlockType{clone(node.inner)};
+                BlockType copy{clone(node.inner), {}};
+                for (const auto& param : node.params)
+                    copy.params.push_back(clone(param));
+                out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, TypeQuery>) {
                 out->kind = TypeQuery{node.query, clone(node.argument)};
             } else {

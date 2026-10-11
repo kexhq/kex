@@ -1,0 +1,89 @@
+# `Block<A, R>` — a `do |a| ... end` block typed with what it is handed
+# (kexhq/kex#469). The result is written last, so `Block<TableBuilder,
+# [Column]>` is the builder idiom: handed a builder, and — because its result
+# is a list — collecting each statement the way `Block<[A]>` does.
+
+record Column do
+  label : String
+  kind : String
+  nullable : Bool = false
+end
+
+record Table do
+  name : String
+  columns : [Column] = []
+end
+
+record TableBuilder do
+  table : String = ""
+end
+
+make TableBuilder do
+  let string(label: String, nullable: Bool = false) -> Column = Column { label: label, kind: "TEXT", nullable: nullable }
+  let bigint(label: String) -> Column = Column { label: label, kind: "BIGINT" }
+end
+
+let createTable(name: String, columns: Block<TableBuilder, [Column]>) -> Table = Table { name: name, columns: columns(TableBuilder { table: name }) }
+
+# A result that is not a list: the block returns its last expression.
+let combine(a: Integer, b: Integer, step: Block<Integer, Integer, Integer>) -> Integer = step(a, b)
+
+record Pair do
+  left : Integer
+  right : Integer
+end
+
+let pairs(count: Integer, each: Block<Integer, Integer, [Pair]>) -> [Pair] = each(count, count * 10)
+
+record Report do
+  title : String
+end
+
+make Report do
+  let lines(body: Block<String, [String]>) -> [String] = body(@title)
+end
+
+main do
+  IO.printLine("-- a builder block collects its statements --")
+  let owners = createTable("owners") do |t|
+    t.string("name", nullable: true)
+    t.bigint("credit")
+  end
+  IO.printLine(owners.name)
+  IO.printLine(owners.columns.map { |column| "${column.label}:${column.kind}:${column.nullable}" })
+
+  IO.printLine("-- guards and spreads, as in Block<[A]> --")
+  let wide = true
+  let extra = [Column { label: "x", kind: "TEXT" }, Column { label: "y", kind: "TEXT" }]
+  let guarded = createTable("guarded") do |t|
+    t.string("always")
+    t.bigint("skipped") if !wide
+    t.bigint("kept") if wide
+    ...extra
+  end
+  IO.printLine(guarded.columns.map { |column| column.label })
+
+  IO.printLine("-- an empty body is an empty list --")
+  let empty = createTable("empty") do |t|
+  end
+  IO.printLine(empty.columns.count)
+
+  IO.printLine("-- a non-list result returns the last expression --")
+  IO.printLine(combine(2, 3) do |a, b|
+    a * 100
+    a + b
+  end)
+
+  IO.printLine("-- two parameters, collecting --")
+  let made = pairs(2) do |n, m|
+    Pair { left: n, right: m }
+    Pair { left: m, right: n }
+  end
+  IO.printLine(made.map { |pair| pair.left })
+
+  IO.printLine("-- as a method's parameter --")
+  IO.printLine(Report { title: "Q3" }.lines do |title|
+    "# ${title}"
+    "done"
+  end)
+end

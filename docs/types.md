@@ -502,6 +502,9 @@ simple message tags or a tuple containing `:get` and a process identifier.
 
 - `Block<A>` — returns last expression
 - `Block<[A]>` — collects each expression into a list
+- `Block<P, A>` — a `do |p| ... end` block handed a `P`. The result is always
+  the last argument, so `Block<P, Q, A>` is handed two values, and
+  `Block<P, [A]>` collects
 
 ```kex
 type HtmlFunction = String? -> [String] -> Block<[Element]> -> Element

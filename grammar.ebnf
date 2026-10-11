@@ -96,7 +96,7 @@ type_expr
   | type_expr QUESTION                            (* optional sugar: T? = Just(T) | None *)
   | type_expr "or" "!" type_expr                  (* result sugar: T or! E = Result<T, E> *)
   | type_expr "or" type_expr                      (* either sugar: A or B = Either<A, B> *)
-  | BLOCK LESS_THAN type_expr GREATER_THAN        (* block type *)
+  | BLOCK LESS_THAN type_expr ( COMMA type_expr )* GREATER_THAN   (* block type; the last is the result *)
   | atom_literal                                  (* atom in type position *)
   ;
 

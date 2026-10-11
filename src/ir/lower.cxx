@@ -170,7 +170,10 @@ auto renderDispatchType(const ast::TypeExpr& type) -> std::string {
         } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             return (node.inner ? renderDispatchType(*node.inner) : "Any") + "?";
         } else if constexpr (std::is_same_v<T, ast::BlockType>) {
-            return "Block<" +
+            std::string out = "Block<";
+            for (const auto& param : node.params)
+                out += (param ? renderDispatchType(*param) : "Any") + ", ";
+            return out +
                 (node.inner ? renderDispatchType(*node.inner) : "Any") + ">";
         } else if constexpr (std::is_same_v<T, ast::AtomType>) {
             return "Atom";
