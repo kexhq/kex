@@ -788,6 +788,16 @@ target_compile_definitions(multi_module_check_cli_test PRIVATE KEX_BINARY_PATH="
 add_dependencies(multi_module_check_cli_test kex)
 add_test(NAME multi_module_check_cli_test COMMAND multi_module_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+add_executable(compiled_dependency_cli_test tests/compiled_dependency_cli_test.cxx)
+target_link_libraries(compiled_dependency_cli_test PRIVATE kex_lib)
+target_include_directories(compiled_dependency_cli_test PRIVATE tests)
+target_compile_definitions(compiled_dependency_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(compiled_dependency_cli_test kex)
+if(TARGET kex_prelude_beam)
+    add_dependencies(compiled_dependency_cli_test kex_prelude_beam)
+endif()
+add_test(NAME compiled_dependency_cli_test COMMAND compiled_dependency_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # Names resolved against the whole program instead of the module's own
 # declarations and imports (kexhq/kex#476). Several modules in separate files,
 # run on both backends, so this too drives the real binary.

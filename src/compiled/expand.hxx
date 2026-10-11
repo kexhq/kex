@@ -67,6 +67,13 @@ struct ExpandOptions {
     // makes every `Kex.embed` there fail to resolve rather than guessing a
     // directory.
     std::string sourcePath;
+    // Where the program's modules are found — the roots the rest of the
+    // build resolves `using` against. A `compiled do` block runs its module in
+    // a sandbox of its own, and one given no roots knew only the standard
+    // library: a library's `using Harmat.Schema` beside a `compiled do` then
+    // failed with "Unknown module" from every package but the library's own
+    // (kexhq/kex#444). The standard library is always searched as well.
+    std::vector<std::string> moduleRoots;
 };
 
 // Expands every `compiled` block in `program` in place, and folds every
