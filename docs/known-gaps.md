@@ -265,13 +265,13 @@ files; the gap is specific to multi-file (`--source-root`) projects, which
 is how every real Kex project outside this repo's own spec/example tree is
 structured.
 
-## Methods are dispatched on a type's last name
+## `make` functions are dispatched on a type's last name
 
 A record's identity is qualified — `Metro.Connection` and `Net.Connection` are
-different types — but both backends file a `make` method under the type's last
-name. Two consequences remain after kexhq/kex#476:
+different types — but both backends file a `make` function under the type's
+last name. Two consequences remain after kexhq/kex#476:
 
-**Same-named types cannot share a method name.** Declared in two modules of one
+**Same-named types cannot share a `make` function name.** Declared in two modules of one
 program, this is a compile error rather than a miscompile:
 
 ```kex
@@ -285,13 +285,14 @@ module Metro.Other
 record Connection do name : String = "" end
 make Connection do let send(message: String) -> String = "..." end
 
-# error: `send` is a method of both `Metro.Connection.Connection` and
-#        `Metro.Other.Connection` — a method is dispatched on its type's last
-#        name, so one of them would answer for the other's values; rename one
-#        of the types or one of the methods
+# error: `send` is declared for both `Metro.Connection.Connection` and
+#        `Metro.Other.Connection` — a `make` function is dispatched on its
+#        type's last name, so one of them would answer for the other's values;
+#        rename one of the types or one of the functions
 ```
 
-**A function and a method of one name and arity cannot share a BEAM module.**
+**A free function and a `make` function of one name and arity cannot share a
+BEAM module.**
 `let served(a, b)` beside a `make T do let served(x) end` in the same file is
 reported by the checker; across compilation units it still surfaces from
 lowering, with no source location:
@@ -301,8 +302,8 @@ IR lower: `served/2` names both a free function and a receiver method in this
 compilation unit — rename one of them
 ```
 
-Lifting either needs method symbols keyed by the qualified type in the
-lowering IR and in the interpreter's method table, not a local patch.
+Lifting either needs `make` functions keyed by the qualified type in the
+lowering IR and in the interpreter's dispatch table, not a local patch.
 
 A read of a field on a receiver whose type is **not known** is also still
 resolved by name: with `let parameters(context: Context)` in scope,

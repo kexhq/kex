@@ -9,5 +9,5 @@ owners
 5
 -- two parameters, collecting --
 [2, 20]
--- as a method's parameter --
+-- as a make function's parameter --
 [# Q3, done]
