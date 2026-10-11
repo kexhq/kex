@@ -213,7 +213,8 @@ auto rootsFromLock(const std::string& text, const fs::path& workspaceRoot) -> Lo
         bool found = false;
         for (const auto& candidate : candidates) {
             std::error_code ec;
-            const auto source = candidate / "src";
+            const auto source = teyPackageDeclaresSources(candidate.string())
+                ? candidate : candidate / "src";
             if (fs::is_directory(source, ec) && !ec) {
                 byName.emplace(std::string(name), canonicalRoot(source));
                 found = true;
@@ -238,6 +239,21 @@ struct CacheEntry {
 };
 
 } // namespace
+
+auto teyPackageDeclaresSources(const std::string& packageDirectory) -> bool {
+    namespace fs = std::filesystem;
+    std::ifstream manifest(fs::path(packageDirectory) / "package.kex");
+    if (!manifest) return false;
+    // A declaration is a line of its own inside `package ... do`; a comment
+    // that mentions one starts with `#` and is not it.
+    std::string line;
+    while (std::getline(manifest, line)) {
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;
+        if (line.compare(first, 8, "sources(") == 0) return true;
+    }
+    return false;
+}
 
 auto teyPackageDirectory(const std::string& start) -> std::string {
     return packageDirectoryFor(start).string();

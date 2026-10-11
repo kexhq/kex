@@ -1531,6 +1531,29 @@ int main() {
                            completion);
             fs::remove_all(root);
         });
+        // A package can keep its modules in folders at its top and say which:
+        // then its own directory is the root, as it is for `tey build`.
+        it("knows a tey package that declares its source folders", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-tey-sources";
+            fs::remove_all(root);
+            fs::create_directories(root / "declared");
+            fs::create_directories(root / "usual");
+            {
+                std::ofstream declared(root / "declared" / "package.kex");
+                declared << "package \"chat\" do\n  entrypoint(\"main.kex\")\n"
+                            "  sources([\"app\", \"config\", \"db\"])\nend\n";
+                std::ofstream usual(root / "usual" / "package.kex");
+                usual << "package \"lib\" do\n  # sources([\"app\"]) would move them\nend\n";
+            }
+            assertTrue(kex::lsp::teyPackageDeclaresSources((root / "declared").string()),
+                       "a `sources([...])` declaration was not seen");
+            assertTrue(!kex::lsp::teyPackageDeclaresSources((root / "usual").string()),
+                       "a comment was taken for a `sources` declaration");
+            assertTrue(!kex::lsp::teyPackageDeclaresSources((root / "missing").string()),
+                       "a directory with no manifest declared sources");
+            fs::remove_all(root);
+        });
         // What `tey build` sees and the editor did not: a dependency's
         // modules, reachable through the roots `tey.lock` names.
         it("resolves modules from a tey package's locked dependencies", []() {

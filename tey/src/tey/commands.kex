@@ -797,7 +797,7 @@ foul dependencyRootsAt(start: String) -> [String] do
         Tey.Cache.packagePath(dependency)
       end
     end
-    let source = FS.Path.join(packageRoot, "src")
+    let source = FS.Path.join(packageRoot, Tey.Commands.sourceDirectoryAt(packageRoot))
     if FS.Directory.directory?(source)
       roots.push!("--source-root")
       roots.push!(source)
@@ -812,30 +812,62 @@ foul dependencyRootsAt(start: String) -> [String] do
   return roots
 end
 
-# Every `--source-root` a compile of THIS package needs: its own `src/` first,
+# The directory a package's module names are resolved against, relative to
+# it: `src`, or the package itself when its package.kex names the folders at
+# its top that hold modules (`sources(["app", "config", "db"])` — then
+# `App.Models.User` is `./app/models/user.kex`). A manifest that cannot be
+# read means `src`; every caller reports that in its own way soon enough.
+foul sourceDirectoryAt(packageRoot: String) -> String do
+  return match FS.File.read(FS.Path.join(packageRoot, "package.kex")) do
+    Error(_) => "src"
+    Ok(text) => match Tey.Manifest.read(text) do
+      Error(_) => "src"
+      Ok(manifest) => manifest.sourceFolders.empty? then "src" else "."
+    end
+  end
+end
+
+# A file of a package's source directory, as the compiler is to be given it:
+# relative to the package. A root of "." adds nothing in front.
+let sourceUnit(directory: String, path: String) -> String do
+  return directory == "." then path else "${directory}/${path}"
+end
+
+# Whether a file directly under the source directory is a module to compile.
+# With the package itself as the root, its manifests sit there too, and are
+# not modules.
+let sourceUnit?(path: String) -> Bool do
+  return path.endsWith?(".kex") && path != "package.kex" && path != "package.local.kex"
+end
+
+# Every `--source-root` a compile of THIS package needs: its own source
+# directory first (`src/`, or the package itself when it declares `sources`),
 # then each dependency's. Own-first is deliberate — a package that shadows a
 # dependency's module name means its own, the same way `--source-root` order
 # already decides that for dependencies among themselves.
 foul sourceRoots -> [String] do
-  let own = FS.Directory.directory?("src") then ["--source-root", "src"] else []
+  let directory = Tey.Commands.sourceDirectoryAt(FS.Directory.current)
+  let own = FS.Directory.directory?(directory) then ["--source-root", directory] else []
   return [...own, ...Tey.Commands.dependencyRoots]
 end
 
 foul sourceRootsAt(packageRoot: String) -> [String] do
-  let source = FS.Path.join(packageRoot, "src")
+  let source = FS.Path.join(packageRoot, Tey.Commands.sourceDirectoryAt(packageRoot))
   let own = FS.Directory.directory?(source) then ["--source-root", source] else []
   return [...own, ...Tey.Commands.dependencyRootsAt(packageRoot)]
 end
 
-# A library's compilable units: every `.kex` directly under `src/`. Not a
+# A library's compilable units: every `.kex` directly under its source
+# directory (`src/`, or the package's top when it declares `sources`). Not a
 # recursive walk — a nested module is reached by the file that declares it,
 # and compiling it twice by name is how you get a duplicate-module error out
 # of a perfectly good package.
 foul librarySources -> [String] do
-  return FS.Directory.files("src").or([])
-    .filter { |path| path.endsWith?(".kex") }
+  let directory = Tey.Commands.sourceDirectoryAt(FS.Directory.current)
+  return FS.Directory.files(directory).or([])
+    .filter { |path| Tey.Commands.sourceUnit?(path) }
     .sort
-    .map { |path| "src/${path}" }
+    .map { |path| Tey.Commands.sourceUnit(directory, path) }
 end
 
 # Returns units relative to `packageRoot`, not absolute: the compiler
@@ -848,11 +880,11 @@ end
 # does not collide with the source-root the same way. Callers must invoke the
 # compiler with `packageRoot` as the working directory.
 foul librarySourcesAt(packageRoot: String) -> [String] do
-  let source = FS.Path.join(packageRoot, "src")
-  return FS.Directory.files(source).or([])
-    .filter { |path| path.endsWith?(".kex") }
+  let directory = Tey.Commands.sourceDirectoryAt(packageRoot)
+  return FS.Directory.files(FS.Path.join(packageRoot, directory)).or([])
+    .filter { |path| Tey.Commands.sourceUnit?(path) }
     .sort
-    .map { |path| "src/${path}" }
+    .map { |path| Tey.Commands.sourceUnit(directory, path) }
 end
 
 # What `tey build` produces is what ships, so what `tey run` and `tey test`
@@ -1023,7 +1055,7 @@ foul buildMember(member: Member) -> Integer do
   let entrypointAbsolute = FS.Path.join(packageRoot, package.entrypoint)
   let units = FS.File.file?(entrypointAbsolute) then [package.entrypoint] else Tey.Commands.librarySourcesAt(packageRoot)
   if units.empty?
-    return Tey.Commands.fail("nothing to build: no ${package.entrypoint} and no modules under src/")
+    return Tey.Commands.fail("nothing to build: no ${package.entrypoint} and no modules under ${package.sourceFolders.empty? then "src/" else package.sourceFolders.join("/, ") + "/"}")
   end
   # Compiling the entry module also emits a companion for every module it
   # reaches — the prelude and runtime included — so a build left ~80 `.beam`
