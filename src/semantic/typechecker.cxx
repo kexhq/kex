@@ -3,6 +3,7 @@
 #include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
+#include "../common/source_name.hxx"
 #include <cctype>
 #include <functional>
 #include <set>
@@ -5552,7 +5553,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 } else if (candidates.size() > 1) {
                     std::string message =
                         "`Type.returnedBy` cannot choose between the overloads of `" +
-                        functionName + "`";
+                        sourceName(functionName) + "`";
                     for (const auto& candidate : candidates)
                         message += "\n\n" + displaySignature(functionName, candidate);
                     error(expr.location, message);
@@ -5562,7 +5563,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         {std::move(*structured), /*evaluateArgument=*/false};
                 } else {
                     error(expr.location,
-                          "`Type.returnedBy` cannot answer for `" + functionName +
+                          "`Type.returnedBy` cannot answer for `" + sourceName(functionName) +
                           "`: its return type is not concrete");
                 }
                 return Type::named("Type");
@@ -6977,7 +6978,7 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
         if (m_functionDeclarations.count(functionName) > 1) {
             error(query.argument->location,
                   "`Type.returnedBy` cannot choose between the overloads of `" +
-                  functionName + "`");
+                  sourceName(functionName) + "`");
             return Type::unknown();
         }
         if (auto declaration = m_functionDeclarations.find(functionName);
@@ -6990,7 +6991,7 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
                                        generics);
             }
             error(query.argument->location,
-                  "`Type.returnedBy` needs `" + functionName +
+                  "`Type.returnedBy` needs `" + sourceName(functionName) +
                   "` to declare its return type");
             return Type::unknown();
         }
@@ -7002,7 +7003,7 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
     if (candidates.size() > 1) {
         std::string message =
             "`Type.returnedBy` cannot choose between the overloads of `" +
-            functionName + "`";
+            sourceName(functionName) + "`";
         for (const auto& candidate : candidates)
             message += "\n\n" + displaySignature(functionName, candidate);
         error(query.argument->location, message);
@@ -7533,7 +7534,7 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
         if (auto* constrained = std::get_if<ConstrainedType>(&t->kind)) return constrained->traitName;
         return typeToString(remap(t));
     };
-    std::string result = name + " : ";
+    std::string result = sourceName(name) + " : ";
     for (const auto& param : sig.params) {
         auto text = displayType(param);
         // A function-typed parameter needs parentheses of its own, or its
@@ -7690,7 +7691,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     }
                 }
                 if (function->params.size() != effective->size()) {
-                    error(loc, "`" + name + "` expects " +
+                    error(loc, "`" + sourceName(name) + "` expects " +
                         std::to_string(function->params.size()) +
                         " argument(s), got " + std::to_string(effective->size()));
                     return function->result;
@@ -7997,7 +7998,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     if (ambiguous) {
         error(loc, "ambiguous imported " +
             std::string(isMethodCall && name.find("::") == std::string::npos
-                ? "receiver function '" : "function '") + name +
+                ? "receiver function '" : "function '") + sourceName(name) +
             "' is provided by both '" + ambiguous->first + "' and '" +
             ambiguous->second + "'");
         return Type::unknown();
@@ -8269,7 +8270,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 for (size_t i = 0; i < ordered.size(); ++i) {
                     if (!ordered[i] && i < required) {
                         error(loc, "Missing required argument `" + layout.paramNames[i] +
-                                   "` for `" + name + "`");
+                                   "` for `" + sourceName(name) + "`");
                         return Type::unknown();
                     }
                     if (!ordered[i]) ordered[i] = Type::unknown();
@@ -8637,7 +8638,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
         if (distinct.size() > 1 && concreteArguments && typedCandidates) {
             std::string message =
-                "Ambiguous overload for `" + name + "`; candidates:";
+                "Ambiguous overload for `" + sourceName(name) + "`; candidates:";
             for (const auto* candidate : distinct)
                 message += "\n\n" + displaySignature(name, *candidate);
             error(loc, message);
@@ -9180,7 +9181,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 std::holds_alternative<TypeVar>(receiver->kind))
                 return Type::unknown();
         }
-        error(loc, "`" + name + "` expects " + std::to_string((*sigs)[0].params.size()) +
+        error(loc, "`" + sourceName(name) + "` expects " + std::to_string((*sigs)[0].params.size()) +
               " argument(s), got " + std::to_string(argTypes.size()));
         return (*sigs)[0].result;
     }
@@ -9302,7 +9303,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
     }
 
-    std::string message = "`" + name + "` expects " + detail;
+    std::string message = "`" + sourceName(name) + "` expects " + detail;
     // Vacuous candidates (params all TypeVar/Unknown/trait bounds — e.g. an
     // unannotated trait default method) add noise to the listing when
     // concrete candidates exist; show them only when they are all we have.

@@ -1,2 +1,2 @@
 spec/error_using_alias_imports_nothing.kex:8:16: error: Undefined function: `addIndex`
-spec/error_using_alias_imports_nothing.kex:9:34: error: `Dsl.Migration::addIndex` expects 3 argument(s), got 1
+spec/error_using_alias_imports_nothing.kex:9:34: error: `Dsl.Migration.addIndex` expects 3 argument(s), got 1
