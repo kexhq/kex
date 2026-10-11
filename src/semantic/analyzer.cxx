@@ -102,8 +102,8 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // arity, which erlc could only report as an internal crash.
     for (auto& conflict : findMethodFunctionCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
-    // …and one method name on two same-named types of different modules.
-    for (auto& conflict : findSameNamedTypeMethodCollisions(program))
+    // …and one function name on two same-named types of different modules.
+    for (auto& conflict : findSameNamedTypeFunctionCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked

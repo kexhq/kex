@@ -344,13 +344,13 @@ auto findMethodFunctionCollisions(const ast::Program& program)
 
 namespace {
 
-// One `make` method of a type its own module declares.
-struct OwnedMethod {
+// One `make` function of a type its own module declares.
+struct OwnedFunction {
     std::string module;
     SourceLocation location;
 };
 
-class OwnedMethodCollector {
+class OwnedFunctionCollector {
 public:
     template <typename Items>
     void walk(const Items& items, const std::string& module) {
@@ -367,8 +367,8 @@ public:
         }
     }
 
-    auto methods() const -> const std::map<Key, std::vector<OwnedMethod>>& {
-        return m_methods;
+    auto functions() const -> const std::map<Key, std::vector<OwnedFunction>>& {
+        return m_functions;
     }
 
 private:
@@ -379,7 +379,7 @@ private:
             auto method = [&](const ast::FunctionDef& def) {
                 const auto arity = paramCount(def) +
                     (receiverIsFirstParam(def) ? 0u : 1u);
-                auto& owners = m_methods[{target, def.name, arity}];
+                auto& owners = m_functions[{target, def.name, arity}];
                 for (const auto& owner : owners)
                     if (owner.module == module) return;
                 owners.push_back({module, def.location});
@@ -401,18 +401,18 @@ private:
         }
     }
 
-    std::map<Key, std::vector<OwnedMethod>> m_methods;
+    std::map<Key, std::vector<OwnedFunction>> m_functions;
 };
 
 } // namespace
 
-auto findSameNamedTypeMethodCollisions(const ast::Program& program)
+auto findSameNamedTypeFunctionCollisions(const ast::Program& program)
     -> std::vector<Diagnostic> {
-    OwnedMethodCollector collector;
+    OwnedFunctionCollector collector;
     collector.walk(program.items, "");
 
     std::vector<Diagnostic> diagnostics;
-    for (const auto& [key, owners] : collector.methods()) {
+    for (const auto& [key, owners] : collector.functions()) {
         if (owners.size() < 2) continue;
         const auto& [type, name, arity] = key;
         (void)arity;
@@ -421,11 +421,11 @@ auto findSameNamedTypeMethodCollisions(const ast::Program& program)
         Diagnostic diagnostic;
         diagnostic.level = Diagnostic::Level::Error;
         diagnostic.location = second.location;
-        diagnostic.message = "`" + name + "` is a method of both `" +
+        diagnostic.message = "`" + name + "` is declared for both `" +
             first.module + "." + type + "` and `" + second.module + "." + type +
-            "` — a method is dispatched on its type's last name, so one of " +
+            "` — a `make` function is dispatched on its type's last name, so one of " +
             "them would answer for the other's values; rename one of the " +
-            "types or one of the methods";
+            "types or one of the functions";
         diagnostic.notes.push_back({first.location, "the other one is here"});
         diagnostics.push_back(std::move(diagnostic));
     }

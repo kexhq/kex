@@ -81,7 +81,7 @@ main do
   end
   IO.printLine(made.map { |pair| pair.left })
 
-  IO.printLine("-- as a method's parameter --")
+  IO.printLine("-- as a make function's parameter --")
   IO.printLine(Report { title: "Q3" }.lines do |title|
     "# ${title}"
     "done"

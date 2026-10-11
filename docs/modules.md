@@ -152,7 +152,8 @@ type Incoming = Request<Binary>     # Net.HTTP.Request<Binary>, everywhere
 ```
 
 `value.field` reads the field whenever `value`'s type is a record declaring
-it; a function or another type's method of the same name is not considered.
+it; a function of the same name, free or from another type's `make` block, is
+not considered.
 
 ## Access
 

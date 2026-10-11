@@ -164,7 +164,7 @@ end
                 "text x\n");
         });
 
-        it("reports one method name on two same-named types", []() {
+        it("reports one make function name on two same-named types", []() {
             const Files files = {
                 {"metro/connection.kex", R"KEX(module Metro.Connection
 
@@ -195,7 +195,7 @@ end
                 const auto output = runProgram(files, mode);
                 // Which module is merged first is not this test's business.
                 assertTrue(
-                    output.find("`send` is a method of both") != std::string::npos &&
+                    output.find("`send` is declared for both") != std::string::npos &&
                     output.find("`Metro.Connection.Connection`") != std::string::npos &&
                     output.find("`Metro.Other.Connection`") != std::string::npos,
                     std::string(mode) + " must name both types, got:\n" + output);
@@ -203,7 +203,7 @@ end
         });
     });
 
-    describe("a method name beside other modules' names (kexhq/kex#476)", []() {
+    describe("a make function's name beside other modules' names (kexhq/kex#476)", []() {
         it("leaves `Headers.empty` and Net.HTTP's own calls alone", []() {
             expectOnBothBackends({
                 {"app/reply.kex", kReply},
@@ -223,7 +223,7 @@ end
                 "empty 204\ntext x\nroute x\n");
         });
 
-        it("does not turn another record's field read into the method", []() {
+        it("does not turn another record's field read into a call", []() {
             expectOnBothBackends({
                 {"app/reply.kex", kReply},
                 {"main.kex", R"KEX(using App.Reply, only: [Reply]
@@ -265,8 +265,8 @@ end
         });
     });
 
-    describe("a function and a method of one name (kexhq/kex#476)", []() {
-        it("passes a foul method its context", []() {
+    describe("a free function and a make function of one name (kexhq/kex#476)", []() {
+        it("passes a foul make function its context", []() {
             expectOnBothBackends({
                 {"app/repo.kex", R"KEX(module App.Repo
 
@@ -301,7 +301,7 @@ end
                 "db/u/T/t\nd2/o/t/b\n");
         });
 
-        it("keeps a foul method apart from a pure one elsewhere (kexhq/kex#451)", []() {
+        it("keeps a foul make function apart from a pure one elsewhere (kexhq/kex#451)", []() {
             // `Net.HTTP.Headers.remove(name)` is pure at the same arity.
             expectOnBothBackends({
                 {"db/holdings.kex", R"KEX(module DB.Holdings
@@ -334,7 +334,7 @@ end
                 "false\n1\n");
         });
 
-        it("does not lend a method's defaults to another receiver (kexhq/kex#475)", []() {
+        it("does not lend a make function's defaults to another receiver (kexhq/kex#475)", []() {
             expectOnBothBackends({
                 {"main.kex", R"KEX(record Builder do
   table : String = ""

@@ -52,8 +52,9 @@ createTable(:owners) do |t|
 end
 ```
 
-The builder's methods stay methods on the builder, so they neither compete
-with other modules for their names nor need to accumulate by side effect.
+The column functions stay in the builder's `make` block, so they neither
+compete with other modules for their names nor need to accumulate by side
+effect.
 
 Collection is decided by the declared type alone: a parameter written as a
 plain function, `TableBuilder -> [Column]`, takes a block that returns its
