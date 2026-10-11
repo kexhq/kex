@@ -1453,9 +1453,16 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
   if (check(TokenType::UpperIdent) && peek().value == "Block") {
     advance();
     expect(TokenType::LessThan, "Expected '<' after Block");
-    auto inner = parseTypeExpr();
+    // `Block<R>` takes nothing; `Block<A, B, R>` is handed an `A` and a `B`.
+    // The result is always written last.
+    std::vector<ast::TypeExprPtr> arguments;
+    arguments.push_back(parseTypeExpr());
+    while (match(TokenType::Comma))
+      arguments.push_back(parseTypeExpr());
     expect(TokenType::GreaterThan, "Expected '>' to close Block type");
-    type->kind = ast::BlockType{std::move(inner)};
+    auto inner = std::move(arguments.back());
+    arguments.pop_back();
+    type->kind = ast::BlockType{std::move(inner), std::move(arguments)};
     return complete(std::move(type));
   }
 

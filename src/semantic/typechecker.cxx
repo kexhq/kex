@@ -2856,10 +2856,14 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return Type::func(std::move(params), std::move(result));
         }
         else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            std::vector<TypePtr> params;
+            for (const auto& param : node.params)
+                params.push_back(param ? resolveTypeExpr(*param, genericVars)
+                                       : Type::unknown());
             auto result = node.inner
                 ? resolveTypeExpr(*node.inner, genericVars)
                 : Type::unknown();
-            return Type::func({}, std::move(result), true);
+            return Type::func(std::move(params), std::move(result), true);
         }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<TypePtr> elements;

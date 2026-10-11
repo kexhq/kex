@@ -285,6 +285,7 @@ module Kex.AST do
     | RecordType([(String, TypeRef)])
     | NullableType(TypeRef)
     | BlockType(TypeRef)
+    | ParameterBlockType([TypeRef], TypeRef)
     | AtomType(String)
     | TypeQuery(String, Expression)
     | TypeVar(String)
@@ -316,6 +317,7 @@ module Kex.AST do
   let typeRefText(RecordType(fields)) -> String = "{" + fields.map { |name, fieldType| "${name}: ${Kex.AST.typeRefText(fieldType)}" }.join(", ") + "}"
   let typeRefText(NullableType(inner)) -> String = "${Kex.AST.typeRefText(inner)}?"
   let typeRefText(BlockType(inner)) -> String = "Block<${Kex.AST.typeRefText(inner)}>"
+  let typeRefText(ParameterBlockType(params, result)) -> String = "Block<${params.map { |param| Kex.AST.typeRefText(param) }.join(", ")}, ${Kex.AST.typeRefText(result)}>"
   let typeRefText(AtomType(name)) -> String = ":${name}"
   let typeRefText(TypeQuery(query, _)) -> String = "Type.${query}(<expression>)"
   let typeRefText(TypeVar(name)) -> String = name
@@ -397,6 +399,7 @@ module Kex.AST do
   let referenceText(UnionType(members)) -> String = Kex.AST.typeRefText(UnionType(members))
   let referenceText(NullableType(inner)) -> String = Kex.AST.typeRefText(NullableType(inner))
   let referenceText(BlockType(inner)) -> String = Kex.AST.typeRefText(BlockType(inner))
+  let referenceText(ParameterBlockType(params, result)) -> String = Kex.AST.typeRefText(ParameterBlockType(params, result))
   let referenceText(AtomType(name)) -> String = Kex.AST.typeRefText(AtomType(name))
   let referenceText(TypeQuery(query, argument)) -> String = Kex.AST.typeRefText(TypeQuery(query, argument))
   let referenceText(TypeVar(name)) -> String = Kex.AST.typeRefText(TypeVar(name))

@@ -71,7 +71,12 @@ struct OptionalType {
 };
 
 struct BlockType {
+    // What the block returns: the only argument of `Block<R>`, the last of
+    // `Block<A, R>`.
     TypeExprPtr inner;
+    // What the block is handed, in order — `Block<TableBuilder, [Column]>`
+    // is a `do |table| ... end`. Empty for a block that takes nothing.
+    std::vector<TypeExprPtr> params;
 };
 
 struct AtomType {

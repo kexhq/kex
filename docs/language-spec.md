@@ -286,6 +286,7 @@ trait  true  type  using  var  when  while
 | `T or! E` | Result sugar — `Result<T, E> = Ok(T) \| Error(E)` |
 | `A or B` | Either sugar — `Either<A, B> = Left(A) \| Right(B)` |
 | `Block<X>` | Block/lambda type |
+| `Block<P, X>` | Block handed a `P` (`do \|p\| ... end`); the result is written last |
 
 Generic parameters are uppercase single letters: `<A>`, `<A, E>`.
 

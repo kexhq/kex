@@ -992,8 +992,10 @@ auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
         } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
           return (node.inner ? typeExprToString(*node.inner) : "?") + "?";
         } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
-          return "Block<" + (node.inner ? typeExprToString(*node.inner) : "?") +
-                 ">";
+          std::string r = "Block<";
+          for (const auto &param : node.params)
+            r += (param ? typeExprToString(*param) : "?") + ", ";
+          return r + (node.inner ? typeExprToString(*node.inner) : "?") + ">";
         } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
           return ":" + node.name;
         } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {

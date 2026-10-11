@@ -259,8 +259,11 @@ private:
             } else if constexpr (std::is_same_v<T, ast::MapType>) {
                 if (node.key) type(*node.key, generics, allowThis);
                 if (node.value) type(*node.value, generics, allowThis);
-            } else if constexpr (std::is_same_v<T, ast::OptionalType> ||
-                                 std::is_same_v<T, ast::BlockType>) {
+            } else if constexpr (std::is_same_v<T, ast::BlockType>) {
+                for (const auto& param : node.params)
+                    if (param) type(*param, generics, allowThis);
+                if (node.inner) type(*node.inner, generics, allowThis);
+            } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
                 if (node.inner) type(*node.inner, generics, allowThis);
             } else if constexpr (std::is_same_v<T, ast::UnionType>) {
                 if (node.left) type(*node.left, generics, allowThis);
