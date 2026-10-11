@@ -103,6 +103,11 @@ record ManifestPackage do
   # beams it is about to load.
   packageOtpRequirement : String = ""
   entrypoint : String = "src/main.kex"
+  # The folders at the package's top that hold its modules, when it keeps
+  # them there instead of under `src/`: `sources(["app", "config", "db"])`
+  # makes `App.Models.User` the file `app/models/user.kex`. Empty for the
+  # usual layout, where `src/` holds everything.
+  sourceFolders : [String] = []
   manifestDependencies : [Dependency] = []
   targets : [Target] = []
   commands : [Command] = []
@@ -119,6 +124,13 @@ end
 # commands would be a cycle. The two have to be kept in step by hand — one
 # `.command(...)` in Tey.Cli, one name here (the first word is enough: `kex`
 # covers every `kex ...` subcommand).
+# Whether a name can be a source folder: one directory at the package's top,
+# by its plain name. Not a path — its name is the first part of every module
+# in it — and nothing hidden.
+let sourceFolder?(name: String) -> Bool do
+  return !name.empty? && !name.contains?("/") && !name.startsWith?(".")
+end
+
 let reservedCommands -> [String] do
   return ["add", "build", "clean", "docs", "generate", "help", "init", "install",
           "kex", "list", "local", "new", "plugin", "run", "setup", "test",
@@ -138,6 +150,7 @@ let read(text: String) -> ManifestPackage or! String do
   var kexRequirement = ">= 0.3.0"
   var otpRequirement = ""
   var entrypoint = "src/main.kex"
+  var sourceFolders: [String] = []
   var dependencies: [Dependency] = []
   var targets: [Target] = []
   var commands: [Command] = []
@@ -174,6 +187,24 @@ let read(text: String) -> ManifestPackage or! String do
         otpRequirement = Tey.Manifest.argument(arguments).or(otpRequirement)
       elif declaration == "entrypoint"
         entrypoint = Tey.Manifest.argument(arguments).or(entrypoint)
+      elif declaration == "sources"
+        # Named one by one: a folder is a source folder because the package
+        # says so, not because it happens to sit at the top.
+        match arguments do
+          [ListLit(items, None)] => do
+            let folders = items.map { |item| Tey.Manifest.stringValue(item).or("") }
+            if folders.empty? || folders.any? { |folder| !Tey.Manifest.sourceFolder?(folder) }
+              failures.push!("sources expects the names of folders at the package's top, like [\"app\", \"config\", \"db\"]")
+              ()
+            else
+              sourceFolders = folders
+            end
+          end
+          _ => do
+            failures.push!("sources expects a list of folder names, like [\"app\", \"config\", \"db\"]")
+            ()
+          end
+        end
       elif declaration == "target"
       targets.push!(Target {
         name: Tey.Manifest.argument(arguments).or("default"),
@@ -319,7 +350,8 @@ let read(text: String) -> ManifestPackage or! String do
   Ok(ManifestPackage { name: name, version: version, description: description, license: license,
                      packageKexRequirement: kexRequirement,
                      packageOtpRequirement: otpRequirement,
-                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
+                     entrypoint: entrypoint, sourceFolders: sourceFolders,
+                     manifestDependencies: dependencies, targets: targets,
                      commands: commands, manifestToolchain: toolchain,
                      manifestWorkspace: workspace, plugins: plugins })
 end

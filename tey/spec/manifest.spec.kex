@@ -136,6 +136,21 @@ describe("Tey.Manifest.read") do
     assert(package.description == "C# interop, of all things")
   end
 
+  it("keeps modules under src unless the package names its source folders") do
+    assert(Tey.Manifest.read("package \"lib\" do\nend").try.sourceFolders == [])
+    let application = Tey.Manifest.read("package \"chat\" do\n  entrypoint(\"main.kex\")\n  sources([\"app\", \"config\", \"db\"])\nend").try
+    assert(application.sourceFolders == ["app", "config", "db"])
+    assert(application.entrypoint == "main.kex")
+  end
+
+  it("takes source folders by name, at the package's top, and only as a list") do
+    assert(Tey.Manifest.read("package \"x\" do\n  sources([\"../other\"])\nend").error?)
+    assert(Tey.Manifest.read("package \"x\" do\n  sources([\"app/models\"])\nend").error?)
+    assert(Tey.Manifest.read("package \"x\" do\n  sources([\".\"])\nend").error?)
+    assert(Tey.Manifest.read("package \"x\" do\n  sources([])\nend").error?)
+    assert(Tey.Manifest.read("package \"x\" do\n  sources(\"app\")\nend").error?)
+  end
+
   it("defaults the entrypoint, and a library leaves it unused") do
     let library = Tey.Manifest.read(`
       package "greet" do

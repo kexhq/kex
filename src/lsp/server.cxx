@@ -278,6 +278,11 @@ auto moduleRootsFor(const std::string& filepath,
             if (fs::is_directory(candidate, ec) && !ec)
                 appendRoot(roots, candidate.string());
         }
+        // A package that names its source folders keeps them at its top, and
+        // its own directory is the root: `app/models/user.kex` is
+        // `App.Models.User` (tey/src/tey/commands.kex, `sourceDirectoryAt`).
+        if (teyPackageDeclaresSources(packageDirectory))
+            appendRoot(roots, packageDirectory);
     }
     if (roots.empty()) roots.push_back(sourceDir.string());
     for (const auto& root : configured) appendRoot(roots, root);

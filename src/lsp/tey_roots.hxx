@@ -12,6 +12,13 @@ namespace kex::lsp {
 // module's `using` lines cannot resolve.
 auto teyPackageDirectory(const std::string& start) -> std::string;
 
+// Whether the package in `packageDirectory` keeps its modules in folders at
+// its top — its `package.kex` has a `sources([...])` declaration — rather
+// than under `src/`. Its own directory is then the root `tey` passes
+// (tey/src/tey/commands.kex, `sourceDirectoryAt`): `App.Models.User` is
+// `app/models/user.kex` beside the manifest.
+auto teyPackageDeclaresSources(const std::string& packageDirectory) -> bool;
+
 // The `--source-root` list `tey` would pass for a file inside a tey package:
 // one entry per package in the governing `tey.lock` — the one at the
 // workspace root for a workspace member. A git package is its cache checkout
