@@ -129,6 +129,31 @@ end
 Calling `Logger.info` from a pure function is an error; calling
 `Logger.format` is fine. See [purity.md](purity.md).
 
+## Name resolution
+
+A bare name is looked up in the module it is written in, then in the modules
+enclosing it, then in what its `using` lines brought in. A top-level `using`
+covers the rest of **its own file**: a module merged in from another file does
+not see the entry file's imports.
+
+A qualified name means what it spells. `Net.HTTP.Request<Binary>` written
+inside a module that declares its own `Request` is Net.HTTP's, and so is
+`Web.Request<Binary>` after `using Net.HTTP, as: Web`.
+
+The same holds for the declarations a module makes: a record's field types and
+a `type` alias's body are read against that module's own `using` lines, once,
+where they are declared — not again wherever the record or alias is used.
+
+```kex
+module Metro.Types
+using Net.HTTP, only: [Request]
+
+type Incoming = Request<Binary>     # Net.HTTP.Request<Binary>, everywhere
+```
+
+`value.field` reads the field whenever `value`'s type is a record declaring
+it; a function or another type's method of the same name is not considered.
+
 ## Access
 
 ```kex

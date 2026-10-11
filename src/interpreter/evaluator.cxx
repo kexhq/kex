@@ -3163,6 +3163,23 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             std::string defKey = fnName;
             if (!node.module.empty()) {
                 auto ns = node.module;
+                // `using App.Controllers.Chat, as: Chat` binds `Chat` to the
+                // module, and `~Chat.show` names its function exactly as
+                // `Chat.show(...)` calls it.
+                if (!m_moduleRegistry.contains(ns)) {
+                    const auto firstDot = ns.find('.');
+                    const auto head = ns.substr(0, firstDot);
+                    auto bound = m_currentModule.empty()
+                        ? ValuePtr{} : m_env->get(m_currentModule + "::" + head);
+                    if (!bound) bound = m_env->get(head);
+                    if (bound)
+                        if (const auto* aliased =
+                                std::get_if<ModuleValue>(&bound->data);
+                            aliased && aliased->name != head)
+                            ns = aliased->name +
+                                 (firstDot == std::string::npos
+                                      ? std::string{} : ns.substr(firstDot));
+                }
                 if (!m_moduleRegistry.contains(ns)) {
                     module::Resolver resolver(m_moduleRoots);
                     if (resolver.resolve(ns, m_currentModule))
