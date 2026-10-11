@@ -5,6 +5,7 @@
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/named_arguments.hxx"
+#include "../common/source_name.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -2524,7 +2525,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                         std::move(namedArgs), expr.location);
                 } catch (const RuntimeError& error) {
                     const std::string undefined =
-                        "Undefined function: " + dispatchName;
+                        "Undefined function: " + sourceName(dispatchName);
                     if (std::string(error.what()).find(undefined) ==
                         std::string::npos)
                         throw;
@@ -2653,7 +2654,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return callFunction(mangledName, std::move(args),
                                     std::move(namedArgs), expr.location);
             } catch (const RuntimeError& error) {
-                const std::string undefined = "Undefined function: " + mangledName;
+                const std::string undefined = "Undefined function: " + sourceName(mangledName);
                 if (std::string(error.what()).find(undefined) == std::string::npos)
                     throw;
                 // Say WHERE the name was looked for. A namespace call names
@@ -2672,7 +2673,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (callableField && callableField->native)
                     return callableField->native(std::move(fieldArgs));
                 if (!receiver) throw;
-                throw RuntimeError("Undefined method: " + mangledName + " for " +
+                throw RuntimeError("Undefined method: " + sourceName(mangledName) + " for " +
                                        receiver->typeName(),
                                    expr.location);
             }
@@ -3814,7 +3815,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         }
     }
     if (!val) {
-        throw RuntimeError("Undefined function: " + name, loc);
+        throw RuntimeError("Undefined function: " + sourceName(name), loc);
     }
 
     if (auto* func = std::get_if<FunctionValue>(&val->data)) {
@@ -3871,7 +3872,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     if (!selected)
                         if (auto unknown = unknownNamedArgument(defLookupKey, namedArgs)) {
                             auto message = "unknown named argument `" + *unknown
-                                + ":` for `" + defLookupKey + "`";
+                                + ":` for `" + sourceName(defLookupKey) + "`";
                             if (auto module =
                                     moduleSupplyingNamedClause(defLookupKey, namedArgs)) {
                                 const auto separator = defLookupKey.rfind("::");
@@ -3883,7 +3884,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                             throw RuntimeError(message, loc);
                         }
                     if (!selected)
-                        throw RuntimeError("No overload of `" + defLookupKey +
+                        throw RuntimeError("No overload of `" + sourceName(defLookupKey) +
                                            "` accepts these named arguments and argument count", loc);
                     const auto& clause = *selected;
                     const auto receiverOffset =
@@ -3942,7 +3943,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         }
     }
 
-    throw RuntimeError("'" + name + "' is not callable", loc);
+    throw RuntimeError("'" + sourceName(name) + "' is not callable", loc);
 }
 
 auto Evaluator::findNamedClause(const std::string& functionName,

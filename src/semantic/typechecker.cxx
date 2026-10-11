@@ -3,6 +3,7 @@
 #include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
+#include "../common/source_name.hxx"
 #include <cctype>
 #include <functional>
 #include <set>
@@ -11,21 +12,6 @@
 namespace kex::semantic {
 
 namespace {
-
-// A callee as the user writes it. Module members are keyed `Module::name`
-// internally; a diagnostic shows `Module.name`.
-auto sourceName(const std::string& name) -> std::string {
-    std::string result;
-    for (size_t i = 0; i < name.size(); ++i) {
-        if (name.compare(i, 2, "::") == 0) {
-            result += '.';
-            ++i;
-        } else {
-            result += name[i];
-        }
-    }
-    return result;
-}
 
 // The name in `candidates` a misspelt `name` most likely meant: one differing
 // only in case (a renamed `whereis` is now `whereIs`) first, then the closest

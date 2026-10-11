@@ -4,6 +4,7 @@
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/named_arguments.hxx"
+#include "../common/source_name.hxx"
 #include "../lexer/token.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -1015,7 +1016,7 @@ struct Lowering {
     auto unknownNamedArgument(const std::string& qualified,
                               const std::string& label) -> ExprPtr {
         auto message = "unknown named argument `" + label + ":` for `" +
-                       qualified + "`";
+                       sourceName(qualified) + "`";
         const auto separator = qualified.rfind("::");
         const auto plain = separator == std::string::npos
             ? qualified : qualified.substr(separator + 2);
