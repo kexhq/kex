@@ -495,6 +495,7 @@ private:
     std::unordered_map<std::string, std::string> m_makeMethodModule;
     // Type names each module declares, for the rule above.
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredTypes;
+    std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredRecords;
     // Modules brought into scope by `using`, one set per environment scope so
     // the lexical `using M do ... end` form ends with its block.
     std::vector<std::set<std::string>> m_usingModules;

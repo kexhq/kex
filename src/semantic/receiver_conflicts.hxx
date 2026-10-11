@@ -44,13 +44,9 @@ auto findReceiverConflicts(const ast::Program& program)
 auto findMethodFunctionCollisions(const ast::Program& program)
     -> std::vector<Diagnostic>;
 
-// Two modules that each declare a type of the same name and give it a method
-// of the same name. Records keep their identity apart (`Metro.Connection` and
-// `Net.Connection` are different types), but both backends file a `make`
-// method under the type's LAST name, so one implementation answered for both:
-// "Undefined method: send" on BEAM, the wrong body on the walker
-// (kexhq/kex#476). Until methods are keyed by the qualified type this is
-// reported rather than miscompiled.
+// Opaque/variant types still dispatch on their short names. Reject two such
+// types that share a make function; record owners use qualified identities
+// and do not collide (kexhq/kex#476).
 auto findSameNamedTypeMethodCollisions(const ast::Program& program)
     -> std::vector<Diagnostic>;
 

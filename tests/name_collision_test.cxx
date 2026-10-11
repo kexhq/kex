@@ -164,7 +164,7 @@ end
                 "text x\n");
         });
 
-        it("reports one method name on two same-named types", []() {
+        it("dispatches one function name on two same-named records", []() {
             const Files files = {
                 {"metro/connection.kex", R"KEX(module Metro.Connection
 
@@ -173,7 +173,9 @@ record Connection do
 end
 
 make Connection do
-  let send(message: String) -> String = "metro ${@id} got ${message}"
+  let send(message: String = "default") -> String do
+    "metro ${@id} got ${message}"
+  end
 end
 )KEX"},
                 {"metro/other.kex", R"KEX(module Metro.Other
@@ -187,19 +189,13 @@ make Connection do
 end
 )KEX"},
                 {"main.kex", R"KEX(main do
-  IO.printLine(Metro.Connection.Connection { id: 3 }.send("x"))
+  IO.printLine(Metro.Connection.Connection { id: 3 }.send(message: "x"))
   IO.printLine(Metro.Other.Connection { name: "ws" }.send("y"))
+  IO.printLine(Metro.Connection.Connection { id: 3 }.send())
 end
 )KEX"}};
-            for (const auto* mode : {"--run", "--run-walker"}) {
-                const auto output = runProgram(files, mode);
-                // Which module is merged first is not this test's business.
-                assertTrue(
-                    output.find("`send` is a method of both") != std::string::npos &&
-                    output.find("`Metro.Connection.Connection`") != std::string::npos &&
-                    output.find("`Metro.Other.Connection`") != std::string::npos,
-                    std::string(mode) + " must name both types, got:\n" + output);
-            }
+            expectOnBothBackends(files,
+                "metro 3 got x\nsent y via ws\nmetro 3 got default\n");
         });
     });
 
@@ -262,6 +258,50 @@ main do
 end
 )KEX"}},
                 "/x\n[false]\n[i]\n");
+        });
+    });
+
+    describe("field reads in unannotated blocks (kexhq/kex#476)", []() {
+        it("does not infer a function's arity for an ambiguous field", []() {
+            expectOnBothBackends({
+                {"main.kex", R"KEX(record First do
+  flag : Bool = false
+end
+
+record Second do
+  flag : Bool = false
+end
+
+let flag(name: String, short: String, help: String, fallback: Bool) -> String = name
+
+main do
+  let handler = { |entry| entry.flag }
+  IO.printLine(handler(First { flag: true }))
+  IO.printLine(handler(Second { flag: false }))
+end
+)KEX"}}, "true\nfalse\n");
+        });
+        it("reads a field before trying an unrelated function", []() {
+            expectOnBothBackends({
+                {"main.kex", R"KEX(using Net.HTTP
+
+let parameters(context: Context) -> {String: String} = { "wrong": "x" }
+
+foul source(context: Context) -> Context do
+  IO.printLine("once")
+  context
+end
+
+main do
+  let handler = { |context| source(context).route.parameters }
+  let context = Context {
+    route: RouteContext { parameters: { "id": "7" } }
+  }
+  let result = handler(context)
+  IO.printLine(result["id"].or("wrong"))
+  IO.printLine(context.parameters["wrong"].or("missing"))
+end
+)KEX"}}, "once\n7\nx\n");
         });
     });
 

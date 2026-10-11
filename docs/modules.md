@@ -154,6 +154,11 @@ type Incoming = Request<Binary>     # Net.HTTP.Request<Binary>, everywhere
 `value.field` reads the field whenever `value`'s type is a record declaring
 it; a function or another type's method of the same name is not considered.
 
+A record's own `make` functions belong to its qualified identity. Records
+with the same short name in different modules can declare the same function
+names: `Metro.Connection.Connection.send` and `Net.Connection.send` remain
+separate implementations, selected by the receiver's record identity.
+
 ## Access
 
 ```kex

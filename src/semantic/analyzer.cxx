@@ -102,7 +102,7 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // arity, which erlc could only report as an internal crash.
     for (auto& conflict : findMethodFunctionCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
-    // …and one method name on two same-named types of different modules.
+    // Same-named opaque/variant types still use short dispatch identities.
     for (auto& conflict : findSameNamedTypeMethodCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
 

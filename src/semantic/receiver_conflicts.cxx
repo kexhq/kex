@@ -356,10 +356,12 @@ public:
     void walk(const Items& items, const std::string& module) {
         std::set<std::string> declared;
         collectDeclaredTypeNames(items, declared);
+        std::set<std::string> records;
+        collectDeclaredRecordNames(items, records);
         for (const auto& item : items) {
             if (const auto* make =
                     std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                if (*make && !module.empty()) collect(**make, module, declared);
+                if (*make && !module.empty()) collect(**make, module, declared, records);
             } else if (const auto* child =
                            std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*child) walk((*child)->body, (*child)->name);
@@ -373,9 +375,13 @@ public:
 
 private:
     void collect(const ast::MakeDef& make, const std::string& module,
-                 const std::set<std::string>& declared) {
+                 const std::set<std::string>& declared,
+                 const std::set<std::string>& records) {
         for (const auto& target : makeTargetNames(make.target)) {
             if (!declared.count(target)) continue;
+            // A record's make functions are registered with its qualified
+            // identity, so equal last segments no longer collide.
+            if (records.count(target)) continue;
             auto method = [&](const ast::FunctionDef& def) {
                 const auto arity = paramCount(def) +
                     (receiverIsFirstParam(def) ? 0u : 1u);

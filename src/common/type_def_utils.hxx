@@ -67,11 +67,31 @@ inline auto collectDeclaredTypeNames(const Items& items,
     }
 }
 
-inline auto makeTargetNames(const ast::TypeExprPtr& target)
+template <typename Items>
+inline auto collectDeclaredRecordNames(const Items& items,
+                                       std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (node) out.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                if (node) collectDeclaredRecordNames(node->items, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectDeclaredRecordNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
+inline auto makeTargetNames(const ast::TypeExprPtr& target,
+                            const std::string& module = "",
+                            const std::set<std::string>& records = {})
     -> std::vector<std::string> {
     std::vector<std::string> names;
-    auto add = [&names](std::string n) {
+    auto add = [&names, &module, &records](std::string n) {
         if (n.empty()) return;
+        if (!module.empty() && records.count(n)) n = module + "." + n;
         if (std::find(names.begin(), names.end(), n) == names.end())
             names.push_back(std::move(n));
     };
@@ -83,11 +103,21 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target)
             return;
         }
         if (const auto* tn = std::get_if<ast::TypeName>(&t->kind)) {
-            if (!tn->parts.empty()) add(tn->parts.back());
+            std::string name;
+            for (const auto& part : tn->parts) {
+                if (!name.empty()) name += ".";
+                name += part;
+            }
+            add(std::move(name));
             return;
         }
         if (const auto* gt = std::get_if<ast::GenericType>(&t->kind)) {
-            if (!gt->name.parts.empty()) add(gt->name.parts.back());
+            std::string name;
+            for (const auto& part : gt->name.parts) {
+                if (!name.empty()) name += ".";
+                name += part;
+            }
+            add(std::move(name));
             return;
         }
         if (std::holds_alternative<ast::ListType>(t->kind)) { add("List"); return; }
