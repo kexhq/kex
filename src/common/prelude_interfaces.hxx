@@ -148,8 +148,12 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 return Type::list(args[0]);
             if (name == "Result" && args.size() == 2)
                 return Type::named("Result", std::move(args));
-            if (name == "Block" && args.size() == 1)
-                return Type::func({}, args[0], true);
+            // `Block<R>`, or `Block<A, R>` for a block handed an `A`.
+            if (name == "Block" && !args.empty()) {
+                auto result = args.back();
+                args.pop_back();
+                return Type::func(std::move(args), std::move(result), true);
+            }
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -209,10 +213,16 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             return Type::atom(node.name);
         }
         else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            std::vector<kex::semantic::TypePtr> params;
+            for (const auto& param : node.params)
+                params.push_back(
+                    param ? resolveSourceType(*param, vars, aliases, traits)
+                          : Type::unknown());
             return Type::func(
-                {}, node.inner
-                        ? resolveSourceType(*node.inner, vars, aliases, traits)
-                        : Type::unknown(),
+                std::move(params),
+                node.inner
+                    ? resolveSourceType(*node.inner, vars, aliases, traits)
+                    : Type::unknown(),
                 true);
         }
         else { return Type::unknown(); }

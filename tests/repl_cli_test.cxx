@@ -1234,7 +1234,7 @@ int main() {
             // same input worked in a script and in the BEAM REPL.
             auto out = runRepl("using Regex\nregex(\"\\\\d+\")\n");
             assertTrue(out.find("Unknown module") == std::string::npos, out);
-            assertTrue(out.find("Ok(Regex { source:") != std::string::npos, out);
+            assertTrue(out.find("Ok(Regex.Regex { source:") != std::string::npos, out);
         });
 
         it("announces `using` as an import, not a definition (BEAM)", []() {

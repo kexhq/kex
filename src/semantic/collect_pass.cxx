@@ -72,7 +72,10 @@ auto typeExprText(const ast::TypeExpr& type) -> std::string {
         } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             return (node.inner ? typeExprText(*node.inner) : "?") + "?";
         } else if constexpr (std::is_same_v<T, ast::BlockType>) {
-            return "Block<" + (node.inner ? typeExprText(*node.inner) : "?") + ">";
+            std::string result = "Block<";
+            for (const auto& param : node.params)
+                result += (param ? typeExprText(*param) : "?") + ", ";
+            return result + (node.inner ? typeExprText(*node.inner) : "?") + ">";
         } else if constexpr (std::is_same_v<T, ast::AtomType>) {
             return ":" + node.name;
         } else if constexpr (std::is_same_v<T, ast::GenericVar>) {

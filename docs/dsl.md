@@ -35,11 +35,37 @@ div do
 end
 ```
 
+## Block<P, [A]> — Builder Blocks
+
+A block can be handed a value and still collect. The types the block receives
+come first and its result last, so `Block<TableBuilder, [Column]>` is a
+`do |t| ... end` whose statements are each a `Column`:
+
+```kex
+let createTable(name: Atom, columns: Block<TableBuilder, [Column]>) -> Table =
+  Table { name: name, columns: columns(TableBuilder {}) }
+
+createTable(:owners) do |t|
+  t.string(:name, nullable: true)
+  t.bigint(:credit)
+  t.bigint(:legacy) if migrating?     # guards and spreads work as above
+end
+```
+
+The column functions stay in the builder's `make` block, so they neither
+compete with other modules for their names nor need to accumulate by side
+effect.
+
+Collection is decided by the declared type alone: a parameter written as a
+plain function, `TableBuilder -> [Column]`, takes a block that returns its
+last expression, and that expression has to be the list.
+
 ## Block<A> vs () -> A
 
 - `Block<A>` — explicitly a `do...end` block, returns last expression
 - `() -> A` — lambda/thunk, can be inline `{ expr }`
 - `Block<[A]>` — collection mode
+- `Block<P, A>` / `Block<P, [A]>` — the same two, for a block handed a `P`
 
 ## Using for Scoped DSL Imports
 

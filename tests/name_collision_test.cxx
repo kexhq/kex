@@ -164,6 +164,25 @@ end
                 "text x\n");
         });
 
+        it("keeps record identities through aliases and re-exports", []() {
+            expectOnBothBackends({
+                {"app/shapes.kex", R"KEX(module App.Shapes
+record Circle do radius : Integer = 2 end
+make Circle do
+  let diameter -> Integer = @radius * 2
+end
+)KEX"},
+                {"main.kex", R"KEX(using App.Shapes, as: Geo
+module Public do
+  export App.Shapes
+end
+main do
+  IO.printLine(Geo.Circle { radius: 3 }.diameter)
+  IO.printLine(Public.Shapes.Circle {}.diameter)
+end
+)KEX"}}, "6\n4\n");
+        });
+
         it("dispatches one function name on two same-named records", []() {
             const Files files = {
                 {"metro/connection.kex", R"KEX(module Metro.Connection
@@ -306,6 +325,44 @@ end
     });
 
     describe("a function and a method of one name (kexhq/kex#476)", []() {
+        it("keeps a top-level function separate from dependency receiver dispatch", []() {
+            expectOnBothBackends({
+                {"app/service.kex", R"KEX(module App.Service
+record Service do value : String end
+make Service do
+  let served(suffix: String) -> String = "record ${@value} ${suffix}"
+end
+)KEX"},
+                {"main.kex", R"KEX(using App.Service, only: [Service]
+let served(value: String, suffix: String) -> String = "free ${value} ${suffix}"
+main do
+  IO.printLine(served("a", "b"))
+  IO.printLine(Service { value: "c" }.served("d"))
+  let call = ~served
+  IO.printLine(call("e", "f"))
+  IO.printLine("g".served("h"))
+end
+)KEX"}}, "free a b\nrecord c d\nfree e f\nfree g h\n");
+        });
+
+        it("keeps a module's free function separate from its make function", []() {
+            expectOnBothBackends({
+                {"app/forms.kex", R"KEX(module App.Forms
+record Env do raw : String end
+make Env do
+  let formFields -> [String] = decodeFields(@raw)
+end
+private do
+  let formFields(text: String) -> [String] = text.split(",")
+  let decodeFields(text: String) -> [String] = formFields(text)
+end
+let fields(text: String) -> [String] = Env { raw: text }.formFields
+)KEX"},
+                {"main.kex", R"KEX(main do
+  IO.printLine(App.Forms.fields("a,b"))
+end
+)KEX"}}, "[a, b]\n");
+        });
         it("passes a foul method its context", []() {
             expectOnBothBackends({
                 {"app/repo.kex", R"KEX(module App.Repo

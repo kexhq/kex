@@ -1,0 +1,30 @@
+# kex: check-only
+# A `Block<A, [R]>` checks what the block is handed and what each of its
+# statements contributes (kexhq/kex#469).
+
+record Column do
+  label : String
+end
+
+record TableBuilder do
+  table : String = ""
+end
+
+make TableBuilder do
+  let string(label: String) -> Column = Column { label: label }
+end
+
+let createTable(name: String, columns: Block<TableBuilder, [Column]>) -> [Column] = columns(TableBuilder { table: name })
+
+main do
+  let wrongElement = createTable("a") do |t|
+    t.string("name")
+    42
+  end
+  let wrongArity = createTable("b") do |t, u|
+    t.string("name")
+  end
+  let noParameter = createTable("c") do
+    "x"
+  end
+end

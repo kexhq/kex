@@ -273,18 +273,11 @@ function; each value reaches the implementation belonging to its own record.
 Opaque and variant types still use short dispatch names. Two such types with
 the same name cannot share a `make` function name; the checker reports this
 collision rather than choosing an implementation.
-
-**A function and a method of one name and arity cannot share a BEAM module.**
-`let served(a, b)` beside a `make T do let served(x) end` in the same file is
-reported by the checker; across compilation units it still surfaces from
-lowering, with no source location:
-
-```
-IR lower: `served/2` names both a free function and a receiver method in this
-compilation unit — rename one of them
-```
-
-Free functions and receiver dispatchers still share a BEAM symbol namespace.
+Same-named opaque and variant types still use short dispatch names. Two such
+types cannot share a `make` function name; the checker reports this collision.
+Records use qualified dispatch identities, so same-named records can share
+function names. Free functions and receiver dispatchers use separate BEAM
+symbols, including when they share a name and arity.
 
 A field read on a receiver whose type is not known checks the runtime record
 layout first. A same-named UFCS function is used only when that record does

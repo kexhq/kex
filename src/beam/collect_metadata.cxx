@@ -85,7 +85,11 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
         } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
             return kexiNamed(node.name);
         } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
-            return kexiNamed("Block", {convertTypeExprImpl(*node.inner)});
+            std::vector<KexiTypePtr> args;
+            for (const auto& param : node.params)
+                args.push_back(convertTypeExprImpl(*param));
+            args.push_back(convertTypeExprImpl(*node.inner));
+            return kexiNamed("Block", std::move(args));
         } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
             // ":macos", not "Atom": the literal is what makes a union of atom
             // literals readable when a consumer prints the type back.
@@ -126,8 +130,13 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
                 args.push_back(convertSemanticType(arg));
             return kexiNamed(node.name, std::move(args));
         } else if constexpr (std::is_same_v<T, kex::semantic::FuncType>) {
-            if (node.block)
-                return kexiNamed("Block", {convertSemanticType(node.result)});
+            if (node.block) {
+                std::vector<KexiTypePtr> args;
+                for (const auto& param : node.params)
+                    args.push_back(convertSemanticType(param));
+                args.push_back(convertSemanticType(node.result));
+                return kexiNamed("Block", std::move(args));
+            }
             std::vector<KexiTypePtr> params;
             for (const auto& param : node.params)
                 params.push_back(convertSemanticType(param));

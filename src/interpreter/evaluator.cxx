@@ -393,6 +393,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     std::vector<semantic::Diagnostic> expandDiagnostics;
     compiled::ExpandOptions expandOptions;
     expandOptions.sourcePath = *path;
+    expandOptions.moduleRoots = m_moduleRoots;
     if (!compiled::expand(*program, expandDiagnostics, expandOptions)) {
         const auto& diagnostic = expandDiagnostics.front();
         m_loadingModules.erase(canonicalName);
@@ -1023,6 +1024,35 @@ auto Evaluator::evalFieldDefault(const std::string& typeName,
 auto Evaluator::resolveRecordTypeName(const std::string& name) const
     -> std::string {
     if (name.find('.') != std::string::npos && m_recordDefs.count(name)) return name;
+    // Follow namespace values rather than tagging alias/re-export spellings
+    // as new records (`Geo.Circle` and `App.Geometry.Circle`).
+    if (const auto dot = name.find('.'); dot != std::string::npos) {
+        auto value = m_env->get(name.substr(0, dot));
+        auto offset = dot + 1;
+        while (value && offset < name.size()) {
+            const auto* module = std::get_if<ModuleValue>(&value->data);
+            if (!module) break;
+            const auto entry = m_moduleRegistry.find(module->name);
+            if (entry == m_moduleRegistry.end()) break;
+            const auto next = name.find('.', offset);
+            const auto member = name.substr(offset, next - offset);
+            if (auto found = entry->second.exports.find(member);
+                found != entry->second.exports.end())
+                value = found->second;
+            else if (auto child = entry->second.submodules.find(member);
+                     child != entry->second.submodules.end())
+                value = Value::module(child->second);
+            else
+                break;
+            if (next == std::string::npos) {
+                if (const auto* record = std::get_if<RecordValue>(&value->data))
+                    if (record->fields.empty() && m_recordDefs.count(record->typeName))
+                        return record->typeName;
+                break;
+            }
+            offset = next + 1;
+        }
+    }
     if (!m_currentModule.empty()) {
         auto scope = m_currentModule;
         while (!scope.empty()) {
@@ -4187,7 +4217,8 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
             // (-1: builtins, function references) stays permissive.
             if (function->arity < 0) return true;
             if constexpr (std::is_same_v<T, ast::BlockType>)
-                return function->arity == 0;
+                return function->arity ==
+                       static_cast<int>(node.params.size());
             else
                 return function->arity == declaredFunctionArity(node);
         } else if constexpr (std::is_same_v<T, ast::ListType>) {

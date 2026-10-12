@@ -1,0 +1,13 @@
+-- a builder block collects its statements --
+owners
+[name:TEXT:true, credit:BIGINT:false]
+-- guards and spreads, as in Block<[A]> --
+[always, kept, x, y]
+-- an empty body is an empty list --
+0
+-- a non-list result returns the last expression --
+5
+-- two parameters, collecting --
+[2, 20]
+-- as a make function's parameter --
+[# Q3, done]

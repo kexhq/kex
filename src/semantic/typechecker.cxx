@@ -2856,10 +2856,14 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return Type::func(std::move(params), std::move(result));
         }
         else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            std::vector<TypePtr> params;
+            for (const auto& param : node.params)
+                params.push_back(param ? resolveTypeExpr(*param, genericVars)
+                                       : Type::unknown());
             auto result = node.inner
                 ? resolveTypeExpr(*node.inner, genericVars)
                 : Type::unknown();
-            return Type::func({}, std::move(result), true);
+            return Type::func(std::move(params), std::move(result), true);
         }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<TypePtr> elements;
@@ -8937,11 +8941,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // `let show(x) = x.to(String)` inferred as `Measure -> String`,
             // rejecting `show(42)`.
             // `x.route` on an unconstrained `x` is as much a read of some
-            // record's `route` FIELD as a call of this method, when a record
-            // in view declares one. Taking the method typed the receiver as
-            // the method's owner: a closure's `context.route` became a call
+            // record's `route` FIELD as a call of this function, when a record
+            // in view declares one. Taking the function typed the receiver as
+            // the function's owner: a closure's `context.route` became a call
             // on an unrelated record the moment that record gained a `route`
-            // method (kexhq/kex#476). Neither is evidence; leave both open.
+            // function (kexhq/kex#476). Neither is evidence; leave both open.
             if (receiverUnknown && isReceiver && argTypes.size() == 1 &&
                 !matched.params.empty()) {
                 const auto owner = typeToString(resolve(matched.params.front()));
