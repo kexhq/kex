@@ -806,6 +806,9 @@ target_link_libraries(name_collision_test PRIVATE kex_lib)
 target_include_directories(name_collision_test PRIVATE tests)
 target_compile_definitions(name_collision_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(name_collision_test kex)
+if(TARGET kex_prelude_beam)
+    add_dependencies(name_collision_test kex_prelude_beam)
+endif()
 add_test(NAME name_collision_test COMMAND name_collision_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Regression test for #372: the `--run` cache used to key its fingerprint on

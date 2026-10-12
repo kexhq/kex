@@ -98,12 +98,8 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // an ambiguous method tends to cause downstream.
     for (auto& conflict : findReceiverConflicts(program))
         m_diagnostics.push_back(std::move(conflict));
-    // …and a method that collides with a plain function of the same emitted
-    // arity, which erlc could only report as an internal crash.
-    for (auto& conflict : findMethodFunctionCollisions(program))
-        m_diagnostics.push_back(std::move(conflict));
-    // …and one function name on two same-named types of different modules.
-    for (auto& conflict : findSameNamedTypeFunctionCollisions(program))
+    // Same-named opaque/variant types still use short dispatch identities.
+    for (auto& conflict : findSameNamedTypeMethodCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked

@@ -1,0 +1,21 @@
+# A private free function and a make function can share a name and arity.
+module Forms do
+  record Env do
+    raw : String
+  end
+
+  make Env do
+    let formFields = decodeFields(@raw)
+  end
+
+  private do
+    let formFields(text) = text.split(",")
+
+    decodeFields : String -> [String]
+    let decodeFields(text) = formFields(text)
+  end
+end
+
+main do
+  IO.printLine(Forms.Env { raw: "a,b" }.formFields)
+end

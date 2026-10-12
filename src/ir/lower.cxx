@@ -380,6 +380,7 @@ struct Lowering {
         }
         const auto dot = base.rfind('.');
         if (dot == std::string::npos) return written;
+        if (localTypeModules.count(base)) return written;
         const auto qualifier = base.substr(0, dot);
         const auto bare = base.substr(dot + 1);
         auto declaring = localTypeModules.find(bare);
@@ -588,6 +589,20 @@ struct Lowering {
     // (element 1). Mirrors the string emitter's collision handling.
     std::unordered_map<std::string, std::vector<std::string>> methodOwners;
     std::unordered_set<std::string> collidingMethods;
+    // Prefix calls and receiver dispatch have distinct symbols even when
+    // their source name and arity coincide.
+    std::unordered_map<std::string, std::string> freeFunctionSymbols;
+
+    auto prefixSymbol(const std::string& name) const -> std::string {
+        auto found = freeFunctionSymbols.find(name);
+        return found == freeFunctionSymbols.end() ? name : found->second;
+    }
+
+    auto prefixCall(const std::string& name, std::vector<ExprPtr> args) -> Call {
+        auto call = localCall(name, std::move(args));
+        call.name = prefixSymbol(name);
+        return call;
+    }
     // Same receiver + name + BEAM arity, but distinct checked parameter
     // signatures. These implementations need their full signature in the
     // local symbol rather than the receiver-only collision spelling.
@@ -1149,20 +1164,11 @@ struct Lowering {
     // member for a union target (`make Float | Integer`). Always non-empty so
     // callers can loop unconditionally; an unnameable target yields "", which
     // is what simpleTypeName returned for it before.
-    static auto makeTargetNameList(const ast::TypeExprPtr& t)
+    static auto makeTargetNameList(const ast::TypeExprPtr& t,
+                                   const std::string& module = "",
+                                   const std::set<std::string>& records = {})
         -> std::vector<std::string> {
-        if (t) {
-            if (const auto* tn = std::get_if<ast::TypeName>(&t->kind);
-                tn && tn->parts.size() > 1) {
-                std::string qualified;
-                for (const auto& part : tn->parts) {
-                    if (!qualified.empty()) qualified += ".";
-                    qualified += part;
-                }
-                return {std::move(qualified)};
-            }
-        }
-        auto names = kex::makeTargetNames(t);
+        auto names = kex::makeTargetNames(t, module, records);
         if (names.empty()) names.emplace_back("");
         return names;
     }
@@ -1172,6 +1178,10 @@ struct Lowering {
     // uppercases). This is the SSA construction the string emitter did via
     // m_varSubst, now done once in the lowering pass.
     std::unordered_map<std::string, std::string> subst;
+    // A dynamic field read evaluates its receiver once, then shares that
+    // value with the ordinary UFCS fallback without changing AST identities
+    // used by the checker's resolved-call and expression-type tables.
+    std::unordered_map<const ast::Expr*, std::string> loweredReceivers;
     // Local (Kex source) name -> the plain top-level function it was bound
     // from via a bare `~name` capture (`let f = ~greet`), so a named-arg
     // call through `f` can reorder by `greet`'s real parameter names instead
@@ -1369,6 +1379,8 @@ struct Lowering {
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr {
         if (!e) return litBool(false);
+        if (auto found = loweredReceivers.find(e.get()); found != loweredReceivers.end())
+            return var(found->second);
         auto prevLoc = currentLoc;
         currentLoc = &e->location;
         auto r = std::visit([&](const auto& n) -> ExprPtr {
@@ -1405,7 +1417,7 @@ struct Lowering {
                     if (topLevelConstants.count(n.name) ||
                         zeroArgFns.count(n.name)) {
                         auto ex = std::make_unique<Expr>();
-                        ex->node = localCall(n.name, {});
+                        ex->node = prefixCall(n.name, {});
                         return ex;
                     }
                     if (auto symbol = moduleConstantSymbol(n.name);
@@ -1477,7 +1489,8 @@ struct Lowering {
                         lam.params.push_back(p);
                         args.push_back(var(p));
                     }
-                    lam.body = localCallExpr(n.name, std::move(args));
+                    lam.body = std::make_unique<Expr>();
+                    lam.body->node = prefixCall(n.name, std::move(args));
                     auto ex = std::make_unique<Expr>();
                     ex->node = std::move(lam);
                     return ex;
@@ -2363,7 +2376,7 @@ struct Lowering {
                                  + qualKey + "`");
             }
             auto ex = std::make_unique<Expr>();
-            ex->node = localCall(n.name, std::move(args));
+            ex->node = prefixCall(n.name, std::move(args));
             return ex;
         };
 
@@ -2510,18 +2523,26 @@ struct Lowering {
         if (found == makeMethods.end()) return nullptr;
         if (auto angle = owner.find('<'); angle != std::string::npos)
             owner.resize(angle);
-        if (auto dot = owner.rfind('.'); dot != std::string::npos)
-            owner.erase(0, dot + 1);
+        owner = canonicalRecordName(owner);
         std::vector<std::string> labels;
         for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
         const auto positional = n.args.size() + (n.block ? 1 : 0);
+        // Whether the receiver's own type declares the function at all. When
+        // it does and the call needs nothing placed — every parameter given,
+        // in order — there is no method to return, and no other type's to
+        // look for: two `Connection`s, of which only one's `send` has a
+        // default, had the other's `send(text)` padded out with it and sent
+        // to an arity nobody defined (kexhq/kex#476).
+        bool declaredByOwner = false;
         for (const auto& method : found->second) {
-            if (!owner.empty() && method.owner != owner) continue;
+            if (!owner.empty() && canonicalRecordName(method.owner) != owner) continue;
+            declaredByOwner = !owner.empty();
             const auto& clause = method.def->clauses[0];
             if (labels.empty() && positional >= clause.params.size()) continue;
             if (namedArgumentsFit(clause, labels, positional)) return &method;
         }
-        return strict || owner.empty() || receiverIsForeignTo(n)
+        return strict || owner.empty() || declaredByOwner ||
+                   receiverIsForeignTo(n)
             ? nullptr : makeMethodFor(n, "", false);
     }
 
@@ -2578,11 +2599,10 @@ struct Lowering {
         if (knownFns.count(mangleQualifiedMember(type, method))) return true;
         auto owners = methodOwners.find(method);
         if (owners == methodOwners.end()) return true;
-        const auto dot = type.rfind('.');
-        const auto bare = dot == std::string::npos ? type : type.substr(dot + 1);
+        const auto canonical = canonicalRecordName(type);
         return std::any_of(owners->second.begin(), owners->second.end(),
                            [&](const std::string& owner) {
-                               return owner == type || owner == bare;
+                               return canonicalRecordName(owner) == canonical;
                            });
     }
 
@@ -2624,8 +2644,7 @@ struct Lowering {
         auto owner = receiverOwner(n);
         if (auto angle = owner.find('<'); angle != std::string::npos)
             owner.resize(angle);
-        if (auto dot = owner.rfind('.'); dot != std::string::npos)
-            owner.erase(0, dot + 1);
+        owner = canonicalRecordName(owner);
         const std::vector<MakeMethod>* methods = nullptr;
         if (auto found = makeMethods.find(n.method); found != makeMethods.end())
             methods = &found->second;
@@ -2672,7 +2691,7 @@ struct Lowering {
                 !typeVariantTags.count(named->name) &&
                 !typeVariantTags.count(bare))
                 return false;
-            name = bare;
+            name = canonicalRecordName(named->name);
         } else if (std::holds_alternative<semantic::PrimitiveType>(kind) ||
                    std::holds_alternative<semantic::SizedIntType>(kind) ||
                    std::holds_alternative<semantic::SizedFloatType>(kind)) {
@@ -2683,9 +2702,7 @@ struct Lowering {
         if (auto methods = makeMethods.find(n.method);
             methods != makeMethods.end())
             for (const auto& method : methods->second) {
-                const auto dot = method.owner.rfind('.');
-                if ((dot == std::string::npos
-                         ? method.owner : method.owner.substr(dot + 1)) == name)
+                if (canonicalRecordName(method.owner) == name)
                     return false;
             }
         return true;
@@ -2989,7 +3006,7 @@ struct Lowering {
         // A module member's EMITTED name can differ from its bare source
         // name (mangling), unlike a top-level one, which is always bare —
         // `moduleFunctions` has the emitted spelling actually safe to call.
-        std::string zeroArgCallName = n.name;
+        std::string zeroArgCallName = prefixSymbol(n.name);
         bool zeroArgThunk = !subst.count(n.name) &&
             (zeroArgFns.count(n.name) || topLevelConstants.count(n.name) ||
              [&] {
@@ -3074,7 +3091,7 @@ struct Lowering {
         // binding and `using`-import checks above already outrank it
         // (kexhq/kex#289, kexhq/kex#362).
         else if (knownFns.count(n.name))
-            ex->node = localCall(n.name, std::move(args));
+            ex->node = prefixCall(n.name, std::move(args));
         else if (auto external = externalPrefixCall(n.name, arity); !external.empty())
             // UFCS runs both ways: `xs.length` and `length(xs)` are the same
             // call, and the walker resolves the prefix spelling against the
@@ -3325,6 +3342,47 @@ struct Lowering {
     }
 
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
+        // A record field wins over a same-named function even when a block's
+        // receiver type was not known to the checker. Keep UFCS as the lazy
+        // fallback for values that do not declare this field (#476).
+        if (!n.receiver || n.parenthesized || n.mutating || !n.args.empty() ||
+            !n.namedArgs.empty() || n.block || !fieldAccessors.count(n.method))
+            return lowerMethodCallImpl(n);
+        std::vector<std::string> path;
+        if (modulePath(*n.receiver, path)) return lowerMethodCallImpl(n);
+        if (auto field = staticFieldRead(n)) return field;
+
+        auto receiver = lower(n.receiver);
+        const auto name = fresh("FieldReceiver");
+        loweredReceivers[n.receiver.get()] = name;
+        auto fallback = lowerMethodCallImpl(n);
+        loweredReceivers.erase(n.receiver.get());
+
+        Match match;
+        match.subjects.push_back(var(name));
+        for (const auto& slot : fieldAccessors.at(n.method)) {
+            MatchClause clause;
+            auto value = std::make_unique<Pattern>();
+            value->kind = PatKind::Var;
+            value->name = fresh("FieldValue");
+            clause.guard = recordGuard(slot, var(value->name));
+            clause.patterns.push_back(std::move(value));
+            clause.body = callE("erlang", "element", 2,
+                                two(litInt(slot.position), var(name)));
+            match.clauses.push_back(std::move(clause));
+        }
+        MatchClause otherwise;
+        auto wildcard = std::make_unique<Pattern>();
+        wildcard->kind = PatKind::Wild;
+        otherwise.patterns.push_back(std::move(wildcard));
+        otherwise.body = std::move(fallback);
+        match.clauses.push_back(std::move(otherwise));
+        auto result = std::make_unique<Expr>();
+        result->node = std::move(match);
+        return makeLet(name, std::move(receiver), std::move(result));
+    }
+
+    auto lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // A bare mutating `!` call used where its rebind can't be applied is
         // a runtime error (matching the walker's behaviour). Statement-position
         // `!` calls are lowered by the caller as value + rebind.
@@ -3518,12 +3576,9 @@ struct Lowering {
             // itself, and hung the moment any `make ..., implement: Clock`
             // existed to put `now` in `localMethods` (kexhq/kex#143).
             if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
-                const auto owners = methodOwners.find(n.method);
                 localTypeShadows =
-                    knownTypes.count(uid->name) && localMethods.count(n.method) &&
-                    owners != methodOwners.end() &&
-                    std::find(owners->second.begin(), owners->second.end(),
-                              uid->name) != owners->second.end();
+                    knownTypes.count(uid->name) &&
+                    typeOwnsStaticFunction(uid->name, n.method);
             }
             if (auto* id = std::get_if<ast::Identifier>(&n.receiver->kind))
                 localTypeShadows = id->name == "this";
@@ -3559,6 +3614,7 @@ struct Lowering {
                     if (auto owner = variantOwner.find(receiverType);
                         owner != variantOwner.end())
                         receiverType = owner->second;
+                    receiverType = canonicalRecordName(receiverType);
                     // The checker names a type declared in a module by its
                     // qualified path (`Net.HTTP.Router`), while `methodOwners`
                     // records the bare name its `make` block wrote. Only an
@@ -3602,9 +3658,8 @@ struct Lowering {
                                         // Named arguments are placed by the
                                         // resolved target's parameter names,
                                         // which this shortcut does not do.
-                                        return owner == receiverType ||
-                                               (owner == bareReceiver &&
-                                                n.namedArgs.empty());
+                                        return canonicalRecordName(owner) == receiverType &&
+                                               n.namedArgs.empty();
                                     });
                 }
             }
@@ -4442,7 +4497,7 @@ struct Lowering {
                 std::string callName = knownFns.count(mangled) ? mangled : n.method;
                 std::vector<ExprPtr> callArgs;
                 if (implicitThisMethods.count(callName))
-                    callArgs.push_back(lit(LitKind::Atom, uid->name));
+                    callArgs.push_back(lit(LitKind::Atom, canonicalRecordName(uid->name)));
                 for (auto& a : args) callArgs.push_back(std::move(a));
                 int ar = static_cast<int>(callArgs.size());
                 auto ex = std::make_unique<Expr>();
@@ -7646,7 +7701,11 @@ struct Lowering {
         const auto targets = makeTargetNameList(make.target);
         const bool ownType = std::any_of(
             targets.begin(), targets.end(),
-            [&](const std::string& target) { return declaredTypes.count(target) > 0; });
+            [&](const std::string& target) {
+                return declaredTypes.count(target) > 0 ||
+                    (target.starts_with(module + ".") &&
+                     declaredTypes.count(target.substr(module.size() + 1)) > 0);
+            });
         auto note = [&](const ast::FunctionDef& def) {
             if (module.empty() || ownType) moduleScopedMethods[def.name] = "";
             else if (!moduleScopedMethods.count(def.name))
@@ -8064,6 +8123,7 @@ struct Lowering {
             if (blocked) continue;
 
             FunDef def; def.name = field; def.arity = 1;
+            def.isFieldAccessor = true;
             FunClause fc;
             auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
             fc.params.push_back(std::move(rp));
@@ -9327,11 +9387,16 @@ static auto mergeDuplicateFunctions(
             // entries for the SAME declaration — a real duplicate there,
             // not a collision, and merging is harmless for it.
             if (existing.isFreeFunction != f.isFreeFunction) {
+                // A record field's reader is in the same position as a
+                // dispatcher: it was routed here by its bare name, and has
+                // nothing to do with this module's function.
+                auto misfiled = [](const FunDef& fn) {
+                    return fn.isCollisionDispatcher || fn.isFieldAccessor;
+                };
                 if (ejectDispatcherConflicts &&
-                    (existing.isCollisionDispatcher || f.isCollisionDispatcher)) {
-                    auto& dispatcher =
-                        existing.isCollisionDispatcher ? existing : f;
-                    auto& keeper = existing.isCollisionDispatcher ? f : existing;
+                    (misfiled(existing) || misfiled(f))) {
+                    auto& dispatcher = misfiled(existing) ? existing : f;
+                    auto& keeper = misfiled(existing) ? f : existing;
                     ejectDispatcherConflicts->push_back(std::move(dispatcher));
                     if (&keeper != &existing) existing = std::move(keeper);
                     continue;
@@ -9611,8 +9676,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         };
     // The module the make block being collected is written in.
     std::string makeModulePath;
+    std::set<std::string> makeRecordNames;
     auto preMake = [&](const ast::MakeDef& md) {
-        for (const auto& typeName : Lowering::makeTargetNameList(md.target)) {
+        for (const auto& typeName : Lowering::makeTargetNameList(
+                 md.target, makeModulePath, makeRecordNames)) {
         std::unordered_map<std::string,
             std::map<std::string, std::vector<std::string>>>
             signaturesByNameAndArity;
@@ -9714,6 +9781,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (module.isCapability) L.capabilityModules.insert(path);
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
+        std::set<std::string> declaredRecords;
+        kex::collectDeclaredRecordNames(module.body, declaredRecords);
         auto preModuleFn = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
@@ -9816,11 +9885,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*md) {
                     makeModulePath = path;
+                    makeRecordNames = declaredRecords;
                     preMake(**md);
                     makeModulePath.clear();
+                    makeRecordNames.clear();
                     L.noteModuleScopedMake(**md, path, declaredTypes);
                     for (const auto& typeName :
-                         Lowering::makeTargetNameList((*md)->target))
+                         Lowering::makeTargetNameList((*md)->target, path, declaredRecords))
                         if (!typeName.empty())
                             L.localTypeModules[typeName] = path;
                 }
@@ -9835,8 +9906,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
                         if (*cmd) {
                             makeModulePath = path;
+                            makeRecordNames = declaredRecords;
                             preMake(**cmd);
                             makeModulePath.clear();
+                            makeRecordNames.clear();
                         }
                     } else if (auto* ctd = std::get_if<std::unique_ptr<ast::TypeDef>>(&ci)) {
                         if (*ctd) preType(**ctd);
@@ -9890,6 +9963,27 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*child) preModule(**child);
             }
+        }
+        // A module's free function and its own make receiver function share
+        // the module BEAM namespace. Give the free export a distinct symbol;
+        // module-local imports below are built from this table.
+        for (const auto& [name, owners] : L.methodOwners) {
+            const auto key = path + "." + name;
+            auto emitted = L.moduleFunctions.find(key);
+            if (emitted == L.moduleFunctions.end()) continue;
+            const auto ownerPrefix = path + ".";
+            const bool sameModuleOwner = std::any_of(
+                owners.begin(), owners.end(), [&](const std::string& owner) {
+                    return owner.rfind(ownerPrefix, 0) == 0;
+                });
+            if (!sameModuleOwner) continue;
+            const auto oldSymbol = emitted->second;
+            const auto newSymbol = mangleModuleMember(path, name + "$free");
+            emitted->second = newSymbol;
+            definedFns.erase(oldSymbol);
+            definedFns.insert(newSymbol);
+            for (auto& [_, value] : L.moduleFunctions)
+                if (value == oldSymbol) value = newSymbol;
         }
     };
     for (const auto& item : prog.items) {
@@ -9948,6 +10042,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             (owners.size() == 1 && preludeAlsoOwns(name) &&
              !L.knownTypes.count(owners.front())))
             L.collidingMethods.insert(name);  // order-free: a set membership
+    if (mod.name != "kex_prelude")
+        for (const auto& [name, owners] : L.methodOwners)
+            if (L.fnParamNames.count(name)) {
+                L.freeFunctionSymbols[name] = name + "$free";
+                L.collidingMethods.insert(name);
+            }
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
     L.knownFns = definedFns;
@@ -9981,6 +10081,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     auto flushGroup = [&]() {
         if (!fnGroup.empty()) {
             auto def = L.lowerFunctionGroup(fnGroup);
+            def.name = L.prefixSymbol(def.name);
             def.isFreeFunction = true;
             mod.functions.push_back(std::move(def));
             fnGroup.clear();
@@ -10153,10 +10254,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         if (!grp.empty() && !continuesFreeFunctionGroup(*grp.front(), *fd)) flush();
                         grp.push_back(fd);
                     };
-                    auto emitMake = [&](const ast::MakeDef* mk) {
+                    auto emitMake = [&](const ast::MakeDef* mk,
+                                        const std::set<std::string>& declaredRecords) {
                         if (!mk) return;
                         for (const auto& typeName :
-                             Lowering::makeTargetNameList(mk->target)) {
+                             Lowering::makeTargetNameList(mk->target, L.currentModulePath, declaredRecords)) {
                         std::vector<const ast::FunctionDef*> methods;
                         auto flushMethods = [&] {
                             if (!methods.empty()) {
@@ -10202,6 +10304,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     lowerModuleBody = [&](const ast::ModuleDef& m) {
                         auto savedModulePath = L.currentModulePath;
                         L.currentModulePath = m.name;
+                        std::set<std::string> declaredRecords;
+                        kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto savedImports = L.moduleImports;
                         auto savedAliases = L.moduleAliases;
                         auto prefix = m.name + ".";
@@ -10299,14 +10403,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
                                 flush();
-                                emitMake(mk->get());
+                                emitMake(mk->get(), declaredRecords);
                             } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
                                 if (*cb) for (const auto& ci : (*cb)->items) {
                                     if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
                                         push(cfd->get());
                                     } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
                                         flush();
-                                        emitMake(cmd->get());
+                                        emitMake(cmd->get(), declaredRecords);
                                     }
                                 }
                             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
@@ -10577,7 +10681,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         hasCatchAllClause = true;
                 }
             }
-            bool allAdt = !owners.empty() && !L.fieldAccessors.count(name) &&
+            bool allAdt = !owners.empty() && !L.freeFunctionSymbols.count(name) &&
+                          !L.fieldAccessors.count(name) &&
                           !(preludeOwnsName && hasCatchAllClause);
             for (const auto& o : owners) {
                 if (!L.typeVariantTags.count(o)) { allAdt = false; break; }
@@ -10702,6 +10807,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (!answersStripped) fallbackArity = arity;
                 }
                 for (auto& function : mod.functions) {
+                    if (function.name == L.prefixSymbol(name) &&
+                        function.name != name && function.arity == arity) {
+                        genericFallback = function.name;
+                        break;
+                    }
                     if (function.name != name || function.arity != arity)
                         continue;
                     genericFallback = name + "$generic";
@@ -11257,6 +11367,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
+            std::set<std::string> declaredRecords;
+            kex::collectDeclaredRecordNames(module.body, declaredRecords);
             auto collectMethod = [&](const ast::FunctionDef* fd,
                                      const std::string& typeName) {
                 if (!fd) return;
@@ -11282,7 +11394,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                         {path, typeName, fd->name});
             };
             for (const auto& typeName :
-                 Lowering::makeTargetNameList(mk->target)) {
+                 Lowering::makeTargetNameList(mk->target, path, declaredRecords)) {
                 for (const auto& mi : mk->body) {
                     if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
                         collectMethod(fd->get(), typeName);

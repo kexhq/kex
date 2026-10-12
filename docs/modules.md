@@ -155,6 +155,11 @@ type Incoming = Request<Binary>     # Net.HTTP.Request<Binary>, everywhere
 it; a function of the same name, free or from another type's `make` block, is
 not considered.
 
+A record's own `make` functions belong to its qualified identity. Records
+with the same short name in different modules can declare the same function
+names: `Metro.Connection.Connection.send` and `Net.Connection.send` remain
+separate implementations, selected by the receiver's record identity.
+
 ## Access
 
 ```kex

@@ -32,26 +32,10 @@ namespace kex::semantic {
 auto findReceiverConflicts(const ast::Program& program)
     -> std::vector<Diagnostic>;
 
-// A `make` method and a plain function in the same scope that land on ONE
-// BEAM symbol. A method reaches its receiver as an extra argument, so
-// `make Env do let formFields = ... end` emits `formFields/1` — exactly what a
-// module-level `let formFields(text)` emits, private or not. erlc used to
-// report this as an internal crash in `beam_ssa_throw`
-// (`{key_exists,{b_local,{b_literal,formFields},1}}`) with nothing naming
-// either declaration.
-//
-// Same-receiver ties are findReceiverConflicts' business and are left to it.
-auto findMethodFunctionCollisions(const ast::Program& program)
-    -> std::vector<Diagnostic>;
-
-// Two modules that each declare a type of the same name and give it a function
-// of the same name. Records keep their identity apart (`Metro.Connection` and
-// `Net.Connection` are different types), but both backends file a `make`
-// function under the type's LAST name, so one implementation answered for both:
-// "Undefined method: send" on BEAM, the wrong body on the walker
-// (kexhq/kex#476). Until they are keyed by the qualified type this is
-// reported rather than miscompiled.
-auto findSameNamedTypeFunctionCollisions(const ast::Program& program)
+// Opaque/variant types still dispatch on their short names. Reject two such
+// types that share a make function; record owners use qualified identities
+// and do not collide (kexhq/kex#476).
+auto findSameNamedTypeMethodCollisions(const ast::Program& program)
     -> std::vector<Diagnostic>;
 
 } // namespace kex::semantic

@@ -701,6 +701,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     // The types this module declares — a `make` for one of them is that type's
     // own interface, not a patch of someone else's (see execMakeDefFor).
     kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
+    kex::collectDeclaredRecordNames(mod.body, m_moduleDeclaredRecords[moduleName]);
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
@@ -1022,7 +1023,36 @@ auto Evaluator::evalFieldDefault(const std::string& typeName,
 
 auto Evaluator::resolveRecordTypeName(const std::string& name) const
     -> std::string {
-    if (m_recordDefs.count(name)) return name;
+    if (name.find('.') != std::string::npos && m_recordDefs.count(name)) return name;
+    // Follow namespace values rather than tagging alias/re-export spellings
+    // as new records (`Geo.Circle` and `App.Geometry.Circle`).
+    if (const auto dot = name.find('.'); dot != std::string::npos) {
+        auto value = m_env->get(name.substr(0, dot));
+        auto offset = dot + 1;
+        while (value && offset < name.size()) {
+            const auto* module = std::get_if<ModuleValue>(&value->data);
+            if (!module) break;
+            const auto entry = m_moduleRegistry.find(module->name);
+            if (entry == m_moduleRegistry.end()) break;
+            const auto next = name.find('.', offset);
+            const auto member = name.substr(offset, next - offset);
+            if (auto found = entry->second.exports.find(member);
+                found != entry->second.exports.end())
+                value = found->second;
+            else if (auto child = entry->second.submodules.find(member);
+                     child != entry->second.submodules.end())
+                value = Value::module(child->second);
+            else
+                break;
+            if (next == std::string::npos) {
+                if (const auto* record = std::get_if<RecordValue>(&value->data))
+                    if (record->fields.empty() && m_recordDefs.count(record->typeName))
+                        return record->typeName;
+                break;
+            }
+            offset = next + 1;
+        }
+    }
     if (!m_currentModule.empty()) {
         auto scope = m_currentModule;
         while (!scope.empty()) {
@@ -1033,6 +1063,10 @@ auto Evaluator::resolveRecordTypeName(const std::string& name) const
             scope.resize(dot);
         }
     }
+    if (auto value = m_env->get(name))
+        if (const auto* record = std::get_if<RecordValue>(&value->data))
+            if (record->fields.empty() && m_recordDefs.count(record->typeName))
+                return record->typeName;
     // An imported record may be written partially qualified: `Router.Config`
     // inside `using Http` is `Http.Router.Config`. Getting this wrong is not
     // a lookup miss but a wrong VALUE — the construction would carry an
@@ -1043,10 +1077,7 @@ auto Evaluator::resolveRecordTypeName(const std::string& name) const
         for (const auto& imported : *scope)
             if (m_recordDefs.count(imported + "." + name))
                 return imported + "." + name;
-    if (auto value = m_env->get(name))
-        if (const auto* record = std::get_if<RecordValue>(&value->data))
-            if (record->fields.empty() && m_recordDefs.count(record->typeName))
-                return record->typeName;
+    if (m_recordDefs.count(name)) return name;
     // Last resort: an unambiguous suffix match. Ambiguity is the case that
     // module-qualified identity exists to keep apart, so it stays unresolved.
     const auto suffix = "." + name;
@@ -1651,10 +1682,12 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def,
     // A union target (`make Float | Integer`) applies the block to every
     // member, so registration runs once per name. A block with no nameable
     // target still runs once with an empty name, as it always has.
-    auto targetNames = kex::makeTargetNames(def.target);
+    auto targetNames = kex::makeTargetNames(
+        def.target, enclosingModule, m_moduleDeclaredRecords[enclosingModule]);
     if (targetNames.empty()) targetNames.push_back("");
-    for (const auto& typeName : targetNames)
+    for (const auto& typeName : targetNames) {
         execMakeDefFor(def, typeName, enclosingModule);
+    }
 }
 
 auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
@@ -1710,8 +1743,12 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
     // same module declares is that type's own interface and travels with its
     // values (`SQL.select(:all).from(:users)`), so it stays reachable — as does
     // every top-level `make`.
+    const auto ownedPrefix = enclosingModule + ".";
+    const bool ownRecord = typeName.starts_with(ownedPrefix) &&
+        m_moduleDeclaredRecords[enclosingModule].contains(
+            typeName.substr(ownedPrefix.size()));
     if (!enclosingModule.empty() && !typeName.empty() &&
-        !m_moduleDeclaredTypes[enclosingModule].count(typeName))
+        !m_moduleDeclaredTypes[enclosingModule].count(typeName) && !ownRecord)
         for (const auto& [method, arity] : ownMethods) {
             (void)arity;
             m_makeMethodModule[typeName + "::" + method] = enclosingModule;
@@ -4301,23 +4338,12 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                                   const std::vector<ValuePtr>* args) const
     -> std::string {
     auto receiverType = dispatchTypeName(receiver);
-    // A record declared inside a module carries a module-qualified identity
-    // (`Boxes.Box`) so same-named records in sibling modules stay distinct,
-    // but a `make Box` written inside that module registers its methods under
-    // the name as written. Prefer a qualified registration when one exists,
-    // and otherwise dispatch on the last segment.
+    // Records and their own make functions share the qualified identity.
+    // Keep short-name fallback for existing generic/foreign registrations.
     if (const auto dot = receiverType.rfind('.'); dot != std::string::npos) {
         const auto qualified = receiverType + "::" + method;
         const auto shortType = receiverType.substr(dot + 1);
-        const auto shortQualified = shortType + "::" + method;
-        // A module function can have the same qualified name as its record
-        // (`module Server; let new(...)`) while `make Server` registers the
-        // actual receiver method under the short type. Presence of that
-        // namespace function must not suppress receiver-method fallback.
-        const bool shortMethod = m_functionDefs.contains(shortQualified) ||
-            m_runtimeSignatures.contains(shortQualified);
-        if ((!m_env->get(qualified) && !m_functionValues.count(qualified)) ||
-            shortMethod)
+        if (!m_env->get(qualified) && !m_functionValues.count(qualified))
             receiverType = std::move(shortType);
     }
     auto typed = receiverType + "::" + method;

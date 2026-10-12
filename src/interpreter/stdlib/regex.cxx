@@ -73,7 +73,7 @@ auto charOffset(const std::string& subject, size_t byteOffset) -> int64_t {
 // Pulls the pattern source out of a `Regex` record (its only field).
 auto regexSource(const ValuePtr& value) -> const std::string* {
     auto* rec = std::get_if<RecordValue>(&value->data);
-    if (!rec || rec->typeName != "Regex") return nullptr;
+    if (!rec || rec->typeName != "Regex.Regex") return nullptr;
     auto it = rec->fields.find("source");
     if (it == rec->fields.end()) return nullptr;
     auto* s = std::get_if<StringValue>(&it->second->data);
@@ -130,7 +130,7 @@ auto buildMatch(const std::string& subject, pcre2_code* code,
 
     auto captures = std::make_shared<Value>();
     captures->data = MapValue{std::move(entries)};
-    return Value::record("Match", {{"captures", captures}});
+    return Value::record("Regex.Match", {{"captures", captures}});
 }
 
 // Escapes every regex metacharacter individually. Deliberately NOT \Q...\E
@@ -192,7 +192,7 @@ namespace regexsupport {
 
 auto isRegex(const ValuePtr& value) -> bool {
     auto* rec = std::get_if<RecordValue>(&value->data);
-    return rec && rec->typeName == "Regex";
+    return rec && rec->typeName == "Regex.Regex";
 }
 
 auto split(const std::string& subject, const ValuePtr& regex, int64_t limit)
@@ -262,7 +262,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     defineIntrinsic("Regex::compile", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s)
-            return Value::error(Value::record("RegexError", {
+            return Value::error(Value::record("Regex.RegexError", {
                 {"source",   Value::string("")},
                 {"position", Value::integer(0)},
                 {"message",  Value::string("regex expects a String")},
@@ -270,13 +270,13 @@ auto Evaluator::registerRegexBuiltins() -> void {
 
         CompileFailure failure;
         if (!compilePattern(s->value, failure))
-            return Value::error(Value::record("RegexError", {
+            return Value::error(Value::record("Regex.RegexError", {
                 {"source",   Value::string(s->value)},
                 {"position", Value::integer(charOffset(s->value, failure.offset))},
                 {"message",  Value::string(failure.message)},
             }));
 
-        return Value::ok(Value::record("Regex", {
+        return Value::ok(Value::record("Regex.Regex", {
             {"source", Value::string(s->value)},
         }));
     });
@@ -303,11 +303,11 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // contribute text and never pattern syntax — which is what keeps the bare
     // return type honest.
     defineIntrinsic("Regex::tag", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::record("Regex", {{"source", Value::string("")}});
+        if (args.empty()) return Value::record("Regex.Regex", {{"source", Value::string("")}});
         auto* parts = std::get_if<ListValue>(&args[0]->data);
         const ListValue* values =
             args.size() >= 2 ? std::get_if<ListValue>(&args[1]->data) : nullptr;
-        if (!parts) return Value::record("Regex", {{"source", Value::string("")}});
+        if (!parts) return Value::record("Regex.Regex", {{"source", Value::string("")}});
 
         std::string source;
         for (size_t i = 0; i < parts->elements.size(); ++i) {
@@ -321,7 +321,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
         if (!compilePattern(source, failure))
             throw std::runtime_error("invalid regex `" + source +
                                      "`: " + failure.message);
-        return Value::record("Regex", {{"source", Value::string(source)}});
+        return Value::record("Regex.Regex", {{"source", Value::string(source)}});
     });
 
     // Regex::validate(source) -> (Integer, String)? — the compile-time check

@@ -164,7 +164,26 @@ end
                 "text x\n");
         });
 
-        it("reports one make function name on two same-named types", []() {
+        it("keeps record identities through aliases and re-exports", []() {
+            expectOnBothBackends({
+                {"app/shapes.kex", R"KEX(module App.Shapes
+record Circle do radius : Integer = 2 end
+make Circle do
+  let diameter -> Integer = @radius * 2
+end
+)KEX"},
+                {"main.kex", R"KEX(using App.Shapes, as: Geo
+module Public do
+  export App.Shapes
+end
+main do
+  IO.printLine(Geo.Circle { radius: 3 }.diameter)
+  IO.printLine(Public.Shapes.Circle {}.diameter)
+end
+)KEX"}}, "6\n4\n");
+        });
+
+        it("dispatches one function name on two same-named records", []() {
             const Files files = {
                 {"metro/connection.kex", R"KEX(module Metro.Connection
 
@@ -173,7 +192,9 @@ record Connection do
 end
 
 make Connection do
-  let send(message: String) -> String = "metro ${@id} got ${message}"
+  let send(message: String = "default") -> String do
+    "metro ${@id} got ${message}"
+  end
 end
 )KEX"},
                 {"metro/other.kex", R"KEX(module Metro.Other
@@ -187,23 +208,17 @@ make Connection do
 end
 )KEX"},
                 {"main.kex", R"KEX(main do
-  IO.printLine(Metro.Connection.Connection { id: 3 }.send("x"))
+  IO.printLine(Metro.Connection.Connection { id: 3 }.send(message: "x"))
   IO.printLine(Metro.Other.Connection { name: "ws" }.send("y"))
+  IO.printLine(Metro.Connection.Connection { id: 3 }.send())
 end
 )KEX"}};
-            for (const auto* mode : {"--run", "--run-walker"}) {
-                const auto output = runProgram(files, mode);
-                // Which module is merged first is not this test's business.
-                assertTrue(
-                    output.find("`send` is declared for both") != std::string::npos &&
-                    output.find("`Metro.Connection.Connection`") != std::string::npos &&
-                    output.find("`Metro.Other.Connection`") != std::string::npos,
-                    std::string(mode) + " must name both types, got:\n" + output);
-            }
+            expectOnBothBackends(files,
+                "metro 3 got x\nsent y via ws\nmetro 3 got default\n");
         });
     });
 
-    describe("a make function's name beside other modules' names (kexhq/kex#476)", []() {
+    describe("a method name beside other modules' names (kexhq/kex#476)", []() {
         it("leaves `Headers.empty` and Net.HTTP's own calls alone", []() {
             expectOnBothBackends({
                 {"app/reply.kex", kReply},
@@ -223,7 +238,7 @@ end
                 "empty 204\ntext x\nroute x\n");
         });
 
-        it("does not turn another record's field read into a call", []() {
+        it("does not turn another record's field read into the method", []() {
             expectOnBothBackends({
                 {"app/reply.kex", kReply},
                 {"main.kex", R"KEX(using App.Reply, only: [Reply]
@@ -265,8 +280,90 @@ end
         });
     });
 
-    describe("a free function and a make function of one name (kexhq/kex#476)", []() {
-        it("passes a foul make function its context", []() {
+    describe("field reads in unannotated blocks (kexhq/kex#476)", []() {
+        it("does not infer a function's arity for an ambiguous field", []() {
+            expectOnBothBackends({
+                {"main.kex", R"KEX(record First do
+  flag : Bool = false
+end
+
+record Second do
+  flag : Bool = false
+end
+
+let flag(name: String, short: String, help: String, fallback: Bool) -> String = name
+
+main do
+  let handler = { |entry| entry.flag }
+  IO.printLine(handler(First { flag: true }))
+  IO.printLine(handler(Second { flag: false }))
+end
+)KEX"}}, "true\nfalse\n");
+        });
+        it("reads a field before trying an unrelated function", []() {
+            expectOnBothBackends({
+                {"main.kex", R"KEX(using Net.HTTP
+
+let parameters(context: Context) -> {String: String} = { "wrong": "x" }
+
+foul source(context: Context) -> Context do
+  IO.printLine("once")
+  context
+end
+
+main do
+  let handler = { |context| source(context).route.parameters }
+  let context = Context {
+    route: RouteContext { parameters: { "id": "7" } }
+  }
+  let result = handler(context)
+  IO.printLine(result["id"].or("wrong"))
+  IO.printLine(context.parameters["wrong"].or("missing"))
+end
+)KEX"}}, "once\n7\nx\n");
+        });
+    });
+
+    describe("a function and a method of one name (kexhq/kex#476)", []() {
+        it("keeps a top-level function separate from dependency receiver dispatch", []() {
+            expectOnBothBackends({
+                {"app/service.kex", R"KEX(module App.Service
+record Service do value : String end
+make Service do
+  let served(suffix: String) -> String = "record ${@value} ${suffix}"
+end
+)KEX"},
+                {"main.kex", R"KEX(using App.Service, only: [Service]
+let served(value: String, suffix: String) -> String = "free ${value} ${suffix}"
+main do
+  IO.printLine(served("a", "b"))
+  IO.printLine(Service { value: "c" }.served("d"))
+  let call = ~served
+  IO.printLine(call("e", "f"))
+  IO.printLine("g".served("h"))
+end
+)KEX"}}, "free a b\nrecord c d\nfree e f\nfree g h\n");
+        });
+
+        it("keeps a module's free function separate from its make function", []() {
+            expectOnBothBackends({
+                {"app/forms.kex", R"KEX(module App.Forms
+record Env do raw : String end
+make Env do
+  let formFields -> [String] = decodeFields(@raw)
+end
+private do
+  let formFields(text: String) -> [String] = text.split(",")
+  let decodeFields(text: String) -> [String] = formFields(text)
+end
+let fields(text: String) -> [String] = Env { raw: text }.formFields
+)KEX"},
+                {"main.kex", R"KEX(main do
+  IO.printLine(App.Forms.fields("a,b"))
+end
+)KEX"}}, "[a, b]\n");
+        });
+        it("passes a foul method its context", []() {
             expectOnBothBackends({
                 {"app/repo.kex", R"KEX(module App.Repo
 
@@ -301,7 +398,7 @@ end
                 "db/u/T/t\nd2/o/t/b\n");
         });
 
-        it("keeps a foul make function apart from a pure one elsewhere (kexhq/kex#451)", []() {
+        it("keeps a foul method apart from a pure one elsewhere (kexhq/kex#451)", []() {
             // `Net.HTTP.Headers.remove(name)` is pure at the same arity.
             expectOnBothBackends({
                 {"db/holdings.kex", R"KEX(module DB.Holdings
@@ -334,7 +431,7 @@ end
                 "false\n1\n");
         });
 
-        it("does not lend a make function's defaults to another receiver (kexhq/kex#475)", []() {
+        it("does not lend a method's defaults to another receiver (kexhq/kex#475)", []() {
             expectOnBothBackends({
                 {"main.kex", R"KEX(record Builder do
   table : String = ""
@@ -353,6 +450,140 @@ main do
 end
 )KEX"}},
                 ":id true false\nhttps://example.com/a?b=1\n");
+        });
+    });
+
+    describe("a field beside another module's function (kexhq/kex#448)", []() {
+        it("compiles and reads the field, typed or not, and still calls the function", []() {
+            expectOnBothBackends({
+                {"lib/kind.kex", R"KEX(module Lib.Kind
+
+record Kind do
+  label : String
+end
+
+let caption(kind: Kind) -> String = "caption of ${kind.label}"
+)KEX"},
+                {"app/views.kex", R"KEX(module App.Views
+
+record Entry do
+  caption : String = "entry"
+end
+
+let shown(entry: Entry) -> String = entry.caption
+)KEX"},
+                {"main.kex", R"KEX(using Lib.Kind, only: [Kind]
+using App.Views, only: [Entry]
+
+record Statement do
+  caption : String = "statement"
+end
+
+main do
+  IO.printLine(Statement {}.caption)
+  IO.printLine(App.Views.shown(Entry {}))
+  IO.printLine([Entry { caption: "listed" }].map { |entry| entry.caption }.join(","))
+  let pick = { |item| item.caption }
+  IO.printLine(pick(Statement { caption: "picked" }))
+  IO.printLine(Lib.Kind.caption(Kind { label: "kind" }))
+end
+)KEX"}},
+                "statement\nentry\nlisted\npicked\ncaption of kind\n");
+        });
+    });
+
+    describe("same-named records with a same-named method (kexhq/kex#476)", []() {
+        it("does not lend one type's default to the other's call", []() {
+            expectOnBothBackends({
+                {"first/net.kex", R"KEX(module First.Net
+
+record Connection do
+  label : String = "first"
+end
+
+make Connection do
+  let send(text: String, loud: Bool = false) -> String do
+    "${@label} sends ${loud then text.upperCase else text}"
+  end
+
+  foul close() -> String do
+    return "${@label} closed"
+  end
+end
+)KEX"},
+                {"second/net.kex", R"KEX(module Second.Net
+
+record Connection do
+  label : String = "second"
+  count : Integer = 0
+end
+
+make Connection do
+  let send(text: String) -> String = "${@label} posts ${text} (${@count})"
+  let close() -> String = "${@label} shut"
+end
+
+let opened(count: Integer) -> Connection = Connection { count: count }
+)KEX"},
+                {"main.kex", R"KEX(main do
+  let first = First.Net.Connection {}
+  let second = Second.Net.opened(3)
+  IO.printLine(first.send("hi"))
+  IO.printLine(first.send("hi", loud: true))
+  IO.printLine(second.send("hi"))
+  IO.printLine(first.close())
+  IO.printLine(second.close())
+end
+)KEX"}},
+                "first sends hi\nfirst sends HI\nsecond posts hi (3)\n"
+                "first closed\nsecond shut\n");
+        });
+    });
+
+    describe("capability stand-ins (kexhq/kex#476)", []() {
+        it("reaches the stand-in's own method when two types share its name", []() {
+            expectOnBothBackends({
+                {"lib/connection.kex", R"KEX(capability Lib.Connection do
+  foul run(statement: String) -> String = "no database: ${statement}"
+end
+)KEX"},
+                {"lib/direct.kex", R"KEX(module Lib.Direct
+
+record Connection do
+  label : String = "direct"
+end
+
+make Connection, implement: Lib.Connection do
+  foul run(statement: String) -> String do
+    return "${@label} ran ${statement}"
+  end
+end
+
+foul sent(statement: String) -> String = Lib.Connection.run(statement)
+)KEX"},
+                {"app/store.kex", R"KEX(module App.Store
+
+record Connection do
+  label : String = "store"
+end
+
+make Connection, implement: Lib.Connection do
+  foul run(statement: String) -> String do
+    return "${@label} ran ${statement}"
+  end
+end
+)KEX"},
+                {"main.kex", R"KEX(main do
+  IO.printLine(Lib.Direct.sent("SELECT 1"))
+  with Lib.Connection = Lib.Direct.Connection {} do
+    IO.printLine(Lib.Direct.sent("SELECT 2"))
+  end
+  with Lib.Connection = App.Store.Connection {} do
+    IO.printLine(Lib.Direct.sent("SELECT 3"))
+  end
+end
+)KEX"}},
+                "no database: SELECT 1\ndirect ran SELECT 2\nstore ran SELECT 3\n");
         });
     });
 

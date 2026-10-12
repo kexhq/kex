@@ -265,50 +265,23 @@ files; the gap is specific to multi-file (`--source-root`) projects, which
 is how every real Kex project outside this repo's own spec/example tree is
 structured.
 
-## `make` functions are dispatched on a type's last name
+## Remaining receiver dispatch limitations
 
-A record's identity is qualified — `Metro.Connection` and `Net.Connection` are
-different types — but both backends file a `make` function under the type's
-last name. Two consequences remain after kexhq/kex#476:
+A record's own `make` functions use its qualified identity on both backends.
+Two modules can each declare a `Connection` record and give it a `send`
+function; each value reaches the implementation belonging to its own record.
+Opaque and variant types still use short dispatch names. Two such types with
+the same name cannot share a `make` function name; the checker reports this
+collision rather than choosing an implementation.
+Same-named opaque and variant types still use short dispatch names. Two such
+types cannot share a `make` function name; the checker reports this collision.
+Records use qualified dispatch identities, so same-named records can share
+function names. Free functions and receiver dispatchers use separate BEAM
+symbols, including when they share a name and arity.
 
-**Same-named types cannot share a `make` function name.** Declared in two modules of one
-program, this is a compile error rather than a miscompile:
-
-```kex
-# metro/connection.kex
-module Metro.Connection
-record Connection do id : Integer = 0 end
-make Connection do let send(message: String) -> String = "..." end
-
-# metro/other.kex
-module Metro.Other
-record Connection do name : String = "" end
-make Connection do let send(message: String) -> String = "..." end
-
-# error: `send` is declared for both `Metro.Connection.Connection` and
-#        `Metro.Other.Connection` — a `make` function is dispatched on its
-#        type's last name, so one of them would answer for the other's values;
-#        rename one of the types or one of the functions
-```
-
-**A free function and a `make` function of one name and arity cannot share a
-BEAM module.**
-`let served(a, b)` beside a `make T do let served(x) end` in the same file is
-reported by the checker; across compilation units it still surfaces from
-lowering, with no source location:
-
-```
-IR lower: `served/2` names both a free function and a receiver method in this
-compilation unit — rename one of them
-```
-
-Lifting either needs `make` functions keyed by the qualified type in the
-lowering IR and in the interpreter's dispatch table, not a local patch.
-
-A read of a field on a receiver whose type is **not known** is also still
-resolved by name: with `let parameters(context: Context)` in scope,
-`{ |context| context.route.parameters }` calls the function on BEAM. Annotate
-the receiver, or give the function another name.
+A field read on a receiver whose type is not known checks the runtime record
+layout first. A same-named UFCS function is used only when that record does
+not declare the field, matching the interpreter.
 
 ## Interpreter REPL prints a stray continuation prompt
 

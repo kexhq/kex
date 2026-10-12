@@ -7842,6 +7842,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // method with the same spelling (`Version.patch` vs HTTP.patch).
     if (isMethodCall && argTypes.size() == 1) {
         auto receiver = resolve(argTypes.front());
+        const auto mayReadField = [&]() {
+            if (!methodCall || methodCall->parenthesized || methodCall->mutating)
+                return false;
+            for (const auto& [record, fields] : m_recordFields)
+                if (fields.count(name)) return true;
+            if (m_importedInterfaces)
+                for (const auto& [record, fields] : m_importedInterfaces->recordFieldNames)
+                    if (fields.count(name)) return true;
+            return false;
+        };
         if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
             if (auto record = m_recordFields.find(
                     resolveRecordName(named->name));
@@ -7901,6 +7911,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 unifyVar(var->id, Type::named(matchedRecord));
                 return matchedFieldType;
             }
+            // Several records may supply the field. That uncertainty does
+            // not make an unrelated function its owner: keep the read
+            // gradual and let runtime record dispatch select the slot.
+            if (mayReadField()) return Type::unknown();
+        } else if ((std::holds_alternative<UnknownType>(receiver->kind) ||
+                    std::holds_alternative<TypeVar>(receiver->kind)) &&
+                   mayReadField()) {
+            return Type::unknown();
         } else if (auto* optional = std::get_if<OptionalType>(&receiver->kind)) {
             // `.field` on an optional used to pass here and then break three
             // different ways at run time — a crash on BEAM, "Undefined
