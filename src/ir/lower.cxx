@@ -2527,13 +2527,22 @@ struct Lowering {
         std::vector<std::string> labels;
         for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
         const auto positional = n.args.size() + (n.block ? 1 : 0);
+        // Whether the receiver's own type declares the function at all. When
+        // it does and the call needs nothing placed — every parameter given,
+        // in order — there is no method to return, and no other type's to
+        // look for: two `Connection`s, of which only one's `send` has a
+        // default, had the other's `send(text)` padded out with it and sent
+        // to an arity nobody defined (kexhq/kex#476).
+        bool declaredByOwner = false;
         for (const auto& method : found->second) {
             if (!owner.empty() && canonicalRecordName(method.owner) != owner) continue;
+            declaredByOwner = !owner.empty();
             const auto& clause = method.def->clauses[0];
             if (labels.empty() && positional >= clause.params.size()) continue;
             if (namedArgumentsFit(clause, labels, positional)) return &method;
         }
-        return strict || owner.empty() || receiverIsForeignTo(n)
+        return strict || owner.empty() || declaredByOwner ||
+                   receiverIsForeignTo(n)
             ? nullptr : makeMethodFor(n, "", false);
     }
 
@@ -8114,6 +8123,7 @@ struct Lowering {
             if (blocked) continue;
 
             FunDef def; def.name = field; def.arity = 1;
+            def.isFieldAccessor = true;
             FunClause fc;
             auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
             fc.params.push_back(std::move(rp));
@@ -9377,11 +9387,16 @@ static auto mergeDuplicateFunctions(
             // entries for the SAME declaration — a real duplicate there,
             // not a collision, and merging is harmless for it.
             if (existing.isFreeFunction != f.isFreeFunction) {
+                // A record field's reader is in the same position as a
+                // dispatcher: it was routed here by its bare name, and has
+                // nothing to do with this module's function.
+                auto misfiled = [](const FunDef& fn) {
+                    return fn.isCollisionDispatcher || fn.isFieldAccessor;
+                };
                 if (ejectDispatcherConflicts &&
-                    (existing.isCollisionDispatcher || f.isCollisionDispatcher)) {
-                    auto& dispatcher =
-                        existing.isCollisionDispatcher ? existing : f;
-                    auto& keeper = existing.isCollisionDispatcher ? f : existing;
+                    (misfiled(existing) || misfiled(f))) {
+                    auto& dispatcher = misfiled(existing) ? existing : f;
+                    auto& keeper = misfiled(existing) ? f : existing;
                     ejectDispatcherConflicts->push_back(std::move(dispatcher));
                     if (&keeper != &existing) existing = std::move(keeper);
                     continue;

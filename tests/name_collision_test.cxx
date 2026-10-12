@@ -453,6 +453,140 @@ end
         });
     });
 
+    describe("a field beside another module's function (kexhq/kex#448)", []() {
+        it("compiles and reads the field, typed or not, and still calls the function", []() {
+            expectOnBothBackends({
+                {"lib/kind.kex", R"KEX(module Lib.Kind
+
+record Kind do
+  label : String
+end
+
+let caption(kind: Kind) -> String = "caption of ${kind.label}"
+)KEX"},
+                {"app/views.kex", R"KEX(module App.Views
+
+record Entry do
+  caption : String = "entry"
+end
+
+let shown(entry: Entry) -> String = entry.caption
+)KEX"},
+                {"main.kex", R"KEX(using Lib.Kind, only: [Kind]
+using App.Views, only: [Entry]
+
+record Statement do
+  caption : String = "statement"
+end
+
+main do
+  IO.printLine(Statement {}.caption)
+  IO.printLine(App.Views.shown(Entry {}))
+  IO.printLine([Entry { caption: "listed" }].map { |entry| entry.caption }.join(","))
+  let pick = { |item| item.caption }
+  IO.printLine(pick(Statement { caption: "picked" }))
+  IO.printLine(Lib.Kind.caption(Kind { label: "kind" }))
+end
+)KEX"}},
+                "statement\nentry\nlisted\npicked\ncaption of kind\n");
+        });
+    });
+
+    describe("same-named records with a same-named method (kexhq/kex#476)", []() {
+        it("does not lend one type's default to the other's call", []() {
+            expectOnBothBackends({
+                {"first/net.kex", R"KEX(module First.Net
+
+record Connection do
+  label : String = "first"
+end
+
+make Connection do
+  let send(text: String, loud: Bool = false) -> String do
+    "${@label} sends ${loud then text.upperCase else text}"
+  end
+
+  foul close() -> String do
+    return "${@label} closed"
+  end
+end
+)KEX"},
+                {"second/net.kex", R"KEX(module Second.Net
+
+record Connection do
+  label : String = "second"
+  count : Integer = 0
+end
+
+make Connection do
+  let send(text: String) -> String = "${@label} posts ${text} (${@count})"
+  let close() -> String = "${@label} shut"
+end
+
+let opened(count: Integer) -> Connection = Connection { count: count }
+)KEX"},
+                {"main.kex", R"KEX(main do
+  let first = First.Net.Connection {}
+  let second = Second.Net.opened(3)
+  IO.printLine(first.send("hi"))
+  IO.printLine(first.send("hi", loud: true))
+  IO.printLine(second.send("hi"))
+  IO.printLine(first.close())
+  IO.printLine(second.close())
+end
+)KEX"}},
+                "first sends hi\nfirst sends HI\nsecond posts hi (3)\n"
+                "first closed\nsecond shut\n");
+        });
+    });
+
+    describe("capability stand-ins (kexhq/kex#476)", []() {
+        it("reaches the stand-in's own method when two types share its name", []() {
+            expectOnBothBackends({
+                {"lib/connection.kex", R"KEX(capability Lib.Connection do
+  foul run(statement: String) -> String = "no database: ${statement}"
+end
+)KEX"},
+                {"lib/direct.kex", R"KEX(module Lib.Direct
+
+record Connection do
+  label : String = "direct"
+end
+
+make Connection, implement: Lib.Connection do
+  foul run(statement: String) -> String do
+    return "${@label} ran ${statement}"
+  end
+end
+
+foul sent(statement: String) -> String = Lib.Connection.run(statement)
+)KEX"},
+                {"app/store.kex", R"KEX(module App.Store
+
+record Connection do
+  label : String = "store"
+end
+
+make Connection, implement: Lib.Connection do
+  foul run(statement: String) -> String do
+    return "${@label} ran ${statement}"
+  end
+end
+)KEX"},
+                {"main.kex", R"KEX(main do
+  IO.printLine(Lib.Direct.sent("SELECT 1"))
+  with Lib.Connection = Lib.Direct.Connection {} do
+    IO.printLine(Lib.Direct.sent("SELECT 2"))
+  end
+  with Lib.Connection = App.Store.Connection {} do
+    IO.printLine(Lib.Direct.sent("SELECT 3"))
+  end
+end
+)KEX"}},
+                "no database: SELECT 1\ndirect ran SELECT 2\nstore ran SELECT 3\n");
+        });
+    });
+
     describe("function references (kexhq/kex#476)", []() {
         it("names the function through a qualifier, an alias and an import", []() {
             expectOnBothBackends({

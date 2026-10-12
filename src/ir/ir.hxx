@@ -262,6 +262,12 @@ struct FunDef {
     // to know which side of that collision to eject to the entry module
     // instead of throwing — see its own doc comment.
     bool isCollisionDispatcher = false;
+    // Set on the reader `makeAccessors` emits for a record field. It is
+    // routed by its bare name like a dispatcher, and so can land beside a
+    // module's own free function of that name: a record with a `caption`
+    // field anywhere in the program, and a `caption(kind)` in some module
+    // (kexhq/kex#448). `mergeDuplicateFunctions` ejects it the same way.
+    bool isFieldAccessor = false;
 };
 
 struct Module {

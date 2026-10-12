@@ -36,16 +36,22 @@ dispatch_method(Receiver, Method, Args)
             %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
             %% `undef` in `Kex.Mock`. The type's own implementation is always
             %% in its module, so use it when the plain name is not there.
+            %%
+            %% That implementation is named after the type's qualified
+            %% identity, which is the record's tag (`size/Mock.Files`): two
+            %% modules may each declare a `Files`, and the short name alone
+            %% would not say whose `size` this is (kexhq/kex#476). A type
+            %% that is still named by its last segment alone is looked for
+            %% under that name next.
             _ = code:ensure_loaded(Module),
-            Name = case erlang:function_exported(Module, Plain, Arity) of
-                true -> Plain;
-                false ->
-                    Short = lists:last(binary:split(atom_to_binary(Tag, utf8), <<".">>, [global])),
-                    Mangled = binary_to_atom(<<Method/binary, "/", Short/binary>>, utf8),
-                    case erlang:function_exported(Module, Mangled, Arity) of
-                        true -> Mangled;
-                        false -> Plain
-                    end
+            Qualified = atom_to_binary(Tag, utf8),
+            Short = lists:last(binary:split(Qualified, <<".">>, [global])),
+            Candidates = [Plain | [binary_to_atom(<<Method/binary, "/", Type/binary>>, utf8)
+                                   || Type <- [Qualified, Short]]],
+            Name = case [Candidate || Candidate <- Candidates,
+                                      erlang:function_exported(Module, Candidate, Arity)] of
+                [Found | _] -> Found;
+                [] -> Plain
             end,
             erlang:apply(Module, Name, [Receiver | Args])
     end;
