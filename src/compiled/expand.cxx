@@ -2,11 +2,13 @@
 
 #include "reify.hxx"
 #include "../ast/clone.hxx"
+#include "../common/prelude_loader.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
@@ -1927,6 +1929,18 @@ struct ChainCollapser {
     }
 };
 
+// Points a sandbox at the build's module roots, so a `using` inside the
+// program being expanded finds the same modules compilation does.
+auto useModuleRoots(interpreter::Evaluator& evaluator,
+                    const ExpandOptions& options) -> void {
+    if (options.moduleRoots.empty()) return;
+    auto roots = options.moduleRoots;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(roots.begin(), roots.end(), root) == roots.end())
+            roots.push_back(std::move(root));
+    evaluator.setModuleRoots(std::move(roots));
+}
+
 // Finds every collapsible expression in `program`, evaluates them in one
 // sandbox run, and replaces those that produced a reifiable value.
 //
@@ -1988,6 +2002,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         RecordLayouts layouts;
         try {
             interpreter::Evaluator evaluator;
+            useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
             values = evaluator.evaluateExpressions(
                 program, requests, options.timeout,
@@ -2137,6 +2152,7 @@ auto expand(ast::Program& program,
         std::vector<interpreter::ValuePtr> values;
         try {
             interpreter::Evaluator evaluator;
+            useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
             values = evaluator.evaluateConstants(program, names, options.timeout);
             generated = evaluator.generatedDeclarations();

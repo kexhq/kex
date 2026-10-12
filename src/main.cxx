@@ -1597,6 +1597,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
       std::vector<kex::semantic::Diagnostic> depExpandDiagnostics;
       kex::compiled::ExpandOptions depExpandOptions;
       depExpandOptions.sourcePath = *path;
+      depExpandOptions.moduleRoots = roots;
       if (!kex::compiled::expand(*depProg, depExpandDiagnostics,
                                  depExpandOptions)) {
         for (const auto &diagnostic : depExpandDiagnostics)
@@ -4970,6 +4971,7 @@ int main(int argc, char *argv[]) {
       // provenance exists (the same gap this function's own comment notes
       // for compiled blocks in merged-in modules).
       expandOptions.sourcePath = filepath;
+      expandOptions.moduleRoots = moduleRootsFor(filepath);
       if (reportCollapse) expandOptions.report = &collapseNotes;
       const bool expanded =
           kex::compiled::expand(target, expandDiagnostics, expandOptions);

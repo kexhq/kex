@@ -393,6 +393,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     std::vector<semantic::Diagnostic> expandDiagnostics;
     compiled::ExpandOptions expandOptions;
     expandOptions.sourcePath = *path;
+    expandOptions.moduleRoots = m_moduleRoots;
     if (!compiled::expand(*program, expandDiagnostics, expandOptions)) {
         const auto& diagnostic = expandDiagnostics.front();
         m_loadingModules.erase(canonicalName);
