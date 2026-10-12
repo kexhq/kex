@@ -46,7 +46,34 @@ stop(_, _) -> net_error('Parse', <<"invalid graceful shutdown duration">>).
 stop_owner(Pid, Grace) ->
     case is_process_alive(Pid) of
         false -> {'Ok', {'Net.HTTP.ShutdownReport', 0, 0, 0, 0}};
-        true -> call(Pid, {stop, Grace}, Grace + 1000)
+        true ->
+            Monitor = erlang:monitor(process, Pid),
+            Ref = make_ref(),
+            Pid ! {call, self(), Ref, {stop, Grace}},
+            receive
+                {Ref, Report} -> await_exit(Monitor, Pid, Report);
+                {'DOWN', Monitor, process, Pid, _} ->
+                    erlang:demonitor(Monitor, [flush]),
+                    {'Ok', {'Net.HTTP.ShutdownReport', 0, 0, 0, 0}}
+            after Grace + 1000 ->
+                erlang:demonitor(Monitor, [flush]),
+                net_error('Timeout', <<"HTTP server operation timed out">>)
+            end
+    end.
+
+%% `finish_shutdown` hands the caller its report and only then returns, so the
+%% owner terminates a moment AFTER the reply is deliverable. A `stop` that
+%% returned in that moment left `running?` — plain `is_process_alive` —
+%% reporting a stopped server as running, which a loaded CI runner hit as a
+%% flaky failure. The reply means the accept loop is finished, so the exit
+%% cannot be far behind; the kill only bounds the wait in case a future change
+%% leaves the owner alive after replying.
+await_exit(Monitor, Pid, Report) ->
+    receive
+        {'DOWN', Monitor, process, Pid, _} -> Report
+    after 1000 ->
+        exit(Pid, kill),
+        receive {'DOWN', Monitor, process, Pid, _} -> Report end
     end.
 
 join({'Net.HTTP.Server.Running', Pid, _, _}) -> join_owner(Pid);
@@ -442,12 +469,6 @@ reason(413) -> <<"Payload Too Large">>; reason(426) -> <<"Upgrade Required">>;
 reason(500) -> <<"Internal Server Error">>;
 reason(_) -> <<"Response">>.
 join_methods(Methods) -> iolist_to_binary(lists:join(<<", ">>, Methods)).
-call(Pid, Message, Timeout) ->
-    case is_process_alive(Pid) of
-        false -> net_error('Closed', <<"HTTP server is stopped">>);
-        true -> Ref = make_ref(), Pid ! {call, self(), Ref, Message},
-                receive {Ref, Value} -> Value after Timeout -> net_error('Timeout', <<"HTTP server operation timed out">>) end
-    end.
 parse_address(Host) -> case inet:parse_address(binary_to_list(Host)) of {ok, A} -> {ok, A}; _ -> {error, <<"server endpoint must contain an IP address">>} end.
 address_text(Address) -> list_to_binary(inet:ntoa(Address)).
 diagnostic(Value) -> unicode:characters_to_binary(io_lib:format("~p", [Value])).
