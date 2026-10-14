@@ -199,6 +199,19 @@ private:
         }
     }
 
+    // Whether `written` could name a trait: one with that identity, or one a
+    // module declares (`Shape` for `Geo.Shape`). Which one it is depends on
+    // the scope it is written in, which the checker resolves; this pass only
+    // has to know it is not a stray name.
+    auto namesTrait(const std::string& written) const -> bool {
+        if (traits.get(written)) return true;
+        const auto suffix = "." + written;
+        return std::any_of(traits.all().begin(), traits.all().end(),
+                           [&](const auto& entry) {
+                               return entry.first.ends_with(suffix);
+                           });
+    }
+
     auto known(const ast::TypeName& name, const auto& generics,
                bool allowThis) const -> bool {
         if (name.parts.empty()) return true;
@@ -211,7 +224,7 @@ private:
         if ((allowThis && last == "This") || last == "Never" ||
             last == "Void" || last == "Any" || generics.count(last) ||
             (name.parts.size() == 1 && last.size() == 1) ||
-            isPrimitiveTypeName(last) || traits.get(last) ||
+            isPrimitiveTypeName(last) || namesTrait(qualified) ||
             declaredTypes.count(qualified) ||
             (name.parts.size() == 1 && declaredTypes.count(last)))
             return true;

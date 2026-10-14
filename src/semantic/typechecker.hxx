@@ -208,7 +208,6 @@ private:
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;
-    auto canonicalTraitName(const std::string& written) const -> std::string;
     auto checkMainBlock(const ast::MainBlock& block) -> void;
 
     // Resolves a parsed `ast::TypeExpr` (param/signature annotation syntax)
@@ -358,6 +357,11 @@ private:
     };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
     std::vector<ImportSelection> m_declarationImports;
+    auto resolveTraitReference(const std::string& written, const std::string& scope,
+                               const std::vector<ImportSelection>* imports,
+                               bool lastResort = true,
+                               std::vector<std::string>* ambiguous = nullptr) const
+        -> std::string;
     std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>>
         m_functionImports;
     std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>>
@@ -394,9 +398,6 @@ private:
     // says.
     int m_clauseVarMark = std::numeric_limits<int>::max();
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
-    // The module paths declaring each trait this program declares ("" at the
-    // top level), so a qualified `implement:` can be held to the right one.
-    std::unordered_map<std::string, std::set<std::string>> m_traitOwners;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;

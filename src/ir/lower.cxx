@@ -398,6 +398,35 @@ struct Lowering {
         return written;
     }
 
+    // The trait a name written in `scope` refers to — `Geo.Shape` for a
+    // `Shape` written inside `module Geo` — by the checker's own rules
+    // (kex::resolveTraitName), or "" when it is no trait. `lastResort` is the
+    // checker's too: an `implement:` list may name a trait exactly one module
+    // declares without importing it, a type annotation may not.
+    // `imports` stands in for the `using`s recorded so far when the caller
+    // knows better — the pre-pass runs before any are.
+    auto traitIdentityOf(const std::string& written, const std::string& scope,
+                         bool lastResort = false,
+                         const std::set<std::string>* imports = nullptr) const
+        -> std::string {
+        if (written.empty()) return {};
+        const auto& visible = imports ? *imports : usingModules;
+        const std::vector<std::string> imported(visible.begin(), visible.end());
+        const auto known = [this](const std::string& name) {
+            return traitMethods.count(name) > 0;
+        };
+        const auto eachKnown = [&](const auto& visit) {
+            if (!lastResort) return;
+            for (const auto& [name, _] : traitMethods) visit(name);
+        };
+        const auto resolved =
+            kex::resolveTraitName(written, scope, imported, known, eachKnown);
+        return known(resolved) ? resolved : std::string{};
+    }
+    auto traitIdentityOf(const std::string& written) const -> std::string {
+        return traitIdentityOf(written, currentModulePath);
+    }
+
     // Resolve a source spelling to the canonical runtime record identity.
     // Module-owned records are tagged `Module.Record`; top-level records keep
     // their historical bare name. Prefer the innermost lexical module before
@@ -7300,7 +7329,7 @@ struct Lowering {
     // guarding on one would emit a tag comparison nothing satisfies.
     auto discriminatingType(const std::string& written) const -> bool {
         if (written.empty() || written == "Any") return false;
-        if (traitMethods.count(written)) return false;
+        if (!traitIdentityOf(written).empty()) return false;
         if (auto alias = structuralTypeAliases.find(written);
             alias != structuralTypeAliases.end() && alias->second != written)
             return discriminatingType(alias->second);
@@ -7342,10 +7371,11 @@ struct Lowering {
         auto traitNameOf = [&](const ast::Param& param) -> std::string {
             if (!param.type || !*param.type) return "";
             const auto* name = std::get_if<ast::TypeName>(&(*param.type)->kind);
-            if (!name || name->parts.size() != 1 ||
-                !traitMethods.count(name->parts.front()))
-                return "";
-            return name->parts.front();
+            if (!name || name->parts.empty()) return "";
+            std::string written;
+            for (const auto& part : name->parts)
+                written += (written.empty() ? "" : ".") + part;
+            return traitIdentityOf(written);
         };
         int dictionaryArity = 0;
         if (!group[0]->clauses.empty())
@@ -7354,17 +7384,19 @@ struct Lowering {
                     ++dictionaryArity;
                     def.dictionaryTraits.push_back(trait);
                 }
-        const bool implicitThisDictionary = !implicitThisName.empty() &&
-            traitMethods.count(currentMakeType) > 0 &&
+        // `make Shape do` inside `module Geo` targets the trait `Geo.Shape`.
+        const auto makeTrait = implicitThisName.empty()
+            ? std::string{} : traitIdentityOf(currentMakeType, currentModulePath, true);
+        const bool implicitThisDictionary = !makeTrait.empty() &&
             std::none_of(
-                traitMethods.at(currentMakeType).begin(),
-                traitMethods.at(currentMakeType).end(),
+                traitMethods.at(makeTrait).begin(),
+                traitMethods.at(makeTrait).end(),
                 [&](const auto& required) {
                     return required.name == group[0]->name;
                 });
         if (implicitThisDictionary) {
             ++dictionaryArity;
-            def.dictionaryTraits.push_back(currentMakeType);
+            def.dictionaryTraits.push_back(makeTrait);
         }
         // Overloads of a name must share purity, so the group's first clause
         // decides. A capability's OWN members are excluded: they are the
@@ -8268,7 +8300,8 @@ struct Lowering {
             def.name = mangleReceiverSignature(
                 first.name, methodDispatchTypes(first, typeName));
         else if ((collidingMethods.count(first.name) ||
-                  traitMethods.count(typeName)) && !typeName.empty())
+                  !traitIdentityOf(typeName, currentModulePath, true).empty()) &&
+                 !typeName.empty())
             def.name = mangleReceiverImplementation(first.name, typeName);
         // A lone local `to(String)` still participates in the language-wide
         // conversion protocol. Its guarded record clause handles the local
@@ -8608,7 +8641,7 @@ struct Lowering {
 
 
     auto typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
-        if (traitMethods.count(written)) return litBool(true);
+        if (!traitIdentityOf(written).empty()) return litBool(true);
         // `type Handler = Env -> String` names a SHAPE. No value carries a
         // 'Handler' tag, so the tagged fallback below could never match one
         // and a `Handler` parameter contributed no guard at all — which is
@@ -8909,7 +8942,9 @@ struct Lowering {
         std::unordered_set<std::string> seen;
         for (const auto& ty : owners) {
             if (!seen.insert(ty).second) continue;
-            if (traitMethods.count(ty))
+            // Built after the module walk: no scope says where `ty` was
+            // written, so a trait one module declares is found by its name.
+            if (!traitIdentityOf(ty, "", true).empty())
                 traitFallbacks.push_back(ty);
             else if (primGuardBifs().count(ty) || ty == "Char"
                 || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))
@@ -9479,9 +9514,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // method group so they go through the exact same lowering/dispatch as
     // directly-defined methods (spec/traits.kex: Bot inherits shout/passing?).
     std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
-    kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td, const std::string&) {
-        traitDefs[td.name] = &td;
-        auto& methods = L.traitMethods[td.name];
+    kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td,
+                                         const std::string& modulePath) {
+        const auto identity = kex::traitIdentity(modulePath, td.name);
+        traitDefs[identity] = &td;
+        auto& methods = L.traitMethods[identity];
         methods.clear();
         for (const auto& entry : td.body)
             if (auto* annotation =
@@ -9514,14 +9551,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         return s;
     };
-    auto inheritedDefaults = [&](const ast::MakeDef& mk) {
+    // The `using`s of each scope, by module path ("" for the file). The
+    // pre-pass below collects a make block's inherited defaults before the
+    // main walk has recorded a single import, so `using Ui` then `implement:
+    // Shape` has to be resolved from these.
+    std::unordered_map<std::string, std::set<std::string>> scopeUsings;
+    kex::collectScopeUsings(prog.items, scopeUsings);
+    auto inheritedDefaults = [&](const ast::MakeDef& mk, const std::string& scope) {
         std::vector<const ast::FunctionDef*> out;
         if (mk.implements.empty()) return out;
         auto own = ownMethodNames(mk);
         std::set<MethodKey> added;
+        const auto visible = kex::usingsVisibleIn(scopeUsings, scope);
         for (const auto& tn : mk.implements) {
-            auto it = traitDefs.find(tn);
-            if (it == traitDefs.end()) it = traitDefs.find(kex::traitBareName(tn));
+            auto it = traitDefs.find(L.traitIdentityOf(tn, scope, true, &visible));
             if (it == traitDefs.end()) continue;
             // Kex writes a multi-clause function as separate `let`
             // declarations, so ONE trait default can be several FunctionDefs
@@ -9610,10 +9653,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 if (!param.type || !*param.type) continue;
                 const auto* type =
                     std::get_if<ast::TypeName>(&(*param.type)->kind);
-                if (type && type->parts.size() == 1 &&
-                    L.traitMethods.count(type->parts.front()))
-                    L.fnTraitParams[fd.name].push_back(
-                        {i, type->parts.front()});
+                if (!type || type->parts.empty()) continue;
+                std::string written;
+                for (const auto& part : type->parts)
+                    written += (written.empty() ? "" : ".") + part;
+                if (auto trait = L.traitIdentityOf(written, ""); !trait.empty())
+                    L.fnTraitParams[fd.name].push_back({i, std::move(trait)});
             }
         }
     };
@@ -9755,7 +9800,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         collectMethod(vfd->get());
         }
         // Inherited trait defaults count as this type's methods too.
-        for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
+        for (const auto* fd : inheritedDefaults(md, makeModulePath)) collectMethod(fd);
         for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
             if (signatures.size() < 2) continue;
             if (!separableOverloadSignatures(signatures)) continue;
@@ -10146,7 +10191,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // TypeAnnotation items in a make block are erased.
                 }
                 // Splice in trait default methods this type doesn't override.
-                for (const auto* fd : inheritedDefaults(*node)) pushFn(fd);
+                for (const auto* fd : inheritedDefaults(*node, "")) pushFn(fd);
                 flushM();
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
@@ -10296,7 +10341,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                                         pushMethod(fd->get());
                         }
-                        for (const auto* fd : inheritedDefaults(*mk)) pushMethod(fd);
+                        for (const auto* fd : inheritedDefaults(*mk, L.currentModulePath)) pushMethod(fd);
                         flushMethods();
                         }
                     };

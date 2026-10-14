@@ -56,9 +56,9 @@ class TraitRegistry {
 public:
     auto define(TraitDef def) -> void;
     auto get(const std::string& name) const -> const TraitDef*;
-    // A trait as an `implement:` list writes it: by its registered name, or
-    // qualified by the module declaring it (`Shop.Rules.Pricing`), which is
-    // registered by its bare name (see kex::traitBareName).
+    // A trait as an `implement:` list writes it, without the scope to
+    // resolve it properly (see kex::resolveTraitName): its identity, or the
+    // end of exactly one (`Pricing` for `Shop.Rules.Pricing`).
     auto lookup(const std::string& written) const -> const TraitDef*;
 
     // Is `type` a member of `traitName`? Number/Integer/Float are checked

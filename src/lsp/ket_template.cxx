@@ -211,7 +211,7 @@ auto translate(const std::string& source) -> Translation {
             }
             case Kind::Control: {
                 // Already zero or more complete Kex statements (`if x`,
-                // `elsif y`, `end`, `let z = ...`) — copied verbatim, and
+                // `elif y`, `end`, `let z = ...`) — copied verbatim, and
                 // followed by a `""`: the literal text after an `if`, `else`
                 // or block opener is output, which the synthetic source does
                 // not otherwise carry. Without it `<% if x %>none<% else

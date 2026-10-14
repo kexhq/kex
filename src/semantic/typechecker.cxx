@@ -590,8 +590,8 @@ auto TypeChecker::check(const ast::Program& program,
     registerLocalConformances(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)
-            m_traits.registerImplementation(c.typeName,
-                                            canonicalTraitName(c.traitName));
+            m_traits.registerImplementation(
+                c.typeName, resolveTraitReference(c.traitName, "", nullptr));
     registerRecordFields(program);
     for (const auto& [name, query] : m_computedAliases)
         m_typeAliases[name] = resolveTypeQuery(*query);
@@ -1685,8 +1685,12 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
         if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
             if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
         if (typeName.empty()) return;
+        static const std::vector<ImportSelection> kNoImports;
+        const auto imports = m_makeImports.find(&def);
         for (const auto& written : def.implements) {
-            const auto traitName = canonicalTraitName(written);
+            const auto traitName = resolveTraitReference(
+                written, modulePath,
+                imports == m_makeImports.end() ? &kNoImports : &imports->second);
             m_traits.registerImplementation(typeName, traitName);
             if (!modulePath.empty())
                 m_traits.registerImplementation(modulePath + "." + typeName,
@@ -1721,12 +1725,10 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
 }
 
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
-    m_traitOwners.clear();
     kex::forEachTraitDef(program.items, [this](const ast::TraitDef& node,
                                                const std::string& modulePath) {
-        m_traitOwners[node.name].insert(modulePath);
         TraitDef td;
-        td.name = node.name;
+        td.name = kex::traitIdentity(modulePath, node.name);
         for (const auto& bodyItem : node.body) {
             std::visit([&](const auto& bi) {
                 using BT = std::decay_t<decltype(bi)>;
@@ -1750,27 +1752,53 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
     });
 }
 
-// The registered name of a trait as a `make` block writes it. A trait is
-// registered by its bare name wherever it is declared (kex::traitBareName),
-// so `Shop.Rules.Pricing` is `Pricing` — provided `Shop.Rules` is where this
-// program declares it, or, for a trait an imported interface supplies, a
-// module this program cannot see into. A name registered in full (a
-// capability) is itself. Anything else comes back as written, unknown.
-auto TypeChecker::canonicalTraitName(const std::string& written) const -> std::string {
-    if (m_traits.get(written)) return written;
-    const auto bare = kex::traitBareName(written);
-    if (bare == written || !m_traits.get(bare)) return written;
-    const auto owners = m_traitOwners.find(bare);
-    if (owners == m_traitOwners.end()) return bare;
-    // `using Shop` then `implement: Rules.Pricing` writes the owner relative
-    // to an import, so a suffix of the declaring path is enough.
-    const auto writtenOwner = written.substr(0, written.size() - bare.size() - 1);
-    for (const auto& owner : owners->second)
-        if (owner == writtenOwner ||
-            (owner.size() > writtenOwner.size() &&
-             owner.ends_with("." + writtenOwner)))
-            return bare;
-    return written;
+// The identity of a trait reference written in module `scope`, against the
+// imports in effect there (`imports`, or the checker's current ones when
+// null) — kex::resolveTraitName's rules. `lastResort` allows its final step,
+// a trait exactly one module declares; a type annotation leaves it out, so a
+// name that is some other module's record is never taken for a trait.
+auto TypeChecker::resolveTraitReference(
+    const std::string& written, const std::string& scope,
+    const std::vector<ImportSelection>* imports, bool lastResort,
+    std::vector<std::string>* ambiguous) const -> std::string {
+    const auto bare = written.substr(written.rfind('.') + 1);
+    std::vector<std::string> modules;
+    std::string throughAlias;
+    auto consider = [&](const ImportSelection& import) {
+        // `using Geo, as: G` then `G.Shape`.
+        if (import.alias && written.starts_with(*import.alias + "."))
+            throughAlias = import.module + written.substr(import.alias->size());
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(), bare) ==
+                import.onlyNames.end())
+            return;
+        if (std::find(import.exceptNames.begin(), import.exceptNames.end(), bare) !=
+            import.exceptNames.end())
+            return;
+        modules.push_back(import.module);
+    };
+    if (imports) {
+        for (auto import = imports->rbegin(); import != imports->rend(); ++import)
+            consider(*import);
+    } else {
+        for (auto frame = m_importScopeStack.rbegin();
+             frame != m_importScopeStack.rend(); ++frame)
+            for (auto import = frame->rbegin(); import != frame->rend(); ++import)
+                consider(*import);
+        for (auto import = m_declarationImports.rbegin();
+             import != m_declarationImports.rend(); ++import)
+            consider(*import);
+    }
+    const auto known = [this](const std::string& name) {
+        return m_traits.get(name) != nullptr;
+    };
+    if (!throughAlias.empty() && known(throughAlias)) return throughAlias;
+    const auto eachKnown = [&](const auto& visit) {
+        if (!lastResort) return;
+        for (const auto& [name, _] : m_traits.all()) visit(name);
+    };
+    return kex::resolveTraitName(written, scope, modules, known, eachKnown,
+                                 ambiguous);
 }
 
 auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
@@ -2810,7 +2838,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // concrete Type — m_globals deliberately has no entry for them
             // (see check()'s comment) — so a param annotated `Float` means
             // "any T satisfying Float", same as an explicit constraint.
-            if (m_traits.get(last)) return Type::constrained(last, last);
+            if (const auto trait = resolveTraitReference(
+                    qualified, m_currentModulePath, nullptr, false);
+                m_traits.get(trait))
+                return Type::constrained(trait, trait);
             if (auto distinct = resolveDistinctName(last);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct);
@@ -4106,10 +4137,20 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
         // a trait the whole program knows perfectly well.
         if (written.find('.') != std::string::npos)
             recordWithOwner(m_referencedModules, written);
-        const auto traitName = canonicalTraitName(written);
+        std::vector<std::string> candidates;
+        const auto traitName = resolveTraitReference(
+            written, m_currentModulePath, nullptr, true, &candidates);
         const TraitDef* trait = m_traits.get(traitName);
         if (!trait) {
-            error(def.location, "Unknown trait: " + traitName);
+            if (candidates.size() > 1) {
+                std::string listed;
+                for (const auto& candidate : candidates)
+                    listed += (listed.empty() ? "`" : ", `") + candidate + "`";
+                error(def.location, "Ambiguous trait: `" + written +
+                      "` could be " + listed + " — write the one you mean");
+            } else {
+                error(def.location, "Unknown trait: " + written);
+            }
             continue;
         }
         std::string prefix = "make " + (typeName.empty() ? "?" : typeName) +

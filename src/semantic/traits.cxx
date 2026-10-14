@@ -15,8 +15,14 @@ auto TraitRegistry::get(const std::string& name) const -> const TraitDef* {
 
 auto TraitRegistry::lookup(const std::string& written) const -> const TraitDef* {
     if (const auto* exact = get(written)) return exact;
-    const auto dot = written.rfind('.');
-    return dot == std::string::npos ? nullptr : get(written.substr(dot + 1));
+    const TraitDef* found = nullptr;
+    const auto suffix = "." + written;
+    for (const auto& [name, def] : m_traits)
+        if (name.size() > suffix.size() && name.ends_with(suffix)) {
+            if (found) return nullptr;
+            found = &def;
+        }
+    return found;
 }
 
 auto TraitRegistry::registerImplementation(const std::string& typeName,
