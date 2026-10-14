@@ -161,7 +161,7 @@ private:
                 contract.implementedTraits.begin(),
                 contract.implementedTraits.end(),
                 [&](const std::string& name) {
-                    const auto* definition = traits.get(name);
+                    const auto* definition = traits.lookup(name);
                     return definition &&
                            std::any_of(definition->requiredMethods.begin(),
                                        definition->requiredMethods.end(),

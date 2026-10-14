@@ -9479,27 +9479,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // method group so they go through the exact same lowering/dispatch as
     // directly-defined methods (spec/traits.kex: Bot inherits shout/passing?).
     std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
-    for (const auto& item : prog.items)
-        if (auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item); td && *td) {
-            traitDefs[(*td)->name] = td->get();
-            auto& methods = L.traitMethods[(*td)->name];
-            methods.clear();
-            for (const auto& entry : (*td)->body)
-                if (auto* annotation =
-                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&entry);
-                    annotation && *annotation) {
-                    int arity = 1;
-                    const ast::TypeExpr* type = (*annotation)->type.get();
-                    while (type) {
-                        const auto* fn =
-                            std::get_if<ast::FunctionType>(&type->kind);
-                        if (!fn) break;
-                        ++arity;
-                        type = fn->result.get();
-                    }
-                    methods.push_back({(*annotation)->name, arity});
+    kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td, const std::string&) {
+        traitDefs[td.name] = &td;
+        auto& methods = L.traitMethods[td.name];
+        methods.clear();
+        for (const auto& entry : td.body)
+            if (auto* annotation =
+                    std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&entry);
+                annotation && *annotation) {
+                int arity = 1;
+                const ast::TypeExpr* type = (*annotation)->type.get();
+                while (type) {
+                    const auto* fn =
+                        std::get_if<ast::FunctionType>(&type->kind);
+                    if (!fn) break;
+                    ++arity;
+                    type = fn->result.get();
                 }
-        }
+                methods.push_back({(*annotation)->name, arity});
+            }
+    });
     // Keyed by (name, BEAM arity): a type overrides a trait default only when it
     // defines the same name at the SAME arity (list.kex's count/1 must NOT block
     // inheriting Enumerable's count/2).
@@ -9522,6 +9521,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         std::set<MethodKey> added;
         for (const auto& tn : mk.implements) {
             auto it = traitDefs.find(tn);
+            if (it == traitDefs.end()) it = traitDefs.find(kex::traitBareName(tn));
             if (it == traitDefs.end()) continue;
             // Kex writes a multi-clause function as separate `let`
             // declarations, so ONE trait default can be several FunctionDefs

@@ -1,0 +1,35 @@
+# A trait declared inside a module is the module's to name: `Shop.Pricing`
+# from outside, `Pricing` alone where it is in scope. Only top-level traits
+# used to be registered, so either spelling was an "Unknown trait" to the
+# checker, and the qualified one inherited no default methods at run time.
+
+module Shop do
+  trait Pricing do
+    price :> Integer
+    let doubled = this.price * 2
+  end
+end
+
+record Box do
+  size : Integer
+end
+
+make Box, implement: Shop.Pricing do
+  let price = @size
+end
+
+record Crate do
+  boxes : Integer
+end
+
+make Crate, implement: Pricing do
+  let price = @boxes * 10
+end
+
+let total(item: Shop.Pricing) -> Integer = item.doubled + item.price
+
+main do
+  IO.printLine(Box { size: 2 }.doubled)
+  IO.printLine(Crate { boxes: 3 }.doubled)
+  IO.printLine(total(Box { size: 1 }))
+end

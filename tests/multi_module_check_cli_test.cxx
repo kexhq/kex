@@ -244,6 +244,100 @@ end
                            result.output);
             assertEqual(result.exitCode, 1);
         });
+
+        // A file checked on its own — what the language server does with
+        // every file it opens — reaches another module only through the names
+        // it writes. Each case below names a module in one way and no other,
+        // and each used to be reported unknown although the whole program,
+        // checked from its entry point, knew it perfectly well.
+        auto shopPackage = [](const std::string& entry) {
+            auto package = makePackage("module Web\n", entry);
+            std::filesystem::create_directories(package->lib / "shop");
+            writeFile(package->lib / "shop" / "rules.kex", R"KEX(module Shop.Rules
+
+let LONGEST = 8
+
+record Order do
+  total : Integer
+end
+
+trait Pricing do
+  price :> Integer
+  let doubled = this.price * 2
+end
+)KEX");
+            writeFile(package->lib / "shop" / "ledger.kex", R"KEX(module Shop.Ledger
+
+capability Shop.Ledger do
+  foul post(amount: Integer) -> Integer = 0
+end
+)KEX");
+            return package;
+        };
+
+        // `"${Shop.Rules.LONGEST}"` desugars to a `show` whose receiver is the
+        // whole path, constant included; shop/rules/longest.kex is no file.
+        it("discovers a module named only by an interpolated constant", [&]() {
+            auto package = shopPackage(R"KEX(main do
+  IO.printLine("at most ${Shop.Rules.LONGEST}")
+end
+)KEX");
+            auto result = runCheck(*package);
+            assertEqual(result.output, std::string("No errors found.\n"));
+            assertEqual(result.exitCode, 0);
+        });
+
+        it("discovers a module named only by a parameter's type", [&]() {
+            auto package = shopPackage(R"KEX(let total(order: Shop.Rules.Order) -> Integer = order.total
+
+main do
+  IO.printLine("none")
+end
+)KEX");
+            auto result = runCheck(*package);
+            assertEqual(result.output, std::string("No errors found.\n"));
+            assertEqual(result.exitCode, 0);
+        });
+
+        // Harmat's shape: `make StoreConnection, implement: Harmat.Connection`.
+        it("discovers a module named only by an implemented capability", [&]() {
+            auto package = shopPackage(R"KEX(record Book do
+  size : Integer
+end
+
+make Book, implement: Shop.Ledger do
+  foul post(amount: Integer) -> Integer = amount
+end
+
+main do
+  IO.printLine(Book { size: 2 }.size)
+end
+)KEX");
+            auto result = runCheck(*package);
+            assertEqual(result.output, std::string("No errors found.\n"));
+            assertEqual(result.exitCode, 0);
+        });
+
+        // A trait declared in a module, implemented from another file by its
+        // qualified name, its default method inherited. Only top-level traits
+        // were registered, so this was "Unknown trait" and "Undefined method".
+        it("knows a trait another module declares", [&]() {
+            auto package = shopPackage(R"KEX(record Box do
+  size : Integer
+end
+
+make Box, implement: Shop.Rules.Pricing do
+  let price = @size
+end
+
+main do
+  IO.printLine(Box { size: 2 }.doubled)
+end
+)KEX");
+            auto result = runCheck(*package);
+            assertEqual(result.output, std::string("No errors found.\n"));
+            assertEqual(result.exitCode, 0);
+        });
     });
     return runAll();
 }

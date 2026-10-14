@@ -339,6 +339,63 @@ int main() {
                        "a declared params: type was not honored inside a .ket hole: " + result);
         });
 
+        it("checks a .ket template inside the module that embeds it", []() {
+            // `params: [card: Card]` means the `Card` declared beside the
+            // `Template.html(Kex.embed(...))` that compiles the template. On
+            // its own the template knew no such record, so every `?` field
+            // read through it was an "Undefined method".
+            //
+            // Also: a hole's error used to be dropped when it was mapped back
+            // (its offset was the `(` wrapped around the hole), and literal
+            // text emitted nothing, so `<% if %>none<% else %><%= s %><%
+            // end %>` had a Void branch beside a String one.
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_lsp_ket_host_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            fs::create_directories(root / "app" / "views" / "parts");
+            std::ofstream(root / "package.kex")
+                << "package \"kp\" do\n  version(\"0.1.0\")\n  sources([\"app\"])\nend\n";
+            std::ofstream(root / "app" / "views" / "page.kex")
+                << "module App.Views.Page\n\n"
+                   "record Card do\n  key : String\n  shown? : Bool\n  note : String = \"\"\nend\n\n"
+                   "let card = Template.html(Kex.embed(\"parts/_card.html.ket\"))\n";
+            const auto templatePath = root / "app" / "views" / "parts" / "_card.html.ket";
+            const std::string text =
+                "---\\nparams: [card: Card, topic: String]\\n---\\n"
+                "<p><%= card.key %><% if card.shown? %> on<% end %><%= card.note %></p>\\n"
+                "<% if topic.empty? %>none<% else %><%= topic %><% end %>\\n"
+                "<%= card.missing %>\\n";
+            std::ofstream(templatePath) << "";
+
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://)" +
+                templatePath.string() +
+                R"(","languageId":"ket-html","version":1,"text":")" + text + R"("}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            fs::remove_all(root);
+            const auto result = output.str();
+            assertTrue(result.find("shown?") == std::string::npos,
+                       "the embedding module's record was not in scope: " + result);
+            assertTrue(result.find("Branch type mismatch") == std::string::npos,
+                       "literal text did not count as a branch's output: " + result);
+            assertTrue(result.find("Undefined method `missing`") != std::string::npos,
+                       "an error inside a <%= %> hole was dropped: " + result);
+            assertTrue(result.find("\"line\":5") != std::string::npos,
+                       "the hole's error did not map back to its own line: " + result);
+        });
+
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(
@@ -903,7 +960,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  command(\"check\", run: \"make check\", description: \"Type-check\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  command(\"check\", run: \"make check\", description: \"Type-check\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  sources([\"app\", \"db\"])\n  plugin namespace: \"demo\", tey: \">= 0.2\" do\n    capabilities([FS.Write.workspace, FS.Read.package, Process.Run([\"git\"]), Net.Connect([\"example.com\"])])\n    command(\"docs\", run: \"script/docs.kex\")\n    generator(\"page\", entrypoint: \"generators/page.kex\")\n    generator(\"model\", entrypoint: \"generators/model.kex\") do\n      option(\"name\", type: String)\n    end\n  end\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":1,"character":4}}})");
             messages += frame(
@@ -919,6 +976,10 @@ int main() {
             const auto result = output.str();
             assertTrue(result.find("Undefined function") == std::string::npos,
                        "the manifest vocabulary was reported as undefined");
+            // `FS.Write.workspace` is `workspace(FS.Write)` by UFCS, and was
+            // once held against the `workspace do` that takes a block.
+            assertTrue(result.find("\"severity\":1") == std::string::npos,
+                       "a well-formed manifest was reported with errors: " + result);
             assertTrue(result.find("version : String -> Void") != std::string::npos,
                        "hovering a manifest declaration showed no signature");
             assertTrue(result.find("command : String") != std::string::npos,

@@ -48,6 +48,56 @@ end
 let plugin(namespace: String, tey: String, body: Block<Void>) -> Void do
 end
 
+# A file-system resource a plugin is granted, which Tey asks the developer to
+# approve when the package is installed.
+record PluginCapability do
+  kind : String
+end
+
+# `Process.Run([...])`: running the programs listed.
+module Process do
+  type Grant = Run([String])
+end
+
+# `Net.Connect([...])`: connecting to the hosts listed.
+module Net do
+  type Grant = Connect([String])
+end
+
+# What a plugin may touch, once, inside its block: `FS.Read.package` (the
+# plugin's own files), `FS.Write.workspace` (the package it runs in),
+# `Process.Run([...])` and `Net.Connect([...])` with the programs and hosts
+# they are allowed.
+#
+# @example
+#   capabilities([FS.Write.workspace, Process.Run(["git"])])
+let capabilities(granted: [Any]) -> Void do
+end
+
+# `FS.Read.package`: reading the plugin's own package.
+let package(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Read.package" }
+
+# `FS.Write.workspace`: writing inside the package the plugin runs in.
+let workspace(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Write.workspace" }
+
+# A plugin command that writes files, run as `tey generate NAMESPACE:NAME`.
+# Its block declares its options with +option+.
+#
+# @example
+#   generator("migration", entrypoint: "generators/migration.kex") do
+#     option("name", type: String)
+#   end
+let generator(name: String, entrypoint: String) -> Void do
+end
+
+let generator(name: String, entrypoint: String, body: Block<Void>) -> Void do
+end
+
+# One `--name value` option of a plugin command or generator: `type:` is
+# `String`, `Integer`, `Float` or `Bool`.
+let option(name: String, type: Any) -> Void do
+end
+
 # The package's own version, as `MAJOR.MINOR.PATCH`.
 let version(version: String) -> Void do
 end
@@ -68,6 +118,12 @@ end
 
 # The source file `tey run` and `tey build` start from.
 let entrypoint(path: String) -> Void do
+end
+
+# The folders at the package's top that hold its modules, when it keeps them
+# there rather than in `src/`: `sources(["app", "config", "db"])` makes
+# `App.Models.User` the file `./app/models/user.kex`.
+let sources(folders: [String]) -> Void do
 end
 
 # A named build target. `entrypoint:` defaults to the package's own.

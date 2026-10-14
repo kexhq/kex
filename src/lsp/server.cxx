@@ -27,6 +27,7 @@
 #include <iostream>
 #include <istream>
 #include <iterator>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -357,6 +358,69 @@ auto specCompanions(const std::string& filepath) -> std::vector<std::string> {
     return {};
 }
 
+// The source file that compiles a `.ket` template — the one whose
+// `Kex.embed("...")` names it, relative to that file's own directory — and
+// the module it declares ("" when it declares none). A template is checked
+// as part of that file: `params: [badge: Badge]` means the `Badge` declared
+// beside the `Template.html(Kex.embed(...))`, and on its own it means
+// nothing, so every field read through it was an undefined method.
+//
+// Only the template's own directory and its ancestors, up to the package,
+// are searched: an embed path that climbs out with `..` is not found.
+struct TemplateHost {
+    std::string file;
+    std::string module;
+};
+
+auto templateHost(const std::string& templatePath) -> std::optional<TemplateHost> {
+    namespace fs = std::filesystem;
+    const auto target = fs::path(templatePath).lexically_normal();
+    const auto package = kex::lsp::teyPackageDirectory(templatePath);
+    std::error_code ec;
+    for (auto directory = target.parent_path(); !directory.empty();
+         directory = directory.parent_path()) {
+        const auto relative = target.lexically_relative(directory).generic_string();
+        const auto needle = "Kex.embed(\"" + relative + "\")";
+        std::vector<fs::path> sources;
+        for (const auto& entry : fs::directory_iterator(directory, ec))
+            if (entry.path().extension() == ".kex" &&
+                entry.is_regular_file(ec))
+                sources.push_back(entry.path());
+        // Sorted, so two files embedding the same template always resolve to
+        // the same host whatever order the directory lists them in.
+        std::sort(sources.begin(), sources.end());
+        for (const auto& source : sources) {
+            std::ifstream input(source, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(input)),
+                                   std::istreambuf_iterator<char>());
+            if (text.find(needle) == std::string::npos) continue;
+            TemplateHost host{source.string(), ""};
+            // `module App.Views.Chat` heading the file, or the first
+            // `module X do` in it.
+            size_t lineStart = 0;
+            while (lineStart < text.size()) {
+                auto lineEnd = text.find('\n', lineStart);
+                if (lineEnd == std::string::npos) lineEnd = text.size();
+                const auto line = std::string_view(text).substr(lineStart, lineEnd - lineStart);
+                if (line.starts_with("module ")) {
+                    auto name = line.substr(7);
+                    name = name.substr(0, name.find_first_of(" \t\r"));
+                    host.module = std::string(name);
+                    break;
+                }
+                lineStart = lineEnd + 1;
+            }
+            return host;
+        }
+        // Outside any package, only the template's own directory.
+        if (package.empty() ||
+            directory == fs::path(package).lexically_normal() ||
+            !directory.has_relative_path())
+            break;
+    }
+    return std::nullopt;
+}
+
 auto utf16Column(const std::string& source, int line, int byteColumn) -> int {
     size_t offset = 0;
     for (int current = 1; current < line && offset < source.size(); ++current) {
@@ -424,9 +488,24 @@ auto identifierLengthAt(const std::string& source, const SourceLocation& locatio
 auto translateKetLocation(const Document& document, SourceLocation location)
     -> std::optional<SourceLocation> {
     if (document.ketOriginalText.empty()) return location;
-    if (location.startOffset < 0) return std::nullopt;
+    // By line and column, which is where an ordinary `.kex` document shows
+    // the diagnostic, rather than by `startOffset`: a checker diagnostic's
+    // offset is often where its EXPRESSION starts, and for a `<%= %>` hole
+    // that is the `(` wrapped around it, which no template byte is behind.
+    // Every undefined method and type error in such a hole was dropped.
+    auto synOffset = location.startOffset;
+    if (location.line >= 1 && location.column >= 1) {
+        size_t lineStart = 0;
+        for (int line = 1; line < location.line && lineStart != std::string::npos; ++line) {
+            lineStart = document.text.find('\n', lineStart);
+            if (lineStart != std::string::npos) ++lineStart;
+        }
+        if (lineStart != std::string::npos)
+            synOffset = static_cast<int>(lineStart) + location.column - 1;
+    }
+    if (synOffset < 0) return std::nullopt;
     const auto origOffset =
-        kex::lsp::ket::mapOffset(document.ketSegments, location.startOffset);
+        kex::lsp::ket::mapOffset(document.ketSegments, synOffset);
     if (origOffset < 0) return std::nullopt;
     int line = 1, column = 1;
     for (int i = 0; i < origOffset &&
@@ -2304,8 +2383,26 @@ private:
         // document".
         std::string ketOriginalText;
         std::vector<kex::lsp::ket::Segment> ketSegments;
+        auto companions = specCompanions(path);
         if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".ket") == 0) {
             auto translation = kex::lsp::ket::translate(text);
+            // Checked where it is compiled (see templateHost): inside the
+            // embedding module, reached by a `using` ahead of the synthetic
+            // function — which shifts every segment by that line — or, for
+            // a file that declares no module, with the file loaded beside it.
+            if (const auto host = templateHost(path)) {
+                if (host->module.empty()) {
+                    companions = {host->file};
+                } else {
+                    const auto prelude = "using " + host->module + "\n";
+                    translation.source.insert(0, prelude);
+                    const auto shift = static_cast<int>(prelude.size());
+                    for (auto& segment : translation.segments) {
+                        segment.synStart += shift;
+                        segment.synEnd += shift;
+                    }
+                }
+            }
             ketOriginalText = std::move(text);
             ketSegments = std::move(translation.segments);
             text = std::move(translation.source);
@@ -2320,7 +2417,7 @@ private:
         document.localReceiverTypes = std::move(previousReceiverTypes);
         document.documentation = sourceDocumentation(document.text);
         m_db.setModuleRoots(documentModuleRoots(path));
-        m_db.updateFile(path, document.text, specCompanions(path));
+        m_db.updateFile(path, document.text, companions);
         // Once per parse, and only here: `updateFile` is what replaces the
         // file's AST, so this is the one place the merge cannot double up.
         if (auto* state = m_db.fileState(path)) {

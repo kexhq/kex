@@ -1769,7 +1769,9 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
     }
 
     // Inherit default methods from implemented traits.
-    for (const auto& traitName : def.implements) {
+    for (const auto& written : def.implements) {
+        const auto traitName = m_traitMethods.count(written)
+            ? written : kex::traitBareName(written);
         std::string prefix = traitName + "::";
         std::vector<const ast::FunctionDef*> inheritedMethods;
         for (const auto& [key, fns] : m_functionDefs) {

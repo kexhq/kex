@@ -13,6 +13,12 @@ auto TraitRegistry::get(const std::string& name) const -> const TraitDef* {
     return it == m_traits.end() ? nullptr : &it->second;
 }
 
+auto TraitRegistry::lookup(const std::string& written) const -> const TraitDef* {
+    if (const auto* exact = get(written)) return exact;
+    const auto dot = written.rfind('.');
+    return dot == std::string::npos ? nullptr : get(written.substr(dot + 1));
+}
+
 auto TraitRegistry::registerImplementation(const std::string& typeName,
                                             const std::string& traitName) -> void {
     m_implementations[typeName].insert(traitName);

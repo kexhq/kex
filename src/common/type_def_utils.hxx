@@ -33,6 +33,35 @@ inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
     return generic && generic->applied;
 }
 
+// Traits are registered by their bare name wherever they are declared, the
+// way an imported package's `.kexi` already exports them. A module still
+// namespaces the trait for the reader: `implement: Shop.Rules.Pricing` names
+// the `Pricing` that `module Shop.Rules` declares. A name registered in full
+// (a capability is: `Harmat.Connection`) is looked up as written first.
+inline auto traitBareName(const std::string& written) -> std::string {
+    const auto dot = written.rfind('.');
+    return dot == std::string::npos ? written : written.substr(dot + 1);
+}
+
+// Every `trait` a program declares, at the top level or inside any module,
+// with the path of the module declaring it ("" at the top level). Every phase
+// that keeps a trait table walks it this way, so one declared inside a module
+// is not known to the checker yet missing from the runtime.
+template <typename Items, typename Visit>
+auto forEachTraitDef(const Items& items, const Visit& visit,
+                     const std::string& modulePath = "") -> void {
+    for (const auto& item : items) {
+        if (auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+            trait && *trait)
+            visit(**trait, modulePath);
+        else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                 module && *module)
+            forEachTraitDef((*module)->body, visit,
+                            modulePath.empty() ? (*module)->name
+                                               : modulePath + "." + (*module)->name);
+    }
+}
+
 // The dispatch names a `make` target covers. Normally one, but a union target
 // (`make Float | Integer do ... end`) applies the block to every member, so
 // each gets its own registration under the same method names. Nested unions

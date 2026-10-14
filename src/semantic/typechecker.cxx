@@ -49,6 +49,20 @@ auto closestName(const std::string& name, const std::vector<std::string>& candid
     return best;
 }
 
+// Records `A.B.Name` — a type, trait or constant declared in `module A.B` —
+// as a module reference for discovery, together with `A.B` itself. Nothing
+// spells `a/b/name.kex`, and the resolver's container fallback reaches only
+// the first segment (`a.kex`), so without the owner a file that names the
+// declaration only this way never gets `a/b.kex` loaded. Whichever of the
+// two is not a module, the resolver drops.
+auto recordWithOwner(std::unordered_set<std::string>& references,
+                     const std::string& qualified) -> void {
+    const auto dot = qualified.rfind('.');
+    if (dot != std::string::npos && qualified.find('.') < dot)
+        references.insert(qualified.substr(0, dot));
+    references.insert(qualified);
+}
+
 } // namespace
 
 auto containsOpenType(const TypePtr& type) -> bool;
@@ -576,7 +590,8 @@ auto TypeChecker::check(const ast::Program& program,
     registerLocalConformances(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)
-            m_traits.registerImplementation(c.typeName, c.traitName);
+            m_traits.registerImplementation(c.typeName,
+                                            canonicalTraitName(c.traitName));
     registerRecordFields(program);
     for (const auto& [name, query] : m_computedAliases)
         m_typeAliases[name] = resolveTypeQuery(*query);
@@ -1670,7 +1685,8 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
         if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
             if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
         if (typeName.empty()) return;
-        for (const auto& traitName : def.implements) {
+        for (const auto& written : def.implements) {
+            const auto traitName = canonicalTraitName(written);
             m_traits.registerImplementation(typeName, traitName);
             if (!modulePath.empty())
                 m_traits.registerImplementation(modulePath + "." + typeName,
@@ -1705,36 +1721,56 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
 }
 
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
-    for (const auto& item : program.items) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-                if (!node) return;
-                TraitDef td;
-                td.name = node->name;
-                for (const auto& bodyItem : node->body) {
-                    std::visit([&](const auto& bi) {
-                        using BT = std::decay_t<decltype(bi)>;
-                        if constexpr (std::is_same_v<BT, std::unique_ptr<ast::TypeAnnotation>>) {
-                            if (!bi) return;
-                            auto sig = annotationToSignature(*bi);
-                            if (sig) {
-                                sig->isFoul = bi->isFoul;
-                                td.requiredMethods.push_back(std::move(*sig));
-                            }
-                        }
-                        // FunctionDef items are default implementations: no
-                        // signature of their own, but the NAME matters —
-                        // every implementing type inherits it.
-                        else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
-                            if (bi) td.defaultMethods.push_back(bi->name);
-                        }
-                    }, bodyItem);
+    m_traitOwners.clear();
+    kex::forEachTraitDef(program.items, [this](const ast::TraitDef& node,
+                                               const std::string& modulePath) {
+        m_traitOwners[node.name].insert(modulePath);
+        TraitDef td;
+        td.name = node.name;
+        for (const auto& bodyItem : node.body) {
+            std::visit([&](const auto& bi) {
+                using BT = std::decay_t<decltype(bi)>;
+                if constexpr (std::is_same_v<BT, std::unique_ptr<ast::TypeAnnotation>>) {
+                    if (!bi) return;
+                    auto sig = annotationToSignature(*bi);
+                    if (sig) {
+                        sig->isFoul = bi->isFoul;
+                        td.requiredMethods.push_back(std::move(*sig));
+                    }
                 }
-                m_traits.define(std::move(td));
-            }
-        }, item);
-    }
+                // FunctionDef items are default implementations: no
+                // signature of their own, but the NAME matters —
+                // every implementing type inherits it.
+                else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
+                    if (bi) td.defaultMethods.push_back(bi->name);
+                }
+            }, bodyItem);
+        }
+        m_traits.define(std::move(td));
+    });
+}
+
+// The registered name of a trait as a `make` block writes it. A trait is
+// registered by its bare name wherever it is declared (kex::traitBareName),
+// so `Shop.Rules.Pricing` is `Pricing` — provided `Shop.Rules` is where this
+// program declares it, or, for a trait an imported interface supplies, a
+// module this program cannot see into. A name registered in full (a
+// capability) is itself. Anything else comes back as written, unknown.
+auto TypeChecker::canonicalTraitName(const std::string& written) const -> std::string {
+    if (m_traits.get(written)) return written;
+    const auto bare = kex::traitBareName(written);
+    if (bare == written || !m_traits.get(bare)) return written;
+    const auto owners = m_traitOwners.find(bare);
+    if (owners == m_traitOwners.end()) return bare;
+    // `using Shop` then `implement: Rules.Pricing` writes the owner relative
+    // to an import, so a suffix of the declaring path is enough.
+    const auto writtenOwner = written.substr(0, written.size() - bare.size() - 1);
+    for (const auto& owner : owners->second)
+        if (owner == writtenOwner ||
+            (owner.size() > writtenOwner.size() &&
+             owner.ends_with("." + writtenOwner)))
+            return bare;
+    return written;
 }
 
 auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
@@ -2764,9 +2800,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (node.parts.size() == 1) {
                 const auto recordName = resolveRecordName(last);
                 if (recordName != last) return Type::named(recordName);
-            } else if (auto nominal = qualifiedNominalType(qualified)) {
-                m_referencedModules.insert(qualified);
-                return Type::named(*nominal);
+            } else {
+                recordWithOwner(m_referencedModules, qualified);
+                if (auto nominal = qualifiedNominalType(qualified))
+                    return Type::named(*nominal);
             }
             if (auto known = m_globals.get(last)) return known;
             // Trait-only names (Float, Number, Comparable, ...) have no
@@ -2781,7 +2818,6 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
             if (node.parts.size() > 1) {
-                m_referencedModules.insert(qualified);
                 const bool isNominal = m_recordFields.count(qualified) ||
                     m_adtVariants.count(qualified) ||
                     (m_importedInterfaces &&
@@ -4062,14 +4098,22 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
         }, item);
     }
 
-    for (const auto& traitName : def.implements) {
+    for (const auto& written : def.implements) {
+        // A qualified trait or capability (`implement: Harmat.Connection`)
+        // is a module reference like any other: when it is the only one a
+        // file makes, discovery must still load the module declaring it, or
+        // checking that file alone — as the language server does — reports
+        // a trait the whole program knows perfectly well.
+        if (written.find('.') != std::string::npos)
+            recordWithOwner(m_referencedModules, written);
+        const auto traitName = canonicalTraitName(written);
         const TraitDef* trait = m_traits.get(traitName);
         if (!trait) {
             error(def.location, "Unknown trait: " + traitName);
             continue;
         }
         std::string prefix = "make " + (typeName.empty() ? "?" : typeName) +
-                             ", implement: " + traitName + " — ";
+                             ", implement: " + written + " — ";
         for (const auto& req : trait->requiredMethods) {
             auto it = provided.find(req.name);
             if (it == provided.end()) {
@@ -5392,7 +5436,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!interfaceModule.empty())
                         dependencyPath = std::move(interfaceModule);
                 }
-                m_referencedModules.insert(std::move(dependencyPath));
+                // A capitalized segment may be a constant rather than a
+                // module: `"${App.Forms.Credentials.SHORTEST}"`, whose `show`
+                // has the whole path as its receiver.
+                const auto last = dependencyPath.substr(dependencyPath.rfind('.') + 1);
+                if (std::none_of(last.begin(), last.end(),
+                                 [](unsigned char c) { return std::islower(c); }))
+                    recordWithOwner(m_referencedModules, dependencyPath);
+                else
+                    m_referencedModules.insert(std::move(dependencyPath));
             }
             bool isImportedNamespace = importedPath && m_importedInterfaces &&
                 m_importedInterfaces->modules.count(*importedPath) > 0;
