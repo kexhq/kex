@@ -824,7 +824,20 @@ jobs:
               return 0
             fi
             npm publish "kexhq-kex-${version}.tgz" --tag "$tag" --registry "$registry" "$@"
-            npm view "@kexhq/kex@${tag}" version --registry "$registry"
+            # The registry is eventually consistent: a dist-tag published for
+            # the first time (rc.1 introduced `rc`) can 404 for a while after
+            # the publish succeeded. Poll instead of failing the job, which
+            # would also skip the remaining registry.
+            local attempt current=""
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              current="$(npm view "@kexhq/kex@${tag}" version --registry "$registry" 2>/dev/null || true)"
+              if [ "$current" = "$version" ]; then
+                echo "@kexhq/kex@${tag} is ${current} on ${registry}"
+                return 0
+              fi
+              sleep 30
+            done
+            echo "::warning::@kexhq/kex@${tag} on ${registry} still reads '${current}' (expected ${version}); the publish itself succeeded"
           }
 
           publish_to "https://registry.npmjs.org" --provenance
