@@ -62,7 +62,7 @@ foul add(name: String, options: ParsedOptions) -> Integer do
     end
   `.substitute({"$BODY$": body, "$NAME$": name, "$GIT$": git,
                 "$SELECTOR$": selector, "$REQUESTED$": requested})
-  return Tey.Commands.fail("could not update package.kex") if !FS.File.write("package.kex", updated)
+  return Tey.Commands.fail("could not update package.kex") if FS.File.write("package.kex", updated).error?
   Tey.Commands.updateDependencies(name)
 end
 
@@ -1416,7 +1416,7 @@ private do
   foul publishLock(path: String, state: LockState) -> Void or! String do
     let nonce = Digest.sha256("${path}:${DateTime.epochNanos()}")
     let staging = "${path}.partial.${nonce}"
-    return Error("could not stage tey.lock") if !FS.File.write(staging, Tey.Lockfile.encode(state))
+    return Error("could not stage tey.lock") if FS.File.write(staging, Tey.Lockfile.encode(state)).error?
     match Process.run("mv", ["--", staging, path]) do
       Ok(result) => return Ok(()) if result.exitCode == 0
       Error(_) => ()
@@ -1762,7 +1762,7 @@ private do
       end
       Error(_) => ()
     end
-    return false if !FS.File.write(path, contents)
+    return false if FS.File.write(path, contents).error?
     Tey.Commands.report("create", directory, path)
     true
   end
@@ -1967,7 +1967,7 @@ private do
     })
     let input = FS.Path.join(ENV.get("TMPDIR").or("/tmp"),
                              "tey-invocation-${DateTime.now().iso.replace(":", "-")}.json")
-    return Error("could not write the plugin invocation to `${input}`") if !FS.File.write(input, invocation)
+    return Error("could not write the plugin invocation to `${input}`") if FS.File.write(input, invocation).error?
     let (guard, profile) = if unconfined?
       IO.printError("${Console.YELLOW}warning:${Console.RESET} running plugin `${namespace}` unconfined, with your full access")
       ([], [])

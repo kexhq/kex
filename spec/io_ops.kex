@@ -23,7 +23,7 @@ main do
   FS.File.delete(path)
 
   IO.printLine(FS.File.exists?(path))
-  IO.printLine(FS.File.write(path, "ab"))
+  IO.printLine(FS.File.write(path, "ab").ok?)
   IO.printLine(FS.File.exists?(path))
   IO.printLine(FS.File.read(path))
   FS.File.append(path, "cd")

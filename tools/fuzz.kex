@@ -692,7 +692,7 @@ let describeOutcome(outcome) -> String do
 end
 
 foul writeRequired(path: String, text: String) do
-  if !FS.File.write(path, text)
+  if FS.File.write(path, text).error?
     IO.printError("fuzz: cannot write ${path}")
     System.exit(2)
   end

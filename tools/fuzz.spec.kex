@@ -64,7 +64,7 @@ describe("fuzzer regression checks") do
       program = "${program}let result${seed} = ${source}\nIO.printLine(result${seed})\n"
       seed = seed + 1
     end
-    assert(FS.File.write(corpus, "${program}end\n"))
+    assert(FS.File.write(corpus, "${program}end\n").ok?)
     let walker = Process.run(kex, ["--run-walker", "--no-colors", corpus], 90000)
     let beam = Process.run(kex, ["--run", "--no-colors", corpus], 90000)
     FS.Directory.deleteAll(root)

@@ -416,8 +416,8 @@ module Mock do
     # the honest answer and the useful one: a test that did not expect a
     # write sees it fail rather than silently succeed.
     foul open(path, mode) = Error(OpenFailed(path))
-    foul write(path, content) = false
-    foul writeBytes(path, content) = false
+    foul write(path, content) = Error(WriteFailed(path))
+    foul writeBytes(path, content) = Error(WriteFailed(path))
     foul append(path, content) = false
     foul delete(path) = false
     foul copy(src, dst) = false

@@ -32,7 +32,7 @@ foul apply(operations: [Operation], workspaceRoot: String,
       let existing = FS.File.file?(target) || FS.Directory.directory?(target)
       Tey.Generator.confirm("write", path, existing, force?).try
       return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
-      return Error("could not write `${path}`") if !FS.File.write(target, content)
+      return Error("could not write `${path}`") if FS.File.write(target, content).error?
       IO.printLine("${Console.GREEN}write${Console.RESET} ${path}")
     end
     DeleteFile(path) => do

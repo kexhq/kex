@@ -439,7 +439,7 @@ foul installSource(source: String, version: String) -> String or! String do
   end
   # `.try` propagates a failed publish as this function's Error.
   let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
-  return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+  return Error("installed Kex but could not select it") if FS.File.write("${home}/current", "${version}\n").error?
   Tey.Toolchain.link(version)
   Ok(installedPrefix)
 end
@@ -482,7 +482,7 @@ foul use(version: String) -> Bool do
       Ok(_) => return true
     end
   end
-  return false if !FS.File.write("${home}/current", "${version}\n")
+  return false if FS.File.write("${home}/current", "${version}\n").error?
   # Best effort: the selection is recorded either way, and `tey` itself reads
   # the record rather than the shim. Only a user's bare `kex` needs the link.
   Tey.Toolchain.link(version)
@@ -656,7 +656,7 @@ private do
       Error(error) => return Error(Unavailable(error))
       Ok(value) => value
     end
-    return Error(Unavailable("installed Kex ${version} but could not select it")) if !FS.File.write("${home}/current", "${version}\n")
+    return Error(Unavailable("installed Kex ${version} but could not select it")) if FS.File.write("${home}/current", "${version}\n").error?
     Tey.Toolchain.link(version)
     return Ok(installedPrefix)
   end
@@ -703,7 +703,7 @@ private do
       return Error("could not copy ${source} into the Tey home: ${copied.stderr}")
     end
     let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
-    return Error("adopted Kex ${version} but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+    return Error("adopted Kex ${version} but could not select it") if FS.File.write("${home}/current", "${version}\n").error?
     Tey.Toolchain.link(version)
     return Ok(installedPrefix)
   end
