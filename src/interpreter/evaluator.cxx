@@ -3579,11 +3579,42 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                std::holds_alternative<BigIntValue>(value->data) ||
                std::holds_alternative<FloatValue>(value->data);
     };
+    // Whether the overload `name` resolved to declares a parameter `right`
+    // can be passed as. A native operator, or a clause with nothing written
+    // on its parameter, takes anything.
+    auto overloadAccepts = [&](const std::string& name) {
+        const auto defs = m_functionDefs.find(name);
+        if (defs == m_functionDefs.end()) return true;
+        for (const auto* def : defs->second) {
+            if (!def) continue;
+            for (const auto& clause : def->clauses) {
+                if (clause.params.empty()) return true;
+                const auto* declared = dispatchParamType(clause.params.back());
+                if (!declared || runtimeTypeMatches(right, *declared)) return true;
+            }
+        }
+        return false;
+    };
     if (!opSymbol.empty() && !(numeric(left) && numeric(right))) {
         std::vector<ValuePtr> operatorArgs{left, right};
         auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
-        if (methodName != opSymbol)
+        const bool equality = opSymbol == "==" || opSymbol == "!=";
+        // `==` and `!=` keep structural equality for whatever an overload
+        // does not take: `let ==(value: String) -> Cond` is what `col ==
+        // "x"` means, and comparing two Cols still compares them
+        // (kexhq/kex#486).
+        if (methodName != opSymbol && (!equality || overloadAccepts(methodName)))
             return callFunction(methodName, {left, right}, {}, loc);
+        // `!=` where no `!=` overload applies is the negation of an
+        // overloaded `==`, so `a != b` and `!(a == b)` always agree. The
+        // checker allows it only where that `==` answers a Bool.
+        if (opSymbol == "!=") {
+            std::vector<ValuePtr> equalityArgs{left, right};
+            const auto equalName = resolveMethodName(left, "==", &equalityArgs);
+            if (equalName != "==" && overloadAccepts(equalName))
+                return Value::boolean(
+                    !callFunction(equalName, {left, right}, {}, loc)->isTrue());
+        }
     }
 
     // li/ri stay the int64_t fast path for the overwhelmingly common case;

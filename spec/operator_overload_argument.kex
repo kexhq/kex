@@ -1,0 +1,41 @@
+# An operator a make block overloads is reached only for an argument its
+# parameter takes (kexhq/kex#486). `Col`'s `==` builds a condition from a
+# String; two Cols still compare structurally, as they did before `==` was
+# declared. `Money`'s `==` answers a Bool, so `!=` is derived from it, and
+# `a != b` agrees with `!(a == b)`. `Col` declares its own `!=`.
+
+type Cond = EqCond(String, String) | NeCond(String, String) | CmpCond(String, String, String)
+
+record Col do
+  label : String
+end
+
+make Col do
+  let ==(value: String) -> Cond = EqCond(@label, value)
+  let !=(value: String) -> Cond = NeCond(@label, value)
+  let <(value: String) -> Cond = CmpCond(@label, "<", value)
+end
+
+record Money do
+  cents : Integer
+  currency : String
+end
+
+# Equality that ignores currency case: a Bool, so `!=` is derived from it.
+make Money do
+  let ==(other: Money) -> Bool = @cents == other.cents && @currency.lowerCase == other.currency.lowerCase
+end
+
+main do
+  let email = Col { label: "email" }
+  IO.printLine("${email == "a@b.co"}")
+  IO.printLine("${email != "a@b.co"}")
+  IO.printLine("${email < "m"}")
+  IO.printLine("${Col { label: "x" } == Col { label: "x" }}")
+  IO.printLine("${Col { label: "x" } != Col { label: "y" }}")
+  IO.printLine("${[email, email].contains?(email)}")
+  let a = Money { cents: 5, currency: "EUR" }
+  let b = Money { cents: 5, currency: "eur" }
+  IO.printLine("${a == b} ${a != b} ${!(a == b)}")
+  IO.printLine("${a != Money { cents: 6, currency: "EUR" }}")
+end
