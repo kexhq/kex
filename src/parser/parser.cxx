@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../ast/function_groups.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -19,89 +20,6 @@ struct ParseError : std::exception {
       : location(std::move(loc)), message(std::move(msg)) {}
   const char *what() const noexcept override { return message.c_str(); }
 };
-
-namespace {
-
-// True when no parameter across every clause in `clauses` plus `candidate`
-// carries an explicit `: Type` annotation. Used to decide whether two
-// adjacent same-name, same-arity `let`s are safe to fold into one
-// FunctionDef's clauses at parse time (kexhq/kex#262) — the ambiguous case
-// the issue's own "Overloads" question raises (`argumentOverloadedMethods` /
-// `separableOverloadSignatures` in lower.cxx treat some same-name-same-arity
-// groups as distinct functions dispatched on argument TYPE, and a merge must
-// not collapse those) can only arise when at least one parameter is actually
-// typed. A pattern-dispatched multi-clause function — `let insert(@Empty,
-// value) = ...` / `let insert(@Node(...), value) do ... end` — never writes
-// a `: Type` on any parameter (patterns and bare names carry no such
-// annotation, whatever type a separate `insert :> ... -> ...` signature line
-// later attaches to them post-parse), so it is always safe to fold. Anything
-// with an explicit annotation anywhere is conservatively left unmerged,
-// exactly as it parses today — the five existing per-consumer
-// re-derivations (lower.cxx twice, collect_pass.cxx, the interpreter) keep
-// deciding overload-vs-clause for those precisely as they already do, since
-// they never see a merged node for them.
-auto noExplicitParamTypes(const std::vector<ast::FunctionClause>& clauses,
-                          const ast::FunctionClause& candidate) -> bool {
-  auto untyped = [](const ast::FunctionClause& clause) {
-    for (const auto& p : clause.params)
-      if (p.type && *p.type) return false;
-    return true;
-  };
-  if (!untyped(candidate)) return false;
-  for (const auto& clause : clauses)
-    if (!untyped(clause)) return false;
-  return true;
-}
-
-// Whether `next` (a freshly parsed, single-clause FunctionDef) should have
-// its one clause folded into `existing`'s `clauses` instead of standing as
-// its own sibling declaration.
-auto canMergeFunctionClause(const ast::FunctionDef& existing,
-                            const ast::FunctionDef& next) -> bool {
-  if (existing.name != next.name) return false;
-  // `let %{expr}(...)` computes its name at compile time; two of these are
-  // never the same declaration even when they happen to share `name == "%"`.
-  if (existing.computedName || next.computedName) return false;
-  if (existing.isFoul != next.isFoul || existing.isSlot != next.isSlot ||
-      existing.isPredicate != next.isPredicate)
-    return false;
-  if (existing.clauses.empty() || next.clauses.empty()) return false;
-  const auto& nextClause = next.clauses.front();
-  if (nextClause.params.size() != existing.clauses.front().params.size())
-    return false;
-  return noExplicitParamTypes(existing.clauses, nextClause);
-}
-
-// Every list a FunctionDef can land in (Program::items, ModuleDef::body,
-// MakeDef::body, VisibilityBlock::items, ...) is a `std::vector` of some
-// `std::variant` that includes `std::unique_ptr<ast::FunctionDef>` as one
-// alternative — this works against any of them unchanged. Takes the item
-// already wrapped in its variant, for a caller (parseProgram, over
-// parseTopLevelItem's ast::TopLevelItem) that never has a bare
-// unique_ptr<FunctionDef> of its own to offer.
-template <typename ItemVariant>
-void pushItemOrMergeClause(std::vector<ItemVariant>& items, ItemVariant item) {
-  if (auto* incoming = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
-      incoming && *incoming && !items.empty()) {
-    if (auto* existing =
-            std::get_if<std::unique_ptr<ast::FunctionDef>>(&items.back());
-        existing && *existing && canMergeFunctionClause(**existing, **incoming)) {
-      (*existing)->clauses.push_back(std::move((*incoming)->clauses.front()));
-      return;
-    }
-  }
-  items.push_back(std::move(item));
-}
-
-// The common case: a call site that just parsed a FunctionDef directly and
-// wants it pushed (or merged) as-is, without constructing the variant itself.
-template <typename ItemVariant>
-void pushFunctionDefOrMergeClause(std::vector<ItemVariant>& items,
-                                  std::unique_ptr<ast::FunctionDef> def) {
-  pushItemOrMergeClause(items, ItemVariant(std::move(def)));
-}
-
-} // namespace
 
 Parser::Parser(std::vector<Token> tokens, std::string_view filename)
     : m_tokens(std::move(tokens)), m_filename(filename) {}
@@ -351,7 +269,7 @@ auto Parser::parseProgram() -> ast::Program {
           program.items.empty()) {
         program.items.push_back(parseModuleDef(true));
       } else {
-        pushItemOrMergeClause(program.items, parseTopLevelItem());
+        program.items.push_back(parseTopLevelItem());
       }
       for (auto &deferred : m_deferredTopLevelItems)
         program.items.push_back(std::move(deferred));
@@ -368,6 +286,9 @@ auto Parser::parseProgram() -> ast::Program {
   // function its parameter types; point the parameters at it so overload
   // dispatch sees them (docs/issue-free-function-overloads.md).
   attachSignatureParamTypes(program.items);
+  // After the signature lines are attached: each one types the declaration
+  // that follows it, so the declarations must still stand apart then.
+  ast::groupFunctionClauses(program);
   return program;
 }
 
@@ -521,9 +442,9 @@ auto Parser::parseModuleDef(bool allowStandalone,
         error("'main' blocks are not allowed inside block modules");
       m_deferredTopLevelItems.push_back(parseMainBlock());
     } else if (check(TokenType::Foul)) {
-      pushFunctionDefOrMergeClause(mod->body, parseFunctionDef(true));
+      mod->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
-      pushFunctionDefOrMergeClause(mod->body, parseFunctionDef());
+      mod->body.push_back(parseFunctionDef());
     } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
                check(TokenType::Spawn) || check(TokenType::After)) {
       mod->body.push_back(parseTypeAnnotation());
@@ -848,10 +769,10 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         ann->isFoul = true;
         def->body.push_back(std::move(ann));
       } else {
-        pushFunctionDefOrMergeClause(def->body, parseFunctionDef(true));
+        def->body.push_back(parseFunctionDef(true));
       }
     } else if (check(TokenType::Let)) {
-      pushFunctionDefOrMergeClause(def->body, parseFunctionDef(false));
+      def->body.push_back(parseFunctionDef(false));
     } else if (check(TokenType::LowerIdent)) {
       // Required method signature: `methodName : type`
       def->body.push_back(parseTypeAnnotation());
@@ -960,11 +881,11 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
       if (check(TokenType::Public) || check(TokenType::Private)) {
         def->body.push_back(parseVisibilityBlock());
       } else if (check(TokenType::Foul)) {
-        pushFunctionDefOrMergeClause(def->body, parseFunctionDef(true));
+        def->body.push_back(parseFunctionDef(true));
       } else if (def->isServing && check(TokenType::Slot)) {
-        pushFunctionDefOrMergeClause(def->body, parseFunctionDef());
+        def->body.push_back(parseFunctionDef());
       } else if (check(TokenType::Let)) {
-        pushFunctionDefOrMergeClause(def->body, parseFunctionDef());
+        def->body.push_back(parseFunctionDef());
       } else if ((check(TokenType::LowerIdent) &&
                   !(allowDrivers && isMakeDriverAhead())) ||
                  ((check(TokenType::After) || check(TokenType::Next)) &&
@@ -4312,7 +4233,7 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
       bool isFoul = check(TokenType::Foul);
       if (isFoul)
         advance();
-      pushFunctionDefOrMergeClause(block->items, parseFunctionDef(isFoul));
+      block->items.push_back(parseFunctionDef(isFoul));
     }
     // make Block inside compiled
     else if (check(TokenType::Make)) {
@@ -4496,9 +4417,9 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 
   while (!check(TokenType::End) && !atEnd()) {
     if (check(TokenType::Foul)) {
-      pushFunctionDefOrMergeClause(block->items, parseFunctionDef(true));
+      block->items.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
-      pushFunctionDefOrMergeClause(block->items, parseFunctionDef());
+      block->items.push_back(parseFunctionDef());
     } else if (check(TokenType::LowerIdent) &&
                !(peek().value == "distinct" &&
                  peekNext().type == TokenType::Type)) {

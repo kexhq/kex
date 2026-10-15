@@ -537,9 +537,9 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
         auto defs = m_functionDefs.find(sourceModule + "::" + logicalName);
         if (defs != m_functionDefs.end())
             for (const auto* def : defs->second)
-                if (def && !def->clauses.empty() &&
-                    !def->clauses.front().params.empty()) {
-                    const auto& first = def->clauses.front().params.front();
+                for (const auto& clause : def->clauses) {
+                    if (clause.params.empty()) continue;
+                    const auto& first = clause.params.front();
                     if (first.type && *first.type &&
                         std::holds_alternative<ast::TypeName>((*first.type)->kind))
                         return;

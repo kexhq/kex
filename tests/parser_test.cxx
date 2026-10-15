@@ -1,6 +1,7 @@
 #include "test.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
+#include "../src/ast/function_groups.hxx"
 #include "../src/ast/convert.hxx"
 #include "../src/ast/syntax.hxx"
 #include <algorithm>
@@ -205,22 +206,21 @@ int main() {
             assertEqual(program.items.size(), size_t(2));
         });
 
-        it("parses multiple function clauses", []() {
+        it("folds a typed clause into the function it continues", []() {
+            // kexhq/kex#262: the clauses of one function are one FunctionDef
+            // whether or not they annotate their parameters.
             auto program = parse(
                 "let factorial(0) = 1\n"
                 "let factorial(n: Int) = n * factorial(n - 1)\n"
             );
-            assertEqual(program.items.size(), size_t(2));
+            assertEqual(program.items.size(), size_t(1));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertEqual(def->clauses.size(), size_t(2));
+            // ...and each typed clause still declares its own signature.
+            assertEqual(ast::signatureClauses(*def).size(), size_t(2));
         });
 
         it("folds adjacent same-name pattern clauses into one FunctionDef", []() {
-            // kexhq/kex#262: a pattern-dispatched multi-clause function —
-            // no parameter anywhere carries an explicit `: Type` — is safe
-            // to fold at parse time, matching what `FunctionDef::clauses`
-            // already promises to hold. `factorial(n: Int)` right above
-            // stays two declarations for exactly the reason this one
-            // becomes one: it has a typed parameter, which is the case an
-            // argument-type overload could also be spelled as.
             auto program = parse(
                 "let factorial(0) = 1\n"
                 "let factorial(n) = n * factorial(n - 1)\n"
@@ -230,15 +230,58 @@ int main() {
             assertEqual(def->clauses.size(), size_t(2));
         });
 
-        it("keeps a bare-name clause and a typed clause separate", []() {
-            // Mixed: one clause typed, one not — merging would risk folding
-            // a genuine argument-type overload, so this stays unmerged
-            // exactly like two fully typed clauses would.
+        it("folds free-function overloads across their signature lines", []() {
+            // A free function is one BEAM function however its clauses are
+            // typed; the signature lines stay where they are.
             auto program = parse(
-                "let describe(x) = \"value\"\n"
-                "let describe(x: Integer) = \"number\"\n"
+                "speak : Dog -> String\n"
+                "let speak(d) = \"woof\"\n"
+                "speak : Cat -> String\n"
+                "let speak(c) = \"meow\"\n"
             );
-            assertEqual(program.items.size(), size_t(2));
+            assertEqual(program.items.size(), size_t(3));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[1]);
+            assertEqual(def->clauses.size(), size_t(2));
+            assertEqual(ast::signatureClauses(*def).size(), size_t(2));
+        });
+
+        it("keeps a make block's argument-type overloads apart", []() {
+            // `Set + Set` and `Set + [A]` are separate BEAM functions, one
+            // per signature, so they stay separate declarations.
+            auto program = parse(
+                "make Set do\n"
+                "  let +(other: Set) = other\n"
+                "  let +(other: List) = other\n"
+                "end\n"
+            );
+            auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
+            assertEqual(make->body.size(), size_t(2));
+        });
+
+        it("folds a make block's clauses that are not separable overloads", []() {
+            // An untyped position beside a typed one is ordinary clause
+            // dispatch, not an overload set (`make Ordering`'s `combine`).
+            auto program = parse(
+                "make Ordering do\n"
+                "  let combine(@Equal, other: Ordering) = other\n"
+                "  let combine(@Less, _) = Less\n"
+                "end\n"
+            );
+            auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
+            assertEqual(make->body.size(), size_t(1));
+        });
+
+        it("does not fold clauses across a block boundary", []() {
+            auto program = parse(
+                "make Box do\n"
+                "  let size(0) = 0\n"
+                "  private do\n"
+                "    let size(n) = n\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
+            assertEqual(make->body.size(), size_t(2));
         });
 
         it("gives each folded clause its own source location", []() {

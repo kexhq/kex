@@ -1,3 +1,4 @@
+#include "../ast/function_groups.hxx"
 #include "typechecker.hxx"
 #include "analyzer.hxx"
 #include "declaration_validator.hxx"
@@ -2282,14 +2283,13 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     // as unknown, while the identical call inside `main` (checked last) worked.
     // Registering the declared shape here makes the method visible to whatever
     // is checked first; the body still refines it later.
-    const auto preRegister = [&](const ast::FunctionDef& method) {
+    const auto preRegister = [&](const ast::FunctionDef& method,
+                                 const ast::FunctionClause& clause) {
         // Only THIS type's own `:>` contract for `method.name` should defer
         // to it — an unrelated type's same-named annotation (Char's
         // `string :> String` vs. Input's own plain `let string(...)`) must
         // not block this type's method from registering at all (#251).
         if (hasAnnotatedSignatureForReceiver(method.name, receiver)) return;
-        if (method.clauses.empty()) return;
-        const auto& clause = method.clauses.front();
         // Only plain named parameters. A pattern in first position is the
         // receiver-matching form (`let head(@[x | _])`) whose arity must not
         // gain an implicit receiver, and a type-selector argument
@@ -2374,16 +2374,22 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         }
     };
     for (const auto& item : def.body) {
+        // One registration per signature the method declares: clauses folded
+        // into one method may each type their parameters differently.
+        const auto registerEach = [&](const ast::FunctionDef& function) {
+            for (const auto* clause : ast::signatureClauses(function))
+                preRegister(function, *clause);
+        };
         if (const auto* function =
                 std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*function) preRegister(**function);
+            if (*function) registerEach(**function);
         } else if (const auto* visibility =
                        std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
                    visibility && *visibility) {
             for (const auto& visible : (*visibility)->items)
                 if (const auto* function =
                         std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
-                    if (*function) preRegister(**function);
+                    if (*function) registerEach(**function);
         }
     }
 }
@@ -3582,6 +3588,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // tower, so `classify(0)` beside an unannotated catch-all must not narrow
     // the whole function to Integer.
     std::vector<TypePtr> siblingParamContracts;
+    const auto namesItsOwnType = [](const ast::Param& param) {
+        if (!param.pattern || !*param.pattern) return false;
+        const auto& kind = (*param.pattern)->kind;
+        if (const auto* record = std::get_if<ast::RecordPattern>(&kind))
+            return !record->typeName.empty();
+        return std::holds_alternative<ast::TypePattern>(kind);
+    };
     for (const auto& clause : def.clauses) {
         if (siblingParamContracts.size() < clause.params.size())
             siblingParamContracts.resize(clause.params.size());
@@ -3652,8 +3665,15 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             TypePtr paramType;
             if (declared && pi < declared->params.size() && !param.type) {
                 paramType = declared->params[pi];
-            } else if (!param.type && pi < siblingParamContracts.size() &&
+            } else if (!param.type && !param.signatureType &&
+                       !namesItsOwnType(param) &&
+                       pi < siblingParamContracts.size() &&
                        siblingParamContracts[pi]) {
+                // A parameter that already says what it takes belongs to that
+                // clause, not to a sibling clause's annotation: `Query.from`
+                // takes a list in one declaration and a Map in the next, and
+                // `respond(JSON { status, body }, route)` a JSON beside a
+                // `respond(reply: String, route)`.
                 paramType = siblingParamContracts[pi];
             } else if (!param.type && pi == 0 && receiverIsFirstParam &&
                        m_currentMakeType && param.pattern &&
@@ -7153,7 +7173,13 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
         // A computed ALIAS resolves before signatures are registered (the
         // signatures may themselves name the alias), so fall back to the
         // declaration's own return annotation.
-        if (m_functionDeclarations.count(functionName) > 1) {
+        // Overloads folded into one function count once per signature.
+        std::size_t declaredSignatures = 0;
+        const auto [first, last] =
+            m_functionDeclarations.equal_range(functionName);
+        for (auto it = first; it != last; ++it)
+            declaredSignatures += ast::signatureClauses(*it->second).size();
+        if (declaredSignatures > 1) {
             error(query.argument->location,
                   "`Type.returnedBy` cannot choose between the overloads of `" +
                   sourceName(functionName) + "`");
