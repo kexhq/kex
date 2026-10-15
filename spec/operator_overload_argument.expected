@@ -1,0 +1,8 @@
+EqCond(email, a@b.co)
+NeCond(email, a@b.co)
+CmpCond(email, <, m)
+true
+true
+true
+true false false
+true

@@ -1,0 +1,19 @@
+# An overloaded operator is checked against its declared parameter: `Col`'s
+# `==` takes a String, so `email == 5` does not build, and neither does an
+# order between two Cols, which have no built-in one (kexhq/kex#486).
+type Cond = EqCond(String, String) | CmpCond(String, String, String)
+
+record Col do
+  label : String
+end
+
+make Col do
+  let ==(value: String) -> Cond = EqCond(@label, value)
+  let <(value: String) -> Cond = CmpCond(@label, "<", value)
+end
+
+main do
+  let email = Col { label: "email" }
+  IO.printLine("${email == 5}")
+  IO.printLine("${email < email}")
+end

@@ -1660,6 +1660,59 @@ struct Lowering {
                     ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
                     return ex;
                 };
+                // The test that `left OP right` reaches a local overload of
+                // `opSym`: the receiver is a type that declares one AND the
+                // argument is what that overload's parameter takes. Null when
+                // no local make block declares it.
+                auto overloadGuard = [&](const std::string& opSym,
+                                         const auto& lRef, const auto& rRef) {
+                    ExprPtr guard;
+                    const auto methods = makeMethods.find(opSym);
+                    if (methods == makeMethods.end()) return guard;
+                    for (const auto& method : methods->second) {
+                        if (!method.def || method.owner.empty()) continue;
+                        for (const auto& clause : method.def->clauses) {
+                            auto test = typeGuard(method.owner, lRef.get());
+                            if (!clause.params.empty())
+                                if (const auto* declared =
+                                        dispatchParamType(clause.params.back())) {
+                                    const auto written = renderDispatchType(*declared);
+                                    if (discriminatingType(written))
+                                        test = callE("erlang", "and", 2,
+                                            two(std::move(test),
+                                                typeGuard(written, rRef.get())));
+                                }
+                            guard = guard
+                                ? callE("erlang", "or", 2,
+                                        two(std::move(guard), std::move(test)))
+                                : std::move(test);
+                        }
+                    }
+                    return guard;
+                };
+                // `!=` where no `!=` overload applies is the negation of an
+                // overloaded `==` wherever that one does, so `a != b` and
+                // `!(a == b)` always agree; the checker allows it only where
+                // that `==` answers a Bool (kexhq/kex#486). `otherwise` is
+                // what is left: the built-in comparison.
+                auto derivedInequality = [&](const auto& lRef, const auto& rRef,
+                                             ExprPtr otherwise) -> ExprPtr {
+                    if (!knownFns.count("==")) return otherwise;
+                    auto guard = overloadGuard("==", lRef, rRef);
+                    if (!guard) return otherwise;
+                    auto equal = std::make_unique<Expr>();
+                    equal->node = Call{std::string{}, "==", 2,
+                                       two(lRef.get(), rRef.get()), false};
+                    return matchBool(std::move(guard),
+                                     callE("erlang", "not", 1, one(std::move(equal))),
+                                     std::move(otherwise));
+                };
+                if (sym == "!=" && !overloadedOps.count("!=") &&
+                    overloadedOps.count("==")) {
+                    auto lRef = snap(l); auto rRef = snap(r);
+                    return wrapLets(binds, derivedInequality(
+                        lRef, rRef, builtinOp(lRef.get(), rRef.get())));
+                }
                 if (!sym.empty() && overloadedOps.count(sym)) {
                     auto lRef = snap(l); auto rRef = snap(r);
                     auto builtin = builtinOp(lRef.get(), rRef.get());
@@ -1754,9 +1807,15 @@ struct Lowering {
                     // is still the right way to reach an unrelated owner.
                     const Op opKind = opOf(n.op);
                     if (opKind == Op::Eq || opKind == Op::Neq) {
-                        ExprPtr ownerGuard;
+                        // An overload is reached only for an argument its
+                        // parameter takes: `let ==(value: String) -> Cond`
+                        // must leave two Cols to structural equality
+                        // (kexhq/kex#486).
+                        ExprPtr ownerGuard = overloadGuard(sym, lRef, rRef);
+                        // No local make block declares it: the owners an
+                        // imported interface names, by receiver alone.
                         if (auto owners = methodOwners.find(sym);
-                            owners != methodOwners.end())
+                            !ownerGuard && owners != methodOwners.end())
                             for (const auto& owner : owners->second) {
                                 auto next = typeGuard(owner, lRef.get());
                                 ownerGuard = ownerGuard
@@ -1765,6 +1824,8 @@ struct Lowering {
                                                 std::move(next)))
                                     : std::move(next);
                             }
+                        if (opKind == Op::Neq)
+                            builtin = derivedInequality(lRef, rRef, std::move(builtin));
                         auto dispatch = ownerGuard
                             ? matchBool(std::move(ownerGuard),
                                         std::move(userCall), std::move(builtin))

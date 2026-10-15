@@ -5082,26 +5082,76 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // builtin numeric/string path below, which rejects any pair of
                 // differing types outright.
                 if (concreteReceiver) {
-                    auto applies = [&](const Signature& signature) {
-                        return signature.params.size() == size_t(2) &&
-                               argMatchesParam(leftType, signature.params[0]) &&
-                               argMatchesParam(rightType, signature.params[1]);
+                    // The overloads of `name` the receiver's own type
+                    // declares — a make block for it, not a generic one.
+                    auto declaredFor = [&](const std::string& name) {
+                        std::vector<Signature> owned;
+                        auto consider = [&](const Signature& signature) {
+                            if (signature.params.size() != size_t(2)) return;
+                            const auto receiverParam = resolve(signature.params[0]);
+                            if (std::holds_alternative<TypeVar>(receiverParam->kind) ||
+                                std::holds_alternative<UnknownType>(receiverParam->kind))
+                                return;
+                            if (argMatchesParam(leftType, signature.params[0]))
+                                owned.push_back(signature);
+                        };
+                        if (auto local = m_methodSignatures.find(name);
+                            local != m_methodSignatures.end())
+                            for (const auto& signature : local->second)
+                                consider(signature);
+                        for (const auto& signature : importedCandidateSignatures(name))
+                            consider(signature);
+                        return owned;
                     };
-                    bool overloaded = false;
-                    if (auto local = m_methodSignatures.find(operatorName);
-                        local != m_methodSignatures.end())
-                        overloaded = std::any_of(local->second.begin(),
-                                                 local->second.end(), applies);
-                    if (!overloaded)
-                        for (const auto& signature :
-                             importedCandidateSignatures(operatorName))
-                            if (applies(signature)) {
-                                overloaded = true;
-                                break;
-                            }
-                    if (overloaded)
+                    auto applies = [&](const Signature& signature) {
+                        return argMatchesParam(rightType, signature.params[1]);
+                    };
+                    auto owned = declaredFor(operatorName);
+                    if (std::any_of(owned.begin(), owned.end(), applies))
                         return checkCall(operatorName, {leftType, rightType},
                                          expr.location, /*isMethodCall=*/true);
+                    // `!=` with no overload of its own negates an overloaded
+                    // `==`, which is only possible when that `==` answers a
+                    // Bool (kexhq/kex#486).
+                    auto contractName = operatorName;
+                    if (operatorName == "!=" && owned.empty()) {
+                        owned = declaredFor("==");
+                        contractName = "==";
+                        if (std::any_of(owned.begin(), owned.end(), applies)) {
+                            auto equal = resolve(checkCall(
+                                "==", {leftType, rightType}, expr.location,
+                                /*isMethodCall=*/true));
+                            const bool undecided =
+                                std::holds_alternative<UnknownType>(equal->kind) ||
+                                std::holds_alternative<TypeVar>(equal->kind);
+                            if (!undecided && !typesEqual(equal, Type::boolean()))
+                                error(expr.location,
+                                          "`!=` is not defined here: `" +
+                                          typeToString(resolve(leftType)) +
+                                          "`'s `==` answers " + typeToString(equal) +
+                                          ", not Bool, so there is no inequality "
+                                          "to derive — declare `!=` beside it");
+                            return Type::boolean();
+                        }
+                    }
+                    // The receiver's type overloads this operator, but for a
+                    // different argument: a call the overload's parameter
+                    // refuses — `email == 5` against `==(value: String)`.
+                    // Except that two values of the same type still compare
+                    // structurally: `let ==(value: String) -> Cond` must not
+                    // stop two Cols comparing. Only equality has a built-in
+                    // answer for any type to fall back on; a record has no
+                    // built-in order.
+                    if (!owned.empty()) {
+                        const bool equality =
+                            operatorName == "==" || operatorName == "!=";
+                        const bool sameType =
+                            argMatchesParam(rightType, leftType) &&
+                            argMatchesParam(leftType, rightType);
+                        if (!(equality && sameType))
+                            return checkCall(contractName, {leftType, rightType},
+                                             expr.location, /*isMethodCall=*/true);
+                    }
                 }
             }
             return inferBinaryOp(node.op, leftType, rightType, expr.location);

@@ -1,0 +1,17 @@
+# `!=` with no overload of its own is the negation of an overloaded `==` —
+# which only exists when that `==` answers a Bool. One that builds a value
+# instead has no inequality to derive, and says so rather than silently
+# comparing structurally (kexhq/kex#486).
+type Cond = EqCond(String, String)
+
+record Col do
+  label : String
+end
+
+make Col do
+  let ==(value: String) -> Cond = EqCond(@label, value)
+end
+
+main do
+  IO.printLine("${Col { label: "email" } != "a"}")
+end
