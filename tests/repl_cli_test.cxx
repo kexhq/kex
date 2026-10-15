@@ -280,6 +280,45 @@ int main() {
             assertEqual(walker, std::string("say hi\n2\n"));
         });
 
+        it("inherits the defaults of a trait another module declares", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_module_trait_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            fs::create_directories(src / "shop");
+
+            // Only top-level traits were registered, so a trait in a module
+            // was unknown to the checker, and implementing it by its
+            // qualified name inherited no defaults on either backend.
+            std::ofstream(src / "shop" / "rules.kex")
+                << "module Shop.Rules\n"
+                   "trait Pricing do\n"
+                   "  price :> Integer\n"
+                   "  let doubled = this.price * 2\n"
+                   "end\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "record Box do\n"
+                   "  size : Integer\n"
+                   "end\n"
+                   "make Box, implement: Shop.Rules.Pricing do\n"
+                   "  let price = @size\n"
+                   "end\n"
+                   "main do\n"
+                   "  IO.printLine(Box { size: 2 }.doubled)\n"
+                   "end\n";
+
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
+                entry.string() + " 2>&1");
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(beam, std::string("4\n"));
+            assertEqual(walker, std::string("4\n"));
+        });
+
         it("lowers named imported-record parameter patterns", []() {
             namespace fs = std::filesystem;
             char rootTemplate[] = "/tmp/kex_imported_record_test_XXXXXX";

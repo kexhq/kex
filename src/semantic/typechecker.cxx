@@ -49,6 +49,20 @@ auto closestName(const std::string& name, const std::vector<std::string>& candid
     return best;
 }
 
+// Records `A.B.Name` — a type, trait or constant declared in `module A.B` —
+// as a module reference for discovery, together with `A.B` itself. Nothing
+// spells `a/b/name.kex`, and the resolver's container fallback reaches only
+// the first segment (`a.kex`), so without the owner a file that names the
+// declaration only this way never gets `a/b.kex` loaded. Whichever of the
+// two is not a module, the resolver drops.
+auto recordWithOwner(std::unordered_set<std::string>& references,
+                     const std::string& qualified) -> void {
+    const auto dot = qualified.rfind('.');
+    if (dot != std::string::npos && qualified.find('.') < dot)
+        references.insert(qualified.substr(0, dot));
+    references.insert(qualified);
+}
+
 } // namespace
 
 auto containsOpenType(const TypePtr& type) -> bool;
@@ -576,7 +590,8 @@ auto TypeChecker::check(const ast::Program& program,
     registerLocalConformances(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)
-            m_traits.registerImplementation(c.typeName, c.traitName);
+            m_traits.registerImplementation(
+                c.typeName, resolveTraitReference(c.traitName, "", nullptr));
     registerRecordFields(program);
     for (const auto& [name, query] : m_computedAliases)
         m_typeAliases[name] = resolveTypeQuery(*query);
@@ -1670,7 +1685,12 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
         if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
             if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
         if (typeName.empty()) return;
-        for (const auto& traitName : def.implements) {
+        static const std::vector<ImportSelection> kNoImports;
+        const auto imports = m_makeImports.find(&def);
+        for (const auto& written : def.implements) {
+            const auto traitName = resolveTraitReference(
+                written, modulePath,
+                imports == m_makeImports.end() ? &kNoImports : &imports->second);
             m_traits.registerImplementation(typeName, traitName);
             if (!modulePath.empty())
                 m_traits.registerImplementation(modulePath + "." + typeName,
@@ -1705,36 +1725,80 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
 }
 
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
-    for (const auto& item : program.items) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-                if (!node) return;
-                TraitDef td;
-                td.name = node->name;
-                for (const auto& bodyItem : node->body) {
-                    std::visit([&](const auto& bi) {
-                        using BT = std::decay_t<decltype(bi)>;
-                        if constexpr (std::is_same_v<BT, std::unique_ptr<ast::TypeAnnotation>>) {
-                            if (!bi) return;
-                            auto sig = annotationToSignature(*bi);
-                            if (sig) {
-                                sig->isFoul = bi->isFoul;
-                                td.requiredMethods.push_back(std::move(*sig));
-                            }
-                        }
-                        // FunctionDef items are default implementations: no
-                        // signature of their own, but the NAME matters —
-                        // every implementing type inherits it.
-                        else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
-                            if (bi) td.defaultMethods.push_back(bi->name);
-                        }
-                    }, bodyItem);
+    kex::forEachTraitDef(program.items, [this](const ast::TraitDef& node,
+                                               const std::string& modulePath) {
+        TraitDef td;
+        td.name = kex::traitIdentity(modulePath, node.name);
+        for (const auto& bodyItem : node.body) {
+            std::visit([&](const auto& bi) {
+                using BT = std::decay_t<decltype(bi)>;
+                if constexpr (std::is_same_v<BT, std::unique_ptr<ast::TypeAnnotation>>) {
+                    if (!bi) return;
+                    auto sig = annotationToSignature(*bi);
+                    if (sig) {
+                        sig->isFoul = bi->isFoul;
+                        td.requiredMethods.push_back(std::move(*sig));
+                    }
                 }
-                m_traits.define(std::move(td));
-            }
-        }, item);
+                // FunctionDef items are default implementations: no
+                // signature of their own, but the NAME matters —
+                // every implementing type inherits it.
+                else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
+                    if (bi) td.defaultMethods.push_back(bi->name);
+                }
+            }, bodyItem);
+        }
+        m_traits.define(std::move(td));
+    });
+}
+
+// The identity of a trait reference written in module `scope`, against the
+// imports in effect there (`imports`, or the checker's current ones when
+// null) — kex::resolveTraitName's rules. `lastResort` allows its final step,
+// a trait exactly one module declares; a type annotation leaves it out, so a
+// name that is some other module's record is never taken for a trait.
+auto TypeChecker::resolveTraitReference(
+    const std::string& written, const std::string& scope,
+    const std::vector<ImportSelection>* imports, bool lastResort,
+    std::vector<std::string>* ambiguous) const -> std::string {
+    const auto bare = written.substr(written.rfind('.') + 1);
+    std::vector<std::string> modules;
+    std::string throughAlias;
+    auto consider = [&](const ImportSelection& import) {
+        // `using Geo, as: G` then `G.Shape`.
+        if (import.alias && written.starts_with(*import.alias + "."))
+            throughAlias = import.module + written.substr(import.alias->size());
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(), bare) ==
+                import.onlyNames.end())
+            return;
+        if (std::find(import.exceptNames.begin(), import.exceptNames.end(), bare) !=
+            import.exceptNames.end())
+            return;
+        modules.push_back(import.module);
+    };
+    if (imports) {
+        for (auto import = imports->rbegin(); import != imports->rend(); ++import)
+            consider(*import);
+    } else {
+        for (auto frame = m_importScopeStack.rbegin();
+             frame != m_importScopeStack.rend(); ++frame)
+            for (auto import = frame->rbegin(); import != frame->rend(); ++import)
+                consider(*import);
+        for (auto import = m_declarationImports.rbegin();
+             import != m_declarationImports.rend(); ++import)
+            consider(*import);
     }
+    const auto known = [this](const std::string& name) {
+        return m_traits.get(name) != nullptr;
+    };
+    if (!throughAlias.empty() && known(throughAlias)) return throughAlias;
+    const auto eachKnown = [&](const auto& visit) {
+        if (!lastResort) return;
+        for (const auto& [name, _] : m_traits.all()) visit(name);
+    };
+    return kex::resolveTraitName(written, scope, modules, known, eachKnown,
+                                 ambiguous);
 }
 
 auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
@@ -2764,16 +2828,20 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (node.parts.size() == 1) {
                 const auto recordName = resolveRecordName(last);
                 if (recordName != last) return Type::named(recordName);
-            } else if (auto nominal = qualifiedNominalType(qualified)) {
-                m_referencedModules.insert(qualified);
-                return Type::named(*nominal);
+            } else {
+                recordWithOwner(m_referencedModules, qualified);
+                if (auto nominal = qualifiedNominalType(qualified))
+                    return Type::named(*nominal);
             }
             if (auto known = m_globals.get(last)) return known;
             // Trait-only names (Float, Number, Comparable, ...) have no
             // concrete Type — m_globals deliberately has no entry for them
             // (see check()'s comment) — so a param annotated `Float` means
             // "any T satisfying Float", same as an explicit constraint.
-            if (m_traits.get(last)) return Type::constrained(last, last);
+            if (const auto trait = resolveTraitReference(
+                    qualified, m_currentModulePath, nullptr, false);
+                m_traits.get(trait))
+                return Type::constrained(trait, trait);
             if (auto distinct = resolveDistinctName(last);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct);
@@ -2781,7 +2849,6 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
             if (node.parts.size() > 1) {
-                m_referencedModules.insert(qualified);
                 const bool isNominal = m_recordFields.count(qualified) ||
                     m_adtVariants.count(qualified) ||
                     (m_importedInterfaces &&
@@ -4062,14 +4129,32 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
         }, item);
     }
 
-    for (const auto& traitName : def.implements) {
+    for (const auto& written : def.implements) {
+        // A qualified trait or capability (`implement: Harmat.Connection`)
+        // is a module reference like any other: when it is the only one a
+        // file makes, discovery must still load the module declaring it, or
+        // checking that file alone — as the language server does — reports
+        // a trait the whole program knows perfectly well.
+        if (written.find('.') != std::string::npos)
+            recordWithOwner(m_referencedModules, written);
+        std::vector<std::string> candidates;
+        const auto traitName = resolveTraitReference(
+            written, m_currentModulePath, nullptr, true, &candidates);
         const TraitDef* trait = m_traits.get(traitName);
         if (!trait) {
-            error(def.location, "Unknown trait: " + traitName);
+            if (candidates.size() > 1) {
+                std::string listed;
+                for (const auto& candidate : candidates)
+                    listed += (listed.empty() ? "`" : ", `") + candidate + "`";
+                error(def.location, "Ambiguous trait: `" + written +
+                      "` could be " + listed + " — write the one you mean");
+            } else {
+                error(def.location, "Unknown trait: " + written);
+            }
             continue;
         }
         std::string prefix = "make " + (typeName.empty() ? "?" : typeName) +
-                             ", implement: " + traitName + " — ";
+                             ", implement: " + written + " — ";
         for (const auto& req : trait->requiredMethods) {
             auto it = provided.find(req.name);
             if (it == provided.end()) {
@@ -5392,7 +5477,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!interfaceModule.empty())
                         dependencyPath = std::move(interfaceModule);
                 }
-                m_referencedModules.insert(std::move(dependencyPath));
+                // A capitalized segment may be a constant rather than a
+                // module: `"${App.Forms.Credentials.SHORTEST}"`, whose `show`
+                // has the whole path as its receiver.
+                const auto last = dependencyPath.substr(dependencyPath.rfind('.') + 1);
+                if (std::none_of(last.begin(), last.end(),
+                                 [](unsigned char c) { return std::islower(c); }))
+                    recordWithOwner(m_referencedModules, dependencyPath);
+                else
+                    m_referencedModules.insert(std::move(dependencyPath));
             }
             bool isImportedNamespace = importedPath && m_importedInterfaces &&
                 m_importedInterfaces->modules.count(*importedPath) > 0;

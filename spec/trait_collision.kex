@@ -1,0 +1,54 @@
+# Two modules may each declare a trait called `Shape`: inside a module a
+# trait is known by its qualified name, the way a record is, so neither
+# replaces the other. Each make block below inherits its own trait's
+# `describe`. A bare `Shape` means the one in scope — the enclosing module's,
+# or the one a `using` brought in.
+
+module Geo do
+  trait Shape do
+    area :> Integer
+    let describe = "area ${this.area}"
+  end
+
+  record Square do
+    side : Integer
+  end
+
+  make Square, implement: Shape do
+    let area = @side * @side
+  end
+
+  let measure(s: Shape) -> Integer = s.area
+end
+
+module Ui do
+  trait Shape do
+    label :> String
+    let describe = "label ${this.label}"
+  end
+end
+
+using Ui
+
+record Button do
+  text : String
+end
+
+make Button, implement: Shape do
+  let label = @text
+end
+
+record Circle do
+  radius : Integer
+end
+
+make Circle, implement: Geo.Shape do
+  let area = 3 * @radius * @radius
+end
+
+main do
+  IO.printLine(Geo.Square { side: 3 }.describe)
+  IO.printLine(Button { text: "ok" }.describe)
+  IO.printLine(Circle { radius: 1 }.describe)
+  IO.printLine(Geo.measure(Circle { radius: 2 }))
+end

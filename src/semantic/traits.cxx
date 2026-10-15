@@ -13,6 +13,18 @@ auto TraitRegistry::get(const std::string& name) const -> const TraitDef* {
     return it == m_traits.end() ? nullptr : &it->second;
 }
 
+auto TraitRegistry::lookup(const std::string& written) const -> const TraitDef* {
+    if (const auto* exact = get(written)) return exact;
+    const TraitDef* found = nullptr;
+    const auto suffix = "." + written;
+    for (const auto& [name, def] : m_traits)
+        if (name.size() > suffix.size() && name.ends_with(suffix)) {
+            if (found) return nullptr;
+            found = &def;
+        }
+    return found;
+}
+
 auto TraitRegistry::registerImplementation(const std::string& typeName,
                                             const std::string& traitName) -> void {
     m_implementations[typeName].insert(traitName);

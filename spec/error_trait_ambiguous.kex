@@ -1,0 +1,21 @@
+# A bare trait name two modules declare, with neither in scope, names
+# neither: the error lists both, rather than picking one.
+module Geo do
+  trait Shape do
+    area :> Integer
+  end
+end
+
+module Ui do
+  trait Shape do
+    label :> String
+  end
+end
+
+make Box, implement: Shape do
+  let area = 1
+end
+
+main do
+  IO.printLine("should not reach")
+end

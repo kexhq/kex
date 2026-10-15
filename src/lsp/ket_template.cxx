@@ -195,9 +195,12 @@ auto translate(const std::string& source) -> Translation {
                 // statement regardless of its own precedence (`a ? b : c`,
                 // a trailing block, ...).
                 const size_t synStart = result.source.size() + 1;
+                // The `""` after it stands for the output: a compiled
+                // template's every branch builds a string, so the synthetic
+                // one has to end each branch in one too (see below).
                 result.source += "(";
                 result.source += body;
-                result.source += ")\n";
+                result.source += ")\n\"\"\n";
                 result.segments.push_back({
                     static_cast<int>(synStart),
                     static_cast<int>(synStart + body.size()),
@@ -208,10 +211,15 @@ auto translate(const std::string& source) -> Translation {
             }
             case Kind::Control: {
                 // Already zero or more complete Kex statements (`if x`,
-                // `elsif y`, `end`, `let z = ...`) — copied verbatim.
+                // `elif y`, `end`, `let z = ...`) — copied verbatim, and
+                // followed by a `""`: the literal text after an `if`, `else`
+                // or block opener is output, which the synthetic source does
+                // not otherwise carry. Without it `<% if x %>none<% else
+                // %><%= topic %><% end %>` read as a Void branch beside a
+                // String one, a mismatch no compiled template has.
                 const size_t synStart = result.source.size();
                 result.source += body;
-                result.source += "\n";
+                result.source += "\n\"\"\n";
                 result.segments.push_back({
                     static_cast<int>(synStart),
                     static_cast<int>(synStart + body.size()),

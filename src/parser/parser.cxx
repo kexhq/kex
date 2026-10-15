@@ -1214,8 +1214,11 @@ auto Parser::parseParam() -> ast::Param {
     return param;
   }
 
-  // name: Type = default  or  name = default  or  just name
-  if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
+  // name: Type = default  or  name = default  or  just name. A call can pass
+  // `type:` as a named argument (`option("name", type: String)`), so a
+  // typed parameter may be named `type` too, or nothing could receive it.
+  if (check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+      (check(TokenType::Type) && peekNext().type == TokenType::Colon)) {
     auto &nameToken = advance();
     param.name = nameToken.value;
 

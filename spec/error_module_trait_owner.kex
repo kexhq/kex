@@ -1,0 +1,18 @@
+# A qualified trait is held to the module that declares it: `Shop.Pricing`
+# names the trait, `Till.Pricing` names nothing.
+module Shop do
+  trait Pricing do
+    price :> Integer
+  end
+end
+
+module Till do
+end
+
+make Box, implement: Till.Pricing do
+  let price = 1
+end
+
+main do
+  IO.printLine("should not reach")
+end

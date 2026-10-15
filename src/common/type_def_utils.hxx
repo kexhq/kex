@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <optional>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,124 @@ inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
     if (std::holds_alternative<ast::TypeName>(only)) return true;
     const auto* generic = std::get_if<ast::GenericType>(&only);
     return generic && generic->applied;
+}
+
+// A trait's identity, the rule records follow: its own name at the top level,
+// `Shop.Rules.Pricing` when `module Shop.Rules` declares it. Two modules may
+// then each declare a `Shape` without one replacing the other.
+inline auto traitIdentity(const std::string& modulePath, const std::string& name)
+    -> std::string {
+    return modulePath.empty() ? name : modulePath + "." + name;
+}
+
+// The identity a trait reference written in `scope` (a module path, "" at
+// the top level) names, given the identities `known` accepts and `eachKnown`
+// lists. In order: a trait of the innermost enclosing module outward
+// (`Shape` inside `module Geo` is `Geo.Shape`; `Inner.Shape` inside `module
+// Outer` may be `Outer.Inner.Shape`), one a `using` brought in, one declared
+// as written, and last a trait exactly one module declares under that
+// name — the way an unimported record is found. When several modules do,
+// the reference is ambiguous: it comes back as written, unknown, and their
+// identities land in `ambiguous` for the error to list.
+template <typename Known, typename EachKnown>
+auto resolveTraitName(const std::string& written, const std::string& scope,
+                      const std::vector<std::string>& imported,
+                      const Known& known, const EachKnown& eachKnown,
+                      std::vector<std::string>* ambiguous = nullptr)
+    -> std::string {
+    for (auto enclosing = scope; !enclosing.empty();) {
+        if (const auto candidate = enclosing + "." + written; known(candidate))
+            return candidate;
+        const auto dot = enclosing.rfind('.');
+        if (dot == std::string::npos) break;
+        enclosing.resize(dot);
+    }
+    for (const auto& module : imported)
+        if (const auto candidate = module + "." + written; known(candidate))
+            return candidate;
+    if (known(written)) return written;
+    std::vector<std::string> matches;
+    const auto suffix = "." + written;
+    eachKnown([&](const std::string& identity) {
+        if (identity.size() > suffix.size() && identity.ends_with(suffix))
+            matches.push_back(identity);
+    });
+    if (matches.size() == 1) return matches.front();
+    if (ambiguous) {
+        std::sort(matches.begin(), matches.end());
+        *ambiguous = std::move(matches);
+    }
+    return written;
+}
+
+// The modules each scope's own `using` lines bring in, by module path (""
+// for the file). Read from the declarations rather than tracked during a walk,
+// for a phase that resolves names before it has walked to them.
+template <typename Items>
+auto collectScopeUsings(const Items& items,
+                        std::unordered_map<std::string, std::set<std::string>>& out,
+                        const std::string& modulePath = "") -> void {
+    for (const auto& item : items) {
+        if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item);
+            block && *block && (*block)->body.empty()) {
+            std::string module;
+            for (const auto& part : (*block)->module.parts)
+                module += (module.empty() ? "" : ".") + part;
+            out[modulePath].insert(std::move(module));
+        } else if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                   nested && *nested) {
+            const auto& name = (*nested)->name;
+            const bool qualified =
+                !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+            collectScopeUsings((*nested)->body, out,
+                               modulePath.empty() || qualified
+                                   ? name : modulePath + "." + name);
+        }
+    }
+}
+
+// What `using`s are in effect in `scope`: the file's, and every enclosing
+// module's own.
+inline auto usingsVisibleIn(
+    const std::unordered_map<std::string, std::set<std::string>>& scopeUsings,
+    const std::string& scope) -> std::set<std::string> {
+    std::set<std::string> visible;
+    auto add = [&](const std::string& path) {
+        if (auto found = scopeUsings.find(path); found != scopeUsings.end())
+            visible.insert(found->second.begin(), found->second.end());
+    };
+    add("");
+    for (auto enclosing = scope; !enclosing.empty();) {
+        add(enclosing);
+        const auto dot = enclosing.rfind('.');
+        if (dot == std::string::npos) break;
+        enclosing.resize(dot);
+    }
+    return visible;
+}
+
+// Every `trait` a program declares, at the top level or inside any module,
+// with the path of the module declaring it ("" at the top level). Every phase
+// that keeps a trait table walks it this way, so one declared inside a module
+// is not known to the checker yet missing from the runtime.
+template <typename Items, typename Visit>
+auto forEachTraitDef(const Items& items, const Visit& visit,
+                     const std::string& modulePath = "") -> void {
+    for (const auto& item : items) {
+        if (auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+            trait && *trait)
+            visit(**trait, modulePath);
+        else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                 module && *module) {
+            // A nested module may be written already qualified by its parent.
+            const auto& name = (*module)->name;
+            const bool qualified =
+                !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+            forEachTraitDef((*module)->body, visit,
+                            modulePath.empty() || qualified
+                                ? name : modulePath + "." + name);
+        }
+    }
 }
 
 // The dispatch names a `make` target covers. Normally one, but a union target

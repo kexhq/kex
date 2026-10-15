@@ -1,0 +1,2 @@
+spec/error_trait_ambiguous.kex:15:1: error: Ambiguous trait: `Shape` could be `Geo.Shape`, `Ui.Shape` — write the one you mean
+Aborted: 1 type error — fix before running (use --no-check to skip).

@@ -241,7 +241,9 @@ private:
     auto execTypeDef(const ast::TypeDef& def,
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
-    auto execTraitDef(const ast::TraitDef& def) -> void;
+    auto execTraitDef(const ast::TraitDef& def, const std::string& moduleScope) -> void;
+    auto traitIdentityOf(const std::string& written, const std::string& scope,
+                         bool lastResort = false) const -> std::string;
     auto execCompiledBlock(const ast::CompiledBlock& block,
                            const std::string& moduleScope = "") -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block,

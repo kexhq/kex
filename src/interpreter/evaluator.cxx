@@ -618,7 +618,7 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
             execTypeDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-            execTraitDef(*node);
+            execTraitDef(*node, "");
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
             execCompiledBlock(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
@@ -780,7 +780,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 execVisibilityBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-                execTraitDef(*node);
+                execTraitDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
                 execCompiledBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
@@ -839,8 +839,34 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     }
 }
 
-auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
-    auto& required = m_traitMethods[def.name];
+// The trait a name written in `scope` refers to, by the checker's rules
+// (kex::resolveTraitName), or "" when it is none. `lastResort` as there: an
+// `implement:` list may name a trait exactly one module declares.
+auto Evaluator::traitIdentityOf(const std::string& written,
+                                const std::string& scope,
+                                bool lastResort) const -> std::string {
+    if (written.empty()) return {};
+    std::vector<std::string> imported;
+    for (auto frame = m_usingModules.rbegin(); frame != m_usingModules.rend(); ++frame)
+        imported.insert(imported.end(), frame->begin(), frame->end());
+    const auto known = [this](const std::string& name) {
+        return m_traitMethods.count(name) > 0;
+    };
+    const auto eachKnown = [&](const auto& visit) {
+        if (!lastResort) return;
+        for (const auto& [name, _] : m_traitMethods) visit(name);
+    };
+    const auto resolved =
+        kex::resolveTraitName(written, scope, imported, known, eachKnown);
+    return known(resolved) ? resolved : std::string{};
+}
+
+auto Evaluator::execTraitDef(const ast::TraitDef& def,
+                             const std::string& moduleScope) -> void {
+    // Known by its identity: `Geo.Shape` inside `module Geo`, so a `Shape`
+    // another module declares is a different trait.
+    const auto identity = kex::traitIdentity(moduleScope, def.name);
+    auto& required = m_traitMethods[identity];
     required.clear();
     for (const auto& item : def.body)
         if (auto* annotation =
@@ -851,7 +877,7 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
     // the trait name so `make X, implement: Trait` can inherit them.
     for (const auto& item : def.body) {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            execFunctionDef(**fn, def.name, true);
+            execFunctionDef(**fn, identity, true);
         }
     }
 }
@@ -1371,8 +1397,12 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     if (!param.name || !param.type || !*param.type) continue;
                     const auto* type = std::get_if<ast::TypeName>(
                         &(*param.type)->kind);
-                    if (!type || type->parts.size() != 1) continue;
-                    auto trait = m_traitMethods.find(type->parts.front());
+                    if (!type || type->parts.empty()) continue;
+                    std::string written;
+                    for (const auto& part : type->parts)
+                        written += (written.empty() ? "" : ".") + part;
+                    auto trait = m_traitMethods.find(
+                        traitIdentityOf(written, m_currentModule));
                     if (trait == m_traitMethods.end()) continue;
                     for (const auto& method : trait->second) {
                         auto methodArgs =
@@ -1769,7 +1799,9 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
     }
 
     // Inherit default methods from implemented traits.
-    for (const auto& traitName : def.implements) {
+    for (const auto& written : def.implements) {
+        const auto traitName = traitIdentityOf(written, enclosingModule, true);
+        if (traitName.empty()) continue;
         std::string prefix = traitName + "::";
         std::vector<const ast::FunctionDef*> inheritedMethods;
         for (const auto& [key, fns] : m_functionDefs) {

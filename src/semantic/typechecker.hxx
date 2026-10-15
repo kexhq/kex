@@ -357,6 +357,11 @@ private:
     };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
     std::vector<ImportSelection> m_declarationImports;
+    auto resolveTraitReference(const std::string& written, const std::string& scope,
+                               const std::vector<ImportSelection>* imports,
+                               bool lastResort = true,
+                               std::vector<std::string>* ambiguous = nullptr) const
+        -> std::string;
     std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>>
         m_functionImports;
     std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>>

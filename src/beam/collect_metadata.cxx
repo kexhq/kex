@@ -8,6 +8,30 @@ namespace kex::beam {
 
 namespace {
 
+// The traits the unit being collected declares, and the `using`s of each of
+// its scopes — what a make block's `implement: Shape` needs to be exported
+// as the identity it means (`Geo.Shape`), which an importer cannot work out
+// without the scope it was written in. Set for one collectMetadata call.
+struct TraitExportScope {
+    std::set<std::string> identities;
+    std::unordered_map<std::string, std::set<std::string>> usings;
+};
+thread_local const TraitExportScope* tTraitExportScope = nullptr;
+
+// A trait this unit declares, by its identity; anything else (a stdlib
+// trait, a capability) exactly as written.
+auto exportedTraitName(const std::string& written, const std::string& modulePath)
+    -> std::string {
+    if (!tTraitExportScope) return written;
+    const auto visible = kex::usingsVisibleIn(tTraitExportScope->usings, modulePath);
+    const std::vector<std::string> imported(visible.begin(), visible.end());
+    const auto& identities = tTraitExportScope->identities;
+    return kex::resolveTraitName(
+        written, modulePath, imported,
+        [&](const std::string& name) { return identities.count(name) > 0; },
+        [&](const auto& visit) { for (const auto& name : identities) visit(name); });
+}
+
 auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
     return std::visit([&te](const auto& node) -> KexiTypePtr {
         using T = std::decay_t<decltype(node)>;
@@ -556,15 +580,16 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
     }
     for (const auto& trait : md.implements) {
         if (typeName.empty()) continue;
+        const auto traitName = exportedTraitName(trait, modulePath);
         meta.traitConformances.push_back(
-            {owned ? modulePath + "." + typeName : typeName, trait});
+            {owned ? modulePath + "." + typeName : typeName, traitName});
         // A make block for a type declared elsewhere may still be naming one
         // of this module's records by a spelling the lookup above missed;
         // the qualified conformance covers it (kexhq/kex#143: `make Files,
         // implement: FS.File` inside `module Mock`).
         if (!owned && !modulePath.empty())
             meta.traitConformances.push_back(
-                {modulePath + "." + typeName, trait});
+                {modulePath + "." + typeName, traitName});
     }
     // Collect standalone type annotations (`:>` sigs) to patch missing
     // types and to surface pure signatures with no implementation.
@@ -627,9 +652,12 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
 void collectFromTraitDef(const kex::ast::TraitDef& trait,
                          KexiTypeInterface& iface,
                          KexiStructuralMetadata& meta,
-                         const kex::semantic::Analyzer* analysis) {
+                         const kex::semantic::Analyzer* analysis,
+                         const std::string& modulePath = {}) {
+    // Exported by its identity, `Geo.Shape` inside `module Geo`.
+    const auto identity = kex::traitIdentity(modulePath, trait.name);
     KexiTraitDef traitMetadata;
-    traitMetadata.name = trait.name;
+    traitMetadata.name = identity;
     for (const auto& item : trait.body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann)
@@ -637,7 +665,7 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
                 {(*ann)->name, (*ann)->isFoul});
     meta.traitDefs.push_back(std::move(traitMetadata));
 
-    auto receiverType = kexiConstrained("T", trait.name);
+    auto receiverType = kexiConstrained("T", identity);
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
     for (const auto& item : trait.body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
@@ -839,7 +867,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
                 collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
-                collectFromTraitDef(*ptr, iface, meta, analysis);
+                collectFromTraitDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -973,7 +1001,7 @@ void collectFlattenedModuleBody(
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
                 collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
-                collectFromTraitDef(*ptr, iface, meta, analysis);
+                collectFromTraitDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -1065,6 +1093,17 @@ auto collectMetadata(const kex::ast::Program& program,
     chunk.metadata.moduleAtom = opts.moduleAtom;
     chunk.metadata.role = opts.role;
     chunk.metadata.entryBackPointer = opts.entryBackPointer;
+
+    TraitExportScope traitScope;
+    kex::forEachTraitDef(program.items, [&](const ast::TraitDef& trait,
+                                            const std::string& modulePath) {
+        traitScope.identities.insert(kex::traitIdentity(modulePath, trait.name));
+    });
+    kex::collectScopeUsings(program.items, traitScope.usings);
+    tTraitExportScope = &traitScope;
+    struct ResetScope {
+        ~ResetScope() { tTraitExportScope = nullptr; }
+    } resetScope;
 
     // Whether this module was declared `capability`. A consumer reads its
     // stdlib interfaces from this chunk rather than from source, so the flag
