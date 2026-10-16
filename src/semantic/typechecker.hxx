@@ -244,6 +244,10 @@ private:
                            bool isMethodCall = false,
                            bool* collection = nullptr)
         -> std::vector<TypePtr>;
+    // The parameter types a block passed by label (`named(from: { |t| … })`)
+    // should take: those of the labelled parameter's function type.
+    auto namedArgHints(const std::string& name, const std::string& label)
+        -> std::vector<TypePtr>;
     // Like resolveBlockHints but for an inline lambda at a specific arg index.
     // Returns the FuncType param hints for that position, applying generic substitution
     // from the other (already-known) arg types.
