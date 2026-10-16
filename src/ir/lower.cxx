@@ -9901,6 +9901,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             }
             else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                // Visibility changes who may name a declaration, not what it
+                // is: a record in `private do` still needs its layout, or its
+                // values stay bare tuples (#495).
                 if (*vb) for (const auto& vi : (*vb)->items) {
                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                         preModuleFn(vfd->get());
@@ -9908,6 +9911,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                  std::get_if<std::unique_ptr<ast::TypeDef>>(
                                      &vi))
                         preModuleType(vtd->get());
+                    else if (auto* vrd =
+                                 std::get_if<std::unique_ptr<ast::RecordDef>>(&vi)) {
+                        if (*vrd) preRecord(**vrd, path);
+                    } else if (auto* vmd =
+                                   std::get_if<std::unique_ptr<ast::MakeDef>>(&vi);
+                               vmd && *vmd) {
+                        makeModulePath = path;
+                        makeRecordNames = declaredRecords;
+                        preMake(**vmd);
+                        makeModulePath.clear();
+                        makeRecordNames.clear();
+                        L.noteModuleScopedMake(**vmd, path, declaredTypes);
+                        for (const auto& typeName :
+                             Lowering::makeTargetNameList((*vmd)->target, path, declaredRecords))
+                            if (!typeName.empty())
+                                L.localTypeModules[typeName] = path;
+                    }
                 }
             } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {
                 if (*ed) {
@@ -10383,6 +10403,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                                      &vi)) {
                                         flush();
                                         emitType(vtd->get());
+                                    } else if (auto* vmk =
+                                                   std::get_if<std::unique_ptr<
+                                                       ast::MakeDef>>(&vi)) {
+                                        flush();
+                                        emitMake(vmk->get(), declaredRecords);
                                     }
                                 }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
@@ -10414,14 +10439,25 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         // The names in scope HERE are what this module's
                         // record defaults were written against; a construction
                         // in another module lowers them with these restored.
-                        for (const auto& bi : m.body) {
-                            const auto* rd =
-                                std::get_if<std::unique_ptr<ast::RecordDef>>(&bi);
-                            if (!rd || !*rd) continue;
-                            auto entry = L.records.find(m.name + "." + (*rd)->name);
-                            if (entry == L.records.end()) continue;
+                        auto noteRecordScope = [&](const ast::RecordDef& rd) {
+                            auto entry = L.records.find(m.name + "." + rd.name);
+                            if (entry == L.records.end()) return;
                             entry->second.imports = L.moduleImports;
                             entry->second.aliases = L.moduleAliases;
+                        };
+                        for (const auto& bi : m.body) {
+                            if (const auto* rd =
+                                    std::get_if<std::unique_ptr<ast::RecordDef>>(&bi);
+                                rd && *rd)
+                                noteRecordScope(**rd);
+                            else if (const auto* vb = std::get_if<
+                                         std::unique_ptr<ast::VisibilityBlock>>(&bi);
+                                     vb && *vb)
+                                for (const auto& vi : (*vb)->items)
+                                    if (const auto* vrd = std::get_if<
+                                            std::unique_ptr<ast::RecordDef>>(&vi);
+                                        vrd && *vrd)
+                                        noteRecordScope(**vrd);
                         }
                         L.moduleImports = std::move(savedImports);
                         L.moduleAliases = std::move(savedAliases);
@@ -11259,6 +11295,18 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                     if (*mk) noteMake(**mk);
                 } else if (auto* md = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                     if (*md) scanModule(**md);
+                } else if constexpr (std::is_constructible_v<
+                                         std::decay_t<decltype(item)>,
+                                         std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                        vb && *vb)
+                        for (const auto& vi : (*vb)->items) {
+                            if (auto* vrd = std::get_if<std::unique_ptr<ast::RecordDef>>(&vi)) {
+                                if (*vrd) noteRecord(**vrd);
+                            } else if (auto* vmk = std::get_if<std::unique_ptr<ast::MakeDef>>(&vi)) {
+                                if (*vmk) noteMake(**vmk);
+                            }
+                        }
                 }
             }
             (void)self;
@@ -11414,6 +11462,12 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                                      ast::TypeDef>>(&entry))
                         addType(td->get(),
                                 (*visibility)->isPublic);
+                    else if (auto* rd =
+                                 std::get_if<std::unique_ptr<ast::RecordDef>>(&entry))
+                        addRecord(rd->get());
+                    else if (auto* mk =
+                                 std::get_if<std::unique_ptr<ast::MakeDef>>(&entry))
+                        addMake(mk->get());
                 }
             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 addMake(mk->get());

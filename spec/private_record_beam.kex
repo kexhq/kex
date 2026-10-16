@@ -1,0 +1,31 @@
+# kex: run-beam
+# A record declared in `private do` is a record like any other: its values
+# carry its tag and fields, and a `make` for it (private too) applies. On the
+# BEAM it was a bare tuple, so `room.viewer` failed with "Undefined method:
+# viewer for Tuple" (kexhq/kex#495).
+
+module Views do
+  made : String
+  let made = shown(Room { viewer: "Ada" })
+
+  greeted : String
+  let greeted = Room { viewer: "Bo" }.greeting
+
+  private do
+    record Room do
+      viewer : String
+    end
+
+    make Room do
+      let greeting -> String = "hello ${@viewer}"
+    end
+
+    shown : Room -> String
+    let shown(room) = "viewed by ${room.viewer}"
+  end
+end
+
+main do
+  IO.printLine(Views.made)
+  IO.printLine(Views.greeted)
+end
