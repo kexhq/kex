@@ -1353,7 +1353,26 @@ auto TypeChecker::constructorOwner(const NamedType& named) const
     -> const std::string* {
     if (!named.typeArgs.empty()) return nullptr;
     auto owner = m_adtOfConstructor.find(named.name);
-    if (owner == m_adtOfConstructor.end()) return nullptr;
+    if (owner == m_adtOfConstructor.end()) {
+        // A constructor of a module's ADT — `Twomod.Access`'s `Private` — is
+        // owned only where that module is in scope. Without it, `Private`
+        // and `Public` did not join in a `then … else` (kexhq/kex#504) and
+        // `Type.of(Public)` was not widened to its type (#505).
+        if (const auto* scoped = scopedConstructorOwner(named.name))
+            return &scoped->adt;
+        const std::string* found = nullptr;
+        for (const auto& [module, constructors] : m_moduleConstructors) {
+            const auto constructor = constructors.find(named.name);
+            if (constructor == constructors.end() ||
+                constructor->second.typeName.empty())
+                continue;
+            if (!withinModule(module) && !moduleMemberImported(module, named.name))
+                continue;
+            if (found && *found != constructor->second.typeName) return nullptr;
+            found = &constructor->second.typeName;
+        }
+        return found;
+    }
     // `Kex.Backend` is registered as the ADT `Backend`, and `Backend` is also
     // a nullary NetErrorKind constructor. Looked up by spelling alone, every
     // `Backend` value became a NetErrorKind.
@@ -6989,6 +7008,10 @@ auto TypeChecker::typeNameReference(const ast::Expr& expr) -> TypePtr {
     if (m_nullaryConstructors.count(named->name) ||
         m_adtOfConstructor.count(named->name))
         return nullptr;
+    // A module's constructor is a value too, not the name of a type: taken
+    // for one, `Type.of(Public)` answered `Public` (kexhq/kex#505).
+    for (const auto& [_, constructors] : m_moduleConstructors)
+        if (constructors.count(named->name)) return nullptr;
     ast::TypeName typeName;
     typeName.parts = {named->name};
     ast::TypeExpr asType;
