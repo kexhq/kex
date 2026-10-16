@@ -157,6 +157,13 @@ private:
                                const std::string& modulePath) -> void;
     auto makeModuleVisible(const std::string& module) const -> bool;
     auto withinModule(const std::string& module) const -> bool;
+    // Whether a bare call to `name` may reach a free function declared in
+    // `module`: from inside it, or — unless it is private there — under a
+    // `using` of it whose `only:` / `except:` admit the name.
+    auto freeFunctionVisible(const std::string& module,
+                             const std::string& name) const -> bool;
+    // "module\nname" for each free function declared in a `private do`.
+    std::unordered_set<std::string> m_privateFreeFunctions;
     auto reportUnknownMethods() -> void;
     auto publishQualifiedSignatures(const std::string& name,
                                     const std::vector<Signature>& signatures) -> void;

@@ -1,0 +1,2 @@
+spec/error_function_not_imported.kex:30:16: error: Undefined function: `tableOf` — `Logs.tableOf` is private to `Logs`
+spec/error_function_not_imported.kex:29:16: error: Undefined function: `put` — `Router.put` is not imported here

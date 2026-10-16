@@ -571,7 +571,22 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 if (!isKnown(node.name)) {
                     auto hint = suggest(node.name);
                     std::string msg = "Undefined function: `" + node.name + "`";
-                    if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
+                    // A module declares it, but not where this call can see:
+                    // name that module rather than guess at a spelling.
+                    std::string owners;
+                    if (m_state)
+                        for (const auto& sym : m_state->symbols)
+                            if (sym.name == node.name &&
+                                sym.kind == SymbolKind::Function &&
+                                !sym.module.empty())
+                                owners += (owners.empty() ? "" : ", ") +
+                                    std::string("`") + sym.module + "." +
+                                    sym.name + "`" +
+                                    (sym.isExported
+                                         ? " is not imported here"
+                                         : " is private to `" + sym.module + "`");
+                    if (!owners.empty()) msg += " — " + owners;
+                    else if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
                     error(expr.location, msg);
                 } else {
                     recordRef(node.name, expr.location);

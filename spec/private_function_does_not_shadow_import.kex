@@ -1,0 +1,47 @@
+# A private function in one module does not stand in for a same-named function
+# elsewhere: `Ledger`'s `table` is the `Shapes.table` it imported, whatever
+# `Logs` keeps privately, and the program's own foul `failed` is still called
+# with its context, whatever `Helpers` keeps (kexhq/kex#494).
+
+module Shapes do
+  record Table do
+    label : String
+  end
+
+  table : String -> Table
+  let table(label) = Table { label: label }
+end
+
+module Logs do
+  private do
+    table : String -> String
+    let table(sql) = "a table in ${sql}"
+  end
+
+  noted : String -> String
+  let noted(sql) = table(sql)
+end
+
+module Helpers do
+  private do
+    failed : Any -> [String]
+    let failed(value) = ["helper failed"]
+  end
+end
+
+foul failed(reason: String) -> Void do
+  IO.printLine("main failed: ${reason}")
+end
+
+module Ledger do
+  using Shapes, only: [table]
+
+  named : String
+  let named = table("ledger").label
+end
+
+main do
+  IO.printLine(Logs.noted("SELECT 1"))
+  IO.printLine(Ledger.named)
+  failed("boom")
+end

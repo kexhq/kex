@@ -1,0 +1,32 @@
+# kex: check-only
+# A bare call reaches a module's function only where that module is in scope:
+# inside it, or under a `using` that imports the name. `Router.put` used to
+# type-check here (against the bare-name table) and then fail at run time
+# with `undef` (kexhq/kex#496).
+
+module Router do
+  get : String -> Integer -> String
+  let get(path, action) = "GET ${path} -> ${action}"
+
+  put : String -> Integer -> String
+  let put(path, action) = "PUT ${path} -> ${action}"
+end
+
+module Logs do
+  private do
+    tableOf : String -> String
+    let tableOf(sql) = "a table in ${sql}"
+  end
+
+  noted : String -> String
+  let noted(sql) = tableOf(sql)
+end
+
+using Router, only: [get]
+
+main do
+  IO.printLine(get("/me", 1))
+  IO.printLine(put("/commands", 2))
+  IO.printLine(tableOf("SELECT 1"))
+  IO.printLine(Logs.noted("SELECT 1"))
+end
