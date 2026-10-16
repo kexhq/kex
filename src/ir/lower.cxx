@@ -9234,63 +9234,6 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
     return fd ? ast::methodArity(*fd) : 1;
 }
 
-// A free function's BEAM arity, unlike a make-block method's (`beamArity`
-// above), never gets an implicit receiver slot — there is no `this` to
-// occupy or free up. `beamArity`'s "no name on the first param means it's
-// the receiver, so don't add one" heuristic is wrong here: it made a plain
-// named-parameter clause (`respond(reply: String, route: String)`, arity 3
-// by that heuristic) look like a different function from a record-pattern
-// clause of the same free function (`respond(JSON { status, body },
-// route: String)`, arity 2 — no receiver to not-add-one for), splitting one
-// multi-clause overload set into two separate BEAM functions of the same
-// name. Only the LATTER function ever got emitted (kexhq/kex#347): the
-// merge step downstream treats a record-pattern clause as an unconditional
-// catch-all (its discriminating check lives in the body, not the head — see
-// `unguardedCatchAll`), so the two groups silently collapsed into whichever
-// one was flushed first.
-static auto freeFunctionArity(const ast::FunctionDef* fd) -> size_t {
-    return fd ? ast::freeFunctionArity(*fd) : 0;
-}
-
-static auto continuesFreeFunctionGroup(const ast::FunctionDef& first,
-                                       const ast::FunctionDef& next) -> bool {
-    return first.name == next.name &&
-        freeFunctionArity(&first) == freeFunctionArity(&next);
-}
-
-// Whether `next` continues the MAKE-BLOCK method group `first` opened — the
-// rule every make-block lowering site uses to turn adjacent declarations
-// into a single BEAM function (kexhq/kex#262). The parser already folds the
-// untyped clauses of a function into one FunctionDef; declarations it leaves
-// separate (typed ones, which may be overloads) still arrive here one by
-// one. Several sites each spelled this out by hand before, and #261 was
-// what a drifting copy of the same rule cost.
-//
-// Uses `beamArity`'s implicit-receiver heuristic, which is correct here (a
-// make-block method always has a receiver, occupying position 0 either
-// explicitly via a pattern or implicitly via `this`) but wrong for a FREE
-// function — see `continuesFreeFunctionGroup` below (kexhq/kex#347).
-static auto continuesFunctionGroup(const ast::FunctionDef& first,
-                                   const ast::FunctionDef& next) -> bool {
-    return first.name == next.name && beamArity(&first) == beamArity(&next);
-}
-
-// The same rule inside a `make` block, where one more thing separates groups:
-// a method overloaded by a non-receiver parameter's type becomes one BEAM
-// function per signature, so a declaration with different dispatch types starts
-// a new group (kexhq/kex#233).
-static auto continuesMethodGroup(
-    const ast::FunctionDef& first, const ast::FunctionDef& next,
-    const std::string& receiverType,
-    const std::unordered_set<std::string>& argumentOverloadedMethods) -> bool {
-    if (!continuesFunctionGroup(first, next)) return false;
-    if (!argumentOverloadedMethods.count(
-            localOverloadKey(next.name, receiverType, beamArity(&next))))
-        return true;
-    return methodDispatchTypes(first, receiverType) ==
-           methodDispatchTypes(next, receiverType);
-}
-
 static auto unguardedCatchAll(const FunClause& c) -> bool {
     return !c.guard &&
         std::all_of(c.params.begin(), c.params.end(),
@@ -10059,35 +10002,24 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.accessorFields.insert(field);
     }
 
-    // Buffer consecutive same-name top-level functions so they group into one
-    // multi-clause FunDef (flushed on any other item / name change / end).
-    std::vector<const ast::FunctionDef*> fnGroup;
-    auto flushGroup = [&]() {
-        if (!fnGroup.empty()) {
-            auto def = L.lowerFunctionGroup(fnGroup);
-            def.name = L.prefixSymbol(def.name);
-            def.isFreeFunction = true;
-            mod.functions.push_back(std::move(def));
-            fnGroup.clear();
-        }
+    // The parser already folded each function's clauses into one FunctionDef
+    // (kexhq/kex#262), so every one lowers to its own FunDef.
+    auto lowerFreeFunction = [&](const ast::FunctionDef& fn) {
+        auto def = L.lowerFunctionGroup({&fn});
+        def.name = L.prefixSymbol(def.name);
+        def.isFreeFunction = true;
+        mod.functions.push_back(std::move(def));
     };
     // Bare top-level expressions (no explicit `main`) → one synthetic main/0.
     std::vector<const ast::ExprPtr*> bareExprs;
 
     for (const auto& item : prog.items) {
         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
-            if (!fnGroup.empty() && !continuesFreeFunctionGroup(*fnGroup.front(), **fdp)) flushGroup();
-            fnGroup.push_back(fdp->get());
+            lowerFreeFunction(**fdp);
             continue;
         }
-        // A standalone signature line between two overloads is erased at this
-        // level, and it must not BREAK the group either: split apart, the two
-        // `speak` definitions each became a whole `speak/1`, the duplicate
-        // merge kept one, and `speak(Dog { … })` printed "meow"
-        // (docs/issue-free-function-overloads.md).
         if (std::holds_alternative<std::unique_ptr<ast::TypeAnnotation>>(item))
             continue;
-        flushGroup();
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
@@ -10101,20 +10033,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // whole emission repeats once per name.
                 for (const auto& typeName :
                      Lowering::makeTargetNameList(node->target)) {
-                std::vector<const ast::FunctionDef*> mgrp;
-                auto flushM = [&]{
-                    if (!mgrp.empty()) {
-                        mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName));
-                        mgrp.clear();
-                    }
-                };
                 auto pushFn = [&](const ast::FunctionDef* fd) {
-                    if (!fd) return;
-                    if (!mgrp.empty() &&
-                        !continuesMethodGroup(*mgrp.front(), *fd, typeName,
-                                              L.argumentOverloadedMethods))
-                        flushM();
-                    mgrp.push_back(fd);
+                    if (fd) mod.functions.push_back(L.lowerMakeGroup({fd}, typeName));
                 };
                 for (const auto& bi : node->body) {
                     if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
@@ -10131,7 +10051,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 // Splice in trait default methods this type doesn't override.
                 for (const auto* fd : inheritedDefaults(*node, "")) pushFn(fd);
-                flushM();
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 if (!node) return;
@@ -10221,56 +10140,25 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) {
-                    std::vector<const ast::FunctionDef*> grp;
-                    auto flush = [&]{
-                        if (!grp.empty()) {
-                            auto it = L.moduleFunctions.find(L.currentModulePath + "." + grp.front()->name);
-                            auto def = L.lowerFunctionGroup(grp, "",
-                                it == L.moduleFunctions.end() ? grp.front()->name : it->second);
-                            def.isFreeFunction = true;
-                            def.declaringModule = L.currentModulePath;
-                            mod.functions.push_back(std::move(def));
-                            grp.clear();
-                        }
-                    };
                     auto push = [&](const ast::FunctionDef* fd) {
                         if (!fd) return;
-                        if (!grp.empty() && !continuesFreeFunctionGroup(*grp.front(), *fd)) flush();
-                        grp.push_back(fd);
+                        auto it = L.moduleFunctions.find(L.currentModulePath + "." + fd->name);
+                        auto def = L.lowerFunctionGroup({fd}, "",
+                            it == L.moduleFunctions.end() ? fd->name : it->second);
+                        def.isFreeFunction = true;
+                        def.declaringModule = L.currentModulePath;
+                        mod.functions.push_back(std::move(def));
                     };
                     auto emitMake = [&](const ast::MakeDef* mk,
                                         const std::set<std::string>& declaredRecords) {
                         if (!mk) return;
                         for (const auto& typeName :
                              Lowering::makeTargetNameList(mk->target, L.currentModulePath, declaredRecords)) {
-                        std::vector<const ast::FunctionDef*> methods;
-                        auto flushMethods = [&] {
-                            if (!methods.empty()) {
-                                auto def = L.lowerMakeGroup(methods, typeName);
-                                def.declaringModule = L.currentModulePath;
-                                mod.functions.push_back(std::move(def));
-                                methods.clear();
-                            }
-                        };
                         auto pushMethod = [&](const ast::FunctionDef* fd) {
                             if (!fd) return;
-                            // Mirrors the top-level make-group splitting a few
-                            // hundred lines up: a receiver type overloaded by
-                            // a NON-receiver parameter's type (`let +(other:
-                            // Set<A>)` vs `let +(other: [A])`, both on `Set`)
-                            // must become two separate BEAM functions, one per
-                            // signature — lowerMakeGroup names each using its
-                            // OWN first clause's dispatch types, so merging
-                            // them here silently drops every clause but the
-                            // first's under one mangled name (kexhq/kex#233).
-                            // A module-nested `make` (any file-header module,
-                            // not just an explicit `module X do ... end`)
-                            // reaches this path instead of the top-level one.
-                            if (!methods.empty() &&
-                                !continuesMethodGroup(*methods.front(), *fd, typeName,
-                                                      L.argumentOverloadedMethods))
-                                flushMethods();
-                            methods.push_back(fd);
+                            auto def = L.lowerMakeGroup({fd}, typeName);
+                            def.declaringModule = L.currentModulePath;
+                            mod.functions.push_back(std::move(def));
                         };
                         for (const auto& mi : mk->body) {
                             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
@@ -10281,7 +10169,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         pushMethod(fd->get());
                         }
                         for (const auto* fd : inheritedDefaults(*mk, L.currentModulePath)) pushMethod(fd);
-                        flushMethods();
                         }
                     };
                     std::function<void(const ast::ModuleDef&)> lowerModuleBody;
@@ -10381,36 +10268,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                                      std::unique_ptr<
                                                          ast::TypeDef>>(
                                                      &vi)) {
-                                        flush();
                                         emitType(vtd->get());
                                     }
                                 }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
-                                flush();
                                 emitMake(mk->get(), declaredRecords);
                             } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
                                 if (*cb) for (const auto& ci : (*cb)->items) {
                                     if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
                                         push(cfd->get());
                                     } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
-                                        flush();
                                         emitMake(cmd->get(), declaredRecords);
                                     }
                                 }
                             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
-                                flush();
                                 if (*child) lowerModuleBody(**child);
                             } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
                                        std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                                    flush();
                                     emitType(td->get());
                                 }
-                            } else {
-                                flush();
                             }
                         }
-                        flush();
                         // The names in scope HERE are what this module's
                         // record defaults were written against; a construction
                         // in another module lowers them with these restored.
@@ -10467,7 +10346,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
         }, item);
     }
-    flushGroup();
 
     // Synthetic main/0 from bare top-level expressions, if no explicit main.
     if (!bareExprs.empty() && !mod.hasMain) {
