@@ -9966,6 +9966,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             emitted->second = newSymbol;
             definedFns.erase(oldSymbol);
             definedFns.insert(newSymbol);
+            // What is known about the function by its symbol moves with it:
+            // a foul one left `foulFns` behind and every call went out without
+            // its capability context — `fetch$free/1` against a defined
+            // `fetch$free/2` (kexhq/kex#492).
+            if (L.foulFns.count(oldSymbol)) L.foulFns.insert(newSymbol);
+            if (L.emittedModuleZeroArg.count(oldSymbol))
+                L.emittedModuleZeroArg.insert(newSymbol);
+            const auto renameArities = [&](auto& arities) {
+                std::vector<std::string> renamed;
+                for (const auto& entry : arities)
+                    if (entry.rfind(oldSymbol + "/", 0) == 0)
+                        renamed.push_back(newSymbol + entry.substr(oldSymbol.size()));
+                for (auto& entry : renamed) arities.insert(std::move(entry));
+            };
+            renameArities(L.pureFnArities);
+            renameArities(L.definedFnArities);
+            renameArities(definedFnArities);
             for (auto& [_, value] : L.moduleFunctions)
                 if (value == oldSymbol) value = newSymbol;
         }
