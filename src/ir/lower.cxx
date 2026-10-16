@@ -1,4 +1,5 @@
 #include "lower.hxx"
+#include "../ast/function_groups.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
@@ -18,6 +19,10 @@
 namespace kex::ir {
 
 namespace {
+
+using ast::methodDispatchTypes;
+using ast::renderDispatchType;
+using ast::separableOverloadSignatures;
 
 // Backend-local symbol construction lives here so every producer and reader
 // changes together. Dots identify qualified/module membership; slash
@@ -115,125 +120,12 @@ auto functionTypeArity(const std::string& written) -> int64_t {
     return arrows;
 }
 
-auto renderDispatchType(const ast::TypeExpr& type) -> std::string {
-    return std::visit([](const auto& node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ast::TypeName>) {
-            return node.parts.empty() ? "Any" : node.parts.back();
-        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
-            std::string out =
-                node.name.parts.empty() ? "Any" : node.name.parts.back();
-            out += "<";
-            for (size_t i = 0; i < node.args.size(); i++) {
-                if (i) out += ", ";
-                out += node.args[i] ? renderDispatchType(*node.args[i]) : "Any";
-            }
-            return out + ">";
-        } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            return "(" +
-                (node.param ? renderDispatchType(*node.param) : "Any") +
-                ") -> " +
-                (node.result ? renderDispatchType(*node.result) : "Any");
-        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
-            std::string out = "(";
-            for (size_t i = 0; i < node.elements.size(); i++) {
-                if (i) out += ", ";
-                out += node.elements[i]
-                    ? renderDispatchType(*node.elements[i]) : "Any";
-            }
-            return out + ")";
-        } else if constexpr (std::is_same_v<T, ast::ListType>) {
-            auto element =
-                node.element ? renderDispatchType(*node.element) : "Any";
-            return element == "Char" ? "String" : "[" + element + "]";
-        } else if constexpr (std::is_same_v<T, ast::MapType>) {
-            return "{" +
-                (node.key ? renderDispatchType(*node.key) : "Any") + ": " +
-                (node.value ? renderDispatchType(*node.value) : "Any") + "}";
-        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
-            return (node.left ? renderDispatchType(*node.left) : "Any") +
-                " | " +
-                (node.right ? renderDispatchType(*node.right) : "Any");
-        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
-            return (node.left ? renderDispatchType(*node.left) : "Any") +
-                " & " +
-                (node.right ? renderDispatchType(*node.right) : "Any");
-        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
-            std::string out = "{";
-            for (size_t i = 0; i < node.fields.size(); i++) {
-                if (i) out += ", ";
-                out += node.fields[i].first + ": " +
-                    (node.fields[i].second
-                         ? renderDispatchType(*node.fields[i].second) : "Any");
-            }
-            return out + "}";
-        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return (node.inner ? renderDispatchType(*node.inner) : "Any") + "?";
-        } else if constexpr (std::is_same_v<T, ast::BlockType>) {
-            std::string out = "Block<";
-            for (const auto& param : node.params)
-                out += (param ? renderDispatchType(*param) : "Any") + ", ";
-            return out +
-                (node.inner ? renderDispatchType(*node.inner) : "Any") + ">";
-        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
-            return "Atom";
-        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
-            return node.name;
-        }
-        return "Any";
-    }, type.kind);
-}
 
-auto methodDispatchTypes(const ast::FunctionDef& function,
-                         const std::string& receiverType)
-    -> std::vector<std::string> {
-    std::vector<std::string> types{receiverType};
-    if (function.clauses.empty()) return types;
-    for (const auto& param : function.clauses.front().params)
-        types.push_back(param.type && *param.type
-            ? renderDispatchType(**param.type)
-            : "Any");
-    return types;
-}
 
 auto localOverloadKey(const std::string& method,
                       const std::string& receiverType,
                       size_t arity) -> std::string {
     return method + "\n" + receiverType + "\n" + std::to_string(arity);
-}
-
-// Splitting same-name methods into per-signature functions is only sound when
-// the signatures actually SEPARATE the values they accept — that is what lets
-// a call site pick one statically (`Date + Duration` vs `Date + Period`) and
-// what makes the guard-based dispatchers exhaustive.
-//
-// A position left untyped renders as `Any` and claims every value there, so a
-// set mixing `Any` with a concrete type in one position is not an overload set
-// at all: it is ordinary clause dispatch that happens to be spelled as several
-// `let`s, as in `make Ordering`'s
-//
-//   let combine(@Equal, other: Ordering) = other
-//   let combine(@Less, _)                = Less
-//
-// Those must stay ONE function so the clauses keep their source order; split
-// apart, the receiver dispatcher sees two impls for the same type and neither
-// is reachable. Differing param counts are equally inseparable.
-auto separableOverloadSignatures(
-    const std::map<std::string, std::vector<std::string>>& signatures) -> bool {
-    const auto width = signatures.begin()->second.size();
-    for (const auto& [signature, types] : signatures) {
-        (void)signature;
-        if (types.size() != width) return false;
-    }
-    for (size_t i = 0; i < width; i++) {
-        bool any = false, concrete = false;
-        for (const auto& [signature, types] : signatures) {
-            (void)signature;
-            if (types[i] == "Any") any = true; else concrete = true;
-        }
-        if (any && concrete) return false;
-    }
-    return true;
 }
 
 // Does `expr` reference the SSA name `name` anywhere? Names are freshened at
@@ -7498,7 +7390,11 @@ struct Lowering {
             return "";
         };
         const bool overloadedByParamType = [&] {
-            if (group.size() < 2) return false;
+            // Clauses, not declarations: overloads folded into one function
+            // (kexhq/kex#262) arrive as a single FunctionDef.
+            std::size_t clauses = 0;
+            for (const auto* fn : group) clauses += fn->clauses.size();
+            if (clauses < 2) return false;
             std::vector<std::string> signature;
             bool differs = false;
             for (const auto* fn : group)
@@ -9335,15 +9231,7 @@ static auto patternBoundNames(const ast::PatternPtr& p,
 }
 
 static auto beamArity(const ast::FunctionDef* fd) -> size_t {
-    if (!fd || fd->clauses.empty()) return 1;
-    const auto& params = fd->clauses[0].params;
-    if (params.empty()) return 1; // implicit-this only, e.g. `let reverse = …`
-    const auto& p0 = params[0];
-    bool receiverPat = !p0.name && p0.pattern &&
-        (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
-         std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
-         std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind));
-    return receiverPat ? params.size() : params.size() + 1;
+    return fd ? ast::methodArity(*fd) : 1;
 }
 
 // A free function's BEAM arity, unlike a make-block method's (`beamArity`
@@ -9361,8 +9249,7 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 // `unguardedCatchAll`), so the two groups silently collapsed into whichever
 // one was flushed first.
 static auto freeFunctionArity(const ast::FunctionDef* fd) -> size_t {
-    if (!fd || fd->clauses.empty()) return 0;
-    return fd->clauses[0].params.size();
+    return fd ? ast::freeFunctionArity(*fd) : 0;
 }
 
 static auto continuesFreeFunctionGroup(const ast::FunctionDef& first,
@@ -9696,16 +9583,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
         if (!fd.clauses.empty()) {
-            std::vector<std::string> pnames;
-            for (const auto& p : fd.clauses[0].params)
-                pnames.push_back(p.name ? *p.name : "");
+            auto pnames = ast::parameterNames(fd);
             if (pnames.empty()) L.zeroArgFns.insert(fd.name);
-            for (const auto& pname : pnames)
-                if (!pname.empty()) L.fnAllParamNames[fd.name].insert(pname);
+            for (const auto& clause : fd.clauses)
+                for (const auto& p : clause.params)
+                    if (p.name && !p.name->empty())
+                        L.fnAllParamNames[fd.name].insert(*p.name);
             L.fnParamNames[fd.name] = std::move(pnames);
-            std::vector<const ast::ExprPtr*> defaults;
-            for (const auto& p : fd.clauses[0].params)
-                defaults.push_back(p.defaultValue ? &*p.defaultValue : nullptr);
+            auto defaults = ast::parameterDefaults(fd);
             if (std::any_of(defaults.begin(), defaults.end(),
                             [](auto* value) { return value != nullptr; }))
                 L.fnDefaults[fd.name] = std::move(defaults);
@@ -9844,9 +9729,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     owners.push_back(typeName);
             }
             if (!fd->clauses.empty()) {
-                std::vector<const ast::ExprPtr*> defaults;
-                for (const auto& p : fd->clauses[0].params)
-                    defaults.push_back(p.defaultValue ? &*p.defaultValue : nullptr);
+                auto defaults = ast::parameterDefaults(*fd);
                 if (std::any_of(defaults.begin(), defaults.end(), [](auto* d) { return d != nullptr; }))
                     L.methodDefaults[fd->name] = std::move(defaults);
                 L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
@@ -9952,13 +9835,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 L.emittedModuleZeroArg.insert(emitted);
             }
             if (!fd->clauses.empty()) {
-                std::vector<std::string> pnames;
-                for (const auto& p : fd->clauses[0].params)
-                    pnames.push_back(p.name ? *p.name : "");
-                L.fnParamNames[path + "." + fd->name] = std::move(pnames);
-                std::vector<const ast::ExprPtr*> defaults;
-                for (const auto& param : fd->clauses[0].params)
-                    defaults.push_back(param.defaultValue ? &*param.defaultValue : nullptr);
+                L.fnParamNames[path + "." + fd->name] = ast::parameterNames(*fd);
+                auto defaults = ast::parameterDefaults(*fd);
                 if (std::any_of(defaults.begin(), defaults.end(),
                                 [](auto* value) { return value != nullptr; }))
                     L.fnDefaults[path + "." + fd->name] = std::move(defaults);

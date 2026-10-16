@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ast/function_groups.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
@@ -538,10 +539,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // parameter or result left unannotated stays Unknown, which the checker
     // treats as "contract not known" rather than as a claim.
     auto inlineSignature = [&](const ast::FunctionDef& fn,
+                               const ast::FunctionClause& clause,
                                const kex::semantic::TypePtr& selfType)
         -> std::optional<kex::semantic::Signature> {
-        if (fn.clauses.empty()) return std::nullopt;
-        const auto& clause = fn.clauses.front();
         const bool anyAnnotation =
             clause.returnAnnotation.has_value() ||
             std::any_of(clause.params.begin(), clause.params.end(),
@@ -590,6 +590,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // never turn into a false mismatch of its own, while its absence made
     // `(1..3).sum` look like a call to List's `sum` with a Range receiver.
     auto shapeOnlySignature = [](const ast::FunctionDef& fn,
+                                 const ast::FunctionClause& clause,
                                  const kex::semantic::TypePtr& selfType)
         -> kex::semantic::Signature {
         kex::semantic::Signature sig;
@@ -597,8 +598,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         sig.isFoul = fn.isFoul;
         sig.params.push_back(selfType ? selfType
                                       : kex::semantic::Type::unknown());
-        const size_t arity =
-            fn.clauses.empty() ? 0 : fn.clauses.front().params.size();
+        const size_t arity = clause.params.size();
         for (size_t i = 0; i < arity; i++)
             sig.params.push_back(kex::semantic::Type::unknown());
         sig.result = kex::semantic::Type::unknown();
@@ -702,18 +702,22 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         if (!annotatedMembers.count((*fn)->name)) {
                             if (directBackendOwnership &&
                                 sourceModule.find('.') != std::string::npos) {
-                                if (auto sig = inlineSignature(**fn, selfType)) {
+                                for (const auto* clause :
+                                     ast::signatureClauses(**fn)) {
+                                    auto sig = inlineSignature(**fn, *clause, selfType);
+                                    if (!sig) continue;
                                     std::vector<std::string> paramNames;
-                                    for (const auto& param :
-                                         (*fn)->clauses.front().params)
+                                    for (const auto& param : clause->params)
                                         paramNames.push_back(
                                             param.name ? *param.name : "");
                                     addReceiverSig(sourceModule, *sig,
                                                    std::move(paramNames));
                                 }
                             } else if (!directBackendOwnership) {
-                                addReceiverSig(sourceModule,
-                                               shapeOnlySignature(**fn, selfType));
+                                for (const auto* clause :
+                                     ast::signatureClauses(**fn))
+                                    addReceiverSig(sourceModule,
+                                                   shapeOnlySignature(**fn, *clause, selfType));
                             }
                         }
                     }
@@ -744,8 +748,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 return nullptr;
             std::unordered_map<std::string, kex::semantic::TypePtr> vars;
             const ast::FunctionDef& fn = *candidates->second.front();
-            if (fn.clauses.empty()) return nullptr;
-            const auto& clause = fn.clauses.front();
+            // Folded overloads are as ambiguous as separate functions.
+            const auto declared = ast::signatureClauses(fn);
+            if (declared.size() != 1) return nullptr;
+            const auto& clause = *declared.front();
             std::vector<kex::semantic::TypePtr> params;
             for (const auto& param : clause.params)
                 params.push_back(
@@ -917,10 +923,11 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     if (*fn) {
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
                         if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
-                            if (auto sig = inlineSignature(**fn, nullptr)) {
+                            for (const auto* clause : ast::signatureClauses(**fn)) {
+                                auto sig = inlineSignature(**fn, *clause, nullptr);
+                                if (!sig) continue;
                                 std::vector<std::string> paramNames;
-                                for (const auto& param :
-                                     (*fn)->clauses.front().params)
+                                for (const auto& param : clause->params)
                                     paramNames.push_back(
                                         param.name ? *param.name : "");
                                 addModuleSig(moduleName, *sig, paramNames);

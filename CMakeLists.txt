@@ -161,6 +161,7 @@ add_library(kex_lib
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
     src/ast/clone.cxx
+    src/ast/function_groups.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
     src/module/resolver.cxx

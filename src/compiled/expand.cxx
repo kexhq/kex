@@ -2,6 +2,7 @@
 
 #include "reify.hxx"
 #include "../ast/clone.hxx"
+#include "../ast/function_groups.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
@@ -2449,6 +2450,9 @@ auto expand(ast::Program& program,
     };
     prune(prune, program.items, "");
 
+    // Generated declarations (`let %{name}(...)`) arrive one per `let`, so
+    // fold them into functions the way the parser folded the written ones.
+    ast::groupFunctionClauses(program);
     return ok;
 }
 

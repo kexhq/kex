@@ -1,3 +1,4 @@
+#include "../ast/function_groups.hxx"
 #include "receiver_conflicts.hxx"
 
 #include "../common/type_def_utils.hxx"
@@ -119,16 +120,21 @@ private:
     void collectFreeFunction(
         const ast::FunctionDef& def,
         const std::map<std::string, std::string>& annotatedReceiver) {
-        if (def.clauses.empty() || def.clauses[0].params.empty()) return;
-        const auto& declared = def.clauses[0].params[0].type;
-        auto receiver = declared ? typeNameOf(*declared) : std::string{};
-        if (receiver.empty())
-            if (auto annotated = annotatedReceiver.find(def.name);
-                annotated != annotatedReceiver.end())
-                receiver = annotated->second;
-        if (receiver.empty()) return;
-        m_sites[{receiver, def.name, paramCount(def)}].push_back(
-            {"free:" + def.name, def.location});
+        // Each typed overload folded into the function names its own
+        // receiver (`close(connection: TCPConnection)`, `close(listener:
+        // TCPListener)`).
+        for (const auto* clause : ast::signatureClauses(def)) {
+            if (clause->params.empty()) continue;
+            const auto& declared = clause->params[0].type;
+            auto receiver = declared ? typeNameOf(*declared) : std::string{};
+            if (receiver.empty())
+                if (auto annotated = annotatedReceiver.find(def.name);
+                    annotated != annotatedReceiver.end())
+                    receiver = annotated->second;
+            if (receiver.empty()) continue;
+            m_sites[{receiver, def.name, clause->params.size()}].push_back(
+                {"free:" + def.name, clause->location});
+        }
     }
 
     std::map<Key, std::vector<Site>> m_sites;
