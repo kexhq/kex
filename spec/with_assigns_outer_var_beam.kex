@@ -1,0 +1,42 @@
+# kex: run-beam
+# A `var` reassigned inside a `with` block keeps its new value after it, as
+# it does after an `if`. On the BEAM the block's rebinding never left it:
+# `unbound variable '_ir_result6'` and erlc refused the module
+# (kexhq/kex#493).
+
+capability Probe do
+  foul named -> String = "default"
+end
+
+record Installed do
+  label : String = "installed"
+end
+
+make Installed, implement: Probe do
+  foul named -> String = @label
+end
+
+foul seen -> String do
+  var result = "unset"
+  with Probe = Installed {} do
+    result = Probe.named()
+  end
+  return result
+end
+
+foul both -> String do
+  var first = "-"
+  var count = 0
+  with Probe = Installed {} do
+    first = Probe.named()
+    if first == "installed"
+      count = count + 1
+    end
+  end
+  return "${first} ${count}"
+end
+
+main do
+  IO.printLine(seen())
+  IO.printLine(both())
+end
