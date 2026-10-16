@@ -1,0 +1,1 @@
+spec/error_branches_against_binding_type.kex:6:21: error: Match arm type mismatch: expected Integer but arm returns String

@@ -1,0 +1,34 @@
+# A typed binding is what its conditional's branches are checked against.
+# Arms of different types used to be compared with each other — the first
+# arm's type — so `let answer : Any = match …` failed with "Match arm type
+# mismatch" though `Any` takes either (kexhq/kex#506).
+
+let read(kind: String, text: String) -> Any do
+  let answer : Any = match kind do
+    "Integer" => text.to(Integer).or(0)
+    _ => text
+  end
+  answer
+end
+
+let pick(n: Integer) -> Integer | String do
+  let chosen : Integer | String = if n > 0
+    n
+  elif n == 0
+    "zero"
+  else
+    "negative"
+  end
+  chosen
+end
+
+let flag(on: Bool) -> Any do
+  let shown : Any = on then 1 else "off"
+  shown
+end
+
+main do
+  IO.printLine("${read("Integer", "4")} ${read("String", "four")}")
+  IO.printLine("${pick(3)} ${pick(0)} ${pick(-1)}")
+  IO.printLine("${flag(true)} ${flag(false)}")
+end
