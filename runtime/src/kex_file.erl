@@ -138,22 +138,22 @@ write_bytes(Path, {'Binary', Bin}) ->
 %% arrives untagged — it shares String's representation — so accept it as
 %% the bytes it is instead of crashing with function_clause (#327).
 write_bytes(Path, Bin) when is_binary(Bin) ->
-    case mock_content(Path) of
-        undefined -> file:write_file(pth(Path), Bin) =:= ok;
-        _ -> put({kex_mock_file, pth(Path)}, Bin), true
-    end.
+    write_result(Path, Bin).
 
-%% File.write(path, content) → true | false
+%% File.write(path, content) → Ok(Unit) | Error(WriteFailed(path))
 write(Path, Content) ->
+    write_result(Path, kex_io:to_string_bin(Content)).
+
+write_result(Path, Bin) ->
     case mock_content(Path) of
         undefined ->
-            case file:write_file(pth(Path), kex_io:to_string_bin(Content)) of
-                ok -> true;
-                _  -> false
+            case file:write_file(pth(Path), Bin) of
+                ok -> {'Ok', 'Kex.Unit'};
+                _  -> {'Error', {'WriteFailed', pth(Path)}}
             end;
         _ ->
-            put({kex_mock_file, pth(Path)}, kex_io:to_string_bin(Content)),
-            true
+            put({kex_mock_file, pth(Path)}, Bin),
+            {'Ok', 'Kex.Unit'}
     end.
 
 %% File.append(path, content) → true | false

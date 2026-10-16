@@ -281,7 +281,7 @@ foul save(receipt: Receipt) -> Void or! String do
   let path = Tey.Programs.receiptPath(receipt.name)
   let staging = "${path}.new"
   return Error("could not create ${FS.Path.dirname(path)}") if !FS.Directory.create(FS.Path.dirname(path))
-  return Error("could not write ${staging}") if !FS.File.write(staging, Tey.Programs.encode(receipt))
+  return Error("could not write ${staging}") if FS.File.write(staging, Tey.Programs.encode(receipt)).error?
   return Error("could not write ${path}") if !FS.File.rename(staging, path)
   return Ok(())
 end

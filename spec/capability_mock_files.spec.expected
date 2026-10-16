@@ -5,7 +5,7 @@ name = "demo"
 true
 (missing)
 false
-false
+Error(WriteFailed(kex.toml))
 name = "demo"
 
 # readme.md

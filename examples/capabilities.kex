@@ -19,7 +19,7 @@ capability Notes do
     Error(_) => None
   end
 
-  foul save(name: String, text: String) -> Bool = FS.File.write("notes/${name}.txt", text)
+  foul save(name: String, text: String) -> Bool = FS.File.write("notes/${name}.txt", text).ok?
 end
 
 # A stand-in is an ordinary record that implements the capability. It must

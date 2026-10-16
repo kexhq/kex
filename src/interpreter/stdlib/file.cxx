@@ -79,6 +79,11 @@ static auto optionalTextReadResult(std::optional<std::string> text) -> ValuePtr 
     return Value::ok(Value::just(Value::string(std::move(*text))));
 }
 
+// A failed FS.File.write / writeBytes, naming the path it failed on.
+static auto writeFailed(const std::string& path) -> ValuePtr {
+    return Value::error(Value::variant("WriteFailed", "FileError", {Value::string(path)}));
+}
+
 static auto optionalValueReadResult(const ValuePtr& value) -> ValuePtr {
     if (!value || value->isNone()) return Value::ok(Value::none());
     if (auto* variant = std::get_if<VariantValue>(&value->data);
@@ -545,35 +550,38 @@ auto Evaluator::registerFileBuiltins() -> void {
                           : Value::ok(Value::binary(std::move(bytes)));
     });
 
+    // File.writeBytes(path, bytes) -> Result<Void, FileError>
     reg("File::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) return writeFailed("");
         auto* path = std::get_if<StringValue>(&args[0]->data);
+        if (!path) return writeFailed("");
         auto* value = std::get_if<BinaryValue>(&args[1]->data);
-        if (!path || !value) return Value::boolean(false);
+        if (!value) return writeFailed(path->value);
         const std::string bytes(value->bytes.begin(), value->bytes.end());
         if (m_mockFiles.count(path->value)) {
-            m_mockFiles[path->value] = bytes; return Value::boolean(true);
+            m_mockFiles[path->value] = bytes;
+            return Value::ok(Value::unit());
         }
         std::ofstream file(path->value, std::ios::binary | std::ios::trunc);
-        if (!file) return Value::boolean(false);
+        if (!file) return writeFailed(path->value);
         file.write(bytes.data(), bytes.size());
-        return Value::boolean(static_cast<bool>(file));
+        return file ? Value::ok(Value::unit()) : writeFailed(path->value);
     });
 
-    // File.write(path, content) -> Bool
+    // File.write(path, content) -> Result<Void, FileError>
     reg("File::write", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) return writeFailed("");
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
+        if (!pathStr) return writeFailed("");
         std::string content = args[1]->toString();
         if (m_mockFiles.count(pathStr->value)) {
             m_mockFiles[pathStr->value] = content;
-            return Value::boolean(true);
+            return Value::ok(Value::unit());
         }
         std::ofstream file(pathStr->value, std::ios::binary | std::ios::trunc);
-        if (!file.is_open()) return Value::boolean(false);
+        if (!file.is_open()) return writeFailed(pathStr->value);
         file << content;
-        return Value::boolean(static_cast<bool>(file));
+        return file ? Value::ok(Value::unit()) : writeFailed(pathStr->value);
     });
 
     // File.append(path, content) -> Bool

@@ -1,0 +1,55 @@
+# kex: check-only
+# A constructor pattern can't match a value whose type has no constructors at
+# all. `Ok`/`Error` arms against a Bool never fire: the program built and
+# died with "no matching clause for false" (kexhq/kex#490).
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+foul present(path: String) -> String do
+  match FS.File.exists?(path) do
+    Ok(_)         => "ok"
+    Error(reason) => "error ${reason}"
+  end
+end
+
+let number(n: Integer) -> String do
+  if let Just(v) = n
+    "just"
+  else
+    "no"
+  end
+end
+
+let items(xs: [Integer]) -> String do
+  match xs do
+    None => "none"
+    _    => "list"
+  end
+end
+
+let point(p: Point) -> String do
+  match p do
+    Ok(v) => "ok"
+    _     => "point"
+  end
+end
+
+# The correct spellings stay accepted.
+let fine(ok: Bool, x: Integer?) -> String do
+  let flag = match ok do
+    true  => "yes"
+    false => "no"
+  end
+  if let Just(v) = x
+    flag
+  else
+    "none"
+  end
+end
+
+main do
+  IO.printLine(fine(true, Just(1)))
+end

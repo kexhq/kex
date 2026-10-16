@@ -44,7 +44,7 @@ foul set(context: Context, name: String, path: String) -> String or! String do
     "local(${JSON.stringify(override.localName)}, path: ${JSON.stringify(override.localPath)})"
   end.join("\n") + "\n"
   Tey.Local.ensureIgnored(context.workspaceRoot).try
-  return Error("could not write ${file}") if !FS.File.write(file, text)
+  return Error("could not write ${file}") if FS.File.write(file, text).error?
   return Ok(manifest.name)
 end
 
@@ -60,7 +60,7 @@ foul remove(context: Context, name: String) -> String or! String do
     "local(${JSON.stringify(entry.localName)}, path: ${JSON.stringify(entry.localPath)})"
   end.join("\n")
   let finalText = text.empty? then "" else "${text}\n"
-  if !FS.File.write(override.overrideFile, finalText)
+  if FS.File.write(override.overrideFile, finalText).error?
     return Error("could not update ${override.overrideFile}")
   end
   return Ok(name)
@@ -161,7 +161,7 @@ private do
     else
       "${existing}\n"
     end
-    if !FS.File.write(path, "${prefix}${missing.join("\n")}\n")
+    if FS.File.write(path, "${prefix}${missing.join("\n")}\n").error?
       return Error("could not add package.local.kex to ${path}")
     end
     return Ok(())

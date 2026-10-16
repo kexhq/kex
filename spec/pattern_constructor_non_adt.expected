@@ -1,0 +1,5 @@
+spec/pattern_constructor_non_adt.kex:13:5: error: `Ok` is a constructor of `Result`, but the value being matched has type `Bool` — this pattern can never match
+spec/pattern_constructor_non_adt.kex:14:5: error: `Error` is a constructor of `Result`, but the value being matched has type `Bool` — this pattern can never match
+spec/pattern_constructor_non_adt.kex:19:10: error: `Just` is a constructor of `Optional`, but the value being matched has type `Integer` — this pattern can never match
+spec/pattern_constructor_non_adt.kex:28:5: error: `None` is a constructor of `Optional`, but the value being matched has type `[Integer]` — this pattern can never match
+spec/pattern_constructor_non_adt.kex:35:5: error: `Ok` is a constructor of `Result`, but the value being matched has type `Point` — this pattern can never match

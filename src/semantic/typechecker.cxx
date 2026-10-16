@@ -3020,9 +3020,6 @@ auto TypeChecker::adtNameOfType(const TypePtr& type) const -> std::string {
 auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
                                                const TypePtr& expected)
     -> void {
-    const auto adt = adtNameOfType(expected);
-    if (adt.empty()) return;
-
     std::string ctorName;
     if (const auto* ctor = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
         ctorName = ctor->name;
@@ -3033,6 +3030,36 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
         // checkMatchExhaustiveness works around).
         ctorName = "None";
     } else {
+        return;
+    }
+
+    const auto adt = adtNameOfType(expected);
+    if (adt.empty()) {
+        // A value whose type is settled and has no constructors at all — a
+        // Bool, a number, a list, a record — can't match an ADT's
+        // constructor. `match FS.File.writeBytes(...)` (a Bool) with `Ok`
+        // and `Error` arms compiled and died with "no matching clause".
+        // Anything still open (a type variable, a union, a trait, unknown)
+        // is left alone.
+        const auto owner = m_adtOfConstructor.find(ctorName);
+        if (owner == m_adtOfConstructor.end() || !expected) return;
+        const auto& kind = expected->kind;
+        const auto* named = std::get_if<NamedType>(&kind);
+        const bool closed =
+            std::holds_alternative<PrimitiveType>(kind) ||
+            std::holds_alternative<SizedIntType>(kind) ||
+            std::holds_alternative<SizedFloatType>(kind) ||
+            std::holds_alternative<FuncType>(kind) ||
+            std::holds_alternative<TupleType>(kind) ||
+            std::holds_alternative<ListType>(kind) ||
+            std::holds_alternative<MapType>(kind) ||
+            std::holds_alternative<RecordType>(kind) ||
+            (named && named->typeArgs.empty() && m_recordFields.count(named->name));
+        if (!closed) return;
+        error(pattern.location,
+              "`" + ctorName + "` is a constructor of `" + owner->second +
+                  "`, but the value being matched has type `" +
+                  typeToString(expected) + "` — this pattern can never match");
         return;
     }
 

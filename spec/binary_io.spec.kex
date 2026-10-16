@@ -4,7 +4,7 @@ describe("binary I/O") do
   it("round trips invalid text losslessly through whole-file helpers") do
     Mock.FS.File("blob.bin", "")
     let payload = Binary.fromBytes([0, 255, 195, 40, 10])
-    assert(FS.File.writeBytes("blob.bin", payload))
+    assert(FS.File.writeBytes("blob.bin", payload).ok?)
     assert(FS.File.readBytes("blob.bin") == Ok(payload))
     assert(FS.File.read("blob.bin") == Error(InvalidUtf8("blob.bin", 1)))
   end
@@ -32,7 +32,7 @@ describe("binary I/O") do
     let path = FS.Path.join(FS.Directory.temporary, "kex_binary_scratch.bin")
     let payload = Binary.fromBytes([0, 255, 1, 254])
     FS.File.delete(path)
-    assert(FS.File.writeBytes(path, payload))
+    assert(FS.File.writeBytes(path, payload).ok?)
     assert(FS.File.readBytes(path) == Ok(payload))
     assert(FS.File.delete(path))
   end

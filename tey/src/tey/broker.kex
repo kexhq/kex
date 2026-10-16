@@ -132,7 +132,7 @@ private do
     return Error("the plugin was not approved to write in the workspace (FS.Write.workspace)") if !grants.writes?
     let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
     return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
-    return Error("could not write `${path}`") if !FS.File.write(target, Tey.Broker.text(request, "content"))
+    return Error("could not write `${path}`") if FS.File.write(target, Tey.Broker.text(request, "content")).error?
     Tey.Broker.announce("write", path)
     return Ok(JSON.stringify({ ok: true }))
   end
@@ -179,7 +179,7 @@ private do
     let sending = if body == ""
       []
     else
-      return Error("could not stage the request body") if !FS.File.write(payload, body)
+      return Error("could not stage the request body") if FS.File.write(payload, body).error?
       ["--data-binary", "@${payload}"]
     end
     let outcome = Process.run("curl", ["-sS", "--max-time", "30", "-X", method, ...sending,

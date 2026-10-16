@@ -77,7 +77,7 @@ foul prefix(limits: Limits) -> ([String], String) or! String do
                           network?: limits.network? }
   let file = FS.Path.join(ENV.get("TMPDIR").or("/tmp"), "tey-sandbox-${DateTime.now().iso.replace(":", "-")}.sb")
   let text = Tey.Sandbox.profile(confined, ENV.get("HOME").or(""))
-  return Error("could not write the sandbox profile to `${file}`") if !FS.File.write(file, text)
+  return Error("could not write the sandbox profile to `${file}`") if FS.File.write(file, text).error?
   return Ok(([Tey.Sandbox.TOOL, "-f", file], file))
 end
 
