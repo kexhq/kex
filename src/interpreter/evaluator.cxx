@@ -4523,6 +4523,18 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
              (protocolMethod && typedExists && !typedHasSignatures)) &&
             makeMethodInScope(typed))
             return typed;
+        // A module's free function over one of the module's OWN types is
+        // that type's receiver function, as on the BEAM (kexhq/kex#230):
+        // `conn.close` reaches `TCP.close(connection: Conn)` for a
+        // `TCP.Conn`. `using Shop.Socket` imports no member of the nested
+        // `TCP`, so neither lookup above found it and the walker reported
+        // "Undefined method: close for Shop.Socket.TCP.Conn". Ahead of an
+        // import: the receiver's own module is the more specific answer.
+        if (const auto full = dispatchTypeName(receiver);
+            full.rfind('.') != std::string::npos) {
+            auto own = full.substr(0, full.rfind('.')) + "::" + method;
+            if (matches(own)) return own;
+        }
         if (!imported.empty()) return imported;
     }
 

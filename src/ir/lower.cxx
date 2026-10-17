@@ -4591,6 +4591,64 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
+        // A module's free function over one of the module's OWN types is that
+        // type's receiver function (kexhq/kex#230). It used to be reached by
+        // its bare name, which only one module can own: beside a
+        // `make Client do let close` elsewhere in the program, `conn.close`
+        // for a `TCP.Conn` went to whichever `close` registered first — the
+        // Client's dispatcher, whose fallback is the prelude's `close`
+        // (`:ok`). With the receiver's static type known, call the function
+        // by its qualified symbol instead, unless the type's own `make`
+        // block answers the name.
+        if (expressionTypes && n.receiver && n.namedArgs.empty() && !n.block)
+            if (auto found = expressionTypes->find(n.receiver.get());
+                found != expressionTypes->end() && found->second)
+                if (const auto* named =
+                        std::get_if<semantic::NamedType>(&found->second->kind)) {
+                    const auto type = canonicalRecordName(named->name);
+                    const auto dot = type.rfind('.');
+                    const auto owners = methodOwners.find(m);
+                    const bool makeAnswers =
+                        owners != methodOwners.end() &&
+                        std::any_of(owners->second.begin(), owners->second.end(),
+                                    [&](const std::string& owner) {
+                                        return canonicalRecordName(owner) == type;
+                                    });
+                    if (dot != std::string::npos && !makeAnswers) {
+                        const auto qualified = type.substr(0, dot) + "." + m;
+                        const auto symbol = moduleFunctions.find(qualified);
+                        const auto clauses = fnNamedClauses.find(qualified);
+                        const auto bareType = type.substr(dot + 1);
+                        const bool overOwnType =
+                            symbol != moduleFunctions.end() &&
+                            clauses != fnNamedClauses.end() &&
+                            std::any_of(
+                                clauses->second.begin(), clauses->second.end(),
+                                [&](const ast::FunctionClause* clause) {
+                                    if (clause->params.size() != n.args.size() + 1)
+                                        return false;
+                                    const auto& receiver = clause->params.front();
+                                    if (!receiver.type || !*receiver.type)
+                                        return false;
+                                    auto written = renderDispatchType(**receiver.type);
+                                    if (auto angle = written.find('<');
+                                        angle != std::string::npos)
+                                        written.resize(angle);
+                                    const auto wdot = written.rfind('.');
+                                    return (wdot == std::string::npos
+                                                ? written
+                                                : written.substr(wdot + 1)) == bareType;
+                                });
+                        if (overOwnType) {
+                            std::vector<ExprPtr> args;
+                            args.push_back(rv());
+                            for (const auto& a : n.args)
+                                args.push_back(atomize_ir(lower(a), rb));
+                            return ret(localCallExpr(symbol->second, std::move(args)));
+                        }
+                    }
+                }
+
         // A public function brought into scope by `using Module` also
         // participates in UFCS: `100.meter` is `meter(100)`, and
         // `distance.per(duration)` is `per(distance, duration)`. The source
@@ -11183,6 +11241,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // program to it made `42.to(String)` an `undef` on BEAM and an empty
         // string on the walker.
         int arity = -1;
+        // Claimed by a module's free function over its own type (the
+        // kexhq/kex#230 bare-name redirect) rather than by a `make` method.
+        bool freeOverOwnType = false;
     };
     std::unordered_map<std::string, Definition> definitions;
     if (externalRecords) {
@@ -11337,7 +11398,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             const int arity = static_cast<int>(fn->clauses[0].params.size()) +
                               (fn->isFoul ? 1 : 0);
             if (!definitions.count(fn->name))
-                definitions[fn->name] = {path, fn->name, true, "", arity};
+                definitions[fn->name] = {path, fn->name, true, "", arity, true};
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
@@ -11346,7 +11407,15 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             auto collectMethod = [&](const ast::FunctionDef* fd,
                                      const std::string& typeName) {
                 if (!fd) return;
-                if (!definitions.count(fd->name))
+                // A make method's dispatcher outranks a free function's
+                // bare-name claim: it falls back to the prelude for other
+                // receivers, and a free function over its own type is
+                // reached by its qualified symbol when the receiver's type is
+                // known. First come, first served sent `client.close` to a
+                // TCP `close` from a module merged earlier.
+                if (auto existing = definitions.find(fd->name);
+                    existing == definitions.end() ||
+                    existing->second.freeOverOwnType)
                     definitions[fd->name] = {path, fd->name, true};
                 // A make method is emitted as `method/Type` when the same
                 // method name has implementations for multiple receiver
