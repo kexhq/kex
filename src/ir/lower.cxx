@@ -9715,7 +9715,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
         std::set<std::string> declaredRecords;
         kex::collectDeclaredRecordNames(module.body, declaredRecords);
-        auto preModuleFn = [&](const ast::FunctionDef* fd) {
+        auto preModuleFn = [&](const ast::FunctionDef* fd, bool isPublic = true) {
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
@@ -9767,7 +9767,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // and erlc rejected it (kexhq/kex#272).
             if (!fd->isFoul && !fd->clauses.empty()) {
                 const auto arity = std::to_string(fd->clauses[0].params.size());
-                L.pureFnArities.insert(fd->name + "/" + arity);
+                // The bare entry is for a call that reaches this function
+                // through a `using`, which a private one never is. Recorded
+                // anyway, a private `failed/1` told the program's own foul
+                // `failed` to drop its context: `undefined function failed/1`
+                // (kexhq/kex#494).
+                if (isPublic) L.pureFnArities.insert(fd->name + "/" + arity);
                 L.pureFnArities.insert(emitted + "/" + arity);
             }
             L.moduleFunctions[path + "." + fd->name] = emitted;
@@ -9849,7 +9854,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // values stay bare tuples (#495).
                 if (*vb) for (const auto& vi : (*vb)->items) {
                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                        preModuleFn(vfd->get());
+                        preModuleFn(vfd->get(), (*vb)->isPublic);
                     else if (auto* vtd =
                                  std::get_if<std::unique_ptr<ast::TypeDef>>(
                                      &vi))

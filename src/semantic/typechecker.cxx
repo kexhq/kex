@@ -2031,6 +2031,7 @@ auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> voi
     auto add = [&](const ast::TypeAnnotation& ann, const std::string& modulePath) {
         auto sig = annotationToSignature(ann);
         if (!sig) return;
+        sig->declaringModule = modulePath;
         // Declared annotation wins — stored first so checkFunctionDef
         // can find it and verify the body against the declared type.
         m_annotationDeclared.insert(ann.name);
@@ -2091,6 +2092,7 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
         auto sig = annotationToSignature(ann);
         m_declarationImports = previousImports;
         if (!sig) return;
+        sig->declaringModule = modulePath;
         m_annotationDeclared.insert(ann.name);
         const auto key = modulePath + "\n" + ann.name;
         m_annotationArities[key].insert(sig->params.size());
@@ -2504,8 +2506,12 @@ auto TypeChecker::preRegisterFunctionSigs(const ast::Program& program) -> void {
                     for (const auto& visible : member->items)
                         if (auto* def = std::get_if<
                                 std::unique_ptr<ast::FunctionDef>>(&visible);
-                            def && *def)
+                            def && *def) {
+                            if (!member->isPublic)
+                                m_privateFreeFunctions.insert(
+                                    m_currentModulePath + "\n" + (*def)->name);
                             preRegisterFunctionDef(**def);
+                        }
                 }
             }, item);
         }
@@ -2651,6 +2657,8 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         m_declarationImports = previousImports;
         return;
     }
+    for (auto& signature : provisional)
+        signature.declaringModule = m_currentModulePath;
     // A module function is reachable QUALIFIED before its definition is
     // checked. Without this, `Tey.Toolchain.sha256(path)` above the `sha256`
     // it names found no `Tey.Toolchain::sha256` yet, fell back to the bare
@@ -3922,6 +3930,9 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         signatures.push_back(std::move(checkedSignature));
     }
 
+    if (!m_inMakeBlock)
+        for (auto& signature : signatures)
+            signature.declaringModule = m_currentModulePath;
     // Preserve the checked declaration interface before the signatures are
     // moved into the unqualified call-resolution table below.
     m_functionSignatures[&def] = signatures;
@@ -4009,6 +4020,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             if (declared && !signatures.empty()) {
                 auto placeholder = std::find_if(
                     sigs.begin(), sigs.end(), [&](const Signature& candidate) {
+                        // Another module's same-named function is not this
+                        // one's placeholder, however alike their parameters.
+                        if (candidate.declaringModule != m_currentModulePath)
+                            return false;
                         if (candidate.params.size() != declared->params.size())
                             return false;
                         for (size_t i = 0; i < candidate.params.size(); ++i)
@@ -4117,6 +4132,26 @@ auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
         if (module.rfind(import.module + ".", 0) == 0) return true;
     }
     return false;
+}
+
+auto TypeChecker::freeFunctionVisible(const std::string& module,
+                                      const std::string& name) const -> bool {
+    if (withinModule(module)) return true;
+    if (m_privateFreeFunctions.contains(module + "\n" + name)) return false;
+    const auto admits = [&](const ImportSelection& import) {
+        if (import.module != module) return false;
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(), name) ==
+                import.onlyNames.end())
+            return false;
+        return std::find(import.exceptNames.begin(), import.exceptNames.end(),
+                         name) == import.exceptNames.end();
+    };
+    for (const auto& frame : m_importScopeStack)
+        for (const auto& import : frame)
+            if (admits(import)) return true;
+    return std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
+                       admits);
 }
 
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
@@ -8096,6 +8131,59 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     else if (auto user = m_userSignatures.find(name);
              user != m_userSignatures.end())
         userSignatures = &user->second;
+    // The bare-name table holds every module's free functions. A plain call
+    // reaches only the ones its module may see: a name `using Router, only:
+    // [get]` left out (`put`) is not borrowed from Router to fail at run
+    // time (#496), and another module's private `table` does not stand in
+    // for the `table` this module imported (#494).
+    std::vector<Signature> visibleUserSignatures;
+    if (userSignatures && !isMethodCall &&
+        name.find("::") == std::string::npos) {
+        std::set<std::string> hiddenModules;
+        for (const auto& signature : *userSignatures) {
+            if (freeFunctionVisible(signature.declaringModule, name))
+                visibleUserSignatures.push_back(signature);
+            else
+                hiddenModules.insert(signature.declaringModule);
+        }
+        if (!hiddenModules.empty())
+            userSignatures = visibleUserSignatures.empty()
+                ? nullptr : &visibleUserSignatures;
+        // Nothing in scope takes these arguments, but a module's function
+        // that is not in scope would: say that, rather than reporting a
+        // mismatch against some unrelated prelude function of the same name.
+        const auto accepts = [&](const Signature& signature) {
+            const auto required =
+                signature.requiredParams.value_or(signature.params.size());
+            if (argTypes.size() < required ||
+                argTypes.size() > signature.params.size())
+                return false;
+            for (size_t i = 0; i < argTypes.size(); ++i)
+                if (argTypes[i] && !argMatchesParam(argTypes[i], signature.params[i]))
+                    return false;
+            return true;
+        };
+        // Only where the resolver let the name through — because some other
+        // function of that name exists (`put` on Process.Shared); a name
+        // nothing in scope declares it has reported already.
+        if (!userSignatures && !hiddenModules.empty()) {
+            const auto others = importedCandidateSignatures(name);
+            if (!others.empty() &&
+                std::none_of(others.begin(), others.end(), accepts)) {
+                std::string owners;
+                for (const auto& module : hiddenModules) {
+                    const bool isPrivate =
+                        m_privateFreeFunctions.contains(module + "\n" + name);
+                    owners += (owners.empty() ? "" : ", ") +
+                        std::string("`") + module + "." + name + "`" +
+                        (isPrivate ? " is private to `" + module + "`"
+                                   : " is not imported here");
+                }
+                error(loc, "Undefined function: `" + name + "` — " + owners);
+                return Type::unknown();
+            }
+        }
+    }
     bool hasUser = userSignatures != nullptr;
     auto methodIt = m_methodSignatures.find(name);
     bool hasLocalMethods = isMethodCall && methodIt != m_methodSignatures.end();

@@ -36,6 +36,11 @@ struct Signature {
     // module member (docs/ufcs-dispatch-plan.md "Follow-up"), so a call site
     // may only see it with a matching `using` in scope.
     std::string makeModule;
+    // The module whose body declares this free function, "" for a top-level
+    // one or one known only through an imported interface. The bare-name
+    // table holds every module's functions, so a plain call keeps only the
+    // ones its module may see (kexhq/kex#496, #494).
+    std::string declaringModule;
 };
 
 struct TraitDef {
