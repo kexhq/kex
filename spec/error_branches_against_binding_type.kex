@@ -1,0 +1,15 @@
+# kex: check-only
+# Branches are checked against the binding's type, so arms that do not fit
+# it are still a mismatch (kexhq/kex#506).
+
+let count(kind: String) -> Integer do
+  let n : Integer = match kind do
+    "one" => 1
+    _ => "many"
+  end
+  n
+end
+
+main do
+  IO.printLine(count("one"))
+end

@@ -9,6 +9,7 @@
 #include <functional>
 #include <set>
 #include <unordered_set>
+#include <utility>
 
 namespace kex::semantic {
 
@@ -5017,7 +5018,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return result;
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+            TypePtr branchExpectation;
+            if (node.type && *node.type && node.value &&
+                (std::holds_alternative<ast::IfExpr>(node.value->kind) ||
+                 std::holds_alternative<ast::MatchExpr>(node.value->kind) ||
+                 std::holds_alternative<ast::ThenElseExpr>(node.value->kind))) {
+                // Muted: declaredBindingType below reports a bad annotation.
+                std::vector<Diagnostic> muted;
+                auto* const reported = std::exchange(m_diagnostics, &muted);
+                std::unordered_map<std::string, TypePtr> generics;
+                branchExpectation = resolveTypeExpr(**node.type, generics);
+                // `Any` resolves to the unknown type, which every arm fits —
+                // the point of writing it. A misspelled annotation does too,
+                // and is reported as one below.
+                m_diagnostics = reported;
+            }
+            const auto outerExpectation =
+                std::exchange(m_branchExpectation, branchExpectation);
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
+            m_branchExpectation = outerExpectation;
             // `let xs: [Colour] = []` — the annotation is what the binding IS;
             // the initializer only has to be compatible with it. Binding the
             // inferred type instead would defeat the reason for writing one.
@@ -6160,6 +6179,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::named("Range", {startElement ? startElement : Type::integer()});
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            const auto expected = std::exchange(m_branchExpectation, nullptr);
+            const auto bothFit = [&](const TypePtr& a, const TypePtr& b) {
+                return expected && argMatchesParam(a, expected) &&
+                       argMatchesParam(b, expected);
+            };
+            bool fittedExpected = false;
             if (node.letPattern) {
                 // `if let Pattern = expr` — infer scrutinee, bind pattern vars
                 // in a scope covering only the then-body (already scoped in
@@ -6204,6 +6229,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // agree on: `if a ... x = 1 elif b ... opt.map(f) end`.
                 if (auto joined = siblingConstructorJoin(rt, elifType)) {
                     branchType = joined;
+                } else if (!rtPermissive && !rePermissive && bothFit(rt, elifType)) {
+                    fittedExpected = true;
                 } else if (node.elseBody && !rtPermissive && !rePermissive &&
                     !argMatchesParam(elifType, rt) && !argMatchesParam(rt, elifType)) {
                     error(expr.location, "Branch type mismatch: 'if' returns " +
@@ -6223,6 +6250,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (auto joined = siblingConstructorJoin(rt, elseType)) {
                     branchType = joined;
                 } else if (!thenPermissive && !elsePermissive &&
+                           bothFit(rt, elseType)) {
+                    fittedExpected = true;
+                } else if (!thenPermissive && !elsePermissive &&
                     !argMatchesParam(elseType, rt) && !argMatchesParam(rt, elseType)) {
                     error(expr.location, "Branch type mismatch: 'if' returns " +
                           typeToString(rt) + " but 'else' returns " + typeToString(elseType));
@@ -6234,9 +6264,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // `if done? ... return Error(e) ... end` is not a Result-valued
             // expression.
             if (!node.elseBody) return Type::voidType();
+            if (fittedExpected) return expected;
             return resolve(branchType);
         }
         else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+            const auto expected = std::exchange(m_branchExpectation, nullptr);
+            bool fittedExpected = false;
             TypePtr subjectType = node.subject ? inferExpr(*node.subject) : Type::unknown();
             TypePtr resultType = Type::unknown();
             for (const auto& clause : node.clauses) {
@@ -6267,6 +6300,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                             std::holds_alternative<UnknownType>(t->kind);
                         if (auto joined = siblingConstructorJoin(rt, t)) {
                             resultType = joined;
+                        } else if (!armPermissive && expected &&
+                                   argMatchesParam(t, expected) &&
+                                   argMatchesParam(rt, expected)) {
+                            fittedExpected = true;
                         } else if (!armPermissive && !argMatchesParam(t, rt) && !argMatchesParam(rt, t)) {
                             error(expr.location, "Match arm type mismatch: expected " +
                                   typeToString(rt) + " but arm returns " + typeToString(t));
@@ -6276,6 +6313,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 popScope();
             }
             checkMatchExhaustiveness(node, expr.location);
+            if (fittedExpected) return expected;
             return resultType;
         }
         else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
@@ -6561,6 +6599,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return inferBody(node.body);
         }
         else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+            const auto expected = std::exchange(m_branchExpectation, nullptr);
             if (node.condition) {
                 auto condType = inferExpr(*node.condition);
                 auto resolved = resolve(condType);
@@ -6582,6 +6621,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 bool elsePermissive = std::holds_alternative<TypeVar>(re->kind) ||
                                       std::holds_alternative<UnknownType>(re->kind);
                 if (auto joined = siblingConstructorJoin(rt, re)) return joined;
+                if (!thenPermissive && !elsePermissive && expected &&
+                    argMatchesParam(rt, expected) && argMatchesParam(re, expected))
+                    return expected;
                 if (!thenPermissive && !elsePermissive &&
                     !argMatchesParam(re, rt) && !argMatchesParam(rt, re)) {
                     error(expr.location, "Branch type mismatch: 'then' returns " +

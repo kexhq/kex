@@ -343,6 +343,12 @@ private:
     auto typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual) -> void;
 
     std::vector<Diagnostic>* m_diagnostics = nullptr;
+    // The type a typed binding asks of the conditional or `match` it is bound
+    // to (`let answer : Any = match …`). Each arm is checked against it
+    // rather than against the first arm (kexhq/kex#506). Taken — and so
+    // cleared — by the construct it was set for, so nested branches are
+    // checked as before.
+    TypePtr m_branchExpectation;
     TypeEnv m_globals;
     std::vector<TypeEnv> m_scopeStack;
     struct ImportSelection {
