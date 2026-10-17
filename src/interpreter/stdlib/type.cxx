@@ -135,6 +135,28 @@ auto typeNameKey(const Map& map, const std::string& name)
     return std::nullopt;
 }
 
+// `matches` (the evaluator's runtimeTypeMatches) also applied to a list's
+// elements and a map's entries, as kex_intrinsic_type.erl's accepts/2 does.
+template <typename Matches>
+auto matchesDeeply(const ValuePtr& value, const ast::TypeExpr& type,
+                   const Matches& matches) -> bool {
+    if (!matches(value, type)) return false;
+    if (const auto* list = std::get_if<ast::ListType>(&type.kind); list && list->element)
+        if (const auto* values = std::get_if<ListValue>(&value->data))
+            return std::all_of(values->elements.begin(), values->elements.end(),
+                               [&](const ValuePtr& element) {
+                                   return matchesDeeply(element, *list->element, matches);
+                               });
+    if (const auto* map = std::get_if<ast::MapType>(&type.kind); map && map->key && map->value)
+        if (const auto* entries = std::get_if<MapValue>(&value->data))
+            return std::all_of(entries->entries.begin(), entries->entries.end(),
+                               [&](const auto& entry) {
+                                   return matchesDeeply(entry.first, *map->key, matches) &&
+                                          matchesDeeply(entry.second, *map->value, matches);
+                               });
+    return true;
+}
+
 // A `Type { name, args }` value as `Name<Arg, …>`, the spelling
 // kex_intrinsic_type.erl's type_name/1 gives.
 auto renderedType(const ValuePtr& type) -> std::string {
@@ -244,9 +266,13 @@ auto Evaluator::registerTypeBuiltins() -> void {
         return Value::list(std::move(constructors));
     });
 
+    const auto matches = [this](const ValuePtr& value, const ast::TypeExpr& type) {
+        return runtimeTypeMatches(value, type);
+    };
+
     // `Type.construct`: a record of the named type from values by field name
     // (kexhq/kex#487). The same rules and messages as kex_intrinsic_type.erl.
-    defineIntrinsic("Type::construct", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Type::construct", [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
         const auto name = stringArg(args);
         const auto key = typeNameKey(m_recordDefs, name);
         if (!key) return Value::error(Value::string("Not a record type: " + name));
@@ -272,7 +298,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                 ? semantic::structuredTypeOfDeclared(*field.type)
                 : semantic::StructuredType{"Any", {}};
             if (auto found = given.find(field.name); found != given.end()) {
-                if (field.type && !runtimeTypeMatches(found->second, *field.type))
+                if (field.type && !matchesDeeply(found->second, *field.type, matches))
                     return Value::error(Value::string(
                         "Field \"" + field.name + "\" of " + name + " expects " +
                         renderedType(structuredTypeValue(declared)) + ", got " +
@@ -293,7 +319,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
     // `Type.variant`: the named constructor of a sum type, applied to its
     // arguments (kexhq/kex#509).
     defineIntrinsic("Type::constructVariant",
-                    [this](std::vector<ValuePtr> args) -> ValuePtr {
+                    [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
         const auto name = stringArg(args);
         const auto key = typeNameKey(m_adtVariants, name);
         if (!key) return Value::error(Value::string("Not a sum type: " + name));
@@ -318,7 +344,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                     tag + " takes " + std::to_string(argTypes.size()) +
                     " argument(s), got " + std::to_string(given->elements.size())));
             for (size_t i = 0; i < argTypes.size(); ++i)
-                if (argTypes[i] && !runtimeTypeMatches(given->elements[i], *argTypes[i]))
+                if (argTypes[i] && !matchesDeeply(given->elements[i], *argTypes[i], matches))
                     return Value::error(Value::string(
                         tag + " expects " +
                         renderedType(structuredTypeValue(
