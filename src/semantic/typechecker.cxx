@@ -4566,6 +4566,29 @@ auto TypeChecker::agreedHints(const std::vector<std::vector<TypePtr>>& hintSets)
     return hints;
 }
 
+auto TypeChecker::namedArgHints(const std::string& name,
+                                 const std::string& label)
+    -> std::vector<TypePtr> {
+    auto candidates = importedCandidateSignatures(name);
+    if (auto user = m_userSignatures.find(name); user != m_userSignatures.end())
+        candidates.insert(candidates.begin(), user->second.begin(),
+                          user->second.end());
+    for (const auto& signature : candidates) {
+        const auto named = std::find(signature.paramNames.begin(),
+                                     signature.paramNames.end(), label);
+        if (named == signature.paramNames.end()) continue;
+        // A receiver prepended to `params` has no name of its own.
+        const auto index =
+            static_cast<size_t>(named - signature.paramNames.begin()) +
+            (signature.params.size() - signature.paramNames.size());
+        if (index >= signature.params.size()) continue;
+        if (const auto* function =
+                std::get_if<FuncType>(&resolve(signature.params[index])->kind))
+            return function->params;
+    }
+    return {};
+}
+
 auto TypeChecker::resolveArgHints(const std::string& name,
                                    const std::vector<TypePtr>& argTypes,
                                    size_t slArgIdx,
@@ -5402,12 +5425,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
             }
-            for (const auto& [_, arg] : node.namedArgs)
-                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            // A block passed by label is typed from that parameter too, as a
+            // positional one is below. Inferred on its own, its parameter had
+            // no type, so `t.text(:c)` was left to run-time dispatch, which
+            // could not find `text` (kexhq/kex#499).
+            std::vector<size_t> labelledLambdas;
+            for (size_t i = 0; i < node.namedArgs.size(); ++i) {
+                const auto& arg = node.namedArgs[i].second;
+                const auto* lambda =
+                    arg ? std::get_if<ast::Lambda>(&arg->kind) : nullptr;
+                if (lambda && !lambda->params.empty()) {
+                    argTypes.push_back(Type::unknown()); // placeholder
+                    labelledLambdas.push_back(i);
+                } else {
+                    argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+                }
+            }
             // Second pass: infer lambdas with parameter hints from the signature.
             for (const auto& [argIdx, rawIdx] : contextualLambdas) {
                 auto hints = resolveArgHints(node.name, argTypes, argIdx);
                 argTypes[argIdx] = inferBlock(*node.args[rawIdx], hints);
+            }
+            for (const auto index : labelledLambdas) {
+                const auto& [label, arg] = node.namedArgs[index];
+                argTypes[node.args.size() + index] =
+                    inferBlock(*arg, namedArgHints(node.name, label));
             }
             if (node.block) {
                 bool collection = false;

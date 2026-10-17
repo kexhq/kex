@@ -1,0 +1,32 @@
+# A block passed as a named argument takes its parameter types from that
+# parameter, as a positional or trailing block does. On the BEAM its
+# parameter was left untyped, so `t.text(:c)` went to run-time dispatch,
+# which could not find `text`: "Undefined method: text for Builder"
+# (kexhq/kex#499).
+
+module Columns do
+  record Builder do
+    table : String = ""
+  end
+
+  make Builder do
+    let text(label: Atom, primaryKey: Bool = false, nullable: Bool = false, default: Any = :none, oneOf: [String] = []) -> String do
+      "${label}".drop(1)
+    end
+  end
+
+  let named(from: Block<Builder, String>) -> String = from(Builder {})
+
+  let changed(column: Atom, from: Block<Builder, String>, to: Block<Builder, String>) -> String do
+    "${column}: ${from(Builder {})} -> ${to(Builder {})}"
+  end
+end
+
+using Columns, only: [named, changed]
+
+main do
+  IO.printLine(named(from: { |t| t.text(:c) }))
+  IO.printLine(changed(:role,
+    from: { |t| t.text(:member, default: "member") },
+    to: { |t| t.text(:owner, oneOf: ["member", "owner"]) }))
+end
