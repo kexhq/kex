@@ -217,6 +217,9 @@ private:
     bool m_noDoBlocks = false;
     std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
     bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
+    // Set by a make body for the member it is about to parse: any keyword may
+    // name it, since it is only reached after `.` (kexhq/kex#508).
+    bool m_makeMemberName = false;
     std::vector<ParseDiagnostic> m_diagnostics;
 };
 
