@@ -1,0 +1,32 @@
+# kex: run-beam
+# A module may implement a capability on one of its records and also have a
+# free function of the same name. The free function is emitted under a
+# separate `$free` symbol, and its callers used to lose track of it being
+# foul: `undefined function 'Store.Api.fetch$free'/1` (kexhq/kex#492).
+
+capability Store.Link do
+  foul fetch(key: String) -> String = "nothing under ${key}"
+end
+
+module Store.Api do
+  record Direct do
+    label : String = "direct"
+  end
+
+  make Direct, implement: Store.Link do
+    foul fetch(key: String) -> String = "direct ${key}"
+  end
+
+  fetch : String -> String
+  foul fetch(key) = Store.Link.fetch(key)
+
+  foul fetchedInside -> String = fetch("inside")
+end
+
+main do
+  IO.printLine(Store.Api.fetch("k"))
+  IO.printLine(Store.Api.fetchedInside())
+  with Store.Link = Store.Api.Direct {} do
+    IO.printLine(Store.Api.fetch("k"))
+  end
+end
