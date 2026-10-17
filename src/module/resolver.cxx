@@ -138,14 +138,23 @@ auto Resolver::resolve(const std::string& moduleName,
                 }
             }
 
-            const auto dot = candidateName.find('.');
-            if (!matchedPath && dot != std::string::npos) {
-                for (const auto& relative :
-                     sourcePaths(candidateName.substr(0, dot))) {
-                    auto container = std::filesystem::path(root) / relative;
-                    if (std::filesystem::is_regular_file(container) &&
-                        !isEntryFile(container)) {
-                        matchedPath = container.string();
+            // No file of its own: a module nested in one that has a file
+            // (`module Holdings do` inside db/schema.kex's `DB.Schema`). The
+            // nearest enclosing module's file wins, so `DB.Schema.Holdings`
+            // finds db/schema.kex before db.kex (kexhq/kex#454). The walk
+            // stays within `moduleName`: climbing into a relative candidate's
+            // `currentModule.` prefix would resolve `Library.Schema`, used in
+            // `Library.Query`, to library/query.kex itself.
+            const auto prefixLength = candidateName.size() - moduleName.size();
+            for (auto container = candidateName;
+                 !matchedPath && container.rfind('.') != std::string::npos;) {
+                container.resize(container.rfind('.'));
+                if (container.size() <= prefixLength) break;
+                for (const auto& relative : sourcePaths(container)) {
+                    auto path = std::filesystem::path(root) / relative;
+                    if (std::filesystem::is_regular_file(path) &&
+                        !isEntryFile(path)) {
+                        matchedPath = path.string();
                         break;
                     }
                 }

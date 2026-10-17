@@ -51,6 +51,13 @@ int main() {
             << "module DB.Migrate.N0001CreateUsers\n";
         std::ofstream(base / "numbered/db/migrate/n0002_add_names.kex")
             << "module DB.Migrate.N0002AddNames\n";
+        fs::create_directories(base / "nested/db");
+        std::ofstream(base / "nested/db/schema.kex")
+            << "module DB.Schema\n\nmodule Holdings do\nend\n";
+        std::ofstream(base / "nested/db.kex") << "module DB\n";
+        fs::create_directories(base / "siblings/db");
+        std::ofstream(base / "siblings/db/schema.kex") << "module DB.Schema\n";
+        std::ofstream(base / "siblings/db/migrate.kex") << "module DB.Migrate\n";
         fs::create_directories(base / "duplicate_manifest");
         std::ofstream(base / "duplicate_manifest/prelude.kex")
             << "using Good\nusing Good\n";
@@ -83,6 +90,26 @@ int main() {
             assertTrue(resolved.has_value());
             assertEqual(resolved->moduleName, std::string("Shop.Cart"));
             assertEqual(resolved->path, (base / "lib/shop.kex").string());
+        });
+
+        it("finds a nested module in its nearest enclosing module's file", [&]() {
+            // kexhq/kex#454: `module Holdings do` inside db/schema.kex's
+            // file-level `DB.Schema` is in that file, not in db.kex.
+            kex::module::Resolver resolver({(base / "nested").string()});
+            auto resolved = resolver.resolve("DB.Schema.Holdings");
+            assertTrue(resolved.has_value());
+            assertEqual(resolved->path, (base / "nested/db/schema.kex").string());
+        });
+
+        it("never resolves a sibling to the current module's own file", [&]() {
+            // `DB.Schema` used in `DB.Migrate`: the relative candidate
+            // `DB.Migrate.DB.Schema` must not walk up to db/migrate.kex,
+            // which made the module import itself forever.
+            kex::module::Resolver resolver({(base / "siblings").string()});
+            auto resolved = resolver.resolve("DB.Schema", "DB.Migrate");
+            assertTrue(resolved.has_value());
+            assertEqual(resolved->moduleName, std::string("DB.Schema"));
+            assertEqual(resolved->path, (base / "siblings/db/schema.kex").string());
         });
 
         it("finds a numbered file written with its capital", [&]() {
