@@ -10344,7 +10344,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     } else if (auto* vmk =
                                                    std::get_if<std::unique_ptr<
                                                        ast::MakeDef>>(&vi)) {
-                                        flush();
                                         emitMake(vmk->get(), declaredRecords);
                                     }
                                 }
@@ -11051,17 +11050,30 @@ using ModuleDefined = std::unordered_map<std::string,
 using ArityFallback =
     std::map<std::pair<std::string, int>, ModuleTarget>;
 
+// `local` is what the calling module itself defines, for the entry module
+// only: its functions keep the flat program's names, so one defined there at
+// the call's name and arity IS the function the call was lowered against. A
+// dispatcher ejected into the entry module by mergeDuplicateFunctions is the
+// case that needs it — Net.HTTP's `close/2` for `make Client` lost its bucket
+// to the TCP `close` the bare-name winner names, and every `client.close` in
+// the program was then redirected to `Kex.Net.Socket.TCP:close`, which
+// badargs on a Client (kexhq/kex#454).
 auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
                         const ModuleDefined& defined,
-                        const ArityFallback& fallback) -> void {
+                        const ArityFallback& fallback,
+                        const std::set<std::pair<std::string, int>>* local = nullptr)
+    -> void {
     if (!expr) return;
     std::visit([&](auto& node) {
         using T = std::decay_t<decltype(node)>;
         auto visit = [&](ExprPtr& child) {
-            rewriteModuleCalls(child, targets, defined, fallback);
+            rewriteModuleCalls(child, targets, defined, fallback, local);
         };
         if constexpr (std::is_same_v<T, Call>) {
-            if (node.module.empty()) {
+            if (node.module.empty() && local &&
+                local->count({node.name, node.arity})) {
+                // Defined right here: stays a local call.
+            } else if (node.module.empty()) {
                 if (auto it = targets.find(node.name); it != targets.end()) {
                     auto built = defined.find(it->second.module);
                     if (built == defined.end() ||
@@ -11563,12 +11575,15 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
         auto& module = result[moduleIndex];
+        const auto* local =
+            moduleIndex == 0 ? &defined[module.name] : nullptr;
         for (auto& fn : module.functions)
             for (auto& clause : fn.clauses) {
                 if (clause.guard)
                     rewriteModuleCalls(*clause.guard, targets, defined,
-                                       fallback);
-                rewriteModuleCalls(clause.body, targets, defined, fallback);
+                                       fallback, local);
+                rewriteModuleCalls(clause.body, targets, defined, fallback,
+                                   local);
                 if (moduleIndex > 0) {
                     if (clause.guard)
                         rewriteModuleCalls(*clause.guard, globalTargets,

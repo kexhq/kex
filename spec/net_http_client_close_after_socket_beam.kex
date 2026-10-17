@@ -1,0 +1,20 @@
+# kex: run-beam
+#
+# `using Net.Socket` before `using Net.HTTP` merges the TCP module first, so
+# the bare name `close` belongs to TCP and Net.HTTP's `close` dispatcher for
+# `make Client` lands in this program's own module instead. A call there to
+# the local dispatcher was still sent to `Kex.Net.Socket.TCP:close` by name,
+# which badargs on a Client (kexhq/kex#454). Both closes must reach their own
+# type's function.
+
+using Net.Socket
+using Net.HTTP
+
+main do
+  let listener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let client = Client.open().try
+  let report = client.close.try
+  listener.close
+  IO.printLine(report.closedConnections)
+  IO.printLine(listener.closed?)
+end
