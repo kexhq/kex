@@ -1,0 +1,38 @@
+# kex: run-beam
+# A make block may overload `&&` and `||` (kexhq/kex#507), so a query builder
+# can write OR. An overload evaluates both sides; every other left value,
+# `Bool` included, keeps the built-in short-circuit.
+
+record Cond do
+  sql : String
+end
+
+make Cond do
+  let &&(other: Cond) -> Cond = Cond { sql: "(${@sql} AND ${other.sql})" }
+  let ||(other: Cond) -> Cond = Cond { sql: "(${@sql} OR ${other.sql})" }
+end
+
+record Column do
+  name : String
+end
+
+make Column do
+  let ==(value: String) -> Cond = Cond { sql: "${@name} = '${value}'" }
+  let >(value: Integer) -> Cond = Cond { sql: "${@name} > ${value}" }
+end
+
+foul loud(flag: Bool, label: String) -> Bool do
+  IO.printLine("evaluated ${label}")
+  return flag
+end
+
+main do
+  let owner = Column { name: "owner" }
+  let credit = Column { name: "credit" }
+  IO.printLine((owner == "ada" || credit > 100).sql)
+  IO.printLine((owner == "ada" && credit > 5 || owner == "bob").sql)
+  # Bool operators still short-circuit.
+  IO.printLine(loud(false, "a") && loud(true, "b"))
+  IO.printLine(loud(true, "c") || loud(true, "d"))
+  IO.printLine(true && false || true)
+end

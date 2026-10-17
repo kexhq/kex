@@ -59,7 +59,8 @@ using_opts = using_opt ( COMMA using_opt )* ;
 using_opt = LOWER_IDENT COLON ( UPPER_IDENT | name_list ) ;
 (* An `as:` alias is longer than one letter: a single capital is a type
    parameter. *)
-name_list = LBRACKET name_entry ( COMMA name_entry )* RBRACKET ;
+(* The list may span lines inside its brackets and end with a comma. *)
+name_list = LBRACKET name_entry ( COMMA name_entry )* COMMA? RBRACKET ;
 name_entry = LOWER_IDENT | UPPER_IDENT | LPAREN binary_op RPAREN ;
 
 export_statement = EXPORT type_name ( COMMA using_opts )? ;
@@ -208,6 +209,8 @@ param
 (*      e.g. modulo :> This -> This  means  This -> This -> This *)
 (*   :  means full explicit signature — used at top level *)
 (*      e.g. element : String -> [String] -> Element *)
+(*   A signature may span lines: after an ARROW, or with the ARROW leading
+     the next line. *)
 type_annotation
   = LOWER_IDENT TYPE_ANNOTATION type_expr
   | LOWER_IDENT SLOT_ANNOTATION type_expr
@@ -311,9 +314,9 @@ expr
   | then_else_expr
   ;
 
-(* Ternary replacement, lowest precedence. THEN must stay on the
-   condition's line unless the whole expression is parenthesized. Either
-   branch may start on the line after THEN/ELSE, and ELSE may open the line
+(* Ternary replacement, lowest precedence. THEN may lead the line after the
+   condition. Either branch may start on the line after THEN/ELSE, and ELSE
+   may open the line
    after the THEN branch when it is indented at least as far as the line
    holding THEN (a less indented ELSE belongs to an enclosing IF).
    Nesting another then/else requires parens. *)
@@ -654,7 +657,12 @@ FLOAT    = DECIMAL "." DECIMAL EXPONENT?
 EXPONENT = ("e" | "E") ("+" | "-")? DECIMAL ;
 STRING  = '"' string_content* '"' ;
 string_content = [^"$\\] | escape | interpolation ;
-escape = "\\" [nrt\\$"] ;
+(* Shared by strings and chars. Any other character after a backslash is an
+   error. \x takes two hex digits of an ASCII byte (00-7F); \u{…} a Unicode
+   scalar value in 1 to 6 hex digits. *)
+escape = "\\" ( [nrte0\\$"'`]
+              | "x" [0-7] [0-9A-Fa-f]
+              | "u{" [0-9A-Fa-f]+ "}" ) ;
 interpolation = "$" "{" expr "}" ;
 RAW_STRING = "`" raw_string_content* "`" ;
 raw_string_content = "``" | [^`] ;

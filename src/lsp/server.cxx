@@ -924,7 +924,11 @@ auto identifierLengthAt(const std::string& source, const SourceLocation& locatio
     auto isIdentifier = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
-    if (!isIdentifier(static_cast<unsigned char>(source[offset]))) return 0;
+    // `!` and `?` end a name (`save!`, `empty?`) but never start one: at the
+    // `!` of `!control.hint` this is the negation, not a name, and claiming
+    // `!control` for it hid `control`'s own hover (kexhq/kex#456).
+    const auto first = static_cast<unsigned char>(source[offset]);
+    if (!std::isalnum(first) && first != '_') return 0;
     const auto start = offset;
     while (offset < source.size() &&
            isIdentifier(static_cast<unsigned char>(source[offset])))
@@ -1003,6 +1007,11 @@ auto wordAt(const std::string& source, unsigned int line,
     while (end < lineEnd &&
            isIdentifier(static_cast<unsigned char>(source[end])))
         ++end;
+    // Only a name's END may be `!` or `?`: in `!control.hint` the word is
+    // `control`, after the negation (kexhq/kex#456).
+    while (start < end && (source[start] == '!' || source[start] == '?'))
+        ++start;
+    if (start == end) return {};
     return {
         .byteColumn = static_cast<uint32_t>(start - lineStart + 1),
         .byteLength = static_cast<uint32_t>(end - start),
@@ -3594,8 +3603,8 @@ private:
         if (moduleQualifier.empty() && !importLine) {
             const auto wordEnd = hoverLineStart + word.byteColumn - 1 +
                                  word.byteLength;
-            if (const auto receiver = scanDotReceiver(document.text, wordEnd);
-                receiver.valid)
+            const auto receiver = scanDotReceiver(document.text, wordEnd);
+            if (receiver.valid)
                 if (auto qualifier = receiverQualifier(
                         document, receiver, wordEnd, &m_interfaces,
                         documentModuleRoots(document.path));
@@ -3606,6 +3615,38 @@ private:
                         if (auto type = recordFieldType(record->detail, lookupName);
                             !type.empty())
                             fieldDetail = word.text + " : " + type;
+            // The receiver's own hover entry knows its type even where the
+            // lookup above cannot ask the analyzer for it — a `.ket` hole,
+            // whose analysis is of the generated Kex. Without it a field read
+            // there hovered as whatever function shares the field's name
+            // (`control.hint` as `function hint`, kexhq/kex#456).
+            if (fieldDetail.empty() && receiver.valid &&
+                receiver.start >= hoverLineStart)
+                for (const auto& entry : document.hoverEntries) {
+                    if (entry.line != params.position.line + 1 ||
+                        entry.byteColumn != receiver.start - hoverLineStart + 1 ||
+                        entry.byteColumn + entry.byteLength !=
+                            receiver.dot - hoverLineStart + 1)
+                        continue;
+                    const auto separator = entry.detail.rfind(" : ");
+                    if (separator == std::string::npos) break;
+                    auto typeName = entry.detail.substr(separator + 3);
+                    if (const auto angle = typeName.find('<');
+                        angle != std::string::npos)
+                        typeName.resize(angle);
+                    // The record symbol is filed under its bare name; the
+                    // entry may spell it qualified (`Views.FormField`).
+                    const auto* record = m_db.findSymbol(typeName, document.path);
+                    if ((!record || record->kind != semantic::SymbolKind::Record) &&
+                        typeName.rfind('.') != std::string::npos)
+                        record = m_db.findSymbol(
+                            typeName.substr(typeName.rfind('.') + 1), document.path);
+                    if (record && record->kind == semantic::SymbolKind::Record)
+                        if (auto type = recordFieldType(record->detail, lookupName);
+                            !type.empty())
+                            fieldDetail = word.text + " : " + type;
+                    break;
+                }
         }
 
         // Documentation is looked up by BARE NAME, so a field must not take

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kex {
 
@@ -133,6 +135,9 @@ struct Token {
     SourceLocation location;
     int startOffset = -1; // byte offset in the original UTF-8 source
     int endOffset = -1;   // exclusive byte offset
+    // String tokens: offsets in `value` of a `$` written `\$`, which never
+    // opens an interpolation even when a `{` follows it.
+    std::vector<std::size_t> escapedDollars;
 };
 
 auto tokenTypeName(TokenType type) -> std::string_view;

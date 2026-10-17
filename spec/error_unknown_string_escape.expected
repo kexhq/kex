@@ -1,0 +1,2 @@
+spec/error_unknown_string_escape.kex:4:16: error: Unknown escape '\q'; write '\\' for a backslash
+Aborted: 1 syntax error — fix before running.

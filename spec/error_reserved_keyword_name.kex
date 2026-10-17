@@ -2,9 +2,15 @@
 # A reserved word used as a name.
 #
 # `compiled do` owns the word, which is fair — but nothing said so: the parser
-# reported "Unexpected token in make body: compiled" and then unwound to the
-# top level, so one bad declaration scattered a screenful of errors across
-# unrelated lines. Recovery now stays inside the make body.
+# reported an unexpected token and then unwound, so one bad declaration
+# scattered a screenful of errors across unrelated lines. Now the one bad
+# declaration is reported once, and the rest still checks.
+#
+# A `make` function is the exception (kexhq/kex#508): it is only reached after
+# `.`, where a keyword cannot start anything else, so `router.compiled` is
+# unambiguous and the declarations in the make body below are fine.
+let compiled = "x"
+
 record Router do
   routes : [String]
 end

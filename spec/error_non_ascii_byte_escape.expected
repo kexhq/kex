@@ -1,0 +1,2 @@
+spec/error_non_ascii_byte_escape.kex:4:16: error: '\xe9' is not ASCII; write the character as '\u{e9}'
+Aborted: 1 syntax error — fix before running.

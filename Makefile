@@ -228,7 +228,7 @@ spec-prelude: build
 			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
 		else \
 			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
-			echo "$$output" | grep '✗' | sed 's/^/    /' || echo "$$output" | head -n 6 | sed 's/^/    /'; \
+			{ echo "$$output" | grep '✗' || echo "$$output" | head -n 6; } | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); \
 		failed=$$((failed + f_failed)); \
@@ -251,11 +251,12 @@ spec-prelude-beam: build
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
 		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -ne 0 ] && [ "$$f_failed" -eq 0 ]; then f_failed=1; fi; \
 		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
 			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
 		else \
 			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
-			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+			{ echo "$$output" | grep '✗' || echo "$$output" | head -n 6; } | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); \
 		failed=$$((failed + f_failed)); \
@@ -404,11 +405,12 @@ spec-stdlib: build
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
 		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -ne 0 ] && [ "$$f_failed" -eq 0 ]; then f_failed=1; fi; \
 		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
 			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
 		else \
 			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
-			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+			{ echo "$$output" | grep '✗' || echo "$$output" | head -n 6; } | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
 	done; \
@@ -455,11 +457,12 @@ spec-stdlib-beam: build
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
 		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -ne 0 ] && [ "$$f_failed" -eq 0 ]; then f_failed=1; fi; \
 		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
 			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
 		else \
 			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
-			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+			{ echo "$$output" | grep '✗' || echo "$$output" | head -n 6; } | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
 	done; \
@@ -550,11 +553,12 @@ spec-tey: build
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
 		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -ne 0 ] && [ "$$f_failed" -eq 0 ]; then f_failed=1; fi; \
 		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
 			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
 		else \
 			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
-			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+			{ echo "$$output" | grep '✗' || echo "$$output" | head -n 6; } | sed 's/^/    /'; \
 		fi; \
 		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
 	done; \

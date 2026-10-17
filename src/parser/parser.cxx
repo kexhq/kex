@@ -976,7 +976,8 @@ auto Parser::parseFunctionDef(bool isFoul)
              check(TokenType::Percent) || check(TokenType::Caret) ||
              check(TokenType::EqEq) || check(TokenType::NotEq) ||
              check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
-             check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
+             check(TokenType::LessEq) || check(TokenType::GreaterEq) ||
+             check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
     def->name = std::string(tokenTypeName(advance().type));
   } else {
     rejectReservedName("function");
@@ -1173,6 +1174,8 @@ auto Parser::parseParam() -> ast::Param {
 // `binary_op TYPE_ANNOTATION type_expr` / `binary_op COLON type_expr`).
 auto Parser::isOverloadableOperator(TokenType type) -> bool {
   switch (type) {
+    case TokenType::AmpAmp:
+    case TokenType::PipePipe:
     case TokenType::Plus:
     case TokenType::Minus:
     case TokenType::Star:
@@ -1214,7 +1217,10 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     ann->implicitThis = false;
   }
 
+  const bool savedInSignature = m_inTypeSignature;
+  m_inTypeSignature = true;
   ann->type = parseTypeExpr();
+  m_inTypeSignature = savedInSignature;
   return complete(std::move(ann));
 }
 
@@ -1272,11 +1278,24 @@ auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
   auto left = parseTypeIntersection();
 
+  // A signature may continue with `->` leading the next line
+  // (kexhq/kex#497). Only in a `name : T` signature, where nothing else can
+  // begin a line with `->`; elsewhere the cursor goes back.
+  if (m_inTypeSignature && check(TokenType::Newline)) {
+    const auto savedPos = m_pos;
+    skipNewlines();
+    if (!check(TokenType::Arrow))
+      m_pos = savedPos;
+  }
+
   if (match(TokenType::Arrow)) {
     auto startOffset = left->location.startOffset;
     auto funcType = std::make_unique<ast::TypeExpr>();
     funcType->location = currentLocation();
     funcType->location.startOffset = startOffset;
+    // Nothing but a type can follow `->`, so a line break after it never
+    // ends the signature: `summed : Integer ->` + `Integer -> Integer`.
+    skipNewlines();
     auto right = parseTypeFunction(); // right-associative
     funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
     return complete(std::move(funcType));
@@ -1504,10 +1523,14 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
   // `cond then a else b` — ternary replacement, lowest precedence. Both
   // branches parse at the assignment level (not parseExpr), so nesting
   // another then/else requires parens — exactly the rule we want.
-  // `then` itself must stay on the condition's line unless the whole
-  // thing is parenthesized, which falls out for free: newlines are only
-  // suppressed inside ( ), so a bare `then` on the next line simply
-  // won't be there to match() below.
+  // `then` may also lead the line after the condition (kexhq/kex#497):
+  // nothing else can begin a line with `then`, so looking past the line
+  // break cannot take anything else, and the cursor goes back otherwise.
+  if (!m_noThenExpr && check(TokenType::Newline)) {
+    const auto conditionEnd = m_pos;
+    skipNewlines();
+    if (!check(TokenType::Then)) m_pos = conditionEnd;
+  }
   if (!m_noThenExpr && match(TokenType::Then)) {
     auto thenElse = std::make_unique<ast::Expr>();
     thenElse->location = expr->location;
@@ -2174,7 +2197,13 @@ auto Parser::parseInterpolatedBody(const Token &token,
       i += 3;
       continue;
     }
-    if (i + 1 >= body.size() || body[i] != '$' || body[i + 1] != '{') {
+    // A `$` written `\$` is literal even before a `{` (docs/strings.md);
+    // the lexer has already unescaped it, so it says which ones they were.
+    const bool escapedDollar =
+        std::find(token.escapedDollars.begin(), token.escapedDollars.end(),
+                  i) != token.escapedDollars.end();
+    if (escapedDollar || i + 1 >= body.size() || body[i] != '$' ||
+        body[i + 1] != '{') {
       part += body[i++];
       continue;
     }
@@ -4349,7 +4378,8 @@ auto Parser::parseUsingOptions(std::optional<std::string> &alias,
           check(TokenType::Percent) || check(TokenType::Caret) ||
           check(TokenType::EqEq) || check(TokenType::NotEq) ||
           check(TokenType::LessThan) || check(TokenType::LessEq) ||
-          check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+          check(TokenType::GreaterThan) || check(TokenType::GreaterEq) ||
+          check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
         auto name = std::string(tokenTypeName(advance().type));
         expect(TokenType::RParen, "Expected ')' after operator");
         return name;
@@ -4374,10 +4404,14 @@ auto Parser::parseUsingOptions(std::optional<std::string> &alias,
       if (!names.empty())
         error("Duplicate '" + key + "' using option");
       expect(TokenType::LBracket, "Expected '[' after using option");
-      if (!check(TokenType::RBracket)) {
-        do {
-          names.push_back(parseName());
-        } while (match(TokenType::Comma));
+      // The list may span lines inside its brackets, one name per line,
+      // with a trailing comma before `]` (kexhq/kex#497).
+      skipNewlines();
+      while (!check(TokenType::RBracket)) {
+        names.push_back(parseName());
+        skipNewlines();
+        if (!match(TokenType::Comma)) break;
+        skipNewlines();
       }
       expect(TokenType::RBracket, "Expected ']' after using option list");
     } else {

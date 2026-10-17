@@ -1,0 +1,36 @@
+# A module's free function over one of its own types is that type's receiver
+# function: `conn.close` reaches `TCP.close(connection: Conn)`. Beside a
+# `make Client do let close` in another module, both share the bare name
+# `close`. The walker never looked in the receiver type's own module, and the
+# BEAM gave the bare name to whichever module registered first, so
+# `client.close` ran TCP's `close` and `conn.close` the prelude's.
+
+module Shop.Socket do
+  module TCP do
+    record Conn do
+      id : Integer
+    end
+
+    let close(connection: Conn) -> String = "tcp close"
+  end
+end
+
+module Shop.Http do
+  record Client do
+    name : String
+  end
+
+  make Client do
+    let close -> String = "http close"
+  end
+end
+
+using Shop.Socket
+using Shop.Http
+
+main do
+  let client = Client { name: "x" }
+  let conn = TCP.Conn { id: 1 }
+  IO.printLine(client.close)
+  IO.printLine(conn.close)
+end

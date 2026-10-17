@@ -101,6 +101,9 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         }
         if (!isWord(static_cast<unsigned char>(c))) break;
         while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        // A leading `!` is a negation in front of the receiver, not part of
+        // its name: `!control.hint` reads `hint` on `control` (#456).
+        while (i < dot && (source[i] == '!' || source[i] == '?')) ++i;
         // `@size` is one expression and the AST records it starting at the
         // `@`. Stopping at the sigil pointed one byte too far right, so the
         // recorded type could not be found and every `@field.method` fell back
