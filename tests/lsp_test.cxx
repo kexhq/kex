@@ -95,6 +95,37 @@ int main() {
                        "distinct nominal mismatch did not reach LSP diagnostics");
         });
 
+        it("hovers a negated receiver and its field by their own names", []() {
+            // kexhq/kex#456: in `!control.hint.empty?` the `!` belongs to no
+            // name. It made `control` hover as `!control : Bool`, and `hint`
+            // fall through to whatever function shares its name.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex","languageId":"kex","version":1,"text":"record FormField do\n  hint : String\nend\n\nlet shown(control: FormField) -> Bool = !control.hint.empty?\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex"},"position":{"line":4,"character":43}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex"},"position":{"line":4,"character":50}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto receiver = responseForId(output.str(), 2);
+            assertTrue(receiver.find("control : FormField") != std::string::npos,
+                       "negated receiver hovered as something else: " + receiver);
+            const auto field = responseForId(output.str(), 3);
+            assertTrue(field.find("hint : String") != std::string::npos,
+                       "field of a negated receiver lost its type: " + field);
+        });
+
         it("hovers custom DNS resolvers as nominal typed handles", []() {
             std::string messages;
             messages += frame(
