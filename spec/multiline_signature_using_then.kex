@@ -1,0 +1,45 @@
+# A type signature, a `using … only:` list and `then … else` may each span
+# lines (kexhq/kex#497): a signature after `->` or with `->` leading the
+# next line, a `using` list inside its brackets (a trailing comma too), and
+# `then` leading the line after its condition.
+
+module Shapes do
+  let one() -> Integer = 1
+  let two() -> Integer = 2
+  let three() -> Integer = 3
+end
+
+using Shapes, only: [
+  one,
+  two,
+]
+
+summed : Integer ->
+  Integer ->
+  Integer
+let summed(a, b) = a + b
+
+scaled : Integer
+  -> Integer
+  -> Integer
+let scaled(a, b) = a * b
+
+let picked = 2 > 1
+  then "yes"
+  else "no"
+
+let sign(n: Integer) -> String do
+  let label = n < 0
+    then "negative"
+    else "non-negative"
+  return label
+end
+
+main do
+  IO.printLine(one() + two())
+  IO.printLine(summed(1, 2))
+  IO.printLine(scaled(3, 4))
+  IO.printLine(picked)
+  IO.printLine(sign(-1))
+  IO.printLine(sign(1))
+end
