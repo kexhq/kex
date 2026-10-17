@@ -1,0 +1,23 @@
+# kex: run-beam
+# A nullary constructor reached through a `using` or a module path is a value
+# of its sum type. Typed as a type of its own, `Private` and `Public` disagreed
+# in a `then … else` even with the binding typed (kexhq/kex#504), and
+# `Type.of(Public)` answered `Public` rather than the sum type (#505).
+
+module Twomod do
+  type Access = Public | Private
+end
+
+using Twomod, only: [Access, Public, Private]
+
+let accessOf(text: String) -> Access = text == "private" then Private else Public
+
+main do
+  let text = "private"
+  let kept : Access = text == "private" then Private else Public
+  IO.printLine(kept == Private)
+  IO.printLine(accessOf("public") == Public)
+  IO.printLine(Type.of(Public).name)
+  IO.printLine(Type.of(Public).constructorNames)
+  IO.printLine(Type.of(Twomod.Private).name)
+end
