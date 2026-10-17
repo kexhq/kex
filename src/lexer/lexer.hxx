@@ -56,6 +56,9 @@ private:
     auto lexString() -> Token;
     auto lexRawString(bool interpolating = false) -> Token;
     auto lexChar() -> Token;
+    // After a backslash in a string or char literal: appends the escaped
+    // character's UTF-8 bytes to `out`, or returns the error to report.
+    auto lexEscape(std::string& out) -> std::optional<std::string>;
     auto lexAtom() -> Token;
     auto lexQuotedAtom(char quote) -> Token;
     auto lexSpliceIdent() -> Token;

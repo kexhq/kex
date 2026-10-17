@@ -2185,7 +2185,13 @@ auto Parser::parseInterpolatedBody(const Token &token,
       i += 3;
       continue;
     }
-    if (i + 1 >= body.size() || body[i] != '$' || body[i + 1] != '{') {
+    // A `$` written `\$` is literal even before a `{` (docs/strings.md);
+    // the lexer has already unescaped it, so it says which ones they were.
+    const bool escapedDollar =
+        std::find(token.escapedDollars.begin(), token.escapedDollars.end(),
+                  i) != token.escapedDollars.end();
+    if (escapedDollar || i + 1 >= body.size() || body[i] != '$' ||
+        body[i + 1] != '{') {
       part += body[i++];
       continue;
     }

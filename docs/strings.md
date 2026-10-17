@@ -10,8 +10,21 @@ IO.printLine("Hello, ${name}!")      # Hello, world!
 IO.printLine("2 + 2 = ${2 + 2}")     # 2 + 2 = 4
 ```
 
-Escape sequences: `\n`, `\r`, `\t`, `\\`, `\$`, `\"`. Write `\$` for a literal
-dollar sign so it is not read as the start of an interpolation.
+Escape sequences: `\n`, `\r`, `\t`, `\e` (ESC), `\0`, `\\`, `\$`, `\"`, `\'`
+and `` \` ``. Write `\$` for a literal dollar sign so it is not read as the
+start of an interpolation.
+
+Any character can be written by number: `\u{1b}` or `\u{1F600}` for a Unicode
+code point in hex, and `\x1b` for an ASCII byte (`\x00` to `\x7F`; above that,
+use `\u{…}`). Char literals take the same escapes: `'\e'`, `'\u{e9}'`.
+
+```kex
+IO.printLine("\e[1mbold\e[0m")       # ANSI escape sequences
+IO.printLine("caf\u{e9}")            # café
+```
+
+Any other character after a backslash is an error, rather than standing for
+itself.
 
 ## `Char` vs `String`
 

@@ -486,22 +486,70 @@ auto Lexer::lexNumber() -> Token {
     return makeToken(isFloat ? TokenType::Float : TokenType::Integer, num);
 }
 
+// Strings and chars share one escape set (kexhq/kex#498). Anything else
+// after a backslash is an error: it used to stand for the character itself,
+// so `"\e"` was an `e` and `"\u{1b}"` the five characters `u{1b}`.
+auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
+    if (atEnd()) return "Unterminated escape";
+    const char escaped = advance();
+    switch (escaped) {
+        case 'n': out += '\n'; return std::nullopt;
+        case 'r': out += '\r'; return std::nullopt;
+        case 't': out += '\t'; return std::nullopt;
+        case 'e': out += '\x1b'; return std::nullopt;
+        case '0': out += '\0'; return std::nullopt;
+        case '\\': case '"': case '\'': case '$': case '`':
+            out += escaped;
+            return std::nullopt;
+        case 'x': {
+            // One ASCII byte. A higher one would be half a UTF-8 sequence
+            // in a String, which is always valid UTF-8.
+            std::string digits;
+            while (digits.size() < 2 && !atEnd() && isHexDigit(peek()))
+                digits += advance();
+            if (digits.size() != 2)
+                return "Expected two hex digits after '\\x'";
+            const auto value = std::stoi(digits, nullptr, 16);
+            if (value > 0x7F)
+                return "'\\x" + digits +
+                       "' is not ASCII; write the character as '\\u{" +
+                       digits + "}'";
+            out += static_cast<char>(value);
+            return std::nullopt;
+        }
+        case 'u': {
+            if (atEnd() || peek() != '{')
+                return "Expected '{' after '\\u'";
+            advance();
+            std::string digits;
+            while (!atEnd() && isHexDigit(peek())) digits += advance();
+            if (atEnd() || peek() != '}')
+                return "Expected '}' to close '\\u{'";
+            advance();
+            if (digits.empty() || digits.size() > 6)
+                return "Expected 1 to 6 hex digits in '\\u{...}'";
+            const auto cp = static_cast<char32_t>(std::stoul(digits, nullptr, 16));
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+                return "'\\u{" + digits + "}' is not a Unicode scalar value";
+            out += utf8::encode(cp);
+            return std::nullopt;
+        }
+        default:
+            return std::string("Unknown escape '\\") + escaped +
+                   "'; write '\\\\' for a backslash";
+    }
+}
+
 auto Lexer::lexString() -> Token {
     std::string str;
+    std::vector<std::size_t> escapedDollars;
     while (!atEnd() && peek() != '"') {
         if (peek() == '\\') {
             advance();
-            if (atEnd()) return errorToken("Unterminated string escape");
-            char escaped = advance();
-            switch (escaped) {
-                case 'n': str += '\n'; break;
-                case 'r': str += '\r'; break;
-                case 't': str += '\t'; break;
-                case '\\': str += '\\'; break;
-                case '"': str += '"'; break;
-                case '$': str += '$'; break;
-                default: str += escaped; break;
-            }
+            // `\$` is a literal dollar even before a `{`; the parser splits
+            // interpolations from the unescaped text, so it has to be told.
+            if (!atEnd() && peek() == '$') escapedDollars.push_back(str.size());
+            if (auto error = lexEscape(str)) return errorToken(*error);
         } else if (peek() == '$' && peekNext() == '{') {
             str += advance(); // $
             str += advance(); // {
@@ -523,7 +571,9 @@ auto Lexer::lexString() -> Token {
     if (atEnd()) return errorToken("Unterminated string");
     advance(); // closing "
 
-    return makeToken(TokenType::String, str);
+    auto token = makeToken(TokenType::String, str);
+    token.escapedDollars = std::move(escapedDollars);
+    return token;
 }
 
 auto Lexer::lexRawString(bool interpolating) -> Token {
@@ -663,17 +713,7 @@ auto Lexer::lexChar() -> Token {
     std::string c;
     if (peek() == '\\') {
         advance();
-        if (atEnd()) return errorToken("Unterminated char literal escape");
-        char escaped = advance();
-        switch (escaped) {
-            case 'n': c = '\n'; break;
-            case 'r': c = '\r'; break;
-            case 't': c = '\t'; break;
-            case '\\': c = '\\'; break;
-            case '\'': c = '\''; break;
-            case '0': c = '\0'; break;
-            default: c = escaped; break;
-        }
+        if (auto error = lexEscape(c)) return errorToken(*error);
     } else if (peek() == '\'') {
         return errorToken("Empty char literal");
     } else {
