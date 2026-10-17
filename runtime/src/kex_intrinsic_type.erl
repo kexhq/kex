@@ -69,14 +69,30 @@ type_of(X) when is_atom(X) ->
         _ ->
             %% Empty records also lower to bare atoms. Their nominal tag is
             %% still their type, including its module qualification.
-            case record_fields(X) of
-                [] -> named(atom_to_binary(X, utf8));
-                _ -> named(<<"Atom">>)
+            %% A type token (or an empty record) names its registered type;
+            %% an empty record not registered there keeps its own tag.
+            case {type_token(atom_to_binary(X, utf8)), record_fields(X)} of
+                {{'Type', <<"Atom">>, _, _}, []} -> named(atom_to_binary(X, utf8));
+                {Token, _} -> Token
             end
     end;
 type_of(X) when is_function(X) -> named(<<"Function">>);
 type_of(X) when is_pid(X) -> named(<<"Process">>);
 type_of(_) -> named(<<"Any">>).
+
+%% A type's name used as a value (`select(as: User)`, `Type.of(Kind)`) is an
+%% atom: the type it names, when one is registered under it (kexhq/kex#509).
+%% A user's own atoms start lower case, so an upper-case one is a type
+%% token, a constructor, or an empty record.
+type_token(Name) ->
+    case layout_entry(persistent_term:get(kex_record_layouts, #{}), Name) of
+        {Key, _} -> named(atom_to_binary(Key, utf8));
+        none ->
+            case layout_entry(persistent_term:get(kex_adt_layouts, #{}), Name) of
+                {Key, _} -> named(atom_to_binary(Key, utf8));
+                none -> named(<<"Atom">>)
+            end
+    end.
 
 %% A list's element type, when every element agrees on it.
 element_type([H | T]) ->

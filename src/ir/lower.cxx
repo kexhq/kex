@@ -3324,6 +3324,24 @@ struct Lowering {
     }
 
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
+        // `App.Models.User` as a value is that type's token, the same atom a
+        // bare `User` is (kexhq/kex#509): what `select(as: App.Models.User)`
+        // passes and `Type.of` reads. Sum types are registered by bare name.
+        if (n.receiver && n.args.empty() && n.namedArgs.empty() && !n.block &&
+            !n.mutating && !n.method.empty() &&
+            std::isupper(static_cast<unsigned char>(n.method[0]))) {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path)) {
+                std::string qualified;
+                for (const auto& segment : path) qualified += segment + ".";
+                qualified += n.method;
+                if (records.count(qualified) || adtLayouts.count(n.method)) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{n.method, {}};
+                    return ex;
+                }
+            }
+        }
         // A record field wins over a same-named function even when a block's
         // receiver type was not known to the checker. Keep UFCS as the lazy
         // fallback for values that do not declare this field (#476).

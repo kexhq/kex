@@ -36,6 +36,10 @@ module Type do
   # The entry point to everything else here. Prefer it over matching on the
   # +Type+ record directly.
   #
+  # A record or sum type's own name, passed as a value, stands for that type:
+  # +Type.of(User)+ is +User+'s type. That is how a library takes a type from
+  # its caller, typed as the generic parameter it binds.
+  #
   # @param value [Any] the value to inspect
   # @return [Type] its type
   #
@@ -46,6 +50,13 @@ module Type do
   #
   # @example Reporting an unexpected value
   #   IO.printError("expected a list, got ${Type.of(value).to(String)}")
+  #
+  # @example Taking a type from the caller
+  #   let select(as: T) -> Result<[T], String> do
+  #     let model = Type.of(as)        # the caller's record type
+  #     ...                            # rows decoded with model.construct
+  #   end
+  #   select(as: User)                 # => Result<[User], String>
   let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)
 
   # Builds a type from its name, for comparing against something you already
@@ -124,6 +135,31 @@ module Type do
     argTypes : [Type]
   end
 
+  # The result of a conversion that answers +None+ for text it cannot read.
+  parsed : Any? -> Type -> String -> Result<Any, String>
+  let parsed(Just(value), _expected, _text) = Ok(value)
+  let parsed(None, expected, text) = Error("Expected ${expected.to(String)}, got \"${text}\"")
+
+end
+
+make Type.Field do
+  # Parses +text+ as a value of this field's declared type: +Type.parse+,
+  # with the field named in the error. What a library reads from a database
+  # row or a form is text, and +Type.construct+ takes typed values, so this is
+  # the step between them.
+  #
+  # @param text [String] the text to read
+  # @return [Result<Any, String>] the value, or why +text+ is not one
+  #
+  # @example
+  #   Type.named("User").fields.first.map { |field| field.parse("u1") }
+  #   # => Just(Ok("u1"))
+  let parse(text: String) -> Result<Any, String> do
+    match @valueType.parse(text) do
+      Ok(value) => Ok(value)
+      Error(message) => Error("Field \"${@name}\": ${message}")
+    end
+  end
 end
 
 # Reflection functions on runtime type values.
@@ -229,6 +265,55 @@ make Type do
   #   Type.named("Kind").variant("Nope")           # => Error("Kind has no constructor Nope")
   let variant(name: String, args: [Any]) -> Result<Any, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, args)
   let variant(name: String) -> Result<Any, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, [])
+
+  # Parses +text+ as a value of this type: what a database cell, a form field
+  # or a query parameter holds is text, and +construct+ takes typed values.
+  #
+  # +String+, +Integer+, +Float+, +Bool+ (+"true"+ or +"false"+) and +Char+
+  # (one character) are read as written. +T?+ parses a +T+ and wraps it in
+  # +Just+. A sum type's nullary constructor is found by its name, exactly or
+  # else ignoring case, so +"channel"+ is +Channel+. There is no null: text
+  # always stands for a value, and a caller with an absent one leaves it out
+  # of +construct+'s map.
+  #
+  # @param text [String] the text to read
+  # @return [Result<Any, String>] the value, or why +text+ is not one
+  #
+  # @example
+  #   Type.named("Integer").parse("42")    # => Ok(42)
+  #   Type.named("Integer").parse("4x")    # => Error("Expected Integer, got \"4x\"")
+  #   Type.named("Kind").parse("channel")  # => Ok(Channel)
+  let parse(text: String) -> Result<Any, String> do
+    match this.name do
+      "String" => Ok(text)
+      "Integer" => Type.parsed(text.to(Integer), this, text)
+      "Float" => Type.parsed(text.to(Float), this, text)
+      "Bool" => Type.parsed(text == "true" then Just(true) else (text == "false" then Just(false) else None), this, text)
+      "Char" => Type.parsed(text.count == 1 then text.at(0) else None, this, text)
+      "Option" => match this.args.first do
+        Just(inner) => match inner.parse(text) do
+          Ok(value) => Ok(Just(value))
+          Error(message) => Error(message)
+        end
+        None => Error("Expected ${this.to(String)}, got \"${text}\"")
+      end
+      _ => match this.nullaryNamed(text) do
+        Just(name) => this.variant(name)
+        None => Error("Expected ${this.to(String)}, got \"${text}\"")
+      end
+    end
+  end
+
+  private do
+    # The nullary constructor +text+ names: exactly, or else ignoring case.
+    let nullaryNamed(text: String) -> String? do
+      let names = this.constructors.filter { |c| c.arity == 0 }.map(&.name)
+      return match names.find { |name| name == text } do
+        Just(name) => Just(name)
+        None => names.find { |name| name.lowerCase == text.lowerCase }
+      end
+    end
+  end
 
   # Returns +true+ when the type is a record: that is, when it has fields.
   #

@@ -947,6 +947,17 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     }
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
+        // The type's own name as a value is its token, as a record's is (see
+        // execRecordDef): `select(as: Kind)` passes it, and `Type.of` reads
+        // the type off it (kexhq/kex#509). Named as its values' parentType
+        // is, and as the BEAM registers it: bare. Bound before the
+        // constructors, so a constructor spelled like its type
+        // (`type Box = Box(Integer)`) keeps the name.
+        // Only a free name: a module of the same spelling (`List`) keeps it.
+        if (const auto key = moduleScope.empty() ? def.name
+                                                 : moduleScope + "::" + def.name;
+            !m_env->get(key))
+            m_env->define(key, Value::record(def.name, {}));
         auto& declared = m_adtVariants[def.name];
         declared.clear();
         for (const auto& variant : *def.variants) {
