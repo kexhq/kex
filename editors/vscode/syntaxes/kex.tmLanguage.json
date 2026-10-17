@@ -127,7 +127,7 @@
     "strings": { "patterns": [
       { "name": "string.quoted.other.raw.interpolated.kex", "begin": "\\$`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``|\\$\\$\\{" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
       { "name": "string.quoted.other.raw.kex", "begin": "`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``" }] },
-      { "name": "string.quoted.double.kex", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.kex", "match": "\\\\(?:[nrt0\\\"'\\\\]|u\\{[0-9a-fA-F]+\\})" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
+      { "name": "string.quoted.double.kex", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.kex", "match": "\\\\(?:[nrte0\\\"'\\\\$`]|x[0-7][0-9a-fA-F]|u\\{[0-9a-fA-F]{1,6}\\})" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
       { "name": "string.quoted.single.kex", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.kex", "match": "\\\\." }] }
     ] }
   }

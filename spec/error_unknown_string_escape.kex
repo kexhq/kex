@@ -1,0 +1,5 @@
+# An escape outside the known set is an error rather than the character after
+# the backslash, which made `"\e"` an `e` (kexhq/kex#498).
+main do
+  IO.printLine("\q")
+end

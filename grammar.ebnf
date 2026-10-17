@@ -654,7 +654,12 @@ FLOAT    = DECIMAL "." DECIMAL EXPONENT?
 EXPONENT = ("e" | "E") ("+" | "-")? DECIMAL ;
 STRING  = '"' string_content* '"' ;
 string_content = [^"$\\] | escape | interpolation ;
-escape = "\\" [nrt\\$"] ;
+(* Shared by strings and chars. Any other character after a backslash is an
+   error. \x takes two hex digits of an ASCII byte (00-7F); \u{…} a Unicode
+   scalar value in 1 to 6 hex digits. *)
+escape = "\\" ( [nrte0\\$"'`]
+              | "x" [0-7] [0-9A-Fa-f]
+              | "u{" [0-9A-Fa-f]+ "}" ) ;
 interpolation = "$" "{" expr "}" ;
 RAW_STRING = "`" raw_string_content* "`" ;
 raw_string_content = "``" | [^`] ;

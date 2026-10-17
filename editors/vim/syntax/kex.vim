@@ -43,7 +43,7 @@ syn region kexRegexCall matchgroup=kexRegexTag
 " `` ` `` escapes to a literal backtick; $${ escapes ${ in interpolated
 " form. They are `skip=` patterns so they cannot end the region.
 syn match kexRawEscape /``\|\$\$[{]/ contained
-syn match kexEscape /\\\%(u[{][0-9a-fA-F]\+[}]\|[nrt0"'$\\]\)/ contained
+syn match kexEscape /\\\%(u[{][0-9a-fA-F]\{1,6}[}]\|x[0-7][0-9a-fA-F]\|[nrte0"'$\\`]\)/ contained
 syn region kexInterpRaw start=/\$`/ skip=/``\|\$\$[{]/ end=/`/ contains=kexInterp,kexRawEscape
 syn region kexRaw start=/`/ skip=/``/ end=/`/ contains=kexRawEscape
 syn region kexString start=/"/ skip=/\\./ end=/"/ contains=kexEscape,kexInterp

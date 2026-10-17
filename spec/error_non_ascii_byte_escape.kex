@@ -1,0 +1,5 @@
+# `\x..` is one ASCII byte: a higher one would be half a UTF-8 sequence in a
+# String, so it points at `\u{…}` instead (kexhq/kex#498).
+main do
+  IO.printLine("\xe9")
+end
