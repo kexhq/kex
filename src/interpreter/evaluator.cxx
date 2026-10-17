@@ -1145,7 +1145,9 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 execTypeDef(*node, typeScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                execRecordDef(*node);
+                // Declared in the module like any other of its records, so a
+                // `make` for it finds the same identity (#495).
+                execRecordDef(*node, module);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 execUsingBlock(*node, typeScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
