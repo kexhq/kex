@@ -1487,11 +1487,56 @@ struct Lowering {
                 // Lower to a boolean Match instead, matching the tree-walker
                 // (spec/mutual_recursion.kex relies on `n == 0 || isOdd(n-1)`
                 // never recursing once n == 0).
-                if (n.op == TokenType::AmpAmp) {
-                    return matchBool(lower(n.left), lower(n.right), litBool(false));
-                }
-                if (n.op == TokenType::PipePipe) {
-                    return matchBool(lower(n.left), litBool(true), lower(n.right));
+                //
+                // A make block may overload them (kexhq/kex#507): an overload
+                // builds a value from both sides, so it evaluates the right
+                // one. It is taken only for a left value of a type declaring
+                // it; any other left value keeps the short-circuit.
+                if (n.op == TokenType::AmpAmp || n.op == TokenType::PipePipe) {
+                    const bool isAnd = n.op == TokenType::AmpAmp;
+                    const std::string sym = isAnd ? "&&" : "||";
+                    if (!overloadedOps.count(sym))
+                        return isAnd
+                            ? matchBool(lower(n.left), lower(n.right), litBool(false))
+                            : matchBool(lower(n.left), litBool(true), lower(n.right));
+                    std::vector<Binding> binds;
+                    auto l = atomize(n.left, binds);
+                    auto lRef = snap(l);
+                    auto shortCircuit = isAnd
+                        ? matchBool(lRef.get(), lower(n.right), litBool(false))
+                        : matchBool(lRef.get(), litBool(true), lower(n.right));
+                    ExprPtr ownerGuard;
+                    if (auto owners = methodOwners.find(sym);
+                        owners != methodOwners.end())
+                        for (const auto& owner : owners->second) {
+                            auto next = typeGuard(owner, lRef.get());
+                            ownerGuard = ownerGuard
+                                ? callE("erlang", "or", 2,
+                                        two(std::move(ownerGuard), std::move(next)))
+                                : std::move(next);
+                        }
+                    if (!ownerGuard)
+                        return wrapLets(binds, std::move(shortCircuit));
+                    std::string userModule;
+                    std::string userFunction = sym;
+                    if (!knownFns.count(sym) && externalModules)
+                        if (auto it = externalModules->receiverFunctions.find(sym);
+                            it != externalModules->receiverFunctions.end())
+                            for (const auto& candidate : it->second)
+                                if (candidate.beamArity == 2) {
+                                    userModule = candidate.moduleAtom;
+                                    userFunction = candidate.beamFunction;
+                                    break;
+                                }
+                    const auto right = fresh("R");
+                    auto userCall = std::make_unique<Expr>();
+                    userCall->node = Call{std::move(userModule),
+                                          std::move(userFunction), 2,
+                                          two(lRef.get(), var(right)), false};
+                    return wrapLets(binds,
+                        matchBool(std::move(ownerGuard),
+                                  makeLet(right, lower(n.right), std::move(userCall)),
+                                  std::move(shortCircuit)));
                 }
                 // Division by literal zero → compile-time error with location,
                 // matching the walker's runtime error format.
