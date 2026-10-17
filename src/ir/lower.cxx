@@ -10297,7 +10297,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     } else if (auto* vmk =
                                                    std::get_if<std::unique_ptr<
                                                        ast::MakeDef>>(&vi)) {
-                                        flush();
                                         emitMake(vmk->get(), declaredRecords);
                                     }
                                 }

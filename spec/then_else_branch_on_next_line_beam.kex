@@ -1,0 +1,29 @@
+# kex: run-beam
+# A `then … else` branch may start on the line after `then` or `else`:
+# nothing else can follow either keyword, so the line break does not end
+# the expression there (kexhq/kex#462).
+
+let payoff(balance: Integer, hopeless: Bool) -> Integer? do
+  balance <= 0 then Just(0) else
+    (hopeless then None else Just(balance))
+end
+
+let scheduled(owed: Integer, payment: Integer, months: Integer) -> Integer? do
+  months >= 12 then None else
+    (owed <= payment
+      then Just(months + 1)
+      else scheduled(owed - payment, payment, months + 1))
+end
+
+let label(ready: Bool) -> String = ready then
+  "ready"
+else
+  "waiting"
+
+main do
+  IO.printLine(payoff(0, false))
+  IO.printLine(payoff(5, true))
+  IO.printLine(payoff(5, false))
+  IO.printLine(scheduled(10, 3, 0))
+  IO.printLine(label(true))
+end

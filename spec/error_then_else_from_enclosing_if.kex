@@ -1,0 +1,11 @@
+# A `then` missing its `else` cannot take the enclosing `if`'s `else` from a
+# less indented line: that would silently drop the `if`'s else branch
+# (kexhq/kex#462).
+main do
+  let ready = true
+  if ready
+    let x = ready then 1
+  else
+    IO.printLine(2)
+  end
+end
