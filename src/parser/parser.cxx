@@ -881,14 +881,17 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
       if (check(TokenType::Public) || check(TokenType::Private)) {
         def->body.push_back(parseVisibilityBlock());
       } else if (check(TokenType::Foul)) {
+        m_makeMemberName = true;
         def->body.push_back(parseFunctionDef(true));
       } else if (def->isServing && check(TokenType::Slot)) {
+        m_makeMemberName = true;
         def->body.push_back(parseFunctionDef());
       } else if (check(TokenType::Let)) {
+        m_makeMemberName = true;
         def->body.push_back(parseFunctionDef());
       } else if ((check(TokenType::LowerIdent) &&
                   !(allowDrivers && isMakeDriverAhead())) ||
-                 ((check(TokenType::After) || check(TokenType::Next)) &&
+                 (isKeywordToken(peek().type) &&
                   (peekNext().type == TokenType::Colon ||
                    peekNext().type == TokenType::TypeAnnotation))) {
         def->body.push_back(parseTypeAnnotation());
@@ -933,6 +936,10 @@ auto Parser::parseFunctionDef(bool isFoul)
   auto def = std::make_unique<ast::FunctionDef>();
   def->location = currentLocation();
   def->isFoul = isFoul;
+  // Only this definition's own name: a local function in its body is not a
+  // make member.
+  const bool makeMember = m_makeMemberName;
+  m_makeMemberName = false;
 
   if (isFoul) {
     expect(TokenType::Foul, "Expected 'foul'");
@@ -957,7 +964,8 @@ auto Parser::parseFunctionDef(bool isFoul)
   else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
            check(TokenType::Loop) || check(TokenType::Match) ||
            check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
-           check(TokenType::After) || check(TokenType::Next)) {
+           check(TokenType::After) || check(TokenType::Next) ||
+           (makeMember && isKeywordToken(peek().type))) {
     // A splice keeps its `%` so callers can tell `let %name(...)` (the name
     // is computed at compile time) from an ordinary `let name(...)`. The
     // lexer strips the sigil, so it is restored here.
@@ -1140,6 +1148,7 @@ auto Parser::parseParam() -> ast::Param {
   // `type:` as a named argument (`option("name", type: String)`), so a
   // typed parameter may be named `type` too, or nothing could receive it.
   if (check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+      check(TokenType::After) ||
       (check(TokenType::Type) && peekNext().type == TokenType::Colon)) {
     auto &nameToken = advance();
     param.name = nameToken.value;
@@ -1190,7 +1199,8 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   ann->location = currentLocation();
   if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
       check(TokenType::After) || check(TokenType::Spawn) ||
-      check(TokenType::Next))
+      check(TokenType::Next) ||
+      isKeywordToken(peek().type))
     ann->name = advance().value;
   else if (isOverloadableOperator(peek().type))
     ann->name = std::string(tokenTypeName(advance().type));
@@ -1845,11 +1855,10 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         continue;
       }
 
+      // Any keyword names a method here: nothing else can follow `.`, so
+      // `insert.record(row)` is unambiguous (kexhq/kex#508).
       if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
-          !check(TokenType::End) && !check(TokenType::Type) &&
-          !check(TokenType::Match) && !check(TokenType::Loop) &&
-          !check(TokenType::Timeout) && !check(TokenType::Spawn) &&
-          !check(TokenType::After) && !check(TokenType::Next)) {
+          !isKeywordToken(peek().type)) {
         error("Expected method or module name after '.'");
       }
       auto methodTok = advance();
@@ -1901,7 +1910,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           do {
             if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                  check(TokenType::Type) || check(TokenType::Match) ||
-                 check(TokenType::Loop)) &&
+                 check(TokenType::Loop) || check(TokenType::After)) &&
                 peekNext().type == TokenType::Colon) {
               auto name = advance().value;
               advance(); // :
@@ -1957,7 +1966,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto name = advance().value;
             advance(); // :
@@ -2036,7 +2045,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto argName = advance().value;
             advance(); // :
@@ -2428,7 +2437,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto argName = advance().value;
             advance(); // :
@@ -2598,7 +2607,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto argName = advance().value;
             advance(); // :
@@ -2665,7 +2674,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto argName = advance().value;
             advance();
@@ -2718,7 +2727,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         do {
           if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
                check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop)) &&
+               check(TokenType::Loop) || check(TokenType::After)) &&
               peekNext().type == TokenType::Colon) {
             auto argName = advance().value;
             advance(); // :
@@ -2776,7 +2785,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
       do {
         if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
              check(TokenType::Type) || check(TokenType::Match) ||
-             check(TokenType::Loop)) &&
+             check(TokenType::Loop) || check(TokenType::After)) &&
             peekNext().type == TokenType::Colon) {
           auto argName = advance().value;
           advance(); // :

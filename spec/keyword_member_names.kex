@@ -1,0 +1,30 @@
+# A keyword may name a `make` function, follow `.`, and `after` may name a
+# parameter and label an argument (kexhq/kex#508). A `make` function is only
+# reached after `.`, so `insert.record(1)` cannot mean anything else.
+
+record Insert do
+  row : [Integer] = []
+end
+
+make Insert do
+  record : Integer -> Insert
+  let record(value) -> Insert = Insert { row: [value | @row] }
+  let public?() -> Bool = true
+  let type() -> String = "insert"
+  let private(flag: Bool) -> String = flag then "hidden" else "shown"
+end
+
+record Column do
+  name : String
+end
+
+let rebuilding(before: Column, after: Column) -> String = "${before.name} -> ${after.name}"
+
+main do
+  IO.printLine(Insert {}.record(1).record(2).row)
+  IO.printLine(Insert {}.public?)
+  IO.printLine(Insert {}.type)
+  IO.printLine(Insert {}.private(true))
+  IO.printLine(rebuilding(before: Column { name: "a" }, after: Column { name: "b" }))
+  IO.printLine(rebuilding(Column { name: "x" }, Column { name: "y" }))
+end
