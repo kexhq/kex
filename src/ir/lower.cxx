@@ -6198,6 +6198,8 @@ struct Lowering {
                 for (auto& s : nn.body) collectMutated(s, out);
                 for (auto& cl : nn.rescue.clauses) collectMutated(cl.body, out);
                 for (auto& s : nn.rescue.catchAllBody) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
             }
         }, e->kind);
     }
@@ -6967,7 +6969,11 @@ struct Lowering {
             // (`rescue _ => found = None`) had no expression form to lower to
             // and failed the whole build ("unimplemented expr node AssignExpr").
             auto* te = std::get_if<ast::TryingExpr>(&e->kind);
-            if (ie || te || (me && !me->subjectBinding)) {
+            // `with` too: its body is lowered as one nested expression, so a
+            // `var` it reassigned got a fresh name nothing after it could see
+            // (`unbound variable '_ir_result6'`, kexhq/kex#493).
+            auto* we = std::get_if<ast::WithExpr>(&e->kind);
+            if (ie || te || we || (me && !me->subjectBinding)) {
                 std::unordered_set<std::string> muts;
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
@@ -6977,7 +6983,31 @@ struct Lowering {
                     std::function<ExprPtr()> yieldState =
                         [&]() -> ExprPtr { return stateExpr(mutVars); };
                     ExprPtr caseE;
-                    if (ie) {
+                    if (we) {
+                        std::string capability;
+                        for (size_t k = 0; k < we->capability.parts.size(); ++k) {
+                            if (k) capability += ".";
+                            capability += we->capability.parts[k];
+                        }
+                        std::vector<Binding> withBinds;
+                        auto replacement = atomize(we->value, withBinds);
+                        std::vector<ExprPtr> putArgs;
+                        putArgs.push_back(lit(LitKind::String, capability));
+                        putArgs.push_back(std::move(replacement));
+                        putArgs.push_back(currentContext());
+                        auto extended = fresh("Ctx");
+                        const auto savedContext = currentContextVar;
+                        currentContextVar = extended;
+                        auto snap = subst;
+                        auto inner = lowerLoopBodyFrom(we->body, 0, "", mutVars, yieldState);
+                        subst = snap;
+                        currentContextVar = savedContext;
+                        caseE = wrapLets(
+                            withBinds,
+                            makeLet(extended,
+                                    callE("maps", "put", 3, std::move(putArgs)),
+                                    std::move(inner)));
+                    } else if (ie) {
                         auto branch = [&](const std::vector<ast::ExprPtr>& bb) {
                             auto snap = subst;
                             auto r = lowerLoopBodyFrom(bb, 0, "", mutVars, yieldState);
