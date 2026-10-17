@@ -194,6 +194,43 @@ make Type do
   #   IO.printLine("one of: ${Type.of(shape).constructorNames.join(", ")}")
   let constructorNames -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
 
+  # Builds a record of this type from values by field name: the other half of
+  # +fields+, for a library mapping data it does not define (database rows,
+  # decoded JSON, form fields) onto the caller's records.
+  #
+  # A field missing from +values+ takes its declared default, or +None+ when
+  # it is optional. A required field that is missing, a key that names no
+  # field, and a value of the wrong type are each an error naming the field.
+  # Values are not converted: +"5"+ is not an +Integer+, so convert first
+  # (+"5".to(Integer)+), using +fields+ for the declared types.
+  #
+  # @param values [{String: Any}] the field values, by field name
+  # @return [Result<Any, String>] the record, or what was wrong
+  #
+  # @example
+  #   Type.named("User").construct({"id": "u1", "email": "ada@example.com"})
+  #   # => Ok(User { id: u1, email: ada@example.com, admin?: false })
+  #   Type.named("User").construct({"id": "u1", "mail": "x"})
+  #   # => Error("Unknown field \"mail\" for User")
+  let construct(values: {String: Any}) -> Result<Any, String> =
+    Kex.Intrinsic.Type.construct(this.name, values)
+
+  # Builds the constructor +name+ of this sum type from its arguments: reading
+  # +"Direct"+ from a database back into +Direct+. The arguments are checked
+  # against the constructor's declared types, and their count against its
+  # arity.
+  #
+  # @param name [String] the constructor's name, as +constructorNames+ lists it
+  # @param args [[Any]] its arguments, none for a nullary constructor
+  # @return [Result<Any, String>] the value, or what was wrong
+  #
+  # @example
+  #   Type.named("Kind").variant("Direct")         # => Ok(Direct)
+  #   Type.named("Shape").variant("Circle", [2.0]) # => Ok(Circle(2.0))
+  #   Type.named("Kind").variant("Nope")           # => Error("Kind has no constructor Nope")
+  let variant(name: String, args: [Any] = []) -> Result<Any, String> =
+    Kex.Intrinsic.Type.constructVariant(this.name, name, args)
+
   # Returns +true+ when the type is a record: that is, when it has fields.
   #
   # @return [Bool] +true+ for a record type
