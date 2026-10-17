@@ -7,7 +7,12 @@
 #   BEAM.odbc.sql_query(...) -> 'odbc':'sql_query'(...)
 #
 # Prerequisites (system level, not Kex):
-#   * Erlang/OTP built with ODBC support   (`erl -man odbc` should work)
+#   * Erlang/OTP built with ODBC support, including its port program
+#     (`lib/odbc-*/priv/bin/odbcserver`). Homebrew's `erlang` ships the odbc
+#     beams without it, so `connect` answers
+#     `(:error, :port_program_executable_not_found)`; build `odbcserver` from
+#     `lib/odbc/c_src/odbcserver.c` of the matching OTP release against
+#     unixODBC, or use an OTP built with ODBC enabled.
 #   * A SQLite ODBC driver installed:
 #       Debian/Ubuntu:  apt install libsqliteodbc
 #       macOS (unixODBC + driver from https://www.ch-werner.de/sqliteodbc/)
@@ -37,11 +42,11 @@
 # wrapper rather than an annotation that would quietly claim a binary is a
 # charlist.
 
-# {binary_strings, true} makes odbc return text columns as binaries
+# {binary_strings, on} makes odbc return text columns as binaries
 # (i.e. real Kex strings) instead of charlists — the same disagreement,
 # settled in the other direction so results need no unwrapping.
 foul connect(dsn: String) -> Any do
-  return BEAM.odbc.connect(dsn.bytes, [(:binary_strings, true)])
+  return BEAM.odbc.connect(dsn.bytes, [(:binary_strings, :on)])
 end
 
 # {:updated, N} for DDL/DML, {:selected, Fields, Rows} for a SELECT,
@@ -88,7 +93,7 @@ foul demo(ref: Any) -> Void do
 
   # Rows is a list of tuples, one tuple per row, values in column order.
   #
-  # `{binary_strings, true}` means a text column arrives as a binary — which is
+  # `{binary_strings, on}` means a text column arrives as a binary — which is
   # exactly what a Kex String already is, so both views of it are available
   # with no conversion and no wrapper. `count` is the TEXT view (characters)
   # and `byteSize` is the STORAGE view (the encoding), and they disagree the
