@@ -1493,16 +1493,38 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
 
   // `cond then a else b` — ternary replacement, lowest precedence. Both
   // branches parse at the assignment level (not parseExpr), so nesting
-  // another then/else requires parens — exactly the rule we want. It
-  // must stay on the same line as `then`/`else` unless the whole thing
-  // is parenthesized, which falls out for free: newlines are only
+  // another then/else requires parens — exactly the rule we want.
+  // `then` itself must stay on the condition's line unless the whole
+  // thing is parenthesized, which falls out for free: newlines are only
   // suppressed inside ( ), so a bare `then` on the next line simply
   // won't be there to match() below.
   if (!m_noThenExpr && match(TokenType::Then)) {
     auto thenElse = std::make_unique<ast::Expr>();
     thenElse->location = expr->location;
+    // The indentation of the line holding `then`: the first token on it.
+    auto lineStart = m_pos - 1;
+    while (lineStart > 0 && m_tokens[lineStart - 1].location.line ==
+                                m_tokens[m_pos - 1].location.line)
+      --lineStart;
+    const auto thenIndent = m_tokens[lineStart].location.column;
+    // A branch may start on the next line: nothing else can follow `then`
+    // or `else`, so the line break cannot end the expression there
+    // (`ready then x else` + a long branch below, kexhq/kex#462).
+    skipNewlines();
     auto thenExpr = parseAssignment();
+    // `else` may open the next line too, since a `then` branch must be
+    // followed by one. Only then are the newlines skipped; otherwise the
+    // missing `else` is reported where the branch ended. An `else` indented
+    // less than the `then` line belongs to an enclosing `if`, and taking it
+    // would give a ternary with no `else` of its own that branch instead.
+    if (check(TokenType::Newline)) {
+      const auto branchEnd = m_pos;
+      skipNewlines();
+      if (!check(TokenType::Else) || peek().location.column < thenIndent)
+        m_pos = branchEnd;
+    }
     expect(TokenType::Else, "Expected 'else' after 'then'");
+    skipNewlines();
     auto elseExpr = parseAssignment();
     thenElse->kind = ast::ThenElseExpr{std::move(expr), std::move(thenExpr),
                                        std::move(elseExpr)};

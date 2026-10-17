@@ -311,8 +311,11 @@ expr
   | then_else_expr
   ;
 
-(* Ternary replacement, lowest precedence. Both branches must stay on the
-   same line as THEN/ELSE unless the whole expression is parenthesized.
+(* Ternary replacement, lowest precedence. THEN must stay on the
+   condition's line unless the whole expression is parenthesized. Either
+   branch may start on the line after THEN/ELSE, and ELSE may open the line
+   after the THEN branch when it is indented at least as far as the line
+   holding THEN (a less indented ELSE belongs to an enclosing IF).
    Nesting another then/else requires parens. *)
 then_else_expr = expr THEN expr ELSE expr ;
 

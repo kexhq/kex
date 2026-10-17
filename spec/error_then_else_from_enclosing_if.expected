@@ -1,0 +1,2 @@
+spec/error_then_else_from_enclosing_if.kex:7:25: error: Expected 'else' after 'then', got Newline
+Aborted: 1 syntax error — fix before running.
