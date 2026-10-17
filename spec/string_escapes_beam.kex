@@ -1,0 +1,20 @@
+# kex: run-beam
+# String and char escapes (kexhq/kex#498): `\e` for ESC, `\0`, `\u{…}` for any
+# Unicode scalar value, `\x..` for an ASCII byte, and `\'` and `` \` `` beside
+# the old set. `\$` keeps a dollar literal even before a `{`.
+
+main do
+  IO.printLine("${"\e".count} ${"\u{1b}".count} ${"\x1b".count} ${"\0".count}")
+  IO.printLine("\e".bytes.first)
+  IO.printLine("\0".bytes.first)
+  IO.printLine("caf\u{e9}")
+  IO.printLine("caf\u{e9} \u{1F600}".count)
+  IO.printLine("\u{1F600}".bytes.length)
+  IO.printLine("\x41\x42\u{43}")
+  IO.printLine("tick \` quote \' dollar \$5")
+  IO.printLine('\e' == '\u{1b}')
+  IO.printLine('\x41')
+  IO.printLine('\u{e9}')
+  let x = 1
+  IO.printLine("cost \${x} vs ${x} and \\${x} and $${x}")
+end

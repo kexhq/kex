@@ -1487,11 +1487,56 @@ struct Lowering {
                 // Lower to a boolean Match instead, matching the tree-walker
                 // (spec/mutual_recursion.kex relies on `n == 0 || isOdd(n-1)`
                 // never recursing once n == 0).
-                if (n.op == TokenType::AmpAmp) {
-                    return matchBool(lower(n.left), lower(n.right), litBool(false));
-                }
-                if (n.op == TokenType::PipePipe) {
-                    return matchBool(lower(n.left), litBool(true), lower(n.right));
+                //
+                // A make block may overload them (kexhq/kex#507): an overload
+                // builds a value from both sides, so it evaluates the right
+                // one. It is taken only for a left value of a type declaring
+                // it; any other left value keeps the short-circuit.
+                if (n.op == TokenType::AmpAmp || n.op == TokenType::PipePipe) {
+                    const bool isAnd = n.op == TokenType::AmpAmp;
+                    const std::string sym = isAnd ? "&&" : "||";
+                    if (!overloadedOps.count(sym))
+                        return isAnd
+                            ? matchBool(lower(n.left), lower(n.right), litBool(false))
+                            : matchBool(lower(n.left), litBool(true), lower(n.right));
+                    std::vector<Binding> binds;
+                    auto l = atomize(n.left, binds);
+                    auto lRef = snap(l);
+                    auto shortCircuit = isAnd
+                        ? matchBool(lRef.get(), lower(n.right), litBool(false))
+                        : matchBool(lRef.get(), litBool(true), lower(n.right));
+                    ExprPtr ownerGuard;
+                    if (auto owners = methodOwners.find(sym);
+                        owners != methodOwners.end())
+                        for (const auto& owner : owners->second) {
+                            auto next = typeGuard(owner, lRef.get());
+                            ownerGuard = ownerGuard
+                                ? callE("erlang", "or", 2,
+                                        two(std::move(ownerGuard), std::move(next)))
+                                : std::move(next);
+                        }
+                    if (!ownerGuard)
+                        return wrapLets(binds, std::move(shortCircuit));
+                    std::string userModule;
+                    std::string userFunction = sym;
+                    if (!knownFns.count(sym) && externalModules)
+                        if (auto it = externalModules->receiverFunctions.find(sym);
+                            it != externalModules->receiverFunctions.end())
+                            for (const auto& candidate : it->second)
+                                if (candidate.beamArity == 2) {
+                                    userModule = candidate.moduleAtom;
+                                    userFunction = candidate.beamFunction;
+                                    break;
+                                }
+                    const auto right = fresh("R");
+                    auto userCall = std::make_unique<Expr>();
+                    userCall->node = Call{std::move(userModule),
+                                          std::move(userFunction), 2,
+                                          two(lRef.get(), var(right)), false};
+                    return wrapLets(binds,
+                        matchBool(std::move(ownerGuard),
+                                  makeLet(right, lower(n.right), std::move(userCall)),
+                                  std::move(shortCircuit)));
                 }
                 // Division by literal zero → compile-time error with location,
                 // matching the walker's runtime error format.
@@ -4591,6 +4636,64 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
+        // A module's free function over one of the module's OWN types is that
+        // type's receiver function (kexhq/kex#230). It used to be reached by
+        // its bare name, which only one module can own: beside a
+        // `make Client do let close` elsewhere in the program, `conn.close`
+        // for a `TCP.Conn` went to whichever `close` registered first — the
+        // Client's dispatcher, whose fallback is the prelude's `close`
+        // (`:ok`). With the receiver's static type known, call the function
+        // by its qualified symbol instead, unless the type's own `make`
+        // block answers the name.
+        if (expressionTypes && n.receiver && n.namedArgs.empty() && !n.block)
+            if (auto found = expressionTypes->find(n.receiver.get());
+                found != expressionTypes->end() && found->second)
+                if (const auto* named =
+                        std::get_if<semantic::NamedType>(&found->second->kind)) {
+                    const auto type = canonicalRecordName(named->name);
+                    const auto dot = type.rfind('.');
+                    const auto owners = methodOwners.find(m);
+                    const bool makeAnswers =
+                        owners != methodOwners.end() &&
+                        std::any_of(owners->second.begin(), owners->second.end(),
+                                    [&](const std::string& owner) {
+                                        return canonicalRecordName(owner) == type;
+                                    });
+                    if (dot != std::string::npos && !makeAnswers) {
+                        const auto qualified = type.substr(0, dot) + "." + m;
+                        const auto symbol = moduleFunctions.find(qualified);
+                        const auto clauses = fnNamedClauses.find(qualified);
+                        const auto bareType = type.substr(dot + 1);
+                        const bool overOwnType =
+                            symbol != moduleFunctions.end() &&
+                            clauses != fnNamedClauses.end() &&
+                            std::any_of(
+                                clauses->second.begin(), clauses->second.end(),
+                                [&](const ast::FunctionClause* clause) {
+                                    if (clause->params.size() != n.args.size() + 1)
+                                        return false;
+                                    const auto& receiver = clause->params.front();
+                                    if (!receiver.type || !*receiver.type)
+                                        return false;
+                                    auto written = renderDispatchType(**receiver.type);
+                                    if (auto angle = written.find('<');
+                                        angle != std::string::npos)
+                                        written.resize(angle);
+                                    const auto wdot = written.rfind('.');
+                                    return (wdot == std::string::npos
+                                                ? written
+                                                : written.substr(wdot + 1)) == bareType;
+                                });
+                        if (overOwnType) {
+                            std::vector<ExprPtr> args;
+                            args.push_back(rv());
+                            for (const auto& a : n.args)
+                                args.push_back(atomize_ir(lower(a), rb));
+                            return ret(localCallExpr(symbol->second, std::move(args)));
+                        }
+                    }
+                }
+
         // A public function brought into scope by `using Module` also
         // participates in UFCS: `100.meter` is `meter(100)`, and
         // `distance.per(duration)` is `per(distance, duration)`. The source
@@ -6198,6 +6301,8 @@ struct Lowering {
                 for (auto& s : nn.body) collectMutated(s, out);
                 for (auto& cl : nn.rescue.clauses) collectMutated(cl.body, out);
                 for (auto& s : nn.rescue.catchAllBody) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
             }
         }, e->kind);
     }
@@ -6967,7 +7072,11 @@ struct Lowering {
             // (`rescue _ => found = None`) had no expression form to lower to
             // and failed the whole build ("unimplemented expr node AssignExpr").
             auto* te = std::get_if<ast::TryingExpr>(&e->kind);
-            if (ie || te || (me && !me->subjectBinding)) {
+            // `with` too: its body is lowered as one nested expression, so a
+            // `var` it reassigned got a fresh name nothing after it could see
+            // (`unbound variable '_ir_result6'`, kexhq/kex#493).
+            auto* we = std::get_if<ast::WithExpr>(&e->kind);
+            if (ie || te || we || (me && !me->subjectBinding)) {
                 std::unordered_set<std::string> muts;
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
@@ -6977,7 +7086,31 @@ struct Lowering {
                     std::function<ExprPtr()> yieldState =
                         [&]() -> ExprPtr { return stateExpr(mutVars); };
                     ExprPtr caseE;
-                    if (ie) {
+                    if (we) {
+                        std::string capability;
+                        for (size_t k = 0; k < we->capability.parts.size(); ++k) {
+                            if (k) capability += ".";
+                            capability += we->capability.parts[k];
+                        }
+                        std::vector<Binding> withBinds;
+                        auto replacement = atomize(we->value, withBinds);
+                        std::vector<ExprPtr> putArgs;
+                        putArgs.push_back(lit(LitKind::String, capability));
+                        putArgs.push_back(std::move(replacement));
+                        putArgs.push_back(currentContext());
+                        auto extended = fresh("Ctx");
+                        const auto savedContext = currentContextVar;
+                        currentContextVar = extended;
+                        auto snap = subst;
+                        auto inner = lowerLoopBodyFrom(we->body, 0, "", mutVars, yieldState);
+                        subst = snap;
+                        currentContextVar = savedContext;
+                        caseE = wrapLets(
+                            withBinds,
+                            makeLet(extended,
+                                    callE("maps", "put", 3, std::move(putArgs)),
+                                    std::move(inner)));
+                    } else if (ie) {
                         auto branch = [&](const std::vector<ast::ExprPtr>& bb) {
                             auto snap = subst;
                             auto r = lowerLoopBodyFrom(bb, 0, "", mutVars, yieldState);
@@ -9934,6 +10067,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             emitted->second = newSymbol;
             definedFns.erase(oldSymbol);
             definedFns.insert(newSymbol);
+            // What is known about the function by its symbol moves with it:
+            // a foul one left `foulFns` behind and every call went out without
+            // its capability context — `fetch$free/1` against a defined
+            // `fetch$free/2` (kexhq/kex#492).
+            if (L.foulFns.count(oldSymbol)) L.foulFns.insert(newSymbol);
+            if (L.emittedModuleZeroArg.count(oldSymbol))
+                L.emittedModuleZeroArg.insert(newSymbol);
+            const auto renameArities = [&](auto& arities) {
+                std::vector<std::string> renamed;
+                for (const auto& entry : arities)
+                    if (entry.rfind(oldSymbol + "/", 0) == 0)
+                        renamed.push_back(newSymbol + entry.substr(oldSymbol.size()));
+                for (auto& entry : renamed) arities.insert(std::move(entry));
+            };
+            renameArities(L.pureFnArities);
+            renameArities(L.definedFnArities);
+            renameArities(definedFnArities);
             for (auto& [_, value] : L.moduleFunctions)
                 if (value == oldSymbol) value = newSymbol;
         }
@@ -11003,17 +11153,30 @@ using ModuleDefined = std::unordered_map<std::string,
 using ArityFallback =
     std::map<std::pair<std::string, int>, ModuleTarget>;
 
+// `local` is what the calling module itself defines, for the entry module
+// only: its functions keep the flat program's names, so one defined there at
+// the call's name and arity IS the function the call was lowered against. A
+// dispatcher ejected into the entry module by mergeDuplicateFunctions is the
+// case that needs it — Net.HTTP's `close/2` for `make Client` lost its bucket
+// to the TCP `close` the bare-name winner names, and every `client.close` in
+// the program was then redirected to `Kex.Net.Socket.TCP:close`, which
+// badargs on a Client (kexhq/kex#454).
 auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
                         const ModuleDefined& defined,
-                        const ArityFallback& fallback) -> void {
+                        const ArityFallback& fallback,
+                        const std::set<std::pair<std::string, int>>* local = nullptr)
+    -> void {
     if (!expr) return;
     std::visit([&](auto& node) {
         using T = std::decay_t<decltype(node)>;
         auto visit = [&](ExprPtr& child) {
-            rewriteModuleCalls(child, targets, defined, fallback);
+            rewriteModuleCalls(child, targets, defined, fallback, local);
         };
         if constexpr (std::is_same_v<T, Call>) {
-            if (node.module.empty()) {
+            if (node.module.empty() && local &&
+                local->count({node.name, node.arity})) {
+                // Defined right here: stays a local call.
+            } else if (node.module.empty()) {
                 if (auto it = targets.find(node.name); it != targets.end()) {
                     auto built = defined.find(it->second.module);
                     if (built == defined.end() ||
@@ -11123,6 +11286,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // program to it made `42.to(String)` an `undef` on BEAM and an empty
         // string on the walker.
         int arity = -1;
+        // Claimed by a module's free function over its own type (the
+        // kexhq/kex#230 bare-name redirect) rather than by a `make` method.
+        bool freeOverOwnType = false;
     };
     std::unordered_map<std::string, Definition> definitions;
     if (externalRecords) {
@@ -11277,7 +11443,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             const int arity = static_cast<int>(fn->clauses[0].params.size()) +
                               (fn->isFoul ? 1 : 0);
             if (!definitions.count(fn->name))
-                definitions[fn->name] = {path, fn->name, true, "", arity};
+                definitions[fn->name] = {path, fn->name, true, "", arity, true};
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
@@ -11286,7 +11452,15 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             auto collectMethod = [&](const ast::FunctionDef* fd,
                                      const std::string& typeName) {
                 if (!fd) return;
-                if (!definitions.count(fd->name))
+                // A make method's dispatcher outranks a free function's
+                // bare-name claim: it falls back to the prelude for other
+                // receivers, and a free function over its own type is
+                // reached by its qualified symbol when the receiver's type is
+                // known. First come, first served sent `client.close` to a
+                // TCP `close` from a module merged earlier.
+                if (auto existing = definitions.find(fd->name);
+                    existing == definitions.end() ||
+                    existing->second.freeOverOwnType)
                     definitions[fd->name] = {path, fd->name, true};
                 // A make method is emitted as `method/Type` when the same
                 // method name has implementations for multiple receiver
@@ -11515,12 +11689,15 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
         auto& module = result[moduleIndex];
+        const auto* local =
+            moduleIndex == 0 ? &defined[module.name] : nullptr;
         for (auto& fn : module.functions)
             for (auto& clause : fn.clauses) {
                 if (clause.guard)
                     rewriteModuleCalls(*clause.guard, targets, defined,
-                                       fallback);
-                rewriteModuleCalls(clause.body, targets, defined, fallback);
+                                       fallback, local);
+                rewriteModuleCalls(clause.body, targets, defined, fallback,
+                                   local);
                 if (moduleIndex > 0) {
                     if (clause.guard)
                         rewriteModuleCalls(*clause.guard, globalTargets,
