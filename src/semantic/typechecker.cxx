@@ -5276,6 +5276,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     case TokenType::GreaterThan: return ">";
                     case TokenType::LessEq: return "<=";
                     case TokenType::GreaterEq: return ">=";
+                    case TokenType::AmpAmp: return "&&";
+                    case TokenType::PipePipe: return "||";
                     default: return "";
                 }
             }();

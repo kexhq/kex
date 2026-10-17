@@ -2170,15 +2170,29 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return value;
         }
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-            // Short-circuit && and || before evaluating rhs.
+            // Short-circuit && and || before evaluating rhs — unless the left
+            // side's type overloads the operator (kexhq/kex#507). An overload
+            // builds a value from both sides, so both are evaluated.
+            auto overloaded = [&](const ValuePtr& left, const char* symbol) {
+                return left && !std::holds_alternative<BoolValue>(left->data) &&
+                       resolveMethodName(left, symbol) != symbol;
+            };
             if (node.op == TokenType::AmpAmp) {
                 auto left = node.left ? eval(*node.left) : Value::none();
+                if (overloaded(left, "&&"))
+                    return evalBinaryOp(node.op, left,
+                                        node.right ? eval(*node.right) : Value::none(),
+                                        expr.location);
                 if (!left || !left->isTrue()) return Value::boolean(false);
                 auto right = node.right ? eval(*node.right) : Value::none();
                 return Value::boolean(right && right->isTrue());
             }
             if (node.op == TokenType::PipePipe) {
                 auto left = node.left ? eval(*node.left) : Value::none();
+                if (overloaded(left, "||"))
+                    return evalBinaryOp(node.op, left,
+                                        node.right ? eval(*node.right) : Value::none(),
+                                        expr.location);
                 if (left && left->isTrue()) return Value::boolean(true);
                 auto right = node.right ? eval(*node.right) : Value::none();
                 return Value::boolean(right && right->isTrue());
@@ -3571,6 +3585,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         case TokenType::GreaterThan: opSymbol = ">"; break;
         case TokenType::LessEq:     opSymbol = "<="; break;
         case TokenType::GreaterEq:  opSymbol = ">="; break;
+        case TokenType::AmpAmp:     opSymbol = "&&"; break;
+        case TokenType::PipePipe:   opSymbol = "||"; break;
         default: break;
     }
     // Numeric pairs use primitive arithmetic and ordering, matching the

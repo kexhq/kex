@@ -968,7 +968,8 @@ auto Parser::parseFunctionDef(bool isFoul)
              check(TokenType::Percent) || check(TokenType::Caret) ||
              check(TokenType::EqEq) || check(TokenType::NotEq) ||
              check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
-             check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
+             check(TokenType::LessEq) || check(TokenType::GreaterEq) ||
+             check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
     def->name = std::string(tokenTypeName(advance().type));
   } else {
     rejectReservedName("function");
@@ -1164,6 +1165,8 @@ auto Parser::parseParam() -> ast::Param {
 // `binary_op TYPE_ANNOTATION type_expr` / `binary_op COLON type_expr`).
 auto Parser::isOverloadableOperator(TokenType type) -> bool {
   switch (type) {
+    case TokenType::AmpAmp:
+    case TokenType::PipePipe:
     case TokenType::Plus:
     case TokenType::Minus:
     case TokenType::Star:
@@ -4366,7 +4369,8 @@ auto Parser::parseUsingOptions(std::optional<std::string> &alias,
           check(TokenType::Percent) || check(TokenType::Caret) ||
           check(TokenType::EqEq) || check(TokenType::NotEq) ||
           check(TokenType::LessThan) || check(TokenType::LessEq) ||
-          check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+          check(TokenType::GreaterThan) || check(TokenType::GreaterEq) ||
+          check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
         auto name = std::string(tokenTypeName(advance().type));
         expect(TokenType::RParen, "Expected ')' after operator");
         return name;

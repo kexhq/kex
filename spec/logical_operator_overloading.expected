@@ -1,0 +1,7 @@
+(owner = 'ada' OR credit > 100)
+((owner = 'ada' AND credit > 5) OR owner = 'bob')
+evaluated a
+false
+evaluated c
+true
+true
