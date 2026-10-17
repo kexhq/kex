@@ -1204,7 +1204,10 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     ann->implicitThis = false;
   }
 
+  const bool savedInSignature = m_inTypeSignature;
+  m_inTypeSignature = true;
   ann->type = parseTypeExpr();
+  m_inTypeSignature = savedInSignature;
   return complete(std::move(ann));
 }
 
@@ -1262,11 +1265,24 @@ auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
   auto left = parseTypeIntersection();
 
+  // A signature may continue with `->` leading the next line
+  // (kexhq/kex#497). Only in a `name : T` signature, where nothing else can
+  // begin a line with `->`; elsewhere the cursor goes back.
+  if (m_inTypeSignature && check(TokenType::Newline)) {
+    const auto savedPos = m_pos;
+    skipNewlines();
+    if (!check(TokenType::Arrow))
+      m_pos = savedPos;
+  }
+
   if (match(TokenType::Arrow)) {
     auto startOffset = left->location.startOffset;
     auto funcType = std::make_unique<ast::TypeExpr>();
     funcType->location = currentLocation();
     funcType->location.startOffset = startOffset;
+    // Nothing but a type can follow `->`, so a line break after it never
+    // ends the signature: `summed : Integer ->` + `Integer -> Integer`.
+    skipNewlines();
     auto right = parseTypeFunction(); // right-associative
     funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
     return complete(std::move(funcType));
@@ -1494,10 +1510,14 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
   // `cond then a else b` — ternary replacement, lowest precedence. Both
   // branches parse at the assignment level (not parseExpr), so nesting
   // another then/else requires parens — exactly the rule we want.
-  // `then` itself must stay on the condition's line unless the whole
-  // thing is parenthesized, which falls out for free: newlines are only
-  // suppressed inside ( ), so a bare `then` on the next line simply
-  // won't be there to match() below.
+  // `then` may also lead the line after the condition (kexhq/kex#497):
+  // nothing else can begin a line with `then`, so looking past the line
+  // break cannot take anything else, and the cursor goes back otherwise.
+  if (!m_noThenExpr && check(TokenType::Newline)) {
+    const auto conditionEnd = m_pos;
+    skipNewlines();
+    if (!check(TokenType::Then)) m_pos = conditionEnd;
+  }
   if (!m_noThenExpr && match(TokenType::Then)) {
     auto thenElse = std::make_unique<ast::Expr>();
     thenElse->location = expr->location;
@@ -4365,10 +4385,14 @@ auto Parser::parseUsingOptions(std::optional<std::string> &alias,
       if (!names.empty())
         error("Duplicate '" + key + "' using option");
       expect(TokenType::LBracket, "Expected '[' after using option");
-      if (!check(TokenType::RBracket)) {
-        do {
-          names.push_back(parseName());
-        } while (match(TokenType::Comma));
+      // The list may span lines inside its brackets, one name per line,
+      // with a trailing comma before `]` (kexhq/kex#497).
+      skipNewlines();
+      while (!check(TokenType::RBracket)) {
+        names.push_back(parseName());
+        skipNewlines();
+        if (!match(TokenType::Comma)) break;
+        skipNewlines();
       }
       expect(TokenType::RBracket, "Expected ']' after using option list");
     } else {

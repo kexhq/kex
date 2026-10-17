@@ -217,6 +217,7 @@ private:
     bool m_noDoBlocks = false;
     std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
     bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
+    bool m_inTypeSignature = false; // `name : T`: `->` may lead the next line
     std::vector<ParseDiagnostic> m_diagnostics;
 };
 
