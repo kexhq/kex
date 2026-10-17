@@ -3369,6 +3369,24 @@ struct Lowering {
     }
 
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
+        // `App.Models.User` as a value is that type's token, the same atom a
+        // bare `User` is (kexhq/kex#509): what `select(as: App.Models.User)`
+        // passes and `Type.of` reads. Sum types are registered by bare name.
+        if (n.receiver && n.args.empty() && n.namedArgs.empty() && !n.block &&
+            !n.mutating && !n.method.empty() &&
+            std::isupper(static_cast<unsigned char>(n.method[0]))) {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path)) {
+                std::string qualified;
+                for (const auto& segment : path) qualified += segment + ".";
+                qualified += n.method;
+                if (records.count(qualified) || adtLayouts.count(n.method)) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{n.method, {}};
+                    return ex;
+                }
+            }
+        }
         // A record field wins over a same-named function even when a block's
         // receiver type was not known to the checker. Keep UFCS as the lazy
         // fallback for values that do not declare this field (#476).
@@ -5390,12 +5408,27 @@ struct Lowering {
             std::vector<ExprPtr> recordEntries;
             for (const auto& [name, fields] : recordLayouts) {
                 std::vector<ExprPtr> described;
-                for (const auto& field : fields) {
+                const auto info = records.find(name);
+                for (size_t i = 0; i < fields.size(); i++) {
+                    const auto& field = fields[i];
                     std::vector<ExprPtr> parts;
                     parts.push_back(binaryLit(field.name));
                     parts.push_back(structuredTypeLiteral(field.type));
                     parts.push_back(litBool(field.type.name == "Option"));
                     parts.push_back(litBool(field.hasDefault));
+                    // The default itself, as a fun evaluated only when
+                    // `Type.construct` needs it (kexhq/kex#487).
+                    if (info != records.end() && i < info->second.defaults.size() &&
+                        info->second.defaults[i]) {
+                        Lambda thunk;
+                        thunk.body = lowerFieldDefault(info->second,
+                                                       *info->second.defaults[i]);
+                        auto fun = std::make_unique<Expr>();
+                        fun->node = std::move(thunk);
+                        parts.push_back(std::move(fun));
+                    } else {
+                        parts.push_back(atomLit("none"));
+                    }
                     described.push_back(tupleOf(std::move(parts)));
                 }
                 recordEntries.push_back(tupleOf(two(atomLit(name), listOf(std::move(described)))));

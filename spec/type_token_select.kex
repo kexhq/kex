@@ -1,0 +1,62 @@
+# A record or sum type's name passed as a value is its token: a generic
+# `select(as: T)` binds `T` from it, so the result is typed, and `Type.of`
+# reads the type back off it at run time (kexhq/kex#509). This is the shape
+# a database library's `select(as: User)` takes, decoding rows of text with
+# `Type.Field.parse` and `Type.construct` (kexhq/kex#487).
+
+module App.Models do
+  type Kind = Admin | Member
+
+  record User do
+    id : String
+    email : String
+    kind : Kind = Member
+    age : Integer?
+  end
+end
+
+module Db do
+  # Rows as a driver returns them: text, keyed by column, a NULL left out.
+  let rows() -> [{String: String}] = [
+    {"id": "u1", "email": "ada@example.com", "kind": "admin", "age": "36"},
+    {"id": "u2", "email": "bob@example.com"},
+  ]
+
+  collect : [Type.Field] -> {String: String} -> {String: Any} -> Result<{String: Any}, String>
+  let collect([], _row, values) = Ok(values)
+  let collect([field | rest], row, values) do
+    return match row.get(field.name) do
+      None => collect(rest, row, values)
+      Just(text) => match field.parse(text) do
+        Ok(value) => collect(rest, row, values.put(field.name, value))
+        Error(message) => Error(message)
+      end
+    end
+  end
+
+  decoded : Type -> {String: String} -> Result<Any, String>
+  let decoded(model, row) do
+    return match collect(model.fields, row, {}) do
+      Ok(values) => model.construct(values)
+      Error(message) => Error(message)
+    end
+  end
+
+  # `as:` is the record type itself: `select(as: User)`.
+  let select(as: T) -> Result<[T], String> do
+    let model = Type.of(as)
+    let decodedRows : [T] = rows().map { |row| decoded(model, row).try }
+    return Ok(decodedRows)
+  end
+end
+
+using App.Models
+
+main do
+  let users = Db.select(as: User).try
+  IO.printLine(users.map(&.email))
+  IO.printLine(users.map { |user| user.age })
+  IO.printLine(users.first.map(&.kind))
+  let qualified = Db.select(as: App.Models.User).try
+  IO.printLine(qualified.count)
+end

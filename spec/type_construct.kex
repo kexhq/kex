@@ -1,0 +1,48 @@
+# `Type.construct` builds a record from values by field name (kexhq/kex#487),
+# and `Type.variant` a sum type's constructor from its name (kexhq/kex#509):
+# defaults and optional fields filled in, and every mistake an error naming
+# what was wrong.
+
+module App.Models do
+  type Kind = Channel | Direct | Group
+
+  type Shape = Circle(Float) | Rect(Float, Float)
+
+  record User do
+    id : String
+    email : String
+    admin? : Bool = false
+    nickname : String?
+    tags : [String] = ["new"]
+  end
+end
+
+using App.Models
+
+let show(result: Result<Any, String>) -> String = match result do
+  Ok(value) => "ok ${value}"
+  Error(message) => "error: ${message}"
+end
+
+main do
+  let users = Type.named("App.Models.User")
+  IO.printLine(show(users.construct({"id": "u1", "email": "ada@example.com"})))
+  IO.printLine(show(users.construct({"id": "u2", "email": "b@x", "admin?": true, "nickname": Just("bee")})))
+  IO.printLine(show(users.construct({"id": "u3"})))
+  IO.printLine(show(users.construct({"id": "u4", "email": "c@x", "mail": "typo"})))
+  IO.printLine(show(users.construct({"id": 5, "email": "d@x"})))
+  IO.printLine(show(users.construct({"id": "u6", "email": "e@x", "tags": [1, 2]})))
+  IO.printLine(show(Type.named("Kind").construct({})))
+
+  let built : User = users.construct({"id": "u7", "email": "f@x"}).try
+  IO.printLine(built.email)
+  IO.printLine(built.admin?)
+
+  let kinds = Type.named("Kind")
+  IO.printLine(show(kinds.variant("Direct")))
+  IO.printLine(show(kinds.variant("Nope")))
+  IO.printLine(show(Type.named("Shape").variant("Circle", [2.0])))
+  IO.printLine(show(Type.named("Shape").variant("Rect", [1.0])))
+  IO.printLine(show(Type.named("Shape").variant("Circle", ["big"])))
+  IO.printLine(kinds.variant("Group").try == Group)
+end

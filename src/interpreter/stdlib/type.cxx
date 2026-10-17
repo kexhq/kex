@@ -123,6 +123,60 @@ auto stringArg(const std::vector<ValuePtr>& args) -> std::string {
     return s ? s->value : "";
 }
 
+// findByTypeName's key rather than its entry: the name a record value or a
+// variant is built under.
+template <typename Map>
+auto typeNameKey(const Map& map, const std::string& name)
+    -> std::optional<std::string> {
+    const auto* found = findByTypeName(map, name);
+    if (!found) return std::nullopt;
+    for (const auto& [key, value] : map)
+        if (&value == found) return key;
+    return std::nullopt;
+}
+
+// `matches` (the evaluator's runtimeTypeMatches) also applied to a list's
+// elements and a map's entries, as kex_intrinsic_type.erl's accepts/2 does.
+template <typename Matches>
+auto matchesDeeply(const ValuePtr& value, const ast::TypeExpr& type,
+                   const Matches& matches) -> bool {
+    if (!matches(value, type)) return false;
+    if (const auto* list = std::get_if<ast::ListType>(&type.kind); list && list->element)
+        if (const auto* values = std::get_if<ListValue>(&value->data))
+            return std::all_of(values->elements.begin(), values->elements.end(),
+                               [&](const ValuePtr& element) {
+                                   return matchesDeeply(element, *list->element, matches);
+                               });
+    if (const auto* map = std::get_if<ast::MapType>(&type.kind); map && map->key && map->value)
+        if (const auto* entries = std::get_if<MapValue>(&value->data))
+            return std::all_of(entries->entries.begin(), entries->entries.end(),
+                               [&](const auto& entry) {
+                                   return matchesDeeply(entry.first, *map->key, matches) &&
+                                          matchesDeeply(entry.second, *map->value, matches);
+                               });
+    return true;
+}
+
+// A `Type { name, args }` value as `Name<Arg, …>`, the spelling
+// kex_intrinsic_type.erl's type_name/1 gives.
+auto renderedType(const ValuePtr& type) -> std::string {
+    const auto* record = std::get_if<RecordValue>(&type->data);
+    if (!record) return "?";
+    const auto name = record->fields.find("name");
+    const auto args = record->fields.find("args");
+    std::string text = name != record->fields.end()
+        ? name->second->toString() : "?";
+    if (args == record->fields.end()) return text;
+    const auto* list = std::get_if<ListValue>(&args->second->data);
+    if (!list || list->elements.empty()) return text;
+    text += "<";
+    for (size_t i = 0; i < list->elements.size(); ++i) {
+        if (i) text += ", ";
+        text += renderedType(list->elements[i]);
+    }
+    return text + ">";
+}
+
 } // namespace
 
 // The runtime half of `Type.of` — what a value IS, structurally. The compiler
@@ -210,6 +264,95 @@ auto Evaluator::registerTypeBuiltins() -> void {
                     constructors.push_back(Value::string(plain->parts.back()));
             }
         return Value::list(std::move(constructors));
+    });
+
+    const auto matches = [this](const ValuePtr& value, const ast::TypeExpr& type) {
+        return runtimeTypeMatches(value, type);
+    };
+
+    // `Type.construct`: a record of the named type from values by field name
+    // (kexhq/kex#487). The same rules and messages as kex_intrinsic_type.erl.
+    defineIntrinsic("Type::construct", [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto name = stringArg(args);
+        const auto key = typeNameKey(m_recordDefs, name);
+        if (!key) return Value::error(Value::string("Not a record type: " + name));
+        const auto* record = m_recordDefs.at(*key);
+        const auto* values =
+            args.size() > 1 ? std::get_if<MapValue>(&args[1]->data) : nullptr;
+        if (!values) return Value::error(Value::string("Expected a map of field values"));
+        std::unordered_map<std::string, ValuePtr> given;
+        for (const auto& [k, v] : values->entries) {
+            const auto* field = std::get_if<StringValue>(&k->data);
+            const bool known = field && std::any_of(
+                record->fields.begin(), record->fields.end(),
+                [&](const auto& declared) { return declared.name == field->value; });
+            if (!known)
+                return Value::error(Value::string(
+                    "Unknown field " + (field ? "\"" + field->value + "\"" : k->toString()) +
+                    " for " + name));
+            given[field->value] = v;
+        }
+        std::unordered_map<std::string, ValuePtr> fields;
+        for (const auto& field : record->fields) {
+            const auto declared = field.type
+                ? semantic::structuredTypeOfDeclared(*field.type)
+                : semantic::StructuredType{"Any", {}};
+            if (auto found = given.find(field.name); found != given.end()) {
+                if (field.type && !matchesDeeply(found->second, *field.type, matches))
+                    return Value::error(Value::string(
+                        "Field \"" + field.name + "\" of " + name + " expects " +
+                        renderedType(structuredTypeValue(declared)) + ", got " +
+                        renderedType(typeOfValue(found->second))));
+                fields[field.name] = found->second;
+            } else if (field.defaultValue && *field.defaultValue) {
+                fields[field.name] = evalFieldDefault(*key, **field.defaultValue);
+            } else if (declared.name == "Option") {
+                fields[field.name] = Value::none();
+            } else {
+                return Value::error(Value::string(
+                    "Missing field \"" + field.name + "\" for " + name));
+            }
+        }
+        return Value::ok(Value::record(*key, std::move(fields)));
+    });
+
+    // `Type.variant`: the named constructor of a sum type, applied to its
+    // arguments (kexhq/kex#509).
+    defineIntrinsic("Type::constructVariant",
+                    [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto name = stringArg(args);
+        const auto key = typeNameKey(m_adtVariants, name);
+        if (!key) return Value::error(Value::string("Not a sum type: " + name));
+        const auto* ctor = args.size() > 1 ? std::get_if<StringValue>(&args[1]->data) : nullptr;
+        const auto* given = args.size() > 2 ? std::get_if<ListValue>(&args[2]->data) : nullptr;
+        if (!ctor || !given)
+            return Value::error(Value::string("Expected a constructor name and its arguments"));
+        for (const auto* variant : m_adtVariants.at(*key)) {
+            std::vector<const ast::TypeExpr*> argTypes;
+            std::string tag;
+            if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind);
+                generic && !generic->name.parts.empty()) {
+                tag = generic->name.parts.back();
+                for (const auto& arg : generic->args) argTypes.push_back(arg.get());
+            } else if (const auto* plain = std::get_if<ast::TypeName>(&variant->kind);
+                       plain && !plain->parts.empty()) {
+                tag = plain->parts.back();
+            }
+            if (tag != ctor->value) continue;
+            if (argTypes.size() != given->elements.size())
+                return Value::error(Value::string(
+                    tag + " takes " + std::to_string(argTypes.size()) +
+                    " argument(s), got " + std::to_string(given->elements.size())));
+            for (size_t i = 0; i < argTypes.size(); ++i)
+                if (argTypes[i] && !matchesDeeply(given->elements[i], *argTypes[i], matches))
+                    return Value::error(Value::string(
+                        tag + " expects " +
+                        renderedType(structuredTypeValue(
+                            semantic::structuredTypeOfDeclared(*argTypes[i]))) +
+                        ", got " + renderedType(typeOfValue(given->elements[i]))));
+            return Value::ok(Value::variant(tag, *key, given->elements));
+        }
+        return Value::error(Value::string(name + " has no constructor " + ctor->value));
     });
 }
 

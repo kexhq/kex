@@ -1,0 +1,61 @@
+# kex: run-beam
+# `Type.parse` and `Type.Field.parse` read text as a value of a declared type,
+# the step between a database row or a form and `Type.construct`. There is no
+# null: an absent column is left out of the map, and `construct` fills `None`.
+
+module App.Models do
+  type Kind = Channel | Direct | Group
+
+  record Conversation do
+    id : String
+    kind : Kind
+    members : Integer
+    archived? : Bool = false
+    topic : String?
+  end
+end
+
+using App.Models
+
+let show(result: Result<Any, String>) -> String = match result do
+  Ok(value) => "ok ${value}"
+  Error(message) => "error: ${message}"
+end
+
+# A row as a database driver returns it: every column is text, and a NULL
+# column is simply not there.
+collect : [Type.Field] -> {String: String} -> {String: Any} -> Result<{String: Any}, String>
+let collect([], _row, values) = Ok(values)
+let collect([field | rest], row, values) do
+  return match row.get(field.name) do
+    None => collect(rest, row, values)
+    Just(text) => match field.parse(text) do
+      Ok(value) => collect(rest, row, values.put(field.name, value))
+      Error(message) => Error(message)
+    end
+  end
+end
+
+let fromRow(row: {String: String}) -> Result<Any, String> do
+  let conversations = Type.named("App.Models.Conversation")
+  return match collect(conversations.fields, row, {}) do
+    Ok(values) => conversations.construct(values)
+    Error(message) => Error(message)
+  end
+end
+
+main do
+  IO.printLine(show(Type.named("Integer").parse("42")))
+  IO.printLine(show(Type.named("Integer").parse("4x")))
+  IO.printLine(show(Type.named("Float").parse("2.5")))
+  IO.printLine(show(Type.named("Bool").parse("true")))
+  IO.printLine(show(Type.named("Bool").parse("yes")))
+  IO.printLine(show(Type.named("Char").parse("é")))
+  IO.printLine(show(Type.named("String").parse("")))
+  IO.printLine(show(Type.named("Kind").parse("Direct")))
+  IO.printLine(show(Type.named("Kind").parse("channel")))
+  IO.printLine(show(Type.named("Kind").parse("nope")))
+  IO.printLine(show(fromRow({"id": "c1", "kind": "group", "members": "3", "topic": "kex"})))
+  IO.printLine(show(fromRow({"id": "c2", "kind": "direct", "members": "2", "archived?": "true"})))
+  IO.printLine(show(fromRow({"id": "c3", "kind": "direct", "members": "many"})))
+end

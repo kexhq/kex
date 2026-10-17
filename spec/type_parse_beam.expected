@@ -1,0 +1,13 @@
+ok 42
+error: Expected Integer, got "4x"
+ok 2.5
+ok true
+error: Expected Bool, got "yes"
+ok é
+ok 
+ok Direct
+ok Channel
+error: Expected Kind, got "nope"
+ok App.Models.Conversation { archived?: false, id: c1, kind: Group, members: 3, topic: Just(kex) }
+ok App.Models.Conversation { archived?: true, id: c2, kind: Direct, members: 2, topic: None }
+error: Field "members": Expected Integer, got "many"

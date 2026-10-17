@@ -1,0 +1,15 @@
+ok App.Models.User { admin?: false, email: ada@example.com, id: u1, nickname: None, tags: [new] }
+ok App.Models.User { admin?: true, email: b@x, id: u2, nickname: Just(bee), tags: [new] }
+error: Missing field "email" for App.Models.User
+error: Unknown field "mail" for App.Models.User
+error: Field "id" of App.Models.User expects String, got Integer
+error: Field "tags" of App.Models.User expects List<String>, got List<Integer>
+error: Not a record type: Kind
+f@x
+false
+ok Direct
+error: Kind has no constructor Nope
+ok Circle(2.0)
+error: Rect takes 2 argument(s), got 1
+error: Circle expects Float, got String
+true
