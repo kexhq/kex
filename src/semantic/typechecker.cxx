@@ -2161,6 +2161,18 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         const std::string& saved;
         ~PathRestore() { target = saved; }
     } pathRestore{m_currentModulePath, previousModulePath};
+    // And against the names that module imported: a `textColumn :> Atom ->
+    // TextColumn` under `using Harmat.Schema, only: [TextColumn]` otherwise
+    // answered a bare `TextColumn` that no `==` or `||` overload is
+    // declared for, once the call was made from another module
+    // (kexhq/kex#532).
+    struct ImportsRestore {
+        std::vector<ImportSelection>& target;
+        std::vector<ImportSelection> saved;
+        ~ImportsRestore() { target = std::move(saved); }
+    } importsRestore{m_declarationImports, m_declarationImports};
+    if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
+        m_declarationImports = imports->second;
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
     // Every method this block defines, keyed by the RECEIVER it answers on —

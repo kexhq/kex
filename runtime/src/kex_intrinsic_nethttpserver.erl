@@ -5,26 +5,39 @@
 -define(HEADER_LIMIT, 65536).
 -define(REQUEST_LINE_LIMIT, 8192).
 -define(HEADER_FIELDS_LIMIT, 100).
--define(BODY_LIMIT, 10485760).
 -define(TIMEOUT, 30000).
 
 start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
       Router = {'Net.HTTP.Router', _}) ->
     start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}}, Router,
-          {'Net.HTTP.ServerOptions', 1024, 128, {'Duration', 10.0}});
+          {'Net.HTTP.ServerOptions', 1024, 128, {'Duration', 10.0}, 10485760});
 start(_, _) -> net_error('Parse', <<"invalid HTTP server configuration">>).
 
+%% `MaximumBody` is the request body limit of every route that does not set
+%% its own (kexhq/kex#488).
 start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
       Router = {'Net.HTTP.Router', _},
-      {'Net.HTTP.ServerOptions', MaximumHandlers, Backlog, {'Duration', GraceSeconds}})
+      {'Net.HTTP.ServerOptions', MaximumHandlers, Backlog, {'Duration', GraceSeconds},
+       MaximumBody})
   when is_integer(MaximumHandlers), MaximumHandlers > 0,
-       is_integer(Backlog), Backlog > 0, is_number(GraceSeconds), GraceSeconds >= 0 ->
-    case parse_address(Host) of
-        {ok, Address} -> open(Address, Port, Router, MaximumHandlers, Backlog,
-                              trunc(GraceSeconds * 1000));
-        {error, Reason} -> net_error('Parse', Reason)
+       is_integer(Backlog), Backlog > 0, is_number(GraceSeconds), GraceSeconds >= 0,
+       is_integer(MaximumBody), MaximumBody >= 0 ->
+    case valid_route_limits(Router) of
+        false -> net_error('Parse', <<"a route's maximumBodyBytes must not be negative">>);
+        true ->
+            case parse_address(Host) of
+                {ok, Address} -> open(Address, Port, {Router, MaximumBody}, MaximumHandlers,
+                                      Backlog, trunc(GraceSeconds * 1000));
+                {error, Reason} -> net_error('Parse', Reason)
+            end
     end;
 start(_, _, _) -> net_error('Parse', <<"invalid HTTP server configuration">>).
+
+valid_route_limits({'Net.HTTP.Router', Routes}) ->
+    lists:all(fun({'Net.HTTP.Route', _, _, _, 'None'}) -> true;
+                 ({'Net.HTTP.Route', _, _, _, {'Just', Limit}}) -> is_integer(Limit) andalso Limit >= 0;
+                 (_) -> false
+              end, Routes).
 
 serve(Endpoint, Router) ->
     case start(Endpoint, Router) of
@@ -212,16 +225,17 @@ finish_shutdown(Completed, Failed, Forced, From, Ref, Started) ->
     Elapsed = erlang:monotonic_time(millisecond) - Started,
     From ! {Ref, {'Ok', {'Net.HTTP.ShutdownReport', Completed, Failed, Forced, Elapsed}}}.
 
+%% The accept loop hands each worker `{Router, MaximumBody}`.
 connection_wait() ->
     receive
-        {serve, Socket, Router, Owner} ->
-            Result = try handle_connection(Socket, Router, <<>>, Owner) catch _:_ -> error end,
+        {serve, Socket, Service, Owner} ->
+            Result = try handle_connection(Socket, Service, <<>>, Owner) catch _:_ -> error end,
             gen_tcp:close(Socket), Owner ! {handler_done, self(), Result}
     after 5000 -> ok
     end.
 
-handle_connection(Socket, Router, Buffered, Owner) ->
-    case read_request(Socket, Buffered) of
+handle_connection(Socket, Service = {Router, _}, Buffered, Owner) ->
+    case read_request(Socket, Buffered, Service) of
         {ok, Request, Method, Path, Rest, KeepAlive} ->
             case dispatch(Request, Method, Path, Router) of
                 {'Net.HTTP.WebSocket.UpgradeResponse', Response, HandlerFun, Selected} ->
@@ -233,7 +247,7 @@ handle_connection(Socket, Router, Buffered, Owner) ->
                     end;
                 Response ->
                     case send_response(Socket, Response, Method, KeepAlive) of
-                        ok when KeepAlive -> handle_connection(Socket, Router, Rest, Owner);
+                        ok when KeepAlive -> handle_connection(Socket, Service, Rest, Owner);
                         ok -> ok;
                         _ -> error
                     end
@@ -246,7 +260,7 @@ handle_connection(Socket, Router, Buffered, Owner) ->
 
 dispatch(Request, Method, Path, {'Net.HTTP.Router', Routes}) ->
     case find_route(Method, Path, Routes) of
-        {route, {'Net.HTTP.Route', _, _, Handler}, Parameters} ->
+        {route, {'Net.HTTP.Route', _, _, Handler, _}, Parameters} ->
             Context = {'Net.HTTP.Context', {'Net.HTTP.RouteContext', Parameters}},
             try Handler(Request, Context) of
                 Value = {'Net.HTTP.Response', _, _, _} -> Value;
@@ -271,7 +285,7 @@ find_route(Method, Path, Routes) ->
     case Matches of
         [{Route, Parameters} | _] -> {route, Route, Parameters};
         [] ->
-            Declared = [M || {'Net.HTTP.Route', M, Pattern, _} <- Routes,
+            Declared = [M || {'Net.HTTP.Route', M, Pattern, _, _} <- Routes,
                                {ok, _} <- [match_path(Pattern, Path)]],
             Methods = case lists:member(<<"GET">>, Declared) of
                 true -> Declared ++ [<<"HEAD">>, <<"OPTIONS">>];
@@ -281,7 +295,7 @@ find_route(Method, Path, Routes) ->
     end.
 
 route_matches(Method, Path, Routes) ->
-    [{R, Parameters} || R = {'Net.HTTP.Route', M, Pattern, _} <- Routes,
+    [{R, Parameters} || R = {'Net.HTTP.Route', M, Pattern, _, _} <- Routes,
                          M =:= Method,
                          {ok, Parameters} <- [match_path(Pattern, Path)]].
 
@@ -306,9 +320,9 @@ match_segments([Segment | Patterns], [Segment | Values], Parameters) ->
 match_segments(_, _, _) -> no.
 decode_segment(Value) -> try {ok, uri_string:percent_decode(Value)} catch _:_ -> error end.
 
-read_request(Socket, Buffered) ->
+read_request(Socket, Buffered, Service) ->
     case recv_headers(Socket, Buffered) of
-        {ok, HeaderBlock, Rest} -> parse_request(Socket, HeaderBlock, Rest);
+        {ok, HeaderBlock, Rest} -> parse_request(Socket, HeaderBlock, Rest, Service);
         Error -> Error
     end.
 
@@ -326,39 +340,49 @@ recv_headers(Socket, Acc) ->
             end
     end.
 
-parse_request(Socket, Block, Buffered) ->
+parse_request(Socket, Block, Buffered, Service) ->
     case binary:split(Block, <<"\r\n">>, [global]) of
         [Line | HeaderLines] when byte_size(Line) =< ?REQUEST_LINE_LIMIT,
                                   length(HeaderLines) =< ?HEADER_FIELDS_LIMIT ->
             case binary:split(Line, <<" ">>, [global, trim_all]) of
-                [Method, Target, Version = <<"HTTP/1.1">>] -> build_request(Socket, Method, Target, Version, HeaderLines, Buffered);
-                [Method, Target, Version = <<"HTTP/1.0">>] -> build_request(Socket, Method, Target, Version, HeaderLines, Buffered);
+                [Method, Target, Version = <<"HTTP/1.1">>] -> build_request(Socket, Method, Target, Version, HeaderLines, Buffered, Service);
+                [Method, Target, Version = <<"HTTP/1.0">>] -> build_request(Socket, Method, Target, Version, HeaderLines, Buffered, Service);
                 _ -> {error, bad_request_line}
             end;
         _ -> {error, bad_request_line}
     end.
 
-build_request(Socket, Method, Target, Version, Lines, Buffered) ->
+build_request(Socket, Method, Target, Version, Lines, Buffered, Service) ->
     case valid_token(Method) andalso valid_target(Target) of
       false -> {error, bad_request_line};
       true -> case parse_headers(Lines, []) of
         {ok, Headers} ->
+            Path = hd(binary:split(Target, <<"?">>)),
+            BodyLimit = body_limit(Method, Path, Service),
             case valid_host(Version, Headers) andalso body_length(Headers) of
-                Length when is_integer(Length), Length >= 0, Length =< ?BODY_LIMIT ->
+                Length when is_integer(Length), Length >= 0, Length =< BodyLimit ->
                     case read_body(Socket, Buffered, Length) of
                         {ok, Body, Rest} ->
-                            Path = hd(binary:split(Target, <<"?">>)),
                             Request = {'Net.HTTP.Request', Method, {'URI.URI', Target},
                                        {'Net.HTTP.Headers', Headers}, {'Binary', Body}},
                             {ok, Request, Method, Path, Rest,
                              keep_alive(Version, Headers)};
                         Error -> Error
                     end;
-                Length when is_integer(Length), Length > ?BODY_LIMIT -> {error, too_large};
+                Length when is_integer(Length), Length > BodyLimit -> {error, too_large};
                 _ -> {error, invalid_framing}
             end;
         Error -> Error
     end end.
+
+%% The route that will answer is known from the request line alone, so its
+%% own limit applies before a byte of the body is read; any other request,
+%% routed or not, gets the server's.
+body_limit(Method, Path, {{'Net.HTTP.Router', Routes}, ServerLimit}) ->
+    case find_route(Method, Path, Routes) of
+        {route, {'Net.HTTP.Route', _, _, _, {'Just', RouteLimit}}, _} -> RouteLimit;
+        _ -> ServerLimit
+    end.
 
 parse_headers([], Acc) -> {ok, lists:reverse(Acc)};
 parse_headers([Line | Rest], Acc) ->

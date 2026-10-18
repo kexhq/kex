@@ -1,0 +1,1 @@
+spec/error_using_bare_operator.kex:6:33: error: An operator in a using option list is written in parentheses: `(||)`

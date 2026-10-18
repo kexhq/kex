@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <string>
+#include <unordered_map>
 #include <variant>
 
 namespace kex::semantic {
@@ -85,6 +86,30 @@ inline auto structuredTypeOfDeclared(const ast::TypeExpr& type) -> StructuredTyp
             return {"Any", {}};
         }
     }, type.kind);
+}
+
+// What each transparent alias stands for, by its declared name:
+// `type UserId = String` maps `UserId` to its `String`.
+using DeclaredAliases = std::unordered_map<std::string, const ast::TypeExpr*>;
+
+// structuredTypeOfDeclared with every transparent alias replaced by what it
+// stands for, as the checker already reads it: `id : UserId` is a String
+// field, so `Type.Field.parse` reads it as one and `valueType` says so
+// (kexhq/kex#530). Only a name written without arguments is looked up; the
+// hop limit stops an alias cycle the checker reports anyway.
+inline auto expandDeclaredAliases(StructuredType type, const DeclaredAliases& aliases,
+                                  int hops = 0) -> StructuredType {
+    if (type.args.empty() && hops < 16)
+        if (auto found = aliases.find(type.name); found != aliases.end() && found->second)
+            return expandDeclaredAliases(structuredTypeOfDeclared(*found->second),
+                                         aliases, hops + 1);
+    for (auto& arg : type.args) arg = expandDeclaredAliases(std::move(arg), aliases, hops);
+    return type;
+}
+
+inline auto structuredTypeOfDeclared(const ast::TypeExpr& type,
+                                     const DeclaredAliases& aliases) -> StructuredType {
+    return expandDeclaredAliases(structuredTypeOfDeclared(type), aliases);
 }
 
 // Whether a declared type admits `None`: written `T?` or `Optional<T>`.

@@ -70,6 +70,9 @@ record Route do
   method : String
   path : String
   handler : Handler
+  # The largest request body this route reads, in bytes, or +None+ for the
+  # server's +ServerOptions.maximumBodyBytes+.
+  maximumBodyBytes : Integer? = None
 end
 
 # An immutable, declaration-ordered HTTP router.
@@ -85,11 +88,35 @@ record ShutdownReport do
   elapsedMilliseconds : Integer
 end
 
-# Bounded HTTP server resources and default graceful-shutdown duration.
+# Bounded HTTP server resources, default graceful-shutdown duration and
+# request body limit.
 record ServerOptions do
   maximumHandlers : Integer = 1024
   backlog : Integer = 128
   gracefulShutdown : Duration = Duration.seconds(10)
+  # The largest request body a route reads, in bytes, unless the route sets
+  # its own. A request declaring a longer +Content-Length+ is answered
+  # +413 Payload Too Large+ before any of its body is read.
+  maximumBodyBytes : Integer = 10485760
+end
+
+# How long one client request may take, and how large an answer it accepts.
+#
+# A request over a size limit is a +Limit+ error, and one over a time limit a
+# +Timeout+.
+#
+# @example A link preview: a short deadline and a small answer
+#   RequestOptions { timeout: Duration.seconds(2), maximumBodyBytes: 262144 }
+record RequestOptions do
+  # How long connecting to the server may take.
+  connectTimeout : Duration = Duration.seconds(10)
+  # The whole exchange, from connecting to the last byte of the body.
+  timeout : Duration = Duration.seconds(30)
+  # The largest response body accepted, in bytes.
+  maximumBodyBytes : Integer = 16777216
+  # The largest response header block accepted, in bytes. +HTTP.request+
+  # leaves header parsing to the runtime and does not apply it.
+  maximumHeaderBytes : Integer = 65536
 end
 
 # HTTP connection-pool bounds and idle lifetime.
@@ -103,6 +130,8 @@ end
 # Options owned by an explicit HTTP client.
 record ClientOptions do
   pool : PoolOptions = PoolOptions {}
+  # The limits of every request the client makes without its own.
+  request : RequestOptions = RequestOptions {}
 end
 
 # Lifetime request/reuse counters plus current pooled connections.
@@ -231,23 +260,46 @@ make Router do
   #
   # @example Adding a custom method
   #   router.route("PURGE", "/cache/:key", ~purge)
-  let route(method: String, path: String, handler: Handler) -> Router = Router {
-    routes: @routes + [Route { method: method, path: path, handler: handler }]
-  }
+  let route(method: String, path: String, handler: Handler) -> Router = this.limited(method, path, handler, None)
+  # Appends a route that reads request bodies up to +maximumBodyBytes+,
+  # instead of the server's +ServerOptions.maximumBodyBytes+.
+  #
+  # A request declaring a longer body is answered +413 Payload Too Large+
+  # before any of it is read, and the handler never runs.
+  #
+  # @example An upload route allowing more than every other route
+  #   Router.build
+  #     .post("/avatar", ~avatar, maximumBodyBytes: 2097152)
+  #     .post("/upload", ~upload, maximumBodyBytes: 524288000)
+  let route(method: String, path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.limited(method, path, handler, Just(maximumBodyBytes))
   # Appends a GET route. GET also supplies automatic HEAD fallback.
   let get(path: String, handler: Handler) -> Router = this.route("GET", path, handler)
+  # Appends a GET route with its own request body limit.
+  let get(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("GET", path, handler, maximumBodyBytes: maximumBodyBytes)
   # Appends an explicit HEAD route, overriding automatic GET fallback.
   let head(path: String, handler: Handler) -> Router = this.route("HEAD", path, handler)
   # Appends an explicit OPTIONS route, overriding generated OPTIONS.
   let options(path: String, handler: Handler) -> Router = this.route("OPTIONS", path, handler)
   # Appends a POST route.
   let post(path: String, handler: Handler) -> Router = this.route("POST", path, handler)
+  # Appends a POST route with its own request body limit.
+  let post(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("POST", path, handler, maximumBodyBytes: maximumBodyBytes)
   # Appends a PUT route.
   let put(path: String, handler: Handler) -> Router = this.route("PUT", path, handler)
+  # Appends a PUT route with its own request body limit.
+  let put(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("PUT", path, handler, maximumBodyBytes: maximumBodyBytes)
   # Appends a PATCH route.
   let patch(path: String, handler: Handler) -> Router = this.route("PATCH", path, handler)
+  # Appends a PATCH route with its own request body limit.
+  let patch(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("PATCH", path, handler, maximumBodyBytes: maximumBodyBytes)
   # Appends a DELETE route.
   let delete(path: String, handler: Handler) -> Router = this.route("DELETE", path, handler)
+
+  private do
+    let limited(method: String, path: String, handler: Handler, maximumBodyBytes: Integer?) -> Router = Router {
+      routes: @routes + [Route { method: method, path: path, handler: handler, maximumBodyBytes: maximumBodyBytes }]
+    }
+  end
 end
 
 # Starting, observing, and gracefully stopping HTTP servers.
@@ -332,6 +384,12 @@ make Client do
   #     .add("Idempotency-Key", requestId).try
   #   client.request("POST", url, headers, JSON.stringify(order).to(Binary).try)
   foul request(method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body)
+  # Sends a buffered request with its own limits instead of the client's.
+  #
+  # @example A link preview that gives up after two seconds
+  #   let quick = RequestOptions { timeout: Duration.seconds(2), maximumBodyBytes: 262144 }
+  #   client.request("GET", url, Headers.empty, Binary.empty, quick)
+  foul request(method: String, url: String, headers: Headers, body: Binary, options: RequestOptions) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body, options)
   # Sends a buffered GET request.
   foul get(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.get(this, url)
   # Sends a buffered binary POST request.
@@ -442,6 +500,15 @@ module HTTP do
   #   HTTP.request("GET", url, headers).try
   request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
+  # Sends one stateless buffered request with its own time and size limits.
+  #
+  # The body is read as it arrives and the request abandoned once it passes
+  # +maximumBodyBytes+, so an oversized answer is never held whole.
+  #
+  # @example
+  #   HTTP.request("GET", url, Headers.empty, Binary.empty, RequestOptions { timeout: Duration.seconds(2) })
+  request : String -> String -> Headers -> Binary -> RequestOptions -> Result<Response<Binary>, NetError>
+  let request(method, url, headers, body, options) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body, options)
   # Sends one stateless buffered GET.
   # @example
   #   HTTP.get("https://example.test/").try

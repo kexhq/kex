@@ -1,0 +1,22 @@
+# A field declared with an alias is read as what the alias stands for: its
+# `valueType` names that type, and `Type.Field.parse` and `Type.construct`
+# take what it takes (kexhq/kex#530).
+
+type UserId = String
+type Visits = Integer
+type Nick = String?
+
+record User do
+  id : UserId
+  visits : Visits
+  nick : Nick
+end
+
+main do
+  Type.of(User).fields.each do |field|
+    IO.printLine("${field.name}: ${field.valueType.to(String)} optional=${field.optional?}")
+  end
+  let fields = Type.of(User).fields
+  IO.printLine(fields.map { |field| field.parse(field.name == "visits" then "3" else "u1") })
+  IO.printLine(Type.of(User).construct({"id": "u1", "visits": 3}).map(&.id))
+end

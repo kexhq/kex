@@ -543,6 +543,9 @@ private:
     // dispatch to nothing: an annotated parameter simply never matched, and
     // the call fell through to None instead of reporting anything.
     std::unordered_map<std::string, const ast::TypeExpr*> m_typeAliases;
+    // What each alias stands for, as `Type.fields` and `Type.constructors`
+    // report a field or argument declared with one (kex::aliasTarget).
+    std::unordered_map<std::string, const ast::TypeExpr*> m_declaredAliases;
     // Erased distinct and opaque types need static names for receiver dispatch.
     std::unordered_set<std::string> m_erasedReceiverTypes;
 

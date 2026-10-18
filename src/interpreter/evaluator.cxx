@@ -945,6 +945,8 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
             kex::isTransparentTypeAlias(def))
             m_typeAliases[def.name] = only.get();
     }
+    if (const auto* target = kex::aliasTarget(def))
+        m_declaredAliases[def.name] = target;
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
         // The type's own name as a value is its token, as a record's is (see

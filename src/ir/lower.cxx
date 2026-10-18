@@ -550,6 +550,9 @@ struct Lowering {
     // single NAMED variant is an ADT tag (or the existing transparent alias),
     // which `variantTagSet` and `records` already speak for.
     std::unordered_map<std::string, std::string> structuralTypeAliases;
+    // What each transparent alias stands for, for the field and constructor
+    // layouts `Type.fields` and `Type.constructors` answer (kexhq/kex#530).
+    semantic::DeclaredAliases declaredAliases;
     // Record/make type names (so a namespace call can be recognized as a
     // static method dispatch, not an unknown module).
     std::unordered_set<std::string> knownTypes;
@@ -2681,14 +2684,28 @@ struct Lowering {
                             return method.owner == owner;
                         });
         if (owned) {
+            // An overload the arguments already fill needs nothing padded,
+            // and one that leaves out a parameter with no default cannot be
+            // the call's: `this.all` beside `all(as: T, renamed = {})` was
+            // padded with `renamed` alone, to an `all/3` nobody declared
+            // (kexhq/kex#531).
+            for (const auto& method : *methods)
+                if (method.owner == owner &&
+                    method.def->clauses[0].params.size() == n.args.size())
+                    return trailing;
             for (const auto& method : *methods) {
                 if (method.owner != owner) continue;
                 const auto& params = method.def->clauses[0].params;
                 if (params.size() <= n.args.size()) continue;
+                if (!std::all_of(params.begin() + static_cast<std::ptrdiff_t>(n.args.size()),
+                                 params.end(),
+                                 [](const ast::Param& param) {
+                                     return param.defaultValue.has_value();
+                                 }))
+                    continue;
                 for (size_t i = n.args.size(); i < params.size(); ++i)
-                    if (params[i].defaultValue)
-                        trailing.push_back(&*params[i].defaultValue);
-                if (!trailing.empty()) break;
+                    trailing.push_back(&*params[i].defaultValue);
+                break;
             }
             return trailing;
         }
@@ -5413,8 +5430,9 @@ struct Lowering {
                     const auto& field = fields[i];
                     std::vector<ExprPtr> parts;
                     parts.push_back(binaryLit(field.name));
-                    parts.push_back(structuredTypeLiteral(field.type));
-                    parts.push_back(litBool(field.type.name == "Option"));
+                    const auto type = semantic::expandDeclaredAliases(field.type, declaredAliases);
+                    parts.push_back(structuredTypeLiteral(type));
+                    parts.push_back(litBool(type.name == "Option"));
                     parts.push_back(litBool(field.hasDefault));
                     // The default itself, as a fun evaluated only when
                     // `Type.construct` needs it (kexhq/kex#487).
@@ -5439,7 +5457,8 @@ struct Lowering {
                 for (const auto& [tag, argTypes] : variants) {
                     std::vector<ExprPtr> types;
                     for (const auto& type : argTypes)
-                        types.push_back(structuredTypeLiteral(type));
+                        types.push_back(structuredTypeLiteral(
+                            semantic::expandDeclaredAliases(type, declaredAliases)));
                     described.push_back(tupleOf(two(binaryLit(tag), listOf(std::move(types)))));
                 }
                 adtEntries.push_back(tupleOf(two(atomLit(owner), listOf(std::move(described)))));
@@ -9729,6 +9748,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
              Lowering::simpleTypeName((*td.variants)[0]).empty()))
             L.structuralTypeAliases[td.name] =
                 renderDispatchType(*(*td.variants)[0]);
+        if (const auto* target = kex::aliasTarget(td))
+            L.declaredAliases[td.name] = target;
         if (kex::isTransparentTypeAlias(td)) return;
         auto& layout = L.adtLayouts[td.name];
         layout.clear();
