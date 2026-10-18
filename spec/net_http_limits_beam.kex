@@ -1,0 +1,68 @@
+# kex: run-beam
+#
+# Settable HTTP limits, against a real server on an ephemeral port: the
+# server's request body limit and a route's own (kexhq/kex#488), and the
+# clients' deadline and response size (kexhq/kex#484). BEAM-only, like the
+# rest of Net.HTTP.
+
+using Net.HTTP
+using Net.Socket
+
+foul echo(
+  request: Request<Binary>,
+  _context: Context
+) -> Response<Binary> = Response.binary(200, request.body, Headers.empty)
+
+foul large(
+  _request: Request<Binary>,
+  _context: Context
+) -> Response<Binary> = Response.text(200, "x".repeat(4096))
+
+foul slow(
+  _request: Request<Binary>,
+  _context: Context
+) -> Response<Binary> do
+  Task.sleep(Duration.seconds(2))
+  return Response.text(200, "late")
+end
+
+let kindOf(result: Result<Response<Binary>, NetError>) -> String = match result do
+  Ok(response) => "ok ${response.status.code}"
+  Error(error) => "${error.kind}"
+end
+
+main do
+  let router = Router.build
+    .post("/small", ~echo)
+    .post("/upload", ~echo, maximumBodyBytes: 64)
+    .get("/large", ~large)
+    .get("/slow", ~slow)
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router, ServerOptions {
+    gracefulShutdown: Duration.milliseconds(100),
+    maximumBodyBytes: 16
+  }).try
+  let base = "http://127.0.0.1:${server.localAddress.port.value}"
+  let body = "y".repeat(32).to(Binary).try
+
+  let client = Client.open().try
+  IO.printLine("server limit: ${kindOf(client.request("POST", "${base}/small", Headers.empty, body))}")
+  IO.printLine("route limit: ${kindOf(client.request("POST", "${base}/upload", Headers.empty, body))}")
+
+  let small = RequestOptions { maximumBodyBytes: 1024 }
+  IO.printLine("client body: ${kindOf(client.request("GET", "${base}/large", Headers.empty, Binary.empty, small))}")
+  IO.printLine("client default: ${kindOf(client.request("GET", "${base}/large", Headers.empty, Binary.empty))}")
+  let quick = RequestOptions { timeout: Duration.milliseconds(300) }
+  IO.printLine("client deadline: ${kindOf(client.request("GET", "${base}/slow", Headers.empty, Binary.empty, quick))}")
+  client.close.try
+
+  let capped = Client.open(ClientOptions { request: small }).try
+  IO.printLine("client options: ${kindOf(capped.request("GET", "${base}/large", Headers.empty, Binary.empty))}")
+  capped.close.try
+
+  IO.printLine("HTTP body: ${kindOf(HTTP.request("GET", "${base}/large", Headers.empty, Binary.empty, small))}")
+  IO.printLine("HTTP default: ${kindOf(HTTP.request("GET", "${base}/large"))}")
+  IO.printLine("HTTP deadline: ${kindOf(HTTP.request("GET", "${base}/slow", Headers.empty, Binary.empty, quick))}")
+
+  Server.stop(server).try
+end

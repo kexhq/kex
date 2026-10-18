@@ -1691,14 +1691,26 @@ auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& dia
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
     walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };
-    walkBodies(program.items, [&](auto& target) {
-        using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>)
-            walk.functionBody(target);
-        else
-            walk.substitute(target);
-    });
-    for (auto& fn : folder.generated) program.items.push_back(std::move(fn));
+    // Each generated function joins the module its template is written in:
+    // appended to the program's top level instead, a `params: [card: Card]`
+    // lost that module's scope, `Card` no longer named its record, and a
+    // `card.name` read became a call to a same-named prelude function
+    // (kexhq/kex#533).
+    auto foldScope = [&](auto&& self, auto& items) -> void {
+        walkScopeBodies(items, [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                walk.functionBody(target);
+            else
+                walk.substitute(target);
+        });
+        for (auto& fn : folder.generated) items.push_back(std::move(fn));
+        folder.generated.clear();
+        for (auto& item : items)
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod) self(self, (*mod)->body);
+    };
+    foldScope(foldScope, program.items);
     return folder.ok;
 }
 

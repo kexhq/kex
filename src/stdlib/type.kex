@@ -113,7 +113,9 @@ module Type do
     name : String
 
     # The field's declared type, as written: +Integer?+ is an +Option+ of
-    # +Integer+, and a type parameter keeps its own name.
+    # +Integer+, and a type parameter keeps its own name. An alias is what it
+    # stands for: a field declared +UserId+ under +type UserId = String+ is a
+    # +String+.
     valueType : Type
 
     # Whether the field is declared optional (+T?+), so a value may be +None+.

@@ -199,8 +199,9 @@ auto Evaluator::registerTypeBuiltins() -> void {
 
     // `Type.fields`: one `(name, type, optional, hasDefault)` tuple per field,
     // in declaration order, the declared type read from the source as written
-    // (semantic::structuredTypeOfDeclared) — the same shape the BEAM runtime
-    // is handed by the compiler.
+    // (semantic::structuredTypeOfDeclared), a transparent alias read as what
+    // it stands for — the same shape the BEAM runtime is handed by the
+    // compiler.
     defineIntrinsic("Type::fieldLayoutsOf",
                     [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> fields;
@@ -208,7 +209,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
         if (record && *record)
             for (const auto& field : (*record)->fields) {
                 const auto type = field.type
-                    ? semantic::structuredTypeOfDeclared(*field.type)
+                    ? semantic::structuredTypeOfDeclared(*field.type, m_declaredAliases)
                     : semantic::StructuredType{"Any", {}};
                 fields.push_back(Value::tuple({
                     Value::string(field.name),
@@ -235,7 +236,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                     name = generic->name.parts.back();
                     for (const auto& arg : generic->args)
                         argTypes.push_back(structuredTypeValue(
-                            arg ? semantic::structuredTypeOfDeclared(*arg)
+                            arg ? semantic::structuredTypeOfDeclared(*arg, m_declaredAliases)
                                 : semantic::StructuredType{"Any", {}}));
                 } else if (const auto* plain = std::get_if<ast::TypeName>(&variant->kind)) {
                     if (plain->parts.empty()) continue;
@@ -295,7 +296,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
         std::unordered_map<std::string, ValuePtr> fields;
         for (const auto& field : record->fields) {
             const auto declared = field.type
-                ? semantic::structuredTypeOfDeclared(*field.type)
+                ? semantic::structuredTypeOfDeclared(*field.type, m_declaredAliases)
                 : semantic::StructuredType{"Any", {}};
             if (auto found = given.find(field.name); found != given.end()) {
                 if (field.type && !matchesDeeply(found->second, *field.type, matches))
@@ -348,7 +349,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                     return Value::error(Value::string(
                         tag + " expects " +
                         renderedType(structuredTypeValue(
-                            semantic::structuredTypeOfDeclared(*argTypes[i]))) +
+                            semantic::structuredTypeOfDeclared(*argTypes[i], m_declaredAliases))) +
                         ", got " + renderedType(typeOfValue(given->elements[i]))));
             return Value::ok(Value::variant(tag, *key, given->elements));
         }

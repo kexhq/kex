@@ -1,0 +1,47 @@
+# kex: run-beam
+# A short chunk-size line can share a socket read with a body larger than
+# maximumHeaderBytes. Only the line counts against the header limit.
+
+using Net.Socket
+using Net.HTTP
+
+foul chunked(body: String) -> Result<Response<Binary>, NetError> do
+  let listener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
+  let port = listener.localAddress.try.port.value
+  let server = Task.start do
+    let peer = listener.accept.try
+    peer.receiveUntil("\r\n\r\n".to(Binary).try, 8192).try
+    let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    peer.sendAll("${head}${body}".to(Binary).try).try
+    peer.close
+  end
+  let client = Client.open(ClientOptions {
+    request: RequestOptions {
+      maximumHeaderBytes: 128,
+      maximumBodyBytes: 4096
+    }
+  }).try
+  let response = client.request(
+    "GET", "http://127.0.0.1:${port}/", Headers.empty, Binary.empty
+  )
+  client.close.try
+  server.await
+  listener.close
+  return response
+end
+
+main do
+  let response = chunked("1000\r\n${"x".repeat(4096)}\r\n0\r\n\r\n").try
+  assert(response.body.to(String).try == "x".repeat(4096))
+  let longLine = chunked("1;${"x".repeat(128)}\r\nx\r\n0\r\n\r\n")
+  match longLine do
+    Error(error) => assert(error.kind == Limit)
+    Ok(_) => assert(false, "an oversized chunk-size line must fail")
+  end
+  let longTrailer = chunked("0\r\nX-Trailer: ${"x".repeat(128)}\r\n\r\n")
+  match longTrailer do
+    Error(error) => assert(error.kind == Limit)
+    Ok(_) => assert(false, "oversized trailers must fail")
+  end
+  IO.printLine("ok")
+end

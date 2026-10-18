@@ -34,6 +34,23 @@ inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
     return generic && generic->applied;
 }
 
+// What a non-generic alias stands for: a transparent alias's named type, or a
+// structural right-hand side (`type Nick = String?`, `type Handler = Env ->
+// String`) no value carries as a tag. Null for a sum type, a distinct type
+// and a generic alias. `Type.fields` reads a field declared with one as what
+// it stands for (kexhq/kex#530).
+inline auto aliasTarget(const ast::TypeDef& def) -> const ast::TypeExpr* {
+    if (def.isDistinct || def.leadingPipe || !def.variants ||
+        def.variants->size() != 1 || !(*def.variants)[0] || !def.typeParams.empty())
+        return nullptr;
+    const auto* only = (*def.variants)[0].get();
+    if (isTransparentTypeAlias(def)) return only;
+    if (std::holds_alternative<ast::TypeName>(only->kind) ||
+        std::holds_alternative<ast::GenericType>(only->kind))
+        return nullptr;
+    return only;
+}
+
 // A trait's identity, the rule records follow: its own name at the top level,
 // `Shop.Rules.Pricing` when `module Shop.Rules` declares it. Two modules may
 // then each declare a `Shape` without one replacing the other.

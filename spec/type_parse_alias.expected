@@ -1,0 +1,5 @@
+id: String optional=false
+visits: Integer optional=false
+nick: String? optional=true
+[Ok(u1), Ok(3), Ok(Just(u1))]
+u1

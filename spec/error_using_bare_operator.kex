@@ -1,0 +1,6 @@
+# kex: check-only
+# An operator in a `using … only:` list is named in parentheses, the same as
+# it is everywhere else it is referred to (kexhq/kex#532). Written bare, the
+# error says so instead of only that a name was expected.
+
+using Vector, only: [magnitude, ||]

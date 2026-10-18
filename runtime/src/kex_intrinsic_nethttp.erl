@@ -1,6 +1,6 @@
 -module(kex_intrinsic_nethttp).
 -export([headers/1, parseHeaders/1, addHeader/3, removeHeader/2,
-         getHeader/2, getAllHeaders/2, status/1, get/1, request/4,
+         getHeader/2, getAllHeaders/2, status/1, get/1, request/4, request/5,
          responseBinary/3, responseText/2, responseEmpty/1, redactedHeaders/1]).
 
 headers(Entries) ->
@@ -40,14 +40,22 @@ redact_header(Name, Value) ->
     end.
 get(URL) -> request(<<"GET">>, URL, {'Net.HTTP.Headers', []}, {'Binary', <<>>}).
 
-request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', RequestBody})
+request(MethodText, URL, Headers, Body) ->
+    request(MethodText, URL, Headers, Body, default_options()).
+
+%% Today's limits, the defaults `Net.HTTP.RequestOptions` declares.
+default_options() ->
+    {'Net.HTTP.RequestOptions', {'Duration', 10.0}, {'Duration', 30.0}, 16777216, 65536}.
+
+request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', RequestBody}, Options)
   when is_binary(MethodText), is_binary(URL) ->
     inets:start(),
     ssl:start(),
-    case method(MethodText) of
-      error -> net_error(<<"unsupported HTTP method">>);
-      Method ->
-    HTTPOptions = [{timeout, 30000}, {connect_timeout, 10000},
+    case {method(MethodText), kex_intrinsic_nethttpclient:request_limits(Options)} of
+      {error, _} -> net_error(<<"unsupported HTTP method">>);
+      {_, error} -> net_error(<<"invalid HTTP request options">>);
+      {Method, {ok, #{connect := Connect, timeout := Timeout, body := BodyLimit}}} ->
+    HTTPOptions = [{timeout, Timeout}, {connect_timeout, min(Connect, Timeout)},
                    {autoredirect, false},
                    {ssl, [{verify, verify_peer},
                           {cacerts, public_key:cacerts_get()},
@@ -58,26 +66,75 @@ request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', Reques
                   head -> {binary_to_list(URL), Headers0};
                   _ -> {binary_to_list(URL), Headers0, "application/octet-stream", RequestBody}
               end,
+    %% Streamed, so a body over the limit is refused as it arrives rather
+    %% than read whole into memory first (kexhq/kex#484).
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
     case httpc:request(Method, Request, HTTPOptions,
-                       [{body_format, binary}]) of
-        {ok, {{_Version, Code, _Reason}, ResponseHeaders, Body}} ->
-            Headers = [{unicode:characters_to_binary(Name),
-                        unicode:characters_to_binary(Value)}
-                       || {Name, Value} <- ResponseHeaders],
-            {'Ok', {'Net.HTTP.Response', {'Net.HTTP.Status', Code},
-                    {'Net.HTTP.Headers', Headers}, {'Binary', Body}}};
-        {error, Reason} ->
-            Kind = case Reason of
-                       timeout -> 'Timeout';
-                       {failed_connect, _} -> 'Connect';
-                       {tls_alert, _} -> 'Protocol';
-                       _ -> 'Backend'
-                   end,
-            {'Error', {'Net.NetError', Kind, 'HTTPClient', diagnostic(Reason),
-                       'None', 'None'}}
+                       [{body_format, binary}, {sync, false}, {stream, self}]) of
+        {ok, RequestId} -> await(RequestId, Deadline, BodyLimit);
+        {error, Reason} -> client_error(Reason)
     end
     end;
-request(_, _, _, _) -> net_error(<<"invalid HTTP request values">>).
+request(_, _, _, _, _) -> net_error(<<"invalid HTTP request values">>).
+
+%% httpc streams only a 200 or 206 answer; any other arrives whole.
+await(RequestId, Deadline, BodyLimit) ->
+    receive
+        {http, {RequestId, {{_Version, Code, _Reason}, ResponseHeaders, Body}}} ->
+            case byte_size(Body) =< BodyLimit of
+                true -> response(Code, ResponseHeaders, Body);
+                false -> body_limit()
+            end;
+        {http, {RequestId, stream_start, ResponseHeaders}} ->
+            Code = case lists:keymember("content-range", 1, ResponseHeaders) of
+                       true -> 206;
+                       false -> 200
+                   end,
+            stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, [], 0);
+        {http, {RequestId, {error, Reason}}} -> client_error(Reason)
+    after remaining(Deadline) ->
+        httpc:cancel_request(RequestId),
+        client_error(timeout)
+    end.
+
+stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Parts, Bytes) ->
+    receive
+        {http, {RequestId, stream, Part}} ->
+            Next = [Part | Parts],
+            NextBytes = Bytes + iolist_size(Part),
+            case NextBytes =< BodyLimit of
+                true -> stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Next, NextBytes);
+                false -> httpc:cancel_request(RequestId), body_limit()
+            end;
+        {http, {RequestId, stream_end, _Trailers}} ->
+            response(Code, ResponseHeaders, iolist_to_binary(lists:reverse(Parts)));
+        {http, {RequestId, {error, Reason}}} -> client_error(Reason)
+    after remaining(Deadline) ->
+        httpc:cancel_request(RequestId),
+        client_error(timeout)
+    end.
+
+response(Code, ResponseHeaders, Body) ->
+    Headers = [{unicode:characters_to_binary(Name),
+                unicode:characters_to_binary(Value)}
+               || {Name, Value} <- ResponseHeaders],
+    {'Ok', {'Net.HTTP.Response', {'Net.HTTP.Status', Code},
+            {'Net.HTTP.Headers', Headers}, {'Binary', Body}}}.
+
+client_error(Reason) ->
+    Kind = case Reason of
+               timeout -> 'Timeout';
+               {failed_connect, _} -> 'Connect';
+               {tls_alert, _} -> 'Protocol';
+               _ -> 'Backend'
+           end,
+    {'Error', {'Net.NetError', Kind, 'HTTPClient', diagnostic(Reason), 'None', 'None'}}.
+
+body_limit() ->
+    {'Error', {'Net.NetError', 'Limit', 'HTTPClient', <<"HTTP response body exceeds limit">>,
+               'None', 'None'}}.
+
+remaining(Deadline) -> max(0, Deadline - erlang:monotonic_time(millisecond)).
 
 parse_line(Line0) ->
     Line = binary:replace(Line0, <<"\r">>, <<>>),

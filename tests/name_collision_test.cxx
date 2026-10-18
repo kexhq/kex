@@ -490,6 +490,115 @@ end
 )KEX"}},
                 "statement\nentry\nlisted\npicked\ncaption of kind\n");
         });
+
+        it("reads a field in a module's embedded template (kexhq/kex#533)", []() {
+            expectOnBothBackends({
+                {"lib/views.kex", R"KEX(module Lib.Views
+
+record Card do
+  name : String
+  link : String
+end
+
+let cardPartial = Template.html(Kex.embed("_card.html.ket"))
+
+shown : Card -> String
+let shown(card) = cardPartial(card)
+)KEX"},
+                {"lib/_card.html.ket", R"KEX(---
+params: [card: Card]
+---
+<p><%= card.name %> <%= card.link %></p>
+)KEX"},
+                {"main.kex", R"KEX(main do
+  IO.print(Lib.Views.shown(Lib.Views.Card { name: "Ada", link: "/u" }))
+end
+)KEX"}},
+                "<p>Ada /u</p>\n");
+        });
+    });
+
+    describe("an imported name in another module's make signature (kexhq/kex#532)", []() {
+        it("types the overloaded || on a value that make function answers", []() {
+            expectOnBothBackends({
+                {"lib/schema.kex", R"KEX(module Lib.Schema
+
+type Cond = EqCond(String, String) | AnyCond([Cond])
+
+record TextColumn do
+  label : String
+end
+
+make TextColumn do
+  let ==(val: String) -> Lib.Schema.Cond = EqCond(@label, val)
+end
+
+make Cond do
+  let ||(other: Lib.Schema.Cond) -> Lib.Schema.Cond = AnyCond([this, other])
+end
+
+text : String -> TextColumn
+let text(label) = TextColumn { label: label }
+
+described : Cond -> String
+let described(cond) do
+  match cond do
+    EqCond(label, value) => "${label}=${value}"
+    AnyCond(parts) => parts.map { |part| described(part) }.join(" or ")
+  end
+end
+)KEX"},
+                {"lib/table.kex", R"KEX(module Lib.Table
+
+using Lib.Schema, only: [TextColumn]
+
+record Definition do
+  label : String
+end
+
+make Definition do
+  textColumn :> String -> TextColumn
+  let textColumn(name) = Lib.Schema.text(name)
+end
+)KEX"},
+                {"main.kex", R"KEX(main do
+  let users = Lib.Table.Definition { label: "users" }
+  let owner = users.textColumn("owner")
+  IO.print(Lib.Schema.described(owner == "a" || owner == "b"))
+end
+)KEX"}},
+                "owner=a or owner=b");
+        });
+    });
+
+    describe("a make function overloaded by name with a defaulted parameter (kexhq/kex#531)", []() {
+        it("calls the overload that takes nothing, and the other without its default", []() {
+            expectOnBothBackends({
+                {"lib/query.kex", R"KEX(module Lib.Query
+
+record Query do
+  n : Integer = 0
+end
+
+let start -> Query = Query {}
+
+make Query do
+  foul all -> [String] = ["u1", "u2"]
+
+  foul all(as: T, renamed: {String: String} = {}) -> [T] = this.all.map { |id| Type.of(as).construct({"id": id}).or(as) }
+end
+)KEX"},
+                {"main.kex", R"KEX(record User do
+  id : String
+end
+
+main do
+  IO.printLine(Lib.Query.start.all(as: User).map(&.id).join(","))
+  IO.printLine(Lib.Query.start.all.join(","))
+end
+)KEX"}},
+                "u1,u2\nu1,u2\n");
+        });
     });
 
     describe("same-named records with a same-named method (kexhq/kex#476)", []() {

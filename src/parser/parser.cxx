@@ -4369,22 +4369,32 @@ auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
 auto Parser::parseUsingOptions(std::optional<std::string> &alias,
                                std::vector<std::string> &onlyNames,
                                std::vector<std::string> &exceptNames) -> void {
+  auto atOperator = [&]() {
+    return check(TokenType::Plus) || check(TokenType::Minus) ||
+           check(TokenType::Star) || check(TokenType::Slash) ||
+           check(TokenType::Percent) || check(TokenType::Caret) ||
+           check(TokenType::EqEq) || check(TokenType::NotEq) ||
+           check(TokenType::LessThan) || check(TokenType::LessEq) ||
+           check(TokenType::GreaterThan) || check(TokenType::GreaterEq) ||
+           check(TokenType::AmpAmp) || check(TokenType::PipePipe);
+  };
   auto parseName = [&]() -> std::string {
     if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent))
       return advance().value;
     if (match(TokenType::LParen)) {
-      if (check(TokenType::Plus) || check(TokenType::Minus) ||
-          check(TokenType::Star) || check(TokenType::Slash) ||
-          check(TokenType::Percent) || check(TokenType::Caret) ||
-          check(TokenType::EqEq) || check(TokenType::NotEq) ||
-          check(TokenType::LessThan) || check(TokenType::LessEq) ||
-          check(TokenType::GreaterThan) || check(TokenType::GreaterEq) ||
-          check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
+      if (atOperator()) {
         auto name = std::string(tokenTypeName(advance().type));
         expect(TokenType::RParen, "Expected ')' after operator");
         return name;
       }
       error("Expected name or operator in using option list");
+    }
+    // `only: [||]` — the operator is named in parentheses, as it is
+    // everywhere else it is referred to (kexhq/kex#532).
+    if (atOperator()) {
+      const auto op = std::string(tokenTypeName(peek().type));
+      error("An operator in a using option list is written in parentheses: `(" +
+            op + ")`");
     }
     error("Expected name in using option list");
   };

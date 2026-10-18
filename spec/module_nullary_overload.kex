@@ -1,0 +1,14 @@
+# A nullary overload is a call, while a binding containing a function is
+# evaluated before applying arguments. Both can live beside ordinary calls.
+
+module Factory do
+  let open -> String = "empty"
+  let open(value: String) -> String = value
+  let render = { |value| "render ${value}" }
+end
+
+main do
+  IO.printLine(Factory.open)
+  IO.printLine(Factory.open("full"))
+  IO.printLine(Factory.render("value"))
+end
