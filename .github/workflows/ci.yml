@@ -328,13 +328,29 @@ jobs:
     needs: changes
     if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
-    # Docker Hub rate-limits anonymous pulls per IP and the shared runners
-    # hit it, failing this job with a 429 on `alpine:3.22` before anything is
-    # built. Amazon's public mirror of the official images is not behind it.
+    # Pull once with registry fallbacks, then reuse a local tag for both
+    # builds. Shared runners have hit rate limits on Docker Hub AND ECR.
     env:
-      BASE_IMAGE: public.ecr.aws/docker/library/alpine:3.22
+      BASE_IMAGE: kex-alpine-base:3.22
     steps:
       - uses: actions/checkout@v4
+
+      - name: Pull the Alpine base image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for source in \
+            mirror.gcr.io/library/alpine:3.22 \
+            public.ecr.aws/docker/library/alpine:3.22 \
+            docker.io/library/alpine:3.22; do
+            if docker pull "$source"; then
+              docker tag "$source" "$BASE_IMAGE"
+              exit 0
+            fi
+            echo "::warning::Could not pull $source; trying the next registry"
+          done
+          echo "::error::Could not pull Alpine 3.22 from any registry"
+          exit 1
 
       - name: Build the Alpine image (runs the suites on musl)
         run: docker build -f docker/Dockerfile.alpine --build-arg BUILD_JOBS=4 --build-arg BASE_IMAGE="$BASE_IMAGE" -t kex:alpine .
