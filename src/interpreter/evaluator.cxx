@@ -942,6 +942,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
         const auto& only = (*def.variants)[0];
         if (std::holds_alternative<ast::FunctionType>(only->kind) ||
             std::holds_alternative<ast::BlockType>(only->kind) ||
+            std::holds_alternative<ast::TypeQuery>(only->kind) ||
             kex::isTransparentTypeAlias(def))
             m_typeAliases[def.name] = only.get();
     }

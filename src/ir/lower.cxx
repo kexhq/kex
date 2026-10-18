@@ -3717,11 +3717,9 @@ struct Lowering {
                         owners != methodOwners.end() &&
                         std::any_of(owners->second.begin(), owners->second.end(),
                                     [&](const std::string& owner) {
-                                        // Named arguments are placed by the
-                                        // resolved target's parameter names,
-                                        // which this shortcut does not do.
-                                        return canonicalRecordName(owner) == receiverType &&
-                                               n.namedArgs.empty();
+                                        // The local method path places labels
+                                        // against the selected declaration too.
+                                        return canonicalRecordName(owner) == receiverType;
                                     });
                 }
             }
@@ -4327,7 +4325,15 @@ struct Lowering {
                         // reference to something that only ever existed as
                         // `render/0`. Evaluate the thunk first, then apply
                         // the supplied args to what it returns.
-                        if (!args.empty() && emittedModuleZeroArg.count(it->second)) {
+                        const auto clauses = fnNamedClauses.find(qualKey);
+                        const bool hasMatchingOverload =
+                            clauses != fnNamedClauses.end() &&
+                            std::any_of(clauses->second.begin(), clauses->second.end(),
+                                        [&](const ast::FunctionClause* clause) {
+                                            return clause->params.size() == args.size();
+                                        });
+                        if (!args.empty() && emittedModuleZeroArg.count(it->second) &&
+                            !hasMatchingOverload) {
                             auto thunk = std::make_unique<Expr>();
                             thunk->node = localCall(it->second, {});
                             auto indirect = std::make_unique<Expr>();

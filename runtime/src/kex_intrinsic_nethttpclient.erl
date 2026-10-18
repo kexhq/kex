@@ -255,10 +255,11 @@ consume_trailers(Transport, Buffer, Acc, Limits) ->
         {error, Reason} -> {error, native_error('Protocol', Reason)}
     end.
 
-read_line(_, Buffer, #{header := HeaderLimit}) when byte_size(Buffer) > HeaderLimit -> {error, header_limit};
-read_line(Transport, Buffer, Limits) ->
+read_line(Transport, Buffer, Limits = #{header := HeaderLimit}) ->
     case binary:match(Buffer, <<"\r\n">>) of
-        {Position, 2} -> {ok, binary:part(Buffer, 0, Position), binary:part(Buffer, Position + 2, byte_size(Buffer) - Position - 2)};
+        {Position, 2} when Position =< HeaderLimit -> {ok, binary:part(Buffer, 0, Position), binary:part(Buffer, Position + 2, byte_size(Buffer) - Position - 2)};
+        {_, _} -> {error, header_limit};
+        nomatch when byte_size(Buffer) > HeaderLimit -> {error, header_limit};
         nomatch -> case transport_recv(Transport, 0, Limits) of {ok, Data} -> read_line(Transport, <<Buffer/binary, Data/binary>>, Limits); Error -> Error end
     end.
 recv_until(Transport, Acc, Marker, Limits = #{header := Limit}) ->
@@ -337,5 +338,6 @@ call(Pid, Message, Timeout) ->
     end.
 %% Running out of time is a Timeout whichever step it happened in.
 native_error(_, timeout) -> error_value('Timeout', <<"HTTP request timed out">>);
+native_error(_, header_limit) -> error_value('Limit', <<"HTTP response headers exceed limit">>);
 native_error(Kind, Reason) -> error_value(Kind, unicode:characters_to_binary(io_lib:format("~p", [Reason]))).
 error_value(Kind, Message) -> {'Error', {'Net.NetError', Kind, 'HTTPClient', Message, 'None', 'None'}}.

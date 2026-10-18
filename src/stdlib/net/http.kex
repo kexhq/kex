@@ -502,8 +502,10 @@ module HTTP do
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
   # Sends one stateless buffered request with its own time and size limits.
   #
-  # The body is read as it arrives and the request abandoned once it passes
-  # +maximumBodyBytes+, so an oversized answer is never held whole.
+  # For status 200 and 206, the runtime streams the body and abandons the
+  # request once it passes +maximumBodyBytes+. Other statuses are buffered
+  # by the runtime before their body size is checked. Use +Client.request+
+  # to bound body reads for every status.
   #
   # @example
   #   HTTP.request("GET", url, Headers.empty, Binary.empty, RequestOptions { timeout: Duration.seconds(2) })

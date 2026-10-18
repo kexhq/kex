@@ -90,19 +90,20 @@ await(RequestId, Deadline, BodyLimit) ->
                        true -> 206;
                        false -> 200
                    end,
-            stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, []);
+            stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, [], 0);
         {http, {RequestId, {error, Reason}}} -> client_error(Reason)
     after remaining(Deadline) ->
         httpc:cancel_request(RequestId),
         client_error(timeout)
     end.
 
-stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Parts) ->
+stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Parts, Bytes) ->
     receive
         {http, {RequestId, stream, Part}} ->
             Next = [Part | Parts],
-            case iolist_size(Next) =< BodyLimit of
-                true -> stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Next);
+            NextBytes = Bytes + iolist_size(Part),
+            case NextBytes =< BodyLimit of
+                true -> stream(RequestId, Deadline, BodyLimit, Code, ResponseHeaders, Next, NextBytes);
                 false -> httpc:cancel_request(RequestId), body_limit()
             end;
         {http, {RequestId, stream_end, _Trailers}} ->
