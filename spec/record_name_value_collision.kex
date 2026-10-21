@@ -1,0 +1,13 @@
+# A record named as a value, `first(as: Session)`, names the record of the
+# module it is written in (kexhq/kex#539). Once Net.HTTP.WebSocket — which
+# declares its own `record Session` — was part of the program, BEAM passed
+# the bare atom 'Session', which the run-time registry could no longer tell
+# apart ("Not a record type: Atom"), and the walker preferred the imported
+# WebSocket record over the module's own ("Unknown field").
+
+using Net.HTTP.WebSocket
+
+main do
+  IO.printLine(RecordValue.Sessions.holder)
+  IO.printLine(Net.HTTP.WebSocket.Session { subprotocol: Just("chat") }.subprotocol)
+end

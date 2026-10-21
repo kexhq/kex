@@ -1,0 +1,23 @@
+# A make function's nullary clause written after a one-argument one: the
+# walker tried clauses in source order, guessing per clause whether the
+# first argument was the receiver, so `["a", "b"].join` reached `join(sep)`
+# first, took the list itself for `sep`, and failed with "'this' used outside
+# of a method context". `sort` only worked because its nullary clause comes
+# first.
+
+record Tally do
+  count : Integer
+end
+
+make Tally do
+  let plus(n: Integer) -> Tally = Tally { count: @count + n }
+  let plus -> Tally = Tally { count: @count + 1 }
+end
+
+main do
+  IO.printLine(["a", "b"].join)
+  IO.printLine(["a", "b"].join("-"))
+  IO.printLine([3, 1].sort)
+  IO.printLine(Tally { count: 1 }.plus.count)
+  IO.printLine(Tally { count: 1 }.plus(5).count)
+end

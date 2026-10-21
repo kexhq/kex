@@ -9,6 +9,7 @@
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -1363,8 +1364,38 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     }
                 if (preferTypeMatched) break;
             }
-        for (const auto* funcDef : m_functionDefs.at(regName)) {
-            for (const auto& clause : funcDef->clauses) {
+        // A make function always gets its receiver as args[0], and each
+        // clause below guesses from its own arity whether that is what
+        // args[0] is. Tried in source order, `[x].join` reached `join(sep)`
+        // first, which took the list for `sep` and left `this` unbound, while
+        // `sort` worked only because its nullary clause is written first. So
+        // a clause that fits with args[0] as the receiver goes first.
+        std::vector<std::pair<const ast::FunctionDef*, const ast::FunctionClause*>>
+            orderedClauses;
+        for (const auto* funcDef : m_functionDefs.at(regName))
+            for (const auto& clause : funcDef->clauses)
+                orderedClauses.emplace_back(funcDef, &clause);
+        if (isMethod && !args.empty())
+            std::stable_partition(
+                orderedClauses.begin(), orderedClauses.end(),
+                [&](const auto& entry) {
+                    const auto& params = entry.second->params;
+                    size_t required = 0;
+                    for (const auto& param : params)
+                        if (!param.defaultValue) required++;
+                    // An `@Pat` first parameter is the receiver itself.
+                    const size_t receiverSlot =
+                        !params.empty() && params[0].pattern &&
+                                *params[0].pattern &&
+                                std::holds_alternative<ast::ThisPattern>(
+                                    (*params[0].pattern)->kind)
+                            ? 0 : 1;
+                    return args.size() >= required + receiverSlot &&
+                           args.size() <= params.size() + receiverSlot;
+                });
+        for (const auto& [funcDef, clausePtr] : orderedClauses) {
+            {
+                const auto& clause = *clausePtr;
                 const bool firstParamIsThisPattern = !clause.params.empty()
                     && clause.params[0].pattern
                     && *clause.params[0].pattern
@@ -2678,7 +2709,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // overloads need to be considered before the receiver's generic
             // method so labels such as `in:` select the imported clause.
             if (auto imported = findImportedNamedOverload(
-                    node.method, namedArgs, receiver))
+                    node.method, namedArgs, receiver, args.size()))
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
             auto specificMethod = resolveMethodName(receiver, node.method, &args);
@@ -3454,13 +3485,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // All valid capitalized names (declared variants, stdlib modules,
             // user record types) are registered in the environment at
             // declaration time. An unknown name here is a real error.
-            auto val = m_env->get(node.name);
+            // The enclosing modules' own declarations come first: a private
+            // `record Session` in DB.Sessions is what a bare `Session` there
+            // names, even when the program imported Net.HTTP.WebSocket's
+            // `Session` into the global scope (kexhq/kex#539).
+            ValuePtr val;
             for (auto scope = m_currentModule; !val && !scope.empty();) {
                 val = m_env->get(scope + "::" + node.name);
                 const auto dot = scope.rfind('.');
                 if (dot == std::string::npos) break;
                 scope.resize(dot);
             }
+            if (!val) val = m_env->get(node.name);
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }
@@ -4163,7 +4199,8 @@ auto Evaluator::moduleSupplyingNamedClause(const std::string& functionName,
 
 auto Evaluator::findImportedNamedOverload(const std::string& functionName,
                                           const NamedArgs& namedArgs,
-                                          const ValuePtr& receiver) const
+                                          const ValuePtr& receiver,
+                                          size_t positionalCount) const
     -> std::optional<std::string> {
     if (namedArgs.empty()) return std::nullopt;
 
@@ -4172,7 +4209,7 @@ auto Evaluator::findImportedNamedOverload(const std::string& functionName,
         if (imported == scope->end()) continue;
 
         auto qualified = imported->second.module + "::" + functionName;
-        if (const auto* clause = findNamedClause(qualified, namedArgs)) {
+        if (const auto* clause = findNamedClause(qualified, namedArgs, positionalCount)) {
             if (!clause->params.empty() && clause->params.front().type &&
                 *clause->params.front().type &&
                 !runtimeTypeMatches(receiver, **clause->params.front().type))
@@ -5045,6 +5082,10 @@ auto Evaluator::registerBuiltins() -> void {
                 }
                 if (std::holds_alternative<ListValue>(val->data))
                     return Value::just(val);
+                // Tuples convert to their elements. Records stay None: they
+                // are a separate value type here, not tuples.
+                if (auto* tuple = std::get_if<TupleValue>(&val->data))
+                    return Value::just(Value::list(tuple->elements));
                 return Value::none();
             }
             return Value::none();

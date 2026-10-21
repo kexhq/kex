@@ -486,6 +486,11 @@ jobs:
           set -euo pipefail
           sh -n install.sh
           export TEY_HOME="$(mktemp -d)/home"
+          # Beside TEY_HOME, not in ~/.cache: the released Tey unpacks the
+          # toolchain in its cache and renames it into TEY_HOME, which fails
+          # when /tmp is a filesystem of its own (ubuntu-26.04), and it then
+          # falls back to a source build that finds no Boost on the runner.
+          export TEY_CACHE="$(dirname "$TEY_HOME")/cache"
           export PREFIX="$(mktemp -d)/dist"
           sh install.sh
           "$PREFIX/bin/tey" --version

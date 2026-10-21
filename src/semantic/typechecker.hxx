@@ -246,10 +246,13 @@ private:
     // non-block args, take those that have a FuncType as their last param,
     // and resolve any negative-ID generic placeholders against the actual arg
     // types. Returns the block param types they agree on, or empty if none.
+    // `skippedTo` receives the block parameter's name when every candidate
+    // reaches it only by skipping defaulted parameters (kexhq/kex#554).
     auto resolveBlockHints(const std::string& name,
                            const std::vector<TypePtr>& nonBlockArgTypes,
                            bool isMethodCall = false,
-                           bool* collection = nullptr)
+                           bool* collection = nullptr,
+                           std::string* skippedTo = nullptr)
         -> std::vector<TypePtr>;
     // The parameter types a block passed by label (`named(from: { |t| … })`)
     // should take: those of the labelled parameter's function type.

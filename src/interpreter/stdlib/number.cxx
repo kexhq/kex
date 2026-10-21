@@ -121,6 +121,35 @@ auto Evaluator::registerNumberBuiltins() -> void {
     auto noVal = []() { return Value::none(); };  // no value parsed
 
     defineModule("Float");
+    defineIntrinsic("Float::formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto places = args.size() > 1 ? asInteger(args[1]) : std::nullopt;
+        if (args.size() != 3 || !std::holds_alternative<FloatValue>(args[0]->data) ||
+            !places || *places < 0 || *places > 15 ||
+            !std::holds_alternative<BoolValue>(args[2]->data))
+            throw RuntimeError("decimal places must be between 0 and 15", {});
+        const auto value = std::get<FloatValue>(args[0]->data).value;
+        const auto count = static_cast<size_t>(places->get_ui());
+        // Round the exact binary value, with ties away from zero, without
+        // overflowing a Float or narrowing the integer part to int64_t.
+        mpq_class exact(std::abs(value));
+        mpz_class scale;
+        mpz_ui_pow_ui(scale.get_mpz_t(), 10, count);
+        mpz_class numerator = exact.get_num() * scale;
+        const mpz_class denominator = exact.get_den();
+        mpz_class rounded = numerator / denominator;
+        if ((numerator % denominator) * 2 >= denominator) ++rounded;
+        auto result = rounded.get_str();
+        if (count > 0) {
+            if (result.size() <= count) result.insert(0, count + 1 - result.size(), '0');
+            result.insert(result.size() - count, 1, '.');
+            if (std::get<BoolValue>(args[2]->data).value) {
+                while (result.back() == '0') result.pop_back();
+                if (result.back() == '.') result.pop_back();
+            }
+        }
+        if (value < 0 && rounded != 0) result.insert(0, 1, '-');
+        return Value::string(result);
+    });
     defineIntrinsic("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));

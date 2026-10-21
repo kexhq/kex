@@ -1,0 +1,11 @@
+# Builds a record of whatever type it is handed, the way a database library
+# answers `first(as: User)`. Used by spec/record_name_value_collision.kex.
+module RecordValue.Decode do
+  decoded : {String: Any} -> T -> Result<T, String>
+  let decoded(values, kind) do
+    let built : Result<T, String> = Type.of(kind).construct(values)
+    built
+  end
+
+  let first(as: T) -> Result<T, String> = decoded({"userId": "u1", "expiresAt": 3}, as)
+end

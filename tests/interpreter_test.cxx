@@ -848,6 +848,21 @@ int main() {
             assertEqual(std::get<StringValue>(result->data).value, std::string("invalid float"));
         });
 
+        it("rejects unsupported fixed decimal precision", []() {
+            for (const auto places : {"-1", "16", "999999999999999999999"}) {
+                bool rejected = false;
+                try {
+                    run(std::string("main do\n") +
+                        "  Kex.Intrinsic.Float.formatFixed(1.0, " + places +
+                        ", false)\nend\n");
+                } catch (const RuntimeError& error) {
+                    rejected = std::string(error.what()).find(
+                        "decimal places must be between 0 and 15") != std::string::npos;
+                }
+                assertTrue(rejected);
+            }
+        });
+
         it("Number.parse tries integer then falls back to float", []() {
             auto ri = run(
                 "main do\n"

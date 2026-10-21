@@ -1,0 +1,4 @@
+---
+params: [email: String]
+---
+<input value="<%= email %>">

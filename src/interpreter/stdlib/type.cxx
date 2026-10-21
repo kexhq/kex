@@ -188,6 +188,24 @@ auto Evaluator::registerTypeBuiltins() -> void {
         return typeOfValue(args.empty() ? nullptr : args[0]);
     });
 
+    // `Type.values`: a record's field values in declaration order. The
+    // fields are held by name here, so the order comes from the declaration,
+    // as the tuple layout gives it on BEAM.
+    defineIntrinsic("Type::recordValues", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto* value = args.empty() || !args[0]
+            ? nullptr : std::get_if<RecordValue>(&args[0]->data);
+        if (!value) return Value::none();
+        const auto* record = findByTypeName(m_recordDefs, value->typeName);
+        if (!record || !*record) return Value::none();
+        std::vector<ValuePtr> values;
+        for (const auto& field : (*record)->fields) {
+            const auto found = value->fields.find(field.name);
+            values.push_back(found != value->fields.end() ? found->second
+                                                          : Value::none());
+        }
+        return Value::just(Value::list(std::move(values)));
+    });
+
     defineIntrinsic("Type::fieldsOf", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> fields;
         const auto* record = findByTypeName(m_recordDefs, stringArg(args));

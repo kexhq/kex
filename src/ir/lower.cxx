@@ -1480,6 +1480,16 @@ struct Lowering {
                     ex->node = Construct{tag, {}};
                     return ex;
                 }
+                // A record named as a value (`first(as: Session)`) is its
+                // record's own tag. The bare 'Session' was looked up by short
+                // name at run time, which a same-named record elsewhere in
+                // the program (Net.HTTP.WebSocket's) made ambiguous:
+                // "Not a record type: Atom" (kexhq/kex#539).
+                if (auto record = canonicalRecordName(n.name);
+                    record != n.name && records.count(record)) {
+                    ex->node = Construct{record, {}};
+                    return ex;
+                }
                 ex->node = Construct{n.name, {}};
                 return ex;
             } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
@@ -2483,6 +2493,33 @@ struct Lowering {
         for (const auto& param : clause->params)
             names.push_back(param.name.value_or(""));
         return names;
+    }
+
+    // Whether a qualified call's trailing block is meant for an overload that
+    // takes exactly the arguments written. `fnDefaults` holds one overload's
+    // defaults, the last one declared, so padding to it moved
+    // `Html.p { … }` from `p(children = …)` to `p(attributes, children = …)`
+    // with the block as `attributes` (kexhq/kex#553). Padding is wrong
+    // whenever it puts the block in a parameter that is not a function.
+    auto blockFitsExactOverload(const std::string& key, size_t count) const
+        -> bool {
+        auto clauses = fnNamedClauses.find(key);
+        if (clauses == fnNamedClauses.end() || count == 0) return false;
+        auto takesBlock = [](const ast::Param& param) {
+            return !param.type || !*param.type ||
+                   std::holds_alternative<ast::BlockType>((*param.type)->kind) ||
+                   std::holds_alternative<ast::FunctionType>((*param.type)->kind);
+        };
+        bool exact = false;
+        bool misplaced = false;
+        for (const auto* clause : clauses->second) {
+            const auto& params = clause->params;
+            if (params.size() == count && takesBlock(params.back()))
+                exact = true;
+            else if (params.size() > count && !takesBlock(params[count - 1]))
+                misplaced = true;
+        }
+        return exact && misplaced;
     }
 
     auto fillDefaultSlots(const std::string& name,
@@ -4305,7 +4342,8 @@ struct Lowering {
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
                         if (auto defaults = fnDefaults.find(qualKey);
-                            defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                            defaults != fnDefaults.end() && args.size() < defaults->second.size() &&
+                            !(n.block && blockFitsExactOverload(qualKey, args.size()))) {
                             args.resize(defaults->second.size());
                             fillDefaultSlots(qualKey, args, binds);
                         }
@@ -4484,7 +4522,8 @@ struct Lowering {
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
                 if (auto defaults = fnDefaults.find(qualKey);
-                    defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
+                    defaults != fnDefaults.end() && args.size() < defaults->second.size() &&
+                    !(n.block && blockFitsExactOverload(qualKey, args.size()))) {
                     args.resize(defaults->second.size());
                     fillDefaultSlots(qualKey, args, binds);
                 }
@@ -4750,6 +4789,23 @@ struct Lowering {
                 (n.block ? 1 : 0);
             for (const auto& [qualified, emitted] : moduleFunctions) {
                 if (emitted != importedMethod->second) continue;
+                if (!n.namedArgs.empty()) {
+                    importedArityMatches = false;
+                    std::vector<std::string> labels;
+                    for (const auto& [label, _] : n.namedArgs)
+                        labels.push_back(label);
+                    if (auto clauses = fnNamedClauses.find(qualified);
+                        clauses != fnNamedClauses.end())
+                        for (const auto* clause : clauses->second)
+                            if (namedArgumentsFit(*clause, labels,
+                                    n.args.size() + 1 + bool(n.block))) {
+                                importedClause = clause;
+                                importedKey = qualified;
+                                importedArityMatches = true;
+                                break;
+                            }
+                    break;
+                }
                 if (auto names = fnParamNames.find(qualified);
                     names != fnParamNames.end())
                     importedArityMatches = names->second.size() == actual;
@@ -8482,7 +8538,18 @@ struct Lowering {
         // hidden dictionary and already forwards through its own fallback.
         if (first.name == "to" && def.name != "to" &&
             preferExternalReceivers && collidingMethods.count("to") &&
-            static_cast<size_t>(def.arity) == sourceArity) {
+            static_cast<size_t>(def.arity) == sourceArity &&
+            [&] {
+                // A new conversion arity need not have a generic sibling:
+                // Measure's precision formatter takes four arguments, while
+                // the generic conversions only take two or three.
+                const auto generic = fnNamedClauses.find("to");
+                return generic != fnNamedClauses.end() &&
+                    std::any_of(generic->second.begin(), generic->second.end(),
+                                [&](const ast::FunctionClause* clause) {
+                                    return clause->params.size() == sourceArity;
+                                });
+            }()) {
             FunClause fallback;
             std::vector<ExprPtr> args;
             for (int i = 0; i < def.arity; ++i) {

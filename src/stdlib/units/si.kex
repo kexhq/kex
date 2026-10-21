@@ -264,6 +264,28 @@ let to(measure: Measure, String, in: SIPrefix) -> String? do
   end
 end
 
+# Renders a compatible prefix and unit with a chosen precision.
+# +places+ is between 0 and 15; +trim+ removes trailing fractional zeros.
+#
+# @example
+#   1500.watt.to(String, in: Kilo(Watt), places: 2) # => Just("1.50 kW")
+let to(measure: Measure, String, in: SIPrefix,
+       places: Integer, trim: Bool) -> String? do
+  return None if measure.kind != in.kind
+  let converted = Measure {
+    canonical: measure.canonical,
+    value: measure.canonical / in.factor,
+    unit: UnitDefinition {
+      conversionFactor: in.factor, dimension: in.kind, notation: in.symbol
+    }
+  }
+  return Just(converted.to(String, places: places, trim: trim))
+end
+
+# Renders a compatible prefix with fixed precision, retaining fractional zeros.
+let to(measure: Measure, String, in: SIPrefix,
+       places: Integer) -> String? = Units.SI.to(measure, String, in, places, false)
+
 # The same measure, displayed with the mega- prefix.
 #
 # @param measure [Measure] the measure to rescale for display

@@ -2384,7 +2384,7 @@ kex -C file.kex         # semantic check only
 kex -n file.kex         # skip semantic check
 kex -p file.kex         # print AST
 kex -l file.kex         # print token stream
-kex -e file.kex         # emit Core Erlang (.core)
+kex -E file.kex         # emit Core Erlang (.core)
 kex -s file.kex         # print public API signatures
 kex --no-colors         # disable ANSI colors
 ```

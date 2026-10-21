@@ -24,6 +24,7 @@
 #include "validation/tag_validator.hxx"
 #include <algorithm>
 #include <cctype>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <getopt.h>
@@ -362,7 +363,24 @@ static auto replTypeAnnotates(const std::string &definitions,
   }
 }
 
+// `compiled do … end` declares what its body generates, so a REPL input that
+// is one is a definition, not an expression to wrap in `main`.
+static auto isReplCompiledBlock(const std::string &source) -> bool {
+  if (source.rfind("compiled", 0) != 0) return false;
+  auto after = source.find_first_not_of(" \t", 8);
+  return after != 8 && after != std::string::npos &&
+         source.compare(after, 2, "do") == 0 &&
+         (after + 2 == source.size() ||
+          !std::isalnum(static_cast<unsigned char>(source[after + 2])));
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
+  // A `compiled do` block names nothing itself, but the BEAM REPL keys its
+  // session definitions by name, so each block gets a number of its own.
+  if (isReplCompiledBlock(source)) {
+    static int blocks = 0;
+    return "compiled block " + std::to_string(++blocks);
+  }
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
   else if (source.rfind("foul ", 0) == 0) off = 5;
@@ -841,8 +859,23 @@ auto bindReplCancelKeys() -> void {
 auto bindReplCancelKeys() -> void {}
 #endif
 
+// `--eval` source, one line at a time: the REPL reads these before it asks
+// the terminal for anything, so a boot script is entered exactly as if it had
+// been typed — multi-line blocks included (kexhq/kex#549).
+std::deque<std::string> g_replScript;
+// Whether the line just read came from `g_replScript`. An input that fails
+// while booting ends the session instead of leaving a half-booted REPL.
+bool g_replLineFromScript = false;
+bool g_replScriptFailed = false;
+
 auto readLine(const std::string &prompt) -> std::pair<std::string, bool> {
   g_replInputCancelled = false;
+  g_replLineFromScript = !g_replScript.empty();
+  if (g_replLineFromScript) {
+    auto line = std::move(g_replScript.front());
+    g_replScript.pop_front();
+    return {line, true};
+  }
 #ifdef HAS_READLINE
   char *input = readline(prompt.c_str());
   if (!input)
@@ -1666,6 +1699,32 @@ auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
   return roots;
 }
 
+// The compile-time expansion a REPL input needs before it is checked or run:
+// a file run goes through `expandParsedProgram`, and without this the REPL
+// left `Kex.embed`, `Template.text`/`html` and `compiled do` for run time,
+// where none of them exists (kexhq/kex#543). An input has no file of its own,
+// so it is expanded as if it were one in the working directory: that is
+// where `Kex.embed`'s relative paths and the session's modules are found.
+//
+// Each call gets a name of its own: generated template functions are named
+// after the path, and the walker REPL keeps every input's definitions, so a
+// second input reusing `<repl>` redefined the first one's templates.
+auto expandReplProgram(kex::ast::Program &program) -> void {
+  static int inputs = 0;
+  const auto here = (std::filesystem::current_path() /
+                     ("<repl-" + std::to_string(++inputs) + ">"))
+                        .string();
+  std::vector<kex::semantic::Diagnostic> diagnostics;
+  kex::compiled::ExpandOptions options;
+  options.sourcePath = here;
+  options.moduleRoots = moduleRootsFor(here);
+  if (kex::compiled::expand(program, diagnostics, options)) return;
+  for (const auto &diagnostic : diagnostics)
+    if (diagnostic.level == kex::semantic::Diagnostic::Level::Error)
+      throw std::runtime_error(diagnostic.message);
+  throw std::runtime_error("compile-time expansion failed");
+}
+
 auto prebuiltRuntimeBeamDir() -> std::string;
 
 struct PreludeInterfaceNames {
@@ -2357,7 +2416,7 @@ auto storeCachedBeam(const std::filesystem::path &entry,
 // "module system and packaging" work, tracked in docs/module-sys-plan.md
 // rather than attempted here.
 //
-// What IS safe to cache without that: for `kex --run` (mode "compile",
+// What IS safe to cache without that: for `kex --run` (Mode::Compile,
 // compileRun — a throwaway compile-then-execute with no persistent .beam
 // artifact to keep in sync), the entire frontend+erlc result is a pure
 // function of the entry file's bytes, every resolved dependency's bytes, and
@@ -2716,7 +2775,11 @@ auto printUsage(const char *progName) -> void {
       << "      --lsp         Run the Kex language server over stdio\n"
       << "  -s, --summary     Print public API signatures (Kex syntax)\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
-      << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+      << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
+      << "                    if typed (repeatable). A failing line ends the\n"
+      << "                    session with status 1. Takes no file; -i picks the\n"
+      << "                    tree-walk REPL\n"
+      << "  -E, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
       << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
       << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
@@ -2734,6 +2797,8 @@ auto printUsage(const char *progName) -> void {
       << "                    fully-qualified host name), reachable by `Node.connect`\n"
       << "      --cookie <cookie>\n"
       << "                    The shared secret nodes need to connect\n"
+      << "      --credits\n"
+      << "                    Roll credits\n"
       << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
          "of a\n"
       << "                    program lie to another, so it is off unless the "
@@ -2800,6 +2865,56 @@ auto printInfo() -> void {
             << "}\n";
 }
 
+// getopt_long reports a long-only option (one with no short flag) by number.
+// One name per option, shared by the table and the switch below. Only the
+// first value is fixed: short options come back as their character, so the
+// long-only markers start past the char range and auto-increment from
+// there. The values are never persisted — only their uniqueness matters —
+// so new options just append a name.
+namespace Option {
+enum Value {
+  BuildPrelude = UCHAR_MAX + 1,
+  NoPrelude,
+  Expand,
+  CollapseReport,
+  Lsp,
+  SourceRoot,
+  Info,
+  AllowMocks,
+  EmitAst,
+  AstFilename,
+  TestJson,
+  TestList,
+  TestOnly,
+  EmitSyntax,
+  Sname,
+  Name,
+  Cookie,
+  Colors,
+  Credits,
+};
+} // namespace Option
+
+// What the CLI was asked to do. One enumerator per mode, chosen by the
+// flags below and defaulted after option parsing; `compileRun` refines
+// `Compile` (emit files vs. compile-and-run on the BEAM).
+enum class Mode {
+  Unset,
+  Lex,
+  Parse,
+  Check,
+  Compile,
+  Run,
+  Repl,
+  BeamRepl,
+  EmitCore,
+  EmitAst,
+  EmitSyntax,
+  Expand,
+  Complete,
+  Lsp,
+};
+
 int main(int argc, char *argv[]) {
   static struct option longOptions[] = {
       {"run", no_argument, nullptr, 'r'},
@@ -2817,58 +2932,60 @@ int main(int argc, char *argv[]) {
       {"json", no_argument, nullptr, 'j'},
       {"summary", no_argument, nullptr, 's'},
       {"types", no_argument, nullptr, 't'},
-      {"emit-core", no_argument, nullptr, 'e'},
-      {"emit-ast", no_argument, nullptr, 1011},
-      {"ast-filename", required_argument, nullptr, 1012},
+      {"emit-core", no_argument, nullptr, 'E'},
+      {"eval", required_argument, nullptr, 'e'},
+      {"emit-ast", no_argument, nullptr, Option::EmitAst},
+      {"ast-filename", required_argument, nullptr, Option::AstFilename},
       {"complete", required_argument, nullptr, 'K'},
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
       // Machine-readable counterpart to --version. Long-only: it is for
       // tools, and a short flag would invite it into shell prompts.
-      {"info", no_argument, nullptr, 1009},
+      {"info", no_argument, nullptr, Option::Info},
       {"no-colors", no_argument, nullptr, 'N'},
-      {"colors", no_argument, nullptr, 1020},
-      {"no-prelude", no_argument, nullptr, 1003},
-      {"source-root", required_argument, nullptr, 1008},
-      {"sname", required_argument, nullptr, 1017},
-      {"name", required_argument, nullptr, 1018},
-      {"cookie", required_argument, nullptr, 1019},
+      {"colors", no_argument, nullptr, Option::Colors},
+      {"no-prelude", no_argument, nullptr, Option::NoPrelude},
+      {"source-root", required_argument, nullptr, Option::SourceRoot},
+      {"sname", required_argument, nullptr, Option::Sname},
+      {"name", required_argument, nullptr, Option::Name},
+      {"cookie", required_argument, nullptr, Option::Cookie},
+      {"credits", no_argument, nullptr, Option::Credits},
       // Mock.* is test-only (issue #144): a mock lets one part of a program
       // lie to another about the filesystem, environment, platform, network
       // or console, so the runtime denies the mock intrinsics unless the
       // entry file is a `*.spec.kex`, this is a REPL, or the user says so
       // here. Long-only and deliberately verbose — nobody should reach for
       // it by habit.
-      {"allow-mocks", no_argument, nullptr, 1010},
+      {"allow-mocks", no_argument, nullptr, Option::AllowMocks},
       // The testing DSL, said in JSON rather than in prose (kexhq/kex#199).
       // `--test-json` replaces the ✓/✗ lines with one record per case —
       // including the FILE and LINE of the `it` and of the failure, which is
       // the part only the runner can know and the part an editor's inline
       // decoration needs. `--test-list` discovers the cases without running
       // any of them, and `--test-only` runs one (repeatable).
-      {"test-json", no_argument, nullptr, 1013},
-      {"test-list", no_argument, nullptr, 1014},
-      {"test-only", required_argument, nullptr, 1015},
-      {"emit-syntax", no_argument, nullptr, 1016},
-      {"lsp", no_argument, nullptr, 1007},
+      {"test-json", no_argument, nullptr, Option::TestJson},
+      {"test-list", no_argument, nullptr, Option::TestList},
+      {"test-only", required_argument, nullptr, Option::TestOnly},
+      {"emit-syntax", no_argument, nullptr, Option::EmitSyntax},
+      {"lsp", no_argument, nullptr, Option::Lsp},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
       // shows the AST before it.
-      {"expand", no_argument, nullptr, 1004},
+      {"expand", no_argument, nullptr, Option::Expand},
       // Report every chain-collapse attempt and its outcome. Collapse changes
       // only the EMITTED code, so without this the only way to tell whether it
       // happened is to decode the Core Erlang by hand.
-      {"collapse-report", no_argument, nullptr, 1005},
+      {"collapse-report", no_argument, nullptr, Option::CollapseReport},
       // Compile the sources selected by src/stdlib/prelude.kex into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
-      {"build-prelude", required_argument, nullptr, 1001},
+      {"build-prelude", required_argument, nullptr, Option::BuildPrelude},
       {nullptr, 0, nullptr, 0}};
 
-  // Empty until a flag picks a mode; whatever is still empty after option
-  // parsing gets the default, which is BEAM ("compile" + compileRun). The
+  // Unset until a flag picks a mode; whatever is still unset after option
+  // parsing gets the default, which is BEAM (Compile + compileRun). The
   // tree-walk interpreter is opt-in: -R for a script, -i for a REPL.
-  std::string mode;
+  Mode mode = Mode::Unset;
   bool skipCheck = false;
   bool dumpTypes = false;
   bool jsonOutput = false;
@@ -2877,6 +2994,8 @@ int main(int argc, char *argv[]) {
   std::string outputDir = ".";
   std::string astFilename;
   bool outputDirExplicit = false;
+  // `--eval` was given: its lines are queued in g_replScript.
+  bool replEval = false;
   int opt;
 
   bool compileRun = false;
@@ -2901,32 +3020,32 @@ int main(int argc, char *argv[]) {
   if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
     kex::color::enabled = false;
 #endif
-  while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
+  while ((opt = getopt_long(argc, argv, "rnlcCiRjspEe:thvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
-    case 1003:
+    case Option::NoPrelude:
       skipPrelude = true;
       break;
-    case 1004:
-      mode = "expand";
+    case Option::Expand:
+      mode = Mode::Expand;
       break;
-    case 1005:
+    case Option::CollapseReport:
       collapseReport = true;
       break;
-    case 1010:
+    case Option::AllowMocks:
       allowMocks = true;
       break;
-    case 1013:
+    case Option::TestJson:
       testReportMode = kex::interpreter::Evaluator::TestReportMode::Json;
       break;
-    case 1014:
+    case Option::TestList:
       testReportMode = kex::interpreter::Evaluator::TestReportMode::List;
       break;
-    case 1015:
+    case Option::TestOnly:
       testFilters.emplace_back(optarg);
       break;
-    case 1017:
-    case 1018: {
+    case Option::Sname:
+    case Option::Name: {
       const bool alreadyNamed =
           std::find_if(cliDistributionArgs.begin(), cliDistributionArgs.end(),
                        [](const std::string &a) {
@@ -2936,41 +3055,44 @@ int main(int argc, char *argv[]) {
         std::cerr << "error: give a node one name: --sname or --name, once\n";
         return 1;
       }
-      if (const auto problem = nodeNameProblem(optarg, opt == 1017);
+      if (const auto problem = nodeNameProblem(optarg, opt == Option::Sname);
           !problem.empty()) {
         std::cerr << "error: invalid node name '" << optarg << "': " << problem
                   << "\n";
         return 1;
       }
-      cliDistributionArgs.push_back(opt == 1017 ? "-sname" : "-name");
+      cliDistributionArgs.push_back(opt == Option::Sname ? "-sname" : "-name");
       cliDistributionArgs.emplace_back(optarg);
       break;
     }
-    case 1019:
+    case Option::Cookie:
       cliDistributionArgs.push_back("-setcookie");
       cliDistributionArgs.emplace_back(optarg);
       break;
-    case 1011:
-      mode = "emit-ast";
+    case Option::Credits: // --credits
+      std::cout << "Copyright (c) 2026 Akos Kovacs." << std::endl;
+      return 0;
+    case Option::EmitAst:
+      mode = Mode::EmitAst;
       break;
-    case 1016:
-      mode = "emit-syntax";
+    case Option::EmitSyntax:
+      mode = Mode::EmitSyntax;
       break;
-    case 1012:
+    case Option::AstFilename:
       astFilename = optarg;
       break;
-    case 1007:
+    case Option::Lsp:
 #ifdef KEX_HAS_LSP
-      mode = "lsp";
+      mode = Mode::Lsp;
 #else
       std::cerr << "error: LSP support is unavailable in this build\n";
       return 1;
 #endif
       break;
-    case 1008:
+    case Option::SourceRoot:
       cliSourceRoots.emplace_back(optarg);
       break;
-    case 1001: {
+    case Option::BuildPrelude: {
       std::string dir = optarg;
       std::vector<PreludeBuildModule> modules;
       if (!compilePreludeCore(dir, &modules))
@@ -3043,52 +3165,60 @@ int main(int argc, char *argv[]) {
       return 0;
     }
     case 'r':
-      mode = "compile";
+      mode = Mode::Compile;
       compileRun = true;
       break;
     case 'n':
       skipCheck = true;
       break;
     case 'l':
-      mode = "lex";
+      mode = Mode::Lex;
       break;
     case 'p':
-      mode = "parse";
+      mode = Mode::Parse;
       break;
     case 'C':
-      mode = "check";
+      mode = Mode::Check;
       break;
     case 'c':
-      mode = "compile";
+      mode = Mode::Compile;
       break;
     case 'R':
-      mode = "run";
+      mode = Mode::Run;
       compileRun = false;
       break;
     case 'i':
-      mode = "repl";
+      mode = Mode::Repl;
       break;
     case 'j':
       jsonOutput = true;
-      mode = "check";
+      mode = Mode::Check;
       break;
     case 's':
       summaryMode = true;
-      mode = "check";
+      mode = Mode::Check;
       break;
     case 't':
       dumpTypes = true;
       break;
-    case 'e':
-      mode = "emit-core";
+    case 'E':
+      mode = Mode::EmitCore;
       break;
+    case 'e': {
+      // Repeatable; each one is entered as its own lines, in order.
+      std::istringstream source(optarg);
+      for (std::string line; std::getline(source, line);)
+        g_replScript.push_back(line);
+      replEval = true;
+      break;
+    }
     case 'o':
       outputDir = optarg;
       outputDirExplicit = true;
       break;
     case 'K':
       completePrefix = optarg;
-      mode = "complete";
+      mode = Mode::Complete;
       break;
     case 'h':
       printUsage(argv[0]);
@@ -3096,13 +3226,13 @@ int main(int argc, char *argv[]) {
     case 'v':
       printVersion();
       return 0;
-    case 1009:
+    case Option::Info:
       printInfo();
       return 0;
     case 'N':
       kex::color::enabled = false;
       break;
-    case 1020:
+    case Option::Colors:
       kex::color::enabled = true;
       break;
     default:
@@ -3112,14 +3242,14 @@ int main(int argc, char *argv[]) {
   }
 
   // No mode flag: BEAM. A file runs on the BEAM, and no file opens the BEAM
-  // REPL (the `mode == "compile" && compileRun` branch below). A wasm build
+  // REPL (the `mode == Mode::Compile && compileRun` branch below). A wasm build
   // has no BEAM to run on — no erl, no runtime beams — so there the default
   // stays the tree-walk interpreter.
-  if (mode.empty()) {
+  if (mode == Mode::Unset) {
 #ifdef __EMSCRIPTEN__
-    mode = "run";
+    mode = Mode::Run;
 #else
-    mode = "compile";
+    mode = Mode::Compile;
     compileRun = true;
 #endif
   }
@@ -3139,13 +3269,13 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-  if (mode == "lsp") {
+  if (mode == Mode::Lsp) {
 #ifdef KEX_HAS_LSP
     return kex::lsp::run(std::cin, std::cout, prebuiltRuntimeBeamDir());
 #endif
   }
 
-  if (mode == "complete") {
+  if (mode == Mode::Complete) {
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
     if (optind < argc)
@@ -3164,16 +3294,24 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  if (optind >= argc && mode != "repl") {
-    // No file — enter REPL mode (the BEAM REPL by default, the tree-walk
-    // REPL for -i and for the other non-BEAM modes)
-    if (mode == "compile" && compileRun)
-      mode = "beam-repl";
-    else if (mode != "beam-repl")
-      mode = "repl";
+  if (replEval && (optind < argc || !((mode == Mode::Compile && compileRun) ||
+                                      mode == Mode::Repl ||
+                                      mode == Mode::BeamRepl))) {
+    std::cerr << "error: --eval enters code in the REPL, so it takes no file "
+                 "and no other mode (use -i for the tree-walk REPL)\n";
+    return 1;
   }
 
-  if (mode == "beam-repl") {
+  if (optind >= argc && mode != Mode::Repl) {
+    // No file — enter REPL mode (the BEAM REPL by default, the tree-walk
+    // REPL for -i and for the other non-BEAM modes)
+    if (mode == Mode::Compile && compileRun)
+      mode = Mode::BeamRepl;
+    else if (mode != Mode::BeamRepl)
+      mode = Mode::Repl;
+  }
+
+  if (mode == Mode::BeamRepl) {
     // ── Writable temp dir for per-eval user beams ─────────────────────
     char rtmpl[] = "/tmp/kex_irepl_XXXXXX";
     char *rtd = mkdtemp(rtmpl);
@@ -3681,7 +3819,8 @@ int main(int argc, char *argv[]) {
       }
       if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
           source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0 ||
-          source.rfind("serving ", 0) == 0 || source.rfind("using ", 0) == 0)
+          source.rfind("serving ", 0) == 0 || source.rfind("using ", 0) == 0 ||
+          isReplCompiledBlock(source))
         isFuncDef = true;
 
       try {
@@ -3744,6 +3883,7 @@ int main(int argc, char *argv[]) {
             kex::Lexer checkLexer(checkSource, "<repl>");
             kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
             auto checkProgram = checkParser.parseProgram();
+            expandReplProgram(checkProgram);
             std::vector<kex::ast::TopLevelItem> checkItems;
             for (const auto &f : loadedBeamFiles) {
               kex::Lexer fl(readFile(f), f);
@@ -3794,6 +3934,7 @@ int main(int argc, char *argv[]) {
           kex::Lexer semanticLexer(semanticSource, "<repl>");
           kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
           auto semanticProgram = semanticParser.parseProgram();
+          expandReplProgram(semanticProgram);
           // Loaded declarations go BEFORE the replayed main block: the
           // checker registers a module's functions as it checks them, so a
           // module appended after the call site is registered too late and
@@ -3943,6 +4084,7 @@ int main(int argc, char *argv[]) {
           kex::Parser parser(std::move(tokens));
           auto program = parser.parseProgram();
           throwOnParseErrors(parser);
+          expandReplProgram(program);
           // Merge non-MainBlock items from files loaded via /load so their
           // definitions (function defs, make blocks, records, types) are
           // visible to every subsequent REPL input. Re-read on each session
@@ -4144,6 +4286,10 @@ int main(int argc, char *argv[]) {
         std::cerr << "  " << kex::color::apply(kex::color::red)
                   << "error:" << kex::color::apply(kex::color::reset) << " "
                   << e.what() << "\n";
+        if (g_replLineFromScript) {
+          g_replScriptFailed = true;
+          break;
+        }
       }
     }
 
@@ -4154,10 +4300,10 @@ int main(int argc, char *argv[]) {
 
     vm.close();
     std::filesystem::remove_all(beamDir);
-    return 0;
+    return g_replScriptFailed ? 1 : 0;
   }
 
-  if (mode == "repl") {
+  if (mode == Mode::Repl) {
     kex::printReplBanner(std::cout, "");
 
 #ifdef HAS_READLINE
@@ -4445,6 +4591,7 @@ int main(int argc, char *argv[]) {
 
       auto execProgram =
           [&](kex::ast::Program *program) -> kex::interpreter::ValuePtr {
+        expandReplProgram(*program);
         if (showAst)
           printAst(*program);
         return evaluator.execute(*program);
@@ -4505,7 +4652,8 @@ int main(int argc, char *argv[]) {
           source.substr(0, 7) == "record " || source.substr(0, 5) == "make " ||
           source.substr(0, 8) == "serving " ||
           source.substr(0, 12) == "foul module " ||
-          source.substr(0, 6) == "using ") {
+          source.substr(0, 6) == "using " ||
+          isReplCompiledBlock(source)) {
         isFuncDef = true;
       }
 
@@ -4596,6 +4744,7 @@ int main(int argc, char *argv[]) {
             kex::Lexer semanticLexer(semanticSource, "<repl>");
             kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
             auto semanticProgram = semanticParser.parseProgram();
+            expandReplProgram(semanticProgram);
             kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
             if (replAnalyzer.analyze(semanticProgram)) {
               for (auto item = semanticProgram.items.rbegin();
@@ -4648,13 +4797,17 @@ int main(int argc, char *argv[]) {
         std::cerr << "  " << kex::color::apply(kex::color::red)
                   << "error:" << kex::color::apply(kex::color::reset) << " "
                   << e.what() << "\n";
+        if (g_replLineFromScript) {
+          g_replScriptFailed = true;
+          break;
+        }
       }
     }
 #ifdef HAS_READLINE
     if (!historyFile.empty())
       write_history(historyFile.c_str());
 #endif
-    return 0;
+    return g_replScriptFailed ? 1 : 0;
   }
 
   std::string filepath = argv[optind];
@@ -4666,7 +4819,7 @@ int main(int argc, char *argv[]) {
   // Every other mode reads Kex SOURCE. Handed a compiled module, `-c` used to
   // fall into the run path below and execute it, and the source-reading modes
   // parsed BEAM bytes as program text (kexhq/kex#85).
-  if (compiledInput && !(mode == "compile" && compileRun)) {
+  if (compiledInput && !(mode == Mode::Compile && compileRun)) {
     std::cerr << "error: " << filepath
               << " is a compiled BEAM module, not Kex source — run it with "
                  "`kex "
@@ -4792,7 +4945,7 @@ int main(int argc, char *argv[]) {
   // backends disagree. A file that could not be opened still stops here —
   // readFile has already said why.
   if (source.empty() &&
-      !((mode == "emit-ast" || mode == "emit-syntax") &&
+      !((mode == Mode::EmitAst || mode == Mode::EmitSyntax) &&
         std::filesystem::is_regular_file(filepath)))
     return 1;
 
@@ -4820,16 +4973,16 @@ int main(int argc, char *argv[]) {
   // doc comments out of their trivia, so both keep the text (and
   // --emit-syntax the token list) that the lexer and parser below consume.
   const std::string syntaxSource =
-      mode == "emit-syntax" || mode == "emit-ast" ? source : std::string{};
+      mode == Mode::EmitSyntax || mode == Mode::EmitAst ? source : std::string{};
   kex::Lexer lexer(std::move(source), filepath);
   auto tokens = lexer.tokenizeAll();
   const auto syntaxTokens =
-      mode == "emit-syntax" ? tokens : std::vector<kex::Token>{};
-  const auto astDocs = mode == "emit-ast"
+      mode == Mode::EmitSyntax ? tokens : std::vector<kex::Token>{};
+  const auto astDocs = mode == Mode::EmitAst
       ? kex::ast::extractDocComments(tokens, syntaxSource)
       : std::unordered_map<int, std::string>{};
 
-  if (mode == "lex") {
+  if (mode == Mode::Lex) {
     for (const auto &token : tokens) {
       std::cout << token.location.line << ":" << token.location.column << "  "
                 << kex::tokenTypeName(token.type);
@@ -4855,10 +5008,10 @@ int main(int argc, char *argv[]) {
     // case). In --check mode the SemanticDB re-parses and reports them
     // itself; printing here would duplicate every message.
     if (!parser.diagnostics().empty() &&
-        (mode == "run" || mode == "compile" || mode == "emit-ast" ||
-         mode == "emit-syntax" ||
-         mode == "parse" || mode == "expand" || mode == "emit-core")) {
-      if (mode == "emit-ast" || mode == "emit-syntax") {
+        (mode == Mode::Run || mode == Mode::Compile || mode == Mode::EmitAst ||
+         mode == Mode::EmitSyntax ||
+         mode == Mode::Parse || mode == Mode::Expand || mode == Mode::EmitCore)) {
+      if (mode == Mode::EmitAst || mode == Mode::EmitSyntax) {
         const auto &diagnostic = parser.diagnostics().front();
         const auto logicalFilename =
             astFilename.empty() ? filepath : astFilename;
@@ -4897,21 +5050,21 @@ int main(int argc, char *argv[]) {
                 << errorCountPhrase(static_cast<int>(parser.diagnostics().size()),
                                     "syntax")
                 << " — fix before "
-                << (mode == "run" || compileRun
+                << (mode == Mode::Run || compileRun
                         ? "running"
-                        : (mode == "parse" || mode == "expand"
+                        : (mode == Mode::Parse || mode == Mode::Expand
                                ? "parsing"
                                : "compiling"))
                 << ".\n";
       return 1;
     }
 
-    if (mode == "parse") {
+    if (mode == Mode::Parse) {
       printAst(program);
       return 0;
     }
 
-    if (mode == "emit-syntax") {
+    if (mode == Mode::EmitSyntax) {
       kex::beam::TermBuilder builder;
       auto tree = kex::ast::buildSyntaxTree(builder, syntaxTokens, syntaxSource,
                                             parser.syntaxSpans());
@@ -4925,7 +5078,7 @@ int main(int argc, char *argv[]) {
                       static_cast<std::streamsize>(bytes.size()));
       return 0;
     }
-    if (mode == "emit-ast") {
+    if (mode == Mode::EmitAst) {
       kex::beam::TermBuilder builder;
       kex::ast::Converter converter(builder);
       auto bytes = kex::beam::encodeEtf(
@@ -4989,7 +5142,7 @@ int main(int argc, char *argv[]) {
     };
     if (!expandParsedProgram(program, collapseReport)) return 1;
 
-    if (mode == "expand") {
+    if (mode == Mode::Expand) {
       printAst(program);
       return 0;
     }
@@ -5007,14 +5160,14 @@ int main(int argc, char *argv[]) {
   kex::ir::EmitResult result;
   std::vector<kex::ir::EmitResult> moduleResults;
   std::vector<std::string> corePaths;
-  if (mode == "compile" || mode == "emit-core") {
+  if (mode == Mode::Compile || mode == Mode::EmitCore) {
       PhaseTimer timings;
       // Loaded once per process and used by every phase below; timed on its
       // own so it does not hide inside whichever phase touches it first.
       (void)preludeSemanticInterfaces();
       timings.mark("prelude interfaces");
 
-      // Independent gating pre-check. `mode == "check"` gates against
+      // Independent gating pre-check. `mode == Mode::Check` gates against
       // PROJECT source plus the compiled stdlib INTERFACE, never an opt-in
       // stdlib module's real SOURCE (see that path's own comment on its
       // `resolveBeamDeps` call): merging the source ahead of the check can
@@ -5054,7 +5207,7 @@ int main(int argc, char *argv[]) {
       bool preCheckFailed = false;
       std::vector<kex::semantic::Diagnostic> preCheckDiagnostics;
       int preCheckTypeErrors = 0;
-      if (mode == "compile" && !skipCheck) {
+      if (mode == Mode::Compile && !skipCheck) {
         kex::ast::Program checkProgram;
         checkProgram.items = std::move(program.items);
         const size_t originalCount = checkProgram.items.size();
@@ -5166,7 +5319,7 @@ int main(int argc, char *argv[]) {
         stem = stem.substr(0, dot);
 
       // `<name>.spec.kex` auto-loads `<name>.kex`'s declarations —
-      // see specBaseCandidates's own doc comment. `mode == "run"`
+      // see specBaseCandidates's own doc comment. `mode == Mode::Run`
       // (the tree-walker) already does this via a separate
       // Evaluator::execute call below; the BEAM codegen path emits
       // everything as ONE Core Erlang module from a single Program,
@@ -5250,7 +5403,7 @@ int main(int argc, char *argv[]) {
       // this unconditional overwrite, or the toolchain's own possibly-stale
       // prebuilt copy silently wins instead (kexhq/kex#27's `env.query`
       // shape, reintroduced by the run-result cache's copy order).
-      if (mode == "compile") {
+      if (mode == Mode::Compile) {
         namespace fs = std::filesystem;
         std::string prebuilt = prebuiltRuntimeBeamDir();
         if (prebuilt.empty()) {
@@ -5285,7 +5438,7 @@ int main(int argc, char *argv[]) {
       std::vector<kex::ir::EmitResult> moduleResultsFromCache;
       bool haveCachedResult = false;
       std::optional<std::string> runCacheKeyValue;
-      if (mode == "compile" && compileRun) {
+      if (mode == Mode::Compile && compileRun) {
         runCacheKeyValue = runCacheKeyFor(
             filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
             beamSpecBaseRawSource, beamDeps);
@@ -5319,13 +5472,13 @@ int main(int argc, char *argv[]) {
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
       // functions visible before names such as `times` are resolved.
-      if (mode == "compile" || mode == "emit-core") {
+      if (mode == Mode::Compile || mode == Mode::EmitCore) {
         compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
             &preludeSemanticInterfaces());
         // `--no-check` suppresses diagnostics and lets invalid programs
         // continue, but overload resolution still has to run: lowering needs
         // the exact selected target even when errors are non-gating.
-        const bool gatingAnalysis = mode == "compile" && !skipCheck;
+        const bool gatingAnalysis = mode == Mode::Compile && !skipCheck;
         int typeErrors = 0;
         // `beamSpecBaseFile` matters here for the same reason it does on the
         // walker path: the Analyzer sees the base file's declarations because
@@ -5426,7 +5579,7 @@ int main(int argc, char *argv[]) {
         corePaths.push_back(std::move(path));
       }
       const std::string &outPath = corePaths.front();
-      if (mode == "emit-core") {
+      if (mode == Mode::EmitCore) {
         for (const auto &path : corePaths) std::cerr << "wrote " << path << "\n";
         return 0;
       }
@@ -5704,7 +5857,7 @@ int main(int argc, char *argv[]) {
     // json_parser.kex's `type Json`, and the checker rejected every one of
     // them as an undefined constructor before the program ever ran.
     std::string specBaseFile;
-    if (mode == "run") {
+    if (mode == Mode::Run) {
       for (const auto &candidate : specBaseCandidates(filepath)) {
         if (!fileExists(candidate))
           continue;
@@ -5764,7 +5917,7 @@ int main(int argc, char *argv[]) {
     // the evaluator that borrows from it.
     kex::semantic::Analyzer runAnalyzer(&preludeSemanticInterfaces());
     bool runAnalyzed = false;
-    if (mode == "run" && !skipCheck) {
+    if (mode == Mode::Run && !skipCheck) {
       int typeErrors = 0;
       runAnalyzed = true;
       if (!runSemanticCheck(program, filepath, &runAnalyzer, specBaseFile,
@@ -5779,7 +5932,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (mode == "run") {
+    if (mode == Mode::Run) {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
       evaluator.setModuleRoots(moduleRootsFor(filepath));
@@ -5813,7 +5966,7 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
-    // mode == "check"
+    // mode == Mode::Check
     // A companion file's declarations are part of what this file means: a
     // `.spec.kex`'s base, and a `package.kex`'s manifest vocabulary. The run
     // and compile paths merge them before checking; do the same here, or
@@ -5841,8 +5994,8 @@ int main(int argc, char *argv[]) {
       break;
     }
 
-    // ...and so are the project's OTHER modules. `mode == "run"` and
-    // `mode == "compile"` both merge every module a `using` or a qualified
+    // ...and so are the project's OTHER modules. `mode == Mode::Run` and
+    // `mode == Mode::Compile` both merge every module a `using` or a qualified
     // reference reaches before checking; this path did not, so it built its
     // checker from the prelude interface alone. A two-module program then
     // reported errors no other mode saw — a record declared in a sibling

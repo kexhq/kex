@@ -6,7 +6,7 @@ Kex runs two ways today:
 
 - **BEAM** (default) — a lowering IR (`src/ir/`) emits Core Erlang, which
   `erlc` turns into `.beam`. `kex file.kex` compiles and runs it, `kex -c`
-  compiles only, `kex -e` emits `.core` without invoking `erlc`.
+  compiles only, `kex -E` emits `.core` without invoking `erlc`.
 - **Tree-walk interpreter** — `kex -R file.kex`. At full spec parity with the
   BEAM backend.
 

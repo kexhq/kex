@@ -1,0 +1,12 @@
+Just([1, 2, 3]) : Optional<[Integer]>
+:one
+1
+None : Optional
+None : Optional
+None : Optional
+None : Optional
+None : Optional
+None : Optional
+None : Optional
+Just([1, 2]) : Optional<[Integer]>
+Just([1, 2, 3]) : Optional<[Integer]>

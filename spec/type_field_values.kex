@@ -1,0 +1,32 @@
+# `Type.fieldValues` reads a record's field values in declaration order, the
+# same order `Type.fields` names them, so a generic encoder needs no knowledge of
+# how a record is represented (kexhq/kex#547). Anything that is not a record
+# answers None: a tuple, a variant, a plain value.
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+record Account do
+  id : String
+  nick : String? = None
+  credit : Integer = 0
+end
+
+type Shape = Circle(Integer) | Square(Integer)
+
+let encoded(value: Any) -> String do
+  let names = Type.of(value).fields.map(&.name)
+  let values = Type.fieldValues(value).or([])
+  names.zip(values).map { |name, field| "${name}=${field}" }.join(",")
+end
+
+main do
+  IO.printLine(Type.fieldValues(Point { x: 1, y: 2 }))
+  IO.printLine(encoded(Account { id: "a1", credit: 5 }))
+  IO.printLine(encoded(Point { y: 4, x: 3 }))
+  IO.printLine(Type.fieldValues((1, 2)) == None)
+  IO.printLine(Type.fieldValues(Circle(3)) == None)
+  IO.printLine(Type.fieldValues(42) == None)
+end

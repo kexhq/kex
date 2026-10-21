@@ -1,0 +1,10 @@
+# kex: check-only
+# A function whose embed path names its parameter gets one clause per file
+# that fits the path (kexhq/kex#544). A path no file fits would leave it with
+# no clause at all, so that is an error at compile time.
+
+let render(name: String) -> String = Kex.embed("lib/compiled/nowhere/${name}.ket")
+
+main do
+  IO.printLine(render("x"))
+end

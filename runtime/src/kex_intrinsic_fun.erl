@@ -29,6 +29,26 @@ convertTo(V, 'Binary') when is_binary(V) -> {'Just', {'Binary', V}};
 convertTo({'Binary', V}, 'Binary') -> {'Just', {'Binary', V}};
 convertTo({'Range', _, _} = Range, 'List') -> {'Just', kex_intrinsic_range:items(Range)};
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
+%% Runtime-tagged values are not tuples, even though they are tuples here —
+%% the walker keeps them as separate types and answers None. They are never
+%% in the record/variant registries, so they need their own clauses.
+convertTo({'Binary', _}, 'List') -> 'None';
+convertTo({'Char', _}, 'List') -> 'None';
+convertTo({'Stream', _}, 'List') -> 'None';
+convertTo({'Feed', _}, 'List') -> 'None';
+convertTo({'Type', _, _, _}, 'List') -> 'None';
+convertTo({'FileHandle', _, _}, 'List') -> 'None';
+convertTo({'MockFileHandle', _}, 'List') -> 'None';
+convertTo({'Server', _, _}, 'List') -> 'None';
+%% A tuple converts to its elements. Records and variants stay None, or
+%% their tag leaks in as an element: records use the same registry guard as
+%% spreadable/2, and variants match a registered tag AND arity the way
+%% kex_io:inspect_tuple_string/1 does.
+convertTo(V, 'List') when is_tuple(V) ->
+    case is_record_term(V) orelse is_variant_term(V) of
+        true -> 'None';
+        false -> {'Just', tuple_to_list(V)}
+    end;
 %% `"ok".to(Atom)` finds an atom that already EXISTS and never makes one:
 %% atoms are never freed, so creating them from untrusted text can exhaust the
 %% atom table. `Atom.from` is the creating form.
@@ -144,6 +164,13 @@ is_record_term(Item) ->
             maps:is_key(Tag, persistent_term:get(kex_display_records, #{}));
         _ ->
             false
+    end.
+
+is_variant_term(Item) ->
+    case maps:get(element(1, Item),
+                  persistent_term:get(kex_display_variants, #{}), undefined) of
+        {Arity, _} -> Arity =:= tuple_size(Item) - 1;
+        _ -> false
     end.
 
 %% Normalize an Enumerable receiver to the item representation used by Kex
