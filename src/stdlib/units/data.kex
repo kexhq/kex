@@ -6,7 +6,7 @@
 #
 #   main do
 #     IO.printLine(1500.megabyte.to(String))              # prints: 1500.0 MB
-#     IO.printLine(1500000000.byteSize.to(String, in: Giga)) # prints: 1.5 GB
+#     IO.printLine(1500000000.byte.to(String, in: GB).or("")) # prints: 1.5 GB
 #   end
 #
 # Both families are here and they are not the same: +KB+ is 1000 bytes, +KiB+
@@ -24,9 +24,11 @@
 #   Binary.fromBytes([104, 105]).length.byte.to(String)  # => "2.0 B"
 #   "é".bytes.count.byte.to(String)                    # => "2.0 B"
 #
-# To display binary units, convert to +KiB+, +MiB+, +GiB+, or +TiB+:
+# To display a size in another unit, decimal or binary, name the unit:
 #
-#   1048576.byte.convertTo(MiB).map { |m| m.to(String) } # => Ok("1.0 MiB")
+#   1048576.byte.to(String, in: MiB)                       # => Just("1.0 MiB")
+#   4312.byte.to(String, in: KB, places: 1)                # => Just("4.3 KB")
+#   1048576.byte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1.0 MiB")
 #
 # Compare an integer byte count directly with a data-size threshold:
 #
@@ -46,13 +48,6 @@ module Units.Data
 #   size(1, KB).canonical    # => 1000.0 bytes
 #   size(1, KiB).canonical   # => 1024.0 bytes
 type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
-
-# A decimal prefix to render a size at: +Kilo+ means KB, +Mega+ means MB,
-# +Giga+ means GB.
-#
-# Data prefixes select their standard decimal byte unit, so +Mega+ is MB
-# rather than a prefix applied twice to the measure's existing unit.
-type DataPrefix = Kilo | Mega | Giga
 
 make DataUnit, implement: Unit do
   let factor(@B) = 1.0
@@ -136,54 +131,54 @@ let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   end
 end
 
-# Renders a size at a chosen decimal prefix.
-#
-# Data prefixes select their standard decimal byte unit. They are targets for
-# formatting, so `Mega` means MB rather than a prefix applied twice to the
-# measure's existing unit. A measure that is not a data size answers +None+.
-#
-# @param String [Type] the target type
-# @param in [DataPrefix] the prefix to display at
-# @return [String?] the rendered size, or +None+
-#
-# @example
-#   1500000000.byteSize.to(String, in: Giga)   # => Just("1.5 GB")
-#   1500000.byteSize.to(String, in: Mega)      # => Just("1.5 MB")
-let to(measure: Measure, String, in: DataPrefix) -> String? do
-  match measure.kind == :data do
-    false => return None
-    true => do
-  match in do
-    Kilo => return Just(displayWithPrefix(measure, 1000.0, "KB"))
-    Mega => return Just(displayWithPrefix(measure, 1000000.0, "MB"))
-    Giga => return Just(displayWithPrefix(measure, 1000000000.0, "GB"))
-    _ => return None
+# Displaying a size in another data unit: the prelude's +to(String, in:)+, for
+# this module's units.
+make Measure do
+  # Renders a size in another data unit, decimal or binary.
+  #
+  # A measure that is not a data size answers +None+.
+  #
+  # @param String [Type] the target type
+  # @param in [DataUnit] the unit to display in
+  # @return [String?] the rendered size, or +None+
+  #
+  # @example
+  #   1500000000.byte.to(String, in: GB)   # => Just("1.5 GB")
+  #   1048576.byte.to(String, in: MiB)     # => Just("1.0 MiB")
+  #   1.second.to(String, in: MB)          # => None
+  let to(String, in: DataUnit) -> String? do
+    match convertTo(this, in) do
+      Ok(converted) => return Just(converted.to(String))
+      Error(_) => return None
+    end
   end
+
+  # Renders another data unit with +places+ digits after the decimal point.
+  #
+  # @example
+  #   4312.byte.to(String, in: KB, places: 1)   # => Just("4.3 KB")
+  let to(String, in: DataUnit, places: Integer) -> String? do
+    return this.to(String, in, places, false)
   end
+
+  # Renders another data unit with fixed precision; +trim+ removes trailing
+  # fractional zeros.
+  #
+  # @example
+  #   1000.byte.to(String, in: KB, places: 2, trim: true)   # => Just("1 KB")
+  let to(String, in: DataUnit, places: Integer, trim: Bool) -> String? do
+    match convertTo(this, in) do
+      Ok(converted) => do
+        # Formatted here rather than through `converted.to(String, places,
+        # trim)`: inside this module that name reaches its own `to(String,
+        # in, places)` first.
+        let text = Kex.Intrinsic.Float.formatFixed(converted.value, places, trim)
+        return Just("${text} ${converted.unit.notation}")
+      end
+      Error(_) => return None
+    end
   end
 end
-
-# Renders a decimal prefix with a chosen precision, optionally trimming zeros.
-# +places+ is between 0 and 15; a non-data measure answers +None+.
-#
-# @example
-#   4312.byte.to(String, in: Kilo, places: 1)   # => Just("4.3 KB")
-let to(measure: Measure, String, in: DataPrefix,
-       places: Integer, trim: Bool) -> String? do
-  let unit = match in do
-    Kilo => KB
-    Mega => MB
-    Giga => GB
-  end
-  match convertTo(measure, unit) do
-    Ok(converted) => Just(converted.to(String, places: places, trim: trim))
-    Error(_) => None
-  end
-end
-
-# Renders a decimal prefix with fixed precision, retaining fractional zeros.
-let to(measure: Measure, String, in: DataPrefix,
-       places: Integer) -> String? = Units.Data.to(measure, String, in, places, false)
 
 # +value+ bytes.
 #
@@ -306,8 +301,6 @@ private do
     assert(measure.kind == :data, "Byte counts require a data-size threshold")
     return measure.canonical
   end
-
-  let displayWithPrefix(measure, divisor, symbol) = "${measure.canonical / divisor} ${symbol}"
 
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
 

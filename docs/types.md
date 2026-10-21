@@ -351,19 +351,28 @@ using Units.SI
 
 let distance = 100.meter  # Measure
 let speed = distance / 9.58.second
-distance.kilo.to(String)  # "0.1 km"
+distance.to(String, in: Kilo(Meter))  # Just("0.1 km")
+5.kilometer.to(String)                # "5.0 km"
 let energy = 31544.watt * 1.hour
 energy.to(String, in: Kilo(Watt * Hour))  # Just("31.544 kWh")
 ```
 
-`Kilo`, `Mega`, `Giga`, `Milli`, `Micro`, and `Nano` construct display units.
-Combine one with a unit expression in `to(String, in:)` to format a measure
-without changing its canonical value. Target formatting returns `String?`:
+`Kilo`, `Mega`, `Giga`, `Milli`, `Micro`, and `Nano` applied to a unit make a
+unit of their own: `Kilo(Meter)` is the kilometre, `Kilo(Watt * Hour)` the
+kilowatt-hour. Like any unit, one is a target for `convertTo` and for
+`to(String, in:)`, which formats a measure without changing its canonical
+value. To *write* a measure in a prefixed unit, use the fused constructor:
+`5.kilometer`, `3.kilowatt`, `250.milligram`.
+
+Every unit is displayed the same way: `90.minute.to(String, in: Hour)`,
+`5000.meter.to(String, in: Kilo(Meter))`, `size.to(String, in: MiB)`, each
+optionally with `places:` and `trim:`. Target formatting returns `String?`:
 it is `None` when the target has a different measurement kind.
 
-`to(String, in:)` belongs to the unit module, not the prelude, so it needs the
-`using` — qualifying the arguments alone is not enough. Without it the call
-reports the unmatched `in:` and names the module to import.
+The time units' `to(String, in:)` is in the prelude; each unit module supplies
+it for its own units, so `in: Kilo(Meter)` needs `using Units.SI` —
+qualifying the arguments alone is not enough. Without it the call reports the
+unmatched `in:` and names the module to import.
 
 Note that `Hour` in that example is *not* an `Units.SI` name. The time units
 (`Nanosecond` through `Week`) are prelude-global, because every unit module
@@ -383,7 +392,8 @@ using Units.Data
 let asset: Measure = 5.megabyte
 let binary: Result<Measure, String> = asset.convertTo(MiB)
 let cache = 2.gibibyte
-asset.to(String, in: Mega)  # Just("5.0 MB")
+asset.to(String, in: MB)   # Just("5.0 MB")
+asset.to(String, in: MiB)  # Just("4.76837158203125 MiB")
 ```
 
 Data constructors use singular names, just like SI: `byte`, `kilobyte`,
@@ -422,7 +432,7 @@ main do
   match FS.File.size("report.pdf") do
     Just(count) => do
       let fileSize = count.byte
-      IO.printLine(fileSize.to(String, in: Mega).or(""))  # decimal MB
+      IO.printLine(fileSize.to(String, in: MB).or(""))   # decimal MB
       IO.printLine(fileSize.convertTo(MiB).map { |m| m.to(String) }.or(""))
     end
     None => IO.printError("Cannot read the file size")
