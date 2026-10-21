@@ -652,10 +652,17 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                                 });
                         });
                     bool duplicate = false;
+                    // Overloads that name their parameters differently stay
+                    // apart: a labelled call is placed by the names, and the
+                    // prelude's `to(String, in: TimeUnit)` shares its BEAM
+                    // function and arity with `to(String, places: Integer)`.
+                    // Appended after the first, so a positional lookup still
+                    // finds what it did.
                     for (const auto& existing : vec)
                         if (existing.moduleAtom == mod.beamAtom &&
                             existing.beamFunction == receiverFn.beamFunction &&
                             existing.beamArity == receiverFn.beamArity &&
+                            existing.paramNames == receiverFn.paramNames &&
                             (!protocolReceiver || existing.receiverType ==
                                 typeNameStr(receiverFn.receiverType))) {
                             duplicate = true; break;

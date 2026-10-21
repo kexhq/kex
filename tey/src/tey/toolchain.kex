@@ -51,7 +51,8 @@ end
 foul installedVersions -> [String] do
   let entries = FS.Directory.directories("${Tey.Toolchain.home}/toolchains").or([])
   let names = entries.filter do |name|
-    !name.endsWith?(".partial") && !name.endsWith?(".previous") && Tey.Toolchain.installed?(name)
+    (!name.endsWith?(".partial") && !name.endsWith?(".previous")
+      && !name.endsWith?(".unpacked") && Tey.Toolchain.installed?(name))
   end
   return Tey.Toolchain.newestFirst(names)
 end
@@ -625,7 +626,11 @@ private do
     let home = Tey.Toolchain.home
     let prefix = "${home}/toolchains/${version}"
     return Error(Unavailable("could not create Tey home")) if !FS.Directory.create("${home}/toolchains")
-    let unpacked = "${downloads}/${name}.unpacked"
+    # Unpacked beside its destination, not in the download cache: the tree is
+    # renamed into place below, and a rename cannot cross filesystems. The
+    # cache under ~/.cache and a Tey home on another one (a tmpfs /tmp, a
+    # separate /home) failed with "could not move the unpacked toolchain".
+    let unpacked = "${prefix}.unpacked"
     FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
     return Error(Unavailable("could not create ${unpacked}")) if !FS.Directory.create(unpacked)
     let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do

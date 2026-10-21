@@ -20,10 +20,14 @@ main do
   # asserts element-wise: the value agrees on both backends but a literal
   # `[Atom, Integer]` list does not typecheck, and neither does the
   # `inspect` annotation (`[Atom]` vs `[Any]`).
+  #
+  # Everything here goes through `inspect` (stderr): the suite compares
+  # stdout and stderr separately, so a `printLine` line would sort apart
+  # from these on one backend but not the other.
   IO.inspect((1, 2, 3).to(List))
   let pair = (:one, 1).to(List).or([])
-  IO.printLine(pair[0])
-  IO.printLine(pair[1])
+  IO.inspect(pair[0] == Just(:one))
+  IO.inspect(pair[1] == Just(1))
 
   # Variants are not tuples, not even the two-element ones.
   IO.inspect(Just(1).to(List))

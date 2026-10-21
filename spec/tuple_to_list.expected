@@ -1,6 +1,6 @@
 Just([1, 2, 3]) : Optional<[Integer]>
-:one
-1
+true : Bool
+true : Bool
 None : Optional
 None : Optional
 None : Optional

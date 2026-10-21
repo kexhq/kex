@@ -503,10 +503,6 @@ struct Lowering {
         const ast::FunctionDef* def;
     };
     std::unordered_map<std::string, std::vector<MakeMethod>> makeMethods;
-    // Which module a bare `using` import of a make function came from, so a
-    // second module extending the same type does not take the name from the
-    // first of them in module-path order (see `nextExtendingModule`).
-    std::unordered_map<std::string, std::string> extensionImportOrigin;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
     // same name, each type's version is emitted mangled (`name/Type`) and a
@@ -952,8 +948,9 @@ struct Lowering {
     // the walker exactly. The type has to be read at runtime (the reason this
     // call is unresolved is that lowering does not know it), so the message is
     // built as an iolist the same way the receiver dispatcher builds its own.
-    auto undefinedMethod(const std::string& method, ExprPtr receiver)
-        -> ExprPtr {
+    // `hint` follows the receiver's type name in the message.
+    auto undefinedMethod(const std::string& method, ExprPtr receiver,
+                         const std::string& hint = {}) -> ExprPtr {
         std::string loc;
         if (currentLoc) loc = std::string(currentLoc->file) + ":"
             + std::to_string(currentLoc->line) + ":"
@@ -964,6 +961,7 @@ struct Lowering {
                             method + " for "));
         parts.push_back(callE("kex_io", "value_type_name", 1,
                               one(std::move(receiver))));
+        if (!hint.empty()) parts.push_back(lit(LitKind::String, hint));
         auto list = std::make_unique<Expr>();
         list->node = MakeList{std::move(parts), std::nullopt};
         return callE("erlang", "error", 1,
@@ -2583,27 +2581,23 @@ struct Lowering {
         return "";
     }
 
-    // The make-block method a receiver call binds when it does not spell out
-    // every parameter in order: labels may name any subset, and defaulted
-    // parameters may be left out. `owner` is the receiver's type when it is
-    // known. A call already committed to this unit's methods may still take
-    // the first one its arguments fit when that type declares none (`strict`
-    // off); deciding whether the call is local at all may not.
     // Several modules of one unit may extend the same type with a function of
     // the same name: Units.SI and Units.Data both `make Measure do let
     // to(String, in: …)`. A call reaches only one of them, so each forwards
-    // what it does not take to the next, in module-path order, and the last
-    // to the prelude; a bare imported name binds to the first of them (see
-    // the `using` lowering). Empty when there is no next one.
+    // what it does not take to the next module after this one, in
+    // module-path order, and the last to the prelude; a call enters at the
+    // first of them (`makeMethodFor`, and `lowerModules`' bare-name
+    // routing). Empty when there is no next one.
     auto nextExtendingModule(const std::string& method,
-                             const std::string& typeName, int arity,
-                             const std::string& after) const -> std::string {
+                             const std::string& typeName, int arity) const
+        -> std::string {
         auto found = makeMethods.find(method);
         if (found == makeMethods.end()) return {};
         const auto owner = canonicalRecordName(typeName);
         std::string next;
         for (const auto& candidate : found->second) {
-            if (candidate.modulePath.empty() || candidate.modulePath <= after ||
+            if (candidate.modulePath.empty() ||
+                candidate.modulePath <= currentModulePath ||
                 canonicalRecordName(candidate.owner) != owner || !candidate.def ||
                 candidate.def->clauses.empty() ||
                 static_cast<int>(candidate.def->clauses[0].params.size()) + 1 !=
@@ -2615,12 +2609,12 @@ struct Lowering {
         return next;
     }
 
-    auto nextExtendingModule(const std::string& method,
-                             const std::string& typeName, int arity) const
-        -> std::string {
-        return nextExtendingModule(method, typeName, arity, currentModulePath);
-    }
-
+    // The make-block method a receiver call binds when it does not spell out
+    // every parameter in order: labels may name any subset, and defaulted
+    // parameters may be left out. `owner` is the receiver's type when it is
+    // known. A call already committed to this unit's methods may still take
+    // the first one its arguments fit when that type declares none (`strict`
+    // off); deciding whether the call is local at all may not.
     auto makeMethodFor(const ast::MethodCall& n, std::string owner,
                        bool strict) const -> const MakeMethod* {
         auto found = makeMethods.find(n.method);
@@ -3236,6 +3230,24 @@ struct Lowering {
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
 
+    // The module of this unit whose `make` covers `type`. The checker names a
+    // module's type qualified (`Units.SI.SIPrefix`) while `make SIPrefix`
+    // registers it bare, so a qualified name is also tried by its last part
+    // when that part was registered by the qualifying module. Without it
+    // `5000.meter.convertTo(Kilo(Meter))` built its Unit dictionary from the
+    // prelude's `factor`, which has never heard of SIPrefix.
+    auto localTypeModule(const std::string& type) const
+        -> std::unordered_map<std::string, std::string>::const_iterator {
+        auto found = localTypeModules.find(type);
+        if (found != localTypeModules.end()) return found;
+        const auto dot = type.rfind('.');
+        if (dot == std::string::npos) return found;
+        auto bare = localTypeModules.find(type.substr(dot + 1));
+        return bare != localTypeModules.end() &&
+                bare->second == type.substr(0, dot)
+            ? bare : localTypeModules.end();
+    }
+
     auto makeTraitDictionary(const std::string& trait,
                              const ast::Expr& value) -> ExprPtr {
         std::string concreteType;
@@ -3273,7 +3285,7 @@ struct Lowering {
                     !concreteType.empty())
                     function = mangleReceiverImplementation(
                         method.name, concreteType);
-            } else if (auto ownerModule = localTypeModules.find(concreteType);
+            } else if (auto ownerModule = localTypeModule(concreteType);
                        ownerModule != localTypeModules.end()) {
                 // A source module compiled in this same unit is not in the
                 // external KexI registry yet, so target its companion's
@@ -5003,11 +5015,30 @@ struct Lowering {
             localMethodArities.empty() ||
             localMethodArities.count(m + "/" + std::to_string(ufcsArity)) > 0;
 
+        // Defined here only by a `make` inside a module this call cannot see.
+        // When the prelude answers the name too, the call goes there: Units.SI
+        // extending `make Measure` with `to(String, in: SIPrefix)` must not
+        // take the prelude's `90.minute.to(String, in: Hour)` away from a
+        // program that merely names `Units.SI.watt`. A call whose arguments
+        // only that module takes is a missing `using`, and otherwise it is
+        // the same "Undefined method" the walker raises.
+        const bool gatedOut = localMethods.count(n.method) && localArityExists &&
+            !makeMethodInScope(n.method);
+        if (gatedOut)
+            if (auto module = gatedModuleTaking(n); !module.empty())
+                return ret(undefinedMethod(
+                    n.method, rv(),
+                    " — `" + module + "` defines a matching `" + n.method +
+                        "`; add `using " + module + "`"));
+        if (gatedOut && !(externalModules &&
+                          externalModules->receiverFunctions.count(n.method)))
+            return ret(undefinedMethod(n.method, rv()));
+
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
         if (externalModules
-            && (!localMethods.count(m) || !localArityExists
+            && (!localMethods.count(m) || !localArityExists || gatedOut
                 || preferExternalReceivers)) {
             auto found = externalModules->receiverFunctions.find(m);
             if (found != externalModules->receiverFunctions.end()) {
@@ -5028,6 +5059,29 @@ struct Lowering {
                     }
                     match = &candidate;
                 }
+                // Overloads of one module at one arity are one dispatching
+                // function there, so any of them may be called; the labels
+                // pick the one whose parameter names place them. The first
+                // was `to(String, places:)`, which has no `in:` for the
+                // prelude's `to(String, in: TimeUnit)`.
+                if (match && sameModuleOverloads && !n.namedArgs.empty())
+                    for (const auto& candidate : found->second) {
+                        if (candidate.beamArity != actualArity ||
+                            candidate.moduleAtom != match->moduleAtom)
+                            continue;
+                        const bool declaresAll = std::all_of(
+                            n.namedArgs.begin(), n.namedArgs.end(),
+                            [&](const auto& named) {
+                                return std::find(candidate.paramNames.begin(),
+                                                 candidate.paramNames.end(),
+                                                 named.first) !=
+                                    candidate.paramNames.end();
+                            });
+                        if (declaresAll) {
+                            match = &candidate;
+                            break;
+                        }
+                    }
                 if (match) {
                     std::vector<ExprPtr> pargs;
                     pargs.push_back(rv());
@@ -5127,12 +5181,7 @@ struct Lowering {
         // because the name alone matched. Falling through lets the prelude's
         // receiver function (Map.get here) handle it, which is what the
         // interpreter already does.
-        if (localMethods.count(n.method) && localArityExists &&
-            !makeMethodInScope(n.method))
-            // Defined only by a `make` inside a module this call cannot see —
-            // the same "Undefined method" the walker now raises for it.
-            return ret(undefinedMethod(n.method, rv()));
-        if (localMethods.count(n.method) && localArityExists) {
+        if (localMethods.count(n.method) && localArityExists && !gatedOut) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
@@ -8013,17 +8062,88 @@ struct Lowering {
         if (owners == moduleScopedMethods.end() || owners->second.empty() ||
             owners->second.count(""))
             return true;
-        for (const auto& module : owners->second) {
-            if (currentModulePath == module ||
-                currentModulePath.rfind(module + ".", 0) == 0)
+        return std::any_of(owners->second.begin(), owners->second.end(),
+                           [&](const std::string& module) {
+                               return moduleInScope(module);
+                           });
+    }
+
+    auto moduleInScope(const std::string& module) const -> bool {
+        if (module.empty() || currentModulePath == module ||
+            currentModulePath.rfind(module + ".", 0) == 0)
+            return true;
+        for (const auto& imported : usingModules)
+            if (imported == module ||
+                imported.rfind(module + ".", 0) == 0 ||
+                module.rfind(imported + ".", 0) == 0)
                 return true;
-            for (const auto& imported : usingModules)
-                if (imported == module ||
-                    imported.rfind(module + ".", 0) == 0 ||
-                    module.rfind(imported + ".", 0) == 0)
-                    return true;
-        }
         return false;
+    }
+
+    // The out-of-scope module whose `make` function takes this call's named
+    // arguments, judged by their static types: `power.to(String, in:
+    // Units.SI.Kilo(Units.SI.Watt))` without `using Units.SI`. The walker
+    // raises the same hint from the values.
+    auto gatedModuleTaking(const ast::MethodCall& n) const -> std::string {
+        if (n.namedArgs.empty()) return {};
+        auto found = makeMethods.find(n.method);
+        if (found == makeMethods.end()) return {};
+        auto baseName = [](std::string written) {
+            if (auto angle = written.find('<'); angle != std::string::npos)
+                written.resize(angle);
+            if (auto dot = written.rfind('.'); dot != std::string::npos)
+                written = written.substr(dot + 1);
+            return written;
+        };
+        std::vector<std::string> labels;
+        for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
+        for (const auto& method : found->second) {
+            if (method.modulePath.empty() || moduleInScope(method.modulePath))
+                continue;
+            const auto& clause = method.def->clauses[0];
+            if (!namedArgumentsFit(clause, labels,
+                                   n.args.size() + (n.block ? 1 : 0)))
+                continue;
+            const bool typesFit = std::all_of(
+                n.namedArgs.begin(), n.namedArgs.end(), [&](const auto& named) {
+                    for (const auto& param : clause.params) {
+                        if (!param.name || *param.name != named.first) continue;
+                        if (!param.type || !*param.type) return true;
+                        const auto wanted = baseName(renderDispatchType(**param.type));
+                        if (auto typed = expressionTypes
+                                ? expressionTypes->find(named.second.get())
+                                : decltype(expressionTypes->find(nullptr)){};
+                            expressionTypes && typed != expressionTypes->end() &&
+                            typed->second) {
+                            const auto written =
+                                semantic::typeToString(typed->second);
+                            if (written != "Unknown")
+                                return baseName(written) == wanted;
+                        }
+                        // The checker leaves the arguments of a call it could
+                        // not resolve untyped, which is exactly this call. A
+                        // constructor of the parameter's type says it anyway:
+                        // `in: Units.SI.Kilo(Units.SI.Watt)`.
+                        std::string constructor;
+                        if (const auto* call =
+                                std::get_if<ast::MethodCall>(&named.second->kind))
+                            constructor = call->method;
+                        else if (const auto* call =
+                                     std::get_if<ast::FunctionCall>(&named.second->kind))
+                            constructor = call->name;
+                        else if (const auto* name =
+                                     std::get_if<ast::UpperIdentifier>(&named.second->kind))
+                            constructor = name->name;
+                        auto tags = typeVariantTags.find(wanted);
+                        return !constructor.empty() && tags != typeVariantTags.end() &&
+                            std::find(tags->second.begin(), tags->second.end(),
+                                      baseName(constructor)) != tags->second.end();
+                    }
+                    return false;
+                });
+            if (typesFit) return method.modulePath;
+        }
+        return {};
     }
 
     // The single receiver type a method of a module compiled in THIS unit
@@ -10742,24 +10862,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             if (bare.find('.') == std::string::npos
                                 && std::find(node->exceptNames.begin(),
                                              node->exceptNames.end(), bare)
-                                    == node->exceptNames.end()) {
-                                auto extends = [&](const std::string& path) {
-                                    auto found = L.makeMethods.find(bare);
-                                    return found != L.makeMethods.end() &&
-                                        std::any_of(found->second.begin(),
-                                                    found->second.end(),
-                                                    [&](const auto& method) {
-                                                        return method.modulePath == path;
-                                                    });
-                                };
-                                if (auto prior = L.extensionImportOrigin.find(bare);
-                                    prior != L.extensionImportOrigin.end() &&
-                                    prior->second < srcMod &&
-                                    extends(prior->second) && extends(srcMod))
-                                    continue;
+                                    == node->exceptNames.end())
                                 L.moduleImports[bare] = val;
-                                L.extensionImportOrigin[bare] = srcMod;
-                            }
                         }
                 }
                 if (!node->alias || !node->onlyNames.empty())
@@ -10814,6 +10918,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         overloadEntries.push_back(&entry);
     std::sort(overloadEntries.begin(), overloadEntries.end(),
               [](const auto* a, const auto* b) { return a->first < b->first; });
+    // The `name/Owner` argument dispatchers emitted below for named methods,
+    // by name, owner and arity: the collision dispatcher may route to these.
+    std::set<std::tuple<std::string, std::string, int>> namedArgumentDispatchers;
     for (const auto* overloadEntry : overloadEntries) {
         const auto& key = overloadEntry->first;
         const auto& overloads = overloadEntry->second;
@@ -10835,6 +10942,21 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             name.front() == '_') {
             const auto owner =
                 key.substr(firstBreak + 1, lastBreak - firstBreak - 1);
+            // Only when every overload is a function of that arity. A `foul`
+            // one also takes the capability context, and one with trait
+            // dictionaries takes those: call sites reach those by their
+            // exact signature, and a dispatcher at the source arity would
+            // name functions that do not exist.
+            const bool targetsExist = std::all_of(
+                overloads.begin(), overloads.end(), [&](const auto& overload) {
+                    return std::any_of(
+                        mod.functions.begin(), mod.functions.end(),
+                        [&](const FunDef& fn) {
+                            return fn.name == overload.first && fn.arity == arity;
+                        });
+                });
+            if (!targetsExist) continue;
+            namedArgumentDispatchers.emplace(name, owner, arity);
             auto def = L.makeArgumentDispatcher(
                 mangleReceiverImplementation(name, owner), arity, overloads);
             // What no overload takes continues to the generic conversion,
@@ -10952,13 +11074,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (fn.name.rfind(prefix, 0) != 0) continue;
             const auto suffix = fn.name.substr(prefix.size());
             const auto owner = suffix.substr(0, suffix.find(','));
-            // A named method's split owner does have a `name/Owner` now —
-            // the argument dispatcher emitted above — so it stays an owner.
+            // A named method's split owner has a `name/Owner` when the
+            // argument dispatcher above was emitted for it, and stays an owner.
             const bool named =
                 std::isalnum(static_cast<unsigned char>(name.front())) ||
                 name.front() == '_';
-            if (!named && L.argumentOverloadedMethods.count(
-                    localOverloadKey(name, owner, fn.arity)))
+            if (L.argumentOverloadedMethods.count(
+                    localOverloadKey(name, owner, fn.arity)) &&
+                !(named && namedArgumentDispatchers.count({name, owner, fn.arity})))
                 continue;
             auto& owners = ownersByArity[fn.arity];
             if (std::find(owners.begin(), owners.end(), owner) == owners.end())
@@ -11558,7 +11681,6 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                              externalRecords, resolvedCalls,
                              preferExternalReceivers, externalVariants,
                              staticTypeOfCalls, expressionTypes);
-    g_keepDeclaringModulesApart = false;
 
     struct Definition {
         std::string path;
