@@ -1,0 +1,5 @@
+---
+params: [title: String, content: Block<String>]
+---
+<title><%= title %></title>
+<main><%== content() %></main>

@@ -1,0 +1,36 @@
+# A trailing block goes to the block parameter even when a defaulted
+# parameter comes before it (kexhq/kex#554). `f do … end` leaves out
+# `attributes`, so the block used to land in `attributes` itself: the walker
+# ignored it and answered the default, BEAM failed in erlc on an `f/1` that
+# does not exist, and a `...` spread in the body crashed lowering. The block
+# is now passed by its parameter's label, so the skipped default is filled
+# in and the body still collects.
+
+let f(attributes: {String: String} = {}, children: Block<[Integer]> = {[]}) -> [Integer] do
+  children() + [attributes.keys.length]
+end
+
+module Html do
+  let div(attributes: {String: String} = {}, children: Block<[String]> = {[]}) -> String do
+    "<div${attributes.keys.length}>" + children().join("") + "</div>"
+  end
+end
+
+main do
+  IO.printLine(f do
+    ...[1, 2]
+  end)
+  IO.printLine(f do
+    1
+    2
+  end)
+  IO.printLine(f { 3 })
+  IO.printLine(f({"a": "b"}) do
+    ...[4, 5]
+  end)
+  IO.printLine(Html.div do
+    "a"
+    ...["b", "c"]
+  end)
+  IO.printLine(Html.div({"id": "x"}) { "d" })
+end

@@ -1,0 +1,4 @@
+---
+params: [footer: String, content: Block<String>]
+---
+<html><%== content() %><footer><%= footer %></footer></html>

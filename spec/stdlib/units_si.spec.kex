@@ -1,6 +1,19 @@
 using Units.SI
 
 describe("Units.SI") do
+  it("selects a prefix from the canonical quantity") do
+    assert(4312.meter.readable.to(String, places: 1) == "4.3 km")
+    assert(0.005.meter.readable.to(String, places: 0) == "5 mm")
+    assert(5000.meter.kilo.readable.to(String, places: 0) == "5 km")
+    assert(0.5.gram.readable.to(String, places: 0) == "500 mg")
+    assert(0.watt.readable.to(String, places: 0) == "0 W")
+  end
+
+  it("formats an explicit prefix and rejects incompatible dimensions") do
+    assert(1500.watt.to(String, in: Kilo(Watt), places: 2) == Just("1.50 kW"))
+    assert(1500.watt.to(String, in: Kilo(Watt), places: 2, trim: true) == Just("1.5 kW"))
+    assert(1500.watt.to(String, in: Kilo(Meter), places: 1) == None)
+  end
   it("constructs the shared Measure type") do
     let distance = 5.meter
     let elapsed = 2.second

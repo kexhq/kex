@@ -317,6 +317,46 @@ make Measure, implement: Showable do
   let symbol -> String = this.unit.symbol
   let to(String) -> String = "${this.value} ${this.unit.symbol}"
 
+  # Renders the current unit with +places+ digits after the decimal point.
+  # Rounds ties away from zero. +places+ must be between 0 and 15.
+  # +trim+ removes trailing fractional zeros; a rounded zero has no minus sign.
+  #
+  # @example
+  #   28.second.to(String, places: 0)                 # => "28 s"
+  #   1.second.to(String, places: 2, trim: true)      # => "1 s"
+  let to(String, places: Integer) -> String = this.to(String, places, false)
+
+  # Renders fixed precision, optionally removing trailing fractional zeros.
+  let to(String, places: Integer, trim: Bool) -> String do
+    let text = Kex.Intrinsic.Float.formatFixed(@value, places, trim)
+    return "${text} ${@unit.notation}"
+  end
+
+  # Chooses the largest unit whose absolute value is at least one.
+  # Time uses nanoseconds through weeks; data uses bytes through terabytes
+  # (+binary: true+ selects KiB through TiB). SI dimensions use decimal
+  # prefixes. Zero uses the family's base unit; smaller values use its
+  # smallest unit. Other dimensions keep their current unit.
+  #
+  # @example
+  #   90.second.readable.to(String, places: 1)       # => "1.5 min"
+  let readable -> Measure = this.readable(false)
+
+  # Chooses readable units, using binary scales for data when +binary+ is true.
+  let readable(binary: Bool) -> Measure do
+    let base = readableMeasureBase(@unit)
+    let family = readableMeasureFamily(base, binary)
+    let magnitude = Math.abs(@canonical)
+    let selected = magnitude == 0.0 then base else
+      family.filter { |unit| unit.conversionFactor <= magnitude }
+        .last.or(family.first.try)
+    return Measure {
+      canonical: @canonical,
+      value: @canonical / selected.conversionFactor,
+      unit: selected
+    }
+  end
+
   # Renders the measure as its value and unit, so +IO.printLine+ and
   # interpolation show +5.0 W+ rather than the record's fields. Inspecting
   # it (the REPL's echo, +inspected+) still shows the record itself.
@@ -465,6 +505,73 @@ make Measure, implement: Showable do
         })
       end
       false => return Error("Cannot subtract measures of different kinds")
+    end
+  end
+
+  private do
+    let readableMeasureBase(unit: UnitDefinition) -> UnitDefinition do
+      let (factor, symbol) = match unit.dimension do
+        :time => (1.0, "s")
+        :data => (1.0, "B")
+        :length => (1.0, "m")
+        :mass => (0.001, "g")
+        :volume => (0.001, "L")
+        :temperature => (1.0, "K")
+        :force => (1.0, "N")
+        :energy => (1.0, "J")
+        :power => (1.0, "W")
+        :voltage => (1.0, "V")
+        :current => (1.0, "A")
+        :resistance => (1.0, "Ω")
+        :charge => (1.0, "C")
+        _ => (unit.conversionFactor, unit.notation)
+      end
+      return UnitDefinition {
+        conversionFactor: factor, dimension: unit.dimension, notation: symbol
+      }
+    end
+
+    let readableMeasureFamily(base: UnitDefinition, binary: Bool) -> [UnitDefinition] do
+      if base.dimension == :time
+        return [
+          (0.000000001, "ns"), (0.000001, "μs"), (0.001, "ms"),
+          (1.0, "s"), (60.0, "min"), (3600.0, "h"),
+          (86400.0, "d"), (604800.0, "wk")
+        ].map do |entry|
+          let (factor, symbol) = entry
+          UnitDefinition {
+            conversionFactor: factor, dimension: :time, notation: symbol
+          }
+        end
+      end
+      if base.dimension == :data
+        let radix = binary then 1024.0 else 1000.0
+        let symbols = binary then ["B", "KiB", "MiB", "GiB", "TiB"] else
+          ["B", "KB", "MB", "GB", "TB"]
+        return (0..4).map do |power|
+          UnitDefinition {
+            conversionFactor: Math.pow(radix, power),
+            dimension: :data,
+            notation: symbols[power].try
+          }
+        end
+      end
+      if ![:length, :mass, :volume, :temperature, :force, :energy,
+           :power, :voltage, :current, :resistance, :charge]
+            .contains?(base.dimension)
+        return [base]
+      end
+      return [
+        (0.000000001, "n"), (0.000001, "μ"), (0.001, "m"),
+        (1.0, ""), (1000.0, "k"), (1000000.0, "M"), (1000000000.0, "G")
+      ].map do |entry|
+        let (factor, prefix) = entry
+        UnitDefinition {
+          conversionFactor: base.conversionFactor * factor,
+          dimension: base.dimension,
+          notation: "${prefix}${base.notation}"
+        }
+      end
     end
   end
 end

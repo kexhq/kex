@@ -1,0 +1,36 @@
+# Two overloads that both take a trailing block, one with an `attributes`
+# parameter before it (kexhq/kex#553). Called qualified, `Html.p { … }` was
+# padded to the LONGER overload's defaults, so on BEAM the block became
+# `attributes` and the call failed with "Undefined method: keys for Any". The
+# overload that takes the block where it is written now answers it. The
+# generated (`%{name}`) and hand-written shapes behave the same.
+
+module Html do
+  type Node = String
+
+  let text(value: String) -> Node = value
+
+  let p(children: Block<[Node]> = {[]}) -> Node = "<p>" + children().join("") + "</p>"
+  let p(attributes: {String: String}, children: Block<[Node]> = {[]}) -> Node do
+    "<p ${attributes.keys.length}>" + children().join("") + "</p>"
+  end
+
+  compiled do
+    ["em"].each do |name|
+      let %{name}(children: Block<[Node]> = {[]}) -> Node = "<${name}>" + children().join("") + "</${name}>"
+      let %{name}(attributes: {String: String}, children: Block<[Node]> = {[]}) -> Node do
+        "<${name} ${attributes.keys.length}>" + children().join("") + "</${name}>"
+      end
+    end
+  end
+end
+
+main do
+  IO.printLine(Html.p { Html.text("a") })
+  IO.printLine(Html.p({"id": "x"}) do
+    Html.text("b")
+  end)
+  IO.printLine(Html.p({"id": "x"}))
+  IO.printLine(Html.em { Html.text("c") })
+  IO.printLine(Html.em({"id": "x"}) { Html.text("d") })
+end

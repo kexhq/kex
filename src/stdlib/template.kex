@@ -11,9 +11,9 @@
 #
 #   using Template
 #
-#   let source = "---\nlayout: page\nparams: [name, library: Bool]\n---\nHi <%= name %>!"
+#   let source = "---\ntitle: Welcome\nparams: [name, library: Bool]\n---\nHi <%= name %>!"
 #   let parsed = Template.scan(source).try
-#   parsed.frontmatter.get("layout")   # => Just(Scalar("page"))
+#   parsed.frontmatter.get("title")    # => Just(Scalar("Welcome"))
 #   parsed.parameters                  # => [TemplateParam { name: "name", type: "" },
 #                                       #     TemplateParam { name: "library", type: "Bool" }]
 #   parsed.nodes                       # => [Text("Hi "), Interpolate("name"), Text("!")]
@@ -50,6 +50,24 @@
 #   <%%             a literal `<%`, for a template that generates ERB-shaped
 #                   output itself
 #
+# ## Layouts
+#
+# A layout is an ordinary template that takes the page as a block. Neither
+# template reads the other: the Kex code that calls them composes them, and
+# the block's result is inserted raw, since it is already rendered (and, from
+# +Template.html+, already escaped).
+#
+#   ---
+#   params: [title: String, content: Block<String>]
+#   ---
+#   <title><%= title %></title>
+#   <main><%== content() %></main>
+#
+#   let frame = Template.html(Kex.embed("views/layouts/auth.html.ket"))
+#   let form = Template.html(Kex.embed("views/signin.html.ket"))
+#
+#   let signin(email: String) -> String = frame("Sign in") { form(email) }
+#
 # ## Whitespace
 #
 # A tag that emits nothing — `<% %>` and `<%# %>` — and stands alone on its
@@ -81,7 +99,7 @@
 #
 # A template file may open with a `---` line, generic `key: value` tags up to
 # a closing `---` line, and then the body. This is metadata for whatever
-# reads the template (a title, a layout name, a list of tags) and there is
+# reads the template (a title, a list of tags) and there is
 # nothing template-specific about it: it is scanned the same generic way
 # whatever key is used.
 #

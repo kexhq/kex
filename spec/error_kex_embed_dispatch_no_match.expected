@@ -1,0 +1,2 @@
+spec/error_kex_embed_dispatch_no_match.kex:6:47: error: Kex.embed("lib/compiled/nowhere/${name}.ket") matches no file, so `render` would have no clause for it
+Aborted: compile-time expansion failed.

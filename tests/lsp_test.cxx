@@ -1397,6 +1397,40 @@ int main() {
                        "serving slot signature help omitted parameters/options: " +
                            result);
         });
+        // A function called on a receiver is the receiver type's, not the
+        // first function of that name: `t.text` reached the top-level `text`,
+        // and from a dependency nothing at all (kexhq/kex#541).
+        it("navigates a block parameter's function to its type's make block", []() {
+            const std::string text =
+                R"(record TableBuilder do\n  name : String\nend\n\nmake TableBuilder do\n  let text(column: Atom) -> String = \"${@name}.${column}\"\nend\n\nlet text(value: String) -> String = value\n\nlet change(name: Atom, from: Block<TableBuilder, String>) -> String = from(TableBuilder { name: \"t\" })\n\nmain do\n  IO.printLine(change(:c, from: { |t| t.text(:kind) }))\n  IO.printLine(change(:c) { |t| t.text(:kind) })\nend\n)";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex","languageId":"kex","version":1,"text":")" +
+                text + R"("}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex"},"position":{"line":13,"character":41}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex"},"position":{"line":14,"character":36}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            const std::string makeText =
+                R"("range":{"end":{"character":10,"line":5},"start":{"character":6,"line":5}})";
+            for (const int id : {2, 3})
+                assertTrue(responseForId(result, id).find(makeText) != std::string::npos,
+                           "t.text did not reach TableBuilder's text: " +
+                               responseForId(result, id));
+        });
         it("keeps local navigation and pattern receiver completion semantic", []() {
             std::string messages;
             messages += frame(

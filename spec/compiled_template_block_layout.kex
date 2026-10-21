@@ -1,0 +1,22 @@
+# A layout is a template that takes the page as a block (kexhq/kex#542). The
+# templates never read each other: the Kex code that calls them composes
+# them. The block's result goes in with `<%== %>`, since it is already
+# rendered and escaped; the layout's own holes are escaped once, as usual.
+# Layouts nest by nesting the calls.
+
+let frame = Template.html(Kex.embed("lib/compiled/layout/frame.html.ket"))
+let site = Template.html(Kex.embed("lib/compiled/layout/site.html.ket"))
+let form = Template.html(Kex.embed("lib/compiled/layout/signin.html.ket"))
+
+let signin(email: String) -> String = frame("Sign in & go") { form(email) }
+
+let page(email: String) -> String do
+  site("f") do
+    frame("Nested") { form(email) }
+  end
+end
+
+main do
+  IO.printLine(signin("<a@b>"))
+  IO.printLine(page("c@d"))
+end

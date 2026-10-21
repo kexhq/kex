@@ -107,6 +107,24 @@ module Type do
   #   Type.returnedBy(Date.parse).to(String)   # => "Result<Date, TimeError>"
   let returnedBy(function: Any) -> Type = Kex.Intrinsic.Type.ofValue(function)
 
+  # Returns a record's field values, in declaration order: the same order as
+  # +Type.of(record).fields+, so the two zip into name/value pairs. Anything
+  # that is not a record answers +None+; a tuple's elements are +items+.
+  #
+  # What a generic encoder needs: it reads a record's values without knowing
+  # its type, the way +construct+ builds one.
+  #
+  # @param value [Any] the record to read
+  # @return [[Any]?] its field values, or +None+
+  #
+  # @example
+  #   Type.fieldValues(Point { x: 1, y: 2 })   # => Just([1, 2])
+  #   Type.fieldValues((1, 2))                 # => None
+  #
+  # @example A record as a map from field names
+  #   Type.of(user).fields.map(&.name).zip(Type.fieldValues(user).or([]))
+  let fieldValues(value: Any) -> [Any]? = Kex.Intrinsic.Type.recordValues(value)
+
   # A record field, as +Type.fields+ describes it.
   record Field do
     # The field's name.

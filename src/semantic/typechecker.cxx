@@ -4437,10 +4437,30 @@ auto TypeChecker::moduleMemberImported(const std::string& module,
     return false;
 }
 
+// A trailing block that reaches its parameter only by skipping defaulted ones
+// (`f(attributes = {}, children)` called as `f do … end`) is passed by that
+// parameter's label instead. Both backends already fill the skipped defaults
+// for a labelled argument; positionally the block would land in `attributes`.
+// A call that already labels arguments keeps the block where it is, since
+// the hint was matched against those as if they were positional.
+//
+// The checker walks the AST as const, but annotating the tree is part of its
+// job here exactly as setting `Lambda::collection` is, so the cast is safe:
+// every node is owned by a Program the caller holds mutably.
+template <typename Call>
+auto passBlockByLabel(const Call& node, const std::string& label) -> void {
+    auto& call = const_cast<Call&>(node);
+    if (label.empty() || !call.block || !call.namedArgs.empty()) return;
+    call.namedArgs.emplace_back(label, std::move(*call.block));
+    call.block.reset();
+}
+
 auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes,
                                      bool isMethodCall,
-                                     bool* collection) -> std::vector<TypePtr> {
+                                     bool* collection,
+                                     std::string* skippedTo) -> std::vector<TypePtr> {
+    if (skippedTo) skippedTo->clear();
     auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = nullptr;
     if (auto scoped = m_scopedDeclaredSignatures.find(
@@ -4460,10 +4480,25 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         std::vector<TypePtr> hints;
         bool collection;
         bool concreteReceiver;
+        // The block parameter's name when defaulted parameters lie between
+        // the call's arguments and it; empty when the block is next.
+        std::string skippedTo;
     };
     std::vector<Candidate> candidates;
     auto hintsFrom = [&](const Signature& sig) -> void {
-        if (sig.params.size() != nonBlockArgTypes.size() + 1) return;
+        // Parameters the call skips between its arguments and the block must
+        // all have defaults: `f(attributes = {}, children)` called as
+        // `f do … end` still hands its block to `children` (kexhq/kex#554).
+        // Only a slot that cannot take the block is skipped: `Retry.run do …
+        // end` hands it to `operation`, its first parameter, however many
+        // defaulted ones follow.
+        if (sig.params.size() < nonBlockArgTypes.size() + 1) return;
+        if (sig.params.size() != nonBlockArgTypes.size() + 1 &&
+            (sig.requiredParams.value_or(sig.params.size()) >
+                 nonBlockArgTypes.size() + 1 ||
+             std::holds_alternative<FuncType>(
+                 resolve(sig.params[nonBlockArgTypes.size()])->kind)))
+            return;
         auto* blockParam = std::get_if<FuncType>(&sig.params.back()->kind);
         if (!blockParam) return;
 
@@ -4503,9 +4538,15 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         auto result = resolve(blockParam->result);
         bool isCollection = blockParam->block &&
             std::holds_alternative<ListType>(result->kind);
+        std::string skipped;
+        if (sig.params.size() != nonBlockArgTypes.size() + 1) {
+            if (sig.paramNames.empty()) return;
+            skipped = sig.paramNames.back();
+        }
         candidates.push_back({std::move(hints), isCollection,
                               isMethodCall && !sig.params.empty() &&
-                                  !isOpenType(sig.params.front())});
+                                  !isOpenType(sig.params.front()),
+                              std::move(skipped)});
     };
 
     if (methodIt != m_methodSignatures.end())
@@ -4540,6 +4581,12 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
             return {};
         }
     if (collection) *collection = candidates.front().collection;
+    if (skippedTo &&
+        std::all_of(candidates.begin(), candidates.end(), [&](const Candidate& c) {
+            return !c.skippedTo.empty() &&
+                   c.skippedTo == candidates.front().skippedTo;
+        }))
+        *skippedTo = candidates.front().skippedTo;
     std::vector<std::vector<TypePtr>> hintSets;
     for (const auto& c : candidates) hintSets.push_back(c.hints);
     return agreedHints(hintSets);
@@ -5448,7 +5495,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const auto& arg = node.namedArgs[i].second;
                 const auto* lambda =
                     arg ? std::get_if<ast::Lambda>(&arg->kind) : nullptr;
-                if (lambda && !lambda->params.empty()) {
+                // A collecting block moved here from the trailing position
+                // (passBlockByLabel) is typed as a block, or its body would
+                // read as one value rather than a list on the next check.
+                if (lambda && (!lambda->params.empty() || lambda->collection)) {
                     argTypes.push_back(Type::unknown()); // placeholder
                     labelledLambdas.push_back(i);
                 } else {
@@ -5467,13 +5517,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             if (node.block) {
                 bool collection = false;
+                std::string skippedTo;
                 auto hints = resolveBlockHints(node.name, argTypes, false,
-                                               &collection);
+                                               &collection, &skippedTo);
                 if (collection)
                     if (auto* lambda = std::get_if<ast::Lambda>(
                             &(**node.block).kind))
                         lambda->collection = true;
                 argTypes.push_back(inferBlock(**node.block, hints));
+                passBlockByLabel(node, skippedTo);
             }
             // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
             if ((node.name == "send" || node.name == "sendFrom") &&
@@ -6017,7 +6069,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             }
             for (const auto& [name, arg] : node.namedArgs) {
-                auto type = arg ? inferExpr(*arg) : Type::unknown();
+                const auto* collecting =
+                    arg ? std::get_if<ast::Lambda>(&arg->kind) : nullptr;
+                auto type = !arg ? Type::unknown()
+                    : collecting && collecting->collection
+                        ? inferBlock(*arg, namedArgHints(callName, name))
+                        : inferExpr(*arg);
                 if (serverSlotCall && name == "within") {
                     auto resolved = resolve(type);
                     const bool infinity = [&] {
@@ -6042,14 +6099,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             if (node.block) {
                 bool collection = false;
+                std::string skippedTo;
                 auto hints = resolveBlockHints(
                     callName, argTypes, /*isMethodCall=*/!isNamespaceCall,
-                    &collection);
+                    &collection, &skippedTo);
                 if (collection)
                     if (auto* lambda = std::get_if<ast::Lambda>(
                             &(**node.block).kind))
                         lambda->collection = true;
                 argTypes.push_back(inferBlock(**node.block, hints));
+                passBlockByLabel(node, skippedTo);
             }
             // `Type.of(x)`: record what the CHECKER knows about the argument.
             // A checked expression knows things the value cannot carry — the

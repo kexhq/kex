@@ -61,8 +61,9 @@ kex                         # start the interactive BEAM REPL (no file)
 kex -c <file.kex>           # compile to BEAM via Core Erlang
 kex -R <file.kex>           # run with the tree-walk interpreter
 kex -i                      # start the interactive tree-walk REPL
+kex -e <code>               # enter <code> in the REPL before its first prompt
 kex -C <file.kex>           # run semantic analysis only
-kex -e <file.kex>           # emit Core Erlang (.core) without invoking erlc
+kex -E <file.kex>           # emit Core Erlang (.core) without invoking erlc
 kex --test-json <spec.kex>  # report describe/it as JSON records, with locations
 kex --test-list <spec.kex>  # list the cases as JSON, running none of them
 kex --test-only <name> ...  # run one case, or one describe (repeatable)
@@ -70,6 +71,16 @@ kex --sname a --cookie secret <file.kex>
                             # run as the distributed node a@<host>
 kex --name a@host.example.com --cookie secret <file.kex>
                             # the same, with a fully-qualified host name
+```
+
+`-e`/`--eval` boots a REPL session: each `-e` is entered as if typed, in
+order, before the first prompt, so its bindings, definitions and spawned
+processes are there when the session starts. A failing line ends the session
+with status 1 rather than leaving it half booted. It takes no file; add `-i`
+for the tree-walk REPL:
+
+```
+kex -e 'using App.Console' -e 'let store = App.Console.boot()'
 ```
 
 `kex` gates on type checking by default. Use `--no-check` to skip the

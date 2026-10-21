@@ -703,6 +703,91 @@ make String, implement: Enumerable, Foldable do
     end
   end
 
+  # Returns the identifier in +snake_case+: its words lower-cased and joined
+  # with underscores.
+  #
+  # Words are separated by +_+, +-+ and spaces, and by case: a capital after
+  # a lower-case letter or digit starts a word (+userId+), and so does the
+  # last capital of a run followed by a lower-case letter (+HTTPServer+ is
+  # +HTTP+, +Server+). Anything else stays in its word, so +empty?+ keeps
+  # its +?+.
+  #
+  # @return [String] the snake-cased identifier
+  #
+  # @example
+  #   "userId".snakeCase       # => "user_id"
+  #   "HTTPServer".snakeCase   # => "http_server"
+  #   "show-nickname".snakeCase   # => "show_nickname"
+  snakeCase :> String
+  let snakeCase = identifierWords(this.chars, None, "", []).map(~lowerCase).join("_")
+
+  # Returns the identifier in +kebab-case+: its words lower-cased and joined
+  # with hyphens. Words are found as +snakeCase+ finds them.
+  #
+  # @return [String] the kebab-cased identifier
+  #
+  # @example
+  #   "userId".kebabCase      # => "user-id"
+  #   "show_nickname".kebabCase   # => "show-nickname"
+  kebabCase :> String
+  let kebabCase = identifierWords(this.chars, None, "", []).map(~lowerCase).join("-")
+
+  # Returns the identifier in +camelCase+: its first word lower-cased and
+  # the rest capitalized, with nothing between them. Words are found as
+  # +snakeCase+ finds them.
+  #
+  # @return [String] the camel-cased identifier
+  #
+  # @example
+  #   "show_nickname".camelCase   # => "showNickname"
+  #   "HTTP server".camelCase     # => "httpServer"
+  camelCase :> String
+  let camelCase do
+    match identifierWords(this.chars, None, "", []) do
+      [] => ""
+      [first | rest] => first.lowerCase + rest.map(~capitalize).join("")
+    end
+  end
+
+  # Returns the identifier in +PascalCase+: every word capitalized, with
+  # nothing between them. Words are found as +snakeCase+ finds them.
+  #
+  # @return [String] the Pascal-cased identifier
+  #
+  # @example
+  #   "show_nickname".pascalCase   # => "ShowNickname"
+  #   "user-id".pascalCase         # => "UserId"
+  pascalCase :> String
+  let pascalCase = identifierWords(this.chars, None, "", []).map(~capitalize).join("")
+
+  private do
+    # The words of an identifier, read one character at a time: `previous`
+    # is the character before `chars`, `current` the word being read.
+    identifierWords :> [Char] -> Char? -> String -> [String] -> [String]
+    let identifierWords(chars, previous, current, words) do
+      match chars do
+        [] => current.empty? then words else words + [current]
+        [c | rest] => do
+          let afterLower = match previous do
+            Just(p) => p.lower? || p.digit?
+            None => false
+          end
+          let endsCapitals = match (previous, rest.first) do
+            (Just(p), Just(n)) => p.upper? && n.lower?
+            _ => false
+          end
+          if c == '_' || c == '-' || c == ' '
+            identifierWords(rest, Just(c), "", current.empty? then words else words + [current])
+          elif c.upper? && (afterLower || endsCapitals) && !current.empty?
+            identifierWords(rest, Just(c), "${c}", words + [current])
+          else
+            identifierWords(rest, Just(c), "${current}${c}", words)
+          end
+        end
+      end
+    end
+  end
+
   # Returns the string with its characters in reverse order.
   #
   # @return [String] the reversed string

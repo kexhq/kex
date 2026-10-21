@@ -12,10 +12,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cctype>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -710,6 +712,45 @@ auto compiledNames(const ast::Program& program) -> CompiledNames {
     return names;
 }
 
+// The text of a string the compiler already knows, or nullopt.
+//
+// An ordinary `"..."` literal is ALWAYS parsed with interpolating = true and
+// its text split into `parts`/`values` (parser.cxx), even when it holds no
+// `${...}` at all — interpolating only means "this token could have held
+// one", not "it does". So the question is whether every interpolated VALUE is
+// itself known: none at all for a plain `"data.txt"`, or only literals, which
+// is what `"views/${name}.ket"` becomes once a compile-time `name` (a
+// `compiled do` loop variable, or a dispatch parameter) is substituted.
+//
+// The parser writes each hole as `value.showValue` (parser.cxx's
+// kShowMethod); a String shows as its own text, so that call is looked
+// through.
+auto holeValue(const ast::Expr& hole) -> const ast::Expr* {
+    const auto* call = std::get_if<ast::MethodCall>(&hole.kind);
+    if (call && call->method == "showValue" && call->receiver &&
+        call->args.empty() && call->namedArgs.empty() && !call->block)
+        return call->receiver.get();
+    return &hole;
+}
+
+auto knownText(const ast::Expr& expr) -> std::optional<std::string> {
+    const auto* literal = std::get_if<ast::StringLiteral>(&expr.kind);
+    if (!literal) return std::nullopt;
+    if (!literal->interpolating) return literal->value;
+    if (literal->values.empty())
+        return literal->parts.empty() ? std::string{} : literal->parts.front();
+    std::string text;
+    for (std::size_t i = 0; i < literal->parts.size(); i++) {
+        text += literal->parts[i];
+        if (i >= literal->values.size()) continue;
+        if (!literal->values[i]) return std::nullopt;
+        auto hole = knownText(*holeValue(*literal->values[i]));
+        if (!hole) return std::nullopt;
+        text += *hole;
+    }
+    return text;
+}
+
 // Folds `Kex.embed("path")` into the literal text of that file, read at
 // compile time (kexhq/kex#171 M2). Unlike chain collapse below, this needs
 // no sandbox run: there is nothing to evaluate, only a syntactic shape to
@@ -750,33 +791,23 @@ struct EmbedFolder {
             return fail(slot->location,
                         "Kex.embed takes exactly one argument: the path of "
                         "the file to embed");
-        const auto* literal =
-            std::get_if<ast::StringLiteral>(&call->args[0]->kind);
-        // An ordinary `"..."` literal is ALWAYS parsed with interpolating =
-        // true and its text split into `parts`/`values` (parser.cxx), even
-        // when it holds no `${...}` at all — interpolating only means "this
-        // token could have held one", not "it does". What actually matters
-        // here is whether any runtime VALUE was interpolated: `values` is
-        // empty for both a raw string and a plain `"data.txt"`.
-        std::string path;
-        if (!literal) {
+        if (!std::holds_alternative<ast::StringLiteral>(call->args[0]->kind))
             return fail(slot->location,
                         "Kex.embed's argument must be a plain string "
                         "literal naming the file to embed — the path has to "
                         "be knowable to the compiler, not just to the "
                         "running program");
-        } else if (!literal->interpolating) {
-            path = literal->value;
-        } else if (literal->values.empty()) {
-            path = literal->parts.empty() ? std::string{} : literal->parts.front();
-        } else {
+        auto path = knownText(*call->args[0]);
+        if (!path)
             return fail(slot->location,
                         "Kex.embed's argument must be a plain string "
                         "literal naming the file to embed, not an "
                         "interpolated one — the path has to be knowable to "
-                        "the compiler, not just to the running program");
-        }
-        std::filesystem::path target = sourceDir / path;
+                        "the compiler, not just to the running program. A "
+                        "hole may name a `compiled do` loop variable, or a "
+                        "String parameter of the enclosing function, which "
+                        "then gets one clause per matching file");
+        std::filesystem::path target = sourceDir / *path;
         std::ifstream file(target, std::ios::binary);
         if (!file)
             return fail(slot->location, "Kex.embed: cannot read '" +
@@ -807,6 +838,215 @@ auto foldEmbeds(ast::Program& program, const std::string& sourcePath,
             walk.substitute(target);
     });
     return folder.ok;
+}
+
+// ---------------------------------------------------------------------------
+// Embed dispatch (kexhq/kex#544)
+//
+// `Kex.embed` needs a path the compiler knows, which on its own makes a
+// `render(name)` impossible to write: the name is a parameter. But when every
+// hole in the path names a String parameter of the enclosing function, the
+// files it can mean are knowable — they are the ones on disk that fit the
+// pattern. So the clause becomes one clause per matching file, each with
+// those parameters fixed to a literal pattern and the literal substituted
+// into its body:
+//
+//   let render(name: String, who: String) -> String =
+//     Template.text(Kex.embed("views/${name}.ket"))(who)
+//
+// is, given views/bye.ket and views/hello.ket,
+//
+//   let render("bye", who: String) -> String = Template.text(Kex.embed("views/bye.ket"))(who)
+//   let render("hello", who: String) -> String = Template.text(Kex.embed("views/hello.ket"))(who)
+//
+// which the ordinary folds below finish. The function stays an ordinary
+// function: callable from other modules, and with a name chosen at run time.
+// A name no file has matches no clause. A hole matches one path segment, so
+// `views/${name}.ket` never reaches into views/admin/.
+// ---------------------------------------------------------------------------
+
+struct EmbedPattern {
+    SourceLocation location;
+    std::vector<std::string> parts; // literal text around the holes
+    std::vector<std::string> holes; // the parameter each hole names
+};
+
+// The first `Kex.embed` in `clause` whose holes all name one of `params`.
+auto findDispatchEmbed(ast::FunctionClause& clause,
+                       const std::unordered_set<std::string>& params,
+                       std::vector<semantic::Diagnostic>& diagnostics)
+    -> std::optional<EmbedPattern> {
+    std::optional<EmbedPattern> found;
+    Constants none;
+    Substituter walk{none, diagnostics, {}, {}, {}};
+    bool splitting = false;
+    walk.alsoSplit = [&](const std::string&) { return splitting; };
+    walk.onSlot = [&](ast::ExprPtr& slot) {
+        if (found || !slot) return found.has_value();
+        auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+        if (!call || call->method != "embed" || !call->receiver ||
+            !EmbedFolder::isKexReceiver(*call->receiver) ||
+            call->args.size() != 1 || !call->args[0])
+            return false;
+        auto* literal = std::get_if<ast::StringLiteral>(&call->args[0]->kind);
+        if (!literal) return true;
+        splitting = true;
+        walk.walkChildren(*call->args[0]);
+        splitting = false;
+        if (literal->values.empty()) return true;
+        EmbedPattern pattern{slot->location, literal->parts, {}};
+        for (const auto& value : literal->values) {
+            const auto* name =
+                value ? std::get_if<ast::Identifier>(&holeValue(*value)->kind) : nullptr;
+            if (!name || !params.count(name->name)) return true;
+            pattern.holes.push_back(name->name);
+        }
+        if (pattern.parts.size() != pattern.holes.size() + 1) return true;
+        found = std::move(pattern);
+        return true;
+    };
+    for (auto& param : clause.params)
+        if (param.defaultValue) walk.substitute(*param.defaultValue);
+    walk.body(clause.body);
+    if (clause.rescue) walk.each(*clause.rescue);
+    return found;
+}
+
+// Every file under `sourceDir` that fits `pattern`, sorted, as the text each
+// hole matched.
+auto matchEmbedPattern(const EmbedPattern& pattern,
+                       const std::filesystem::path& sourceDir)
+    -> std::vector<std::vector<std::string>> {
+    auto escape = [](const std::string& text) {
+        std::string out;
+        for (char c : text) {
+            if (std::strchr("\\^$.|?*+()[]{}", c)) out += '\\';
+            out += c;
+        }
+        return out;
+    };
+    // A parameter named twice must match the same text both times.
+    std::unordered_map<std::string, std::size_t> group;
+    std::string expression = escape(pattern.parts[0]);
+    for (std::size_t i = 0; i < pattern.holes.size(); i++) {
+        auto seen = group.find(pattern.holes[i]);
+        if (seen != group.end()) {
+            expression += "\\" + std::to_string(seen->second);
+        } else {
+            group.emplace(pattern.holes[i], group.size() + 1);
+            expression += "([^/]+)";
+        }
+        expression += escape(pattern.parts[i + 1]);
+    }
+    const std::regex matcher(expression);
+
+    const auto& lead = pattern.parts[0];
+    const auto slash = lead.rfind('/');
+    const bool absolute = !lead.empty() && lead.front() == '/';
+    const auto root = slash == std::string::npos
+        ? sourceDir : sourceDir / lead.substr(0, slash + 1);
+    std::vector<std::vector<std::string>> matches;
+    std::error_code error;
+    if (!std::filesystem::is_directory(root, error)) return matches;
+    std::filesystem::recursive_directory_iterator walk(root, error), end;
+    for (; !error && walk != end; walk.increment(error)) {
+        if (!walk->is_regular_file(error)) continue;
+        const auto candidate = absolute
+            ? walk->path().generic_string()
+            : walk->path().lexically_relative(sourceDir).generic_string();
+        std::smatch match;
+        if (!std::regex_match(candidate, match, matcher)) continue;
+        std::vector<std::string> captured;
+        for (const auto& hole : pattern.holes)
+            captured.push_back(match[group.at(hole)].str());
+        matches.push_back(std::move(captured));
+    }
+    std::sort(matches.begin(), matches.end());
+    return matches;
+}
+
+auto expandEmbedDispatch(ast::Program& program, const std::string& sourcePath,
+                         std::vector<semantic::Diagnostic>& diagnostics)
+    -> bool {
+    const auto sourceDir = std::filesystem::path(sourcePath).parent_path();
+    bool ok = true;
+    auto dispatch = [&](ast::FunctionDef& fn) {
+        // Most functions embed nothing; leave their clauses where they are.
+        if (!std::any_of(fn.clauses.begin(), fn.clauses.end(),
+                         [&](ast::FunctionClause& clause) {
+                             std::unordered_set<std::string> params;
+                             for (const auto& param : clause.params)
+                                 if (param.name && !param.pattern &&
+                                     !param.defaultValue)
+                                     params.insert(*param.name);
+                             return findDispatchEmbed(clause, params, diagnostics)
+                                 .has_value();
+                         }))
+            return;
+        std::vector<ast::FunctionClause> clauses;
+        for (auto& clause : fn.clauses) {
+            std::unordered_set<std::string> params;
+            for (const auto& param : clause.params)
+                if (param.name && !param.pattern && !param.defaultValue)
+                    params.insert(*param.name);
+            auto pattern = findDispatchEmbed(clause, params, diagnostics);
+            if (!pattern) {
+                clauses.push_back(std::move(clause));
+                continue;
+            }
+            auto matches = matchEmbedPattern(*pattern, sourceDir);
+            if (matches.empty()) {
+                std::string shown = pattern->parts[0];
+                for (std::size_t i = 0; i < pattern->holes.size(); i++)
+                    shown += "${" + pattern->holes[i] + "}" + pattern->parts[i + 1];
+                addError(diagnostics, pattern->location,
+                         "Kex.embed(\"" + shown + "\") matches no file, so `" +
+                             fn.name + "` would have no clause for it");
+                ok = false;
+                clauses.push_back(std::move(clause));
+                continue;
+            }
+            for (const auto& captured : matches) {
+                auto copy = ast::clone(clause);
+                Constants fixed;
+                for (std::size_t i = 0; i < pattern->holes.size(); i++)
+                    fixed.emplace(pattern->holes[i],
+                                  interpreter::Value::string(captured[i]));
+                std::vector<std::string> others;
+                for (auto& param : copy.params) {
+                    if (!param.name || !fixed.count(*param.name)) {
+                        if (param.name) others.push_back(*param.name);
+                        continue;
+                    }
+                    auto literal = std::make_unique<ast::Pattern>();
+                    literal->location = pattern->location;
+                    literal->kind = ast::LiteralPattern{Token{
+                        TokenType::RawString,
+                        captured[std::find(pattern->holes.begin(),
+                                           pattern->holes.end(), *param.name) -
+                                 pattern->holes.begin()],
+                        pattern->location}};
+                    param.pattern = std::move(literal);
+                    param.name.reset();
+                    param.type.reset();
+                }
+                Substituter fill{fixed, diagnostics, {}, {}, {}};
+                for (auto& param : copy.params)
+                    if (param.defaultValue) fill.substitute(*param.defaultValue);
+                fill.inScope(others, [&] {
+                    fill.body(copy.body);
+                    if (copy.rescue) fill.each(*copy.rescue);
+                });
+                clauses.push_back(std::move(copy));
+            }
+        }
+        fn.clauses = std::move(clauses);
+    };
+    walkBodies(program.items, [&](auto& target) {
+        using T = std::decay_t<decltype(target)>;
+        if constexpr (std::is_same_v<T, ast::FunctionDef>) dispatch(target);
+    }, /*intoCompiled=*/false);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -1629,18 +1869,8 @@ struct TemplateCallFolder {
             ok = false;
             return true;
         }
-        std::string source;
-        bool isLiteral = false;
-        if (const auto* literal = std::get_if<ast::StringLiteral>(&call->args[0]->kind)) {
-            if (!literal->interpolating) {
-                source = literal->value;
-                isLiteral = true;
-            } else if (literal->values.empty()) {
-                source = literal->parts.empty() ? std::string{} : literal->parts.front();
-                isLiteral = true;
-            }
-        }
-        if (!isLiteral) {
+        auto known = knownText(*call->args[0]);
+        if (!known) {
             addError(diagnostics, slot->location,
                      "Template." + call->method +
                          "'s argument must be a compile-time-known string (a plain literal, "
@@ -1651,7 +1881,7 @@ struct TemplateCallFolder {
         }
 
         auto lowered =
-            lowerTemplateFunction(htmlMode, source, slot->location, namePrefix, counter,
+            lowerTemplateFunction(htmlMode, *known, slot->location, namePrefix, counter,
                                   timeout, diagnostics);
         if (!lowered) {
             ok = false;
@@ -1684,10 +1914,18 @@ auto templateNamePrefix(const std::string& sourcePath) -> std::string {
     return std::string("__kexTemplate_") + digits + "_";
 }
 
+//
+// `counter` carries over between calls: templates are folded once before
+// generation and again after it, and the second pass must not reuse a name.
 auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& diagnostics,
-                    const ExpandOptions& options) -> bool {
+                    const ExpandOptions& options, int& counter) -> bool {
     TemplateCallFolder folder{diagnostics, options.timeout, {},
-                              templateNamePrefix(options.sourcePath), 0, true};
+                              templateNamePrefix(options.sourcePath), counter, true};
+    struct CounterSync {
+        TemplateCallFolder& folder;
+        int& counter;
+        ~CounterSync() { counter = folder.counter; }
+    } sync{folder, counter};
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
     walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };
@@ -2069,8 +2307,14 @@ auto expand(ast::Program& program,
     // skip the rest of this function. Embeds first, since
     // `Template.text(Kex.embed(...))` needs the embed already folded to a
     // literal before the template call's own argument-shape check runs.
+    // A function whose embed path names its own parameter becomes one clause
+    // per matching file first, so each clause has a literal path to fold.
+    if (!expandEmbedDispatch(program, options.sourcePath, diagnostics))
+        return false;
+    int templateCounter = 0;
     if (!foldEmbeds(program, options.sourcePath, diagnostics)) return false;
-    if (!foldTemplates(program, diagnostics, options)) return false;
+    if (!foldTemplates(program, diagnostics, options, templateCounter))
+        return false;
 
     // --- 1. Find the constants, in source order.
     std::vector<std::string> names;
@@ -2398,6 +2642,15 @@ auto expand(ast::Program& program,
             else
                 eraser.substitute(target);
         });
+    }
+
+    // A generated body may embed a file its loop variable names
+    // (`Kex.embed("views/${name}.ket")`): step 0 never saw it, since a
+    // template is only a declaration until the loop runs. Now that the
+    // bindings are literals, fold those embeds and templates too.
+    if (ok && !generated.empty()) {
+        ok = foldEmbeds(program, options.sourcePath, diagnostics) &&
+             foldTemplates(program, diagnostics, options, templateCounter);
     }
 
     // --- 4. Collapse compiled-builder chains that are already fully known.

@@ -163,6 +163,28 @@ let to(measure: Measure, String, in: DataPrefix) -> String? do
   end
 end
 
+# Renders a decimal prefix with a chosen precision, optionally trimming zeros.
+# +places+ is between 0 and 15; a non-data measure answers +None+.
+#
+# @example
+#   4312.byte.to(String, in: Kilo, places: 1)   # => Just("4.3 KB")
+let to(measure: Measure, String, in: DataPrefix,
+       places: Integer, trim: Bool) -> String? do
+  let unit = match in do
+    Kilo => KB
+    Mega => MB
+    Giga => GB
+  end
+  match convertTo(measure, unit) do
+    Ok(converted) => Just(converted.to(String, places: places, trim: trim))
+    Error(_) => None
+  end
+end
+
+# Renders a decimal prefix with fixed precision, retaining fractional zeros.
+let to(measure: Measure, String, in: DataPrefix,
+       places: Integer) -> String? = Units.Data.to(measure, String, in, places, false)
+
 # +value+ bytes.
 #
 # Named +byteSize+ rather than +bytes+, which +String+ already uses for its

@@ -307,7 +307,8 @@ private:
         -> std::optional<std::string>;
     auto findImportedNamedOverload(const std::string& functionName,
                                    const NamedArgs& namedArgs,
-                                   const ValuePtr& receiver) const
+                                   const ValuePtr& receiver,
+                                   size_t positionalCount) const
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;

@@ -1,0 +1,41 @@
+# `Kex.embed` needs a path the compiler knows, so a `render(name)` over a
+# directory of templates used to be impossible to write (kexhq/kex#544). Two
+# shapes now give it one:
+#
+# - A hole in the path that names a String parameter of the enclosing
+#   function: the function gets one clause per file that fits, with that
+#   parameter fixed to a literal pattern. It stays an ordinary function, so
+#   the name can be chosen at run time. A hole is one path segment, so
+#   views/admin/nested.ket is not one of `render`'s clauses.
+# - A hole that names a `compiled do` loop variable: each generated function
+#   embeds the file its own name picks.
+
+let render(name: String, who: String) -> String do
+  Template.text(Kex.embed("lib/compiled/views/${name}.ket"))(who)
+end
+
+module Views do
+  let page(name: String, who: String) -> String do
+    "[" + Template.text(Kex.embed("lib/compiled/views/${name}.ket"))(who) + "]"
+  end
+end
+
+module Pages do
+  compiled do
+    ["greeting", "farewell"].each do |name|
+      let %name(who: String) -> String do
+        Template.text(Kex.embed("lib/compiled/views/${name}.ket"))(who)
+      end
+    end
+  end
+end
+
+main do
+  IO.printLine(render("greeting", "Ann"))
+  IO.printLine(render("farewell", "Ann"))
+  ["farewell", "greeting"].each do |name|
+    IO.printLine(Views.page(name, "Bob"))
+  end
+  IO.printLine(Pages.greeting("Cy"))
+  IO.printLine(Pages.farewell("Cy"))
+end

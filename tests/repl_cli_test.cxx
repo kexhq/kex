@@ -1601,5 +1601,83 @@ int main() {
         });
     });
 
+    // `-e` boots a session before the first prompt (kexhq/kex#549): what it
+    // defines is there for the first typed line, and a line that fails ends
+    // the session instead of leaving it half booted.
+    describe("--eval", []() {
+        const std::string kex = std::string(KEX_BINARY_PATH) + " --no-colors";
+        const std::string boot =
+            " -e 'let x = 41' -e 'let double(n) do\n  n * 2\nend'";
+
+        it("enters its lines before the first prompt in both REPLs", [kex, boot]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand("echo 'double(x + 1)' | " + kex + repl +
+                                      boot + " 2>&1");
+                assertTrue(out.find("=> 84") != std::string::npos,
+                           "the typed line did not see the boot bindings: " + out);
+            }
+        });
+
+        it("ends the session with status 1 when a line fails", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "echo 'IO.printLine(\"typed\")' | " + kex + repl +
+                    " -e 'let y = undefinedThing' -e 'IO.printLine(\"later\")'"
+                    " 2>&1; echo \"status=$?\"");
+                assertTrue(out.find("status=1") != std::string::npos,
+                           "a failed boot did not exit with 1: " + out);
+                assertTrue(out.find("later") == std::string::npos &&
+                               out.find("typed") == std::string::npos,
+                           "the session went on after a failed boot: " + out);
+            }
+        });
+
+        it("refuses a file", [kex]() {
+            auto out = runCommand(kex + " -e '1' some.kex 2>&1; echo \"status=$?\"");
+            assertTrue(out.find("status=1") != std::string::npos &&
+                           out.find("takes no file") != std::string::npos,
+                       "expected --eval to refuse a file: " + out);
+        });
+    });
+
+    // Compile-time expansion is what a file run gets before anything else
+    // sees the program; the REPL skipped it, so `Kex.embed` reached run time
+    // as "Undefined function: Kex.embed" (kexhq/kex#543). An input has no
+    // file, so the embedded paths here are absolute.
+    describe("compile-time expansion in the REPL", []() {
+        const auto views = std::filesystem::temp_directory_path() /
+                           ("kex_repl_embed_" + std::to_string(getpid()));
+        std::filesystem::create_directories(views);
+        std::ofstream(views / "hello.ket") << "---\nparams: [who: String]\n---\nHi <%= who %>";
+        std::ofstream(views / "bye.ket") << "---\nparams: [who: String]\n---\nBye <%= who %>";
+        const auto dir = views.string();
+        const auto input =
+            "let greet = Template.text(Kex.embed(\"" + dir + "/hello.ket\"))\n"
+            "greet(\"Ann\")\n"
+            "let render(name: String, who: String) -> String = "
+            "Template.text(Kex.embed(\"" + dir + "/${name}.ket\"))(who)\n"
+            "render(\"bye\", \"Bo\")\n"
+            "compiled do\n"
+            "  [\"hello\"].each do |name|\n"
+            "    let %name(who: String) -> String = "
+            "Template.text(Kex.embed(\"" + dir + "/${name}.ket\"))(who)\n"
+            "  end\n"
+            "end\n"
+            "hello(\"Cy\")\n";
+
+        it("embeds, renders and generates in both REPLs", [input]() {
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("\"Hi Ann\"") != std::string::npos,
+                           "expected the embedded template, got: " + out);
+                assertTrue(out.find("\"Bye Bo\"") != std::string::npos,
+                           "a later input reused an earlier template: " + out);
+                assertTrue(out.find("\"Hi Cy\"") != std::string::npos,
+                           "expected the compiled do block to generate: " + out);
+                assertTrue(out.find("error") == std::string::npos,
+                           "unexpected error: " + out);
+            }
+        });
+    });
+
     return runAll();
 }

@@ -882,6 +882,33 @@ auto locationOfOffset(const std::string& source, size_t offset)
 // always safer than one pointing at the wrong place).
 auto definitionLocation(const Document& document, SourceLocation location,
                         size_t nameLength, const std::string* source)
+    -> std::optional<::lsp::Location>;
+
+// `location` moved onto `name` when it points at the keyword before it: a
+// function is recorded at its `let`/`foul` in some declaration shapes, so a
+// definition range of the name's length covered `let ` instead of the name.
+auto atDeclaredName(const std::string& source, SourceLocation location,
+                    const std::string& name) -> SourceLocation {
+    if (location.line < 1 || location.column < 1 || name.empty()) return location;
+    size_t offset = 0;
+    for (int line = 1; line < location.line; ++line) {
+        const auto newline = source.find('\n', offset);
+        if (newline == std::string::npos) return location;
+        offset = newline + 1;
+    }
+    const auto start = offset + static_cast<size_t>(location.column - 1);
+    if (source.compare(start, name.size(), name) == 0) return location;
+    for (const std::string keyword : {"let ", "foul ", "slot ", "foul slot "})
+        if (source.compare(start, keyword.size(), keyword) == 0 &&
+            source.compare(start + keyword.size(), name.size(), name) == 0) {
+            location.column += static_cast<int>(keyword.size());
+            return location;
+        }
+    return location;
+}
+
+auto definitionLocation(const Document& document, SourceLocation location,
+                        size_t nameLength, const std::string* source)
     -> std::optional<::lsp::Location> {
     auto endLocation = location;
     endLocation.column += static_cast<int>(nameLength);
@@ -4182,14 +4209,38 @@ private:
                     symbol = m_db.symbolInModule(
                         qualifier.substr(dot + 1), word.text);
         }
+        size_t lineStart = 0;
+        for (unsigned int current = 0; current < params.position.line;
+             ++current) {
+            const auto newline = document.text.find('\n', lineStart);
+            if (newline == std::string::npos) break;
+            lineStart = newline + 1;
+        }
+        // `t.text(…)` is a function of the receiver's type, found through
+        // that type the way hover and signature help find it. By name alone
+        // it was whichever `text` came first — a top-level one, or none from
+        // a dependency — and a block parameter's receiver, typed only by the
+        // block it is in, never resolved at all (kexhq/kex#541).
         if (!symbol && qualifier.empty()) {
-            size_t lineStart = 0;
-            for (unsigned int current = 0; current < params.position.line;
-                 ++current) {
-                const auto newline = document.text.find('\n', lineStart);
-                if (newline == std::string::npos) break;
-                lineStart = newline + 1;
+            const auto wordEnd =
+                lineStart + word.byteColumn - 1 + word.byteLength;
+            const auto receiver = scanDotReceiver(document.text, wordEnd);
+            if (receiver.valid) {
+                auto type = receiverQualifier(document, receiver, wordEnd,
+                                              &m_interfaces,
+                                              documentModuleRoots(document.path));
+                if (const auto angle = type.find('<'); angle != std::string::npos)
+                    type.resize(angle);
+                if (!type.empty()) {
+                    symbol = m_db.receiverSymbol(type, word.text);
+                    if (const auto dot = type.rfind('.');
+                        !symbol && dot != std::string::npos)
+                        symbol = m_db.receiverSymbol(type.substr(dot + 1),
+                                                     word.text);
+                }
             }
+        }
+        if (!symbol && qualifier.empty()) {
             const auto referenceOffset = lineStart + word.byteColumn - 1;
             if (auto local = sourceLocalDefinition(
                     document.text, document.path, word.text,
@@ -4205,8 +4256,11 @@ private:
         const auto* state = m_db.fileState(
             std::string(symbol->definition.file));
         const std::string* source = state ? &state->source : nullptr;
+        const auto declared = source
+            ? atDeclaredName(*source, symbol->definition, symbol->name)
+            : symbol->definition;
         if (auto location = definitionLocation(
-                document, symbol->definition, symbol->name.size(), source))
+                document, declared, symbol->name.size(), source))
             return ::lsp::Definition{std::move(*location)};
         return {};
     }

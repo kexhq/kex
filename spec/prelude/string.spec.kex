@@ -226,3 +226,29 @@ describe("String — indentRest") do
     assert("a\n\nb\n".indentRest("  ") == "a\n\n  b")
   end
 end
+
+describe("String — identifier case conversion") do
+  it("splits words at separators and at case boundaries") do
+    assert("userId".snakeCase == "user_id")
+    assert("show-nickname".snakeCase == "show_nickname")
+    assert("  spaced  out ".snakeCase == "spaced_out")
+    assert("user2Id".snakeCase == "user2_id")
+  end
+
+  it("keeps a run of capitals together, up to the word it starts") do
+    assert("HTTPServer".snakeCase == "http_server")
+    assert("XMLHttpRequest".kebabCase == "xml-http-request")
+  end
+
+  it("spells the words in each convention") do
+    assert("show_nickname".camelCase == "showNickname")
+    assert("show_nickname".pascalCase == "ShowNickname")
+    assert("userId".kebabCase == "user-id")
+    assert("PascalCase".camelCase == "pascalCase")
+  end
+
+  it("leaves other characters in their word") do
+    assert("empty?".snakeCase == "empty?")
+    assert("".camelCase == "")
+  end
+end

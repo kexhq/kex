@@ -1,0 +1,44 @@
+# Tuples convert to List; tuple-shaped non-tuples do not (kexhq/kex#535).
+#
+# `Fun.convertTo` had Range→List and List→List clauses but no tuple clause,
+# so `(1, 2, 3).to(List)` answered None on both backends.
+#
+# Records and variants must STAY None: on BEAM they are tuples too
+# (`{'One', 1}`, `{'Just', 1}`), and converting them would leak the tag in
+# as an element. The walker keeps them as separate types; the BEAM side
+# consults the record registry (like spreadable/2) and the variant registry
+# (like inspect_tuple_string/1), with explicit clauses for the
+# runtime-tagged values that live in neither (Binary, Char, Stream, ...).
+
+record One do
+  a : Int = 1
+end
+
+main do
+  # Genuine tuples convert, whatever they hold — including an atom first
+  # element, which alone must not read as a tag. The heterogeneous tuple
+  # asserts element-wise: the value agrees on both backends but a literal
+  # `[Atom, Integer]` list does not typecheck, and neither does the
+  # `inspect` annotation (`[Atom]` vs `[Any]`).
+  IO.inspect((1, 2, 3).to(List))
+  let pair = (:one, 1).to(List).or([])
+  IO.printLine(pair[0])
+  IO.printLine(pair[1])
+
+  # Variants are not tuples, not even the two-element ones.
+  IO.inspect(Just(1).to(List))
+  IO.inspect(Ok(1).to(List))
+
+  # Records are not tuples either — neither a user record nor a prelude one.
+  IO.inspect(One {}.to(List))
+  IO.inspect(Duration.seconds(1).to(List))
+
+  # Neither are the runtime-tagged values.
+  IO.inspect('a'.to(List))
+  IO.inspect(Type.of(1).to(List))
+
+  # What already worked still works.
+  IO.inspect("hi".to(List))
+  IO.inspect([1, 2].to(List))
+  IO.inspect((1..3).to(List))
+end

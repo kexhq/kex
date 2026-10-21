@@ -1,0 +1,14 @@
+# A private record whose name Net.HTTP.WebSocket also declares. Used by
+# spec/record_name_value_collision.kex.
+module RecordValue.Sessions
+
+using RecordValue.Decode, as: Decode
+
+private do
+  record Session do
+    userId : String
+    expiresAt : Integer
+  end
+end
+
+let holder -> String = "${Decode.first(as: Session).map { |session| session.userId }}"

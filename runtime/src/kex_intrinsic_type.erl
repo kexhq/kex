@@ -8,7 +8,7 @@
 -module(kex_intrinsic_type).
 -export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1, 'updateRecord'/3,
          'fieldLayoutsOf'/1, 'constructorLayoutsOf'/1, register_layouts/2,
-         'construct'/2, 'constructVariant'/3]).
+         'construct'/2, 'constructVariant'/3, 'recordValues'/1]).
 
 'updateRecord'(Record, Field, Value) when is_tuple(Record), tuple_size(Record) > 0 ->
     Tag = element(1, Record),
@@ -28,6 +28,23 @@ index_of(Wanted, [Wanted | _], Index) -> {ok, Index};
 index_of(Wanted, [_ | Rest], Index) -> index_of(Wanted, Rest, Index + 1).
 
 'ofValue'(X) -> type_of(X).
+
+%% `Type.values`: a record's field values in declaration order, which is its
+%% tuple layout. A variant or a plain tuple is not a record, so it answers
+%% None, exactly as `type_of` tells them apart.
+'recordValues'(X) when is_tuple(X), tuple_size(X) > 0 ->
+    Tag = element(1, X),
+    Arity = tuple_size(X) - 1,
+    case variant_metadata(Tag) of
+        {Arity, _} -> 'None';
+        _ ->
+            case record_fields(Tag) of
+                Fields when is_list(Fields), length(Fields) =:= Arity ->
+                    {'Just', tl(tuple_to_list(X))};
+                _ -> 'None'
+            end
+    end;
+'recordValues'(_) -> 'None'.
 
 type_of(X) when is_binary(X) -> named(<<"String">>);
 type_of(X) when is_integer(X) -> named(<<"Integer">>);
