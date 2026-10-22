@@ -1,2 +1,3 @@
 before
-Internal error: spec/error_measure_to_without_unit_module.kex:15:24: runtime error: unknown named argument `in:` for `Measure.to` — `Units.SI` defines a matching `to`; add `using Units.SI`
+1.5 h
+Internal error: spec/error_measure_to_without_unit_module.kex:18:24: runtime error: Undefined method: to for Measure — `Units.SI` defines a matching `to`; add `using Units.SI`

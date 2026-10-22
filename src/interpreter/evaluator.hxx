@@ -296,6 +296,11 @@ private:
                          const NamedArgs& namedArgs,
                          std::optional<std::size_t> positionalCount = std::nullopt) const
         -> const ast::FunctionClause*;
+    // Whether `clause` declares every label and, with `checkTypes`, the value
+    // is of the type it annotates the labelled parameter with.
+    auto namedArgsTypeFit(const ast::FunctionClause& clause,
+                          const NamedArgs& namedArgs, bool checkTypes) const
+        -> bool;
     // The first label no clause of `functionName` declares, if any.
     auto unknownNamedArgument(const std::string& functionName,
                               const NamedArgs& namedArgs) const
@@ -313,6 +318,13 @@ private:
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
     auto makeMethodInScope(const std::string& qualified) const -> bool;
+    auto moduleInScope(const std::string& module) const -> bool;
+    auto makeDefInScope(const ast::FunctionDef* def) const -> bool;
+    // The out-of-scope module whose gated definition of `functionName` takes
+    // these named arguments, for the "add `using`" hint.
+    auto gatedModuleTaking(const std::string& functionName,
+                           const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
@@ -496,6 +508,11 @@ private:
     // member, so resolution skips one whose module is not in scope; a
     // top-level `make` never appears here and stays global.
     std::unordered_map<std::string, std::string> m_makeMethodModule;
+    // The same gate for one definition, for a method the prelude or a
+    // top-level `make` also defines: `Units.SI`'s `make Measure do let
+    // to(String, in: SIPrefix)` beside the prelude's `to`. The name stays
+    // global there, and only these definitions wait for the `using`.
+    std::unordered_map<const ast::FunctionDef*, std::string> m_gatedMakeDefs;
     // Type names each module declares, for the rule above.
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredTypes;
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredRecords;

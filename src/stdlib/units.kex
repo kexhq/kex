@@ -332,6 +332,49 @@ make Measure, implement: Showable do
     return "${text} ${@unit.notation}"
   end
 
+  # Renders the measure in another time unit: +convertTo+, then +to(String)+.
+  #
+  # Every unit module supplies the same call for its own units, so a measure
+  # is displayed in a named unit the same way whatever it measures:
+  # +in: Kilo(Meter)+ with +Units.SI+, +in: MiB+ with +Units.Data+.
+  #
+  # Answers +None+ when the measure is not a time.
+  #
+  # @param String [Type] the target type
+  # @param in [TimeUnit] the unit to display in
+  # @return [String?] the rendered measure, or +None+
+  #
+  # @example
+  #   90.minute.to(String, in: Hour)   # => Just("1.5 h")
+  #   1.5.hour.to(String, in: Minute)  # => Just("90.0 min")
+  let to(String, in: TimeUnit) -> String? do
+    match this.convertTo(in) do
+      Ok(converted) => return Just(converted.to(String))
+      Error(_) => return None
+    end
+  end
+
+  # Renders another time unit with +places+ digits after the decimal point,
+  # as +to(String, places:)+ does.
+  #
+  # @example
+  #   100.minute.to(String, in: Hour, places: 2)   # => Just("1.67 h")
+  let to(String, in: TimeUnit, places: Integer) -> String? do
+    return this.to(String, in, places, false)
+  end
+
+  # Renders another time unit with fixed precision, optionally removing
+  # trailing fractional zeros.
+  #
+  # @example
+  #   90.minute.to(String, in: Hour, places: 3, trim: true)   # => Just("1.5 h")
+  let to(String, in: TimeUnit, places: Integer, trim: Bool) -> String? do
+    match this.convertTo(in) do
+      Ok(converted) => return Just(converted.to(String, places, trim))
+      Error(_) => return None
+    end
+  end
+
   # Chooses the largest unit whose absolute value is at least one.
   # Time uses nanoseconds through weeks; data uses bytes through terabytes
   # (+binary: true+ selects KiB through TiB). SI dimensions use decimal
@@ -352,7 +395,7 @@ make Measure, implement: Showable do
         .last.or(family.first.try)
     return Measure {
       canonical: @canonical,
-      value: @canonical / selected.conversionFactor,
+      value: scaledValue(@canonical, selected.conversionFactor),
       unit: selected
     }
   end
@@ -366,11 +409,6 @@ make Measure, implement: Showable do
   # @example
   #   "drawn: ${1.volt * 5.ampere}"   # => "drawn: 5.0 W"
   let showValue -> String = this.to(String)
-  # Formatting into a target display unit deliberately has NO prelude clause.
-  # A unit module (Units.SI, Units.Data, ...) supplies `to(String, in:)` for
-  # the units it owns, and reaching one requires importing it. A catch-all
-  # here would answer `None` for an un-imported module instead: a silently
-  # empty Optional in place of "you need `using Units.SI`".
 
   # Multiplies the measure by a plain number, keeping its unit.
   #
@@ -439,7 +477,7 @@ make Measure, implement: Showable do
     match this.unit.kind == target.kind do
       true => return Ok(Measure {
         canonical: this.canonical,
-        value: this.canonical / target.factor,
+        value: scaledValue(this.canonical, target.factor),
         unit: target
       })
       false => return Error("Cannot convert between different measurement kinds")
@@ -509,6 +547,27 @@ make Measure, implement: Showable do
   end
 
   private do
+    # Divides a canonical value by a unit factor. The conversion is exact in
+    # principle (0.000005 W is 5 μW), but neither number is exactly
+    # representable in binary, so the quotient can land an ulp or two off
+    # (5.000000000000001). Round back to 15 significant digits, comfortably
+    # inside a double's ~15.95, so converted measures read the way they were
+    # written. The annotation says Number because `Integer / Float` infers
+    # Integer; the result is always a Float.
+    let scaledValue(canonical: Float, factor: Float) -> Number do
+      let raw: Float = canonical / factor
+      return raw if raw == 0.0
+      # Scaling past the exponent range would overflow to infinity; nothing
+      # that extreme is a meaningful measurement anyway.
+      return raw if Math.abs(raw) < 1.0e-300 || Math.abs(raw) > 1.0e300
+      # Both powers of ten come from `pow` rather than one being the other's
+      # reciprocal, which would reintroduce the rounding this removes.
+      let exponent = 14 - Math.floor(Math.log10(Math.abs(raw)))
+      let scale = Math.pow(10.0, exponent)
+      let inverse = Math.pow(10.0, 0 - exponent)
+      return (raw / inverse).round / scale
+    end
+
     let readableMeasureBase(unit: UnitDefinition) -> UnitDefinition do
       let (factor, symbol) = match unit.dimension do
         :time => (1.0, "s")

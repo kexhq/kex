@@ -8,11 +8,12 @@ let checkFileSize(file: FS.FileInfo) -> String do
 end
 
 describe("Units.Data") do
-  it("formats a chosen decimal prefix with precision and trimming") do
-    assert(4312.byte.to(String, in: Kilo, places: 1) == Just("4.3 KB"))
-    assert(10485760.byte.to(String, in: Mega, places: 1) == Just("10.5 MB"))
-    assert(1000.byte.to(String, in: Kilo, places: 2, trim: true) == Just("1 KB"))
-    assert(1.second.to(String, in: Mega, places: 1) == None)
+  it("formats a chosen unit with precision and trimming") do
+    assert(4312.byte.to(String, in: KB, places: 1) == Just("4.3 KB"))
+    assert(10485760.byte.to(String, in: MB, places: 1) == Just("10.5 MB"))
+    assert(10485760.byte.to(String, in: MiB, places: 1) == Just("10.0 MiB"))
+    assert(1000.byte.to(String, in: KB, places: 2, trim: true) == Just("1 KB"))
+    assert(1.second.to(String, in: MB, places: 1) == None)
   end
 
   it("selects decimal or binary units without changing canonical bytes") do
@@ -122,13 +123,14 @@ describe("Units.Data") do
     end
   end
 
-  it("formats decimal data prefixes from canonical bytes") do
+  it("formats data units from canonical bytes") do
     let size = 5000000.byteSize
-    assert(size.to(String, in: Kilo) == Just("5000.0 KB"))
-    assert(size.to(String, in: Mega) == Just("5.0 MB"))
-    assert(size.to(String, in: Giga) == Just("0.005 GB"))
-    assert(5.megabyte.to(String, in: Mega) == Just("5.0 MB"))
-    assert(1.second.to(String, in: Mega) == None)
+    assert(size.to(String, in: KB) == Just("5000.0 KB"))
+    assert(size.to(String, in: MB) == Just("5.0 MB"))
+    assert(size.to(String, in: GB) == Just("0.005 GB"))
+    assert(5.megabyte.to(String, in: MB) == Just("5.0 MB"))
+    assert(1048576.byte.to(String, in: MiB) == Just("1.0 MiB"))
+    assert(1.second.to(String, in: MB) == None)
   end
 
   it("adds data measures using canonical bytes") do

@@ -7,7 +7,7 @@ main do
   let speed = distance / elapsed
 
   IO.printLine("distance: ${distance.to(String)}")
-  IO.printLine("distance in kilometres: ${distance.kilo.to(String)}")
+  IO.printLine("distance in kilometres: ${distance.to(String, in: Kilo(Meter)).or("")}")
   IO.printLine("elapsed: ${elapsed.to(String)}")
   IO.printLine("average speed: ${speed.to(String)}")
 end

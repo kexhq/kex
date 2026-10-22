@@ -1,6 +1,7 @@
-# `to(String, in:)` is supplied by a unit module, not the prelude. Without the
-# `using`, the named argument matches no clause — say so, and name the module
-# that does define one, rather than quietly formatting without it.
+# A unit module's `to(String, in:)` is reached through its `using`. The
+# prelude answers `in:` for the time units itself, so without the import the
+# label alone is not the problem: the value is one only Units.SI takes. Say so,
+# and name the module, rather than running the prelude's clause with it.
 #
 # Both backends report it identically, hint included — BEAM lowers the call to
 # the same runtime error rather than failing the compilation, so the rest of
@@ -12,5 +13,7 @@ main do
   # without the import that now fails first — which is the same rule this spec
   # is about, one operator earlier.
   let power: Measure = Units.SI.watt(11_111)
+  # The prelude's own `in:` still works next to the unimported module.
+  IO.printLine(90.minute.to(String, in: Hour).or("none"))
   IO.printLine(power.to(String, in: Units.SI.Kilo(Units.SI.Watt)))
 end

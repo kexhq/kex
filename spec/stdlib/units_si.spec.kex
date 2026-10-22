@@ -4,7 +4,8 @@ describe("Units.SI") do
   it("selects a prefix from the canonical quantity") do
     assert(4312.meter.readable.to(String, places: 1) == "4.3 km")
     assert(0.005.meter.readable.to(String, places: 0) == "5 mm")
-    assert(5000.meter.kilo.readable.to(String, places: 0) == "5 km")
+    assert(5.kilometer.readable.to(String, places: 0) == "5 km")
+    assert(5000000.milligram.readable.to(String, places: 0) == "5 kg")
     assert(0.5.gram.readable.to(String, places: 0) == "500 mg")
     assert(0.watt.readable.to(String, places: 0) == "0 W")
   end
@@ -40,13 +41,15 @@ describe("Units.SI") do
     assert(2.5.joule.canonical == 2.5)
   end
 
-  it("applies decimal prefixes and formats composite display units") do
-    assert(5000.meter.kilo.value == 5.0)
-    assert(1.meter.milli.value == 1000.0)
+  it("converts to prefixed units and formats composite display units") do
+    assert(5000.meter.convertTo(Kilo(Meter)).map { |m| m.value } == Ok(5.0))
+    assert(1.meter.convertTo(Milli(Meter)).map { |m| m.value } == Ok(1000.0))
+    assert(5.kilometer.convertTo(Meter).map { |m| m.to(String) } == Ok("5000.0 m"))
+    assert(5000.meter.to(String, in: Kilo(Meter)) == Just("5.0 km"))
     assert(3.kilowatt.canonical == 3000.0)
     assert(3.kilowatt.to(String) == "3.0 kW")
     assert(1.kilometer.to(String) == "1.0 km")
-    assert((31544.watt * 1.hour).to(String, in: Mega) == Just("113.5584 MJ"))
+    assert((31544.watt * 1.hour).to(String, in: Mega(Joule)) == Just("113.5584 MJ"))
     let energy = 31544.watt * 1.hour
     assert(energy.to(String, in: Kilo(Joule)) == Just("113558.4 kJ"))
     assert(energy.to(String, in: Kilo(Watt * Hour)) == Just("31.544 kWh"))
@@ -71,11 +74,11 @@ describe("Units.SI") do
   end
 
   it("formats every decimal prefix") do
-    assert(mega(2000000.watt).to(String) == "2.0 MW")
-    assert(giga(3000000000.watt).to(String) == "3.0 GW")
-    assert(milli(0.004.watt).to(String) == "4.0 mW")
-    assert(micro(0.000005.watt).to(String) == "5.0 μW")
-    assert(nano(0.000000006.watt).to(String) == "6.0 nW")
+    assert(2000000.watt.to(String, in: Mega(Watt)) == Just("2.0 MW"))
+    assert(3000000000.watt.to(String, in: Giga(Watt)) == Just("3.0 GW"))
+    assert(0.004.watt.to(String, in: Milli(Watt)) == Just("4.0 mW"))
+    assert(0.000005.watt.to(String, in: Micro(Watt)) == Just("5.0 μW"))
+    assert(0.000000006.watt.to(String, in: Nano(Watt)) == Just("6.0 nW"))
   end
 
   it("derives speed and acceleration with /") do

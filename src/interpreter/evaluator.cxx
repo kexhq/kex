@@ -1372,9 +1372,13 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
         // a clause that fits with args[0] as the receiver goes first.
         std::vector<std::pair<const ast::FunctionDef*, const ast::FunctionClause*>>
             orderedClauses;
-        for (const auto* funcDef : m_functionDefs.at(regName))
+        // A module's definitions of a name the prelude also answers wait for
+        // that module's `using` (m_gatedMakeDefs).
+        for (const auto* funcDef : m_functionDefs.at(regName)) {
+            if (!makeDefInScope(funcDef)) continue;
             for (const auto& clause : funcDef->clauses)
                 orderedClauses.emplace_back(funcDef, &clause);
+        }
         if (isMethod && !args.empty())
             std::stable_partition(
                 orderedClauses.begin(), orderedClauses.end(),
@@ -1827,11 +1831,37 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
         m_moduleDeclaredRecords[enclosingModule].contains(
             typeName.substr(ownedPrefix.size()));
     if (!enclosingModule.empty() && !typeName.empty() &&
-        !m_moduleDeclaredTypes[enclosingModule].count(typeName) && !ownRecord)
+        !m_moduleDeclaredTypes[enclosingModule].count(typeName) && !ownRecord) {
         for (const auto& [method, arity] : ownMethods) {
             (void)arity;
-            m_makeMethodModule[typeName + "::" + method] = enclosingModule;
+            const auto qualified = typeName + "::" + method;
+            // A name defined before this block — by the prelude, a top-level
+            // `make` or another module — is not this module's to gate: only
+            // its own definitions are (m_gatedMakeDefs below). Gating the
+            // name took the prelude's `90.minute.to(String, in: Hour)` away
+            // from a program that only named `Units.SI.watt`.
+            if (auto defined = m_functionDefs.find(qualified);
+                defined != m_functionDefs.end() && !defined->second.empty()) {
+                if (auto gated = m_makeMethodModule.find(qualified);
+                    gated != m_makeMethodModule.end() &&
+                    gated->second != enclosingModule)
+                    gated->second.clear();
+                continue;
+            }
+            m_makeMethodModule[qualified] = enclosingModule;
         }
+        auto gate = [&](const ast::FunctionDef* fd) {
+            if (fd) m_gatedMakeDefs[fd] = enclosingModule;
+        };
+        for (const auto& item : def.body) {
+            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                gate(fn->get());
+            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
+                if (*vb) for (const auto& vi : (*vb)->items)
+                    if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                        gate(vf->get());
+        }
+    }
 
     // Process the make block's own methods.
     for (const auto& item : def.body) {
@@ -4051,6 +4081,23 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     const auto offset = receiverArgumentOffset(defLookupKey, args);
                     const auto* selected = findNamedClause(
                         defLookupKey, namedArgs, args.size() - offset);
+                    // Only the labels fit what is in scope, and a module this
+                    // call cannot see takes the values: that is a missing
+                    // `using`, not a call to run with the wrong clause.
+                    // BEAM raises the same from lowering.
+                    if (!selected || !namedArgsTypeFit(*selected, namedArgs, true))
+                        if (auto module = gatedModuleTaking(defLookupKey, namedArgs)) {
+                            const auto separator = defLookupKey.rfind("::");
+                            const auto method = separator == std::string::npos
+                                ? defLookupKey : defLookupKey.substr(separator + 2);
+                            throw RuntimeError(
+                                "Undefined method: " + method + " for " +
+                                (offset && !args.empty() ? dispatchTypeName(args[0])
+                                                         : sourceName(defLookupKey)) +
+                                " — `" + *module + "` defines a matching `" + method +
+                                "`; add `using " + *module + "`",
+                                loc);
+                        }
                     // No clause declares one of these labels. Falling back to
                     // clause 0 would drop it, turning `m.to(String, in: kWh)`
                     // into a plain `to(String)` whose answer looks fine and
@@ -4141,25 +4188,43 @@ auto Evaluator::findNamedClause(const std::string& functionName,
     auto definitions = m_functionDefs.find(functionName);
     if (definitions == m_functionDefs.end()) return nullptr;
 
-    for (const auto* definition : definitions->second) {
-        for (const auto& clause : definition->clauses) {
-            bool acceptsAll = std::all_of(
-                namedArgs.begin(), namedArgs.end(), [&](const auto& named) {
-                    return std::any_of(
-                        clause.params.begin(), clause.params.end(),
-                        [&](const auto& param) {
-                            return param.name && *param.name == named.first;
-                        });
-                });
-            if (acceptsAll && positionalCount) {
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : namedArgs) labels.push_back(label);
-                acceptsAll = namedArgumentsFit(clause, labels, *positionalCount);
+    // Labels first, with the values' types as the tie-breaker: the
+    // prelude's `to(String, in: TimeUnit)` and Units.SI's `to(String, in:
+    // SIPrefix)` both take `in:`, and the value says which one is meant. Not
+    // types alone, since a trait-typed parameter does not check here.
+    for (const bool checkTypes : {true, false})
+        for (const auto* definition : definitions->second) {
+            if (!makeDefInScope(definition)) continue;
+            for (const auto& clause : definition->clauses) {
+                bool acceptsAll =
+                    namedArgsTypeFit(clause, namedArgs, checkTypes);
+                if (acceptsAll && positionalCount) {
+                    std::vector<std::string> labels;
+                    for (const auto& [label, _] : namedArgs)
+                        labels.push_back(label);
+                    acceptsAll =
+                        namedArgumentsFit(clause, labels, *positionalCount);
+                }
+                if (acceptsAll) return &clause;
             }
-            if (acceptsAll) return &clause;
         }
-    }
     return nullptr;
+}
+
+auto Evaluator::namedArgsTypeFit(const ast::FunctionClause& clause,
+                                 const NamedArgs& namedArgs,
+                                 bool checkTypes) const -> bool {
+    return std::all_of(
+        namedArgs.begin(), namedArgs.end(), [&](const auto& named) {
+            return std::any_of(
+                clause.params.begin(), clause.params.end(),
+                [&](const auto& param) {
+                    return param.name && *param.name == named.first &&
+                           (!checkTypes || !param.type || !*param.type ||
+                            !named.second ||
+                            runtimeTypeMatches(named.second, **param.type));
+                });
+        });
 }
 
 auto Evaluator::unknownNamedArgument(const std::string& functionName,
@@ -4453,7 +4518,29 @@ auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
 auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
     auto owner = m_makeMethodModule.find(qualified);
     if (owner == m_makeMethodModule.end()) return true;
-    const auto& module = owner->second;
+    return moduleInScope(owner->second);
+}
+
+auto Evaluator::makeDefInScope(const ast::FunctionDef* def) const -> bool {
+    auto owner = m_gatedMakeDefs.find(def);
+    return owner == m_gatedMakeDefs.end() || moduleInScope(owner->second);
+}
+
+auto Evaluator::gatedModuleTaking(const std::string& functionName,
+                                  const NamedArgs& namedArgs) const
+    -> std::optional<std::string> {
+    auto definitions = m_functionDefs.find(functionName);
+    if (definitions == m_functionDefs.end()) return std::nullopt;
+    for (const auto* definition : definitions->second) {
+        if (makeDefInScope(definition)) continue;
+        for (const auto& clause : definition->clauses)
+            if (namedArgsTypeFit(clause, namedArgs, true))
+                return m_gatedMakeDefs.at(definition);
+    }
+    return std::nullopt;
+}
+
+auto Evaluator::moduleInScope(const std::string& module) const -> bool {
     if (module.empty()) return true;
     if (m_currentModule == module ||
         m_currentModule.rfind(module + ".", 0) == 0)
