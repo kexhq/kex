@@ -21,13 +21,13 @@ main do
   # `[Atom, Integer]` list does not typecheck, and neither does the
   # `inspect` annotation (`[Atom]` vs `[Any]`).
   #
-  # Everything here goes through `inspect` (stderr): the suite compares
-  # stdout and stderr separately, so a `printLine` line would sort apart
-  # from these on one backend but not the other.
+  # Its elements go to stderr like everything else here: `IO.inspect` writes
+  # there, and on BEAM a line on stdout can land before or after the stderr
+  # lines around it, which made this spec pass or fail by timing.
   IO.inspect((1, 2, 3).to(List))
   let pair = (:one, 1).to(List).or([])
-  IO.inspect(pair[0] == Just(:one))
-  IO.inspect(pair[1] == Just(1))
+  IO.printError(pair[0])
+  IO.printError(pair[1])
 
   # Variants are not tuples, not even the two-element ones.
   IO.inspect(Just(1).to(List))
