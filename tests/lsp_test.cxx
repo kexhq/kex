@@ -1658,6 +1658,52 @@ int main() {
                            completion);
             fs::remove_all(root);
         });
+        // A sibling module's `compiled do` declarations exist for the editor
+        // too: Metro.Html's element constructors were "has no function" in
+        // every file that called them, while the same files built.
+        it("sees declarations a sibling module's compiled block generates", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-sibling-compiled";
+            fs::remove_all(root);
+            fs::create_directories(root / "lib");
+            {
+                std::ofstream library(root / "lib" / "gen.kex");
+                library << "module Gen do\n"
+                           "  let NAMES = [\"em\"]\n"
+                           "  compiled do\n"
+                           "    NAMES.each do |name|\n"
+                           "      let %{name}(text: String) -> String = text\n"
+                           "    end\n"
+                           "  end\n"
+                           "end\n";
+            }
+            const char* entry =
+                "using Gen\\n"
+                "main do\\n"
+                "  IO.printLine(Gen.em(\\\"x\\\"))\\n"
+                "end\\n";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-sibling-compiled","capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                std::string(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-compiled/main.kex","languageId":"kex","version":1,"text":")") +
+                entry + R"("}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto text = output.str();
+            assertTrue(text.find("publishDiagnostics") != std::string::npos,
+                       "no diagnostics were published: " + text.substr(0, 2000));
+            assertTrue(text.find("has no function") == std::string::npos,
+                       "a generated function was missing: " +
+                           text.substr(0, 2000));
+            fs::remove_all(root);
+        });
         // A package can keep its modules in folders at its top and say which:
         // then its own directory is the root, as it is for `tey build`.
         it("knows a tey package that declares its source folders", []() {

@@ -1,0 +1,7 @@
+read default/a
+read /srv/a
+put /srv/b: 1
+stored b
+not a key: c/d
+/x/y
+true

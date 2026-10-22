@@ -1,0 +1,33 @@
+# A block with as many parameters as an element's tuple has spreads each
+# element across them, and the checker types each parameter by its element
+# (kexhq/kex#537). It typed every parameter as the whole tuple, so handing
+# `glyph` on to a String parameter was rejected — over a module constant, a
+# literal list and a local alike. Both backends always spread.
+
+using Presence.Statuses, only: [STATUSES]
+
+module Picker do
+  preset : String -> String -> String
+  let preset(glyph, words) = "${glyph} ${words}"
+
+  braced : [String]
+  let braced = Presence.Statuses.STATUSES.map { |glyph, words| preset(glyph, words) }
+
+  blocked : [String]
+  let blocked = Presence.Statuses.STATUSES.map do |glyph, words|
+    preset(glyph, words)
+  end
+end
+
+main do
+  IO.printLine(Picker.braced)
+  IO.printLine(Picker.blocked)
+  IO.printLine(STATUSES.map { |glyph, words| Picker.preset(glyph, words) })
+  IO.printLine([("👋", "Around")].map { |glyph, words| Picker.preset(glyph, words) })
+  let local = [("🏠", "At home")]
+  local.each do |glyph, words|
+    IO.printLine(Picker.preset(glyph, words))
+  end
+  # The element's parts keep their own types.
+  IO.printLine([("a", 1), ("b", 2)].map { |name, count| name.length + count })
+end

@@ -1,0 +1,9 @@
+# kex: check-only
+# Each spread block parameter is typed by its own tuple element
+# (kexhq/kex#537), so a String part passed where an Integer is wanted is
+# reported against String, not against the whole tuple.
+let doubled(count: Integer) -> Integer = count * 2
+
+main do
+  IO.printLine([("a", 1)].map { |name, count| doubled(name) })
+end

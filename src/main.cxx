@@ -1391,6 +1391,128 @@ struct LoadedDep {
   std::unique_ptr<kex::ast::Program> program;
 };
 
+// Every module a program declares, a nested one by its full name and by the
+// name it is written with.
+auto declaredModuleNames(const kex::ast::Program &program)
+    -> std::unordered_set<std::string> {
+  std::unordered_set<std::string> names;
+  const auto add = [&](auto &self, const kex::ast::ModuleDef &module,
+                       const std::string &prefix) -> void {
+    const auto full = prefix.empty() ? module.name : prefix + "." + module.name;
+    names.insert(module.name);
+    names.insert(full);
+    for (const auto &item : module.body)
+      if (auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+        if (*nested) self(self, **nested, full);
+  };
+  for (const auto &item : program.items)
+    if (auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+      if (*module) add(add, **module, "");
+  return names;
+}
+
+// The module name a file's place under `root` gives it:
+// `app/services/authority.kex` is `App.Services.Authority`.
+auto moduleNameForPath(const std::filesystem::path &relative) -> std::string {
+  std::string name;
+  for (auto part : relative) {
+    auto text = part.replace_extension().string();
+    if (!name.empty()) name += ".";
+    bool upper = true;
+    for (const auto c : text) {
+      if (c == '_') { upper = true; continue; }
+      name += upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+      upper = false;
+    }
+  }
+  return name;
+}
+
+// The file name a module name part is conventionally written as:
+// `RichText` is `rich_text`.
+auto snakeCasedPart(const std::string &part) -> std::string {
+  std::string result;
+  for (size_t i = 0; i < part.size(); ++i) {
+    const auto c = static_cast<unsigned char>(part[i]);
+    if (i > 0 && std::isupper(c) &&
+        std::islower(static_cast<unsigned char>(part[i - 1])))
+      result += '_';
+    result += static_cast<char>(std::tolower(c));
+  }
+  return result;
+}
+
+// A path as a diagnostic shows it: relative to the working directory.
+auto shownPath(const std::filesystem::path &path) -> std::string {
+  std::error_code ec;
+  auto relative = std::filesystem::relative(path, ec);
+  return ec || relative.empty() ? path.string() : relative.string();
+}
+
+// An error about a module's file, at its header.
+auto reportModuleFileError(const std::filesystem::path &file, int line,
+                           const std::string &message) -> void {
+  std::cerr << kex::color::apply(kex::color::gray) << shownPath(file) << ":"
+            << line << ":1:" << kex::color::apply(kex::color::reset) << " "
+            << kex::color::apply(kex::color::bold)
+            << kex::color::apply(kex::color::red) << "error:"
+            << kex::color::apply(kex::color::reset) << " " << message << "\n";
+}
+
+struct DeclaringFile {
+  std::filesystem::path root;
+  std::filesystem::path file;
+  int line;
+};
+
+// The file under one of the program's own source roots (not the standard
+// library's) that declares `module <name>` as its header, with the root it
+// was found under.
+auto fileDeclaringModule(const std::string &name,
+                         const std::vector<std::string> &roots)
+    -> std::optional<DeclaringFile> {
+  namespace fs = std::filesystem;
+  std::unordered_set<std::string> standard;
+  for (const auto &root : kex::standardLibraryModuleRoots()) {
+    std::error_code ec;
+    standard.insert(fs::weakly_canonical(root, ec).string());
+  }
+  // The header's line, or 0 when the file's header is another module's.
+  const auto declares = [&](const fs::path &file) {
+    std::ifstream input(file);
+    std::string line;
+    for (int number = 1; std::getline(input, line); ++number) {
+      const auto start = line.find_first_not_of(" \t");
+      if (start == std::string::npos || line[start] == '#') continue;
+      if (line.compare(start, 7, "module ") != 0) return 0;
+      const auto rest = line.substr(start + 7);
+      const auto header = rest.substr(0, rest.find_first_of(" \t\r"));
+      return header == name ? number : 0;
+    }
+    return 0;
+  };
+  for (const auto &root : roots) {
+    std::error_code ec;
+    if (standard.contains(fs::weakly_canonical(root, ec).string())) continue;
+    fs::recursive_directory_iterator walk(
+        root, fs::directory_options::skip_permission_denied, ec);
+    for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
+      const auto &entry = *walk;
+      const auto base = entry.path().filename().string();
+      if (entry.is_directory(ec)) {
+        if (base.starts_with(".") || base == "ebin" || base == "build" ||
+            base == "_build" || base == "node_modules")
+          walk.disable_recursion_pending();
+        continue;
+      }
+      if (entry.path().extension() != ".kex") continue;
+      if (const auto line = declares(entry.path()))
+        return DeclaringFile{fs::path(root), entry.path(), line};
+    }
+  }
+  return std::nullopt;
+}
+
 // A suffix no other writer of the same cache entry will pick, for the
 // staging file a cache write renames into place. `getpid()` is unavailable
 // under emscripten, and the wasm build compiles this file too; a random
@@ -1539,6 +1661,10 @@ auto resolveBeamDeps(kex::ast::Program &program,
   std::chrono::steady_clock::duration analyzeTime{};
 
   size_t discoveryHits = 0;
+  // Names a `using` or a qualified reference asked for that no file under the
+  // source roots answers to. Most are declared inline or come from an
+  // interface; the rest are checked once everything is loaded.
+  std::set<std::string> unresolved;
 
   // `source` is a dependency file's own text, which keys the discovery cache;
   // the entry program passes nullptr, since its AST is already expanded and
@@ -1585,7 +1711,10 @@ auto resolveBeamDeps(kex::ast::Program &program,
     }
     for (const auto &modName : modules) {
       auto resolved = resolver.resolve(modName);
-      if (!resolved) continue;
+      if (!resolved) {
+        unresolved.insert(modName);
+        continue;
+      }
       if (!loaded.insert(resolved->path).second) continue;
 
       auto path = std::make_unique<std::string>(resolved->path);
@@ -1638,6 +1767,33 @@ auto resolveBeamDeps(kex::ast::Program &program,
         std::cerr << "error: could not expand module " << modName << "\n";
         std::exit(1);
       }
+      // Found by its path, but declaring another module: `using
+      // App.Services.Authority` reaching app/services/authority.kex whose
+      // header says `module App.Authority`. The walker refuses that file;
+      // the build compiled it and the first call failed at run time.
+      const auto lastPart =
+          resolved->moduleName.substr(resolved->moduleName.rfind('.') + 1);
+      const auto stem = std::filesystem::path(*path).stem().string();
+      auto lowered = lastPart;
+      for (auto &c : lowered)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const bool ownFile = stem == snakeCasedPart(lastPart) || stem == lowered;
+      const kex::ast::ModuleDef *header = nullptr;
+      for (const auto &item : depProg->items)
+        if (auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+            module && *module) {
+          header = module->get();
+          break;
+        }
+      if (header && ownFile &&
+          !declaredModuleNames(*depProg).contains(resolved->moduleName)) {
+        reportModuleFileError(
+            *path, header->location.line,
+            "this file is `" + resolved->moduleName + "` by its path, but "
+            "declares `" + header->name + "`; name it `module " +
+            resolved->moduleName + "`");
+        std::exit(1);
+      }
       resolve(*depProg, {}, src.get());
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
@@ -1653,6 +1809,35 @@ auto resolveBeamDeps(kex::ast::Program &program,
     for (auto &item : program.items)
       merged.push_back(std::move(item));
     program.items = std::move(merged);
+  }
+  // A module whose file sits where another name belongs is reached by
+  // neither: `module App.Authority` in app/services/authority.kex. The build
+  // used to succeed without it and the first call died at run time with
+  // "Unknown module" or "Undefined function".
+  if (!unresolved.empty()) {
+    const auto declared = declaredModuleNames(program);
+    for (const auto &name : unresolved) {
+      if (declared.contains(name)) continue;
+      if (interfaces && (interfaces->modules.contains(name) ||
+                         interfaces->modules.contains("Kex." + name)))
+        continue;
+      const auto found = fileDeclaringModule(name, roots);
+      if (!found) continue;
+      if (loaded.contains(found->file.string())) continue;
+      const auto byPath =
+          moduleNameForPath(found->file.lexically_relative(found->root));
+      auto expected = found->root;
+      std::stringstream parts(name);
+      for (std::string part; std::getline(parts, part, '.');)
+        expected /= snakeCasedPart(part);
+      expected += ".kex";
+      reportModuleFileError(
+          found->file, found->line,
+          "module `" + name + "` is declared in a file whose path names `" +
+              byPath + "`, so `" + name + "` is not found; name it `module " +
+              byPath + "`, or move it to " + shownPath(expected));
+      std::exit(1);
+    }
   }
   if (const char *timings = std::getenv("KEX_TIMINGS");
       timings && *timings && std::string(timings) != "0") {

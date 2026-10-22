@@ -1,0 +1,7 @@
+# Deliberately misplaced: by its path this file is `Misplaced.Services.Authority`.
+# error_module_path_mismatch.kex and error_module_path_mismatch_by_path.kex
+# reach it under each name.
+module Misplaced.Authority
+
+granted? : String -> Bool
+let granted?(name) = name == "admin"

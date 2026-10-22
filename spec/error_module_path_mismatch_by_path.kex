@@ -1,0 +1,8 @@
+# kex: check-only
+# The same misplaced file reached by the name its PATH gives it: the build
+# compiled it, but the module it declares is not the one asked for.
+using Misplaced.Services.Authority
+
+main do
+  IO.printLine(granted?("admin"))
+end

@@ -1,0 +1,18 @@
+# A capability with a module of its own name beside it. Inside `with Vault =
+# …`, only the capability's own members (`put`, `get`) go to the
+# replacement; the module's helpers are ordinary calls. Every `Vault.x` used
+# to be routed to the replacement: `undef` on BEAM, "Undefined method:
+# located for Vault.Disk" in the walker. Metro kept its capability under a
+# separate name (Metro.Storage.Service) because of this.
+using Vault
+
+main do
+  IO.printLine(Vault.get("a").or("none"))
+  with Vault = Vault.Disk { root: "/srv" } do
+    IO.printLine(Vault.get("a").or("none"))
+    IO.printLine(Vault.stored("b", "1"))
+    IO.printLine(Vault.stored("c/d", "2"))
+    IO.printLine(Vault.located("/x", "y"))
+    IO.printLine(Vault.key?("ok"))
+  end
+end

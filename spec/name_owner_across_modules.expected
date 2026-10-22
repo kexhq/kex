@@ -1,0 +1,8 @@
+a table in SELECT 1
+ledger
+shape failed: x
+42
+sink: main failed: boom
+sink: main table: t
+sink: main seeded: disk
+sink: main failed: unknown command plant

@@ -585,7 +585,17 @@ struct Lowering {
     // `request/5`, which erlc rejects. A definition that IS pure at exactly
     // the arity being called settles it.
     std::unordered_set<std::string> pureFnArities;
+    // The program's own top-level foul functions, as `name/arity`. A module's
+    // public pure function records its BARE name in `pureFnArities` too (for
+    // calls that reach it through a `using`), and that entry used to win over
+    // the program's own foul function of the same name and arity: the stdlib's
+    // `Random.seeded/1` made a top-level `foul seeded(store)` go out as
+    // `seeded/1` against a defined `seeded/2` (kexhq/kex#494).
+    std::unordered_set<std::string> topLevelFoulArities;
     std::unordered_set<std::string> capabilityModules;
+    // Each capability declared in this unit and the foul members it declares.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        capabilityMembers;
     // Name of the context variable in scope; empty means there is none, and
     // a call from there passes a fresh empty map.
     std::string currentContextVar;
@@ -869,8 +879,17 @@ struct Lowering {
                                    return entry.rfind(prefix, 0) == 0;
                                });
         }
-        // Declared in this unit: `foulFns` carries the names marked `foul`.
-        if (capabilityModules.count(capability)) return foulFns.count(method) > 0;
+        // Declared in this unit: its own foul members. A module of the same
+        // name may add helpers beside them (`capability Storage` next to
+        // `module Storage`), and those are plain calls even while the
+        // capability is replaced — routed to the replacement, they were
+        // `undef` (the replacement does not define them).
+        if (capabilityModules.count(capability)) {
+            if (auto members = capabilityMembers.find(capability);
+                members != capabilityMembers.end())
+                return members->second.count(method) > 0;
+            return foulFns.count(method) > 0;
+        }
         return true;
     }
 
@@ -896,8 +915,9 @@ struct Lowering {
         if (arity == 1 && accessorFields.count(name) &&
             !moduleReceiverNames.count(name))
             return false;
-        if (pureFnArities.count(name + "/" + std::to_string(arity)))
-            return false;
+        const auto key = name + "/" + std::to_string(arity);
+        if (topLevelFoulArities.count(key)) return true;
+        if (pureFnArities.count(key)) return false;
         return true;
     }
     // Every local call goes through here so the context is appended in one
@@ -2440,7 +2460,8 @@ struct Lowering {
             // takes — `ENV.get(...)` never reaches the receiver or module
             // paths (kexhq/kex#143).
             if (threadsCapabilities() && !owningModule.empty() &&
-                isCapabilityModule(owningModule))
+                isCapabilityModule(owningModule) &&
+                capabilityInterfaceHas(owningModule, n.name))
                 return capabilityDispatchLowered(
                     owningModule, n.name, std::move(args), binds,
                     [&](std::vector<ExprPtr> callArgs) {
@@ -4248,6 +4269,7 @@ struct Lowering {
                     if (it != moduleFunctions.end() && threadsCapabilities() &&
                         (capabilityModules.count(candidate) ||
                          importedCapability) &&
+                        capabilityInterfaceHas(candidate, n.method) &&
                         n.namedArgs.empty() && !n.block) {
                         std::vector<Binding> binds;
                         std::vector<std::string> argVars;
@@ -4398,6 +4420,7 @@ struct Lowering {
                         if (eit != externalModules->exportToBeamFn.end() &&
                             threadsCapabilities() &&
                             isCapabilityModule(candidate) &&
+                            capabilityInterfaceHas(candidate, n.method) &&
                             n.namedArgs.empty() && !n.block) {
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
@@ -4542,6 +4565,7 @@ struct Lowering {
                 // the external tables, never through `moduleFunctions`.
                 if (eit != externalModules->exportToBeamFn.end() &&
                     threadsCapabilities() && isCapabilityModule(uid->name) &&
+                    capabilityInterfaceHas(uid->name, n.method) &&
                     n.namedArgs.empty() && !n.block) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
@@ -9779,6 +9803,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
             if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
+            else L.topLevelFoulArities.insert(fd.name + "/" + arity);
             definedFnArities.insert(fd.name + "/" + arity);
             L.definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
@@ -9970,7 +9995,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     std::function<void(const ast::ModuleDef&)> preModule;
     preModule = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
-        if (module.isCapability) L.capabilityModules.insert(path);
+        if (module.isCapability) {
+            L.capabilityModules.insert(path);
+            auto& members = L.capabilityMembers[path];
+            for (const auto& item : module.body) {
+                if (const auto* fd =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                    fd && *fd && (*fd)->isFoul)
+                    members.insert((*fd)->name);
+                else if (const auto* required =
+                             std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+                         required && *required && (*required)->isFoul)
+                    members.insert((*required)->name);
+            }
+        }
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
         std::set<std::string> declaredRecords;

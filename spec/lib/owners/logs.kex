@@ -1,0 +1,16 @@
+module Owners.Logs
+
+capability Sink do
+  foul written(line: String) -> Void = IO.printLine("sink: ${line}")
+end
+
+noted : String -> String
+let noted(sql) = table(sql)
+
+private do
+  table : String -> String
+  let table(sql) = "a table in ${sql}"
+
+  failed : Any -> [String]
+  let failed(value) = ["helper failed"]
+end

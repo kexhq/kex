@@ -1,0 +1,1 @@
+spec/lib/misplaced/services/authority.kex:4:1: error: module `Misplaced.Authority` is declared in a file whose path names `Misplaced.Services.Authority`, so `Misplaced.Authority` is not found; name it `module Misplaced.Services.Authority`, or move it to spec/lib/misplaced/authority.kex

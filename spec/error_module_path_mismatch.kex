@@ -1,0 +1,11 @@
+# kex: check-only
+# A module whose header does not match its file's place under the source
+# root is found under neither name. `using` the declared name used to build
+# with the module silently left out, and the first call failed at run time
+# with "Unknown module" or "Undefined function". The build now says where the
+# module is and what its path makes it.
+using Misplaced.Authority
+
+main do
+  IO.printLine(granted?("admin"))
+end

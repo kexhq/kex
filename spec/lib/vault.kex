@@ -1,0 +1,52 @@
+# A capability and a module of the same name, as Metro.Storage wants to be:
+# the capability is the replaceable part (`put`, `get`), the module holds
+# the helpers and the providers.
+capability Vault do
+  foul put(key: String, content: String) -> Result<Void, String> do
+    return Vault.folder().put(key, content)
+  end
+
+  foul get(key: String) -> Result<String, String> do
+    return Vault.folder().get(key)
+  end
+end
+
+module Vault do
+  record Disk do
+    root : String
+  end
+
+  make Disk, implement: Vault do
+    foul put(key: String, content: String) -> Result<Void, String> do
+      return Error("not a key: ${key}") if !Vault.key?(key)
+      IO.printLine("put ${Vault.located(@root, key)}: ${content}")
+      return Ok(())
+    end
+
+    foul get(key: String) -> Result<String, String> do
+      return Error("not a key: ${key}") if !Vault.key?(key)
+      return Ok("read ${Vault.located(@root, key)}")
+    end
+  end
+
+  # Where nothing else is installed.
+  folder : Disk
+  foul folder = Disk { root: "default" }
+
+  key? : String -> Bool
+  let key?(text) = !text.empty? && !text.contains?("/")
+
+  located : String -> String -> String
+  let located(root, key) = "${root}/${key}"
+
+  # A foul helper of the module, not of the capability: it stays a call to
+  # this function while Vault is replaced, and reaches the replacement only
+  # through the `Vault.put` inside it.
+  stored : String -> String -> String
+  foul stored(key, content) do
+    match Vault.put(key, content) do
+      Ok(_) => return "stored ${key}"
+      Error(reason) => return reason
+    end
+  end
+end

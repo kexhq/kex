@@ -1,0 +1,46 @@
+# A function name resolves to the caller's own definition or its explicit
+# import, never to another module's function of that name (kexhq/kex#494).
+#
+# Three modules in lib/owners/ share names with the program:
+#  - Owners.Logs has a PRIVATE `table` and `failed`;
+#  - Owners.Shapes has a PUBLIC `table`, `failed` and `seeded`;
+#  - Owners.Ledger imports Shapes' `table` with `using …, only:`.
+#
+# The program's own `failed`, `table` and `seeded` are foul and write
+# through a capability, so on BEAM each takes the capability context as an
+# extra argument. A same-named pure function elsewhere used to make the call
+# go out without it (`undefined function seeded/1`), and the program's own
+# `table` used to replace the one Ledger imported (`Undefined method label
+# for Void`).
+
+using Owners.Logs, only: [Sink]
+
+foul failed(reason: String) -> Void do
+  Sink.written("main failed: ${reason}")
+end
+
+foul table(name: String) -> Void do
+  Sink.written("main table: ${name}")
+end
+
+foul seeded(store: String) -> Void do
+  Sink.written("main seeded: ${store}")
+end
+
+foul commanded(command: String, store: String) -> Void do
+  match command do
+    "seed" => seeded(store)
+    other => failed("unknown command ${other}")
+  end
+end
+
+main do
+  IO.printLine(Owners.Logs.noted("SELECT 1"))
+  IO.printLine(Owners.Ledger.named)
+  IO.printLine(Owners.Shapes.failed("x"))
+  IO.printLine(Owners.Shapes.seeded(21))
+  failed("boom")
+  table("t")
+  commanded("seed", "disk")
+  commanded("plant", "disk")
+end
