@@ -5086,7 +5086,7 @@ struct Lowering {
                 // Overloads of one module at one arity are one dispatching
                 // function there, so any of them may be called; the labels
                 // pick the one whose parameter names place them. The first
-                // was `to(String, places:)`, which has no `in:` for the
+                // was `to(String, decimals:)`, which has no `in:` for the
                 // prelude's `to(String, in: TimeUnit)`.
                 if (match && sameModuleOverloads && !n.namedArgs.empty())
                     for (const auto& candidate : found->second) {
@@ -8707,7 +8707,7 @@ struct Lowering {
             // The same goes for its typed parameters: Units.SI's
             // `make Measure do let to(String, in: SIPrefix)` is a 3-ary `to`
             // too, and without a guard on `in` it claimed the prelude's
-            // `to(String, places: 1)` and read `1` as the prefix.
+            // `to(String, decimals: 1)` and read `1` as the prefix.
             std::vector<const ast::FunctionClause*> sourceClauses;
             for (const auto* fn : group)
                 for (const auto& cl : fn->clauses) sourceClauses.push_back(&cl);

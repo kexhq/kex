@@ -20,7 +20,22 @@ struct TagUse {
     const ast::Expr* expr = nullptr;
     const ast::TaggedLiteral* literal = nullptr;
     std::string scope;
+    // `Number` for `Number.format`#.00``: the tag and its companion are
+    // looked up in that module rather than where the literal is written.
+    std::string qualifier;
 };
+
+// The dotted module path a qualified tag is written with, or nothing when
+// the receiver is not one.
+auto modulePath(const ast::Expr& receiver) -> std::optional<std::string> {
+    if (const auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+        return root->name;
+    const auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
+    if (!segment || !segment->receiver || !segment->args.empty()) return std::nullopt;
+    auto parent = modulePath(*segment->receiver);
+    if (!parent) return std::nullopt;
+    return *parent + "." + segment->method;
+}
 
 using Functions =
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>>;
@@ -58,6 +73,9 @@ auto walkExpr(
             for (const auto& [_, value] : node.namedArgs) walk(value);
             if (node.block) walk(*node.block);
         } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            if (node.tagged && node.receiver)
+                if (auto path = modulePath(*node.receiver))
+                    uses.push_back(TagUse{&expression, node.tagged.get(), scope, *path});
             walk(node.receiver);
             for (const auto& value : node.args) walk(value);
             for (const auto& [_, value] : node.namedArgs) walk(value);
@@ -244,10 +262,18 @@ auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
 
 auto loadUsingModules(
     const ast::Program& program,
-    const std::vector<std::string>& roots) -> std::vector<ImportedModule> {
+    const std::vector<std::string>& roots,
+    const std::vector<TagUse>& uses) -> std::vector<ImportedModule> {
     std::vector<ImportedModule> modules;
     module::Resolver resolver(roots);
-    for (const auto& name : usingModuleNames(program)) {
+    // A qualified tag names its module itself, with or without a `using`
+    // (`Number` is reached through the prelude).
+    auto names = usingModuleNames(program);
+    for (const auto& use : uses)
+        if (!use.qualifier.empty() &&
+            std::find(names.begin(), names.end(), use.qualifier) == names.end())
+            names.push_back(use.qualifier);
+    for (const auto& name : names) {
         auto resolved = resolver.resolve(name);
         if (!resolved) continue;
 
@@ -581,7 +607,7 @@ auto validateTaggedLiterals(
     // validator is allowed to use anyway, being pure).
     std::vector<ImportedModule> imported;
     if (!moduleRoots.empty() && !uses.empty())
-        imported = loadUsingModules(program, moduleRoots);
+        imported = loadUsingModules(program, moduleRoots, uses);
     for (auto& module : imported)
         if (module.program) {
             std::vector<TagUse> ignored;
@@ -598,14 +624,28 @@ auto validateTaggedLiterals(
         const std::string subject = use.literal->parts[0];
 
         const auto companion = companionName(use.literal->tag);
-        const auto companionKey = qualified(use.scope, companion);
+        const auto owner = use.qualifier.empty() ? use.scope : use.qualifier;
+        const auto companionKey = qualified(owner, companion);
 
         // Prefer a program-local definition; fall back to an imported module's.
         const ast::Program* home = &program;
         const Functions* scope = &functions;
         std::string moduleCompanionKey;
         const ImportedModule* matchedModule = nullptr;
-        if (!functions.contains(qualified(use.scope, use.literal->tag))) {
+        if (!use.qualifier.empty() && !functions.contains(qualified(owner, use.literal->tag))) {
+            // A qualified tag is that module's own function: no trailing-
+            // segment matching, which could find another module's tag.
+            for (const auto& module : imported)
+                if (module.functions.contains(qualified(owner, use.literal->tag)) &&
+                    module.functions.contains(companionKey)) {
+                    scope = &module.functions;
+                    home = module.program.get();
+                    moduleCompanionKey = companionKey;
+                    matchedModule = &module;
+                    break;
+                }
+            if (!matchedModule) continue;
+        } else if (!functions.contains(qualified(owner, use.literal->tag))) {
             // A module file collects its functions under its own scope
             // ("Regex::regex"), while the tag at the use site is unqualified
             // ("regex") — `using` brought it into scope. Match on the trailing

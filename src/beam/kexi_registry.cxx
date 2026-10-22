@@ -655,7 +655,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                     // Overloads that name their parameters differently stay
                     // apart: a labelled call is placed by the names, and the
                     // prelude's `to(String, in: TimeUnit)` shares its BEAM
-                    // function and arity with `to(String, places: Integer)`.
+                    // function and arity with `to(String, decimals: Integer)`.
                     // Appended after the first, so a positional lookup still
                     // finds what it did.
                     for (const auto& existing : vec)

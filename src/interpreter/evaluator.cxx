@@ -4615,6 +4615,11 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     if (receiverType.empty())
         return protocolFallback.empty() ? method : protocolFallback;
 
+    // Candidates whose every clause was checked against the call's values
+    // and fitted none. A type's own `to(String, format: NumberFormat)` must
+    // not take `3.to(Float)` from the generic conversion: before, the
+    // fallbacks below returned it anyway, and the call answered None.
+    std::unordered_set<std::string> rejected;
     if (args) {
         // A definition with inline parameter annotations and no separate
         // `name : T -> U` line registers no runtime signature, so the
@@ -4678,6 +4683,19 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         const bool typedExists = m_env->get(typed) != nullptr ||
             m_functionValues.count(typed) > 0;
         const bool typedHasSignatures = m_runtimeSignatures.count(typed) > 0;
+        auto checkable = [&](const std::string& candidate) {
+            return m_runtimeSignatures.count(candidate) > 0 ||
+                   m_functionDefs.count(candidate) > 0;
+        };
+        // Only where a free function of that name does fit: the check does
+        // not see blocks, so a lone misfit is no proof by itself.
+        if (checkable(method) && matches(method)) {
+            if (!typedMatches && checkable(typed)) rejected.insert(typed);
+            for (const auto& super : dispatchSupertypes(receiverType))
+                if (auto candidate = super + "::" + method;
+                    checkable(candidate) && !matches(candidate))
+                    rejected.insert(std::move(candidate));
+        }
         std::string imported;
         for (auto scope = m_importScopes.rbegin();
              scope != m_importScopes.rend(); ++scope) {
@@ -4706,14 +4724,16 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         if (!imported.empty()) return imported;
     }
 
-    if (m_env->get(typed) && makeMethodInScope(typed)) return typed;
+    if (m_env->get(typed) && makeMethodInScope(typed) && !rejected.count(typed))
+        return typed;
 
     // `make Number do ... end` covers Integer and Float. Below the concrete
     // lookup above, so a type defining the method itself still wins, and
     // above the trait fallback, since it is a real implementation.
     for (const auto& super : dispatchSupertypes(receiverType)) {
         auto typedBySuper = super + "::" + method;
-        if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper))
+        if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper) &&
+            !rejected.count(typedBySuper))
             return typedBySuper;
     }
 

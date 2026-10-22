@@ -27,7 +27,7 @@
 # To display a size in another unit, decimal or binary, name the unit:
 #
 #   1048576.byte.to(String, in: MiB)                       # => Just("1.0 MiB")
-#   4312.byte.to(String, in: KB, places: 1)                # => Just("4.3 KB")
+#   4312.byte.to(String, in: KB, format: Number.format`#.#`)      # => Just("4.3 KB")
 #   1048576.byte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1.0 MiB")
 #
 # Compare an integer byte count directly with a data-size threshold:
@@ -148,33 +148,21 @@ make Measure do
   #   1.second.to(String, in: MB)          # => None
   let to(String, in: DataUnit) -> String? do
     match convertTo(this, in) do
-      Ok(converted) => return Just(converted.to(String))
+      Ok(converted) => return Just(converted.showValue)
       Error(_) => return None
     end
   end
 
-  # Renders another data unit with +places+ digits after the decimal point.
+  # Renders another data unit, its value written by a digit pattern (see
+  # +Number.format+).
   #
   # @example
-  #   4312.byte.to(String, in: KB, places: 1)   # => Just("4.3 KB")
-  let to(String, in: DataUnit, places: Integer) -> String? do
-    return this.to(String, in, places, false)
-  end
-
-  # Renders another data unit with fixed precision; +trim+ removes trailing
-  # fractional zeros.
-  #
-  # @example
-  #   1000.byte.to(String, in: KB, places: 2, trim: true)   # => Just("1 KB")
-  let to(String, in: DataUnit, places: Integer, trim: Bool) -> String? do
+  #   4312.byte.to(String, in: KB, format: Number.format`#.#`)    # => Just("4.3 KB")
+  #   1000.byte.to(String, in: KB, format: Number.format`#.##`)   # => Just("1 KB")
+  let to(String, in: DataUnit, format: NumberFormat) -> String? do
     match convertTo(this, in) do
-      Ok(converted) => do
-        # Formatted here rather than through `converted.to(String, places,
-        # trim)`: inside this module that name reaches its own `to(String,
-        # in, places)` first.
-        let text = Kex.Intrinsic.Float.formatFixed(converted.value, places, trim)
-        return Just("${text} ${converted.unit.notation}")
-      end
+      Ok(converted) =>
+        return converted.value.to(String, format).map { |text| "${text} ${converted.unit.notation}" }
       Error(_) => return None
     end
   end

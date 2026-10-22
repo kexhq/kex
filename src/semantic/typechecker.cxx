@@ -6271,6 +6271,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                              /*isMethodCall=*/true, &node, &expr);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
+            if (node.anyElements) {
+                for (const auto& elem : node.elements)
+                    if (elem) inferExpr(*elem);
+                return Type::list(Type::unknown());
+            }
             TypePtr elemType = Type::unknown();
             for (const auto& elem : node.elements) {
                 if (elem) {

@@ -220,6 +220,8 @@ struct Identifier { std::string name; };
 struct UpperIdentifier { std::string name; };
 struct ThisExpr {};
 
+struct TaggedLiteral;
+
 struct MethodCall {
     ExprPtr receiver;
     std::string method;
@@ -235,6 +237,11 @@ struct MethodCall {
     // remains the erased head type value, while semantic analysis retains
     // generic/structural arguments here.
     TypeExprPtr targetType;
+    // A module-qualified tagged literal, `Number.format`#.00``, is this call
+    // to `Number.format(parts, values)` resolved like any other module call.
+    // The literal is kept (without its values, which are the call's second
+    // argument) so the compile-time validator can still find and check it.
+    std::shared_ptr<const TaggedLiteral> tagged;
 };
 
 struct FunctionCall {
@@ -289,6 +296,9 @@ struct TupleExpr {
 struct ListExpr {
     std::vector<ExprPtr> elements;
     std::optional<ExprPtr> rest; // [x | rest] construction
+    // A tagged literal's interpolated values: each keeps its own type and
+    // the list is `[Any]`, where a written list needs one element type.
+    bool anyElements = false;
 };
 
 struct MapEntry {

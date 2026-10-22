@@ -366,7 +366,7 @@ value. To *write* a measure in a prefixed unit, use the fused constructor:
 
 Every unit is displayed the same way: `90.minute.to(String, in: Hour)`,
 `5000.meter.to(String, in: Kilo(Meter))`, `size.to(String, in: MiB)`, each
-optionally with `places:` and `trim:`. Target formatting returns `String?`:
+optionally with `decimals:` and `trim:`. Target formatting returns `String?`:
 it is `None` when the target has a different measurement kind.
 
 The time units' `to(String, in:)` is in the prelude; each unit module supplies

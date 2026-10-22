@@ -1864,30 +1864,54 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       auto methodTok = advance();
       auto method = methodTok.value;
 
-      // Module-qualified tagged literal: `Regex.regex`\d+`` behaves
-      // exactly like the bare `regex`\d+`` — same tag (`regex`, resolved
-      // in scope), same compile-time validation, same result. Requires
-      // adjacency (no space before the backtick) and a module-path
-      // receiver, so ordinary `mod.method` access is untouched.
+      // Module-qualified tagged literal: `Number.format`#.00`` is the call
+      // `Number.format(parts, values)`, so the tag resolves in that module
+      // like any other `Number.x`, and its validator is
+      // `Number.validateFormat`. Requires adjacency (no space before the
+      // backtick) and a module-path receiver, so ordinary `mod.method`
+      // access is untouched.
       if (methodTok.type == TokenType::LowerIdent &&
           (check(TokenType::RawString) ||
            check(TokenType::InterpolatedRawString)) &&
           methodTok.endOffset == peek().startOffset &&
           isModulePathExpr(expr.get())) {
         auto body = advance();
-        auto tagExpr = std::make_unique<ast::Expr>();
-        tagExpr->location = expr->location;
-        ast::TaggedLiteral tagged;
-        tagged.tag = method;
-        tagged.interpolating = body.type == TokenType::InterpolatedRawString;
-        tagged.bodyStartOffset = body.startOffset;
-        tagged.bodyEndOffset = body.endOffset;
-        if (tagged.interpolating)
-          parseInterpolatedBody(body, tagged.parts, tagged.values, true);
+        auto literal = std::make_shared<ast::TaggedLiteral>();
+        literal->tag = method;
+        literal->interpolating = body.type == TokenType::InterpolatedRawString;
+        literal->bodyStartOffset = body.startOffset;
+        literal->bodyEndOffset = body.endOffset;
+        std::vector<ast::ExprPtr> values;
+        if (literal->interpolating)
+          parseInterpolatedBody(body, literal->parts, values, true);
         else
-          tagged.parts.push_back(body.value);
-        tagExpr->kind = std::move(tagged);
-        expr = complete(std::move(tagExpr));
+          literal->parts.push_back(body.value);
+
+        const auto location = expr->location;
+        auto listOf = [&](std::vector<ast::ExprPtr> elements, bool anyElements) {
+          auto list = std::make_unique<ast::Expr>();
+          list->location = location;
+          list->kind = ast::ListExpr{std::move(elements), std::nullopt, anyElements};
+          return list;
+        };
+        std::vector<ast::ExprPtr> parts;
+        for (const auto &part : literal->parts) {
+          auto text = std::make_unique<ast::Expr>();
+          text->location = location;
+          text->kind = ast::StringLiteral{part, false, {}, {}};
+          parts.push_back(std::move(text));
+        }
+        ast::MethodCall call;
+        call.receiver = std::move(expr);
+        call.method = method;
+        call.args.push_back(listOf(std::move(parts), false));
+        call.args.push_back(listOf(std::move(values), true));
+        call.parenthesized = true;
+        call.tagged = std::move(literal);
+        auto callExpr = std::make_unique<ast::Expr>();
+        callExpr->location = location;
+        callExpr->kind = std::move(call);
+        expr = complete(std::move(callExpr));
         continue;
       }
 

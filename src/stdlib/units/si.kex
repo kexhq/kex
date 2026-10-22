@@ -252,33 +252,21 @@ make Measure do
   #   1500.watt.to(String, in: Kilo(Meter))   # => None
   let to(String, in: SIPrefix) -> String? do
     match this.rescaled(in.factor, in.kind, in.symbol) do
-      Just(converted) => return Just(converted.to(String))
+      Just(converted) => return Just(converted.showValue)
       None => return None
     end
   end
 
-  # Renders a prefixed unit with +places+ digits after the decimal point.
+  # Renders a prefixed unit, its value written by a digit pattern (see
+  # +Number.format+).
   #
   # @example
-  #   1500.watt.to(String, in: Kilo(Watt), places: 2)   # => Just("1.50 kW")
-  let to(String, in: SIPrefix, places: Integer) -> String? do
-    return this.to(String, in, places, false)
-  end
-
-  # Renders a prefixed unit with fixed precision; +trim+ removes trailing
-  # fractional zeros.
-  #
-  # @example
-  #   1500.watt.to(String, in: Kilo(Watt), places: 2, trim: true)   # => Just("1.5 kW")
-  let to(String, in: SIPrefix, places: Integer, trim: Bool) -> String? do
+  #   1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.00`)   # => Just("1.50 kW")
+  #   1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.##`)   # => Just("1.5 kW")
+  let to(String, in: SIPrefix, format: NumberFormat) -> String? do
     match this.rescaled(in.factor, in.kind, in.symbol) do
-      Just(converted) => do
-        # Formatted here rather than through `converted.to(String, places,
-        # trim)`: inside this module that name reaches its own `to(String,
-        # in, places)` first.
-        let text = Kex.Intrinsic.Float.formatFixed(converted.value, places, trim)
-        return Just("${text} ${converted.unit.notation}")
-      end
+      Just(converted) =>
+        return converted.value.to(String, format).map { |text| "${text} ${converted.unit.notation}" }
       None => return None
     end
   end

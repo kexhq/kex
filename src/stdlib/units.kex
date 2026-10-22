@@ -315,21 +315,29 @@ make Measure, implement: Showable do
   let factor -> Float = this.unit.factor
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
-  let to(String) -> String = "${this.value} ${this.unit.symbol}"
-
-  # Renders the current unit with +places+ digits after the decimal point.
-  # Rounds ties away from zero. +places+ must be between 0 and 15.
-  # +trim+ removes trailing fractional zeros; a rounded zero has no minus sign.
+  # Renders the measure in its own unit.
+  #
+  # @param String [Type] the target type
+  # @return [String?] the rendered measure
   #
   # @example
-  #   28.second.to(String, places: 0)                 # => "28 s"
-  #   1.second.to(String, places: 2, trim: true)      # => "1 s"
-  let to(String, places: Integer) -> String = this.to(String, places, false)
+  #   90.second.to(String)   # => Just("90.0 s")
+  let to(String) -> String? = Just(this.showValue)
 
-  # Renders fixed precision, optionally removing trailing fractional zeros.
-  let to(String, places: Integer, trim: Bool) -> String do
-    let text = Kex.Intrinsic.Float.formatFixed(@value, places, trim)
-    return "${text} ${@unit.notation}"
+  # Renders the measure in its own unit, its value written by a digit
+  # pattern (see +Number.format+).
+  #
+  # @param String [Type] the target type
+  # @param format [NumberFormat] how to write the value
+  # @return [String?] the rendered measure, or +None+ for a pattern that is
+  #   not valid
+  #
+  # @example
+  #   28.second.to(String, Number.format`#`)         # => Just("28 s")
+  #   1.second.to(String, Number.format`#.##`)       # => Just("1 s")
+  #   1.125.second.to(String, Number.format`#.00`)   # => Just("1.13 s")
+  let to(String, format: NumberFormat) -> String? do
+    return @value.to(String, format).map { |text| "${text} ${@unit.notation}" }
   end
 
   # Renders the measure in another time unit: +convertTo+, then +to(String)+.
@@ -349,28 +357,20 @@ make Measure, implement: Showable do
   #   1.5.hour.to(String, in: Minute)  # => Just("90.0 min")
   let to(String, in: TimeUnit) -> String? do
     match this.convertTo(in) do
-      Ok(converted) => return Just(converted.to(String))
+      Ok(converted) => return converted.to(String)
       Error(_) => return None
     end
   end
 
-  # Renders another time unit with +places+ digits after the decimal point,
-  # as +to(String, places:)+ does.
+  # Renders the measure in another time unit, its value written by a digit
+  # pattern (see +Number.format+).
   #
   # @example
-  #   100.minute.to(String, in: Hour, places: 2)   # => Just("1.67 h")
-  let to(String, in: TimeUnit, places: Integer) -> String? do
-    return this.to(String, in, places, false)
-  end
-
-  # Renders another time unit with fixed precision, optionally removing
-  # trailing fractional zeros.
-  #
-  # @example
-  #   90.minute.to(String, in: Hour, places: 3, trim: true)   # => Just("1.5 h")
-  let to(String, in: TimeUnit, places: Integer, trim: Bool) -> String? do
+  #   100.minute.to(String, in: Hour, format: Number.format`#.00`)   # => Just("1.67 h")
+  #   90.minute.to(String, in: Hour, format: Number.format`#.###`)   # => Just("1.5 h")
+  let to(String, in: TimeUnit, format: NumberFormat) -> String? do
     match this.convertTo(in) do
-      Ok(converted) => return Just(converted.to(String, places, trim))
+      Ok(converted) => return converted.to(String, format)
       Error(_) => return None
     end
   end
@@ -382,13 +382,13 @@ make Measure, implement: Showable do
   # smallest unit. Other dimensions keep their current unit.
   #
   # @example
-  #   90.second.readable.to(String, places: 1)       # => "1.5 min"
-  let readable -> Measure = this.readable(false)
+  #   90.second.scaled.to(String, Number.format`#.#`)   # => Just("1.5 min")
+  let scaled -> Measure = this.scaled(false)
 
-  # Chooses readable units, using binary scales for data when +binary+ is true.
-  let readable(binary: Bool) -> Measure do
-    let base = readableMeasureBase(@unit)
-    let family = readableMeasureFamily(base, binary)
+  # As +scaled+, using binary scales for data when +binary+ is true.
+  let scaled(binary: Bool) -> Measure do
+    let base = scaledMeasureBase(@unit)
+    let family = scaledMeasureFamily(base, binary)
     let magnitude = Math.abs(@canonical)
     let selected = magnitude == 0.0 then base else
       family.filter { |unit| unit.conversionFactor <= magnitude }
@@ -408,7 +408,7 @@ make Measure, implement: Showable do
   #
   # @example
   #   "drawn: ${1.volt * 5.ampere}"   # => "drawn: 5.0 W"
-  let showValue -> String = this.to(String)
+  let showValue -> String = "${this.value} ${this.unit.symbol}"
 
   # Multiplies the measure by a plain number, keeping its unit.
   #
@@ -568,7 +568,7 @@ make Measure, implement: Showable do
       return (raw / inverse).round / scale
     end
 
-    let readableMeasureBase(unit: UnitDefinition) -> UnitDefinition do
+    let scaledMeasureBase(unit: UnitDefinition) -> UnitDefinition do
       let (factor, symbol) = match unit.dimension do
         :time => (1.0, "s")
         :data => (1.0, "B")
@@ -590,7 +590,7 @@ make Measure, implement: Showable do
       }
     end
 
-    let readableMeasureFamily(base: UnitDefinition, binary: Bool) -> [UnitDefinition] do
+    let scaledMeasureFamily(base: UnitDefinition, binary: Bool) -> [UnitDefinition] do
       if base.dimension == :time
         return [
           (0.000000001, "ns"), (0.000001, "μs"), (0.001, "ms"),
