@@ -1,0 +1,3 @@
+spec/error_block_spread_element_type.kex:8:47: error: `doubled` expects argument 1 to be Integer, but got String
+
+doubled : Integer -> Integer

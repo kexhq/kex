@@ -221,6 +221,17 @@ auto mergeProjectModules(ast::Program& program,
             Parser parser(lexer.tokenizeAll(), *path);
             auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
             if (!parser.diagnostics().empty()) continue;
+            // Expanded against its own path before it is merged, as the
+            // compiler does (kexhq/kex#385): a sibling's `compiled do`
+            // declarations are otherwise missing here, and every call to one
+            // was "has no function" while the same file built. One that does
+            // not expand is skipped, like one that does not parse.
+            std::vector<semantic::Diagnostic> expansionDiagnostics;
+            compiled::ExpandOptions expandOptions;
+            expandOptions.sourcePath = *path;
+            expandOptions.moduleRoots = moduleRoots;
+            if (!compiled::expand(*parsed, expansionDiagnostics, expandOptions))
+                continue;
             pending.push_back(parsed.get());
             retained.paths.push_back(std::move(path));
             retained.sources.push_back(std::move(source));

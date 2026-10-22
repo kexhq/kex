@@ -4758,6 +4758,18 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             if (!hintParams.empty()) return bodyType;
             return Type::unknown();
         }
+        // `pairs.map { |glyph, words| … }` over `[(String, String)]` spreads
+        // each element across the parameters on both backends, so the
+        // parameters are typed by the tuple's elements, not each by the whole
+        // tuple. `glyph` was `(String, String)` and passing it on to a
+        // `String` parameter was rejected (kexhq/kex#537). The function-type
+        // comparison accepts the block's shape (argMatchesParam).
+        auto spreadHints = hintParams;
+        if (lam->params.size() > 1 && hintParams.size() == 1)
+            if (auto* tuple =
+                    std::get_if<TupleType>(&resolve(hintParams[0])->kind);
+                tuple && tuple->elements.size() == lam->params.size())
+                spreadHints = tuple->elements;
         pushScope();
         std::vector<TypePtr> paramTypes;
         std::unordered_map<std::string, TypePtr> genericVars;
@@ -4765,8 +4777,8 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             TypePtr pt;
             if (lam->params[i].type) {
                 pt = resolveTypeExpr(**lam->params[i].type, genericVars);
-            } else if (i < hintParams.size()) {
-                auto hint = resolve(hintParams[i]);
+            } else if (i < spreadHints.size()) {
+                auto hint = resolve(spreadHints[i]);
                 if (!std::holds_alternative<TypeVar>(hint->kind) &&
                     !std::holds_alternative<UnknownType>(hint->kind)) {
                     pt = hint;
@@ -4844,6 +4856,10 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             resultType = declared;
         }
         popScope();
+        // Outwardly a spreading block still takes the whole element first,
+        // the shape argMatchesParam recognises as destructuring.
+        if (spreadHints.size() != hintParams.size() && !lam->params[0].type)
+            paramTypes[0] = hintParams[0];
         return Type::func(std::move(paramTypes), resultType);
     }
     // A bare `~f` passed where a function is expected: check it against the
@@ -8260,6 +8276,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 visibleUserSignatures.push_back(signature);
             else
                 hiddenModules.insert(signature.declaringModule);
+        }
+        // Inside a module, the program's top-level function steps aside for
+        // one the module declares or imports by that name: `main.kex`'s own
+        // `table` took the place of the `table` a module imported with
+        // `using App.Shapes, only: [table]` (#494).
+        const auto topLevel = [](const Signature& signature) {
+            return signature.declaringModule.empty();
+        };
+        if (!m_currentModulePath.empty() &&
+            std::any_of(visibleUserSignatures.begin(),
+                        visibleUserSignatures.end(), topLevel) &&
+            !std::all_of(visibleUserSignatures.begin(),
+                         visibleUserSignatures.end(), topLevel)) {
+            std::erase_if(visibleUserSignatures, topLevel);
+            hiddenModules.insert("");
         }
         if (!hiddenModules.empty())
             userSignatures = visibleUserSignatures.empty()

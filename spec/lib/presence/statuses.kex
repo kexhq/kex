@@ -1,0 +1,4 @@
+module Presence.Statuses
+
+STATUSES : [(String, String)]
+let STATUSES = [("🌴", "On vacation"), ("🤒", "Out sick")]

@@ -477,6 +477,18 @@ private:
     // are automatic, and so the same capability may be replaced again inside
     // an enclosing replacement (kexhq/kex#143).
     std::vector<std::pair<std::string, ValuePtr>> m_capabilityBindings;
+    // What each capability declares. A module of the capability's name may
+    // add helpers of its own (`capability Storage` beside `module Storage`),
+    // and those are not the replacement's to answer: `Storage.located(...)`
+    // inside `with Storage = Disk {...}` went to Disk and failed.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_capabilityMembers;
+    auto capabilityMember(const std::string& capability,
+                          const std::string& name) const -> bool {
+        auto members = m_capabilityMembers.find(capability);
+        return members == m_capabilityMembers.end() ||
+               members->second.contains(name);
+    }
     auto lookupCapability(const std::string& name) const -> ValuePtr {
         for (auto it = m_capabilityBindings.rbegin();
              it != m_capabilityBindings.rend(); ++it)

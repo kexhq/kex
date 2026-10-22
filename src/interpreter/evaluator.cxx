@@ -703,6 +703,17 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     // own interface, not a patch of someone else's (see execMakeDefFor).
     kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
     kex::collectDeclaredRecordNames(mod.body, m_moduleDeclaredRecords[moduleName]);
+    if (mod.isCapability) {
+        auto& members = m_capabilityMembers[moduleName];
+        for (const auto& item : mod.body) {
+            if (const auto* function =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                members.insert((*function)->name);
+            else if (const auto* required =
+                         std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
+                members.insert((*required)->name);
+        }
+    }
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
@@ -2500,7 +2511,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             ValuePtr capabilityOverride;
             if (node.receiver)
                 if (auto path = qualifiedPath(*node.receiver))
-                    if (auto bound = lookupCapability(*path)) {
+                    if (auto bound = lookupCapability(*path);
+                        bound && capabilityMember(*path, node.method)) {
                         capabilityOverride = bound;
                         isNamespaceCall = false;
                         namespaceName.clear();

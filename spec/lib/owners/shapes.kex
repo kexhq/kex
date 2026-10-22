@@ -1,0 +1,16 @@
+module Owners.Shapes
+
+record Table do
+  label : String
+end
+
+table : String -> Table
+let table(label) = Table { label: label }
+
+failed : String -> String
+let failed(reason) = "shape failed: ${reason}"
+
+# Public and pure, like the stdlib's `Random.seeded`: the program's own
+# `foul seeded` must still take its capability context.
+seeded : Integer -> Integer
+let seeded(seed) = seed * 2

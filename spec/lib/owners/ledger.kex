@@ -1,0 +1,6 @@
+module Owners.Ledger
+
+using Owners.Shapes, only: [table]
+
+named : String
+let named = table("ledger").label
