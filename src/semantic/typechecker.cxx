@@ -9229,6 +9229,27 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             }
             if (!dominated) undominated.push_back(cand);
         }
+        // Matching a candidate can bind an argument's type variable: a
+        // tagged literal's `re` result became `Regex` while the Regex
+        // overload of `replace` was tried, after the prelude's
+        // `replace(String, String, String)` had already matched it unbound.
+        // Choosing among the stale matches then sent `text.replace(re`y`, …)`
+        // to the String function and BEAM died with badarg (kexhq/kex#560).
+        // Keep only the candidates the arguments still match, as they now
+        // resolve.
+        {
+            std::vector<const Signature*> stillMatching;
+            for (const auto* candidate : undominated) {
+                bool matches = candidate->params.size() == argTypes.size();
+                for (size_t i = 0; matches && i < argTypes.size(); ++i)
+                    matches = argMatchesParam(resolve(argTypes[i]),
+                                              resolve(candidate->params[i]));
+                if (matches) stillMatching.push_back(candidate);
+            }
+            if (!stillMatching.empty() &&
+                stillMatching.size() < undominated.size())
+                undominated = std::move(stillMatching);
+        }
         std::vector<const Signature*> distinct;
         for (const auto* candidate : undominated) {
             bool duplicate = std::any_of(
