@@ -4392,6 +4392,10 @@ int main(int argc, char *argv[]) {
             std::cerr << "  " << kex::color::apply(kex::color::red)
                       << "error:" << kex::color::apply(kex::color::reset)
                       << " failed to load session module\n";
+            if (g_replLineFromScript) {
+              g_replScriptFailed = true;
+              break;
+            }
             continue;
           }
           std::string evalNonce = std::to_string(++iteration);
@@ -4405,6 +4409,12 @@ int main(int argc, char *argv[]) {
             std::cerr << "  " << kex::color::apply(kex::color::red)
                       << "error:" << kex::color::apply(kex::color::reset) << " "
                       << output;
+            // A boot line that fails at run time must not leave a
+            // half-booted session behind its prompt (kexhq/kex#549).
+            if (g_replLineFromScript) {
+              g_replScriptFailed = true;
+              break;
+            }
           }
 
           if (isLocalLet && evalStatus == "ok") {

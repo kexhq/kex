@@ -36,6 +36,11 @@ describe("parseReport") do
     assert(parseReport("${draft}\n${answer}").try.summary == "final")
   end
 
+  it("reads a block whose label sits on the line after its fence") do
+    let text = "Prose.\n\n${fence}`\nkex-review\n{\"summary\": \"s\", \"findings\": []}\n${fence}`\n"
+    assert(parseReport(text).try.summary == "s")
+  end
+
   it("ignores keys it does not read") do
     let text = reportOf("{\"summary\": \"s\", \"verdict\": \"ok\", \"findings\": [{\"file\": \"a\", \"startLine\": 1, \"severity\": \"low\", \"comment\": \"x\", \"title\": \"t\"}]}")
     assert(parseReport(text).try.findings.count == 1)
@@ -50,6 +55,13 @@ describe("parseReport") do
 end
 
 describe("parseReconcile") do
+  it("reads a block whose label sits on the line after its fence") do
+    let previous = [marked(1, "a", 1, "high"), marked(2, "b", 2, "low")]
+    let text = "${fence}\nkex-reconcile\n{\"keep\": [1], \"close\": [2]}\n${fence}\n"
+    let (_, closeIds) = parseReconcile(text, previous).try
+    assert(closeIds == [2])
+  end
+
   it("closes only known ids that are not also kept") do
     let previous = [marked(1, "a", 1, "high"), marked(2, "b", 2, "low"), marked(3, "c", 3, "low")]
     let text = "${fence}kex-reconcile\n{\"keep\": [3], \"close\": [2, 3, 99]}\n${fence}\nnotes"
