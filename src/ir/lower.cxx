@@ -1992,7 +1992,18 @@ struct Lowering {
                 // Params shadow outer bindings: resolve to themselves inside.
                 auto snap = subst;
                 Lambda lam;
-                for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
+                for (const auto& p : n.params) {
+                    // `_` is an ordinary variable in Core Erlang, so two of
+                    // them in one head (`{ |key, _, _| key }`) were a
+                    // duplicate variable and erlc refused the module. Each
+                    // one is a fresh name nothing reads.
+                    if (p.name == "_") {
+                        lam.params.push_back(fresh("Ignored"));
+                        continue;
+                    }
+                    lam.params.push_back(p.name);
+                    subst[p.name] = p.name;
+                }
                 if (n.collection) {
                     auto singleton = [&](const ast::ExprPtr& item) {
                         std::vector<Binding> binds;
@@ -3147,9 +3158,11 @@ struct Lowering {
         // name (mangling), unlike a top-level one, which is always bare —
         // `moduleFunctions` has the emitted spelling actually safe to call.
         std::string zeroArgCallName = prefixSymbol(n.name);
+        // The enclosing modules' own bindings first, innermost out: a
+        // top-level `layout` answered `Views.layout(live)` inside `module
+        // Views` while the walker called the module's own.
         bool zeroArgThunk = !subst.count(n.name) &&
-            (zeroArgFns.count(n.name) || topLevelConstants.count(n.name) ||
-             [&] {
+            ([&] {
                  for (auto scope = currentModulePath; !scope.empty();) {
                      if (moduleZeroArgFns.count(scope + "." + n.name)) {
                          if (auto emitted = moduleFunctions.find(scope + "." + n.name);
@@ -3162,7 +3175,8 @@ struct Lowering {
                      scope.resize(dot);
                  }
                  return false;
-             }());
+             }() ||
+             zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
             && !zeroArgThunk) {
@@ -7656,7 +7670,10 @@ struct Lowering {
     // ---- Function / program ----------------------------------------------
     // A single param → an IR pattern (var name or a destructuring pattern).
     auto lowerParam(const ast::Param& p) -> PatternPtr {
-        if (p.name) {
+        // A `_` parameter is a wildcard, like an unnamed one: as a variable,
+        // two of them (`let seventh(_: Integer, _: Integer)`) were a
+        // duplicate `_` in the clause head and erlc refused the module.
+        if (p.name && *p.name != "_") {
             auto pat = std::make_unique<Pattern>();
             pat->kind = PatKind::Var; pat->name = *p.name;
             subst[*p.name] = *p.name;

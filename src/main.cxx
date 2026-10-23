@@ -3644,6 +3644,58 @@ int main(int argc, char *argv[]) {
     // so its processes are purged only by redefinition, as in Erlang.
     std::map<std::string, std::string> loadedCompanionCore;
     std::vector<std::string> loadedBeamFiles; // .kex paths loaded via /load
+    // Where a module's `using`s are found: the session's source roots
+    // (`--source-root`, then lib/ and src/ under the working directory), as a
+    // build of a file there would search them. A `/load`-ed module used to
+    // bring in only its own declarations, so `Store`'s `using Wire` left
+    // `Statement` unknown, and every later input failed with that error.
+    const auto replRoots = moduleRootsFor(
+        (std::filesystem::current_path() / "repl.kex").string());
+    auto replProjectRoots = replRoots;
+    {
+      const auto stdlibRoots = kex::standardLibraryModuleRoots();
+      replProjectRoots.erase(
+          std::remove_if(replProjectRoots.begin(), replProjectRoots.end(),
+                         [&](const std::string &root) {
+                           return std::find(stdlibRoots.begin(),
+                                            stdlibRoots.end(),
+                                            root) != stdlibRoots.end();
+                         }),
+          replProjectRoots.end());
+    }
+    // Prepends the loaded files' declarations (and `extra`, a file being
+    // `/load`-ed) to a checker program, then the project modules they and the
+    // input use. Installed stdlib modules stay external: their source would
+    // shadow their typed interface (see the expression check below).
+    auto mergeLoadedForCheck = [&](kex::ast::Program &program,
+                                   const std::string &extra = {}) {
+      auto files = loadedBeamFiles;
+      if (!extra.empty()) files.push_back(extra);
+      std::vector<kex::ast::TopLevelItem> merged;
+      for (const auto &f : files) {
+        kex::Lexer fl(readFile(f), f);
+        kex::Parser fp(fl.tokenizeAll(), f);
+        auto fprog = fp.parseProgram();
+        for (auto &item : fprog.items)
+          if (kex::ast::isMergedDeclaration(item))
+            merged.push_back(std::move(item));
+      }
+      for (auto &item : program.items) merged.push_back(std::move(item));
+      program.items = std::move(merged);
+      kex::semantic::Analyzer dependencyAnalysis(&preludeSemanticInterfaces());
+      (void)dependencyAnalysis.analyze(program);
+      auto qualified = dependencyAnalysis.referencedModules();
+      for (auto it = qualified.begin(); it != qualified.end();) {
+        const auto imported = preludeSemanticInterfaces().modules.find(*it);
+        if (imported != preludeSemanticInterfaces().modules.end() &&
+            imported->second.automaticImport)
+          it = qualified.erase(it);
+        else
+          ++it;
+      }
+      resolveBeamDeps(program, replProjectRoots, &preludeSemanticInterfaces(),
+                      qualified);
+    };
     kex::beam::KexiRegistry kexiRegistry;
 
     auto topDefsStr = [&]() -> std::string {
@@ -3835,11 +3887,41 @@ int main(int argc, char *argv[]) {
           kex::Parser parser(lex.tokenizeAll(), filePath);
           parser.parseProgram();
           throwOnParseErrors(parser);
-          loadedBeamFiles.push_back(filePath);
-          std::cout << "  loaded " << filePath << "\n";
         } catch (const std::exception& e) {
           std::cerr << "  /load parse error: " << e.what() << "\n";
+          continue;
         }
+        // Checked with the session and the modules it uses before it joins:
+        // a file that does not check is refused here, rather than kept and
+        // replayed into every later input, each of which then failed with
+        // its error.
+        try {
+          kex::Lexer checkLexer(topDefsStr() + "main do\nend\n", "<repl>");
+          kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
+          auto checkProgram = checkParser.parseProgram();
+          expandReplProgram(checkProgram);
+          mergeLoadedForCheck(checkProgram, filePath);
+          kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
+          if (!checkAnalyzer.analyze(checkProgram)) {
+            std::string message = "semantic analysis failed";
+            for (const auto &diagnostic : checkAnalyzer.diagnostics())
+              if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
+                message = diagnostic.message;
+                break;
+              }
+            throw std::runtime_error(message);
+          }
+        } catch (const std::exception& e) {
+          std::cerr << "  /load: " << filePath << " was not loaded: "
+                    << e.what() << "\n";
+          if (g_replLineFromScript) {
+            g_replScriptFailed = true;
+            break;
+          }
+          continue;
+        }
+        loadedBeamFiles.push_back(filePath);
+        std::cout << "  loaded " << filePath << "\n";
         continue;
       }
       if (input.substr(0, 8) == "/unload ") {
@@ -4069,19 +4151,7 @@ int main(int argc, char *argv[]) {
             kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
             auto checkProgram = checkParser.parseProgram();
             expandReplProgram(checkProgram);
-            std::vector<kex::ast::TopLevelItem> checkItems;
-            for (const auto &f : loadedBeamFiles) {
-              kex::Lexer fl(readFile(f), f);
-              kex::Parser fp(fl.tokenizeAll(), f);
-              auto fprog = fp.parseProgram();
-              for (auto &item : fprog.items)
-                if (!std::holds_alternative<
-                        std::unique_ptr<kex::ast::MainBlock>>(item))
-                  checkItems.push_back(std::move(item));
-            }
-            for (auto &item : checkProgram.items)
-              checkItems.push_back(std::move(item));
-            checkProgram.items = std::move(checkItems);
+            mergeLoadedForCheck(checkProgram);
             kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
             if (!checkAnalyzer.analyze(checkProgram)) {
               topDefs = previousTopDefs;
@@ -4126,23 +4196,7 @@ int main(int argc, char *argv[]) {
           // `Loaded.values()` came back untyped — the walker REPL, which
           // prepends the same source, reported `[Integer]` for it while this
           // one fell back to the runtime `[Int]`.
-          std::vector<kex::ast::TopLevelItem> loadedItems;
-          for (const auto& f : loadedBeamFiles) {
-            auto fs = readFile(f);
-            kex::Lexer fl(std::move(fs), f);
-            kex::Parser fp(fl.tokenizeAll(), f);
-            auto fprog = fp.parseProgram();
-            for (auto& item : fprog.items)
-              if (!std::holds_alternative<
-                      std::unique_ptr<kex::ast::MainBlock>>(item))
-                loadedItems.push_back(std::move(item));
-          }
-          if (!loadedItems.empty()) {
-            loadedItems.reserve(loadedItems.size() + semanticProgram.items.size());
-            for (auto& item : semanticProgram.items)
-              loadedItems.push_back(std::move(item));
-            semanticProgram.items = std::move(loadedItems);
-          }
+          mergeLoadedForCheck(semanticProgram);
           // Installed stdlib modules already have a typed source interface.
           // Keep them external here: merging their source into the replay
           // would make the local module shell shadow that interface and erase
@@ -4308,7 +4362,7 @@ int main(int argc, char *argv[]) {
               ++it;
           }
           auto replDeps = resolveBeamDeps(
-              program, kex::standardLibraryModuleRoots(),
+              program, replRoots,
               &preludeSemanticInterfaces(),
               replQualifiedModules);
           (void)replDeps;
@@ -4567,6 +4621,26 @@ int main(int argc, char *argv[]) {
 
     // Keep parsed programs alive so function closures can reference AST nodes
     std::vector<kex::ast::Program *> replPrograms;
+    // The project modules a `/load`-ed file uses, found as a build of a file
+    // in the working directory would find them, and kept alive for the same
+    // reason. Without them `Store`'s `using Wire` left `Statement` unknown.
+    std::vector<LoadedDep> replLoadedDeps;
+    // Their files, which the input check parses in as declarations: a file
+    // with a `module Wire` header cannot be glued onto the session source.
+    std::vector<std::string> replLoadedDepFiles;
+    auto walkerProjectRoots =
+        moduleRootsFor((std::filesystem::current_path() / "repl.kex").string());
+    {
+      const auto stdlibRoots = kex::standardLibraryModuleRoots();
+      walkerProjectRoots.erase(
+          std::remove_if(walkerProjectRoots.begin(), walkerProjectRoots.end(),
+                         [&](const std::string &root) {
+                           return std::find(stdlibRoots.begin(),
+                                            stdlibRoots.end(),
+                                            root) != stdlibRoots.end();
+                         }),
+          walkerProjectRoots.end());
+    }
     // A line read ahead while chaining function clauses that turned out
     // to belong to the next statement; replayed on the next iteration.
     std::optional<std::string> pendingLine;
@@ -4690,10 +4764,58 @@ int main(int argc, char *argv[]) {
           // the rest of the REPL session, just like definitions entered at the
           // prompt; a stack-local Program leaves those pointers dangling as
           // soon as /load returns.
-          auto *prog = new kex::ast::Program(parser.parseProgram());
+          auto prog = std::make_unique<kex::ast::Program>(parser.parseProgram());
           throwOnParseErrors(parser);
-          replPrograms.push_back(prog);
-          evaluator.execute(*prog);
+          auto deps = resolveBeamDeps(*prog, walkerProjectRoots,
+                                      &preludeSemanticInterfaces());
+          // Checked with the session before anything runs: a file that does
+          // not check is refused, rather than kept in the session source that
+          // every later input is checked against, each failing with its error.
+          {
+            kex::Lexer checkLexer(replAccumSource + "main do\nend\n", "<repl>");
+            kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
+            auto checkProgram = checkParser.parseProgram();
+            expandReplProgram(checkProgram);
+            auto files = replLoadedDepFiles;
+            for (const auto &dep : deps)
+              if (dep.path && std::find(files.begin(), files.end(), *dep.path) ==
+                                  files.end())
+                files.push_back(*dep.path);
+            files.push_back(filePath);
+            std::vector<kex::ast::TopLevelItem> merged;
+            for (const auto &f : files) {
+              kex::Lexer fl(readFile(f), f);
+              kex::Parser fp(fl.tokenizeAll(), f);
+              auto fprog = fp.parseProgram();
+              for (auto &item : fprog.items)
+                if (kex::ast::isMergedDeclaration(item))
+                  merged.push_back(std::move(item));
+            }
+            for (auto &item : checkProgram.items)
+              merged.push_back(std::move(item));
+            checkProgram.items = std::move(merged);
+            kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
+            if (!checkAnalyzer.analyze(checkProgram)) {
+              std::string message = "semantic analysis failed";
+              for (const auto &diagnostic : checkAnalyzer.diagnostics())
+                if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
+                  message = diagnostic.message;
+                  break;
+                }
+              std::cerr << "  /load: " << filePath << " was not loaded: "
+                        << message << "\n";
+              continue;
+            }
+          }
+          replPrograms.push_back(prog.release());
+          evaluator.execute(*replPrograms.back());
+          for (auto &dep : deps) {
+            if (dep.path &&
+                std::find(replLoadedDepFiles.begin(), replLoadedDepFiles.end(),
+                          *dep.path) == replLoadedDepFiles.end())
+              replLoadedDepFiles.push_back(*dep.path);
+            replLoadedDeps.push_back(std::move(dep));
+          }
           replAccumSource += readFile(filePath) + "\n";
           replDb.updateFile("<repl>", replAccumSource);
           std::cout << "  loaded " << filePath << "\n";
@@ -4940,6 +5062,20 @@ int main(int argc, char *argv[]) {
             kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
             auto semanticProgram = semanticParser.parseProgram();
             expandReplProgram(semanticProgram);
+            if (!replLoadedDepFiles.empty()) {
+              std::vector<kex::ast::TopLevelItem> merged;
+              for (const auto &f : replLoadedDepFiles) {
+                kex::Lexer fl(readFile(f), f);
+                kex::Parser fp(fl.tokenizeAll(), f);
+                auto fprog = fp.parseProgram();
+                for (auto &item : fprog.items)
+                  if (kex::ast::isMergedDeclaration(item))
+                    merged.push_back(std::move(item));
+              }
+              for (auto &item : semanticProgram.items)
+                merged.push_back(std::move(item));
+              semanticProgram.items = std::move(merged);
+            }
             kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
             if (replAnalyzer.analyze(semanticProgram)) {
               for (auto item = semanticProgram.items.rbegin();

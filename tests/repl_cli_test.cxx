@@ -1079,6 +1079,41 @@ int main() {
             assertTrue(out.find("=> [5, 6, 7] : [Integer]") != std::string::npos, out);
         });
 
+        // `/load` brings in the modules the file uses, found under the
+        // session's source roots as a build would find them. It used to load
+        // only the file itself: `Store`'s `using Wire` left `Statement`
+        // unknown, and every later input failed with it, even `let x = 1`.
+        // A file that does not check is refused at `/load` instead.
+        it("loads a module's dependencies and refuses one that does not check", []() {
+            char dir[] = "/tmp/kex_repl_load_deps_XXXXXX";
+            assertTrue(mkdtemp(dir) != nullptr, "mkdtemp should create a directory");
+            const std::string root = dir;
+            std::filesystem::create_directory(root + "/lib");
+            std::ofstream(root + "/lib/wire.kex")
+                << "module Wire\n\nrecord Statement do\n  text : String\nend\n";
+            std::ofstream(root + "/lib/store.kex")
+                << "module Store\n\nusing Wire, only: [Statement]\n\n"
+                   "let prepared(text: String) -> Statement = "
+                   "Statement { text: text }\n\n"
+                   "let shown(text: String) -> String = prepared(text).text\n";
+            std::ofstream(root + "/lib/broken.kex")
+                << "module Broken\n\nlet bad() -> Integer = \"no\"\n";
+            std::ofstream(root + "/input.txt")
+                << "/load lib/store.kex\nStore.shown(\"select 1\")\n"
+                   "/load lib/broken.kex\nlet x = 1\n";
+            for (const auto* flags : {" --no-colors", " -i --no-colors"}) {
+                auto out = runCommand("cd " + root + " && " +
+                                      std::string(KEX_BINARY_PATH) + flags +
+                                      " < input.txt 2>&1");
+                assertTrue(out.find("\"select 1\" : String") != std::string::npos, out);
+                assertTrue(out.find("Unknown type") == std::string::npos, out);
+                assertTrue(out.find("lib/broken.kex was not loaded") !=
+                               std::string::npos, out);
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
+            }
+            std::filesystem::remove_all(root);
+        });
+
         it("keeps imported unit modules and lambda bindings live across reloads", []() {
             auto out = runBeamRepl(
                 "Units.Data.B\n"
