@@ -1,0 +1,56 @@
+# `Number.format` builds a digit pattern for `to(String, format)`, checked
+# during compilation: `0` is a required digit, `#` an optional one, `.`
+# starts the decimals. Every `to(String…)` answers `String?`.
+using Units.SI
+using Units.Data
+
+main do
+  # Floats: fixed, at most, and whole.
+  IO.inspect(1.5.to(String, Number.format`#.00`))
+  IO.inspect(1.5.to(String, Number.format`#.##`))
+  IO.inspect(2.0.to(String, Number.format`#.##`))
+  IO.inspect(2.5.to(String, Number.format`#`))
+  IO.inspect(1234.5678.to(String, Number.format`#.0#`))
+  IO.inspect(0.5.to(String, Number.format`#.00`))
+  IO.inspect((-1.125).to(String, Number.format`#.00`))
+  IO.inspect((-0.001).to(String, Number.format`#.#`))
+
+  # Integers stay exact, however large.
+  IO.inspect(7.to(String, Number.format`000`))
+  IO.inspect((-7).to(String, Number.format`000`))
+  IO.inspect(42.to(String, Number.format`#.00`))
+  IO.inspect(123456789012345678901234567890.to(String, Number.format`#.0`))
+
+  # Measures: the value by the pattern, then the unit.
+  IO.inspect(1.125.second.to(String, Number.format`#.00`))
+  IO.inspect(90.minute.to(String, in: Hour, format: Number.format`#.###`))
+  IO.inspect(1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.00`))
+  IO.inspect(1000.byte.to(String, in: KB, format: Number.format`#.##`))
+  IO.inspect(1.second.to(String, in: MB, format: Number.format`#`))
+  IO.inspect(90.second.scaled.to(String, Number.format`#.#`))
+  IO.inspect(90.second.to(String))
+
+  # A pattern known only at run time is parsed into a Result.
+  IO.inspect(NumberFormat.parse("#.00").map { |format| 3.to(String, format) })
+  match NumberFormat.parse("#.#0") do
+    Ok(_) => IO.inspect("unexpected")
+    Error(problem) => IO.inspect("${problem.position}: ${problem.message}")
+  end
+  match NumberFormat.parse("##.0.0") do
+    Ok(_) => IO.inspect("unexpected")
+    Error(problem) => IO.inspect("${problem.position}: ${problem.message}")
+  end
+
+  # An interpolated tag is not checked during compilation; an invalid one
+  # renders as None.
+  let decimals = "00"
+  let places = 2
+  IO.inspect(1.5.to(String, Number.format$`#.${decimals}`))
+  IO.inspect(1.5.to(String, Number.format$`#.0${places}`))
+
+  # The other conversions are unchanged beside the new `to`.
+  IO.inspect(1.to(String))
+  IO.inspect(3.7.to(Integer))
+  IO.inspect(3.to(Float))
+  IO.inspect(255.to(String, radix: 16))
+end

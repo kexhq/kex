@@ -4015,9 +4015,14 @@ struct Lowering {
                         resolved->second.backendFunction.substr(slash + 1);
                     return traitMethods.count(owner) ? owner : std::string{};
                 }();
+                // Only at an arity the local name is defined with: a program's
+                // own `to(String, format)` (`to/3`) must leave `3.to(String)`
+                // to the default, not call a `to/2` that does not exist.
                 const bool localBeatsTraitDefault =
                     !traitDefaultOwner.empty() && localMethods.count(n.method) &&
-                    knownFns.count(n.method);
+                    knownFns.count(n.method) &&
+                    definedFnArities.count(n.method + "/" +
+                                           std::to_string(args.size()));
                 if (localBeatsTraitDefault) {
                     // Do not compute args.size() in the same call expression
                     // that moves args. Function-argument evaluation order is
@@ -5086,7 +5091,7 @@ struct Lowering {
                 // Overloads of one module at one arity are one dispatching
                 // function there, so any of them may be called; the labels
                 // pick the one whose parameter names place them. The first
-                // was `to(String, places:)`, which has no `in:` for the
+                // was `to(String, decimals:)`, which has no `in:` for the
                 // prelude's `to(String, in: TimeUnit)`.
                 if (match && sameModuleOverloads && !n.namedArgs.empty())
                     for (const auto& candidate : found->second) {
@@ -8707,7 +8712,7 @@ struct Lowering {
             // The same goes for its typed parameters: Units.SI's
             // `make Measure do let to(String, in: SIPrefix)` is a 3-ary `to`
             // too, and without a guard on `in` it claimed the prelude's
-            // `to(String, places: 1)` and read `1` as the prefix.
+            // `to(String, decimals: 1)` and read `1` as the prefix.
             std::vector<const ast::FunctionClause*> sourceClauses;
             for (const auto* fn : group)
                 for (const auto& cl : fn->clauses) sourceClauses.push_back(&cl);
@@ -10145,13 +10150,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // A make-block method reaches its receiver one of two ways:
                 // implicitly through `this` (params exclude it), or as its
                 // first pattern parameter (`let rangeStart(x.._)`,
-                // `let startsWith_(@['_' | rest])`). Both spellings are legal,
-                // and which one is in play is not decidable here, so record
-                // both candidate arities — the guard's job is only to reject
-                // an arity that exists NOWHERE locally.
-                const auto params = fd->clauses[0].params.size();
-                L.localMethodArities.insert(fd->name + "/" + std::to_string(params));
-                L.localMethodArities.insert(fd->name + "/" + std::to_string(params + 1));
+                // `let startsWith_(@['_' | rest])`). `beamArity` tells the two
+                // apart from the first parameter. Recording both spellings
+                // also recorded an arity nothing defines: a program's own
+                // `make Integer` `to(String, fmt)` claimed `3.to(Float)` for
+                // a local `to/2` that does not exist.
+                L.localMethodArities.insert(
+                    fd->name + "/" + std::to_string(beamArity(fd)));
                 auto dispatchTypes = methodDispatchTypes(*fd, typeName);
                 const auto signature =
                     mangleReceiverSignature(fd->name, dispatchTypes);

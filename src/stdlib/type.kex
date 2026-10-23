@@ -158,7 +158,7 @@ module Type do
   # The result of a conversion that answers +None+ for text it cannot read.
   parsed : Any? -> Type -> String -> Result<Any, String>
   let parsed(Just(value), _expected, _text) = Ok(value)
-  let parsed(None, expected, text) = Error("Expected ${expected.to(String)}, got \"${text}\"")
+  let parsed(None, expected, text) = Error("Expected ${expected.showValue}, got \"${text}\"")
 
 end
 
@@ -315,11 +315,11 @@ make Type do
           Ok(value) => Ok(Just(value))
           Error(message) => Error(message)
         end
-        None => Error("Expected ${this.to(String)}, got \"${text}\"")
+        None => Error("Expected ${this.showValue}, got \"${text}\"")
       end
       _ => match this.nullaryNamed(text) do
         Just(name) => this.variant(name)
-        None => Error("Expected ${this.to(String)}, got \"${text}\"")
+        None => Error("Expected ${this.showValue}, got \"${text}\"")
       end
     end
   end
@@ -361,26 +361,35 @@ make Type do
   # as +String?+, a map as +{String: Integer}+, and a function as its
   # signature.
   #
+  # @return [String?] the type, as source
+  #
+  # @example
+  #   Type.of([1, 2]).to(String)      # => Just("[Integer]")
+  #   Type.of((1, "a")).to(String)    # => Just("(Integer, String)")
+  #   Type.of(Just(1)).to(String)     # => Just("Integer?")
+  #   Type.of("hi").to(String)        # => Just("String")
+  #
+  # @example An error message that names the type
+  #   die("cannot serialise a ${Type.of(value)}")
+  let to(String) -> String? = Just(this.showValue)
+
+  # The type as source, as +to(String)+ gives it; also what interpolation
+  # shows.
+  #
   # @return [String] the type, as source
   #
   # @example
-  #   Type.of([1, 2]).to(String)      # => "[Integer]"
-  #   Type.of((1, "a")).to(String)    # => "(Integer, String)"
-  #   Type.of(Just(1)).to(String)     # => "Integer?"
-  #   Type.of("hi").to(String)        # => "String"
-  #
-  # @example An error message that names the type
-  #   die("cannot serialise a ${Type.of(value).to(String)}")
-  let to(String) -> String do
+  #   "${Type.of([1, 2])}"   # => "[Integer]"
+  let showValue -> String do
     # A function reads as its signature: `String -> String`, `foul () -> Void`.
     if this.name == "Function" && this.args.count > 0
-      let arrow = this.args.map(&.to(String)).join(" -> ")
+      let arrow = this.args.map(&.showValue).join(" -> ")
       let signature = this.args.count == 1 then "() -> ${arrow}" else arrow
       return "foul ${signature}" if this.pure == false
       return signature
     end
     return this.name if this.args.count == 0
-    let rendered = this.args.map(&.to(String))
+    let rendered = this.args.map(&.showValue)
     return "[${rendered.at(0).or("?")}]" if this.name == "List" && this.args.count == 1
     return "(${rendered.join(", ")})" if this.name == "Tuple"
     return "${rendered.at(0).or("?")}?" if this.name == "Option" && this.args.count == 1

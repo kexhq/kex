@@ -529,4 +529,198 @@ module Number do
   #   Number.parse("x")      # => Error(ParseError { ... })
   parse : String -> Result<Number, ParseError>
   let parse(s) = Kex.Intrinsic.Number.parse(s)
+
+  # Builds a +NumberFormat+ from a digit pattern, for +to(String, format)+.
+  #
+  # The pattern is checked during compilation (by +validateFormat+), so a
+  # mistake in it fails the build instead of leaving text out at run time.
+  #
+  # - +0+ is a required digit: +000+ pads the integer part to three digits,
+  #   and +.00+ always writes two decimals.
+  # - +#+ is an optional digit: +#.##+ writes at most two decimals and drops
+  #   trailing zeros. Optional digits come before required ones in the
+  #   integer part (+#0+) and after them in the decimals (+.0#+).
+  # - +.+ starts the decimals. The value is rounded to as many decimals as
+  #   the pattern allows, with ties away from zero.
+  #
+  # The integer part always has at least one digit, so +#.00+ writes
+  # +0.50+, never +.50+. A value that rounds to zero has no minus sign.
+  #
+  # @param parts [[String]] the literal pieces of the tagged literal
+  # @param values [[Any]] the interpolated values
+  # @return [NumberFormat] the format
+  #
+  # @example
+  #   1.5.to(String, Number.format`#.00`)   # => Just("1.50")
+  #   1.5.to(String, Number.format`#.##`)   # => Just("1.5")
+  #   2.0.to(String, Number.format`#.##`)   # => Just("2")
+  #   7.to(String, Number.format`000`)      # => Just("007")
+  format : [String] -> [Any] -> NumberFormat
+  let format(parts, values) do
+    let rest = values.zip(parts.rest).map { |value, part| "${value}${part}" }
+    return NumberFormat { pattern: parts.first.or("") + rest.join("") }
+  end
+
+  # Checks a +Number.format+ pattern during compilation, pointing at the
+  # first character that does not fit.
+  #
+  # @param source [String] the pattern
+  # @return [[TaggedValidation.Issue]] the problem found, if any
+  let validateFormat(source: String) -> [TaggedValidation.Issue] do
+    match NumberFormat.parse(source) do
+      Ok(_) => return []
+      Error(problem) => return [TaggedValidation.fatalAt(problem.position, problem.message)]
+    end
+  end
+end
+
+# How +to(String, format)+ writes a number: a digit pattern such as
+# +"#.00"+, described at +Number.format+. Build one with +Number.format+,
+# which checks the pattern during compilation, or with +NumberFormat.parse+
+# for a pattern known only at run time.
+record NumberFormat do
+  # The digit pattern, such as +"#.00"+.
+  pattern : String
+end
+
+module NumberFormat do
+  # Checks a digit pattern known only at run time. +Number.format+
+  # describes the patterns.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<NumberFormat, ParseError>] the format, or where the
+  #   pattern goes wrong
+  #
+  # @example
+  #   NumberFormat.parse("#.00")   # => Ok(NumberFormat { pattern: "#.00" })
+  #   NumberFormat.parse("#.#0")   # => Error(ParseError { position: 3, ... })
+  parse : String -> Result<NumberFormat, ParseError>
+  let parse(pattern) do
+    match layout(pattern) do
+      Ok(_) => return Ok(NumberFormat { pattern: pattern })
+      Error((index, message)) => return Error(ParseError {
+        input: pattern,
+        position: pattern.take(index).byteSize,
+        value: None,
+        message: message,
+        rest: pattern.drop(index)
+      })
+    end
+  end
+
+  # What a pattern writes: the fewest integer digits, the fewest decimals
+  # and the most decimals. Otherwise the index of its first problem, and
+  # what that problem is.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<(Integer, Integer, Integer), (Integer, String)>] the
+  #   layout, or the problem
+  #
+  # @example
+  #   NumberFormat.layout("#0.0##")   # => Ok((1, 1, 3))
+  layout : String -> Result<(Integer, Integer, Integer), (Integer, String)>
+  let layout(pattern) do
+    let pieces = pattern.split(".")
+    let whole = pieces.first.or("")
+    let decimals = pieces.get(1, "")
+    let point = whole.count
+    return Error((0, "a number format needs a digit: `#` or `0`")) if whole.empty?
+    if let Just(problem) = misplaced(whole.chars, 0, '#', '0', false)
+      return Error(problem)
+    end
+    if pieces.count > 2
+      return Error((point + 1 + decimals.count, "a number format has one decimal point"))
+    end
+    if pieces.count == 2 && decimals.empty?
+      return Error((point, "the point needs a decimal after it: `.0` or `.#`"))
+    end
+    if let Just(problem) = misplaced(decimals.chars, point + 1, '0', '#', false)
+      return Error(problem)
+    end
+    if decimals.count > 15
+      return Error((point + 16, "a number format has at most 15 decimals"))
+    end
+    let wholeZeros = whole.chars.count { |c| c == '0' }
+    let decimalZeros = decimals.chars.count { |c| c == '0' }
+    return Ok((wholeZeros, decimalZeros, decimals.count))
+  end
+
+  private do
+    # The first character of +chars+ (starting at +index+ in the pattern)
+    # that is not a digit, or that puts a +late+ digit before an +early+
+    # one, with what is wrong with it.
+    let misplaced(chars: [Char], index: Integer, early: Char, late: Char,
+                  seenLate: Bool) -> (Integer, String)? do
+      match chars do
+        [] => return None
+        [c | rest] => do
+          if c != '0' && c != '#'
+            return Just((index, "`${c}` is not part of a number format: `0` is a required digit, `#` an optional one, and `.` the decimal point"))
+          end
+          if c == early && seenLate
+            return Just((index, early == '#'
+              then "an optional digit cannot follow a required one before the point; write `#0`"
+              else "a required decimal cannot follow an optional one; write `.0#`"))
+          end
+          return misplaced(rest, index + 1, early, late, seenLate || c == late)
+        end
+      end
+    end
+  end
+end
+
+make Number do
+  # Writes the number by a digit pattern, described at +Number.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [NumberFormat] the pattern
+  # @return [String?] the text, or +None+ when the pattern is not valid
+  #
+  # @example
+  #   1234.5.to(String, Number.format`#.00`)    # => Just("1234.50")
+  #   (-0.001).to(String, Number.format`#.#`)   # => Just("0")
+  #   42.to(String, Number.format`0000.0`)      # => Just("0042.0")
+  let to(String, format: NumberFormat) -> String? do
+    match NumberFormat.layout(format.pattern) do
+      Error(_) => return None
+      Ok((digits, fewest, most)) => do
+        let text = Kex.Intrinsic.Kex.kind(this) == :float
+          then Kex.Intrinsic.Float.formatFixed(this, most)
+          else this.showValue
+        let negative = text.startsWith?("-")
+        let pieces = (negative then text.drop(1) else text).split(".")
+        let whole = leadingZeros(pieces.first.or("0"), digits)
+        let decimals = trailingZeros(pieces.get(1, ""), fewest)
+        let sign = negative then "-" else ""
+        return Just(decimals.empty? then "${sign}${whole}" else "${sign}${whole}.${decimals}")
+      end
+    end
+  end
+
+  # Writes the number in another base, as the generic +to(value, t, radix:)+
+  # does. Declared here as well so that, on a number, it and
+  # +to(String, format)+ are told apart by their argument's type.
+  #
+  # @param String [Type] the target type
+  # @param radix [Integer] the base, 2 through 36
+  # @return [String?] the digits
+  #
+  # @example
+  #   255.to(String, radix: 16)   # => Just("ff")
+  let to(String, radix: Integer) -> String? = Kex.Intrinsic.Fun.convertTo(this, String, radix)
+
+  private do
+    # +text+ with leading zeros up to +width+ characters.
+    let leadingZeros(text: String, width: Integer) -> String do
+      return text.count >= width then text else leadingZeros("0" + text, width)
+    end
+
+    # +text+ with exactly +width+ characters if it is shorter, or with its
+    # trailing zeros dropped down to +width+ characters if it is longer.
+    let trailingZeros(text: String, width: Integer) -> String do
+      return trailingZeros(text + "0", width) if text.count < width
+      return trailingZeros(text.take(text.count - 1), width) if text.count > width && text.endsWith?("0")
+      return text
+    end
+  end
 end

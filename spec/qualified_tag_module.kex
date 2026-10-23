@@ -1,0 +1,18 @@
+# A module-qualified tagged literal calls that module's function, on both
+# backends, and is validated by that module's `validate<Tag>`. It used to
+# resolve the bare tag name wherever the literal was written, so the
+# qualifier was decoration: the program's own `shout` below took the call.
+let shout(parts: [String], values: [Any]) -> String = "the program's own shout"
+
+module Local do
+  # The literal reversed.
+  backwards : [String] -> [Any] -> String
+  let backwards(parts, values) = parts.first.or("").reverse
+end
+
+main do
+  IO.printLine(Marks.shout`hello`)
+  IO.printLine(Marks.shout$`hello ${1 + 1} times`)
+  IO.printLine(Local.backwards`stressed`)
+  IO.printLine(shout`unqualified`)
+end

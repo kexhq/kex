@@ -123,9 +123,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
     defineModule("Float");
     defineIntrinsic("Float::formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto places = args.size() > 1 ? asInteger(args[1]) : std::nullopt;
-        if (args.size() != 3 || !std::holds_alternative<FloatValue>(args[0]->data) ||
-            !places || *places < 0 || *places > 15 ||
-            !std::holds_alternative<BoolValue>(args[2]->data))
+        if (args.size() != 2 || !std::holds_alternative<FloatValue>(args[0]->data) ||
+            !places || *places < 0 || *places > 15)
             throw RuntimeError("decimal places must be between 0 and 15", {});
         const auto value = std::get<FloatValue>(args[0]->data).value;
         const auto count = static_cast<size_t>(places->get_ui());
@@ -142,10 +141,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         if (count > 0) {
             if (result.size() <= count) result.insert(0, count + 1 - result.size(), '0');
             result.insert(result.size() - count, 1, '.');
-            if (std::get<BoolValue>(args[2]->data).value) {
-                while (result.back() == '0') result.pop_back();
-                if (result.back() == '.') result.pop_back();
-            }
         }
         if (value < 0 && rounded != 0) result.insert(0, 1, '-');
         return Value::string(result);

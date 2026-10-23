@@ -9,26 +9,26 @@ end
 
 describe("Units.Data") do
   it("formats a chosen unit with precision and trimming") do
-    assert(4312.byte.to(String, in: KB, places: 1) == Just("4.3 KB"))
-    assert(10485760.byte.to(String, in: MB, places: 1) == Just("10.5 MB"))
-    assert(10485760.byte.to(String, in: MiB, places: 1) == Just("10.0 MiB"))
-    assert(1000.byte.to(String, in: KB, places: 2, trim: true) == Just("1 KB"))
-    assert(1.second.to(String, in: MB, places: 1) == None)
+    assert(4312.byte.to(String, in: KB, format: Number.format`#.0`) == Just("4.3 KB"))
+    assert(10485760.byte.to(String, in: MB, format: Number.format`#.0`) == Just("10.5 MB"))
+    assert(10485760.byte.to(String, in: MiB, format: Number.format`#.0`) == Just("10.0 MiB"))
+    assert(1000.byte.to(String, in: KB, format: Number.format`#.##`) == Just("1 KB"))
+    assert(1.second.to(String, in: MB, format: Number.format`#.0`) == None)
   end
 
   it("selects decimal or binary units without changing canonical bytes") do
-    let size = 4312.byte.readable
+    let size = 4312.byte.scaled
     assert(size.canonical == 4312.0)
-    assert(size.to(String, places: 1) == "4.3 KB")
-    assert(4312.byte.readable(binary: true).to(String, places: 1) == "4.2 KiB")
-    assert(2500000000.byte.readable.to(String, places: 1) == "2.5 GB")
-    assert(28.byte.readable.to(String, places: 1, trim: true) == "28 B")
-    assert(0.megabyte.readable.to(String, places: 0) == "0 B")
-    assert((-1024).byte.readable(binary: true).to(String, places: 0) == "-1 KiB")
-    assert(999.byte.readable.symbol == "B")
-    assert(1000.byte.readable.symbol == "KB")
-    assert(1024.byte.readable(binary: true).symbol == "KiB")
-    assert(0.5.byte.readable.symbol == "B")
+    assert(size.to(String, Number.format`#.0`) == Just("4.3 KB"))
+    assert(4312.byte.scaled(binary: true).to(String, Number.format`#.0`) == Just("4.2 KiB"))
+    assert(2500000000.byte.scaled.to(String, Number.format`#.0`) == Just("2.5 GB"))
+    assert(28.byte.scaled.to(String, Number.format`#.#`) == Just("28 B"))
+    assert(0.megabyte.scaled.to(String, Number.format`#`) == Just("0 B"))
+    assert((-1024).byte.scaled(binary: true).to(String, Number.format`#`) == Just("-1 KiB"))
+    assert(999.byte.scaled.symbol == "B")
+    assert(1000.byte.scaled.symbol == "KB")
+    assert(1024.byte.scaled(binary: true).symbol == "KiB")
+    assert(0.5.byte.scaled.symbol == "B")
   end
 
   it("constructs data using the shared Measure type") do

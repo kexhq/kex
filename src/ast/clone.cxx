@@ -265,6 +265,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.mutating = node.mutating;
                 copy.parenthesized = node.parenthesized;
                 copy.targetType = clone(node.targetType);
+                copy.tagged = node.tagged;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, FunctionCall>) {
                 FunctionCall copy;
@@ -287,7 +288,8 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
             } else if constexpr (std::is_same_v<T, TupleExpr>) {
                 out->kind = TupleExpr{cloneVec(node.elements)};
             } else if constexpr (std::is_same_v<T, ListExpr>) {
-                out->kind = ListExpr{cloneVec(node.elements), cloneOpt(node.rest)};
+                out->kind = ListExpr{cloneVec(node.elements), cloneOpt(node.rest),
+                                     node.anyElements};
             } else if constexpr (std::is_same_v<T, MapExpr>) {
                 MapExpr copy;
                 for (const auto& entry : node.entries)

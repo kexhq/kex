@@ -109,7 +109,7 @@ end
 # @return [Measure] the length
 #
 # @example
-#   5000.meter.to(String)        # => "5000.0 m"
+#   5000.meter.to(String)        # => Just("5000.0 m")
 #   5000.meter.to(String, in: Kilo(Meter))   # => Just("5.0 km")
 let meter(value: Number) -> Measure = measure(value, Meter)
 # +value+ grams, as a +Measure+.
@@ -118,7 +118,7 @@ let meter(value: Number) -> Measure = measure(value, Meter)
 # @return [Measure] the mass
 #
 # @example
-#   500.gram.to(String)   # => "500.0 g"
+#   500.gram.to(String)   # => Just("500.0 g")
 let gram(value: Number) -> Measure = measure(value, Gram)
 # +value+ kelvin, as a +Measure+.
 #
@@ -126,7 +126,7 @@ let gram(value: Number) -> Measure = measure(value, Gram)
 # @return [Measure] the temperature
 #
 # @example
-#   300.kelvin.to(String)   # => "300.0 K"
+#   300.kelvin.to(String)   # => Just("300.0 K")
 let kelvin(value: Number) -> Measure = measure(value, Kelvin)
 # +value+ litres, as a +Measure+.
 #
@@ -134,7 +134,7 @@ let kelvin(value: Number) -> Measure = measure(value, Kelvin)
 # @return [Measure] the volume
 #
 # @example
-#   2.liter.to(String)   # => "2.0 L"
+#   2.liter.to(String)   # => Just("2.0 L")
 let liter(value: Number) -> Measure = measure(value, Liter)
 # +value+ newtons, as a +Measure+.
 #
@@ -142,7 +142,7 @@ let liter(value: Number) -> Measure = measure(value, Liter)
 # @return [Measure] the force
 #
 # @example Force times distance is energy
-#   (2.newton * 3.meter).to(String)   # => "6.0 J"
+#   (2.newton * 3.meter).to(String)   # => Just("6.0 J")
 let newton(value: Number) -> Measure = measure(value, Newton)
 # +value+ joules, as a +Measure+.
 #
@@ -150,7 +150,7 @@ let newton(value: Number) -> Measure = measure(value, Newton)
 # @return [Measure] the energy
 #
 # @example
-#   100.joule.to(String)   # => "100.0 J"
+#   100.joule.to(String)   # => Just("100.0 J")
 let joule(value: Number) -> Measure = measure(value, Joule)
 # +value+ watts, as a +Measure+.
 #
@@ -158,11 +158,11 @@ let joule(value: Number) -> Measure = measure(value, Joule)
 # @return [Measure] the power
 #
 # @example
-#   3.kilowatt.to(String)                  # => "3.0 kW"
+#   3.kilowatt.to(String)                  # => Just("3.0 kW")
 #   1500.watt.to(String, in: Kilo(Watt))   # => Just("1.5 kW")
 #
 # @example Power times time is energy
-#   (3.kilowatt * 2.hour).to(String)   # => "21600000.0 J"
+#   (3.kilowatt * 2.hour).to(String)   # => Just("21600000.0 J")
 let watt(value: Number) -> Measure = measure(value, Watt)
 # +value+ volts, as a +Measure+.
 #
@@ -170,7 +170,7 @@ let watt(value: Number) -> Measure = measure(value, Watt)
 # @return [Measure] the voltage
 #
 # @example
-#   12.volt.to(String)   # => "12.0 V"
+#   12.volt.to(String)   # => Just("12.0 V")
 let volt(value: Number) -> Measure = measure(value, Volt)
 # +value+ amperes, as a +Measure+.
 #
@@ -178,7 +178,7 @@ let volt(value: Number) -> Measure = measure(value, Volt)
 # @return [Measure] the current
 #
 # @example Voltage times current is power
-#   (12.volt * 2.ampere).to(String)   # => "24.0 W"
+#   (12.volt * 2.ampere).to(String)   # => Just("24.0 W")
 let ampere(value: Number) -> Measure = measure(value, Ampere)
 # +value+ ohms, as a +Measure+.
 #
@@ -186,7 +186,7 @@ let ampere(value: Number) -> Measure = measure(value, Ampere)
 # @return [Measure] the resistance
 #
 # @example
-#   470.ohm.to(String)   # => "470.0 Ω"
+#   470.ohm.to(String)   # => Just("470.0 Ω")
 let ohm(value: Number) -> Measure = measure(value, Ohm)
 # +value+ coulombs, as a +Measure+.
 #
@@ -194,7 +194,7 @@ let ohm(value: Number) -> Measure = measure(value, Ohm)
 # @return [Measure] the charge
 #
 # @example
-#   3.coulomb.to(String)   # => "3.0 C"
+#   3.coulomb.to(String)   # => Just("3.0 C")
 let coulomb(value: Number) -> Measure = measure(value, Coulomb)
 
 # Generate the fused SI spellings (+kilometer+, +kilogram+, +millivolt+, ...).
@@ -252,33 +252,21 @@ make Measure do
   #   1500.watt.to(String, in: Kilo(Meter))   # => None
   let to(String, in: SIPrefix) -> String? do
     match this.rescaled(in.factor, in.kind, in.symbol) do
-      Just(converted) => return Just(converted.to(String))
+      Just(converted) => return Just(converted.showValue)
       None => return None
     end
   end
 
-  # Renders a prefixed unit with +places+ digits after the decimal point.
+  # Renders a prefixed unit, its value written by a digit pattern (see
+  # +Number.format+).
   #
   # @example
-  #   1500.watt.to(String, in: Kilo(Watt), places: 2)   # => Just("1.50 kW")
-  let to(String, in: SIPrefix, places: Integer) -> String? do
-    return this.to(String, in, places, false)
-  end
-
-  # Renders a prefixed unit with fixed precision; +trim+ removes trailing
-  # fractional zeros.
-  #
-  # @example
-  #   1500.watt.to(String, in: Kilo(Watt), places: 2, trim: true)   # => Just("1.5 kW")
-  let to(String, in: SIPrefix, places: Integer, trim: Bool) -> String? do
+  #   1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.00`)   # => Just("1.50 kW")
+  #   1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.##`)   # => Just("1.5 kW")
+  let to(String, in: SIPrefix, format: NumberFormat) -> String? do
     match this.rescaled(in.factor, in.kind, in.symbol) do
-      Just(converted) => do
-        # Formatted here rather than through `converted.to(String, places,
-        # trim)`: inside this module that name reaches its own `to(String,
-        # in, places)` first.
-        let text = Kex.Intrinsic.Float.formatFixed(converted.value, places, trim)
-        return Just("${text} ${converted.unit.notation}")
-      end
+      Just(converted) =>
+        return converted.value.to(String, format).map { |text| "${text} ${converted.unit.notation}" }
       None => return None
     end
   end
@@ -333,7 +321,7 @@ end
 # @return [Measure] the quotient, in its derived unit
 #
 # @example
-#   100.meter.per(10.second).to(String)   # => "10.0 m/s"
+#   100.meter.per(10.second).to(String)   # => Just("10.0 m/s")
 per : Measure -> Measure -> Measure
 let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
 
@@ -347,8 +335,8 @@ let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
 # @return [Measure] the product, in its derived unit
 #
 # @example
-#   2.newton.times(3.meter).to(String)   # => "6.0 J"
-#   (12.volt * 2.ampere).to(String)      # => "24.0 W"
+#   2.newton.times(3.meter).to(String)   # => Just("6.0 J")
+#   (12.volt * 2.ampere).to(String)      # => Just("24.0 W")
 times : Measure -> Measure -> Measure
 let times(measure: Measure, other: Measure) = multiplyMeasures(measure, other)
 

@@ -1,0 +1,14 @@
+# A tag and its compile-time validator, for spec/qualified_tag_module.kex.
+module Marks do
+  # The literal upper-cased, with any values spliced in.
+  shout : [String] -> [Any] -> String
+  let shout(parts, values) do
+    let rest = values.zip(parts.rest).map { |value, part| "${value}${part}" }
+    return (parts.first.or("") + rest.join("")).upperCase
+  end
+
+  # A shout must not be empty.
+  let validateShout(source: String) -> [TaggedValidation.Issue] do
+    return source.empty? then [TaggedValidation.fatal("a shout needs words")] else []
+  end
+end

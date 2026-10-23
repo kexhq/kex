@@ -1,0 +1,28 @@
+Just("1.50") : Optional<String>
+Just("1.5") : Optional<String>
+Just("2") : Optional<String>
+Just("3") : Optional<String>
+Just("1234.57") : Optional<String>
+Just("0.50") : Optional<String>
+Just("-1.13") : Optional<String>
+Just("0") : Optional<String>
+Just("007") : Optional<String>
+Just("-007") : Optional<String>
+Just("42.00") : Optional<String>
+Just("123456789012345678901234567890.0") : Optional<String>
+Just("1.13 s") : Optional<String>
+Just("1.5 h") : Optional<String>
+Just("1.50 kW") : Optional<String>
+Just("1 KB") : Optional<String>
+None : Optional
+Just("1.5 min") : Optional<String>
+Just("90.0 s") : Optional<String>
+Ok(Just("3.00")) : Result<Optional<String>, ?>
+"3: a required decimal cannot follow an optional one; write `.0#`" : String
+"4: a number format has one decimal point" : String
+Just("1.50") : Optional<String>
+None : Optional
+Just("1") : Optional<String>
+Just(3) : Optional<Integer>
+Just(3.0) : Optional<Float>
+Just("ff") : Optional<String>
