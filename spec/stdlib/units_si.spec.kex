@@ -2,18 +2,18 @@ using Units.SI
 
 describe("Units.SI") do
   it("selects a prefix from the canonical quantity") do
-    assert(4312.meter.scaled.to(String, decimals: 1) == "4.3 km")
-    assert(0.005.meter.scaled.to(String, decimals: 0) == "5 mm")
-    assert(5.kilometer.scaled.to(String, decimals: 0) == "5 km")
-    assert(5000000.milligram.scaled.to(String, decimals: 0) == "5 kg")
-    assert(0.5.gram.scaled.to(String, decimals: 0) == "500 mg")
-    assert(0.watt.scaled.to(String, decimals: 0) == "0 W")
+    assert(4312.meter.scaled.to(String, Number.format`#.0`) == Just("4.3 km"))
+    assert(0.005.meter.scaled.to(String, Number.format`#`) == Just("5 mm"))
+    assert(5.kilometer.scaled.to(String, Number.format`#`) == Just("5 km"))
+    assert(5000000.milligram.scaled.to(String, Number.format`#`) == Just("5 kg"))
+    assert(0.5.gram.scaled.to(String, Number.format`#`) == Just("500 mg"))
+    assert(0.watt.scaled.to(String, Number.format`#`) == Just("0 W"))
   end
 
   it("formats an explicit prefix and rejects incompatible dimensions") do
-    assert(1500.watt.to(String, in: Kilo(Watt), decimals: 2) == Just("1.50 kW"))
-    assert(1500.watt.to(String, in: Kilo(Watt), decimals: 2, trim: true) == Just("1.5 kW"))
-    assert(1500.watt.to(String, in: Kilo(Meter), decimals: 1) == None)
+    assert(1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.00`) == Just("1.50 kW"))
+    assert(1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.##`) == Just("1.5 kW"))
+    assert(1500.watt.to(String, in: Kilo(Meter), format: Number.format`#.0`) == None)
   end
   it("constructs the shared Measure type") do
     let distance = 5.meter
@@ -44,11 +44,11 @@ describe("Units.SI") do
   it("converts to prefixed units and formats composite display units") do
     assert(5000.meter.convertTo(Kilo(Meter)).map { |m| m.value } == Ok(5.0))
     assert(1.meter.convertTo(Milli(Meter)).map { |m| m.value } == Ok(1000.0))
-    assert(5.kilometer.convertTo(Meter).map { |m| m.to(String) } == Ok("5000.0 m"))
+    assert(5.kilometer.convertTo(Meter).map { |m| m.showValue } == Ok("5000.0 m"))
     assert(5000.meter.to(String, in: Kilo(Meter)) == Just("5.0 km"))
     assert(3.kilowatt.canonical == 3000.0)
-    assert(3.kilowatt.to(String) == "3.0 kW")
-    assert(1.kilometer.to(String) == "1.0 km")
+    assert(3.kilowatt.to(String) == Just("3.0 kW"))
+    assert(1.kilometer.to(String) == Just("1.0 km"))
     assert((31544.watt * 1.hour).to(String, in: Mega(Joule)) == Just("113.5584 MJ"))
     let energy = 31544.watt * 1.hour
     assert(energy.to(String, in: Kilo(Joule)) == Just("113558.4 kJ"))

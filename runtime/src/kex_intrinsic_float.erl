@@ -1,16 +1,15 @@
 %% Kex.Intrinsic.Float — BEAM primitive backend for Float namespace functions.
 -module(kex_intrinsic_float).
--export([parse/1, parsePrefix/1, scaleUnit/3, formatFixed/3]).
+-export([parse/1, parsePrefix/1, scaleUnit/3, formatFixed/2]).
 
 parse(S) -> kex_intrinsic_number:float_parse(S).
 parsePrefix(S) -> kex_intrinsic_number:float_parse_prefix(S).
 
-formatFixed(Value, Places, Trim)
-  when is_float(Value), is_integer(Places), Places >= 0, Places =< 15,
-       is_boolean(Trim) ->
+formatFixed(Value, Places)
+  when is_float(Value), is_integer(Places), Places >= 0, Places =< 15 ->
     Text = float_to_binary(Value, [{decimals, Places}]),
     %% A rounded zero has no sign, including a negative zero input.
-    Unsigned = case Text of
+    case Text of
         <<"-", Rest/binary>> ->
             case lists:all(fun(C) -> C =:= $0 orelse C =:= $. end,
                            binary_to_list(Rest)) of
@@ -18,12 +17,8 @@ formatFixed(Value, Places, Trim)
                 false -> Text
             end;
         _ -> Text
-    end,
-    case Trim andalso Places > 0 of
-        true -> string:trim(string:trim(Unsigned, trailing, "0"), trailing, ".");
-        false -> Unsigned
     end;
-formatFixed(_, _, _) ->
+formatFixed(_, _) ->
     erlang:error({kex_error, <<"decimal places must be between 0 and 15">>}).
 
 %% Clamp rounding at the excluded upper endpoint to its predecessor.

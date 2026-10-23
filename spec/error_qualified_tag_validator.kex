@@ -1,0 +1,6 @@
+# kex: check-only
+# The qualifier also picks the validator: `Marks.validateShout` rejects an
+# empty `Marks.shout` literal during compilation.
+main do
+  IO.printLine(Marks.shout``)
+end

@@ -1,0 +1,19 @@
+# A program's own `to` on a built-in type adds to the generic conversions
+# rather than replacing them. A `make Integer` `to(String, fmt: Fmt)` used to
+# make `3.to(String)` and `3.to(Float)` answer None in the walker, and on
+# BEAM those calls went to a local `to/2` that does not exist.
+record Fmt do
+  pattern : String
+end
+
+make Integer do
+  let to(String, fmt: Fmt) -> String? = Just("${this} as ${fmt.pattern}")
+end
+
+main do
+  let fmt = Fmt { pattern: "x" }
+  IO.inspect(3.to(String, fmt))
+  IO.inspect(3.to(String))
+  IO.inspect(3.to(Float))
+  IO.inspect(255.to(String, radix: 16))
+end

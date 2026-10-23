@@ -2174,6 +2174,9 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
         m_declarationImports = imports->second;
     std::unordered_map<std::string, TypePtr> targetVars;
+    // Where the target's own variables (`X` in `make List<X>`) start; see
+    // the generalizeSignature call below.
+    const int targetVarMark = m_nextTypeVar;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
     // Every method this block defines, keyed by the RECEIVER it answers on —
     // needed before the body is checked, when the method's own signature is
@@ -2264,6 +2267,13 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                 error(ann->location,
                       "`::>` is not valid on a cast slot — casts have no `from`; use `:>`");
             sig->params.insert(sig->params.begin(), receiver);
+            // The target's `X` is one inference variable for the whole block.
+            // Left as it is, every `[X]` signature shared it: a stdlib checked
+            // from source bound it to String at `pieces.get(1, "")`, and
+            // `this.args.first` then answered String in another file. The
+            // prelude interface stores these as per-call placeholders, and
+            // this makes the source agree.
+            generalizeSignature(*sig, targetVarMark);
             m_annotatedMethods.insert(ann->name);
             m_annotatedReceiverKeys[ann->name].insert(typeToString(receiver));
             // Skip a signature already registered with the same parameters —

@@ -170,6 +170,10 @@ literal supplies one string in `parts` and an empty `values` list. Whitespace
 between the identifier and opening backtick disables tagging, so
 `` firstPart `raw body` `` is two separate expressions.
 
+A tag may be qualified by a module path: `` Number.format`#.00` `` is the call
+`Number.format(["#.00"], [])`, resolved like any other `Number.format(...)`.
+Its companion validator (below) is looked up in that module too.
+
 ### Interpolating Backtick Strings
 
 A `$` before the opening backtick enables `${expression}` holes:

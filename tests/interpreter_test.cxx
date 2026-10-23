@@ -854,7 +854,7 @@ int main() {
                 try {
                     run(std::string("main do\n") +
                         "  Kex.Intrinsic.Float.formatFixed(1.0, " + places +
-                        ", false)\nend\n");
+                        ")\nend\n");
                 } catch (const RuntimeError& error) {
                     rejected = std::string(error.what()).find(
                         "decimal places must be between 0 and 15") != std::string::npos;

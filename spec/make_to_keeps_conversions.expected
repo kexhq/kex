@@ -1,0 +1,4 @@
+Just("3 as x") : Optional<String>
+Just("3") : Optional<String>
+Just(3.0) : Optional<Float>
+Just("ff") : Optional<String>

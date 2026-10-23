@@ -131,10 +131,11 @@ let text = myTag`raw body`
 - **Adjacency matters:** whitespace between the identifier and the backtick
   disables tagging — `` myTag `body` `` is two separate expressions.
 - The tag identifier may be **bare** (`` regex`…` ``) or **module-qualified**
-  (`` Regex.regex`…` ``); both resolve to the same tag function and behave
-  identically. A qualifier must be a module path (a capitalised name or dotted
-  chain), so ordinary `value.function` access is never mistaken for a tag (see
-  `docs/regex.md`).
+  (`` Number.format`…` ``). A qualified tag is that module's function, called
+  like any other `Number.x`, and its validator is that module's
+  (`Number.validateFormat`); a bare one resolves where the literal is written.
+  A qualifier must be a module path (a capitalised name or dotted chain), so
+  ordinary `value.function` access is never mistaken for a tag.
 
 ### Compile-time validation
 

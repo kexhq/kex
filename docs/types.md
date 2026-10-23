@@ -222,6 +222,43 @@ r.max   # Just(10)
 r.map { |x| x * 2 }
 ```
 
+## Formatting numbers
+
+`to(String, format)` writes a number by a digit pattern, built with the
+`Number.format` tag:
+
+```kex
+1.5.to(String, Number.format`#.00`)       # Just("1.50")   exactly two decimals
+1.5.to(String, Number.format`#.##`)       # Just("1.5")    at most two
+2.0.to(String, Number.format`#.##`)       # Just("2")
+2.5.to(String, Number.format`#`)          # Just("3")      whole, ties away from zero
+7.to(String, Number.format`000`)          # Just("007")    at least three digits
+1.125.second.to(String, Number.format`#.00`)   # Just("1.13 s")
+```
+
+- `0` is a required digit and `#` an optional one. Optional digits come
+  before required ones in the integer part (`#0`) and after them in the
+  decimals (`.0#`).
+- `.` starts the decimals, at most 15. The value is rounded to as many as the
+  pattern allows; a value that rounds to zero has no minus sign.
+- The integer part always has at least one digit: `#.00` writes `0.50`.
+- Integers stay exact however large; their decimals are zeros.
+
+The pattern is checked during compilation, so a mistake fails the build with
+a caret on the character:
+
+```kex
+Number.format`#.#0`   # error: a required decimal cannot follow an optional one; write `.0#`
+```
+
+A pattern known only at run time goes through `NumberFormat.parse`, which
+answers a `Result` (`Error(ParseError)` says where the pattern goes wrong).
+An interpolating tag (`` Number.format$`#.${zeros}` ``) is not checked during
+compilation; an invalid one renders as `None`.
+
+`radix:` still writes an integer in another base: `255.to(String, radix: 16)`
+is `Just("ff")`.
+
 ## Units
 
 `Measure` is the shared representation for every unit family. Time units are
@@ -233,8 +270,12 @@ let elapsed: Measure = 2.5.second
 
 elapsed.canonical                 # 2.5
 elapsed.kind                      # :time
-elapsed.to(String)                # "2.5 s"
+elapsed.to(String)                # Just("2.5 s")
 ```
+
+Every `to(String…)` answers `String?`, whatever the receiver: a conversion
+may not apply, and one shape covers them all. Interpolation and printing go
+through `showValue` instead and need no unwrapping: `"took ${elapsed}"`.
 
 `Duration` is a separate elapsed-span concept, used by `Date`, `Time`, and
 `DateTime` (below); a value such as `5.second` is a `Measure`, not a `Duration`.
@@ -246,14 +287,14 @@ The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
 and take apart. It is in the prelude.
 
 ```kex
-Type.of(42).to(String)                  # "Integer"
-Type.of([1, 2]).to(String)              # "[Integer]"
-Type.of((1, "a")).to(String)            # "(Integer, String)"
+Type.of(42).to(String)                  # Just("Integer")
+Type.of([1, 2]).to(String)              # Just("[Integer]")
+Type.of((1, "a")).to(String)            # Just("(Integer, String)")
 Type.of(Date.of(2026, 7, 30))         # Result<Date, TimeError>
 Type.of(x) == Type.named("Date")      # ordinary record equality
 Type.of(point).fieldNames             # ["x", "y"]
 Type.of(Light).constructorNames       # ["Light", "Dark"]
-Type.returnedBy(Date.parse).to(String)  # "Result<Date, TimeError>"
+Type.returnedBy(Date.parse).to(String)  # Just("Result<Date, TimeError>")
 
 "34".to(Type.of(234))                 # Just(34) — `.to` takes a Type value
 5.to(String)                          # Just("5") — or a bare type name
@@ -263,7 +304,7 @@ Type.returnedBy(Date.parse).to(String)  # "Result<Date, TimeError>"
 derives something from it — a decoder, a form, a schema:
 
 ```kex
-Type.of(point).fields.map { |f| (f.name, f.valueType.to(String)) }
+Type.of(point).fields.map { |f| (f.name, f.valueType.showValue) }
 # [("x", "Integer"), ("label", "String?")]
 Type.of(user).fields.filter { |f| f.optional? || f.default? }   # may be left out
 Type.of(Light).constructors.map { |c| (c.name, c.arity) }
@@ -286,8 +327,8 @@ A function's type is its signature — parameters, result, and whether calling i
 is a side effect:
 
 ```kex
-Type.of(helloWorld).to(String)    # "String -> String"
-Type.of(shout).to(String)         # "foul String -> String"
+Type.of(helloWorld).to(String)    # Just("String -> String")
+Type.of(shout).to(String)         # Just("foul String -> String")
 Type.of(shout).pure           # false
 ```
 
@@ -352,7 +393,7 @@ using Units.SI
 let distance = 100.meter  # Measure
 let speed = distance / 9.58.second
 distance.to(String, in: Kilo(Meter))  # Just("0.1 km")
-5.kilometer.to(String)                # "5.0 km"
+5.kilometer.to(String)                # Just("5.0 km")
 let energy = 31544.watt * 1.hour
 energy.to(String, in: Kilo(Watt * Hour))  # Just("31.544 kWh")
 ```
@@ -365,9 +406,11 @@ value. To *write* a measure in a prefixed unit, use the fused constructor:
 `5.kilometer`, `3.kilowatt`, `250.milligram`.
 
 Every unit is displayed the same way: `90.minute.to(String, in: Hour)`,
-`5000.meter.to(String, in: Kilo(Meter))`, `size.to(String, in: MiB)`, each
-optionally with `decimals:` and `trim:`. Target formatting returns `String?`:
-it is `None` when the target has a different measurement kind.
+`5000.meter.to(String, in: Kilo(Meter))`, `size.to(String, in: MiB)`. Each
+takes a digit pattern as well (see [Formatting numbers](#formatting-numbers)),
+labelled `format:` after `in:`:
+`` 1500.watt.to(String, in: Kilo(Watt), format: Number.format`#.00`) `` is
+`Just("1.50 kW")`. A target of a different measurement kind answers `None`.
 
 The time units' `to(String, in:)` is in the prelude; each unit module supplies
 it for its own units, so `in: Kilo(Meter)` needs `using Units.SI` —
@@ -447,10 +490,10 @@ characters; use the UTF-8 byte count when measuring encoded text:
 using Units.Data
 
 let payload = Binary.fromBytes([104, 105])
-payload.length.byte.to(String)  # "2.0 B"
+payload.length.byte.to(String)  # Just("2.0 B")
 "é".count                      # 1 character
-"é".bytes.count.byte.to(String) # "2.0 B"
-1048576.byte.convertTo(MiB).map { |m| m.to(String) } # Ok("1.0 MiB")
+"é".bytes.count.byte.to(String) # Just("2.0 B")
+1048576.byte.convertTo(MiB).map { |m| m.showValue } # Ok("1.0 MiB")
 ```
 
 Keep integer byte counts for file offsets, read lengths, and buffer sizes.

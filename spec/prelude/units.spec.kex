@@ -90,7 +90,7 @@ describe("Measure arithmetic") do
   it("scales a measure") do
     let measure = 2.5.second.scale(4)
     assert(measure.canonical == 10.0)
-    assert(measure.to(String) == "10.0 s")
+    assert(measure.to(String) == Just("10.0 s"))
   end
 
   it("raises a measure and its display unit to a power") do
@@ -104,26 +104,26 @@ end
 
 describe("time conversion and formatting") do
   it("formats a fixed precision and trims only fractional zeros") do
-    assert(1.125.second.to(String, decimals: 2) == "1.13 s")
-    assert((-1.125).second.to(String, decimals: 2) == "-1.13 s")
-    assert(28.second.to(String, decimals: 0) == "28 s")
-    assert(1.second.to(String, decimals: 2) == "1.00 s")
-    assert(100.second.to(String, decimals: 2, trim: true) == "100 s")
-    assert(1.25.second.to(String, decimals: 4, trim: true) == "1.25 s")
-    assert((-0.001).second.to(String, decimals: 2) == "0.00 s")
-    assert(1.0e20.second.to(String, decimals: 1) == "100000000000000000000.0 s")
-    assert(1.second.to(String, decimals: 15) == "1.000000000000000 s")
+    assert(1.125.second.to(String, Number.format`#.00`) == Just("1.13 s"))
+    assert((-1.125).second.to(String, Number.format`#.00`) == Just("-1.13 s"))
+    assert(28.second.to(String, Number.format`#`) == Just("28 s"))
+    assert(1.second.to(String, Number.format`#.00`) == Just("1.00 s"))
+    assert(100.second.to(String, Number.format`#.##`) == Just("100 s"))
+    assert(1.25.second.to(String, Number.format`#.####`) == Just("1.25 s"))
+    assert((-0.001).second.to(String, Number.format`#.00`) == Just("0.00 s"))
+    assert(1.0e20.second.to(String, Number.format`#.0`) == Just("100000000000000000000.0 s"))
+    assert(1.second.to(String, Number.format`#.000000000000000`) == Just("1.000000000000000 s"))
   end
 
   it("chooses time units by magnitude while preserving the quantity") do
     let scaled = 90.second.scaled
     assert(scaled.canonical == 90.0)
-    assert(scaled.to(String, decimals: 1) == "1.5 min")
-    assert(0.second.scaled.to(String, decimals: 0) == "0 s")
-    assert(0.0005.second.scaled.to(String, decimals: 0) == "500 μs")
-    assert((-3600).second.scaled.to(String, decimals: 0) == "-1 h")
+    assert(scaled.to(String, Number.format`#.0`) == Just("1.5 min"))
+    assert(0.second.scaled.to(String, Number.format`#`) == Just("0 s"))
+    assert(0.0005.second.scaled.to(String, Number.format`#`) == Just("500 μs"))
+    assert((-3600).second.scaled.to(String, Number.format`#`) == Just("-1 h"))
     assert(0.0000000001.second.scaled.symbol == "ns")
-    assert(1209600.second.scaled.to(String, decimals: 0) == "2 wk")
+    assert(1209600.second.scaled.to(String, Number.format`#`) == Just("2 wk"))
   end
 
   it("converts between display units") do
@@ -139,16 +139,16 @@ describe("time conversion and formatting") do
   end
 
   it("formats the selected unit") do
-    assert(2.hour.to(String) == "2.0 h")
+    assert(2.hour.to(String) == Just("2.0 h"))
     match 90.minute.convert(Hour) do
-      Ok(measure) => assert(measure.to(String) == "1.5 h")
+      Ok(measure) => assert(measure.to(String) == Just("1.5 h"))
       Error(_) => assert(false)
     end
   end
 
   it("converts through the Unit trait and rejects incompatible targets") do
     match 3600.second.convertTo(Hour) do
-      Ok(measure) => assert(measure.to(String) == "1.0 h")
+      Ok(measure) => assert(measure.to(String) == Just("1.0 h"))
       Error(_) => assert(false)
     end
     let length = UnitDefinition { conversionFactor: 1.0, dimension: :length, notation: "m" }

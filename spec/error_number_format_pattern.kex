@@ -1,0 +1,7 @@
+# kex: check-only
+# A `Number.format` pattern is checked during compilation by
+# `Number.validateFormat`, found through the tag's own module: a required
+# decimal after an optional one fails the build at that character.
+main do
+  IO.inspect(1.5.to(String, Number.format`#.#0`))
+end

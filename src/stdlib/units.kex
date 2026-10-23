@@ -6,8 +6,8 @@
 # arithmetic is right regardless of which units the operands were written in,
 # and mixing dimensions is an +Error+ rather than a silently wrong number.
 #
-#   5.second.to(String)                     # => "5.0 s"
-#   1.5.hour.to(String)                  # => "1.5 h"
+#   5.second.to(String)                     # => Just("5.0 s")
+#   1.5.hour.to(String)                  # => Just("1.5 h")
 #   (1.hour + 30.minute).map(~to(String))  # => Ok("1.5 h")
 #   90.minute.convert(Hour)              # => Ok(1.5 h)
 #
@@ -170,7 +170,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in nanoseconds
   #
   # @example
-  #   100.nanosecond.to(String)   # => "100.0 ns"
+  #   100.nanosecond.to(String)   # => Just("100.0 ns")
   let nanosecond -> Measure = this.timeMeasure(Nanosecond)
 
   # This many microseconds, as a +Measure+.
@@ -178,7 +178,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in microseconds
   #
   # @example
-  #   250.microsecond.to(String)   # => "250.0 μs"
+  #   250.microsecond.to(String)   # => Just("250.0 μs")
   let microsecond -> Measure = this.timeMeasure(Microsecond)
 
   # This many milliseconds, as a +Measure+.
@@ -186,7 +186,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in milliseconds
   #
   # @example
-  #   500.millisecond.to(String)   # => "500.0 ms"
+  #   500.millisecond.to(String)   # => Just("500.0 ms")
   let millisecond -> Measure = this.timeMeasure(Millisecond)
 
   # This many seconds, as a +Measure+. Seconds are the base unit of time, so
@@ -195,7 +195,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in seconds
   #
   # @example
-  #   5.second.to(String)   # => "5.0 s"
+  #   5.second.to(String)   # => Just("5.0 s")
   let second -> Measure = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
@@ -211,7 +211,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in hours
   #
   # @example
-  #   (1.hour + 30.minute).map { |m| m.to(String) }   # => Ok("1.5 h")
+  #   (1.hour + 30.minute).map { |m| m.showValue }   # => Ok("1.5 h")
   let hour -> Measure = this.timeMeasure(Hour)
 
   # This many days, as a +Measure+.
@@ -219,7 +219,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in days
   #
   # @example
-  #   1.day.convertTo(Hour).map { |m| m.to(String) }   # => Ok("24.0 h")
+  #   1.day.convertTo(Hour).map { |m| m.showValue }   # => Ok("24.0 h")
   let day -> Measure = this.timeMeasure(Day)
 
   # This many weeks, as a +Measure+.
@@ -227,7 +227,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in weeks
   #
   # @example
-  #   2.week.to(String)   # => "2.0 wk"
+  #   2.week.to(String)   # => Just("2.0 wk")
   let week -> Measure = this.timeMeasure(Week)
 
   private do
@@ -264,7 +264,7 @@ make Float do
   # @return [Measure] the quantity, displayed in milliseconds
   #
   # @example
-  #   2.5.millisecond.to(String)   # => "2.5 ms"
+  #   2.5.millisecond.to(String)   # => Just("2.5 ms")
   let millisecond -> Measure = this.timeMeasure(Millisecond)
 
   # This many seconds, as a +Measure+.
@@ -272,7 +272,7 @@ make Float do
   # @return [Measure] the quantity, displayed in seconds
   #
   # @example
-  #   0.25.second.to(String)   # => "0.25 s"
+  #   0.25.second.to(String)   # => Just("0.25 s")
   let second -> Measure = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
@@ -285,7 +285,7 @@ make Float do
   # @return [Measure] the quantity, displayed in hours
   #
   # @example
-  #   1.5.hour.to(String)   # => "1.5 h"
+  #   1.5.hour.to(String)   # => Just("1.5 h")
   let hour -> Measure = this.timeMeasure(Hour)
 
   # This many days, as a +Measure+.
@@ -419,8 +419,8 @@ make Measure, implement: Showable do
   # @return [Measure] the scaled measure
   #
   # @example
-  #   2.second.scale(3).to(String)     # => "6.0 s"
-  #   1.hour.scale(0.5).to(String)  # => "0.5 h"
+  #   2.second.scale(3).to(String)     # => Just("6.0 s")
+  #   1.hour.scale(0.5).to(String)  # => Just("0.5 h")
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
     return Measure {
@@ -441,7 +441,7 @@ make Measure, implement: Showable do
   # @return [Measure] the raised measure
   #
   # @example
-  #   (2.second ^ 2).to(String)   # => "4.0 s^2"
+  #   (2.second ^ 2).to(String)   # => Just("4.0 s^2")
   let ^(exponent: Number) -> Measure do
     return Measure {
       canonical: Kex.Intrinsic.Math.pow(this.canonical, exponent),
@@ -466,8 +466,8 @@ make Measure, implement: Showable do
   # @return [Result<Measure, String>] the converted measure, or why it could not be
   #
   # @example
-  #   1.day.convertTo(Hour).map { |m| m.to(String) }     # => Ok("24.0 h")
-  #   90.minute.convertTo(Hour).map { |m| m.to(String) } # => Ok("1.5 h")
+  #   1.day.convertTo(Hour).map { |m| m.showValue }     # => Ok("24.0 h")
+  #   90.minute.convertTo(Hour).map { |m| m.showValue } # => Ok("1.5 h")
   let convertTo(unit: Unit) -> Result<Measure, String> do
     let target = UnitDefinition {
       conversionFactor: unit.factor,
@@ -491,7 +491,7 @@ make Measure, implement: Showable do
   # @return [Result<Measure, String>] the converted measure, or why it could not be
   #
   # @example
-  #   90.minute.convert(Hour).map { |m| m.to(String) }   # => Ok("1.5 h")
+  #   90.minute.convert(Hour).map { |m| m.showValue }   # => Ok("1.5 h")
   let convert(unit: TimeUnit) -> Result<Measure, String> do
     return this.convertTo(unit)
   end
@@ -506,8 +506,8 @@ make Measure, implement: Showable do
   # @return [Result<Measure, String>] the sum, or why they could not be added
   #
   # @example
-  #   (1.hour + 30.minute).map { |m| m.to(String) }   # => Ok("1.5 h")
-  #   (30.minute + 1.hour).map { |m| m.to(String) }   # => Ok("90.0 min")
+  #   (1.hour + 30.minute).map { |m| m.showValue }   # => Ok("1.5 h")
+  #   (30.minute + 1.hour).map { |m| m.showValue }   # => Ok("90.0 min")
   let +(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
       true => do
@@ -531,7 +531,7 @@ make Measure, implement: Showable do
   # @return [Result<Measure, String>] the difference, or why they could not be subtracted
   #
   # @example
-  #   (1.hour - 30.minute).map { |m| m.to(String) }   # => Ok("0.5 h")
+  #   (1.hour - 30.minute).map { |m| m.showValue }   # => Ok("0.5 h")
   let -(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
       true => do

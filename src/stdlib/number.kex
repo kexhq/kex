@@ -622,7 +622,7 @@ module NumberFormat do
   let layout(pattern) do
     let pieces = pattern.split(".")
     let whole = pieces.first.or("")
-    let decimals: String = pieces.get(1, "")
+    let decimals = pieces.get(1, "")
     let point = whole.count
     return Error((0, "a number format needs a digit: `#` or `0`")) if whole.empty?
     if let Just(problem) = misplaced(whole.chars, 0, '#', '0', false)
@@ -685,7 +685,7 @@ make Number do
       Error(_) => return None
       Ok((digits, fewest, most)) => do
         let text = Kex.Intrinsic.Kex.kind(this) == :float
-          then Kex.Intrinsic.Float.formatFixed(this, most, false)
+          then Kex.Intrinsic.Float.formatFixed(this, most)
           else this.showValue
         let negative = text.startsWith?("-")
         let pieces = (negative then text.drop(1) else text).split(".")

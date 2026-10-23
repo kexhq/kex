@@ -20,15 +20,15 @@
 # File and payload APIs return integer byte counts. Wrap those counts with
 # +byte+ to convert or display them as measurements:
 #
-#   FS.File.size("report.pdf").map { |n| n.byte.to(String) }
-#   Binary.fromBytes([104, 105]).length.byte.to(String)  # => "2.0 B"
-#   "é".bytes.count.byte.to(String)                    # => "2.0 B"
+#   FS.File.size("report.pdf").map { |n| n.byte.showValue }
+#   Binary.fromBytes([104, 105]).length.byte.to(String)  # => Just("2.0 B")
+#   "é".bytes.count.byte.to(String)                    # => Just("2.0 B")
 #
 # To display a size in another unit, decimal or binary, name the unit:
 #
-#   1048576.byte.to(String, in: MiB)                       # => Just("1.0 MiB")
-#   4312.byte.to(String, in: KB, format: Number.format`#.#`)      # => Just("4.3 KB")
-#   1048576.byte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1.0 MiB")
+#   1048576.byte.to(String, in: MiB)                           # => Just("1.0 MiB")
+#   4312.byte.to(String, in: KB, format: Number.format`#.#`)   # => Just("4.3 KB")
+#   1048576.byte.convertTo(MiB).map { |m| m.showValue }        # => Ok("1.0 MiB")
 #
 # Compare an integer byte count directly with a data-size threshold:
 #
@@ -96,8 +96,8 @@ end
 # @return [Measure] the size
 #
 # @example
-#   size(4096, B).to(String)     # => "4096.0 B"
-#   size(1.5, MB).to(String)     # => "1.5 MB"
+#   size(4096, B).to(String)     # => Just("4096.0 B")
+#   size(1.5, MB).to(String)     # => Just("1.5 MB")
 let size(value: Number, unit: DataUnit) -> Measure do
   let converted = amount(value)
   return Measure {
@@ -117,8 +117,8 @@ end
 # @return [Result<Measure, String>] the converted size, or why it could not be
 #
 # @example
-#   1.gibibyte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
-#   2.gigabyte.convertTo(MB).map { |m| m.to(String) }    # => Ok("2000.0 MB")
+#   1.gibibyte.convertTo(MiB).map { |m| m.showValue }   # => Ok("1024.0 MiB")
+#   2.gigabyte.convertTo(MB).map { |m| m.showValue }    # => Ok("2000.0 MB")
 let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   let target = definition(unit)
   match measure.kind == target.dimension do
@@ -177,10 +177,10 @@ end
 # @return [Measure] the size
 #
 # @example
-#   4096.byteSize.to(String)   # => "4096.0 B"
+#   4096.byteSize.to(String)   # => Just("4096.0 B")
 #
 # @example Reporting a file's size
-#   FS.File.size("report.pdf").map { |n| n.byte.to(String) }
+#   FS.File.size("report.pdf").map { |n| n.byte.showValue }
 let byteSize(value: Number) -> Measure = byte(value)
 
 # +value+ bytes, as a +Measure+.
@@ -192,7 +192,7 @@ let byteSize(value: Number) -> Measure = byte(value)
 #
 # @example A binary payload's size
 #   let payload = Binary.fromBytes([104, 105])
-#   payload.length.byte.to(String)   # => "2.0 B"
+#   payload.length.byte.to(String)   # => Just("2.0 B")
 let byte(value: Number) -> Measure = size(value, B)
 # +value+ kilobytes, 1000 bytes each.
 #
@@ -200,7 +200,7 @@ let byte(value: Number) -> Measure = size(value, B)
 # @return [Measure] the size
 #
 # @example
-#   5.kilobyte.to(String)   # => "5.0 KB"
+#   5.kilobyte.to(String)   # => Just("5.0 KB")
 let kilobyte(value: Number) -> Measure = size(value, KB)
 # +value+ megabytes, 1000000 bytes each.
 #
@@ -208,7 +208,7 @@ let kilobyte(value: Number) -> Measure = size(value, KB)
 # @return [Measure] the size
 #
 # @example
-#   1500.megabyte.to(String)   # => "1500.0 MB"
+#   1500.megabyte.to(String)   # => Just("1500.0 MB")
 let megabyte(value: Number) -> Measure = size(value, MB)
 # +value+ gigabytes, 10^9 bytes each.
 #
@@ -216,7 +216,7 @@ let megabyte(value: Number) -> Measure = size(value, MB)
 # @return [Measure] the size
 #
 # @example
-#   2.gigabyte.convertTo(MB).map { |m| m.to(String) }   # => Ok("2000.0 MB")
+#   2.gigabyte.convertTo(MB).map { |m| m.showValue }   # => Ok("2000.0 MB")
 let gigabyte(value: Number) -> Measure = size(value, GB)
 # +value+ terabytes, 10^12 bytes each.
 #
@@ -224,7 +224,7 @@ let gigabyte(value: Number) -> Measure = size(value, GB)
 # @return [Measure] the size
 #
 # @example
-#   2.terabyte.to(String)   # => "2.0 TB"
+#   2.terabyte.to(String)   # => Just("2.0 TB")
 let terabyte(value: Number) -> Measure = size(value, TB)
 # +value+ kibibytes, 1024 bytes each.
 #
@@ -232,7 +232,7 @@ let terabyte(value: Number) -> Measure = size(value, TB)
 # @return [Measure] the size
 #
 # @example
-#   1024.kibibyte.to(String)   # => "1024.0 KiB"
+#   1024.kibibyte.to(String)   # => Just("1024.0 KiB")
 let kibibyte(value: Number) -> Measure = size(value, KiB)
 # +value+ mebibytes, 1024^2 bytes each.
 #
@@ -240,7 +240,7 @@ let kibibyte(value: Number) -> Measure = size(value, KiB)
 # @return [Measure] the size
 #
 # @example
-#   3.mebibyte.to(String)   # => "3.0 MiB"
+#   3.mebibyte.to(String)   # => Just("3.0 MiB")
 let mebibyte(value: Number) -> Measure = size(value, MiB)
 # +value+ gibibytes, 1024^3 bytes each.
 #
@@ -248,7 +248,7 @@ let mebibyte(value: Number) -> Measure = size(value, MiB)
 # @return [Measure] the size
 #
 # @example
-#   1.gibibyte.convertTo(MiB).map { |m| m.to(String) }   # => Ok("1024.0 MiB")
+#   1.gibibyte.convertTo(MiB).map { |m| m.showValue }   # => Ok("1024.0 MiB")
 let gibibyte(value: Number) -> Measure = size(value, GiB)
 # +value+ tebibytes, 1024^4 bytes each.
 #
@@ -256,7 +256,7 @@ let gibibyte(value: Number) -> Measure = size(value, GiB)
 # @return [Measure] the size
 #
 # @example
-#   1.tebibyte.to(String)   # => "1.0 TiB"
+#   1.tebibyte.to(String)   # => Just("1.0 TiB")
 let tebibyte(value: Number) -> Measure = size(value, TiB)
 
 # Compares an integer byte count with a data-size threshold.

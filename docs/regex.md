@@ -43,9 +43,10 @@ let url = re`https?://\S+`
 ```
 
 The tag may also be written **module-qualified** — `` Regex.regex`…` `` (and
-`` Regex.re`…` ``) behave exactly like the bare form: same tag, same
-compile-time validation, same bare-`Regex` result, on both backends. As with any
-`Regex.*` name, the module must be in scope (`using Regex`).
+`` Regex.re`…` ``) call `Regex.regex` and are validated by
+`Regex.validateRegex`: the same compile-time check and bare-`Regex` result as
+the bare form, on both backends. As with any `Regex.*` name, the module must be
+in scope (`using Regex`).
 
 ### Call form — `regex("…")` (returns `Result`)
 
