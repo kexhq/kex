@@ -1,0 +1,81 @@
+name: AI review
+description: Review a pull request with a free OpenCode model and post the findings back to it
+
+inputs:
+  skill:
+    description: Path to the review skill, a directory containing SKILL.md or the file itself
+    required: false
+    default: .github/actions/ai-review
+
+  model:
+    description: Model that runs the review, as `provider/model` plus an optional `#variant` for the effort level (low, high, max). OpenCode's free models need no credentials
+    required: false
+    default: opencode/glm-5.3-flash-free#high
+
+  fast-model:
+    description: Model that reconciles the new review with an earlier round's comments, what to close and what to keep. A low-effort variant is enough
+    required: false
+    default: opencode/glm-5.3-flash-free#low
+
+  min-severity:
+    description: Lowest severity of finding that is published at all, of low, medium, high, critical
+    required: false
+    default: medium
+
+  comment:
+    description: Post the review on the pull request; "false" runs both agents and only logs what it would post
+    required: false
+    default: "true"
+
+  token:
+    description: Token for posting. The workflow's own token can comment, update, and delete but not resolve a conversation, so closing falls back to deleting; a personal access token with repo access resolves instead
+    required: false
+    default: ${{ github.token }}
+
+  kex-version:
+    description: The released Kex that runs the reviewer
+    required: false
+    default: 0.4.0-rc.2
+
+runs:
+  using: composite
+  steps:
+    # The reviewer is a Kex script, run on a RELEASED toolchain rather than one
+    # built from the pull request, so a PR that breaks the compiler cannot
+    # break its own review.
+    - name: Set up Kex
+      uses: ./.github/actions/setup-tey
+      with:
+        kex-version: ${{ inputs.kex-version }}
+
+    # A few seconds, and a broken reviewer fails here instead of posting.
+    - name: Test the reviewer
+      shell: bash
+      run: kex "${{ github.action_path }}/review.spec.kex"
+
+    - name: Install OpenCode CLI
+      shell: bash
+      # Pinned. The CLI runs in the OpenCode identity, which is what makes its
+      # free models usable from a runner; the embedded SDK gets FreeTierError.
+      run: |
+        curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.0.31
+        echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+    - name: Run review
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        INPUT_SKILL: ${{ inputs.skill }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_FAST_MODEL: ${{ inputs['fast-model'] }}
+        INPUT_MIN_SEVERITY: ${{ inputs['min-severity'] }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        # Lets the skill diff the pull request against its base branch.
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        # Anchors inline comments to the head commit of the PR.
+        GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Commenting needs `pull-requests: write` on the calling workflow.
+        GH_TOKEN: ${{ inputs.token }}
+      # `gh` and `jq` come with the runner image.
+      run: kex "${{ github.action_path }}/review.kex"

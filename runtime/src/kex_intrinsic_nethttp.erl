@@ -59,7 +59,9 @@ request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', Reques
                    {autoredirect, false},
                    {ssl, [{verify, verify_peer},
                           {cacerts, public_key:cacerts_get()},
-                          {depth, 10}]}],
+                          {depth, 10},
+                          {customize_hostname_check,
+                           [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}]}],
     Headers0 = [{binary_to_list(Name), binary_to_list(Value)} || {Name, Value} <- RequestHeaders],
     Request = case Method of
                   get -> {binary_to_list(URL), Headers0};

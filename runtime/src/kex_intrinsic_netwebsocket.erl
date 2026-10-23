@@ -654,6 +654,8 @@ open_transport({<<"wss">>, Host, Port}) ->
     ssl:start(),
     Options = [binary, {active, false}, {server_name_indication, binary_to_list(Host)},
                {verify, verify_peer}, {cacerts, public_key:cacerts_get()},
+               {customize_hostname_check,
+                [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]},
                {versions, ['tlsv1.2', 'tlsv1.3']}],
     case ssl:connect(binary_to_list(Host), Port, Options, 10000) of
         {ok, Socket} -> {ok, {tls, Socket}};
