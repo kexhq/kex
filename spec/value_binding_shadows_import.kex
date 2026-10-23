@@ -1,0 +1,29 @@
+# A program's own value binding holding a function answers a call through it,
+# even when an import has a function of the same name. The prelude's public
+# `NumberFormat.layout` took `layout(live)` over the program's
+# `let layout = { … }` — Slick's views, and the page Metro's app generator
+# writes — so `page` was checked as returning NumberFormat's Result.
+# Inside a module the module's own binding wins over a top-level one of the
+# same name; BEAM used to call the top-level `layout` from `Views.page`.
+let layout = { |body| "<main>${body}</main>" }
+
+page : String -> String
+let page(live) = layout(live)
+
+let frame = { |title, body| "<${title}>${body}</${title}>" }
+
+framed : String -> String -> String
+let framed(title, body) = frame(title, body)
+
+module Views do
+  let layout = { |body| "<section>${body}</section>" }
+
+  page : String -> String
+  let page(live) = layout(live)
+end
+
+main do
+  IO.printLine(page("top-level"))
+  IO.printLine(framed("h1", "two arguments"))
+  IO.printLine(Views.page("module"))
+end

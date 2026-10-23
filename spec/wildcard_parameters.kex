@@ -1,0 +1,29 @@
+# Several `_` parameters in one parameter list, on both backends. `_` was
+# emitted as an ordinary Core Erlang variable, so two of them in one head were
+# a duplicate variable and erlc refused the module — for a function, a `make`
+# function, a lambda, and a block alike, spread tuple or not. Patterns
+# (`let (key, _, _) = row`) were already fine.
+let seventh(_: Integer, _: Integer) -> Integer = 7
+
+let both(_, _) = "both"
+
+make Integer do
+  let pick(_: Integer, _: Integer) -> Integer = this
+end
+
+main do
+  IO.printLine(seventh(1, 2))
+  IO.printLine(both(1, 2))
+  IO.printLine(5.pick(1, 2))
+
+  let skip = { |_, _| 0 }
+  IO.printLine(skip(1, 2))
+
+  IO.printLine([1, 2, 3].reduce(0) { |_, _| 7 })
+
+  let rows = [("a", "b", 1), ("c", "d", 2)]
+  IO.printLine(rows.map { |key, _, _| key }.join(","))
+
+  let (first, _, _) = rows[0].or(("?", "?", 0))
+  IO.printLine(first)
+end

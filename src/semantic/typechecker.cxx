@@ -599,6 +599,16 @@ auto TypeChecker::check(const ast::Program& program,
         m_typeAliases[name] = resolveTypeQuery(*query);
     m_computedAliases.clear();
     validateDeclarations(program, m_importedInterfaces, m_traits, diagnostics);
+    m_topLevelValueNames.clear();
+    for (const auto& item : program.items)
+        if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+            main && *main && (*main)->synthetic)
+            for (const auto& e : (*main)->body)
+                if (const auto* let = e ? std::get_if<ast::LetExpr>(&e->kind) : nullptr;
+                    let && let->pattern)
+                    if (const auto* var =
+                            std::get_if<ast::VarPattern>(&let->pattern->kind))
+                        m_topLevelValueNames.insert(var->name);
     registerDeclaredSignatures(program);
     registerMakeSignatures(program);
     m_moduleReexports.clear();
@@ -8569,11 +8579,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // ever got a look (#343); `String.get : String -> Integer ->
             // Char?` matched a call and hid its wrong argument until run
             // time (#324).
-            const bool declaredShadowsImport = hasUser &&
-                std::any_of(userSignatures->begin(), userSignatures->end(),
-                            [&](const Signature& signature) {
-                                return signature.params.size() == argTypes.size();
-                            });
+            // A value binding the program declares (`let layout = { |b| … }`,
+            // a single 0-param signature) called with arguments is a call
+            // through the value it holds — the idiom handled below. It
+            // shadows imports too: `NumberFormat.layout` in the prelude took
+            // `layout(live)` over the program's own `layout` (Slick).
+            // A top-level value is not a signature at all (see
+            // m_topLevelValueNames).
+            const bool declaredValueCalled = !argTypes.empty() &&
+                ((hasUser && userSignatures->size() == 1 &&
+                  userSignatures->front().params.empty()) ||
+                 (!hasUser && m_topLevelValueNames.count(name)));
+            const bool declaredShadowsImport = declaredValueCalled ||
+                (hasUser &&
+                 std::any_of(userSignatures->begin(), userSignatures->end(),
+                             [&](const Signature& signature) {
+                                 return signature.params.size() == argTypes.size();
+                             }));
             if (!declaredShadowsImport)
                 for (const auto& [_, module] : m_importedInterfaces->modules) {
                     if (!module.automaticImport) continue;

@@ -364,6 +364,11 @@ private:
     // checked as before.
     TypePtr m_branchExpectation;
     TypeEnv m_globals;
+    // The program's top-level `let name = expr` values. Functions are checked
+    // before the synthetic main blocks that bind these, so a call through one
+    // (`layout(live)`) has no type for it yet — but it is still the program's
+    // own name, and an import of the same name must not answer the call.
+    std::unordered_set<std::string> m_topLevelValueNames;
     std::vector<TypeEnv> m_scopeStack;
     struct ImportSelection {
         std::string module;
