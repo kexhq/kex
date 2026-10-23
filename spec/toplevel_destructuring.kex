@@ -32,3 +32,10 @@ IO.printLine("${u} ${v} ${w}")
 
 let sum() -> Integer = a + b + q + r
 IO.printLine(sum())
+
+# An anonymous `{ k }` pattern over an atom-keyed map reads the `:k` key. It
+# used to look up only `"k"`, so the walker left `scale` unbound, and on BEAM
+# the read emitted a `case` with no clauses, which erlc rejected.
+let { scale, offset: o } = { scale: 10, offset: 3 }
+let scaled(n: Integer) -> Integer = n * scale + o
+IO.printLine("${scale} ${o} ${scaled(2)}")

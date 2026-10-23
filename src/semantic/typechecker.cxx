@@ -6254,64 +6254,65 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     std::holds_alternative<OptionalType>(fallback->kind) ||
                     (fallbackNamed && (fallbackNamed->name == "None" ||
                                        fallbackNamed->name == "Result"));
-                if ((optionalReceiver || resultReceiver) && wrappedFallback) {
-                    const auto unwrapped = optionalReceiver
-                        ? std::get<OptionalType>(receiver->kind).inner
-                        : (receiverNamed->typeArgs.empty()
-                               ? Type::unknown()
-                               : receiverNamed->typeArgs.front());
-                    const auto unwrappedName = typeToString(unwrapped);
-                    const bool vowel = !unwrappedName.empty() &&
-                        std::string("AEIOUaeiou").find(unwrappedName.front()) !=
-                            std::string::npos;
-                    const auto wanted = containsOpenType(unwrapped)
-                        ? std::string("the unwrapped value")
-                        : (vowel ? "an " : "a ") + unwrappedName;
-                    error(argument ? argument->location : expr.location,
-                          "`or` needs " + wanted + " to fall back to, but got " +
-                              (constructedWrapped
-                                   ? "`" + std::string(
-                                         std::get_if<ast::FunctionCall>(&argument->kind)
-                                             ? std::get<ast::FunctionCall>(argument->kind).name
-                                             : std::get<ast::MethodCall>(argument->kind).method) +
-                                         "(…)`"
-                                   : typeToString(fallback)) +
-                              " — `or` is what leaves the " +
-                              (optionalReceiver ? "optional" : "result") +
-                              "; pass a plain default, keep the value as it is, "
-                              "or `match` on it");
-                }
                 // `or` never calls its fallback, so `r.or { |_| … }` answered
                 // the block itself in place of the value (kexhq/kex#558). A
                 // function default is still fine when the value is one.
+                // A bare `~f` is typed only in the deferred, hinted pass, so
+                // its type is not known yet here; its signatures say whether
+                // it captures a function (a parameterless one is its value).
+                const auto capturesFunction = [&](const ast::Expr* e) {
+                    if (!isBareCapture(e)) return false;
+                    const auto& name = std::get<ast::CurryExpr>(e->kind).name;
+                    auto signatures = importedCandidateSignatures(name);
+                    if (auto user = m_userSignatures.find(name);
+                        user != m_userSignatures.end())
+                        signatures = user->second;
+                    return std::any_of(signatures.begin(), signatures.end(),
+                                       [](const Signature& signature) {
+                                           return !signature.params.empty();
+                                       });
+                };
                 const bool functionFallback = argument &&
                     ((node.args.empty() && node.block) ||
-                     std::holds_alternative<FuncType>(fallback->kind));
-                if ((optionalReceiver || resultReceiver) && !wrappedFallback &&
-                    functionFallback) {
+                     std::holds_alternative<FuncType>(fallback->kind) ||
+                     capturesFunction(argument));
+                if (optionalReceiver || resultReceiver) {
                     const auto unwrapped = resolve(optionalReceiver
                         ? std::get<OptionalType>(receiver->kind).inner
                         : (receiverNamed->typeArgs.empty()
                                ? Type::unknown()
                                : receiverNamed->typeArgs.front()));
-                    if (!containsOpenType(unwrapped) &&
-                        !std::holds_alternative<UnknownType>(unwrapped->kind) &&
-                        !std::holds_alternative<FuncType>(unwrapped->kind)) {
-                        const auto unwrappedName = typeToString(unwrapped);
-                        const bool vowel = !unwrappedName.empty() &&
-                            std::string("AEIOUaeiou").find(unwrappedName.front()) !=
-                                std::string::npos;
-                        const bool block = node.args.empty();
+                    const auto unwrappedName = typeToString(unwrapped);
+                    const bool vowel = !unwrappedName.empty() &&
+                        std::string("AEIOUaeiou").find(unwrappedName.front()) !=
+                            std::string::npos;
+                    const bool openUnwrapped = containsOpenType(unwrapped);
+                    const auto wanted = openUnwrapped
+                        ? std::string("the unwrapped value")
+                        : (vowel ? "an " : "a ") + unwrappedName;
+                    const std::string wrapper = optionalReceiver ? "optional" : "result";
+                    if (wrappedFallback) {
+                        error(argument ? argument->location : expr.location,
+                              "`or` needs " + wanted + " to fall back to, but got " +
+                                  (constructedWrapped
+                                       ? "`" + std::string(
+                                             std::get_if<ast::FunctionCall>(&argument->kind)
+                                                 ? std::get<ast::FunctionCall>(argument->kind).name
+                                                 : std::get<ast::MethodCall>(argument->kind).method) +
+                                             "(…)`"
+                                       : typeToString(fallback)) +
+                                  " — `or` is what leaves the " + wrapper +
+                                  "; pass a plain default, keep the value as it is, "
+                                  "or `match` on it");
+                    } else if (functionFallback && !openUnwrapped &&
+                               !std::holds_alternative<UnknownType>(unwrapped->kind) &&
+                               !std::holds_alternative<FuncType>(unwrapped->kind)) {
+                        const std::string given = node.args.empty() ? "block" : "function";
                         error(argument->location,
-                              std::string("`or` needs ") + (vowel ? "an " : "a ") +
-                                  unwrappedName + " to fall back to, but got a " +
-                                  (block ? "block" : "function") +
-                                  " — `or` never calls it, so the " +
-                                  (block ? "block" : "function") +
-                                  " itself would be the answer; pass a plain "
-                                  "default, or `match` on the " +
-                                  (optionalReceiver ? "optional" : "result") +
-                                  " to compute one");
+                              "`or` needs " + wanted + " to fall back to, but got a " +
+                                  given + " — `or` never calls it, so the " + given +
+                                  " itself would be the answer; pass a plain default, "
+                                  "or `match` on the " + wrapper + " to compute one");
                     }
                 }
             }

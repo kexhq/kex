@@ -6072,15 +6072,30 @@ struct Lowering {
                     var(subject)));
             m.clauses.push_back(std::move(hit));
         }
+        // With no record declaring `field` the case had no clauses at all,
+        // which erlc rejects as a syntax error, so a top-level
+        // `let { k } = { k: 1 }` failed to compile.
+        MatchClause miss;
+        auto wild = std::make_unique<Pattern>();
+        wild->kind = PatKind::Wild;
+        miss.patterns.push_back(std::move(wild));
+        miss.body = runtimeError("pattern mismatch");
+        m.clauses.push_back(std::move(miss));
         auto byTag = std::make_unique<Expr>();
         byTag->node = std::move(m);
         // A `let { k } = someMap` destructures a map too (the walker's
         // let-binding path does). Match arms never reach this on a map — the
-        // structural test above admits tuples only.
+        // structural test above admits tuples only. The key is `"k"`, or `:k`
+        // in an atom-keyed map such as `{ k: 1 }`.
+        auto byKey = matchBool(
+            callE("maps", "is_key", 2,
+                  two(lit(LitKind::String, field), var(subject))),
+            callE("maps", "get", 2,
+                  two(lit(LitKind::String, field), var(subject))),
+            callE("maps", "get", 2,
+                  two(lit(LitKind::Atom, field), var(subject))));
         return matchBool(callE("erlang", "is_map", 1, one(var(subject))),
-                         callE("maps", "get", 2,
-                               two(lit(LitKind::String, field), var(subject))),
-                         std::move(byTag));
+                         std::move(byKey), std::move(byTag));
     }
     auto wrapAnonymousRecordPattern(const std::string& subject,
                                     const ast::RecordPattern& rp,
@@ -10566,8 +10581,19 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         def.isFreeFunction = true;
         mod.functions.push_back(std::move(def));
     };
-    // Bare top-level expressions (no explicit `main`) → one synthetic main/0.
+    // Bare top-level expressions → one synthetic main/0, or, beside an
+    // explicit `main`, spliced around its body in source order.
     std::vector<const ast::ExprPtr*> bareExprs;
+    // An explicit `main`, lowered where it is written and emitted once every
+    // bare expression is known: the walker runs those before and after its
+    // body in source order, and BEAM used to drop them.
+    struct ExplicitMain {
+        FunDef def;
+        FunClause clause;
+        ExprPtr body;
+        size_t bareBefore = 0;
+    };
+    std::optional<ExplicitMain> explicitMain;
 
     for (const auto& item : prog.items) {
         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
@@ -10662,10 +10688,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         fc.params.push_back(std::move(p));
                     }
                     if (node->rescue) body = L.wrapWithTryCatch(std::move(body), *node->rescue);
-                    fc.body = L.withTestSummary(
-                        L.withDisplayInfo(std::move(body), mod.name));
-                    def.clauses.push_back(std::move(fc));
-                    mod.functions.push_back(std::move(def));
+                    explicitMain = ExplicitMain{std::move(def), std::move(fc),
+                                                std::move(body), bareExprs.size()};
                     mod.hasMain = true;
                 } else {
                     // Bare top-level expression(s) → accumulate for a synthetic main.
@@ -10916,6 +10940,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                  + typeid(T).name());
             }
         }, item);
+    }
+
+    if (explicitMain) {
+        L.subst.clear();
+        std::vector<ExprPtr> steps;
+        for (size_t i = 0; i < explicitMain->bareBefore; ++i)
+            steps.push_back(L.lower(*bareExprs[i]));
+        steps.push_back(std::move(explicitMain->body));
+        for (size_t i = explicitMain->bareBefore; i < bareExprs.size(); ++i)
+            steps.push_back(L.lower(*bareExprs[i]));
+        ExprPtr sequence = std::move(steps.back());
+        for (size_t i = steps.size() - 1; i-- > 0;) {
+            auto let = std::make_unique<Expr>();
+            let->node = Let{L.fresh("S"), std::move(steps[i]), std::move(sequence)};
+            sequence = std::move(let);
+        }
+        explicitMain->clause.body = L.withTestSummary(
+            L.withDisplayInfo(std::move(sequence), mod.name));
+        explicitMain->def.clauses.push_back(std::move(explicitMain->clause));
+        mod.functions.push_back(std::move(explicitMain->def));
     }
 
     // Synthetic main/0 from bare top-level expressions, if no explicit main.

@@ -1,14 +1,28 @@
-# `or` never calls its fallback, so a block passed to it was the answer
-# itself, and checking `r.or { … }` crashed the checker on an empty argument
-# list (kexhq/kex#558). A function fallback is still fine when the wrapped
-# value is a function.
+# `or` never calls its fallback, so a block or a function passed to it was the
+# answer itself, and checking `r.or { … }` crashed the checker on an empty
+# argument list (kexhq/kex#558). A function fallback is still fine when the
+# wrapped value is a function.
 let port(configured: Result<Integer, String>) -> Integer = configured.or { |_| 8080 }
 
 foul mustWrite(path: String) do
   FS.File.write(path, "x").or { |_| die("no") }
 end
 
+let fallbackPort(reason: String) -> Integer = 8080
+
+let lambdaPort(configured: Result<Integer, String>) -> Integer = configured.or({ |_| 8080 })
+
+let namedPort(configured: Result<Integer, String>) -> Integer = configured.or(fallbackPort)
+
+let capturedPort(configured: Result<Integer, String>) -> Integer = configured.or(~fallbackPort)
+
+let label(name: String?) -> String = name.or(&.upperCase)
+
 let handler(found: (Integer -> Integer)?) -> (Integer -> Integer) = found.or { |x| x }
+
+let double(x: Integer) -> Integer = x * 2
+
+let doubler(found: (Integer -> Integer)?) -> (Integer -> Integer) = found.or(~double)
 
 main do
   IO.printLine("${port(Ok(1))}")

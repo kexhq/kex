@@ -2194,11 +2194,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 } else if (recPat->typeName.empty()) {
                   // The anonymous `{ k }` form also destructures maps by key; a
                   // named `Foo { k }` is record-only (maps carry no type name).
+                  // The key is `"k"` or, in an atom-keyed map such as
+                  // `{ k: 1 }`, `:k`.
                   if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
                     for (const auto& field : recPat->fields) {
                         for (const auto& [k, v] : mapVal->entries) {
-                            if (auto* sk = std::get_if<StringValue>(&k->data)) {
-                                if (sk->value == field.name) {
+                            const auto* sk = std::get_if<StringValue>(&k->data);
+                            const auto* ak = std::get_if<AtomValue>(&k->data);
+                            if (sk || ak) {
+                                if ((sk ? sk->value : ak->name) == field.name) {
                                     if (field.pattern && *field.pattern) {
                                         matchPattern(**field.pattern, v);
                                     } else {
