@@ -811,4 +811,14 @@ struct Program {
     std::vector<TopLevelItem> items;
 };
 
+// Which of a companion file's top-level items (a `<name>.spec.kex`'s base
+// `<name>.kex`) join the file that merges it: everything but its main code. A
+// top-level `let k = 1` parses into a synthetic main-block wrapper, yet it is a
+// constant the companion's functions read, so it comes along (kexhq/kex#559);
+// an explicit `main` and bare top-level expressions do not.
+inline auto isCompanionDeclaration(const TopLevelItem& item) -> bool {
+    const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
+    return !main || ((*main)->synthetic && !(*main)->isExplicitMain);
+}
+
 } // namespace kex::ast

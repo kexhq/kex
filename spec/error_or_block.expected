@@ -1,0 +1,3 @@
+spec/error_or_block.kex:5:74: error: `or` needs an Integer to fall back to, but got a block — `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:8:31: error: `or` needs a Void to fall back to, but got a block — `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+Aborted: 2 type errors — fix before running (use --no-check to skip).

@@ -6237,8 +6237,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const auto wrappingConstructor = [](const std::string& name) {
                     return name == "Just" || name == "Ok" || name == "Error";
                 };
+                // `r.or { … }` passes its fallback as the trailing block, so
+                // `node.args` is empty (kexhq/kex#558).
+                const ast::Expr* argument = !node.args.empty()
+                    ? node.args.back().get()
+                    : (node.block ? node.block->get() : nullptr);
                 bool constructedWrapped = false;
-                if (const auto& argument = node.args.back()) {
+                if (argument) {
                     if (const auto* call = std::get_if<ast::FunctionCall>(&argument->kind))
                         constructedWrapped = wrappingConstructor(call->name);
                     else if (const auto* method = std::get_if<ast::MethodCall>(&argument->kind);
@@ -6262,19 +6267,52 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     const auto wanted = containsOpenType(unwrapped)
                         ? std::string("the unwrapped value")
                         : (vowel ? "an " : "a ") + unwrappedName;
-                    error(node.args.back() ? node.args.back()->location : expr.location,
+                    error(argument ? argument->location : expr.location,
                           "`or` needs " + wanted + " to fall back to, but got " +
                               (constructedWrapped
                                    ? "`" + std::string(
-                                         std::get_if<ast::FunctionCall>(&node.args.back()->kind)
-                                             ? std::get<ast::FunctionCall>(node.args.back()->kind).name
-                                             : std::get<ast::MethodCall>(node.args.back()->kind).method) +
+                                         std::get_if<ast::FunctionCall>(&argument->kind)
+                                             ? std::get<ast::FunctionCall>(argument->kind).name
+                                             : std::get<ast::MethodCall>(argument->kind).method) +
                                          "(…)`"
                                    : typeToString(fallback)) +
                               " — `or` is what leaves the " +
                               (optionalReceiver ? "optional" : "result") +
                               "; pass a plain default, keep the value as it is, "
                               "or `match` on it");
+                }
+                // `or` never calls its fallback, so `r.or { |_| … }` answered
+                // the block itself in place of the value (kexhq/kex#558). A
+                // function default is still fine when the value is one.
+                const bool functionFallback = argument &&
+                    ((node.args.empty() && node.block) ||
+                     std::holds_alternative<FuncType>(fallback->kind));
+                if ((optionalReceiver || resultReceiver) && !wrappedFallback &&
+                    functionFallback) {
+                    const auto unwrapped = resolve(optionalReceiver
+                        ? std::get<OptionalType>(receiver->kind).inner
+                        : (receiverNamed->typeArgs.empty()
+                               ? Type::unknown()
+                               : receiverNamed->typeArgs.front()));
+                    if (!containsOpenType(unwrapped) &&
+                        !std::holds_alternative<UnknownType>(unwrapped->kind) &&
+                        !std::holds_alternative<FuncType>(unwrapped->kind)) {
+                        const auto unwrappedName = typeToString(unwrapped);
+                        const bool vowel = !unwrappedName.empty() &&
+                            std::string("AEIOUaeiou").find(unwrappedName.front()) !=
+                                std::string::npos;
+                        const bool block = node.args.empty();
+                        error(argument->location,
+                              std::string("`or` needs ") + (vowel ? "an " : "a ") +
+                                  unwrappedName + " to fall back to, but got a " +
+                                  (block ? "block" : "function") +
+                                  " — `or` never calls it, so the " +
+                                  (block ? "block" : "function") +
+                                  " itself would be the answer; pass a plain "
+                                  "default, or `match` on the " +
+                                  (optionalReceiver ? "optional" : "result") +
+                                  " to compute one");
+                    }
                 }
             }
             return checkCall(callName, argTypes, expr.location,

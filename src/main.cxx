@@ -5408,8 +5408,7 @@ int main(int argc, char *argv[]) {
           std::vector<kex::ast::TopLevelItem> merged;
           merged.reserve(baseProgram.items.size() + checkProgram.items.size());
           for (auto &item : baseProgram.items)
-            if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
-                    item))
+            if (kex::ast::isCompanionDeclaration(item))
               merged.push_back(std::move(item));
           for (auto &item : checkProgram.items) merged.push_back(std::move(item));
           checkProgram.items = std::move(merged);
@@ -5530,8 +5529,7 @@ int main(int argc, char *argv[]) {
         std::vector<kex::ast::TopLevelItem> merged;
         merged.reserve(baseProgram.items.size() + program.items.size());
         for (auto &item : baseProgram.items)
-          if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
-                  item))
+          if (kex::ast::isCompanionDeclaration(item))
             merged.push_back(std::move(item));
         for (auto &item : program.items)
           merged.push_back(std::move(item));
@@ -6057,8 +6055,7 @@ int main(int argc, char *argv[]) {
         std::vector<kex::ast::TopLevelItem> merged;
         merged.reserve(baseProgram.items.size() + program.items.size());
         for (auto &item : baseProgram.items)
-          if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
-                  item))
+          if (kex::ast::isCompanionDeclaration(item))
             merged.push_back(std::move(item));
         for (auto &item : program.items)
           merged.push_back(std::move(item));
@@ -6171,7 +6168,7 @@ int main(int argc, char *argv[]) {
       std::vector<kex::ast::TopLevelItem> merged;
       merged.reserve(baseProgram.items.size() + program.items.size());
       for (auto &item : baseProgram.items)
-        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+        if (kex::ast::isCompanionDeclaration(item))
           merged.push_back(std::move(item));
       for (auto &item : program.items)
         merged.push_back(std::move(item));

@@ -1,0 +1,15 @@
+# `or` never calls its fallback, so a block passed to it was the answer
+# itself, and checking `r.or { … }` crashed the checker on an empty argument
+# list (kexhq/kex#558). A function fallback is still fine when the wrapped
+# value is a function.
+let port(configured: Result<Integer, String>) -> Integer = configured.or { |_| 8080 }
+
+foul mustWrite(path: String) do
+  FS.File.write(path, "x").or { |_| die("no") }
+end
+
+let handler(found: (Integer -> Integer)?) -> (Integer -> Integer) = found.or { |x| x }
+
+main do
+  IO.printLine("${port(Ok(1))}")
+end
