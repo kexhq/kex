@@ -1,0 +1,13 @@
+# The base of spec/spec_base_constants.spec.kex. Its top-level constants are
+# what its functions read, so the spec merges them in with the declarations;
+# its `main` stays behind (kexhq/kex#559).
+let offset = 1
+let (scale, _) = (10, 0)
+
+let shifted(n: Integer) -> Integer = n + offset
+
+let scaled(n: Integer) -> Integer = n * scale
+
+main do
+  IO.printLine("main: ${shifted(1)} ${scaled(2)}")
+end

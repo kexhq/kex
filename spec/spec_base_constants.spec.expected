@@ -1,0 +1,6 @@
+spec base constants
+  ✓ reads a plain constant
+  ✓ reads a destructured constant
+  ✓ sees the constant itself
+
+3 passed, 0 failed

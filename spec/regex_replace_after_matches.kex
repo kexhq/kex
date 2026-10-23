@@ -1,0 +1,23 @@
+# A regex `replace` called through UFCS on a typed String reaches Regex's
+# `replace`, even after another function has already called a Regex function
+# (kexhq/kex#560). Matching the prelude's `replace(String, String, String)`
+# left the literal's type open; trying Regex's overload then bound it to
+# `Regex`, and the checker picked from the stale matches — the String
+# function, which died with badarg on BEAM.
+using Regex
+
+let vowel?(text: String) -> Bool = text.matches?(re`[aeiou]`)
+
+let masked(text: String) -> String = text.replace(re`[0-9]`, "#")
+
+let words(text: String) -> [String] = text.split(re`\s+`)
+
+let dashed(text: String) -> String = text.replace(re`\s+`, "-")
+
+main do
+  IO.printLine(vowel?("kex"))
+  IO.printLine(masked("pin 1234"))
+  IO.printLine(words("a  b c"))
+  IO.printLine(dashed("a  b c"))
+  IO.printLine("plain".replace("p", "P"))
+end

@@ -1,0 +1,16 @@
+# A spec sees its base file's top-level constants, not only its declarations
+# (kexhq/kex#559). They parse into the base's implicit main, which the merge
+# used to drop wholesale, so `shifted` failed to check with "Undefined name".
+describe("spec base constants") do
+  it("reads a plain constant") do
+    assert(shifted(1) == 2)
+  end
+
+  it("reads a destructured constant") do
+    assert(scaled(3) == 30)
+  end
+
+  it("sees the constant itself") do
+    assert(offset == 1)
+  end
+end

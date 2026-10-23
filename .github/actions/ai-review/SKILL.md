@@ -23,6 +23,12 @@ Then:
 - New behaviour should come with a test: `spec/*.kex` or `tests/`. Flag a behaviour change that has none.
 - Skip praise and summaries that restate the diff.
 
+You have 15 minutes in total, and a run that overruns is killed with nothing posted. CI runs the full test suites on this pull request anyway, so spend the time reading, not testing:
+
+- Running code is optional. When a claim can only be settled by running it, build just the compiler (`cmake -B build -G "Unix Makefiles" && cmake --build build --target kex -j`, a few minutes on a cold checkout) and run single files: `./build/kex spec/<name>.kex`, compared with its `.expected`, or a small probe of your own.
+- Never run `make test`, `make test-all`, any `make spec…` target, `ctest`, or the binaries under `build/tests/`. Each takes longer than the whole review.
+- Stop investigating with time to spare: once about 10 minutes have passed, write the report with the findings you have.
+
 Finish your response with exactly one fenced code block labelled `kex-review`, and nothing outside it. Fence it with exactly three backticks — the example below is nested in four backticks only because it sits inside this document's own fence. The response is read programmatically: every finding becomes a comment on the pull request.
 
 ````kex-review

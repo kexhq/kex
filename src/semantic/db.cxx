@@ -102,7 +102,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
     }
 
     // Companion declarations (see the header): parse each and prepend
-    // everything except its `main` block, so the collect/resolve passes below
+    // everything except its main code, so the collect/resolve passes below
     // treat them as part of this file's unit. Parse diagnostics from a
     // companion are dropped — it is checked on its own when run directly.
     for (const auto& companion : companionDeclFiles) {
@@ -117,7 +117,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         std::vector<ast::TopLevelItem> merged;
         merged.reserve(companionAst.items.size() + state.ast.items.size());
         for (auto& item : companionAst.items)
-            if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+            if (ast::isMergedDeclaration(item))
                 merged.push_back(std::move(item));
         for (auto& item : state.ast.items) merged.push_back(std::move(item));
         state.ast.items = std::move(merged);

@@ -1,0 +1,8 @@
+# Importing a module's file brings in its declarations and top-level
+# constants, but not its main code: the file's bare `IO.printLine` and its
+# `main` must not run here (kexhq/kex#559 merge rule, `isMergedDeclaration`).
+using Noisy
+
+main do
+  IO.printLine(greet("kex"))
+end

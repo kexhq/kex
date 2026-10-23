@@ -248,7 +248,7 @@ auto mergeProjectModules(ast::Program& program,
     std::vector<ast::TopLevelItem> merged;
     for (auto& dependency : retained.programs)
         for (auto& item : dependency->items)
-            if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+            if (ast::isMergedDeclaration(item))
                 merged.push_back(std::move(item));
     for (auto& item : program.items) merged.push_back(std::move(item));
     program.items = std::move(merged);

@@ -6237,8 +6237,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const auto wrappingConstructor = [](const std::string& name) {
                     return name == "Just" || name == "Ok" || name == "Error";
                 };
+                // `r.or { … }` passes its fallback as the trailing block, so
+                // `node.args` is empty (kexhq/kex#558).
+                const ast::Expr* argument = !node.args.empty()
+                    ? node.args.back().get()
+                    : (node.block ? node.block->get() : nullptr);
                 bool constructedWrapped = false;
-                if (const auto& argument = node.args.back()) {
+                if (argument) {
                     if (const auto* call = std::get_if<ast::FunctionCall>(&argument->kind))
                         constructedWrapped = wrappingConstructor(call->name);
                     else if (const auto* method = std::get_if<ast::MethodCall>(&argument->kind);
@@ -6249,32 +6254,67 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     std::holds_alternative<OptionalType>(fallback->kind) ||
                     (fallbackNamed && (fallbackNamed->name == "None" ||
                                        fallbackNamed->name == "Result"));
-                if ((optionalReceiver || resultReceiver) && wrappedFallback) {
-                    const auto unwrapped = optionalReceiver
+                // `or` never calls its fallback, so `r.or { |_| … }` answered
+                // the block itself in place of the value (kexhq/kex#558; STYLE.md
+                // `or-function-default`). A function default is still fine
+                // when the value is one.
+                // A bare `~f` is typed only in the deferred, hinted pass, so
+                // its type is not known yet here; its signatures say whether
+                // it captures a function (a parameterless one is its value).
+                const auto capturesFunction = [&](const ast::Expr* e) {
+                    if (!isBareCapture(e)) return false;
+                    const auto& name = std::get<ast::CurryExpr>(e->kind).name;
+                    auto signatures = importedCandidateSignatures(name);
+                    if (auto user = m_userSignatures.find(name);
+                        user != m_userSignatures.end())
+                        signatures = user->second;
+                    return std::any_of(signatures.begin(), signatures.end(),
+                                       [](const Signature& signature) {
+                                           return !signature.params.empty();
+                                       });
+                };
+                const bool functionFallback = argument &&
+                    ((node.args.empty() && node.block) ||
+                     std::holds_alternative<FuncType>(fallback->kind) ||
+                     capturesFunction(argument));
+                if (optionalReceiver || resultReceiver) {
+                    const auto unwrapped = resolve(optionalReceiver
                         ? std::get<OptionalType>(receiver->kind).inner
                         : (receiverNamed->typeArgs.empty()
                                ? Type::unknown()
-                               : receiverNamed->typeArgs.front());
+                               : receiverNamed->typeArgs.front()));
                     const auto unwrappedName = typeToString(unwrapped);
                     const bool vowel = !unwrappedName.empty() &&
                         std::string("AEIOUaeiou").find(unwrappedName.front()) !=
                             std::string::npos;
-                    const auto wanted = containsOpenType(unwrapped)
+                    const bool openUnwrapped = containsOpenType(unwrapped);
+                    const auto wanted = openUnwrapped
                         ? std::string("the unwrapped value")
                         : (vowel ? "an " : "a ") + unwrappedName;
-                    error(node.args.back() ? node.args.back()->location : expr.location,
-                          "`or` needs " + wanted + " to fall back to, but got " +
-                              (constructedWrapped
-                                   ? "`" + std::string(
-                                         std::get_if<ast::FunctionCall>(&node.args.back()->kind)
-                                             ? std::get<ast::FunctionCall>(node.args.back()->kind).name
-                                             : std::get<ast::MethodCall>(node.args.back()->kind).method) +
-                                         "(…)`"
-                                   : typeToString(fallback)) +
-                              " — `or` is what leaves the " +
-                              (optionalReceiver ? "optional" : "result") +
-                              "; pass a plain default, keep the value as it is, "
-                              "or `match` on it");
+                    const std::string wrapper = optionalReceiver ? "optional" : "result";
+                    if (wrappedFallback) {
+                        error(argument ? argument->location : expr.location,
+                              "`or` needs " + wanted + " to fall back to, but got " +
+                                  (constructedWrapped
+                                       ? "`" + std::string(
+                                             std::get_if<ast::FunctionCall>(&argument->kind)
+                                                 ? std::get<ast::FunctionCall>(argument->kind).name
+                                                 : std::get<ast::MethodCall>(argument->kind).method) +
+                                             "(…)`"
+                                       : typeToString(fallback)) +
+                                  " — `or` is what leaves the " + wrapper +
+                                  "; pass a plain default, keep the value as it is, "
+                                  "or `match` on it");
+                    } else if (functionFallback && !openUnwrapped &&
+                               !std::holds_alternative<UnknownType>(unwrapped->kind) &&
+                               !std::holds_alternative<FuncType>(unwrapped->kind)) {
+                        const std::string given = node.args.empty() ? "block" : "function";
+                        error(argument->location,
+                              "`or` needs " + wanted + " to fall back to, but got a " +
+                                  given + " — `or` never calls it, so the " + given +
+                                  " itself would be the answer; pass a plain default, "
+                                  "or `match` on the " + wrapper + " to compute one");
+                    }
                 }
             }
             return checkCall(callName, argTypes, expr.location,
@@ -9190,6 +9230,29 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (dominates(other, cand)) { dominated = true; break; }
             }
             if (!dominated) undominated.push_back(cand);
+        }
+        // Matching a candidate can bind an argument's type variable: a
+        // tagged literal's `re` result became `Regex` while the Regex
+        // overload of `replace` was tried, after the prelude's
+        // `replace(String, String, String)` had already matched it unbound.
+        // Choosing among the stale matches then sent `text.replace(re`y`, …)`
+        // to the String function and BEAM died with badarg (kexhq/kex#560).
+        // Keep only the candidates the arguments still match, as they now
+        // resolve. Every candidate already passed the arity check above, a
+        // defaulted trailing parameter left out included, so only the
+        // arguments actually passed are compared, as there.
+        {
+            std::vector<const Signature*> stillMatching;
+            for (const auto* candidate : undominated) {
+                bool matches = true;
+                for (size_t i = 0; matches && i < argTypes.size(); ++i)
+                    matches = argMatchesParam(resolve(argTypes[i]),
+                                              resolve(candidate->params[i]));
+                if (matches) stillMatching.push_back(candidate);
+            }
+            if (!stillMatching.empty() &&
+                stillMatching.size() < undominated.size())
+                undominated = std::move(stillMatching);
         }
         std::vector<const Signature*> distinct;
         for (const auto* candidate : undominated) {

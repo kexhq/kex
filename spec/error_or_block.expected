@@ -1,0 +1,7 @@
+spec/error_or_block.kex:5:74: error: `or` needs an Integer to fall back to, but got a block — `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:8:31: error: `or` needs a Void to fall back to, but got a block — `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:13:80: error: `or` needs an Integer to fall back to, but got a function — `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:15:79: error: `or` needs an Integer to fall back to, but got a function — `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:17:82: error: `or` needs an Integer to fall back to, but got a function — `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+spec/error_or_block.kex:19:46: error: `or` needs a String to fall back to, but got a function — `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the optional to compute one
+Aborted: 6 type errors — fix before running (use --no-check to skip).

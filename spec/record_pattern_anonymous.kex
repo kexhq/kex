@@ -42,6 +42,10 @@ main do
   let mp = { "value": "mv", "rest": "mr" }
   let { value, rest } = mp
   IO.printLine("map let ${value}/${rest}")
+  let { value: av, rest: ar } = { value: "av", rest: "ar" }
+  IO.printLine("atom map let ${av}/${ar}")
+  let { kind } = { "kind": "string key", kind: "atom key" }
+  IO.printLine("both keys ${kind}")
   match mp do
     { value, rest } => IO.printLine("map match ${value}/${rest}")
     _               => IO.printLine("map match fell through (known gap)")

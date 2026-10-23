@@ -1,0 +1,16 @@
+# Bare top-level expressions beside an explicit `main` run in source order:
+# the ones written before `main` first, then its body, then the ones after.
+# The walker always did this; BEAM dropped every bare expression as soon as
+# an explicit `main` existed.
+let greeting = "hello"
+
+let shout(text: String) -> String = text.upperCase
+
+IO.printLine("before: ${greeting}")
+
+main do
+  let local = "main"
+  IO.printLine("${local}: ${shout(greeting)}")
+end
+
+IO.printLine("after")

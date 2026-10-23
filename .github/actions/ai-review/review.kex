@@ -389,11 +389,13 @@ end
 
 # The last `kex-review` block. Read strictly first, to the end of the text,
 # so backticks inside a comment survive; when the agent wrote prose after
-# the fence, fall back to stopping at the first closing fence.
+# the fence, fall back to stopping at the first closing fence. The label may
+# sit on the line after its fence: a model fenced the block in four backticks
+# and wrote `kex-review` below them, and the whole review was thrown away.
 parseReport : String -> Report or! String
 let parseReport(text) do
-  let strict = text.matches(re`(?s).*\x60{3,}kex-review[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
-  let lazy = text.matches(re`(?s).*\x60{3,}kex-review[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
+  let strict = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
+  let lazy = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
   # Qualified: the UFCS spelling lowers to String's replace on BEAM
   # (kexhq/kex#560).
   let block = match strict do
@@ -440,8 +442,8 @@ end
 # dropped. When in doubt, a comment is never destroyed.
 parseReconcile : String -> [Marked] -> ([Marked], [Integer]) or! String
 foul parseReconcile(text, previous) do
-  let closed = text.matches(re`(?s).*\x60{3,}kex-reconcile[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
-  let open = text.matches(re`(?s).*\x60{3,}kex-reconcile[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
+  let closed = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
+  let open = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
   let source = match closed.or(open.or("")) do
     ""    => return Error("the reconciliation does not end with a ```kex-reconcile block")
     found => found
@@ -566,7 +568,7 @@ let reconcilePrompt(previous, sticky, findings) do
   end
   let newest = current.empty? then "(the newest review found nothing to report)" else current
 
-  `
+  $`
     Another review round is about to publish on this pull request, and you reconcile it with what an earlier round left behind. The pull request changed since those comments: lines may have moved and code may have been fixed. You may read the code in the working tree to check.
 
     Decide, for every previous comment, whether the problem it describes still stands in the code today:
