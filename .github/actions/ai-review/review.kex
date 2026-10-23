@@ -1,0 +1,785 @@
+# AI review of a pull request on a free OpenCode model, posted back to it.
+#
+# Three phases:
+#
+# 1. Review (INPUT_MODEL): the agent diffs the PR against its base and ends
+#    with a `kex-review` JSON block of findings.
+# 2. Reconcile (INPUT_FAST_MODEL): with the earlier round's inline comments
+#    and the new findings in context, a second agent decides which earlier
+#    comments still stand (keep) and which are addressed (close).
+# 3. Publish (this file, deterministic): closed comments are resolved, or
+#    deleted when the token cannot resolve; repeated findings update their
+#    earlier comment; new findings post inline; one sticky verdict comment is
+#    rewritten in place. The agents only decide, this code renders.
+#
+# A run that produces no review exits 1, so a missing model or a provider
+# outage turns the check red instead of reading like a clean review.
+#
+# GitHub is reached through `gh api`, which owns the token, pagination, and
+# GraphQL; `--jq` flattens each response to one small object per line.
+using JSON
+using Regex
+
+main(args, env) do
+  let config = Config.read(env).orFail
+
+  # ----- Phase 1: the review. -----
+  let skill = FS.File.read(config.skill).or("")
+  fail("cannot read the skill at ${config.skill}") if skill.empty?
+  let reportText = prompt(config, skill, config.reviewModel)
+  IO.printLine(reportText)
+  let report = parseReport(reportText).orFail
+
+  let threshold = rank(config.minimumSeverity)
+  let shown = report.findings.filter { |f| rank(f.severity) >= threshold }
+  let published = mergeByLocation(shown)
+  let dropped = report.findings.count - shown.count
+  if dropped > 0
+    IO.printLine("ai-review: ${dropped} finding(s) below ${config.minimumSeverity} are not published")
+  end
+
+  if config.pullRequest == None
+    IO.printError("ai-review: not talking to GitHub, GITHUB_REPOSITORY or GITHUB_PR_NUMBER is not set")
+    System.exit(0)
+  end
+  let github = GitHub {
+    repository: config.repository,
+    pullRequest: config.pullRequest.or(""),
+    scratch: config.scratch
+  }
+  let previous = github.markedComments.orFail
+  let sticky = github.sticky.orFail
+
+  # ----- Phase 2: reconcile with the earlier round. -----
+  let (kept, closeIds) = if previous.empty?
+    IO.printLine("ai-review: no earlier round to reconcile with")
+    ([], [])
+  else
+    let text = prompt(config, reconcilePrompt(previous, sticky, published), config.fastModel)
+    IO.printLine(text)
+    parseReconcile(text, previous).orFail
+  end
+  if !previous.empty?
+    let counts = "keeps ${kept.count} and closes ${closeIds.count} of ${previous.count}"
+    IO.printLine("ai-review: reconciliation ${counts} comment(s)")
+  end
+
+  if !config.post?
+    let verb = sticky.set? then "update" else "create"
+    let plan = "post ${published.count} finding(s), closing ${closeIds.count} comment(s)"
+    IO.printLine("ai-review: would ${verb} the sticky comment and ${plan}")
+    System.exit(0)
+  end
+
+  # ----- Phase 3: publish, deterministically. -----
+  let resolved = closeIds.filter do |id|
+    if github.resolveThread(id)
+      true
+    else
+      github.deleteComment(id).orFail
+      false
+    end
+  end.count
+
+  let outcomes = published.map do |finding|
+    match kept.find { |c| c.key == finding.key } do
+      Just(repeated) => do
+        github.updateInline(repeated.id, inlineBody(finding, repeated.fileLevel?)).orFail
+        :updated
+      end
+      None => match config.headSha do
+        Just(sha) => github.place(sha, finding).orFail
+        None => :unanchored
+      end
+    end
+  end
+  let unanchored = published.zip(outcomes).flatMap do |pair|
+    let (finding, outcome) = pair
+    outcome == :unanchored then [finding] else []
+  end
+
+  let repeatedKeys = published.map(&.key)
+  let keptUnmatched = kept.reject { |c| repeatedKeys.contains?(c.key) }
+  let blocking = rank("high")
+  let newBlocks = published.any? { |f| rank(f.severity) >= blocking }
+  let oldBlocks = keptUnmatched.any? { |c| rank(c.severity) >= blocking }
+  let ready = !newBlocks && !oldBlocks
+
+  let body = stickyBody(ready, report.summary, published, keptUnmatched, unanchored)
+  github.writeSticky(sticky, body).orFail
+
+  let action = sticky.set? then "updated" else "created"
+  let verdict = ready then "✅ ready" else "🚩 not ready"
+  let created = outcomes.filter { |o| o == :inline || o == :fileLevel }.count
+  let updated = outcomes.filter { |o| o == :updated }.count
+  let deleted = closeIds.count - resolved
+  IO.printLine("ai-review: ${action} the sticky comment, verdict ${verdict}")
+  IO.printLine("ai-review: inline ${created} created and ${updated} updated, ${unanchored.count} not anchored")
+  IO.printLine("ai-review: closed ${resolved} resolved and ${deleted} deleted")
+end
+
+# The fixed vocabulary of a review. A module rather than top-level `let`s,
+# which would belong to the script's implicit main and stay out of the spec
+# (kexhq/kex#559).
+module Vocabulary do
+  # Every severity, lowest first.
+  let severities = ["low", "medium", "high", "critical"]
+  # Leads the one verdict comment, so a run finds it again.
+  let stickyMarker = "<!-- kex-review:sticky -->"
+  # Leads an inline comment, followed by its `file|line|severity` key.
+  let inlinePrefix = "<!-- kex-review:inline "
+  # A Markdown code fence.
+  let fence = "```"
+end
+
+# Everything the action passes in through the environment.
+record Config do
+  skill           : String
+  reviewModel     : String
+  fastModel       : String
+  minimumSeverity : String
+  post?           : Bool
+  repository      : String
+  pullRequest     : String?
+  headSha         : String?
+  scratch         : String
+end
+
+module Config do
+  read : ENV -> Config or! String
+  foul read(env) do
+    let path = setting(env, "INPUT_SKILL").or(".github/actions/ai-review")
+    let minimum = setting(env, "INPUT_MIN_SEVERITY").or("medium")
+    if !Vocabulary.severities.contains?(minimum)
+      let allowed = Vocabulary.severities.join(", ")
+      return Error("`min-severity` must be one of ${allowed}; got ${minimum}")
+    end
+    let repository = setting(env, "GITHUB_REPOSITORY")
+    Ok(Config {
+      skill: path.endsWith?(".md") then path else "${path}/SKILL.md",
+      reviewModel: setting(env, "INPUT_MODEL").or("opencode/glm-5.3-flash-free#high"),
+      fastModel: setting(env, "INPUT_FAST_MODEL").or("opencode/glm-5.3-flash-free#low"),
+      minimumSeverity: minimum,
+      post?: setting(env, "INPUT_COMMENT") != Just("false"),
+      repository: repository.or(""),
+      pullRequest: repository.flatMap { |_| setting(env, "GITHUB_PR_NUMBER") },
+      headSha: setting(env, "GITHUB_PR_HEAD_SHA"),
+      scratch: setting(env, "RUNNER_TEMP").or("/tmp")
+    })
+  end
+
+  private do
+    # An environment variable, trimmed, with empty meaning unset.
+    let setting(env, name) = env.get(name).map(&.trim).flatMap(~present)
+
+    let present(value) = value.empty? then None else Just(value)
+  end
+end
+
+# One finding of a review.
+record Finding do
+  file      : String
+  startLine : Integer
+  endLine   : Integer?
+  severity  : String
+  comment   : String
+end
+
+make Finding do
+  key :> String
+  let key = "${@file}|${@startLine}"
+
+  # The same finding over the lines `first` to `last`.
+  spanning :> Integer -> Integer? -> Finding
+  let spanning(first, last) = New { startLine: first, endLine: last }
+
+  anchor :> String
+  let anchor = match @endLine do
+    Just(last) when last != @startLine => "${@file}:${@startLine}–${last}"
+    _                                  => "${@file}:${@startLine}"
+  end
+end
+
+# An inline comment of an earlier round, read back through its marker.
+record Marked do
+  id         : Integer
+  file       : String
+  startLine  : Integer
+  severity   : String
+  fileLevel? : Bool
+  body       : String
+end
+
+make Marked do
+  key :> String
+  let key = "${@file}|${@startLine}"
+
+  # The comment's prose, without the marker and the location header.
+  text :> String
+  let text = @body.lines.drop(2).reject { |line| line.startsWith?("<!--") }.join(" ").trim
+end
+
+# The review the first agent ends with.
+record Report do
+  summary  : String
+  findings : [Finding]
+end
+
+# The shapes `construct` checks the agents' and gh's JSON against. Each one
+# names only what is read, and `construct` drops any other key first, so an
+# agent adding a field of its own is not an error.
+record RawReport do
+  summary  : String
+  findings : [Any]
+end
+
+record RawFinding do
+  file      : String
+  startLine : Integer
+  endLine   : Integer?
+  severity  : String
+  comment   : String
+end
+
+record RawReconcile do
+  keep  : [Integer] = []
+  close : [Integer] = []
+end
+
+# A comment as `gh api --jq '{id, body}'` prints it.
+record RawComment do
+  id   : Integer
+  body : String
+end
+
+# A review thread as the GraphQL query in `resolveThread` is flattened to.
+record RawThread do
+  id        : String
+  resolved? : Bool
+  commentId : Integer?
+end
+
+# A text part or an error, as `opencode run --format json` prints them. An
+# error is either `{type, message}` or `{name, data: {message, isRetryable}}`;
+# the jq filter in `runAgent` flattens both into this.
+record RawEvent do
+  kind       : String
+  message    : String = ""
+  text       : String = ""
+  retryable? : Bool   = false
+end
+
+# What one `opencode run` came back with.
+record AgentRun do
+  text       : String
+  failure    : String?
+  retryable? : Bool    = false
+end
+
+rank : String -> Integer
+let rank(severity) = Vocabulary.severities.indexOf(severity).or(0)
+
+fail : String -> Never
+foul fail(message) do
+  die(message.startsWith?("ai-review:") then message else "ai-review: ${message}")
+end
+
+# The value, or the run fails with the error.
+orFail : Result<X, String> -> X
+foul orFail(result) = match result do
+  Ok(value)      => value
+  Error(message) => fail(message)
+end
+
+# Run one prompt through the OpenCode CLI and return the final message's
+# text. It runs inside the OpenCode identity, which is what makes the free
+# models usable from a CI runner without credentials.
+#
+# The prompt goes over stdin, since skill text starts with `---`, which the
+# CLI's flag parser trips on. The CLI can exit 0 on failure and non-zero
+# mid-stream while still producing a review, so the NDJSON stream is the
+# source of truth. A run that failed retryably with no text at all is tried
+# again a few times.
+prompt : Config -> String -> String -> String
+foul prompt(config, input, model) do
+  let file = "${config.scratch}/kex-review-prompt.md"
+  fail("cannot write the prompt to ${file}") if FS.File.write(file, input).error?
+
+  let attempt = retrying(file, model, [5, 15, 45])
+  fail("the agent failed: ${attempt.failure.or("it produced no text")}") if attempt.text.trim.empty?
+  if let Just(failure) = attempt.failure
+    IO.printError("ai-review: the run finished alongside an error (${failure}), keeping the review")
+  end
+  attempt.text
+end
+
+retrying : String -> String -> [Integer] -> AgentRun
+foul retrying(file, model, delays) do
+  let attempt = runAgent(file, model)
+  return attempt if !attempt.text.trim.empty? || !attempt.retryable?
+  match delays do
+    [] => attempt
+    [seconds | rest] => do
+      let reason = attempt.failure.or("")
+      IO.printError("ai-review: agent attempt failed (${reason}), retrying in ${seconds}s")
+      Task.sleep(Duration.seconds(seconds))
+      retrying(file, model, rest)
+    end
+  end
+end
+
+runAgent : String -> String -> AgentRun
+foul runAgent(promptFile, model) do
+  # `provider/model#variant` goes to the CLI as written: 2.0 takes the
+  # effort variant after `#` and has no `--variant` flag.
+  # jq keeps one line per event that matters: every text part and every
+  # error.
+  let filter = `
+    select(.type == "text" or .type == "error")
+    | if .type == "text"
+      then {kind: "text", text: (.part.text // ""), message: (.part.messageID // "")}
+      else {kind: "error",
+            message: ((.error.type // .error.name // "unknown") + ": "
+                      + (.error.message // .error.data.message // "the agent run failed")),
+            "retryable?": ((.error.data.isRetryable // false)
+                           or ((.error.type // "") | startswith("provider.")))}
+      end
+  `
+  let quoted = filter.replace("'", "'\\''")
+  let script = "opencode run --format json --auto --model \"$2\" < \"$1\" | jq -c --unbuffered '${quoted}'"
+  let argv = ["-c", "set -o pipefail; ${script}", "sh", promptFile, model]
+  # A stalled provider can hold the CLI open for an hour; the budget kills
+  # its whole process group and the run fails instead.
+  let result = match Process.run("sh", argv, 15 * 60 * 1000) do
+    Ok(result)     => result
+    Error(message) => return AgentRun { text: "", failure: Just("opencode: ${message}") }
+  end
+  IO.printError(result.stderr) if !result.stderr.empty?
+
+  let events = objects(result.stdout, "RawEvent")
+  # The answer can arrive split across messages, cut mid-sentence, so every
+  # text part joins in order; the parsers read the LAST fenced block.
+  let text = events.filter { |e| e.kind == "text" }.map(&.text).join("")
+  let error = events.find { |e| e.kind == "error" }
+
+  let silentExit = text.trim.empty? && result.exitCode != 0
+  let failure = match error do
+    Just(e) => Just(e.message)
+    None    => silentExit then Just("opencode exited with ${result.exitCode}") else None
+  end
+  AgentRun { text: text, failure: failure, retryable?: error.map(&.retryable?).or(false) }
+end
+
+# Build the record type `name` from a parsed JSON object, keeping only the
+# keys it declares. JSON has no `Just`, so a value for an optional field is
+# wrapped here and a `null` one dropped (kexhq/kex#561).
+construct : String -> Any -> Result<Any, String>
+let construct(name, value) do
+  return Error("expected an object for ${name}") if Type.of(value).name != "Map"
+  let picked = Type.named(name).fields.reduce({}) do |acc, field|
+    let optional = field.valueType.name == "Option"
+    match value[field.name] do
+      Just(None)  => acc
+      Just(given) => acc.put(field.name, optional then Just(given) else given)
+      None        => acc
+    end
+  end
+  Type.named(name).construct(picked)
+end
+
+# The last `kex-review` block. Read strictly first, to the end of the text,
+# so backticks inside a comment survive; when the agent wrote prose after
+# the fence, fall back to stopping at the first closing fence.
+parseReport : String -> Report or! String
+let parseReport(text) do
+  let strict = text.matches(re`(?s).*\x60{3,}kex-review[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
+  let lazy = text.matches(re`(?s).*\x60{3,}kex-review[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
+  # Qualified: the UFCS spelling lowers to String's replace on BEAM
+  # (kexhq/kex#560).
+  let block = match strict do
+    Just(rest) => Regex.replace(rest, re`\x60{3,}\s*\z`, "").trim
+    None       => return Error("the review does not end with a ```kex-review block")
+  end
+
+  let parsed = match JSON.parse(block) do
+    Ok(value) => value
+    Error(error) => match JSON.parse(lazy.or(block)) do
+      Ok(value) => value
+      Error(_)  => return Error("the review report is not valid JSON: ${error}")
+    end
+  end
+  let raw: RawReport = match construct("RawReport", parsed) do
+    Ok(report)     => report
+    Error(message) => return Error("the review report needs `summary` and `findings`: ${message}")
+  end
+
+  let findings = raw.findings.map do |item|
+    let f: RawFinding = match construct("RawFinding", item) do
+      Ok(finding) => finding
+      Error(message) => return Error("a finding needs `file`, `startLine`, `severity`, `comment`: ${message}")
+    end
+    if !Vocabulary.severities.contains?(f.severity) || f.startLine < 1 || f.file.empty?
+      return Error("a finding has an unusable location or severity: ${JSON.stringify(item)}")
+    end
+    # A range written backwards is turned around: the comments API needs
+    # its ends in order.
+    let plain = Finding {
+      file: f.file, startLine: f.startLine, endLine: None, severity: f.severity, comment: f.comment
+    }
+    match f.endLine do
+      Just(last) when last >= 1 && last < f.startLine => plain.spanning(last, Just(f.startLine))
+      Just(last) when last >= 1                       => plain.spanning(f.startLine, Just(last))
+      _                                               => plain
+    end
+  end
+  Ok(Report { summary: raw.summary, findings: findings })
+end
+
+# The last `kex-reconcile` block. Every earlier comment lands in keep or close:
+# an id in neither or in both keeps, and an id the agent invented is
+# dropped. When in doubt, a comment is never destroyed.
+parseReconcile : String -> [Marked] -> ([Marked], [Integer]) or! String
+foul parseReconcile(text, previous) do
+  let closed = text.matches(re`(?s).*\x60{3,}kex-reconcile[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
+  let open = text.matches(re`(?s).*\x60{3,}kex-reconcile[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
+  let source = match closed.or(open.or("")) do
+    ""    => return Error("the reconciliation does not end with a ```kex-reconcile block")
+    found => found
+  end
+  let decided: RawReconcile = match JSON.parse(source.trim) do
+    Ok(value) => match construct("RawReconcile", value) do
+      Ok(lists)      => lists
+      Error(message) => return Error("the reconciliation needs `keep` and `close` id lists: ${message}")
+    end
+    Error(error) => return Error("the reconciliation is not valid JSON: ${error}")
+  end
+
+  let known = previous.map(&.id)
+  let unknown = (decided.keep + decided.close).reject { |id| known.contains?(id) }
+  if !unknown.empty?
+    IO.printError("ai-review: the evaluator spoke of unknown comment ids ${unknown.join(", ")}, ignored")
+  end
+
+  let closeIds = decided.close.filter { |id| known.contains?(id) && !decided.keep.contains?(id) }
+  let kept = previous.reject { |c| closeIds.contains?(c.id) }
+  kept.each do |c|
+    if !decided.keep.contains?(c.id)
+      IO.printError("ai-review: the evaluator did not decide comment ${c.id}, keeping it")
+    end
+  end
+  Ok((kept, closeIds))
+end
+
+# Findings at the same file and line merge into one comment with the higher
+# severity, so no comment silently overwrites another. Most severe first.
+mergeByLocation : [Finding] -> [Finding]
+let mergeByLocation(findings) do
+  let merged = findings.map(&.key).uniq.flatMap do |key|
+    match findings.filter { |f| f.key == key } do
+      [] => []
+      [first | _] => do
+        let group = findings.filter { |f| f.key == key }
+        let last = group.map { |f| f.endLine.or(f.startLine) }.max.or(first.startLine)
+        [Finding {
+          file: first.file,
+          startLine: first.startLine,
+          endLine: last > first.startLine then Just(last) else None,
+          severity: group.max { |f| rank(f.severity) }.map(&.severity).or(first.severity),
+          comment: group.map(&.comment).join("\n\n---\n\n")
+        }]
+      end
+    end
+  end
+  merged.sort { |a, b| rank(a.severity) > rank(b.severity) }
+end
+
+# A one-line squash of a text, stopping at the limit with an ellipsis.
+excerpt : String -> Integer -> String
+let excerpt(text, limit) do
+  let line = Regex.replace(text, re`\s+`, " ").trim
+  line.length > limit then "${line.take(limit - 1)}…" else line
+end
+
+# The body of an inline comment: the marker carries the key and severity, and
+# the header repeats the location so the comment reads on its own.
+inlineBody : Finding -> Bool -> String
+let inlineBody(finding, fileLevel) do
+  let level = fileLevel then "|file" else ""
+  let fallback = fileLevel then " (file-level fallback)" else ""
+  let key = "${finding.file}|${finding.startLine}|${finding.severity}"
+  [
+    "${Vocabulary.inlinePrefix}${key}${level} -->",
+    "**`${finding.anchor}`${fallback} · ${finding.severity}**",
+    "",
+    finding.comment
+  ].join("\n")
+end
+
+# The sticky comment: verdict, judgement, and a finding index, with the kept
+# comments no finding repeated and any unanchored finding spelled out, since
+# neither has an inline comment of its own.
+stickyBody : Bool -> String -> [Finding] -> [Marked] -> [Finding] -> String
+let stickyBody(ready, summary, findings, keptUnmatched, unanchored) do
+  let title = ready then "✅ Ready to merge" else "🚩 Not ready to merge"
+  let findingLines = section("Findings (${findings.count})", findings.map do |f|
+    "- `${f.anchor}` · `${f.severity}` — ${excerpt(f.comment, 140)}"
+  end)
+  let keptLines = section("Still open from earlier rounds", keptUnmatched.map do |c|
+    "- `${c.file}:${c.startLine}` · `${c.severity}` — ${excerpt(c.text, 140)}"
+  end)
+  let unanchoredHeading = "Findings that could not anchor in the diff"
+  let unanchoredLines = section(unanchoredHeading, unanchored.flatMap do |f|
+    ["#### `${f.anchor}` · `${f.severity}`", "", f.comment.trim, ""]
+  end)
+  let note = "<sub>AI review on a free OpenCode model. It can be wrong; reply on a comment to argue it.</sub>"
+  let head = [Vocabulary.stickyMarker, "", "## ${title}", "", summary.trim]
+
+  let body = (head + findingLines + keptLines + unanchoredLines + ["", note]).join("\n").trim
+  return body if body.byteSize < 55000
+
+  # GitHub caps a comment at 65,536 bytes.
+  let short = "${findings.count} findings, the runner log has the complete text"
+  [
+    Vocabulary.stickyMarker, "", "## ${title}", "", excerpt(summary, 400), "",
+    "(the review was too long to list in full; ${short})"
+  ].join("\n")
+end
+
+# A `###` section of the sticky comment, or nothing when it has no lines.
+section : String -> [String] -> [String]
+let section(heading, lines) = lines.empty? then [] else ["", "### ${heading}", ""] + lines
+
+# The prompt for the second agent: what the earlier round left behind, what
+# the newest found, and the answer's exact shape.
+reconcilePrompt : [Marked] -> Optional<RawComment> -> [Finding] -> String
+let reconcilePrompt(previous, sticky, findings) do
+  let comments = previous.map do |c|
+    let level = c.fileLevel? then ", file-level" else ""
+    "- ID ${c.id} — `${c.file}:${c.startLine}` · `${c.severity}${level}`\n  «${c.text.take(600)}»"
+  end.join("\n")
+  let current = findings.map do |f|
+    "- `${f.anchor}` · `${f.severity}`\n  «${excerpt(f.comment, 600)}»"
+  end.join("\n")
+  let verdict = match sticky do
+    None    => "this is the first round"
+    Just(s) => s.body.contains?("## ✅") then "Ready to merge" else "Not ready to merge"
+  end
+  let newest = current.empty? then "(the newest review found nothing to report)" else current
+
+  `
+    Another review round is about to publish on this pull request, and you reconcile it with what an earlier round left behind. The pull request changed since those comments: lines may have moved and code may have been fixed. You may read the code in the working tree to check.
+
+    Decide, for every previous comment, whether the problem it describes still stands in the code today:
+
+    - **keep** when the code still has the problem — either because the newest findings report it again, or because the problem persists although the newest review no longer touches those lines
+    - **close** when the code now addresses the problem, or when the comment is outdated or simply wrong
+
+    Judge by what the comments say about the code, not by similarity of wording between the two lists.
+
+    <previous comments>
+    ${comments}
+    </previous comments>
+
+    <newest findings>
+    ${newest}
+    </newest findings>
+
+    <previous verdict>
+    ${verdict}
+    </previous verdict>
+
+    Finish your response with exactly one fenced code block labelled kex-reconcile, and nothing outside it. The block is one valid JSON object, and every previous comment id appears in exactly one of the two lists:
+
+    ${Vocabulary.fence}kex-reconcile
+    { "keep": [4317788349], "close": [4317789184] }
+    ${Vocabulary.fence}
+
+    Use empty lists when they apply. When in doubt about a comment, keep it.
+  `
+end
+
+# The GitHub calls publishing needs, all through `gh api`.
+record GitHub do
+  repository  : String
+  pullRequest : String
+  scratch     : String
+end
+
+make GitHub do
+  # Every inline comment of an earlier round.
+  markedComments :> [Marked] or! String
+  foul markedComments do
+    let comments = this.listComments("repos/${@repository}/pulls/${@pullRequest}/comments").try
+    Ok(comments.flatMap { |c| parseMarker(c).map { |m| [m] }.or([]) })
+  end
+
+  # The sticky verdict comment of an earlier round, if one was published.
+  sticky :> Optional<RawComment> or! String
+  foul sticky do
+    let comments = this.listComments("repos/${@repository}/issues/${@pullRequest}/comments").try
+    Ok(comments.find { |c| c.body.startsWith?(Vocabulary.stickyMarker) })
+  end
+
+  # Resolve the conversation one of this action's comments opened. The
+  # workflow's own token cannot, so false tells the caller to delete.
+  resolveThread :> Integer -> Bool
+  foul resolveThread(commentId) do
+    let (owner, name) = match @repository.split("/") do
+      [o, n] => (o, n)
+      _      => return false
+    end
+    let query = `
+      query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $number) {
+            reviewThreads(first: 100, after: $endCursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
+            }
+          }
+        }
+      }
+    `
+    let flatten = `
+      .data.repository.pullRequest.reviewThreads.nodes[]
+      | {id, "resolved?": .isResolved, commentId: .comments.nodes[0].databaseId}
+    `
+    let listed = gh([
+      "api", "graphql", "--paginate",
+      "-F", "owner=${owner}", "-F", "name=${name}", "-F", "number=${@pullRequest}",
+      "-f", "query=${query}", "--jq", flatten
+    ])
+    let threads = match listed do
+      Ok(out)  => objects(out, "RawThread")
+      Error(_) => return false
+    end
+    let thread = match threads.find { |t| t.commentId == Just(commentId) } do
+      Just(t) => t
+      None    => return false
+    end
+    return true if thread.resolved?
+
+    let mutation = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }"
+    let answer = gh([
+      "api", "graphql", "-f", "query=${mutation}", "-f", "id=${thread.id}",
+      "--jq", ".data.resolveReviewThread.thread.isResolved"
+    ])
+    match answer do
+      Ok(out) => out.trim == "true"
+      Error(message) => do
+        IO.printError("ai-review: resolving comment ${commentId} failed: ${excerpt(message, 300)}")
+        false
+      end
+    end
+  end
+
+  deleteComment :> Integer -> Void or! String
+  foul deleteComment(id) do
+    this.send("DELETE", "repos/${@repository}/pulls/comments/${id}", None).map { |_| () }
+  end
+
+  updateInline :> Integer -> String -> Void or! String
+  foul updateInline(id, body) do
+    let path = "repos/${@repository}/pulls/comments/${id}"
+    this.send("PATCH", path, Just({ "body": body })).map { |_| () }
+  end
+
+  # Create one finding's comment: line-anchored where GitHub takes it,
+  # file-level where the line is outside the diff's hunks, and :unanchored
+  # when not even the file changed — then it rides along in the sticky.
+  place :> String -> Finding -> Atom or! String
+  foul place(headSha, finding) do
+    let path = "repos/${@repository}/pulls/${@pullRequest}/comments"
+    let lines = match finding.endLine do
+      Just(last) when last > finding.startLine =>
+        { "line": last, "start_line": finding.startLine, "start_side": "RIGHT" }
+      _ => { "line": finding.startLine }
+    end
+    let inline = {
+      "commit_id": headSha, "path": finding.file, "side": "RIGHT", "body": inlineBody(finding, false)
+    }
+    match this.send("POST", path, Just(inline.merge(lines))) do
+      Ok(_)          => return Ok(:inline)
+      Error(message) => return Error(message) if !message.contains?("HTTP 422")
+    end
+
+    let fileLevel = {
+      "commit_id": headSha, "path": finding.file, "subject_type": "file",
+      "body": inlineBody(finding, true)
+    }
+    match this.send("POST", path, Just(fileLevel)) do
+      Ok(_)          => Ok(:fileLevel)
+      Error(message) => message.contains?("HTTP 422") then Ok(:unanchored) else Error(message)
+    end
+  end
+
+  writeSticky :> Optional<RawComment> -> String -> Void or! String
+  foul writeSticky(existing, body) do
+    let path = match existing do
+      Just(c) => "repos/${@repository}/issues/comments/${c.id}"
+      None    => "repos/${@repository}/issues/${@pullRequest}/comments"
+    end
+    this.send(existing.set? then "PATCH" else "POST", path, Just({ "body": body })).map { |_| () }
+  end
+
+  private do
+    foul listComments(path) do
+      gh(["api", "--paginate", "${path}?per_page=100", "--jq", ".[] | {id, body}"]).map do |out|
+        objects(out, "RawComment")
+      end
+    end
+
+    # One REST call with an optional JSON body, passed through a file so a
+    # long comment never meets the argument limit.
+    foul send(method, path, body) do
+      let args = match body do
+        Just(fields) => do
+          let file = "${@scratch}/kex-review-body.json"
+          fail("cannot write ${file}") if FS.File.write(file, JSON.stringify(fields)).error?
+          ["api", "--method", method, path, "--input", file]
+        end
+        None => ["api", "--method", method, path]
+      end
+      gh(args)
+    end
+  end
+end
+
+# Run `gh` and answer its stdout, or why it failed: gh prints the HTTP
+# status, `(HTTP 422)` for instance, on stderr.
+gh : [String] -> String or! String
+foul gh(args) = match Process.run("gh", args) do
+  Ok(result) => do
+    let command = args.take(4).join(" ")
+    let reason = "${result.stderr.trim} ${excerpt(result.stdout, 300)}"
+    result.exitCode == 0 then Ok(result.stdout) else Error("gh ${command}: ${reason}")
+  end
+  Error(message) => Error("cannot start gh: ${message}")
+end
+
+# One record per line of JSON output; a line that does not fit is skipped.
+objects : String -> String -> [Any]
+let objects(output, name) = output.lines.filter { |line| !line.trim.empty? }.flatMap do |line|
+  match JSON.parse(line) do
+    Ok(value) => construct(name, value).map { |r| [r] }.or([])
+    Error(_)  => []
+  end
+end
+
+# The marker reads `file|startLine|severity`, plus `|file` when the comment
+# fell back to file level.
+parseMarker : RawComment -> Marked?
+let parseMarker(comment) do
+  let marker = re`^<!-- kex-review:inline ([^|]+)\|(\d+)\|(low|medium|high|critical)(\|file)? -->`
+  comment.body.matches(marker).flatMap do |m|
+    let line = m.get(2).flatMap { |text| text.to(Integer) }.or(0)
+    line < 1 then None else Just(Marked {
+      id: comment.id,
+      file: m.get(1).or(""),
+      startLine: line,
+      severity: m.get(3).or("medium"),
+      fileLevel?: m.get(4).set?,
+      body: comment.body
+    })
+  end
+end

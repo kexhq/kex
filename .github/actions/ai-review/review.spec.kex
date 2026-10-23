@@ -1,0 +1,97 @@
+let fence = "```"
+
+let reportOf(json) = "Some prose first.\n\n${fence}kex-review\n${json}\n${fence}\n"
+
+let finding(file, line, severity) = Finding { file: file, startLine: line, endLine: None, severity: severity, comment: "c" }
+
+let marked(id, file, line, severity) = Marked {
+  id: id, file: file, startLine: line, severity: severity, fileLevel?: false,
+  body: "${Vocabulary.inlinePrefix}${file}|${line}|${severity} -->\n**x**\n\nthe problem"
+}
+
+describe("parseReport") do
+  it("reads findings and turns a backwards range around") do
+    let text = reportOf("{\"summary\": \"s\", \"findings\": [{\"file\": \"a.cxx\", \"startLine\": 9, \"endLine\": 3, \"severity\": \"high\", \"comment\": \"x\"}]}")
+    let report = parseReport(text).try
+    assert(report.summary == "s")
+    assert(report.findings.count == 1)
+    let f = report.findings[0].try
+    assert(f.startLine == 3)
+    assert(f.endLine == Just(9))
+  end
+
+  it("keeps backticks inside a comment") do
+    let text = reportOf("{\"summary\": \"s\", \"findings\": [{\"file\": \"a\", \"startLine\": 1, \"severity\": \"low\", \"comment\": \"use ${fence}x${fence}\"}]}")
+    assert(parseReport(text).try.findings[0].try.comment == "use ${fence}x${fence}")
+  end
+
+  it("falls back to the first fence when prose follows the block") do
+    let text = "${reportOf("{\"summary\": \"s\", \"findings\": []}")}\nA closing note."
+    assert(parseReport(text).try.summary == "s")
+  end
+
+  it("reads the last block when the agent quoted an earlier one") do
+    let draft = reportOf("{\"summary\": \"draft\", \"findings\": []}")
+    let answer = reportOf("{\"summary\": \"final\", \"findings\": []}")
+    assert(parseReport("${draft}\n${answer}").try.summary == "final")
+  end
+
+  it("ignores keys it does not read") do
+    let text = reportOf("{\"summary\": \"s\", \"verdict\": \"ok\", \"findings\": [{\"file\": \"a\", \"startLine\": 1, \"severity\": \"low\", \"comment\": \"x\", \"title\": \"t\"}]}")
+    assert(parseReport(text).try.findings.count == 1)
+  end
+
+  it("fails loudly on a missing block, bad JSON, or a bad severity") do
+    assert(parseReport("no block here").error?)
+    assert(parseReport(reportOf("{not json")).error?)
+    assert(parseReport(reportOf("{\"summary\": 3, \"findings\": []}")).error?)
+    assert(parseReport(reportOf("{\"summary\": \"s\", \"findings\": [{\"file\": \"a\", \"startLine\": 1, \"severity\": \"huge\", \"comment\": \"x\"}]}")).error?)
+  end
+end
+
+describe("parseReconcile") do
+  it("closes only known ids that are not also kept") do
+    let previous = [marked(1, "a", 1, "high"), marked(2, "b", 2, "low"), marked(3, "c", 3, "low")]
+    let text = "${fence}kex-reconcile\n{\"keep\": [3], \"close\": [2, 3, 99]}\n${fence}\nnotes"
+    let (kept, closeIds) = parseReconcile(text, previous).try
+    assert(closeIds == [2])
+    assert(kept.map(&.id) == [1, 3])
+  end
+
+  it("fails on a missing block") do
+    assert(parseReconcile("nothing", []).error?)
+  end
+end
+
+describe("mergeByLocation") do
+  it("merges one location into the higher severity, most severe first") do
+    let merged = mergeByLocation([finding("a", 1, "low"), finding("b", 2, "medium"), finding("a", 1, "critical")])
+    assert(merged.map(&.key) == ["a|1", "b|2"])
+    assert(merged[0].try.severity == "critical")
+    assert(merged[0].try.comment == "c\n\n---\n\nc")
+  end
+end
+
+describe("markers") do
+  it("reads back what inlineBody writes") do
+    let f = Finding { file: "src/x.cxx", startLine: 4, endLine: Just(6), severity: "high", comment: "bad" }
+    let read = parseMarker(RawComment { id: 7, body: inlineBody(f, true) }).try
+    assert(read.key == "src/x.cxx|4")
+    assert(read.severity == "high")
+    assert(read.fileLevel?)
+    assert(read.text == "bad")
+  end
+
+  it("ignores comments that are not ours") do
+    assert(parseMarker(RawComment { id: 1, body: "LGTM" }) == None)
+  end
+end
+
+describe("stickyBody") do
+  it("leads with the marker and the verdict") do
+    let body = stickyBody(false, "Summary.", [finding("a", 1, "high")], [], [])
+    assert(body.startsWith?(Vocabulary.stickyMarker))
+    assert(body.contains?("## 🚩 Not ready to merge"))
+    assert(body.contains?("### Findings (1)"))
+  end
+end

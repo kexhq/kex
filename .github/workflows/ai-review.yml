@@ -1,0 +1,40 @@
+name: AI review
+
+# A free AI review of every pull request: one sticky verdict comment, updated
+# in place each push, plus one inline comment per finding. See
+# .github/actions/ai-review/README.md.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# A newer push makes the running review moot.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The review is posted back to the pull request.
+  pull-requests: write
+
+jobs:
+  review:
+    # Drafts are skipped until they are marked ready. Fork pull requests get
+    # a read-only token, so nothing could be posted, and the agent runs with
+    # `--auto` tool access over the checked-out code: both are kept out.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so the agent can diff the pull request against its base.
+          fetch-depth: 0
+
+      - name: Review
+        uses: ./.github/actions/ai-review
+        with:
+          min-severity: medium

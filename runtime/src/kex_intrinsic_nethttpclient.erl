@@ -128,6 +128,8 @@ connect_within({<<"https">>, Host, Port}, Timeout) ->
     ssl:start(),
     Options = [binary, {active, false}, {server_name_indication, binary_to_list(Host)},
                {verify, verify_peer}, {cacerts, public_key:cacerts_get()},
+               {customize_hostname_check,
+                [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]},
                {versions, ['tlsv1.2', 'tlsv1.3']}, {alpn_advertised_protocols, [<<"http/1.1">>]}],
     case ssl:connect(binary_to_list(Host), Port, Options, Timeout) of
         {ok, Socket} -> {ok, {tls, Socket}};

@@ -4,7 +4,7 @@
 connect({'Net.Socket.TCP.Endpoint',Host,{'Net.Port',Port}},
         {'Net.Socket.TLS.ClientConfig',ServerName,Verify,ALPN}) ->
     ssl:start(),
-    VerifyOpts=case Verify of true->[{verify,verify_peer},{cacerts,public_key:cacerts_get()}];false->[{verify,verify_none}]end,
+    VerifyOpts=case Verify of true->[{verify,verify_peer},{cacerts,public_key:cacerts_get()},{customize_hostname_check,[{match_fun,public_key:pkix_verify_hostname_match_fun(https)}]}];false->[{verify,verify_none}]end,
     Opts=[binary,{active,false},{server_name_indication,binary_to_list(ServerName)},
           {versions,['tlsv1.2','tlsv1.3']},{alpn_advertised_protocols,ALPN}|VerifyOpts],
     start(fun()->ssl:connect(binary_to_list(Host),Port,Opts,10000)end).
