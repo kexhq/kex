@@ -117,7 +117,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         std::vector<ast::TopLevelItem> merged;
         merged.reserve(companionAst.items.size() + state.ast.items.size());
         for (auto& item : companionAst.items)
-            if (ast::isCompanionDeclaration(item))
+            if (ast::isMergedDeclaration(item))
                 merged.push_back(std::move(item));
         for (auto& item : state.ast.items) merged.push_back(std::move(item));
         state.ast.items = std::move(merged);

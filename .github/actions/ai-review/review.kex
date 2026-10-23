@@ -568,7 +568,7 @@ let reconcilePrompt(previous, sticky, findings) do
   end
   let newest = current.empty? then "(the newest review found nothing to report)" else current
 
-  `
+  $`
     Another review round is about to publish on this pull request, and you reconcile it with what an earlier round left behind. The pull request changed since those comments: lines may have moved and code may have been fixed. You may read the code in the working tree to check.
 
     Decide, for every previous comment, whether the problem it describes still stands in the code today:

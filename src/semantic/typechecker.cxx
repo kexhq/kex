@@ -6255,8 +6255,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     (fallbackNamed && (fallbackNamed->name == "None" ||
                                        fallbackNamed->name == "Result"));
                 // `or` never calls its fallback, so `r.or { |_| … }` answered
-                // the block itself in place of the value (kexhq/kex#558). A
-                // function default is still fine when the value is one.
+                // the block itself in place of the value (kexhq/kex#558; STYLE.md
+                // `or-function-default`). A function default is still fine
+                // when the value is one.
                 // A bare `~f` is typed only in the deferred, hinted pass, so
                 // its type is not known yet here; its signatures say whether
                 // it captures a function (a parameterless one is its value).
@@ -9237,11 +9238,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // Choosing among the stale matches then sent `text.replace(re`y`, …)`
         // to the String function and BEAM died with badarg (kexhq/kex#560).
         // Keep only the candidates the arguments still match, as they now
-        // resolve.
+        // resolve. Every candidate already passed the arity check above, a
+        // defaulted trailing parameter left out included, so only the
+        // arguments actually passed are compared, as there.
         {
             std::vector<const Signature*> stillMatching;
             for (const auto* candidate : undominated) {
-                bool matches = candidate->params.size() == argTypes.size();
+                bool matches = true;
                 for (size_t i = 0; matches && i < argTypes.size(); ++i)
                     matches = argMatchesParam(resolve(argTypes[i]),
                                               resolve(candidate->params[i]));

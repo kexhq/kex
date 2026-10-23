@@ -6086,14 +6086,21 @@ struct Lowering {
         // A `let { k } = someMap` destructures a map too (the walker's
         // let-binding path does). Match arms never reach this on a map — the
         // structural test above admits tuples only. The key is `"k"`, or `:k`
-        // in an atom-keyed map such as `{ k: 1 }`.
+        // in an atom-keyed map such as `{ k: 1 }` — the string key first, as
+        // in the walker — and a missing one is its "pattern mismatch", not
+        // an Erlang badkey.
+        auto byAtom = matchBool(
+            callE("maps", "is_key", 2,
+                  two(lit(LitKind::Atom, field), var(subject))),
+            callE("maps", "get", 2,
+                  two(lit(LitKind::Atom, field), var(subject))),
+            runtimeError("pattern mismatch"));
         auto byKey = matchBool(
             callE("maps", "is_key", 2,
                   two(lit(LitKind::String, field), var(subject))),
             callE("maps", "get", 2,
                   two(lit(LitKind::String, field), var(subject))),
-            callE("maps", "get", 2,
-                  two(lit(LitKind::Atom, field), var(subject))));
+            std::move(byAtom));
         return matchBool(callE("erlang", "is_map", 1, one(var(subject))),
                          std::move(byKey), std::move(byTag));
     }
@@ -7155,6 +7162,9 @@ struct Lowering {
                     for (const auto& name : names) subst[name] = name;
                     auto rest = isLast ? lit(LitKind::Atom, "ok")
                                        : lowerBodyFrom(body, i + 1);
+                    // Lowering the rest moved the location on; a missing key
+                    // is reported at this `let`, as the walker does.
+                    currentLoc = &e->location;
                     return makeLet(
                         rv, lower(le->value),
                         wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));

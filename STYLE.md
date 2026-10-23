@@ -1095,6 +1095,25 @@ spelled `a.set? then a else b` (there is no `orElse` in the stdlib). The same
 holds for a result: the argument to `or` is the plain fallback, never
 `Error(e)`.
 
+**[L]** **`or` never calls its fallback**, so a block or a function is not a
+lazy default: it would *be* the answer, a function where the value was
+expected (`or-function-default`). Pass the value itself, or `match` when the
+fallback has to be computed — from the error, say:
+
+```kex
+Integer.parse(input).or(8080)              # yes
+Integer.parse(input).or { |_| 8080 }       # no — the answer is the block
+Integer.parse(input).or(~defaultPort)      # no — the answer is the function
+
+match Integer.parse(input) do              # yes — computed from the error
+  Ok(port)      => port
+  Error(reason) => fallbackFor(reason)
+end
+```
+
+A function default is right only when the value is itself a function:
+`handlers.get(name).or(~notFound)` on a `(Request -> Response)?`.
+
 **[L]** `die` is for a broken invariant, never for an expected failure, and
 never in library code that a caller could reasonably recover from
 (`die-in-library`).
@@ -1402,6 +1421,7 @@ legitimate is suppressing it everywhere because one function is over.
 | `prefer-try` | 15 | warn |
 | `early-unwrap` | 15 | warn |
 | `or-optional-default` | 15 | warn |
+| `or-function-default` | 15 | error |
 | `die-in-library` | 15 | error |
 | `missing-doc` | 16 | warn (error in stdlib) |
 | `doc-param-mismatch` | 16 | warn |

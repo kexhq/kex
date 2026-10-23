@@ -107,3 +107,13 @@ describe("stickyBody") do
     assert(body.contains?("### Findings (1)"))
   end
 end
+
+describe("reconcilePrompt") do
+  it("fills in the previous comments, the newest findings and the verdict") do
+    let text = reconcilePrompt([marked(42, "a.cxx", 3, "high")], None, [finding("b.cxx", 7, "low")])
+    assert(text.contains?("ID 42"))
+    assert(text.contains?("b.cxx"))
+    assert(text.contains?("this is the first round"))
+    assert(!text.contains?(`${`))
+  end
+end

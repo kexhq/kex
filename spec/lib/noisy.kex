@@ -1,0 +1,14 @@
+# A module file with a bare top-level expression and its own `main`, for
+# spec/module_file_main_stays_out.kex: neither may run in a program that
+# imports the module, while its top-level constant is still visible.
+let greeting = "hello"
+
+IO.printLine("noisy: top level ran")
+
+module Noisy do
+  let greet(name: String) -> String = "${greeting}, ${name}"
+end
+
+main do
+  IO.printLine("noisy: main ran")
+end

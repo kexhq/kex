@@ -566,7 +566,7 @@ auto Evaluator::loadPrelude() -> void {
             Parser parser(lex.tokenizeAll(), f);
             auto parsed = parser.parseProgram();
             for (auto& item : parsed.items)
-                if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+                if (ast::isMergedDeclaration(item))
                     prog->items.push_back(std::move(item));
         }
         return prog;
@@ -2195,21 +2195,31 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                   // The anonymous `{ k }` form also destructures maps by key; a
                   // named `Foo { k }` is record-only (maps carry no type name).
                   // The key is `"k"` or, in an atom-keyed map such as
-                  // `{ k: 1 }`, `:k`.
+                  // `{ k: 1 }`, `:k` — the string key first when a map has
+                  // both, as on BEAM. A missing key is a pattern mismatch
+                  // here, rather than a name left unbound.
                   if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
                     for (const auto& field : recPat->fields) {
-                        for (const auto& [k, v] : mapVal->entries) {
-                            const auto* sk = std::get_if<StringValue>(&k->data);
-                            const auto* ak = std::get_if<AtomValue>(&k->data);
-                            if (sk || ak) {
-                                if ((sk ? sk->value : ak->name) == field.name) {
-                                    if (field.pattern && *field.pattern) {
-                                        matchPattern(**field.pattern, v);
-                                    } else {
-                                        m_env->define(field.name, v);
-                                    }
-                                }
+                        ValuePtr found;
+                        for (const auto& [k, v] : mapVal->entries)
+                            if (auto* sk = std::get_if<StringValue>(&k->data);
+                                sk && sk->value == field.name) {
+                                found = v;
+                                break;
                             }
+                        if (!found)
+                            for (const auto& [k, v] : mapVal->entries)
+                                if (auto* ak = std::get_if<AtomValue>(&k->data);
+                                    ak && ak->name == field.name) {
+                                    found = v;
+                                    break;
+                                }
+                        if (!found)
+                            throw RuntimeError("pattern mismatch", expr.location);
+                        if (field.pattern && *field.pattern) {
+                            matchPattern(**field.pattern, found);
+                        } else {
+                            m_env->define(field.name, found);
                         }
                     }
                   }

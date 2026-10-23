@@ -1,0 +1,8 @@
+# A module whose functions read a top-level constant of its own file, for
+# spec/module_file_toplevel_constant.kex.
+let rate = 3
+let (base, _) = (10, 0)
+
+module Tariff do
+  let total(n: Integer) -> Integer = base + n * rate
+end

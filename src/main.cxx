@@ -1804,7 +1804,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
     std::vector<kex::ast::TopLevelItem> merged;
     for (auto &dep : deps)
       for (auto &item : dep.program->items)
-        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+        if (kex::ast::isMergedDeclaration(item))
           merged.push_back(std::move(item));
     for (auto &item : program.items)
       merged.push_back(std::move(item));
@@ -2098,7 +2098,7 @@ auto compilePreludeCore(const std::string &dir,
       parsed = false;
     }
     for (auto &item : prog.items)
-      if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+      if (kex::ast::isMergedDeclaration(item))
         merged.items.push_back(std::move(item));
   };
   for (size_t t = 0; t < 4; t++) {
@@ -4281,7 +4281,7 @@ int main(int argc, char *argv[]) {
               kex::Parser fp(fl.tokenizeAll(), f);
               auto fprog = fp.parseProgram();
               for (auto& item : fprog.items)
-                if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+                if (kex::ast::isMergedDeclaration(item))
                   program.items.push_back(std::move(item));
             } catch (...) {
               // Syntax errors in a loaded file were caught by /load; if the
@@ -5418,7 +5418,7 @@ int main(int argc, char *argv[]) {
           std::vector<kex::ast::TopLevelItem> merged;
           merged.reserve(baseProgram.items.size() + checkProgram.items.size());
           for (auto &item : baseProgram.items)
-            if (kex::ast::isCompanionDeclaration(item))
+            if (kex::ast::isMergedDeclaration(item))
               merged.push_back(std::move(item));
           for (auto &item : checkProgram.items) merged.push_back(std::move(item));
           checkProgram.items = std::move(merged);
@@ -5539,7 +5539,7 @@ int main(int argc, char *argv[]) {
         std::vector<kex::ast::TopLevelItem> merged;
         merged.reserve(baseProgram.items.size() + program.items.size());
         for (auto &item : baseProgram.items)
-          if (kex::ast::isCompanionDeclaration(item))
+          if (kex::ast::isMergedDeclaration(item))
             merged.push_back(std::move(item));
         for (auto &item : program.items)
           merged.push_back(std::move(item));
@@ -6065,7 +6065,7 @@ int main(int argc, char *argv[]) {
         std::vector<kex::ast::TopLevelItem> merged;
         merged.reserve(baseProgram.items.size() + program.items.size());
         for (auto &item : baseProgram.items)
-          if (kex::ast::isCompanionDeclaration(item))
+          if (kex::ast::isMergedDeclaration(item))
             merged.push_back(std::move(item));
         for (auto &item : program.items)
           merged.push_back(std::move(item));
@@ -6178,7 +6178,7 @@ int main(int argc, char *argv[]) {
       std::vector<kex::ast::TopLevelItem> merged;
       merged.reserve(baseProgram.items.size() + program.items.size());
       for (auto &item : baseProgram.items)
-        if (kex::ast::isCompanionDeclaration(item))
+        if (kex::ast::isMergedDeclaration(item))
           merged.push_back(std::move(item));
       for (auto &item : program.items)
         merged.push_back(std::move(item));

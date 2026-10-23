@@ -1,0 +1,10 @@
+# A module's file can declare top-level constants its functions read
+# (kexhq/kex#559, as the AI review on #566 pointed out). The dependency merge
+# dropped every main block wholesale, and a top-level `let` parses into one,
+# so `Tariff.total` failed to check with "Undefined identifier: rate".
+using Tariff
+
+main do
+  IO.printLine(total(2))
+  IO.printLine(Tariff.total(5))
+end

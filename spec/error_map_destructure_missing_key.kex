@@ -1,0 +1,8 @@
+# An anonymous `{ k }` destructure of a map with neither a `"k"` nor a `:k`
+# key is a pattern mismatch at the `let`, on both backends. The walker used
+# to leave `k` unbound and fail later with "Undefined variable", while BEAM
+# raised an Erlang badkey.
+main do
+  let { port } = { host: "localhost" }
+  IO.printLine(port)
+end
