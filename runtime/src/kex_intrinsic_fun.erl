@@ -94,6 +94,17 @@ applyFlexible(F, Args) when is_function(F) ->
     Count = length(Args),
     if
         Count =:= N -> erlang:apply(F, Args);
+        %% One tuple for a block of as many parameters is spread across them,
+        %% as the walker does and as applyItem already did for the list HOFs.
+        %% Generic stdlib code such as Optional's and Result's `map` calls the
+        %% block with one value, so `found.map { |name, _| name }` came back as
+        %% a partial application (or a function_clause from `flatMap`).
+        Count =:= 1, N > 1 ->
+            [Only] = Args,
+            case spreadable(Only, N) of
+                true -> erlang:apply(F, tuple_to_list(Only));
+                false -> partial(F, Args, N - Count)
+            end;
         Count > N ->
             {Now, Rest} = lists:split(N, Args),
             applyFlexible(erlang:apply(F, Now), Rest);
@@ -146,15 +157,18 @@ applyPredicate(F, Item) -> truthy(applyItem(F, Item)).
 %% Only a genuine tuple of exactly N elements, and only for N > 1 — a
 %% single-parameter block always receives the whole item.
 %%
-%% RECORDS ARE EXCLUDED, and that is the whole subtlety: a record is also a
-%% tuple here (`{'Point', 1, 2}`), so without the check a two-parameter block
-%% over a list of one-field records got the tag and the field rather than an
-%% error. The walker has RecordValue and TupleValue as separate types and
-%% rejects it, so this was a silent backend divergence. The registry
-%% kex_io:register_display/2 fills is what makes the two distinguishable at
-%% all — a bare `{a, 1}` and a record are otherwise the same term.
+%% RECORDS AND VARIANTS ARE EXCLUDED, and that is the whole subtlety: a record
+%% is also a tuple here (`{'Point', 1, 2}`), so without the check a
+%% two-parameter block over a list of one-field records got the tag and the
+%% field rather than an error. The walker has RecordValue and TupleValue as
+%% separate types and rejects it, so this was a silent backend divergence.
+%% Variants (`{'Ok', 1}`) are the same: the walker spreads only TupleValue, so
+%% `[Ok(1)].map { |tag, v| ... }` must not hand the tag to the first parameter.
+%% The registries kex_io:register_display/2 fills are what make these
+%% distinguishable at all — a bare `{a, 1}` and a record are otherwise the
+%% same term.
 spreadable(Item, N) when is_tuple(Item), N > 1, tuple_size(Item) =:= N ->
-    not is_record_term(Item);
+    not is_record_term(Item) andalso not is_variant_term(Item);
 spreadable(_, _) ->
     false.
 
