@@ -187,8 +187,9 @@ module Process do
   run : String -> [String] -> Integer -> Result<ProcessResult, String>
   foul run(command, args, timeoutMs) = Kex.Intrinsic.Process.run(command, args, timeoutMs)
 
-  # Runs an executable with the CALLER's stdout and stderr, so its output
-  # appears as it is produced rather than in one block when it exits.
+  # Runs an executable with the CALLER's stdin, stdout and stderr, so its
+  # output appears as it is produced rather than in one block when it exits,
+  # and a child that reads the terminal — a REPL, a prompt — has it.
   #
   # Answers the exit code; nothing is captured: that is the trade, and it is
   # useful for commands whose progress should appear in the terminal.
