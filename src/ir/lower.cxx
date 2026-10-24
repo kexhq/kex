@@ -5445,7 +5445,11 @@ struct Lowering {
                 auto slash = entry.rfind('/');
                 if (slash == std::string::npos) continue;
                 const auto qualKey = entry.substr(0, slash);
-                auto dot = qualKey.find('.');
+                // The member is after the LAST dot. Split at the first one, a
+                // nested module's `Time.Clock.now` was filed as `Time`'s `now`,
+                // and `Time.Clock.now()` went out without its context
+                // (`undef` for 'Kex.Time.Clock':now/0).
+                auto dot = qualKey.rfind('.');
                 if (dot == std::string::npos) continue;
                 auto atom = externalModules->nameToAtom.find(qualKey.substr(0, dot));
                 auto beamFn = externalModules->exportToBeamFn.find(qualKey);

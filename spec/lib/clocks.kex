@@ -1,0 +1,12 @@
+module Clocks
+
+# Named like the prelude's own `Clock` capability (`Time.Clock`).
+capability Clock do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
+foul stamp() -> String = "at ${Clock.now()}"
+
+foul recent?() -> Bool = Time.Clock.now().date.year > 2000

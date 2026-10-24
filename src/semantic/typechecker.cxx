@@ -1139,6 +1139,40 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
 auto TypeChecker::resolveModulePath(const std::string& name,
                                     const std::string& member) const
     -> std::string {
+    auto resolved = resolveImportedModulePath(name, member);
+    const auto exportsMember = [&](const std::string& module) {
+        if (m_localModules.contains(module) &&
+            m_userSignatures.contains(module + "::" + member))
+            return true;
+        if (!m_importedInterfaces) return false;
+        auto found = m_importedInterfaces->modules.find(module);
+        if (found == m_importedInterfaces->modules.end()) return false;
+        auto exported = found->second.exports.find(member);
+        return exported != found->second.exports.end() && !exported->second.empty();
+    };
+    // A module of the enclosing module's own comes before another module the
+    // name would otherwise reach: `Clock.now()` inside `module Clocks`,
+    // beside its own `capability Clock`, called the prelude's `Time.Clock`
+    // and failed on BEAM with `undef`, while the walker (which looks in the
+    // module first) was right. Only a name that does reach another module is
+    // settled here; a nested name that resolves to nothing is left as it is,
+    // for the lookups after this one.
+    if (!exportsMember(resolved)) return resolved;
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        const auto nested = scope + "." + name;
+        if (nested != resolved && m_localModules.contains(nested) &&
+            exportsMember(nested))
+            return nested;
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    return resolved;
+}
+
+auto TypeChecker::resolveImportedModulePath(const std::string& name,
+                                            const std::string& member) const
+    -> std::string {
     // A `make X<A> do ... end` block unconditionally creates a placeholder
     // `ifaces.modules[typeName]` entry while scanning its own methods
     // (`prelude_interfaces.hxx`'s `collectMakeMember`), keyed by the type's
@@ -5410,8 +5444,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // trait-shaped unit overload such as Watt * Hour must not
                 // capture Float * Float merely because both types also occur
                 // in generic receiver tables loaded from the prelude.
-                if (m_traits.satisfies(leftType, "Number") &&
-                    m_traits.satisfies(rightType, "Number"))
+                // Resolved first: a parameter `limit > 3` has already bound to
+                // Integer is still its type variable here, which satisfies
+                // nothing, so `limit - 1` went on to the overloads and picked
+                // `Duration`'s (kexhq/kex#563).
+                if (m_traits.satisfies(resolve(leftType), "Number") &&
+                    m_traits.satisfies(resolve(rightType), "Number"))
                     return inferBinaryOp(node.op, leftType, rightType,
                                          expr.location);
                 auto receiver = resolve(leftType);

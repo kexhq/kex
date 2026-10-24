@@ -2524,13 +2524,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // on that record would take (kexhq/kex#143).
             ValuePtr capabilityOverride;
             if (node.receiver)
-                if (auto path = qualifiedPath(*node.receiver))
-                    if (auto bound = lookupCapability(*path);
-                        bound && capabilityMember(*path, node.method)) {
+                if (auto path = qualifiedPath(*node.receiver)) {
+                    const auto capability = canonicalCapability(*path);
+                    if (auto bound = lookupCapability(capability);
+                        bound && capabilityMember(capability, node.method)) {
                         capabilityOverride = bound;
                         isNamespaceCall = false;
                         namespaceName.clear();
                     }
+                }
             auto receiver = capabilityOverride
                 ? capabilityOverride
                 : ((!isNamespaceCall && node.receiver) ? eval(*node.receiver)
@@ -3603,7 +3605,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 capabilityName += node.capability.parts[i];
             }
             auto replacement = node.value ? eval(*node.value) : Value::none();
-            m_capabilityBindings.emplace_back(capabilityName, replacement);
+            m_capabilityBindings.emplace_back(canonicalCapability(capabilityName),
+                                              replacement);
             // Pop on the way out however the body leaves — a `return`, a
             // `break`, or a raised error must not leak the substitution into
             // the code that follows.

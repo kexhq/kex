@@ -191,7 +191,9 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             return;
         }
         if (source.substr(0, 5) == "/set " || source == "/set" ||
-            source.substr(0, 7) == "/unset ") {
+            source.substr(0, 7) == "/unset " || source == "/with" ||
+            source.substr(0, 6) == "/with " ||
+            source.substr(0, 9) == "/without ") {
             session->lastResult = "  not yet implemented in the web REPL\n";
             return;
         }
