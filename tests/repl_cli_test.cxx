@@ -1098,9 +1098,15 @@ int main() {
                    "let shown(text: String) -> String = prepared(text).text\n";
             std::ofstream(root + "/lib/broken.kex")
                 << "module Broken\n\nlet bad() -> Integer = \"no\"\n";
+            // A dependency that does not parse is a refused load too: it used
+            // to reach the build's `exit(1)` and end the session.
+            std::ofstream(root + "/lib/shaky.kex")
+                << "module Shaky\n\nrecord Half do\n  text : String\n";
+            std::ofstream(root + "/lib/leaning.kex")
+                << "module Leaning\n\nusing Shaky\n\nlet lean() -> String = \"no\"\n";
             std::ofstream(root + "/input.txt")
                 << "/load lib/store.kex\nStore.shown(\"select 1\")\n"
-                   "/load lib/broken.kex\nlet x = 1\n";
+                   "/load lib/broken.kex\n/load lib/leaning.kex\nlet x = 1\n";
             for (const auto* flags : {" --no-colors", " -i --no-colors"}) {
                 auto out = runCommand("cd " + root + " && " +
                                       std::string(KEX_BINARY_PATH) + flags +
@@ -1108,6 +1114,9 @@ int main() {
                 assertTrue(out.find("\"select 1\" : String") != std::string::npos, out);
                 assertTrue(out.find("Unknown type") == std::string::npos, out);
                 assertTrue(out.find("lib/broken.kex was not loaded") !=
+                               std::string::npos, out);
+                assertTrue(out.find("lib/leaning.kex was not loaded: "
+                                    "could not parse module Shaky") !=
                                std::string::npos, out);
                 assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
             }

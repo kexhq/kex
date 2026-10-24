@@ -1450,6 +1450,17 @@ auto shownPath(const std::filesystem::path &path) -> std::string {
 }
 
 // An error about a module's file, at its header.
+// Whether a dependency that cannot be loaded ends the process (a build) or
+// is thrown as an error (a REPL, where `/load` and each input catch it). An
+// interactive session used to die with the build's `exit(1)` the moment a
+// `/load`-ed file used a module with a syntax error.
+bool g_dependencyFailureThrows = false;
+
+[[noreturn]] auto dependencyFailure(const std::string &what) -> void {
+  if (g_dependencyFailureThrows) throw std::runtime_error(what);
+  std::exit(1);
+}
+
 auto reportModuleFileError(const std::filesystem::path &file, int line,
                            const std::string &message) -> void {
   std::cerr << kex::color::apply(kex::color::gray) << shownPath(file) << ":"
@@ -1740,7 +1751,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
                     << "error:" << kex::color::apply(kex::color::reset) << " "
                     << diagnostic.message << "\n";
         std::cerr << "error: could not parse module " << modName << "\n";
-        std::exit(1);
+        dependencyFailure("could not parse module " + modName);
       }
       // Expanded HERE, against THIS module's own path, while it is still its
       // own separate AST — not later, once `resolveBeamDeps` has merged its
@@ -1765,7 +1776,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
         for (const auto &diagnostic : depExpandDiagnostics)
           printSemanticDiagnostic(diagnostic);
         std::cerr << "error: could not expand module " << modName << "\n";
-        std::exit(1);
+        dependencyFailure("could not expand module " + modName);
       }
       // Found by its path, but declaring another module: `using
       // App.Services.Authority` reaching app/services/authority.kex whose
@@ -1792,7 +1803,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
             "this file is `" + resolved->moduleName + "` by its path, but "
             "declares `" + header->name + "`; name it `module " +
             resolved->moduleName + "`");
-        std::exit(1);
+        dependencyFailure("module file " + shownPath(*path) + " declares another module");
       }
       resolve(*depProg, {}, src.get());
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
@@ -1836,7 +1847,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
           "module `" + name + "` is declared in a file whose path names `" +
               byPath + "`, so `" + name + "` is not found; name it `module " +
               byPath + "`, or move it to " + shownPath(expected));
-      std::exit(1);
+      dependencyFailure("module `" + name + "` is declared in a file named for another module");
     }
   }
   if (const char *timings = std::getenv("KEX_TIMINGS");
@@ -3649,6 +3660,9 @@ int main(int argc, char *argv[]) {
     // build of a file there would search them. A `/load`-ed module used to
     // bring in only its own declarations, so `Store`'s `using Wire` left
     // `Statement` unknown, and every later input failed with that error.
+    // A dependency that cannot be loaded is a refused `/load` or a failed
+    // input here, not the end of the session.
+    g_dependencyFailureThrows = true;
     const auto replRoots = moduleRootsFor(
         (std::filesystem::current_path() / "repl.kex").string());
     auto replProjectRoots = replRoots;
@@ -3888,7 +3902,8 @@ int main(int argc, char *argv[]) {
           parser.parseProgram();
           throwOnParseErrors(parser);
         } catch (const std::exception& e) {
-          std::cerr << "  /load parse error: " << e.what() << "\n";
+          std::cerr << "  /load: " << filePath << " was not loaded: "
+                    << e.what() << "\n";
           continue;
         }
         // Checked with the session and the modules it uses before it joins:
@@ -4145,7 +4160,9 @@ int main(int argc, char *argv[]) {
           // A parse is not enough: a definition the checker rejects (a pure
           // `let` that receives, say) was kept anyway, and every later input
           // — which replays all definitions — then failed with its error.
-          {
+          // Any failure here restores the earlier definitions, including a
+          // dependency that cannot be loaded (thrown from mergeLoadedForCheck).
+          try {
             const auto checkSource = topDefsStr() + "main do\nend\n";
             kex::Lexer checkLexer(checkSource, "<repl>");
             kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
@@ -4154,12 +4171,14 @@ int main(int argc, char *argv[]) {
             mergeLoadedForCheck(checkProgram);
             kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
             if (!checkAnalyzer.analyze(checkProgram)) {
-              topDefs = previousTopDefs;
               for (const auto &diagnostic : checkAnalyzer.diagnostics())
                 if (diagnostic.level == kex::semantic::Diagnostic::Level::Error)
                   throw std::runtime_error(diagnostic.message);
               throw std::runtime_error("semantic analysis failed");
             }
+          } catch (...) {
+            topDefs = previousTopDefs;
+            throw;
           }
 
           // `using M` is an import, not a definition — it is kept in topDefs
@@ -4624,6 +4643,7 @@ int main(int argc, char *argv[]) {
     // The project modules a `/load`-ed file uses, found as a build of a file
     // in the working directory would find them, and kept alive for the same
     // reason. Without them `Store`'s `using Wire` left `Statement` unknown.
+    g_dependencyFailureThrows = true; // as in the BEAM REPL
     std::vector<LoadedDep> replLoadedDeps;
     // Their files, which the input check parses in as declarations: a file
     // with a `module Wire` header cannot be glued onto the session source.
@@ -4820,7 +4840,7 @@ int main(int argc, char *argv[]) {
           replDb.updateFile("<repl>", replAccumSource);
           std::cout << "  loaded " << filePath << "\n";
         } catch (const std::exception& e) {
-          std::cerr << "  /load error: " << e.what() << "\n";
+          std::cerr << "  /load: " << filePath << " was not loaded: " << e.what() << "\n";
         }
         continue;
       }
