@@ -176,7 +176,7 @@ deadline(Ms) -> erlang:monotonic_time(millisecond) + Ms.
 timeout_message(Ms) ->
     list_to_binary(["timed out after ", integer_to_list(Ms), "ms"]).
 
-%% Process.stream — run a program and let its output through AS IT ARRIVES,
+%% Process.stream — run a program on THIS process's stdin, stdout and stderr,
 %% answering only the exit code.
 %%
 %% `run/2` above captures both streams and can only answer once the child has
@@ -184,40 +184,26 @@ timeout_message(Ms) ->
 %% the end — `tey test` and a package's own commands looked stalled for their
 %% whole run (kexhq/kex#187).
 %%
-%% stderr is folded into stdout (`stderr_to_stdout`) rather than separated the
-%% way `run/2` does it: the two are being written straight through to the same
-%% terminal, so keeping them apart would only reorder them against each other.
-%%
-%% Unlike the tree walker — which forks and lets the child inherit the real
-%% descriptors — a port is a pipe, so a child that asks whether it is talking
-%% to a terminal is told no, and may drop its own colours. Live output is
-%% worth that; a child whose colours matter can be told explicitly.
+%% The child inherits the VM's own descriptors (`nouse_stdio`: the port talks
+%% over fds 3 and 4, which nothing here uses), as the tree walker's forked
+%% child does. Its output is this process's output, with its own buffering
+%% and colour decisions, and it reads the terminal itself: a child that asks
+%% whether it is talking to one is told yes, so a REPL run by `tey console`
+%% has its line editing, completion and history. Relayed through a pipe it
+%% had none of them, and its input was echoed back a line at a time.
 stream(Command, Args) ->
     case os:find_executable(unicode:characters_to_list(Command)) of
         false -> {'Error', <<"executable not found: ", (unicode:characters_to_binary(Command))/binary>>};
         Executable ->
             Arguments = [unicode:characters_to_list(A) || A <- Args],
             Port = open_port({spawn_executable, Executable},
-                             [binary, exit_status, use_stdio, stderr_to_stdout,
-                              hide, {args, Arguments}]),
-            %% A child that READS is as common as one that writes — `tey repl`
-            %% and `tey run` on a program that asks a question both do — and a
-            %% port's stdin is written by the parent rather than inherited, so
-            %% without this the child prints its prompt and then waits for
-            %% input that can never arrive. The feeder reads this process's
-            %% own stdin and forwards it, in its own process so that waiting
-            %% for a line never stops the output loop below.
+                             [exit_status, nouse_stdio, hide, {args, Arguments}]),
             %% A port's child is in its own process group and nothing
             %% reaps it, so it outlives this VM with its socket still bound:
             %% `tey run` exited and left the server it started serving. See
             %% kex_child_guard.
             Guard = kex_child_guard:protect(Port),
-            Feeder = erlang:spawn(fun() -> feed_port(Port) end),
-            Status = pump_port(Port),
-            %% The child is gone; whatever the feeder is waiting for is no
-            %% longer wanted, and leaving it blocked on stdin would eat the
-            %% next thing typed at Tey itself.
-            erlang:exit(Feeder, kill),
+            Status = receive {Port, {exit_status, Exited}} -> Exited end,
             kex_child_guard:release(Guard),
             {'Ok', Status}
     end.
@@ -268,63 +254,6 @@ say_to_port(Port, Line) ->
         _ -> ok
     catch
         _:_ -> ok
-    end.
-
-feed_port(Port) ->
-    case io:get_line('') of
-        eof -> ok;
-        {error, _} -> ok;
-        Line ->
-            %% `port_command` raises once the child has exited, which is a
-            %% race this cannot avoid: the line was typed before the exit
-            %% arrived. Losing it is correct — there is nobody to read it.
-            try erlang:port_command(Port, unicode:characters_to_binary(Line)) of
-                true -> feed_port(Port)
-            catch
-                _:_ -> ok
-            end
-    end.
-
-%% Every chunk the child writes goes straight out, and the loop ends with the
-%% exit status.
-%%
-%% A port hands over BYTES, and a chunk boundary can fall inside a multi-byte
-%% character: the spec runner's `✓` is three bytes, and `io:put_chars/1` on a
-%% truncated sequence raises `badarg` — which surfaced as `tey: badarg` from
-%% the launcher, on Alpine, in the middle of `tey test`. So an incomplete tail
-%% is held back and prepended to the next chunk.
-pump_port(Port) -> pump_port(Port, <<>>).
-
-pump_port(Port, Buffered) ->
-    receive
-        {Port, {data, Bin}} ->
-            pump_port(Port, emit(<<Buffered/binary, Bin/binary>>));
-        {Port, {exit_status, Status}} ->
-            %% Whatever is left cannot become valid — the child is gone — but
-            %% it is output the child produced, so it goes out as raw bytes
-            %% rather than being dropped.
-            case Buffered of
-                <<>> -> ok;
-                Rest -> file:write(standard_io, Rest)
-            end,
-            Status
-    end.
-
-%% Writes every COMPLETE character in `Chunk` and answers the incomplete tail
-%% to carry forward. Invalid bytes (not merely incomplete ones) are written
-%% raw: they came from the child, and a terminal showing them wrongly beats
-%% output that silently disappears.
-emit(Chunk) ->
-    case unicode:characters_to_binary(Chunk, unicode, unicode) of
-        {incomplete, Encoded, Rest} ->
-            io:put_chars(Encoded),
-            Rest;
-        {error, Encoded, _Rest} ->
-            io:put_chars(Encoded),
-            <<>>;
-        Encoded when is_binary(Encoded) ->
-            io:put_chars(Encoded),
-            <<>>
     end.
 
 run_merged(Executable, Arguments, Timeout) ->

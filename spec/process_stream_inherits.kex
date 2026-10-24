@@ -1,0 +1,28 @@
+# kex: skip-wasm
+# Process.stream runs its child on the caller's own stdin, stdout and
+# stderr, and answers only the child's exit code. Both backends agree: the
+# walker forks and the child inherits its descriptors, and on BEAM the port
+# is opened with `nouse_stdio`, so the child writes to the VM's fd 1 itself
+# rather than through a pipe Kex relays. What the child prints therefore
+# lands in this program's own output, between what the program printed
+# before and after it.
+#
+# Skipped under wasm: there are no child processes there.
+
+main do
+  IO.printLine("before")
+  match Process.stream("sh", ["-c", "echo from-child; exit 3"]) do
+    Error(error) => IO.printLine("error: ${error}")
+    Ok(code) => IO.printLine("exit ${code}")
+  end
+
+  match Process.stream("sh", ["-c", "true"]) do
+    Error(error) => IO.printLine("error: ${error}")
+    Ok(code) => IO.printLine("exit ${code}")
+  end
+
+  match Process.stream("definitely-not-a-real-program", []) do
+    Error(error) => IO.printLine("missing: ${error}")
+    Ok(code) => IO.printLine("unexpected exit ${code}")
+  end
+end

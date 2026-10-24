@@ -34,7 +34,11 @@ jobs:
           # Full history so the agent can diff the pull request against its base.
           fetch-depth: 0
 
+      # Optional: a review that cannot run — the free model's quota spent, a
+      # provider down — is a warning on the run, not a failed check on the
+      # pull request. review.kex still exits 1 for it, so it stays visible.
       - name: Review
         uses: ./.github/actions/ai-review
+        continue-on-error: true
         with:
           min-severity: medium
