@@ -1,0 +1,18 @@
+# kex: check-only
+# A block of several parameters spreads only a tuple. A record or a variant
+# is not one, over an Optional or a Result as over a list: the checker used to
+# leave the block's hint open there and accept it, and then BEAM handed back a
+# partial application where the walker ran the block.
+record Pair do
+  a : Integer
+  b : Integer
+end
+
+main do
+  let found : Pair? = Just(Pair { a: 1, b: 2 })
+  IO.printLine(found.map { |x, y| x.a }.or(0))
+  let got : Result<Integer?, String> = Ok(Just(1))
+  IO.printLine(got.map { |tag, value| value }.inspect)
+  let maybes : [Integer?] = [Just(1)]
+  IO.printLine(maybes.map { |tag, value| value }.inspect)
+end

@@ -1,0 +1,33 @@
+spec/error_block_spread_non_tuple.kex:13:26: error: `map` expects argument 2 to be A -> B, but got Pair -> T0 -> Integer
+
+map : A? -> (A -> B) -> B?
+
+map : Feed<A> -> (A -> B) -> Feed<B>
+
+map : Result<A, B> -> (A -> C) -> Result<C, B>
+
+map : Stream<A> -> (A -> B) -> Stream<B>
+
+map : [A] -> (A -> B) -> [B]
+spec/error_block_spread_non_tuple.kex:15:24: error: `map` expects argument 2 to be A -> C, but got Integer? -> T1 -> T1
+
+map : A? -> (A -> B) -> B?
+
+map : Feed<A> -> (A -> B) -> Feed<B>
+
+map : Result<A, B> -> (A -> C) -> Result<C, B>
+
+map : Stream<A> -> (A -> B) -> Stream<B>
+
+map : [A] -> (A -> B) -> [B]
+spec/error_block_spread_non_tuple.kex:17:27: error: `map` expects argument 2 to be A -> B, but got Integer? -> T2 -> T2
+
+map : A? -> (A -> B) -> B?
+
+map : Feed<A> -> (A -> B) -> Feed<B>
+
+map : Result<A, B> -> (A -> C) -> Result<C, B>
+
+map : Stream<A> -> (A -> B) -> Stream<B>
+
+map : [A] -> (A -> B) -> [B]

@@ -4475,6 +4475,46 @@ auto passBlockByLabel(const Call& node, const std::string& label) -> void {
     call.block.reset();
 }
 
+// Binds the type variables of a signature parameter to the matching parts of
+// the argument's type, wherever they sit: bare, a list's element, or inside
+// `A?`, `Result<A, E>`, a map or a tuple. Only a bare `A` and `[A]` used to
+// bind, so a block over an Optional or a Result kept an open hint, and
+// `found.map { |x, y| … }` over a record was accepted as if it destructured a
+// tuple: BEAM handed back a partial application where the walker ran it.
+template <typename Resolve>
+static auto bindHintVars(const TypePtr& sigP, const TypePtr& argRaw,
+                         std::unordered_map<int, TypePtr>& sub,
+                         const Resolve& resolve) -> void {
+    const auto argT = resolve(argRaw);
+    if (auto* tv = std::get_if<TypeVar>(&sigP->kind)) {
+        sub.emplace(tv->id, argT);
+    } else if (auto* list = std::get_if<ListType>(&sigP->kind)) {
+        if (auto* argList = std::get_if<ListType>(&argT->kind))
+            bindHintVars(list->element, argList->element, sub, resolve);
+    } else if (auto* opt = std::get_if<OptionalType>(&sigP->kind)) {
+        if (auto* argOpt = std::get_if<OptionalType>(&argT->kind))
+            bindHintVars(opt->inner, argOpt->inner, sub, resolve);
+    } else if (auto* map = std::get_if<MapType>(&sigP->kind)) {
+        if (auto* argMap = std::get_if<MapType>(&argT->kind)) {
+            bindHintVars(map->key, argMap->key, sub, resolve);
+            bindHintVars(map->value, argMap->value, sub, resolve);
+        }
+    } else if (auto* tuple = std::get_if<TupleType>(&sigP->kind)) {
+        auto* argTuple = std::get_if<TupleType>(&argT->kind);
+        if (argTuple && argTuple->elements.size() == tuple->elements.size())
+            for (size_t i = 0; i < tuple->elements.size(); i++)
+                bindHintVars(tuple->elements[i], argTuple->elements[i], sub,
+                             resolve);
+    } else if (auto* named = std::get_if<NamedType>(&sigP->kind)) {
+        auto* argNamed = std::get_if<NamedType>(&argT->kind);
+        if (argNamed && argNamed->name == named->name &&
+            argNamed->typeArgs.size() == named->typeArgs.size())
+            for (size_t i = 0; i < named->typeArgs.size(); i++)
+                bindHintVars(named->typeArgs[i], argNamed->typeArgs[i], sub,
+                             resolve);
+    }
+}
+
 auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes,
                                      bool isMethodCall,
@@ -4534,16 +4574,9 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         // caller's type to every later block (kexhq/kex#408). This only
         // computes hints: nothing here is unified.
         std::unordered_map<int, TypePtr> sub;
-        for (size_t i = 0; i < nonBlockArgTypes.size(); i++) {
-            const auto& sigP = sig.params[i];
-            const auto& argT = resolve(nonBlockArgTypes[i]);
-            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv)
-                sub.emplace(tv->id, argT);
-            else if (auto* lt = std::get_if<ListType>(&sigP->kind))
-                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2)
-                    if (auto* argLt = std::get_if<ListType>(&argT->kind))
-                        sub.emplace(tv2->id, resolve(argLt->element));
-        }
+        for (size_t i = 0; i < nonBlockArgTypes.size(); i++)
+            bindHintVars(sig.params[i], nonBlockArgTypes[i], sub,
+                         [&](const TypePtr& t) { return resolve(t); });
 
         auto applySubst = [&](const TypePtr& t) -> TypePtr {
             if (auto* tv = std::get_if<TypeVar>(&t->kind)) {
@@ -4701,17 +4734,10 @@ auto TypeChecker::resolveArgHints(const std::string& name,
 
         // Build generic substitution from the concrete args.
         std::unordered_map<int, TypePtr> sub;
-        for (size_t i = 0; i < argTypes.size(); i++) {
-            if (i == slArgIdx) continue;
-            const auto& sigP = sig.params[i];
-            const auto& argT = resolve(argTypes[i]);
-            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv)
-                sub.emplace(tv->id, argT);
-            else if (auto* lt = std::get_if<ListType>(&sigP->kind))
-                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2)
-                    if (auto* argLt = std::get_if<ListType>(&argT->kind))
-                        sub.emplace(tv2->id, resolve(argLt->element));
-        }
+        for (size_t i = 0; i < argTypes.size(); i++)
+            if (i != slArgIdx)
+                bindHintVars(sig.params[i], argTypes[i], sub,
+                             [&](const TypePtr& t) { return resolve(t); });
 
         auto applySubst = [&](const TypePtr& t) -> TypePtr {
             if (auto* tv = std::get_if<TypeVar>(&t->kind)) {

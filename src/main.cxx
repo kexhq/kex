@@ -4160,7 +4160,9 @@ int main(int argc, char *argv[]) {
           // A parse is not enough: a definition the checker rejects (a pure
           // `let` that receives, say) was kept anyway, and every later input
           // — which replays all definitions — then failed with its error.
-          {
+          // Any failure here restores the earlier definitions, including a
+          // dependency that cannot be loaded (thrown from mergeLoadedForCheck).
+          try {
             const auto checkSource = topDefsStr() + "main do\nend\n";
             kex::Lexer checkLexer(checkSource, "<repl>");
             kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
@@ -4169,12 +4171,14 @@ int main(int argc, char *argv[]) {
             mergeLoadedForCheck(checkProgram);
             kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
             if (!checkAnalyzer.analyze(checkProgram)) {
-              topDefs = previousTopDefs;
               for (const auto &diagnostic : checkAnalyzer.diagnostics())
                 if (diagnostic.level == kex::semantic::Diagnostic::Level::Error)
                   throw std::runtime_error(diagnostic.message);
               throw std::runtime_error("semantic analysis failed");
             }
+          } catch (...) {
+            topDefs = previousTopDefs;
+            throw;
           }
 
           // `using M` is an import, not a definition — it is kept in topDefs
