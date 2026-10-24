@@ -1114,6 +1114,52 @@ int main() {
             std::filesystem::remove_all(root);
         });
 
+        it("keeps a /with capability replacement for the session", []() {
+            // kexhq/kex#550: a `with` closes at its `end`, so an app console
+            // had to wrap every query in one.
+            char dir[] = "/tmp/kex_repl_with_XXXXXX";
+            assertTrue(mkdtemp(dir) != nullptr, "mkdtemp should create a directory");
+            const std::string root = dir;
+            std::filesystem::create_directory(root + "/lib");
+            std::ofstream(root + "/lib/tickers.kex")
+                << "module Tickers\n\ncapability Ticker do\n"
+                   "  foul now() -> Integer do\n    return 1000\n  end\nend\n\n"
+                   "record FrozenTicker do\n  at : Integer\nend\n\n"
+                   "make FrozenTicker, implement: Ticker do\n"
+                   "  foul now() -> Integer = @at\nend\n\n"
+                   "foul stamp() -> String = \"at ${Ticker.now()}\"\n";
+            std::ofstream(root + "/input.txt")
+                << "using Tickers\n"
+                   "let frozen = FrozenTicker { at: 7 }\n"
+                   "/with Tickers.Ticker = frozen\n"
+                   "stamp()\n"
+                   "let later = stamp()\n"
+                   "/with\n"
+                   "/with Tickers.Ticker = 5\n"
+                   "/without Tickers.Ticker\n"
+                   "stamp()\n"
+                   "later\n";
+            for (const auto* flags : {" --no-colors", " -i --no-colors"}) {
+                auto out = runCommand("cd " + root + " && " +
+                                      std::string(KEX_BINARY_PATH) + flags +
+                                      " < input.txt 2>&1");
+                assertTrue(out.find("(with Tickers.Ticker)") != std::string::npos, out);
+                assertTrue(out.find("=> \"at 7\" : String") != std::string::npos, out);
+                assertTrue(out.find("  Tickers.Ticker = frozen") != std::string::npos,
+                           out);
+                assertTrue(out.find("does not implement it: Integer") !=
+                               std::string::npos, out);
+                assertTrue(out.find("(without Tickers.Ticker)") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> \"at 1000\" : String") != std::string::npos,
+                           out);
+                // A binding made under the replacement keeps what it saw.
+                assertTrue(out.rfind("=> \"at 7\" : String") >
+                               out.find("=> \"at 1000\" : String"), out);
+            }
+            std::filesystem::remove_all(root);
+        });
+
         it("keeps imported unit modules and lambda bindings live across reloads", []() {
             auto out = runBeamRepl(
                 "Units.Data.B\n"

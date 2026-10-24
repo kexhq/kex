@@ -28,6 +28,8 @@ inline auto replCommands() -> const std::vector<ReplCommand> & {
       {"/unload", "", "<mod>", "Unload a previously loaded module"},
       {"/reload", "", "", "Reload all loaded modules"},
       {"/reset", "", "", "Clear all bindings"},
+      {"/with", "", "<C> = <v>", "Replace capability C with v for the session"},
+      {"/without", "", "<C>", "Stop replacing capability C"},
   };
   return cmds;
 }

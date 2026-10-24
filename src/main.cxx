@@ -2235,6 +2235,124 @@ auto displayTypeOf(const kex::semantic::Analyzer &analyzer,
   return kex::semantic::typeToString(type);
 }
 
+// `/with Harmat.Connection = conn` keeps a capability replaced for the rest
+// of the REPL session (kexhq/kex#550): a `with ... do ... end` closes at its
+// `end`, so in an app console every query needed its own wrapper. The value
+// is evaluated once, into a hidden session binding, and every later input is
+// entered inside `with Capability = <binding> do ... end`.
+struct ReplSessionWith {
+  std::string capability;
+  std::string binding;
+  std::string value; // as typed, for `/with` to list
+};
+
+auto replWithBindingName(const std::string &capability) -> std::string {
+  std::string name = "__replWith_";
+  for (char c : capability)
+    name += c == '.' ? '_' : c;
+  return name;
+}
+
+// A capability name as `/with` and `/without` take it: dotted, each part
+// capitalized (`FS.File`).
+auto isReplCapabilityName(const std::string &name) -> bool {
+  if (name.empty()) return false;
+  bool partStart = true;
+  for (char c : name) {
+    if (partStart) {
+      if (!std::isupper((unsigned char)c)) return false;
+      partStart = false;
+    } else if (c == '.') {
+      partStart = true;
+    } else if (!std::isalnum((unsigned char)c) && c != '_') {
+      return false;
+    }
+  }
+  return !partStart;
+}
+
+auto trimReplWords(const std::string &s) -> std::string {
+  const auto start = s.find_first_not_of(" \t");
+  if (start == std::string::npos) return "";
+  const auto end = s.find_last_not_of(" \t\r\n");
+  return s.substr(start, end - start + 1);
+}
+
+// Handles `/with` and `/without`. Returns the input to go on with: empty when
+// the command was handled here, or — for `/with Capability = value` — the
+// hidden binding to evaluate, with `pending` set to the `with` to keep once it
+// has been evaluated and checked.
+auto handleReplWithCommand(const std::string &input,
+                           std::vector<ReplSessionWith> &withs,
+                           std::optional<ReplSessionWith> &pending)
+    -> std::string {
+  if (input == "/with") {
+    if (withs.empty())
+      std::cout << "  (no session with)\n";
+    for (const auto &with : withs)
+      std::cout << "  " << with.capability << " = " << with.value << "\n";
+    return "";
+  }
+  if (input.rfind("/without ", 0) == 0) {
+    const auto capability = trimReplWords(input.substr(9));
+    auto found = std::find_if(withs.begin(), withs.end(), [&](const auto &w) {
+      return w.capability == capability;
+    });
+    if (found == withs.end())
+      throw std::runtime_error("/without: no session with for `" +
+                               capability + "`");
+    withs.erase(found);
+    std::cout << "  (without " << capability << ")\n";
+    return "";
+  }
+  const auto rest = input.substr(6);
+  const auto equals = rest.find('=');
+  const auto capability =
+      trimReplWords(equals == std::string::npos ? rest : rest.substr(0, equals));
+  const auto value = equals == std::string::npos
+                         ? std::string()
+                         : trimReplWords(rest.substr(equals + 1));
+  if (!isReplCapabilityName(capability) || value.empty())
+    throw std::runtime_error(
+        "/with takes `Capability = value`, as `with` does");
+  pending = ReplSessionWith{capability, replWithBindingName(capability), value};
+  return "let " + pending->binding + " = " + value;
+}
+
+// The `with` lines the session's inputs are entered inside, and their `end`s.
+// `except` leaves out the capability being replaced: its hidden binding is
+// what the input rebinds.
+auto replWithOpen(const std::vector<ReplSessionWith> &withs,
+                  const std::string &except = "") -> std::string {
+  std::string open;
+  for (const auto &with : withs)
+    if (with.capability != except)
+      open += "  with " + with.capability + " = " + with.binding + " do\n";
+  return open;
+}
+
+auto replWithClose(const std::vector<ReplSessionWith> &withs,
+                   const std::string &except = "") -> std::string {
+  std::string close;
+  for (const auto &with : withs)
+    if (with.capability != except) close += "  end\n";
+  return close;
+}
+
+// The input's own last statement in a REPL main block: inside the session's
+// `with` wrappers, when there are any.
+auto replLastStatement(const kex::ast::MainBlock &main)
+    -> const kex::ast::Expr * {
+  if (main.body.empty()) return nullptr;
+  const kex::ast::Expr *last = main.body.back().get();
+  while (last) {
+    const auto *with = std::get_if<kex::ast::WithExpr>(&last->kind);
+    if (!with || with->body.empty()) break;
+    last = with->body.back().get();
+  }
+  return last;
+}
+
 // Prelude variant tags, so a compiled program can register their display info
 // the same way it registers the prelude's record layouts.
 auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag> {
@@ -3633,6 +3751,7 @@ int main(int argc, char *argv[]) {
     // source type and therefore cannot enforce typestate by itself.
     std::vector<std::pair<std::string, std::string>> beamSemanticBinds;
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
+    std::vector<ReplSessionWith> sessionWiths;
     int iteration = 0;
     // Each input's session module gets a name of its own. Reloading one stable
     // name on every input meant the BEAM purged the version two inputs back —
@@ -3797,10 +3916,28 @@ int main(int argc, char *argv[]) {
         localBinds.clear();
         mutableBinds.clear();
         beamSemanticBinds.clear();
+        sessionWiths.clear();
         beamReplDb.removeFile("<repl>");
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
         continue;
+      }
+      std::optional<ReplSessionWith> pendingWith;
+      if (input == "/with" || input.rfind("/with ", 0) == 0 ||
+          input.rfind("/without ", 0) == 0) {
+        try {
+          input = handleReplWithCommand(input, sessionWiths, pendingWith);
+        } catch (const std::exception &e) {
+          std::cerr << "  " << kex::color::apply(kex::color::red)
+                    << "error:" << kex::color::apply(kex::color::reset) << " "
+                    << e.what() << "\n";
+          if (g_replLineFromScript) {
+            g_replScriptFailed = true;
+            break;
+          }
+          continue;
+        }
+        if (input.empty()) continue;
       }
       if (input == "/set" || input.substr(0, 5) == "/set " ||
           input.substr(0, 7) == "/unset ") {
@@ -4183,9 +4320,13 @@ int main(int argc, char *argv[]) {
           for (const auto &[name, binding] : beamSemanticBinds)
             if (!isLocalLet || name != letVarName)
               semanticBindSource += "  " + binding + "\n";
+          const auto withExcept =
+              pendingWith ? pendingWith->capability : std::string();
+          const auto withOpen = replWithOpen(sessionWiths, withExcept);
+          const auto withClose = replWithClose(sessionWiths, withExcept);
           auto semanticSource = topDefsStr() + "main do\n" +
-                                semanticBindSource + "  " + source +
-                                "\nend\n";
+                                semanticBindSource + withOpen + "  " + source +
+                                "\n" + withClose + "end\n";
           kex::Lexer semanticLexer(semanticSource, "<repl>");
           kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
           auto semanticProgram = semanticParser.parseProgram();
@@ -4210,6 +4351,29 @@ int main(int argc, char *argv[]) {
                 throw std::runtime_error(diagnostic.message);
             throw std::runtime_error("semantic analysis failed");
           }
+          if (pendingWith) {
+            // The value has to be something `with` accepts for the
+            // capability; checked here, before it is kept, so a bad one does
+            // not break every input after it.
+            const auto withCheck =
+                topDefsStr() + "main do\n" + semanticBindSource + withOpen +
+                "  " + source + "\n  with " + pendingWith->capability + " = " +
+                pendingWith->binding + " do\n    0\n  end\n" + withClose +
+                "end\n";
+            kex::Lexer withLexer(withCheck, "<repl>");
+            kex::Parser withParser(withLexer.tokenizeAll(), "<repl>");
+            auto withProgram = withParser.parseProgram();
+            expandReplProgram(withProgram);
+            mergeLoadedForCheck(withProgram);
+            kex::semantic::Analyzer withAnalyzer(&preludeSemanticInterfaces());
+            if (!withAnalyzer.analyze(withProgram)) {
+              for (const auto &diagnostic : withAnalyzer.diagnostics())
+                if (diagnostic.level ==
+                    kex::semantic::Diagnostic::Level::Error)
+                  throw std::runtime_error(diagnostic.message);
+              throw std::runtime_error("semantic analysis failed");
+            }
+          }
           std::optional<std::string> beamSemanticType;
           for (auto item = semanticProgram.items.rbegin();
                item != semanticProgram.items.rend(); ++item) {
@@ -4217,7 +4381,7 @@ int main(int argc, char *argv[]) {
                 std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&*item);
             if (!main || !*main || (*main)->body.empty())
               continue;
-            const auto *last = (*main)->body.back().get();
+            const auto *last = replLastStatement(**main);
             const kex::ast::Expr *typedExpr = last;
             if (const auto *binding =
                     std::get_if<kex::ast::LetExpr>(&last->kind);
@@ -4305,17 +4469,20 @@ int main(int argc, char *argv[]) {
             } else {
               puts = putBack(letVarName);
             }
-            kexSource = topDefsStr() + "main do\n" + localBinds + bindLine +
-                        puts + mutablePuts +
-                        "  " + inspectCall(shown) + "\nend\n";
+            // A `/with` value is not echoed: the command answers for itself.
+            kexSource = topDefsStr() + "main do\n" + localBinds + withOpen +
+                        bindLine + puts + mutablePuts +
+                        (pendingWith ? "" : "  " + inspectCall(shown) + "\n") +
+                        withClose + "end\n";
           } else if (!mutatedName.empty()) {
-            kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" + mutablePuts +
-                        "  " + inspectCall(mutatedName) + "\nend\n";
-          } else {
-            kexSource = topDefsStr() + "main do\n" + localBinds +
-                        "  " + inspectCall(source) + "\n" + mutablePuts +
+            kexSource = topDefsStr() + "main do\n" + localBinds + withOpen +
+                        "  " + source + "\n" + mutablePuts +
+                        "  " + inspectCall(mutatedName) + "\n" + withClose +
                         "end\n";
+          } else {
+            kexSource = topDefsStr() + "main do\n" + localBinds + withOpen +
+                        "  " + inspectCall(source) + "\n" + mutablePuts +
+                        withClose + "end\n";
           }
 
           kex::Lexer lexer(kexSource);
@@ -4529,6 +4696,13 @@ int main(int argc, char *argv[]) {
                     }),
                 beamSemanticBinds.end());
             beamSemanticBinds.emplace_back(replayNames.front(), source);
+            if (pendingWith) {
+              std::erase_if(sessionWiths, [&](const auto &with) {
+                return with.capability == pendingWith->capability;
+              });
+              sessionWiths.push_back(*pendingWith);
+              std::cout << "  (with " << pendingWith->capability << ")\n";
+            }
           }
         }
       } catch (const std::exception &e) {
@@ -4612,6 +4786,7 @@ int main(int argc, char *argv[]) {
     // Local bindings are evaluated one input at a time, but their source is
     // retained here so semantic analysis can infer the type of later inputs.
     std::vector<std::pair<std::string, std::string>> replBindings;
+    std::vector<ReplSessionWith> sessionWiths;
     g_replCompletionContext = [&]() {
       ReplCompletionContext context{replAccumSource, {}};
       for (const auto &[name, binding] : replBindings)
@@ -4746,6 +4921,23 @@ int main(int argc, char *argv[]) {
       if (line.substr(0, 10) == "/complete ") {
         printReplCompletions(line.substr(10));
         continue;
+      }
+      std::optional<ReplSessionWith> pendingWith;
+      if (line == "/with" || line.rfind("/with ", 0) == 0 ||
+          line.rfind("/without ", 0) == 0) {
+        try {
+          line = handleReplWithCommand(line, sessionWiths, pendingWith);
+        } catch (const std::exception &e) {
+          std::cerr << "  " << kex::color::apply(kex::color::red)
+                    << "error:" << kex::color::apply(kex::color::reset) << " "
+                    << e.what() << "\n";
+          if (g_replLineFromScript) {
+            g_replScriptFailed = true;
+            break;
+          }
+          continue;
+        }
+        if (line.empty()) continue;
       }
       if (line.substr(0, 6) == "/load ") {
         auto filePath = line.substr(6);
@@ -5004,7 +5196,12 @@ int main(int argc, char *argv[]) {
                     << replDefinitionName(source) << "\n";
         } else {
           // Wrap in main for expression evaluation
-          auto wrapped = "main do\n" + source + "\nend\n";
+          const auto withExcept =
+              pendingWith ? pendingWith->capability : std::string();
+          const auto withOpen = replWithOpen(sessionWiths, withExcept);
+          const auto withClose = replWithClose(sessionWiths, withExcept);
+          auto wrapped =
+              "main do\n" + withOpen + source + "\n" + withClose + "end\n";
           kex::Lexer lexer(wrapped);
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
@@ -5022,7 +5219,7 @@ int main(int argc, char *argv[]) {
                 std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
             if (!main || !*main || (*main)->body.empty())
               continue;
-            const auto &lastKind = (*main)->body.back()->kind;
+            const auto &lastKind = replLastStatement(**main)->kind;
             // `var x = v` binds just as much as `let` does. The runtime value
             // lives in the evaluator's persistent REPL env either way; what
             // this record drives is the semantic replay below, and without it
@@ -5056,8 +5253,15 @@ int main(int argc, char *argv[]) {
             for (const auto &[name, binding] : replBindings)
               if (!bindingName || name != *bindingName)
                 bindingSource += binding + "\n";
+            // A `/with` value is checked against its capability before it is
+            // kept; its type is not shown, so the check can go last.
+            const auto withCheck =
+                pendingWith ? "with " + pendingWith->capability + " = " +
+                                  pendingWith->binding + " do\n0\nend\n"
+                            : std::string();
             auto semanticSource = replAccumSource + "main do\n" +
-                                  bindingSource + source + "\nend\n";
+                                  bindingSource + withOpen + source + "\n" +
+                                  withCheck + withClose + "end\n";
             kex::Lexer semanticLexer(semanticSource, "<repl>");
             kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
             auto semanticProgram = semanticParser.parseProgram();
@@ -5076,6 +5280,25 @@ int main(int argc, char *argv[]) {
                 merged.push_back(std::move(item));
               semanticProgram.items = std::move(merged);
             }
+            // A module the session names (`using Clocks`, `Clocks.stamp()`)
+            // is checked from its source, as the BEAM REPL does. Without it
+            // the checker knew the module's functions only from what the
+            // runtime had loaded, and none of its capabilities: `with
+            // Clocks.Ticker = ...` was rejected as "not a capability".
+            {
+              kex::semantic::Analyzer dependencyAnalysis(
+                  &preludeSemanticInterfaces());
+              (void)dependencyAnalysis.analyze(semanticProgram);
+              auto qualified = dependencyAnalysis.referencedModules();
+              std::erase_if(qualified, [](const std::string &module) {
+                const auto imported =
+                    preludeSemanticInterfaces().modules.find(module);
+                return imported != preludeSemanticInterfaces().modules.end() &&
+                       imported->second.automaticImport;
+              });
+              resolveBeamDeps(semanticProgram, walkerProjectRoots,
+                              &preludeSemanticInterfaces(), qualified);
+            }
             kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
             if (replAnalyzer.analyze(semanticProgram)) {
               for (auto item = semanticProgram.items.rbegin();
@@ -5084,7 +5307,7 @@ int main(int argc, char *argv[]) {
                     std::unique_ptr<kex::ast::MainBlock>>(&*item);
                 if (!main || !*main || (*main)->body.empty())
                   continue;
-                const auto *last = (*main)->body.back().get();
+                const auto *last = replLastStatement(**main);
                 const kex::ast::Expr *typedExpr = last;
                 if (const auto *binding =
                         std::get_if<kex::ast::LetExpr>(&last->kind);
@@ -5111,7 +5334,15 @@ int main(int argc, char *argv[]) {
             throw std::runtime_error(*semanticError);
 
           auto result = execProgram(program);
-          showResult(result, semanticType);
+          if (pendingWith) {
+            std::erase_if(sessionWiths, [&](const auto &with) {
+              return with.capability == pendingWith->capability;
+            });
+            sessionWiths.push_back(*pendingWith);
+            std::cout << "  (with " << pendingWith->capability << ")\n";
+          } else {
+            showResult(result, semanticType);
+          }
           if (bindingName) {
             replBindings.erase(
                 std::remove_if(

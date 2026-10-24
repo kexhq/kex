@@ -1,0 +1,22 @@
+# A module's own capability wins over the prelude's of the same name inside
+# that module. `Clock.now()` in `module Clocks`, beside its own `capability
+# Clock`, was resolved to the prelude's `Time.Clock` and died on BEAM with
+# `undef`; the walker already looked in the module first. The prelude's is
+# still there under its full name.
+using Clocks
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clocks.Clock do
+  foul now() -> Integer = @at
+end
+
+main do
+  IO.printLine(stamp())
+  with Clocks.Clock = FrozenClock { at: 7 } do
+    IO.printLine(stamp())
+  end
+  IO.printLine(recent?())
+end

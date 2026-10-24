@@ -42,6 +42,9 @@ kex> /load myfile.kex     # load a module from file
 kex> /unload MyModule     # unload a previously loaded module
 kex> /reload              # reload all loaded modules
 kex> /reset               # clear all bindings
+kex> /with FS.File = fake # replace a capability for the rest of the session
+kex> /with                # list the session's replaced capabilities
+kex> /without FS.File     # stop replacing it
 kex> /set <opt>           # enable a feature
 kex> /unset <opt>         # disable a feature
 kex> /complete prefix     # show completions for a prefix
@@ -81,6 +84,16 @@ for the tree-walk REPL:
 
 ```
 kex -e 'using App.Console' -e 'let store = App.Console.boot()'
+```
+
+`/with` keeps a capability replaced for the rest of the session, as if every
+later input were inside `with Capability = value do ... end`. The value is
+evaluated once and checked against the capability when it is set. It boots
+from `-e` like any other line, so an app console can hand every query its
+connection:
+
+```
+kex -e 'let conn = App.Console.boot()' -e '/with Harmat.Connection = conn'
 ```
 
 `kex` gates on type checking by default. Use `--no-check` to skip the

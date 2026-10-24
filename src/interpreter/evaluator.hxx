@@ -489,6 +489,20 @@ private:
         return members == m_capabilityMembers.end() ||
                members->second.contains(name);
     }
+    // A capability named from inside its module, or one nested in it, is
+    // `Ticker` there but `Clocks.Ticker` everywhere else. Replacements are
+    // keyed by the full name, as BEAM keys its context: a `with Clocks.Ticker`
+    // from the app never reached `Ticker.now()` inside `module Clocks`.
+    auto canonicalCapability(const std::string& name) const -> std::string {
+        auto scope = m_currentModule;
+        while (!scope.empty()) {
+            if (auto full = scope + "." + name; m_capabilityMembers.contains(full))
+                return full;
+            const auto dot = scope.rfind('.');
+            scope = dot == std::string::npos ? std::string() : scope.substr(0, dot);
+        }
+        return name;
+    }
     auto lookupCapability(const std::string& name) const -> ValuePtr {
         for (auto it = m_capabilityBindings.rbegin();
              it != m_capabilityBindings.rend(); ++it)

@@ -1,0 +1,13 @@
+# A capability declared in another module is replaced by its full name, and
+# that module's own code, which names it `Ticker`, sees the replacement. BEAM
+# did; the interpreter keyed the replacement `Tickers.Ticker` but looked up
+# `Ticker` inside `module Tickers`, so it kept running the default.
+using Tickers
+
+main do
+  IO.printLine(stamp())
+  with Tickers.Ticker = FrozenTicker { at: 7 } do
+    IO.printLine(stamp())
+  end
+  IO.printLine(stamp())
+end

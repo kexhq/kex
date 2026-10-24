@@ -1,0 +1,18 @@
+module Tickers
+
+capability Ticker do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
+record FrozenTicker do
+  at : Integer
+end
+
+make FrozenTicker, implement: Ticker do
+  foul now() -> Integer = @at
+end
+
+# Names the capability as its own module does, unqualified.
+foul stamp() -> String = "at ${Ticker.now()}"

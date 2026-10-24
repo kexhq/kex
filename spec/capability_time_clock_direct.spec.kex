@@ -1,0 +1,12 @@
+# `Time.Clock.now()` called directly, not through `DateTime.now` and the rest.
+# On BEAM it went out without its capability context: the compiler filed the
+# nested prelude module's `Time.Clock.now` as `Time`'s `now`, so the call was
+# `'Kex.Time.Clock':now/0` and died with `undef`.
+
+main do
+  let eve = DateTime.parse("1999-12-31T23:59:59Z").try
+  IO.printLine(Time.Clock.now().date.year > 2000)
+  with Time.Clock = Mock.Clock { at: eve } do
+    IO.printLine(Time.Clock.now().iso)
+  end
+end
