@@ -905,8 +905,8 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 // method on any receiver: `box.sha256`, `box.shiftLeft(1)`,
                 // `headers.set("a", "b")` all checked clean and then died at
                 // runtime with "Undefined method" (rodolfo docs/kex-issues.md
-                // #5). A module the file actually imports still suppresses —
-                // and so does a prelude one, which needs no import.
+                // #5). A module the call's own imports bring in still
+                // suppresses — and so does a prelude one, which needs no import.
                 if (!moduleInReach(moduleName, name)) continue;
                 if (module.exports.count(name)) return true;
             }

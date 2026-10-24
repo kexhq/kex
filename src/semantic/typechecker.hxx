@@ -402,9 +402,9 @@ private:
     std::unordered_map<const ast::TypeDef*, std::vector<ImportSelection>>
         m_typeImports;
     // Every module path any `using` in this program names, wherever it sits.
-    // `reportUnknownMethods` is a whole-program pass, so a file-wide union is
-    // the right granularity: it only ever decides whether a module's members
-    // COULD be in scope, and a union can only make that answer more generous.
+    // Not what decides whether a method name is in reach: that is the call's
+    // own imports (`m_unresolvedMethodImports`), since a union over the whole
+    // program let one module's `using` reach every other file (kexhq/kex#570).
     std::unordered_set<std::string> m_importedModulePaths;
     // "App.Geometry" -> "Geometry" for `module App do export Geometry end`
     // — every `export` in the program, global rather than scope-stacked
