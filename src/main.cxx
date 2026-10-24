@@ -3902,7 +3902,8 @@ int main(int argc, char *argv[]) {
           parser.parseProgram();
           throwOnParseErrors(parser);
         } catch (const std::exception& e) {
-          std::cerr << "  /load parse error: " << e.what() << "\n";
+          std::cerr << "  /load: " << filePath << " was not loaded: "
+                    << e.what() << "\n";
           continue;
         }
         // Checked with the session and the modules it uses before it joins:
