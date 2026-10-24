@@ -814,29 +814,56 @@ auto TypeChecker::reportUnknownMethods() -> void {
     // tests) are asking a different question entirely.
     if (!m_importedInterfaces) {
         m_unresolvedMethods.clear();
+        m_unresolvedMethodImports.clear();
         return;
     }
-    // Is this module named by some `using` in the program — directly, as a
-    // parent of one, or as a child? `using Data.Set` brings its siblings and
-    // children within reach too (see `registerModuleAliases`), and being
-    // generous here only costs a diagnostic, never a false error.
-    auto importedHere = [&](const std::string& moduleName) {
-        if (m_importedModulePaths.count(moduleName)) return true;
-        for (const auto& path : m_importedModulePaths)
-            if (moduleName.rfind(path + ".", 0) == 0 ||
-                path.rfind(moduleName + ".", 0) == 0)
+    // Is this module named by a `using` in force at the call — directly, as a
+    // parent of one, or as a child? `using Data.Set` brings its children
+    // within reach too (see `registerModuleAliases`), and being generous here
+    // only costs a diagnostic, never a false error. But only the call's own
+    // imports count, and only what their `only:`/`except:` let through. The
+    // whole program's imports used to: a spec file, which pulls in
+    // `Net.HTTP.WebSocket` and with it that module's `using Net.HTTP`, had
+    // `Net.HTTP.Server.localAddress` in reach without importing it, as did
+    // `using Net.HTTP, only: [Router]`. `running.localAddress` then checked
+    // clean as Unknown, and BEAM called the TCP listener's `localAddress`
+    // (kexhq/kex#570).
+    const std::vector<ImportSelection>* callImports = nullptr;
+    auto importedHere = [&](const std::string& moduleName,
+                            const std::string& member) {
+        if (!callImports) return false;
+        auto selected = [](const ImportSelection& import,
+                           const std::string& name) {
+            if (!import.onlyNames.empty() &&
+                std::find(import.onlyNames.begin(), import.onlyNames.end(),
+                          name) == import.onlyNames.end())
+                return false;
+            return std::find(import.exceptNames.begin(), import.exceptNames.end(),
+                             name) == import.exceptNames.end();
+        };
+        for (const auto& import : *callImports) {
+            const auto& path = import.module;
+            if (moduleName == path) {
+                if (selected(import, member)) return true;
+            } else if (moduleName.rfind(path + ".", 0) == 0) {
+                const auto rest = moduleName.substr(path.size() + 1);
+                if (selected(import, rest.substr(0, rest.find('.')))) return true;
+            } else if (path.rfind(moduleName + ".", 0) == 0) {
                 return true;
+            }
+        }
         return false;
     };
-    // A module is in reach when the file imports it, or when it is one of the
-    // automatically imported (prelude) ones that need no import at all.
-    auto moduleInReach = [&](const std::string& moduleName) {
+    // A module is in reach when the call's imports bring it in, or when it is
+    // one of the automatically imported (prelude) ones that need no import.
+    auto moduleInReach = [&](const std::string& moduleName,
+                             const std::string& member) {
         if (moduleName.empty()) return true;
         if (auto module = m_importedInterfaces->modules.find(moduleName);
             module != m_importedInterfaces->modules.end() &&
             module->second.automaticImport)
             return true;
-        return importedHere(moduleName);
+        return importedHere(moduleName, member);
     };
     auto knownSomewhere = [&](const std::string& name, bool fieldMayExist) {
         if (m_methodSignatures.count(name) || m_userSignatures.count(name) ||
@@ -867,7 +894,7 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 providers != m_importedInterfaces->receiverFunctions.end() &&
                 std::any_of(providers->second.begin(), providers->second.end(),
                             [&](const ImportedFunction& provider) {
-                                return moduleInReach(provider.sourceModule);
+                                return moduleInReach(provider.sourceModule, name);
                             }))
                 return true;
             for (const auto& [moduleName, module] :
@@ -878,9 +905,9 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 // method on any receiver: `box.sha256`, `box.shiftLeft(1)`,
                 // `headers.set("a", "b")` all checked clean and then died at
                 // runtime with "Undefined method" (rodolfo docs/kex-issues.md
-                // #5). A module the file actually imports still suppresses —
-                // and so does a prelude one, which needs no import.
-                if (!moduleInReach(moduleName)) continue;
+                // #5). A module the call's own imports bring in still
+                // suppresses — and so does a prelude one, which needs no import.
+                if (!moduleInReach(moduleName, name)) continue;
                 if (module.exports.count(name)) return true;
             }
             if (fieldMayExist)
@@ -892,7 +919,10 @@ auto TypeChecker::reportUnknownMethods() -> void {
         }
         return false;
     };
-    for (const auto& unresolved : m_unresolvedMethods) {
+    for (size_t i = 0; i < m_unresolvedMethods.size(); ++i) {
+        const auto& unresolved = m_unresolvedMethods[i];
+        callImports = i < m_unresolvedMethodImports.size()
+            ? &m_unresolvedMethodImports[i] : nullptr;
         // Checked here, not at the call: the guess may come later in the file.
         if (knownSomewhere(unresolved.name,
                            unresolved.fieldMayExist ||
@@ -905,6 +935,7 @@ auto TypeChecker::reportUnknownMethods() -> void {
                    : " for `" + unresolved.receiver + "`"));
     }
     m_unresolvedMethods.clear();
+    m_unresolvedMethodImports.clear();
 }
 
 // `namesOnly` runs the same traversal for its record IDENTITIES alone. Type
@@ -8959,6 +8990,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                              m_recordFields.count(resolveRecordName(named->name)))));
             m_unresolvedMethods.push_back(
                 {name, loc, typeToString(receiver), fieldMayExist});
+            auto& imports = m_unresolvedMethodImports.emplace_back(
+                m_declarationImports);
+            for (const auto& scope : m_importScopeStack)
+                imports.insert(imports.end(), scope.begin(), scope.end());
         }
         return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
     }

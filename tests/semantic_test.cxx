@@ -1139,10 +1139,18 @@ int main() {
                 "using Opt, only: [doubled]\n"
                 "let bad() = \"wrong\".doubled\n",
                 interfaces, "doubled"));
+            // Excluded is not imported: the name is out of reach, as with no
+            // `using` at all, so the call is undefined rather than checked
+            // against the excluded signature. It used to pass silently, the
+            // whole import counting despite `except:` (kexhq/kex#570).
+            assertTrue(hasErrorWithInterfaces(
+                "using Opt, except: [doubled]\n"
+                "main do \"wrong\".doubled end\n",
+                interfaces, "Undefined method `doubled`"));
             assertFalse(hasErrorWithInterfaces(
                 "using Opt, except: [doubled]\n"
                 "main do \"wrong\".doubled end\n",
-                interfaces, "doubled"));
+                interfaces, "expects argument"));
         });
 
         it("registers Regex as an opt-in typed stdlib module", []() {

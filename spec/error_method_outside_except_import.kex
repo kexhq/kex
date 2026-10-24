@@ -1,0 +1,12 @@
+# kex: check-only
+# `except:` takes a name out of reach as surely as leaving it unimported
+# (kexhq/kex#570). With `Server` excepted, `running.localAddress` is
+# undefined; the whole `using Net.HTTP` used to count anyway, and BEAM then
+# called the TCP listener's `localAddress`.
+using Net.HTTP, except: [Server]
+
+foul address(running: Net.HTTP.Server.Running) = running.localAddress
+
+main do
+  IO.printLine(Router.build)
+end

@@ -382,6 +382,10 @@ private:
     };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
     std::vector<ImportSelection> m_declarationImports;
+    // The imports in force at each of `m_unresolvedMethods`' calls, in step
+    // with it: whether a method name is in reach depends on the call's own
+    // file and block, not on what some other module of the program imports.
+    std::vector<std::vector<ImportSelection>> m_unresolvedMethodImports;
     auto resolveTraitReference(const std::string& written, const std::string& scope,
                                const std::vector<ImportSelection>* imports,
                                bool lastResort = true,
@@ -398,9 +402,9 @@ private:
     std::unordered_map<const ast::TypeDef*, std::vector<ImportSelection>>
         m_typeImports;
     // Every module path any `using` in this program names, wherever it sits.
-    // `reportUnknownMethods` is a whole-program pass, so a file-wide union is
-    // the right granularity: it only ever decides whether a module's members
-    // COULD be in scope, and a union can only make that answer more generous.
+    // Not what decides whether a method name is in reach: that is the call's
+    // own imports (`m_unresolvedMethodImports`), since a union over the whole
+    // program let one module's `using` reach every other file (kexhq/kex#570).
     std::unordered_set<std::string> m_importedModulePaths;
     // "App.Geometry" -> "Geometry" for `module App do export Geometry end`
     // — every `export` in the program, global rather than scope-stacked

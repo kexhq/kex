@@ -1,0 +1,14 @@
+# kex: check-only
+# A method is only in reach through the imports at its call, and only what
+# their `only:` lets through (kexhq/kex#570). `Net.HTTP.Server.localAddress`
+# is not imported here, so `running.localAddress` is undefined. It checked
+# clean instead, because the import of `Net.HTTP` counted whole, and BEAM then
+# called the TCP listener's `localAddress`: `function_clause` at run time. A
+# spec file got the same from `Net.HTTP.WebSocket`'s own `using Net.HTTP`.
+using Net.HTTP, only: [Router]
+
+foul address(running: Net.HTTP.Server.Running) = running.localAddress
+
+main do
+  IO.printLine(Router.build)
+end
