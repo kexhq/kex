@@ -230,10 +230,11 @@ foul dispatchArguments(args: [String]) -> Integer do
   end
 end
 
-# `kex` colors only a terminal, and every `kex` Tey starts — `tey test`,
-# `tey run`, a package command — writes through a pipe (`Process.stream` is a
-# port), even when that pipe ends on this same terminal. So when Tey itself is
-# coloring, it tells its children to as well. NO_COLOR, when set, is left to
+# `kex` colors only a terminal. Every `kex` Tey starts — `tey test`, `tey
+# run`, a package command — now writes to Tey's own stdout (`Process.stream`
+# hands its child the descriptors), so it sees the terminal Tey sees and
+# colors by itself; until it did, it wrote through a pipe and had to be told.
+# Telling it still agrees with what it sees. NO_COLOR, when set, is left to
 # win in every child; `Kex.AST` passes `--no-colors`, which outranks this, so
 # nothing Tey parses back picks up escape codes.
 foul relayColors -> Void do
