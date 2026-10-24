@@ -1,0 +1,11 @@
+# kex: check-only
+# The other side of error_method_outside_only_import.kex: an `only:` that
+# names `Server` keeps `Net.HTTP.Server.localAddress` in reach as a method
+# (kexhq/kex#570).
+using Net.HTTP, only: [Server]
+
+foul address(running: Net.HTTP.Server.Running) = running.localAddress
+
+main do
+  IO.printLine("checked")
+end

@@ -1,0 +1,1 @@
+spec/error_method_outside_only_import.kex:10:70: error: Undefined method `localAddress` for `Running`

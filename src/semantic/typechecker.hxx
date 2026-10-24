@@ -382,6 +382,10 @@ private:
     };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
     std::vector<ImportSelection> m_declarationImports;
+    // The imports in force at each of `m_unresolvedMethods`' calls, in step
+    // with it: whether a method name is in reach depends on the call's own
+    // file and block, not on what some other module of the program imports.
+    std::vector<std::vector<ImportSelection>> m_unresolvedMethodImports;
     auto resolveTraitReference(const std::string& written, const std::string& scope,
                                const std::vector<ImportSelection>* imports,
                                bool lastResort = true,
