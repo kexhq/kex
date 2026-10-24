@@ -1,0 +1,30 @@
+# A block whose parameters spread a tuple works over an Optional or a Result
+# on BEAM, as over a list and as in the walker. Their `map` and `flatMap` call
+# the block with one tuple, and BEAM's flexible call took that as a partial
+# application: `found.map { |name, _| name }` printed a function, and
+# `flatMap` died with function_clause. A capture filled in over several calls
+# still curries.
+let add(a: Integer, b: Integer) -> Integer = a + b
+
+main do
+  let found : (String, Integer)? = Just(("ada", 1))
+  IO.printLine(found.map { |name, _| name }.or("none"))
+  IO.printLine(found.flatMap { |name, n| Just("${name}${n}") }.or("none"))
+
+  let missing : (String, Integer)? = None
+  IO.printLine(missing.map { |name, _| name }.or("none"))
+
+  let got : Result<(String, Integer), String> = Ok(("eve", 3))
+  IO.printLine(got.map { |name, _| name }.or("none"))
+  IO.printLine(got.flatMap { |_, n| Ok(n * 2) }.or(0))
+
+  let triple : (Integer, Integer, Integer)? = Just((1, 2, 3))
+  IO.printLine(triple.map { |a, b, c| a + b + c }.or(0))
+
+  IO.printLine([("bob", 2)].map { |name, _| name }.join(","))
+
+  let plus = ~add
+  IO.printLine(plus(1, 2))
+  let plusOne = ~add(1)
+  IO.printLine(plusOne(2))
+end

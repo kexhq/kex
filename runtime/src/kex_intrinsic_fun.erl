@@ -94,6 +94,17 @@ applyFlexible(F, Args) when is_function(F) ->
     Count = length(Args),
     if
         Count =:= N -> erlang:apply(F, Args);
+        %% One tuple for a block of as many parameters is spread across them,
+        %% as the walker does and as applyItem already did for the list HOFs.
+        %% Generic stdlib code such as Optional's and Result's `map` calls the
+        %% block with one value, so `found.map { |name, _| name }` came back as
+        %% a partial application (or a function_clause from `flatMap`).
+        Count =:= 1, N > 1 ->
+            [Only] = Args,
+            case spreadable(Only, N) andalso not is_variant_term(Only) of
+                true -> erlang:apply(F, tuple_to_list(Only));
+                false -> partial(F, Args, N - Count)
+            end;
         Count > N ->
             {Now, Rest} = lists:split(N, Args),
             applyFlexible(erlang:apply(F, Now), Rest);
