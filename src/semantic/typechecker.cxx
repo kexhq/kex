@@ -1139,6 +1139,40 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
 auto TypeChecker::resolveModulePath(const std::string& name,
                                     const std::string& member) const
     -> std::string {
+    auto resolved = resolveImportedModulePath(name, member);
+    const auto exportsMember = [&](const std::string& module) {
+        if (m_localModules.contains(module) &&
+            m_userSignatures.contains(module + "::" + member))
+            return true;
+        if (!m_importedInterfaces) return false;
+        auto found = m_importedInterfaces->modules.find(module);
+        if (found == m_importedInterfaces->modules.end()) return false;
+        auto exported = found->second.exports.find(member);
+        return exported != found->second.exports.end() && !exported->second.empty();
+    };
+    // A module of the enclosing module's own comes before another module the
+    // name would otherwise reach: `Clock.now()` inside `module Clocks`,
+    // beside its own `capability Clock`, called the prelude's `Time.Clock`
+    // and failed on BEAM with `undef`, while the walker (which looks in the
+    // module first) was right. Only a name that does reach another module is
+    // settled here; a nested name that resolves to nothing is left as it is,
+    // for the lookups after this one.
+    if (!exportsMember(resolved)) return resolved;
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        const auto nested = scope + "." + name;
+        if (nested != resolved && m_localModules.contains(nested) &&
+            exportsMember(nested))
+            return nested;
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    return resolved;
+}
+
+auto TypeChecker::resolveImportedModulePath(const std::string& name,
+                                            const std::string& member) const
+    -> std::string {
     // A `make X<A> do ... end` block unconditionally creates a placeholder
     // `ifaces.modules[typeName]` entry while scanning its own methods
     // (`prelude_interfaces.hxx`'s `collectMakeMember`), keyed by the type's
@@ -1162,18 +1196,6 @@ auto TypeChecker::resolveModulePath(const std::string& name,
         const auto backend = "Kex." + module;
         return exportsMember(backend) ? backend : module;
     };
-    // A module of the enclosing module's own comes before a global one of
-    // the same name: `Clock.now()` inside `module Clocks`, beside its own
-    // `capability Clock`, called the prelude's `Clock` and failed on BEAM
-    // with `undef`, while the walker (which looks in the module first) was
-    // right.
-    for (auto scope = m_currentModulePath; !scope.empty();) {
-        const auto nested = scope + "." + name;
-        if (m_localModules.contains(nested) && exportsMember(nested)) return nested;
-        const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
-        scope.resize(dot);
-    }
     if (exportsMember(canonicalModule(name))) return canonicalModule(name);
     // `using M, as: A` binds `A` (and `A.Child`) to `M`. Innermost scope
     // first, so a block-level alias shadows a file-level one.

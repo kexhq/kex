@@ -551,6 +551,9 @@ private:
     // rules (kexhq/kex#229).
     auto resolveModulePath(const std::string& name,
                           const std::string& member) const -> std::string;
+    // The same, without the enclosing module's own nested modules.
+    auto resolveImportedModulePath(const std::string& name,
+                                   const std::string& member) const -> std::string;
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;
