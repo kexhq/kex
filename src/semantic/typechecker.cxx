@@ -5396,8 +5396,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // trait-shaped unit overload such as Watt * Hour must not
                 // capture Float * Float merely because both types also occur
                 // in generic receiver tables loaded from the prelude.
-                if (m_traits.satisfies(leftType, "Number") &&
-                    m_traits.satisfies(rightType, "Number"))
+                // Resolved first: a parameter `limit > 3` has already bound to
+                // Integer is still its type variable here, which satisfies
+                // nothing, so `limit - 1` went on to the overloads and picked
+                // `Duration`'s (kexhq/kex#563).
+                if (m_traits.satisfies(resolve(leftType), "Number") &&
+                    m_traits.satisfies(resolve(rightType), "Number"))
                     return inferBinaryOp(node.op, leftType, rightType,
                                          expr.location);
                 auto receiver = resolve(leftType);

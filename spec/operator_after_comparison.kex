@@ -1,0 +1,22 @@
+# An unannotated parameter that a comparison has bound to Integer still
+# takes the numeric operators (kexhq/kex#563). The checker tested the
+# parameter's type variable rather than what it was bound to, found no
+# Number, and resolved `limit - 1` against the operator overloads instead:
+# "`-` expects argument 2 to be Duration, but got Integer", and `+` picked
+# Binary's in a loop.
+let below(limit) = limit > 3 then limit - 1 else 0
+
+foul climb(n) do
+  var x = n
+  loop do
+    break if x > 3
+    x = x + 1
+  end
+  x
+end
+
+main do
+  IO.printLine(below(5))
+  IO.printLine(below(2))
+  IO.printLine(climb(1))
+end
