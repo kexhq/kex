@@ -3,6 +3,7 @@
 #include "reify.hxx"
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
+#include "../beam/kexi.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
@@ -17,6 +18,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <unordered_map>
@@ -1162,6 +1164,151 @@ auto trimmed(std::string text) -> std::string {
     return text;
 }
 
+// The options of the `expand` call in progress: what a template scan reads
+// its cache settings from, without threading them through every folder and
+// lowerer between `expand` and the scan. One compile is one thread.
+thread_local const ExpandOptions* activeOptions = nullptr;
+
+// One scanned template, as the cache keeps it.
+struct ScannedTemplate {
+    std::vector<TemplateNode> nodes;
+    std::vector<ExplicitParam> explicitParams;
+};
+
+auto scanCacheKey(const std::string& source, const std::string& toolchainKey) -> std::string {
+    const std::string material = "kex-template-scan-v1\n" + toolchainKey + "\n" + source;
+    const auto digest = beam::computeSha256(std::vector<uint8_t>(material.begin(), material.end()));
+    static const char* hex = "0123456789abcdef";
+    std::string key;
+    for (const auto byte : digest) {
+        key += hex[byte >> 4];
+        key += hex[byte & 0xF];
+    }
+    return key;
+}
+
+auto scanCachePath(const std::filesystem::path& root, const std::string& key) -> std::filesystem::path {
+    return root / "templates" / key.substr(0, 2) / (key + ".scan");
+}
+
+// Every string written as its length, a newline, then its bytes: a
+// template's text may hold anything, newlines included.
+auto writeCachedString(std::ostream& out, const std::string& text) -> void {
+    out << text.size() << "\n" << text;
+}
+
+auto readCachedString(std::istream& in, std::string& text) -> bool {
+    std::size_t size = 0;
+    if (!(in >> size)) return false;
+    if (in.get() != '\n') return false;
+    text.assign(size, '\0');
+    return static_cast<bool>(in.read(text.data(), static_cast<std::streamsize>(size)));
+}
+
+// A cached scan, or nullopt when there is no complete entry: the first line
+// marks a finished write, and a short or garbled file reads as no entry.
+auto readScanCache(const std::filesystem::path& entry) -> std::optional<ScannedTemplate> {
+    std::ifstream in(entry, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::string header;
+    if (!std::getline(in, header) || header != "kex-template-scan") return std::nullopt;
+    ScannedTemplate scanned;
+    std::size_t nodeCount = 0;
+    if (!(in >> nodeCount)) return std::nullopt;
+    for (std::size_t i = 0; i < nodeCount; i++) {
+        int kind = 0;
+        if (!(in >> kind) || kind < 0 || kind > static_cast<int>(TemplateNode::Kind::Comment)) return std::nullopt;
+        std::string text;
+        if (!readCachedString(in, text)) return std::nullopt;
+        scanned.nodes.push_back({static_cast<TemplateNode::Kind>(kind), std::move(text)});
+    }
+    std::size_t paramCount = 0;
+    if (!(in >> paramCount)) return std::nullopt;
+    for (std::size_t i = 0; i < paramCount; i++) {
+        ExplicitParam param;
+        if (!readCachedString(in, param.name) || !readCachedString(in, param.type)) return std::nullopt;
+        scanned.explicitParams.push_back(std::move(param));
+    }
+    return scanned;
+}
+
+// Written beside the final name and renamed into place, so two builds
+// sharing the cache never read half an entry; a failed write only means the
+// next build scans that template again.
+auto writeScanCache(const std::filesystem::path& entry, const ScannedTemplate& scanned) -> void {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(entry.parent_path(), ec);
+    if (ec) return;
+    // A suffix no other writer of the same entry picks: a random value for
+    // this process, and a count within it.
+    static const auto process = [] {
+        std::random_device device;
+        return (static_cast<unsigned long long>(device()) << 32) ^ device();
+    }();
+    static unsigned long long counter = 0;
+    auto staging = entry;
+    staging += ".tmp." + std::to_string(process) + "." + std::to_string(++counter);
+    {
+        std::ofstream out(staging, std::ios::binary);
+        if (!out) return;
+        out << "kex-template-scan\n" << scanned.nodes.size();
+        for (const auto& node : scanned.nodes) {
+            out << " " << static_cast<int>(node.kind) << " ";
+            writeCachedString(out, node.text);
+        }
+        out << " " << scanned.explicitParams.size();
+        for (const auto& param : scanned.explicitParams) {
+            out << " ";
+            writeCachedString(out, param.name);
+            out << " ";
+            writeCachedString(out, param.type);
+        }
+        if (!out) { out.close(); fs::remove(staging, ec); return; }
+    }
+    fs::rename(staging, entry, ec);
+    if (ec) fs::remove(staging, ec);
+}
+
+auto scanTemplateSourceUncached(const std::string& source, std::chrono::milliseconds timeout,
+                                std::vector<TemplateNode>& nodes,
+                                std::vector<ExplicitParam>& explicitParams,
+                                std::string& error) -> bool;
+
+// A template's scan: this process's own, then the cache's, then a real one
+// (written back to both). Only a scan that succeeded is kept — a failing one
+// must report its error again on the next build.
+auto scanTemplateSource(const std::string& source, std::chrono::milliseconds timeout,
+                         std::vector<TemplateNode>& nodes,
+                         std::vector<ExplicitParam>& explicitParams,
+                         std::string& error) -> bool {
+    static std::unordered_map<std::string, ScannedTemplate> scannedHere;
+    const std::string toolchainKey = activeOptions ? activeOptions->toolchainKey : std::string{};
+    const auto key = scanCacheKey(source, toolchainKey);
+    const auto use = [&](const ScannedTemplate& scanned) {
+        nodes = scanned.nodes;
+        explicitParams = scanned.explicitParams;
+        return true;
+    };
+    if (auto found = scannedHere.find(key); found != scannedHere.end()) return use(found->second);
+    const bool persistent = activeOptions && !activeOptions->scanCache.empty() &&
+                            !activeOptions->toolchainKey.empty();
+    const auto entry = persistent ? scanCachePath(activeOptions->scanCache, key)
+                                  : std::filesystem::path{};
+    if (persistent) {
+        if (auto cached = readScanCache(entry)) {
+            auto& kept = scannedHere.emplace(key, std::move(*cached)).first->second;
+            return use(kept);
+        }
+    }
+    ScannedTemplate scanned;
+    if (!scanTemplateSourceUncached(source, timeout, scanned.nodes, scanned.explicitParams, error))
+        return false;
+    if (persistent) writeScanCache(entry, scanned);
+    auto& kept = scannedHere.emplace(key, std::move(scanned)).first->second;
+    return use(kept);
+}
+
 // Runs the REAL `Template.scan` at compile time (via the same sandboxed
 // Evaluator `compiled do` blocks use) and reads its `nodes` and frontmatter
 // `params` directly out of the returned Value — no scanning logic duplicated
@@ -1170,10 +1317,10 @@ auto trimmed(std::string text) -> std::string {
 //
 // Returns false and sets `error` on a scan failure or a sandbox crash; both
 // are compile errors at the call site, never a silently empty template.
-auto scanTemplateSource(const std::string& source, std::chrono::milliseconds timeout,
-                         std::vector<TemplateNode>& nodes,
-                         std::vector<ExplicitParam>& explicitParams,
-                         std::string& error) -> bool {
+auto scanTemplateSourceUncached(const std::string& source, std::chrono::milliseconds timeout,
+                                std::vector<TemplateNode>& nodes,
+                                std::vector<ExplicitParam>& explicitParams,
+                                std::string& error) -> bool {
     ast::Expr sourceLit;
     sourceLit.kind = ast::StringLiteral{source, false};
     ast::Expr receiver;
@@ -2301,6 +2448,12 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
 auto expand(ast::Program& program,
             std::vector<semantic::Diagnostic>& diagnostics,
             const ExpandOptions& options) -> bool {
+    // Template scans read their cache settings from here (scanTemplateSource).
+    struct ActiveOptions {
+        const ExpandOptions* previous;
+        explicit ActiveOptions(const ExpandOptions& options) : previous(activeOptions) { activeOptions = &options; }
+        ~ActiveOptions() { activeOptions = previous; }
+    } active{options};
     // --- 0. Fold Kex.embed(...) and Template.text/.html(...) everywhere.
     // Unconditional: a program using either has no `compiled do` block at
     // all, so both must run before the hasBlock check below would otherwise
