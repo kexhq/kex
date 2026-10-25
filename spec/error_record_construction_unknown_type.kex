@@ -1,0 +1,7 @@
+# A record construction must name a declared record. `Crew {}` with no `Crew`
+# anywhere was accepted: the walker built an empty record, BEAM a bare
+# `:Crew` atom.
+main do
+  let crew = Crew {}
+  IO.printLine(crew.to(String))
+end
