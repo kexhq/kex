@@ -7,6 +7,12 @@
 # lands in this program's own output, between what the program printed
 # before and after it.
 #
+# Not checked here: that the child reads the caller's stdin and sees a
+# terminal (the runners feed no stdin, and capture through pipes), and that
+# its stderr stays apart from stdout (the walker suite reads the two merged,
+# the BEAM suite one after the other, so no one golden file can say where
+# it went). `make test-process-stream-pty` checks both, under a real pty.
+#
 # Skipped under wasm: there are no child processes there.
 
 main do

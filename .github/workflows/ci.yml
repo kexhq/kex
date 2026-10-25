@@ -420,6 +420,11 @@ jobs:
       - name: Test tey launcher's stdin/pty handling
         run: make -o build test-tey-launcher
 
+      # kexhq/kex#572: a Process.stream child gets the caller's terminal and
+      # stderr, which every Tey command relies on; only a pty shows it.
+      - name: Test Process.stream's terminal handling
+        run: make -o build test-process-stream-pty
+
       # Compiling Tey is the next assertion: it either builds with this
       # compiler or it does not.
       - name: Build Tey
