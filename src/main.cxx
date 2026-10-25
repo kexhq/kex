@@ -104,6 +104,88 @@ static auto replInputIsDeclaration(const std::string &input) -> bool {
   return i != std::string::npos && input[i] != '=';
 }
 
+auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string>;
+
+// The modules under the REPL's source roots, by the name each file declares:
+// what a dotted name typed at the prompt can lead to. Read once a session —
+// the roots are fixed when it starts — and only each file's own `module`
+// line, so `DB.` costs no parsing.
+static auto replRootModules() -> const std::vector<std::string> & {
+  static const std::vector<std::string> modules = [] {
+    namespace fs = std::filesystem;
+    std::set<std::string> found;
+    const auto roots =
+        moduleRootsFor((fs::current_path() / "<repl>").string());
+    for (const auto &root : roots) {
+      std::error_code ec;
+      fs::recursive_directory_iterator walk(
+          root, fs::directory_options::skip_permission_denied, ec);
+      for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
+        const auto &entry = *walk;
+        const auto name = entry.path().filename().string();
+        if (entry.is_directory(ec)) {
+          if (!name.empty() && (name[0] == '.' || name == "ebin" ||
+                                name == "node_modules"))
+            walk.disable_recursion_pending();
+          continue;
+        }
+        if (entry.path().extension() != ".kex" || name.ends_with(".spec.kex"))
+          continue;
+        std::ifstream input(entry.path());
+        for (std::string text; std::getline(input, text);) {
+          if (text.rfind("module ", 0) != 0) continue;
+          auto module = text.substr(7);
+          module.erase(std::find_if(module.begin(), module.end(),
+                                    [](unsigned char c) {
+                                      return !(std::isalnum(c) || c == '.' || c == '_');
+                                    }),
+                       module.end());
+          if (!module.empty()) found.insert(module);
+          break;
+        }
+      }
+    }
+    return std::vector<std::string>(found.begin(), found.end());
+  }();
+  return modules;
+}
+
+// Completions for a dotted name the REPL's own index cannot know: a module
+// under a source root. `qualified` is the path up to the word being typed
+// (`DB.Repositories.Users.`, or "" for a bare word). The module it names is
+// loaded into the index the first time, so its members complete as the
+// prelude's do; and the next part of every module whose name it begins
+// (`DB.` offers `Repositories`, `Schema`, `Store`) is offered too.
+static auto replRootCompletions(const std::string &qualified,
+                                const std::string &word)
+    -> std::vector<std::string> {
+  std::vector<std::string> matches;
+  if (!g_replCompletionDb) return matches;
+  if (!qualified.empty()) {
+    static std::set<std::string> loaded;
+    const auto module = qualified.substr(0, qualified.size() - 1);
+    if (loaded.insert(module).second) {
+      kex::module::Resolver resolver(
+          moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
+      if (const auto resolved = resolver.resolve(module)) {
+        std::ifstream input(resolved->path);
+        std::stringstream text;
+        text << input.rdbuf();
+        g_replCompletionDb->updateFile(resolved->path, text.str());
+      }
+    }
+    for (auto &match : g_replCompletionDb->completionsFor(qualified + word))
+      if (match.rfind(qualified, 0) == 0)
+        matches.push_back(match.substr(qualified.size()));
+  }
+  for (const auto &module : replRootModules()) {
+    if (module.rfind(qualified + word, 0) != 0) continue;
+    const auto rest = module.substr(qualified.size());
+    matches.push_back(rest.substr(0, rest.find('.')));
+  }
+  return matches;
+}
+
 // Completions for `line` at byte offset `point`. `replaceFrom` is where, in
 // `line`, the word each match replaces starts.
 static auto replCompleteAt(const std::string &line, size_t point)
@@ -124,6 +206,37 @@ static auto replCompleteAt(const std::string &line, size_t point)
       *g_replCompletionDb, *g_replAnalysisDb, "<repl-completion>", program,
       lineStart + std::min(point, line.size()), &preludeSemanticInterfaces());
   completion.replaceFrom -= lineStart;
+  // A name that is not an expression's member — `DB.`, `DB.Repositories.Us`,
+  // `Conf` — may be a module under a source root the index has not loaded.
+  if (completion.qualifier.empty()) {
+    const auto isWord = [](unsigned char c) {
+      return std::isalnum(c) || c == '_' || c == '?' || c == '!';
+    };
+    const auto end = std::min(point, line.size());
+    size_t wordStart = end;
+    while (wordStart > 0 && isWord(static_cast<unsigned char>(line[wordStart - 1])))
+      --wordStart;
+    size_t pathStart = wordStart;
+    while (pathStart > 0 &&
+           (isWord(static_cast<unsigned char>(line[pathStart - 1])) ||
+            line[pathStart - 1] == '.'))
+      --pathStart;
+    const auto qualified = line.substr(pathStart, wordStart - pathStart);
+    const auto word = line.substr(wordStart, end - wordStart);
+    // Only a module path: a lower-case part before the word (`users.`) is a
+    // value, which the analyzer has already answered for.
+    const bool modulePath = qualified.empty()
+        ? !word.empty() && std::isupper(static_cast<unsigned char>(word[0]))
+        : std::isupper(static_cast<unsigned char>(qualified[0]));
+    if (modulePath) {
+      for (auto &match : replRootCompletions(qualified, word))
+        completion.matches.push_back(std::move(match));
+      std::sort(completion.matches.begin(), completion.matches.end());
+      completion.matches.erase(
+          std::unique(completion.matches.begin(), completion.matches.end()),
+          completion.matches.end());
+    }
+  }
   return completion;
 }
 
