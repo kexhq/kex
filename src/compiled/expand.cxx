@@ -5,9 +5,11 @@
 #include "../ast/function_groups.hxx"
 #include "../beam/kexi.hxx"
 #include "../common/prelude_loader.hxx"
+#include "../common/type_def_utils.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
 #include "../lexer/lexer.hxx"
+#include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 
 #include <algorithm>
@@ -2347,6 +2349,172 @@ auto useModuleRoots(interpreter::Evaluator& evaluator,
     evaluator.setModuleRoots(std::move(roots));
 }
 
+// ADT constructors are pure value builders. Reified constants use their
+// module-qualified spelling even when the current source file does not import
+// that module directly. Recognize those calls so a query chain containing a
+// reified schema record can still be folded through to its SQL statement.
+auto constructorsInFile(const std::string& path)
+    -> const std::unordered_set<std::string>& {
+    static std::unordered_map<std::string, std::unordered_set<std::string>> seen;
+    if (auto found = seen.find(path); found != seen.end())
+        return found->second;
+    std::unordered_set<std::string> names;
+    try {
+        std::ifstream input(path);
+        std::stringstream source;
+        source << input.rdbuf();
+        Lexer lexer(source.str(), path);
+        Parser parser(lexer.tokenizeAll(), path);
+        auto program = parser.parseProgram();
+        if (parser.diagnostics().empty()) {
+            auto scanType = [&](const ast::TypeDef& type, const std::string& scope) {
+                if (!type.variants || type.isDistinct ||
+                    kex::isTransparentTypeAlias(type)) return;
+                for (const auto& variant : *type.variants) {
+                    if (!variant) continue;
+                    const ast::TypeName* name =
+                        std::get_if<ast::TypeName>(&variant->kind);
+                    if (const auto* generic =
+                            std::get_if<ast::GenericType>(&variant->kind))
+                        name = &generic->name;
+                    if (name && !name->parts.empty())
+                        names.insert(qualifiedName(scope, name->parts.back()));
+                }
+            };
+            for (const auto& item : program.items) {
+                if (const auto* mod =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                    mod && *mod) {
+                    for (const auto& entry : (*mod)->body)
+                        if (const auto* type =
+                                std::get_if<std::unique_ptr<ast::TypeDef>>(&entry);
+                            type && *type)
+                            scanType(**type, (*mod)->name);
+                } else if (const auto* type =
+                               std::get_if<std::unique_ptr<ast::TypeDef>>(&item);
+                           type && *type) {
+                    scanType(**type, "");
+                }
+            }
+        }
+    } catch (const std::exception&) {
+    }
+    return seen.emplace(path, std::move(names)).first->second;
+}
+
+// The `compiled do` names declared in one module's file, read once per path:
+// a module is `using`-ed by many files of a build, and every one of them asks.
+// A file that does not parse declares nothing here — compiling it reports why.
+auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
+    static std::unordered_map<std::string, CompiledNames> seen;
+    if (const auto found = seen.find(path); found != seen.end())
+        return found->second;
+    CompiledNames names;
+    try {
+        std::ifstream input(path);
+        std::stringstream source;
+        source << input.rdbuf();
+        Lexer lexer(source.str(), path);
+        Parser parser(lexer.tokenizeAll(), path);
+        names = compiledNames(parser.parseProgram());
+    } catch (const std::exception&) {
+    }
+    return seen.emplace(path, std::move(names)).first->second;
+}
+
+// Adds the compiled names of the modules `program` uses, as `program` calls
+// them, so that a builder declared in another module's `compiled do`
+// collapses here too, not only in the file that declares it. A module's
+// `Mod::fn` is known by its full name, by `Alias::fn` under `as: Alias`, and
+// as a bare `fn` where `using Mod` brings it in unqualified — every name, or
+// those `only:` names, less the `except:` ones. Methods of a compiled `make`
+// are found by their receiver, wherever it was made, so they come as they are.
+//
+// Only recognition is widened. The sandbox already loads a used module from
+// the same roots, and still decides by trying: a name recognized here that
+// cannot be evaluated is kept for runtime, as any other.
+auto addImportedCompiledNames(const ast::Program& program,
+                              const ExpandOptions& options,
+                              CompiledNames& into) -> void {
+    auto roots = options.moduleRoots;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(roots.begin(), roots.end(), root) == roots.end())
+            roots.push_back(std::move(root));
+    const module::Resolver resolver(roots);
+
+    auto add = [&](const ast::UsingBlock& use, const std::string& scope) {
+        std::string name;
+        for (const auto& part : use.module.parts)
+            name += (name.empty() ? "" : ".") + part;
+        const auto resolved = resolver.resolve(name, scope);
+        if (!resolved) return;
+        const auto& theirs = compiledNamesInFile(resolved->path);
+        const auto prefix = resolved->moduleName + "::";
+        for (const auto& identity : theirs.qualified) {
+            if (identity.rfind(prefix, 0) != 0) continue;
+            const auto bare = identity.substr(prefix.size());
+            if (bare.find("::") != std::string::npos) continue;
+            into.qualified.insert(identity);
+            if (name != resolved->moduleName)
+                into.qualified.insert(qualifiedName(name, bare));
+            if (use.alias) {
+                into.qualified.insert(qualifiedName(*use.alias, bare));
+                continue;
+            }
+            const auto& only = use.onlyNames;
+            const auto& except = use.exceptNames;
+            const bool brought =
+                only.empty()
+                    ? std::find(except.begin(), except.end(), bare) == except.end()
+                    : std::find(only.begin(), only.end(), bare) != only.end();
+            if (brought) into.functions.insert(bare);
+        }
+        into.methods.insert(theirs.methods.begin(), theirs.methods.end());
+    };
+
+    auto scan = [&](auto&& self, const auto& items,
+                    const std::string& scope) -> void {
+        for (const auto& item : items) {
+            if (const auto* use =
+                    std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
+                if (*use) add(**use, scope);
+            } else if (const auto* mod =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
+            }
+        }
+    };
+    scan(scan, program.items, std::string{});
+
+    // A reified value can mention a constructor of a module the file does
+    // not `using` itself. Resolve only actual ADT declarations; an arbitrary
+    // module function must never be evaluated just because it has no args.
+    Constants none;
+    std::vector<semantic::Diagnostic> unused;
+    Substituter finder{none, unused, {}, {}, {}};
+    finder.onSlot = [&](ast::ExprPtr& slot) {
+        const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+        std::string owner;
+        if (call && call->receiver &&
+            finder.qualifierPath(*call->receiver, owner)) {
+            if (const auto resolved = resolver.resolve(owner, "")) {
+                const auto identity = qualifiedName(resolved->moduleName,
+                                                    call->method);
+                if (constructorsInFile(resolved->path).count(identity))
+                    into.qualified.insert(qualifiedName(owner, call->method));
+            }
+        }
+        return false;
+    };
+    walkBodies(program.items, [&](auto& target) {
+        using T = std::decay_t<decltype(target)>;
+        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            finder.functionBody(target);
+        else
+            finder.substitute(target);
+    });
+}
+
 // Finds every collapsible expression in `program`, evaluates them in one
 // sandbox run, and replaces those that produced a reifiable value.
 //
@@ -2359,7 +2527,8 @@ auto useModuleRoots(interpreter::Evaluator& evaluator,
 // Terminates because a round only repeats when the rejected set GREW, and a
 // program has finitely many expressions.
 auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void {
-    const auto compiled = compiledNames(program);
+    auto compiled = compiledNames(program);
+    addImportedCompiledNames(program, options, compiled);
     if (compiled.empty()) return;
 
     std::unordered_set<const ast::Expr*> rejected;
@@ -2406,6 +2575,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         std::vector<interpreter::ValuePtr> values;
         std::vector<std::string> reasons;
         RecordLayouts layouts;
+        std::unordered_map<std::string, std::string> typeModules;
         try {
             interpreter::Evaluator evaluator;
             useModuleRoots(evaluator, options);
@@ -2414,6 +2584,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
                 program, requests, options.timeout,
                 options.report ? &reasons : nullptr);
             layouts = evaluator.recordFieldOrder();
+            typeModules = evaluator.typeModules();
         } catch (const std::exception&) {
             // Collapse is an optimization: if the sandbox itself cannot run,
             // the program still compiles and builds its values at runtime.
@@ -2432,7 +2603,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             const SourceLocation where = (*candidate.slot)->location;
             auto literal =
                 values[i] ? valueToLiteral(values[i], where, why,
-                                           {&layouts, &candidate.exprs})
+                                           {&layouts, &candidate.exprs, &typeModules})
                           : nullptr;
             if (literal) {
                 *candidate.slot = std::move(literal);
@@ -2450,6 +2621,201 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         }
         if (!grew) return;
     }
+}
+
+// --- Constants across modules ----------------------------------------------
+//
+// A `compiled do` constant is known while compiling, so it is known to every
+// module that refers to it, not only to the one that declares it: there it
+// is substituted as the literal it is, exactly as in its own module. Its
+// declaring module still drops it from the emitted code, and nothing is left
+// to call at runtime — what reads `DB.Schema.Users` reads the table itself,
+// written into the program. A builder chain over such a value is then known
+// all the way through, and collapses.
+
+// What a module's `compiled do` blocks evaluated, by the module that owns
+// each constant, with the record layouts that writing them as literals needs.
+struct ModuleExports {
+    ScopedConstants constants;
+    RecordLayouts layouts;
+    std::unordered_map<std::string, std::string> modules;
+};
+
+// The expansion that `exportsOf` is running, and where its constants go. Only
+// the expansion of that very file writes here: the sandbox expands every
+// module it loads, through this same function, and those are not asked.
+struct ExportSink {
+    std::string path;
+    ModuleExports* into;
+};
+thread_local ExportSink* exportSink = nullptr;
+
+// Whether a parsed file declares any compile-time constant at all — most do
+// not, and those need no expansion to say so.
+auto declaresConstants(const ast::Program& program) -> bool {
+    bool found = false;
+    auto scan = [&](auto&& self, const auto& items) -> void {
+        for (const auto& item : items) {
+            if (const auto* block =
+                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
+                if (!*block) continue;
+                for (const auto& entry : (*block)->items)
+                    if (const auto* fn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
+                        if (*fn && isValueBinding(**fn)) found = true;
+            } else if (const auto* mod =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) self(self, (*mod)->body);
+            }
+        }
+    };
+    scan(scan, program.items);
+    return found;
+}
+
+// The constants a module's file declares, evaluated: by expanding a fresh
+// parse of it, once per file. Null for a file already being expanded for its
+// constants further up — modules that refer to each other's constants in a
+// cycle cannot both be first, and the one asked second sees none.
+auto exportsOf(const std::string& path, const ExpandOptions& options)
+    -> const ModuleExports* {
+    static std::unordered_map<std::string, ModuleExports> seen;
+    static std::unordered_set<std::string> underway;
+    if (const auto found = seen.find(path); found != seen.end())
+        return &found->second;
+    if (!underway.insert(path).second) return nullptr;
+    ModuleExports exports;
+    auto* previous = exportSink;
+    try {
+        std::ifstream input(path);
+        std::stringstream source;
+        source << input.rdbuf();
+        Lexer lexer(source.str(), path);
+        Parser parser(lexer.tokenizeAll(), path);
+        auto program = parser.parseProgram();
+        if (parser.diagnostics().empty() && declaresConstants(program)) {
+            ExpandOptions inner;
+            inner.sourcePath = path;
+            inner.moduleRoots = options.moduleRoots;
+            inner.timeout = options.timeout;
+            inner.stepLimit = options.stepLimit;
+            inner.scanCache = options.scanCache;
+            inner.toolchainKey = options.toolchainKey;
+            ExportSink sink{path, &exports};
+            exportSink = &sink;
+            std::vector<semantic::Diagnostic> ignored;
+            (void)expand(program, ignored, inner);
+        }
+    } catch (const std::exception&) {
+    }
+    exportSink = previous;
+    underway.erase(path);
+    return &seen.emplace(path, std::move(exports)).first->second;
+}
+
+// Substitutes, in `program`, every reference to another module's compile-time
+// constant with its literal: `DB.Schema.Users`, `Config.LIMIT`, and `A.X` under
+// `using M, as: A`. Before anything else is evaluated, so that the program's
+// own constants and chains may be made of them. Every qualified name the
+// program mentions is a candidate owner; one that is no module, or a module
+// that declares no constants, costs a lookup and a parse, once.
+auto importConstants(ast::Program& program, const ExpandOptions& options,
+                     std::vector<semantic::Diagnostic>& diagnostics) -> bool {
+    auto roots = options.moduleRoots;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(roots.begin(), roots.end(), root) == roots.end())
+            roots.push_back(std::move(root));
+    const module::Resolver resolver(roots);
+
+    // Owner as written, and the module it names.
+    std::unordered_map<std::string, std::string> owners;
+    auto scanUsings = [&](auto&& self, const auto& items) -> void {
+        for (const auto& item : items) {
+            if (const auto* use =
+                    std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
+                if (!*use) continue;
+                std::string name;
+                for (const auto& part : (*use)->module.parts)
+                    name += (name.empty() ? "" : ".") + part;
+                if ((*use)->alias) owners.emplace(*(*use)->alias, name);
+            } else if (const auto* mod =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) self(self, (*mod)->body);
+            }
+        }
+    };
+    scanUsings(scanUsings, program.items);
+    {
+        Constants none;
+        std::vector<semantic::Diagnostic> unused;
+        Substituter finder{none, unused, {}, {}, {}};
+        finder.onSlot = [&](ast::ExprPtr& slot) {
+            const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+            std::string owner;
+            if (call && call->receiver && call->args.empty() &&
+                call->namedArgs.empty() && !call->block &&
+                finder.qualifierPath(*call->receiver, owner))
+                owners.emplace(owner, owner);
+            return false;
+        };
+        walkBodies(program.items, [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                finder.functionBody(target);
+            else
+                finder.substitute(target);
+        });
+    }
+
+    ScopedConstants imported;
+    RecordLayouts layouts;
+    std::unordered_map<std::string, std::string> modules;
+    for (const auto& [written, named] : owners) {
+        const auto resolved = resolver.resolve(named, "");
+        if (!resolved) continue;
+        if (std::filesystem::weakly_canonical(resolved->path) ==
+            std::filesystem::weakly_canonical(options.sourcePath))
+            continue;
+        const auto* exports = exportsOf(resolved->path, options);
+        if (!exports) continue;
+        const auto theirs = exports->constants.find(resolved->moduleName);
+        if (theirs == exports->constants.end() || theirs->second.empty())
+            continue;
+        imported[written] = theirs->second;
+        for (const auto& [record, fields] : exports->layouts)
+            layouts.emplace(record, fields);
+        for (const auto& [type, owner] : exports->modules)
+            modules.emplace(type, owner);
+    }
+    if (imported.empty()) return true;
+
+    Constants none;
+    Substituter substituter{
+        none, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &modules}};
+    substituter.scoped = &imported;
+    walkBodies(program.items, [&](auto& target) {
+        using T = std::decay_t<decltype(target)>;
+        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            substituter.functionBody(target);
+        else
+            substituter.substitute(target);
+    });
+    bool ok = true;
+    std::unordered_set<std::string> reported;
+    for (const auto& reference : substituter.remaining) {
+        if (!reported.insert(reference).second) continue;
+        const auto split = reference.rfind("::");
+        std::string why;
+        if (split != std::string::npos)
+            (void)valueToLiteral(
+                imported[reference.substr(0, split)].at(reference.substr(split + 2)),
+                SourceLocation{}, why, {&layouts, nullptr, &modules});
+        addError(diagnostics, SourceLocation{},
+                 "compile-time constant `" + reference +
+                     "` cannot be inlined: " + why);
+        ok = false;
+    }
+    return ok;
 }
 } // namespace
 
@@ -2477,6 +2843,10 @@ auto expand(ast::Program& program,
     if (!foldTemplates(program, diagnostics, options, templateCounter))
         return false;
 
+    // --- 0b. Other modules' constants, as literals: before this file's own
+    // are evaluated, since those may be made of them.
+    if (!importConstants(program, options, diagnostics)) return false;
+
     // --- 1. Find the constants, in source order.
     std::vector<std::string> names;
     std::vector<SourceLocation> locations;
@@ -2500,7 +2870,12 @@ auto expand(ast::Program& program,
         }
     };
     scan(scan, program.items, "");
-    if (!hasBlock) return true;
+    // A file with no block of its own still calls the builders of the modules
+    // it uses: that is most of them, an application's every file.
+    if (!hasBlock) {
+        collapseChains(program, options);
+        return true;
+    }
 
     // Which scope does each generation template belong to? A `let %name(...)`
     // inside `module M do compiled do ... end end` must produce a method OF M,
@@ -2564,6 +2939,7 @@ auto expand(ast::Program& program,
     // included — a reified record has to be written in its declared order,
     // which on BEAM is its tuple layout.
     RecordLayouts layouts;
+    std::unordered_map<std::string, std::string> typeModules;
     {
         const SourceLocation blame =
             locations.empty() ? SourceLocation{} : locations.front();
@@ -2575,6 +2951,7 @@ auto expand(ast::Program& program,
             values = evaluator.evaluateConstants(program, names, options.timeout);
             generated = evaluator.generatedDeclarations();
             layouts = evaluator.recordFieldOrder();
+            typeModules = evaluator.typeModules();
         } catch (const interpreter::EvaluationTimeout&) {
             addError(diagnostics, blame,
                      "compile-time evaluation timed out after " +
@@ -2596,6 +2973,11 @@ auto expand(ast::Program& program,
             constants[scope].emplace(bare, values[i]);
         }
     }
+    if (exportSink && exportSink->path == options.sourcePath) {
+        exportSink->into->constants = constants;
+        exportSink->into->layouts = layouts;
+        exportSink->into->modules = typeModules;
+    }
 
     // --- 3. Substitute every use with the computed literal.
     std::unordered_set<std::string> keep;
@@ -2608,7 +2990,7 @@ auto expand(ast::Program& program,
                 for (const auto& [name, value] : constants[scope])
                     visible[name] = value;
             Substituter substituter{
-                visible, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+                visible, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &typeModules}};
             substituter.scoped = &constants;
             walkScopeBodies(items, [&](auto& target) {
                 using T = std::decay_t<decltype(target)>;

@@ -134,6 +134,16 @@ public:
     auto recordFieldOrder() const
         -> std::unordered_map<std::string, std::vector<std::string>>;
 
+    // The module that declared each sum type the program knows, by the
+    // type's bare name — the name its values carry as their `parentType`.
+    // Prelude types are not here. Code writing a value back as source for
+    // another module (src/compiled/) qualifies its constructors with this,
+    // so that `Characters` reads `Harmat.Column.Characters` where Harmat.Column
+    // is not imported.
+    auto typeModules() const -> const std::unordered_map<std::string, std::string>& {
+        return m_typeModules;
+    }
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
@@ -526,8 +536,11 @@ private:
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;
     std::vector<std::string> m_moduleRoots{"lib", "src"};
-    std::vector<std::unique_ptr<std::string>> m_loadedModulePaths;
-    std::vector<std::unique_ptr<ast::Program>> m_loadedModulePrograms;
+    // Shared, not owned: a module file's parse and expansion is kept for the
+    // whole process (`ensureModuleLoaded`), and every evaluator that loads it
+    // runs the same tree.
+    std::vector<std::shared_ptr<std::string>> m_loadedModulePaths;
+    std::vector<std::shared_ptr<ast::Program>> m_loadedModulePrograms;
     std::string m_currentModule;
     // `Type::method` of every method a module-scoped `make` defines -> that
     // module. A module-scoped `make` is import-gated like every other module
@@ -554,6 +567,7 @@ private:
     // `make Option<A> do let map(@Just(x), f) = ... end` (registered under
     // "Option::map") when called on a `Just(...)` value (tagged "Just").
     std::unordered_map<std::string, std::string> m_variantParent;
+    std::unordered_map<std::string, std::string> m_typeModules;
     // Each sum type's variants as declared, in order: what
     // `Type.constructors` answers with, names and argument types alike.
     std::unordered_map<std::string, std::vector<const ast::TypeExpr*>> m_adtVariants;

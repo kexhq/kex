@@ -364,48 +364,90 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         return canonicalName;
     }
 
-    auto path = std::make_unique<std::string>(std::move(resolved->path));
-    std::ifstream input(*path);
-    std::string source((std::istreambuf_iterator<char>(input)),
-                       std::istreambuf_iterator<char>());
-    Lexer lexer(std::move(source), *path);
-    Parser parser(lexer.tokenizeAll(), *path);
-    auto program = std::make_unique<ast::Program>(parser.parseProgram());
-    if (!parser.diagnostics().empty()) {
-        const auto& diagnostic = parser.diagnostics().front();
-        m_loadingModules.erase(canonicalName);
-        throw RuntimeError("Failed to parse module " + canonicalName + ": " + diagnostic.message,
-                           diagnostic.location);
+    // A module file is parsed and expanded once per process, for every
+    // evaluator that loads it: each compile-time sandbox is a fresh
+    // evaluator, and a module with a `compiled do` of its own runs sandboxes
+    // to expand, which load the modules it uses, which expand theirs. Done
+    // again in every sandbox, that multiplied with each level (a repository
+    // over a schema over Harmat). The file's size and modification time are
+    // part of the key, so an edited file — in the REPL — is read again.
+    struct ExpandedModule {
+        std::shared_ptr<std::string> path;
+        std::shared_ptr<ast::Program> program;
+    };
+    static std::unordered_map<std::string, ExpandedModule> expandedModules;
+    std::string cacheKey;
+    {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(resolved->path, ec);
+        const auto modified =
+            std::filesystem::last_write_time(resolved->path, ec).time_since_epoch().count();
+        cacheKey = resolved->path + "|" + canonicalName + "|" +
+                   std::to_string(static_cast<unsigned long long>(size)) + "|" +
+                   std::to_string(static_cast<long long>(modified));
+        for (const auto& root : m_moduleRoots) cacheKey += "|" + root;
     }
-    // A source root can supply a leading package namespace for leaf module
-    // declarations. Qualify such a declaration with the resolver's canonical
-    // identity before executing it, just as the compiled module loader does.
-    for (auto& item : program->items) {
-        auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
-        if (!module || !*module || (*module)->name.find('.') != std::string::npos)
-            continue;
-        const auto dot = canonicalName.rfind('.');
-        if (dot != std::string::npos &&
-            canonicalName.substr(dot + 1) == (*module)->name) {
-            (*module)->name = canonicalName;
-            break;
+    std::shared_ptr<std::string> path;
+    std::shared_ptr<ast::Program> program;
+    if (const auto cached = expandedModules.find(cacheKey);
+        false && cached != expandedModules.end()) {
+        path = cached->second.path;
+        program = cached->second.program;
+    } else {
+        path = std::make_shared<std::string>(std::move(resolved->path));
+        std::ifstream input(*path);
+        std::string source((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+        Lexer lexer(std::move(source), *path);
+        Parser parser(lexer.tokenizeAll(), *path);
+        program = std::make_shared<ast::Program>(parser.parseProgram());
+        if (!parser.diagnostics().empty()) {
+            const auto& diagnostic = parser.diagnostics().front();
+            m_loadingModules.erase(canonicalName);
+            throw RuntimeError("Failed to parse module " + canonicalName + ": " + diagnostic.message,
+                               diagnostic.location);
+        }
+        // A source root can supply a leading package namespace for leaf module
+        // declarations. Qualify such a declaration with the resolver's canonical
+        // identity before executing it, just as the compiled module loader does.
+        for (auto& item : program->items) {
+            auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+            if (!module || !*module || (*module)->name.find('.') != std::string::npos)
+                continue;
+            const auto dot = canonicalName.rfind('.');
+            if (dot != std::string::npos &&
+                canonicalName.substr(dot + 1) == (*module)->name) {
+                (*module)->name = canonicalName;
+                break;
+            }
+        }
+        // A module asked for while it is itself being expanded — its own
+        // `compiled do` runs in a sandbox that loads it — is run as it was
+        // written: the tree-walker runs a `compiled do` as ordinary code, and
+        // expanding it again from in here would never finish.
+        static std::unordered_set<std::string> expanding;
+        if (expanding.insert(cacheKey).second) {
+            std::vector<semantic::Diagnostic> expandDiagnostics;
+            compiled::ExpandOptions expandOptions;
+            expandOptions.sourcePath = *path;
+            expandOptions.moduleRoots = m_moduleRoots;
+            const bool expanded =
+                compiled::expand(*program, expandDiagnostics, expandOptions);
+            expanding.erase(cacheKey);
+            if (!expanded) {
+                const auto& diagnostic = expandDiagnostics.front();
+                m_loadingModules.erase(canonicalName);
+                throw RuntimeError("Failed to expand module " + canonicalName + ": " +
+                                       diagnostic.message,
+                                   diagnostic.location);
+            }
+            expandedModules.emplace(cacheKey, ExpandedModule{path, program});
         }
     }
-    std::vector<semantic::Diagnostic> expandDiagnostics;
-    compiled::ExpandOptions expandOptions;
-    expandOptions.sourcePath = *path;
-    expandOptions.moduleRoots = m_moduleRoots;
-    if (!compiled::expand(*program, expandDiagnostics, expandOptions)) {
-        const auto& diagnostic = expandDiagnostics.front();
-        m_loadingModules.erase(canonicalName);
-        throw RuntimeError("Failed to expand module " + canonicalName + ": " +
-                               diagnostic.message,
-                           diagnostic.location);
-    }
 
-    m_loadedModulePaths.push_back(std::move(path));
+    m_loadedModulePaths.push_back(path);
     auto* ownedProgram = program.get();
-    m_loadedModulePrograms.push_back(std::move(program));
+    m_loadedModulePrograms.push_back(program);
     // A module's declarations are global for the rest of the run. Loading is
     // lazy, so this can fire from inside a function body — executing the
     // items against the CURRENT m_env would define them into that call's
@@ -975,6 +1017,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
                                                  : moduleScope + "::" + def.name;
             !m_env->get(key) && !m_env->get(def.name))
             m_env->define(key, Value::record(def.name, {}));
+        if (!moduleScope.empty()) m_typeModules[def.name] = moduleScope;
         auto& declared = m_adtVariants[def.name];
         declared.clear();
         for (const auto& variant : *def.variants) {
@@ -3672,12 +3715,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
 auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right,
                              SourceLocation loc) -> ValuePtr {
-    // A placeholder can be CARRIED by compile-time evaluation but never
-    // computed with — `x + 1` has no answer until the program runs. Checked
-    // before operator overloading, which would otherwise dispatch on it.
-    for (const auto* side : {&left, &right})
-        if (const auto* ph = std::get_if<PlaceholderValue>(&(*side)->data))
-            throw PlaceholderMisuse(ph->name, "this operator");
+    // A placeholder can be carried through a typed operator that constructs
+    // data (for example TextColumn == userId constructs EqCond). It cannot be
+    // used by primitive operators, which need the value now. A placeholder
+    // receiver has no type for method dispatch, so only the RHS can pass.
+    const auto* leftPlaceholder = std::get_if<PlaceholderValue>(&left->data);
+    const auto* rightPlaceholder = std::get_if<PlaceholderValue>(&right->data);
+    if (leftPlaceholder)
+        throw PlaceholderMisuse(leftPlaceholder->name, "this operator");
 
     // Operator overloading: `make Type do let +(other) -> Type ... end`
     // registers "Type::+", dispatched here through the same receiver-type
@@ -3734,6 +3779,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         // (kexhq/kex#486).
         if (methodName != opSymbol && (!equality || overloadAccepts(methodName)))
             return callFunction(methodName, {left, right}, {}, loc);
+        if (rightPlaceholder)
+            throw PlaceholderMisuse(rightPlaceholder->name, "this operator");
         // `!=` where no `!=` overload applies is the negation of an
         // overloaded `==`, so `a != b` and `!(a == b)` always agree. The
         // checker allows it only where that `==` answers a Bool.
@@ -3745,6 +3792,9 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                     !callFunction(equalName, {left, right}, {}, loc)->isTrue());
         }
     }
+
+    if (rightPlaceholder)
+        throw PlaceholderMisuse(rightPlaceholder->name, "this operator");
 
     // li/ri stay the int64_t fast path for the overwhelmingly common case;
     // leftInt/rightInt (set for either IntValue or BigIntValue) are the
@@ -4375,6 +4425,10 @@ auto declaredFunctionArity(const ast::FunctionType& type) -> int {
 
 auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                                    const ast::TypeExpr& type) const -> bool {
+    // During compile-time folding, the later type checker will check the
+    // source expression. A placeholder is unknown here, so a typed builder
+    // method may carry it through without evaluating it.
+    if (value && std::holds_alternative<PlaceholderValue>(value->data)) return true;
     // A `make X<A> do ... end` sitting directly in a file-header module
     // (`module Data`) writes its own param-type annotations against the
     // record's BARE name (`other: Set<A>`), but the record's runtime

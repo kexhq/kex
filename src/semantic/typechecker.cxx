@@ -5733,6 +5733,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 error(expr.location,
                                       "cannot access private name `" +
                                           node.method + "` from " + *path);
+                            // A constructor reached through its full module path
+                            // retains its defining ADT even when the current file
+                            // did not import that ADT's bare name. This matters
+                            // for reified constants containing nested records.
+                            if (!moduleMemberImported(*path, node.method) &&
+                                !withinModule(*path) &&
+                                !constructor->second.typeName.empty())
+                                return Type::named(constructor->second.typeName);
                             return Type::named(node.method);
                         }
                 }

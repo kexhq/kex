@@ -90,6 +90,12 @@ auto Fiber::resume() -> void {
     if (m_finished) return;
 
     Fiber* prevFiber = g_currentFiber;
+    // Restored with the current fiber below: a fiber can be resumed from
+    // inside another — an evaluator made while one is running, as a
+    // compile-time sandbox expanding a module that is being loaded — and the
+    // outer fiber, carrying on afterwards, has to yield to its own caller,
+    // not to the slot of the inner one, which is gone by then.
+    ctx::fiber* prevSlot = g_yieldSlot();
     g_currentFiber = this;
     m_started = true;
 
@@ -105,6 +111,7 @@ auto Fiber::resume() -> void {
     m_impl->intoFiber = std::move(m_impl->intoFiber).resume();
 
     g_currentFiber = prevFiber;
+    g_yieldSlot() = prevSlot;
 }
 
 auto Fiber::yieldToScheduler() -> void {
