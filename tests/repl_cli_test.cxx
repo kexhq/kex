@@ -978,6 +978,52 @@ int main() {
                     assertTrue(out.find(expected) != std::string::npos, out);
             }
         });
+
+        // A module under the session's source roots is offered before
+        // anything has loaded it: its name from the file's header alone, and
+        // its members once a path names it.
+        it("completes the modules under the source roots, and their members", []() {
+            namespace fs = std::filesystem;
+            char tmp[] = "/tmp/kex_repl_root_modules_XXXXXX";
+            const fs::path project = mkdtemp(tmp);
+            const auto write = [&](const fs::path& file, const std::string& text) {
+                fs::create_directories((project / file).parent_path());
+                std::ofstream(project / file) << text;
+            };
+            write("src/config.kex", "# Settings.\nmodule Config\n\nlet port() = 4000\n");
+            write("src/db/schema.kex", "module DB.Schema\n");
+            write("src/db/repositories/users.kex",
+                  "module DB.Repositories.Users\n\n"
+                  "let find(id: Integer) = id\n"
+                  "let named(name: String) = name\n");
+            // Not modules of the project: a build directory's copy, and a
+            // `module` line that is not the file's header.
+            write("src/build/stale.kex", "module Stale\n");
+            write("src/notes.kex", "let text = \"\"\"\nmodule Fake\n\"\"\"\n");
+            write("input.txt",
+                  "/complete Conf\n"
+                  "/complete DB.\n"
+                  "/complete DB.Repositories.Users.\n"
+                  "/complete Sta\n"
+                  "/complete Fak\n");
+            const auto run = [&](const std::string& flags) {
+                return runCommand("cd " + project.string() + " && " +
+                                  std::string(KEX_BINARY_PATH) + flags +
+                                  " --no-colors < input.txt 2>&1");
+            };
+            for (const auto& out : {run(" -i"), run("")}) {
+                for (const auto* expected : {
+                         "  Config\n",
+                         "  DB.Repositories\n",
+                         "  DB.Schema\n",
+                         "  DB.Repositories.Users.find\n",
+                         "  DB.Repositories.Users.named\n",
+                         "(no completions for \"Sta\")",
+                         "(no completions for \"Fak\")"})
+                    assertTrue(out.find(expected) != std::string::npos, out);
+            }
+            fs::remove_all(project);
+        });
     });
 
     describe("CLI — spawning a serving record", []() {

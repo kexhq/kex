@@ -106,43 +106,74 @@ static auto replInputIsDeclaration(const std::string &input) -> bool {
 
 auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string>;
 
+// A file's module header: the name its first significant line declares, and
+// that line's number. Nothing when that line is anything else — only one line
+// is read from a file that is not a module.
+struct ModuleHeader {
+  std::string name;
+  int line;
+};
+
+auto moduleHeaderOf(const std::filesystem::path &file)
+    -> std::optional<ModuleHeader> {
+  std::ifstream input(file);
+  std::string line;
+  for (int number = 1; std::getline(input, line); ++number) {
+    const auto start = line.find_first_not_of(" \t");
+    if (start == std::string::npos || line[start] == '#') continue;
+    if (line.compare(start, 7, "module ") != 0) return std::nullopt;
+    const auto rest = line.substr(start + 7);
+    return ModuleHeader{rest.substr(0, rest.find_first_of(" \t\r")), number};
+  }
+  return std::nullopt;
+}
+
+// The directories a walk for modules under a source root does not enter.
+auto skippedByModuleWalk(const std::string &directory) -> bool {
+  return directory.starts_with(".") || directory == "ebin" ||
+         directory == "build" || directory == "_build" ||
+         directory == "node_modules";
+}
+
+// The standard library's roots, canonical: a walk for the project's own
+// modules leaves them to the prelude.
+auto standardModuleRoots() -> std::unordered_set<std::string> {
+  std::unordered_set<std::string> standard;
+  for (const auto &root : kex::standardLibraryModuleRoots()) {
+    std::error_code ec;
+    standard.insert(std::filesystem::weakly_canonical(root, ec).string());
+  }
+  return standard;
+}
+
 // The modules under the REPL's source roots, by the name each file declares:
 // what a dotted name typed at the prompt can lead to. Read once a session —
-// the roots are fixed when it starts — and only each file's own `module`
-// line, so `DB.` costs no parsing.
+// the roots are fixed when it starts — and only each file's header, so `DB.`
+// costs no parsing.
 static auto replRootModules() -> const std::vector<std::string> & {
   static const std::vector<std::string> modules = [] {
     namespace fs = std::filesystem;
     std::set<std::string> found;
+    const auto standard = standardModuleRoots();
     const auto roots =
         moduleRootsFor((fs::current_path() / "<repl>").string());
     for (const auto &root : roots) {
       std::error_code ec;
+      if (standard.contains(fs::weakly_canonical(root, ec).string())) continue;
       fs::recursive_directory_iterator walk(
           root, fs::directory_options::skip_permission_denied, ec);
       for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
         const auto &entry = *walk;
         const auto name = entry.path().filename().string();
         if (entry.is_directory(ec)) {
-          if (!name.empty() && (name[0] == '.' || name == "ebin" ||
-                                name == "node_modules"))
-            walk.disable_recursion_pending();
+          if (skippedByModuleWalk(name)) walk.disable_recursion_pending();
           continue;
         }
         if (entry.path().extension() != ".kex" || name.ends_with(".spec.kex"))
           continue;
-        std::ifstream input(entry.path());
-        for (std::string text; std::getline(input, text);) {
-          if (text.rfind("module ", 0) != 0) continue;
-          auto module = text.substr(7);
-          module.erase(std::find_if(module.begin(), module.end(),
-                                    [](unsigned char c) {
-                                      return !(std::isalnum(c) || c == '.' || c == '_');
-                                    }),
-                       module.end());
-          if (!module.empty()) found.insert(module);
-          break;
-        }
+        if (const auto header = moduleHeaderOf(entry.path());
+            header && !header->name.empty())
+          found.insert(header->name);
       }
     }
     return std::vector<std::string>(found.begin(), found.end());
@@ -171,7 +202,10 @@ static auto replRootCompletions(const std::string &qualified,
         std::ifstream input(resolved->path);
         std::stringstream text;
         text << input.rdbuf();
-        g_replCompletionDb->updateFile(resolved->path, text.str());
+        // As SemanticDB::ensureModule loads one: for its interface, without
+        // resolving its own names (kexhq/kex#323).
+        g_replCompletionDb->updateFile(resolved->path, text.str(), {},
+                                       /*resolveNames=*/false);
       }
     }
     for (auto &match : g_replCompletionDb->completionsFor(qualified + word))
@@ -1596,25 +1630,7 @@ auto fileDeclaringModule(const std::string &name,
                          const std::vector<std::string> &roots)
     -> std::optional<DeclaringFile> {
   namespace fs = std::filesystem;
-  std::unordered_set<std::string> standard;
-  for (const auto &root : kex::standardLibraryModuleRoots()) {
-    std::error_code ec;
-    standard.insert(fs::weakly_canonical(root, ec).string());
-  }
-  // The header's line, or 0 when the file's header is another module's.
-  const auto declares = [&](const fs::path &file) {
-    std::ifstream input(file);
-    std::string line;
-    for (int number = 1; std::getline(input, line); ++number) {
-      const auto start = line.find_first_not_of(" \t");
-      if (start == std::string::npos || line[start] == '#') continue;
-      if (line.compare(start, 7, "module ") != 0) return 0;
-      const auto rest = line.substr(start + 7);
-      const auto header = rest.substr(0, rest.find_first_of(" \t\r"));
-      return header == name ? number : 0;
-    }
-    return 0;
-  };
+  const auto standard = standardModuleRoots();
   for (const auto &root : roots) {
     std::error_code ec;
     if (standard.contains(fs::weakly_canonical(root, ec).string())) continue;
@@ -1624,14 +1640,13 @@ auto fileDeclaringModule(const std::string &name,
       const auto &entry = *walk;
       const auto base = entry.path().filename().string();
       if (entry.is_directory(ec)) {
-        if (base.starts_with(".") || base == "ebin" || base == "build" ||
-            base == "_build" || base == "node_modules")
-          walk.disable_recursion_pending();
+        if (skippedByModuleWalk(base)) walk.disable_recursion_pending();
         continue;
       }
       if (entry.path().extension() != ".kex") continue;
-      if (const auto line = declares(entry.path()))
-        return DeclaringFile{fs::path(root), entry.path(), line};
+      if (const auto header = moduleHeaderOf(entry.path());
+          header && header->name == name)
+        return DeclaringFile{fs::path(root), entry.path(), header->line};
     }
   }
   return std::nullopt;
