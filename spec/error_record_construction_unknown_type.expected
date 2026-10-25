@@ -1,0 +1,2 @@
+spec/error_record_construction_unknown_type.kex:5:14: error: Unknown record type `Crew`
+Aborted: 1 type error — fix before running (use --no-check to skip).

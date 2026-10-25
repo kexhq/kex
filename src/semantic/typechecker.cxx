@@ -6903,6 +6903,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // a literal must have the same type name that annotations
             // mentioning the same record resolve to.
             if (contextualRecordType) return contextualRecordType;
+            // `Crew {}` with no `Crew` declared is a typo or a missing
+            // declaration, not a record: unchecked, the walker made an empty
+            // record and BEAM a bare `:Crew` atom.
+            if (record == m_recordFields.end() &&
+                !(m_importedInterfaces &&
+                  m_importedInterfaces->recordArities.count(recordName))) {
+                error(expr.location, "Unknown record type `" + sourceName + "`");
+                return Type::unknown();
+            }
             // A generic record's literal has to carry its arguments, or the
             // value can never flow back into anything that names them:
             // `Box { items: [1, 2, 3] }` is a `Box<Integer>`, and only that
