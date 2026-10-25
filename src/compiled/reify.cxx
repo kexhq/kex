@@ -173,7 +173,47 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::VariantValue>) {
                 // A nullary variant is just its name (`None`); one with a
                 // payload is a constructor call (`Just(3)`).
-                if (node.args.empty()) {
+                // Written with its module where one is known, the way the
+                // parser reads `Harmat.Column.Characters`: a chain of calls
+                // on the module path, ending in the constructor.
+                std::string owner;
+                if (context.modules) {
+                    const auto found = context.modules->find(node.parentType);
+                    if (found != context.modules->end()) owner = found->second;
+                }
+                if (!owner.empty()) {
+                    ast::ExprPtr path;
+                    std::size_t start = 0;
+                    for (;;) {
+                        const auto dot = owner.find('.', start);
+                        auto part = owner.substr(start, dot == std::string::npos
+                                                            ? std::string::npos
+                                                            : dot - start);
+                        auto step = std::make_unique<ast::Expr>();
+                        step->location = location;
+                        if (!path) {
+                            step->kind = ast::UpperIdentifier{std::move(part)};
+                        } else {
+                            ast::MethodCall call;
+                            call.receiver = std::move(path);
+                            call.method = std::move(part);
+                            step->kind = std::move(call);
+                        }
+                        path = std::move(step);
+                        if (dot == std::string::npos) break;
+                        start = dot + 1;
+                    }
+                    ast::MethodCall constructor;
+                    constructor.receiver = std::move(path);
+                    constructor.method = node.tag;
+                    constructor.parenthesized = !node.args.empty();
+                    for (const auto& arg : node.args) {
+                        auto lowered = valueToLiteral(arg, location, error, context);
+                        if (!lowered) return nullptr;
+                        constructor.args.push_back(std::move(lowered));
+                    }
+                    out->kind = std::move(constructor);
+                } else if (node.args.empty()) {
                     out->kind = ast::UpperIdentifier{node.tag};
                 } else {
                     ast::FunctionCall call;

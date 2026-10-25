@@ -45,6 +45,11 @@ struct ReifyContext {
     // Null here means placeholders cannot be reified at all, and one reaching
     // the reifier is an error rather than a silent wrong answer.
     const std::vector<const ast::Expr*>* placeholders = nullptr;
+    // The module that declared each sum type, by its bare name (Evaluator's
+    // typeModules). Given, a constructor is written with its module — for a
+    // literal going into a module that may not import it. Null writes every
+    // constructor bare, as the module that evaluated it can read it.
+    const std::unordered_map<std::string, std::string>* modules = nullptr;
 };
 
 auto valueToLiteral(const interpreter::ValuePtr& value,
