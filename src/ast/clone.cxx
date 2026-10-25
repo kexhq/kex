@@ -273,6 +273,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.args = cloneVec(node.args);
                 copy.namedArgs = cloneNamed(node.namedArgs);
                 copy.block = cloneOpt(node.block);
+                copy.reifiedConstructor = node.reifiedConstructor;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, RecordConstruction>) {
                 RecordConstruction copy;
