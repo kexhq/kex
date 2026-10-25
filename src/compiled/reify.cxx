@@ -90,6 +90,21 @@ auto valueToLiteral(const ValuePtr& value,
                 out->kind = ast::AtomLiteral{node.name};
             } else if constexpr (std::is_same_v<T, interpreter::ListValue>) {
                 ast::ListExpr list;
+                // A compiled value can contain runtime placeholders of
+                // different types, as in SQL parameters [userId, after].
+                // Such a list is already typed by the value's destination
+                // (usually [Any]); asking the literal to infer one element
+                // type rejects an otherwise valid collapsed expression.
+                if (node.elements.size() > 1) {
+                    const auto first = node.elements.front()->data.index();
+                    for (const auto& element : node.elements) {
+                        if (std::holds_alternative<interpreter::PlaceholderValue>(
+                                element->data) || element->data.index() != first) {
+                            list.anyElements = true;
+                            break;
+                        }
+                    }
+                }
                 for (const auto& element : node.elements) {
                     auto lowered = valueToLiteral(element, location, error, context);
                     if (!lowered) return nullptr;
@@ -218,6 +233,7 @@ auto valueToLiteral(const ValuePtr& value,
                 } else {
                     ast::FunctionCall call;
                     call.name = node.tag;
+                    call.reifiedConstructor = true;
                     for (const auto& arg : node.args) {
                         auto lowered = valueToLiteral(arg, location, error, context);
                         if (!lowered) return nullptr;

@@ -2269,7 +2269,8 @@ struct ChainCollapser {
                 : compiled.qualified.count(
                       qualifiedName(call->name.substr(0, dot),
                                     call->name.substr(dot + 1))) > 0;
-            if (!isCompiled || call->block) return false;
+            if ((!isCompiled && !call->reifiedConstructor) || call->block)
+                return false;
             return allStatic(call->args) && allStatic(call->namedArgs);
         }
         return false;
@@ -2727,9 +2728,13 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
             roots.push_back(std::move(root));
     const module::Resolver resolver(roots);
 
-    // Owner as written, and the module it names.
+    // Fully qualified owners are the same everywhere. Aliases are lexical:
+    // two modules may both call their own, different dependency `Config`.
     std::unordered_map<std::string, std::string> owners;
-    auto scanUsings = [&](auto&& self, const auto& items) -> void {
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::string>> aliases;
+    auto scanUsings = [&](auto&& self, const auto& items,
+                          const std::string& scope) -> void {
         for (const auto& item : items) {
             if (const auto* use =
                     std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
@@ -2737,14 +2742,14 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
                 std::string name;
                 for (const auto& part : (*use)->module.parts)
                     name += (name.empty() ? "" : ".") + part;
-                if ((*use)->alias) owners.emplace(*(*use)->alias, name);
+                if ((*use)->alias) aliases[scope][*(*use)->alias] = name;
             } else if (const auto* mod =
                            std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body);
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
             }
         }
     };
-    scanUsings(scanUsings, program.items);
+    scanUsings(scanUsings, program.items, "");
     {
         Constants none;
         std::vector<semantic::Diagnostic> unused;
@@ -2768,53 +2773,80 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
     }
 
     ScopedConstants imported;
+    std::unordered_map<std::string, ScopedConstants> scopedImports;
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
-    for (const auto& [written, named] : owners) {
+    auto gather = [&](const std::string& written, const std::string& named,
+                      ScopedConstants& destination) -> void {
         const auto resolved = resolver.resolve(named, "");
-        if (!resolved) continue;
+        if (!resolved) return;
         if (std::filesystem::weakly_canonical(resolved->path) ==
             std::filesystem::weakly_canonical(options.sourcePath))
-            continue;
+            return;
         const auto* exports = exportsOf(resolved->path, options);
-        if (!exports) continue;
+        if (!exports) return;
         const auto theirs = exports->constants.find(resolved->moduleName);
         if (theirs == exports->constants.end() || theirs->second.empty())
-            continue;
-        imported[written] = theirs->second;
+            return;
+        destination[written] = theirs->second;
         for (const auto& [record, fields] : exports->layouts)
             layouts.emplace(record, fields);
         for (const auto& [type, owner] : exports->modules)
             modules.emplace(type, owner);
-    }
-    if (imported.empty()) return true;
+    };
+    for (const auto& [written, named] : owners)
+        gather(written, named, imported);
+    for (const auto& [scope, names] : aliases)
+        for (const auto& [written, named] : names)
+            gather(written, named, scopedImports[scope]);
+    if (imported.empty() && scopedImports.empty()) return true;
 
-    Constants none;
-    Substituter substituter{
-        none, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &modules}};
-    substituter.scoped = &imported;
-    walkBodies(program.items, [&](auto& target) {
-        using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>)
-            substituter.functionBody(target);
-        else
-            substituter.substitute(target);
-    });
     bool ok = true;
     std::unordered_set<std::string> reported;
-    for (const auto& reference : substituter.remaining) {
-        if (!reported.insert(reference).second) continue;
-        const auto split = reference.rfind("::");
-        std::string why;
-        if (split != std::string::npos)
-            (void)valueToLiteral(
-                imported[reference.substr(0, split)].at(reference.substr(split + 2)),
-                SourceLocation{}, why, {&layouts, nullptr, &modules});
-        addError(diagnostics, SourceLocation{},
-                 "compile-time constant `" + reference +
-                     "` cannot be inlined: " + why);
-        ok = false;
-    }
+    auto substituteScope = [&](auto&& self, auto& items,
+                               const std::string& scope) -> void {
+        ScopedConstants visible = imported;
+        if (auto root = scopedImports.find(""); root != scopedImports.end())
+            for (const auto& [name, values] : root->second)
+                visible[name] = values;
+        if (auto local = scopedImports.find(scope);
+            local != scopedImports.end())
+            for (const auto& [name, values] : local->second)
+                visible[name] = values;
+        Constants none;
+        Substituter substituter{
+            none, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &modules}};
+        substituter.scoped = &visible;
+        walkScopeBodies(items, [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                substituter.functionBody(target);
+            else
+                substituter.substitute(target);
+        });
+        for (const auto& reference : substituter.remaining) {
+            if (!reported.insert(qualifiedName(scope, reference)).second)
+                continue;
+            const auto split = reference.rfind("::");
+            std::string why;
+            if (split != std::string::npos)
+                if (const auto found = visible.find(reference.substr(0, split));
+                    found != visible.end())
+                    if (const auto value = found->second.find(
+                            reference.substr(split + 2));
+                        value != found->second.end())
+                        (void)valueToLiteral(value->second, SourceLocation{},
+                                             why, {&layouts, nullptr, &modules});
+            addError(diagnostics, SourceLocation{},
+                     "compile-time constant `" + reference +
+                         "` cannot be inlined: " + why);
+            ok = false;
+        }
+        for (auto& item : items)
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
+    };
+    substituteScope(substituteScope, program.items, "");
     return ok;
 }
 } // namespace

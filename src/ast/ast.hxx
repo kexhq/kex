@@ -249,6 +249,9 @@ struct FunctionCall {
     std::vector<ExprPtr> args;
     std::vector<std::pair<std::string, ExprPtr>> namedArgs;
     std::optional<ExprPtr> block;
+    // Set only by constant reification for a known ADT constructor. Source
+    // calls still need an explicit `compiled do` declaration to be folded.
+    bool reifiedConstructor = false;
 };
 
 // Kept distinct from FunctionCall until semantic analysis has resolved and
