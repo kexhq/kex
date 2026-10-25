@@ -1197,10 +1197,14 @@ auto writeCachedString(std::ostream& out, const std::string& text) -> void {
     out << text.size() << "\n" << text;
 }
 
-auto readCachedString(std::istream& in, std::string& text) -> bool {
+// A length longer than the rest of the file is a garbled entry, refused
+// before anything is allocated for it.
+auto readCachedString(std::istream& in, std::uintmax_t fileSize, std::string& text) -> bool {
     std::size_t size = 0;
     if (!(in >> size)) return false;
     if (in.get() != '\n') return false;
+    const auto at = in.tellg();
+    if (at < 0 || size > fileSize - static_cast<std::uintmax_t>(at)) return false;
     text.assign(size, '\0');
     return static_cast<bool>(in.read(text.data(), static_cast<std::streamsize>(size)));
 }
@@ -1208,6 +1212,9 @@ auto readCachedString(std::istream& in, std::string& text) -> bool {
 // A cached scan, or nullopt when there is no complete entry: the first line
 // marks a finished write, and a short or garbled file reads as no entry.
 auto readScanCache(const std::filesystem::path& entry) -> std::optional<ScannedTemplate> {
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(entry, ec);
+    if (ec) return std::nullopt;
     std::ifstream in(entry, std::ios::binary);
     if (!in) return std::nullopt;
     std::string header;
@@ -1219,14 +1226,15 @@ auto readScanCache(const std::filesystem::path& entry) -> std::optional<ScannedT
         int kind = 0;
         if (!(in >> kind) || kind < 0 || kind > static_cast<int>(TemplateNode::Kind::Comment)) return std::nullopt;
         std::string text;
-        if (!readCachedString(in, text)) return std::nullopt;
+        if (!readCachedString(in, fileSize, text)) return std::nullopt;
         scanned.nodes.push_back({static_cast<TemplateNode::Kind>(kind), std::move(text)});
     }
     std::size_t paramCount = 0;
     if (!(in >> paramCount)) return std::nullopt;
     for (std::size_t i = 0; i < paramCount; i++) {
         ExplicitParam param;
-        if (!readCachedString(in, param.name) || !readCachedString(in, param.type)) return std::nullopt;
+        if (!readCachedString(in, fileSize, param.name) ||
+            !readCachedString(in, fileSize, param.type)) return std::nullopt;
         scanned.explicitParams.push_back(std::move(param));
     }
     return scanned;

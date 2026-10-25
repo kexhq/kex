@@ -65,6 +65,16 @@ auto runCacheEntryCount(const std::string& cacheDir) -> size_t {
     return count;
 }
 
+// The one template scan kept under `<cacheDir>/templates`, or an empty path.
+auto scanCacheEntry(const std::string& cacheDir) -> fs::path {
+    std::error_code ec;
+    const auto templates = fs::path(cacheDir) / "templates";
+    for (fs::recursive_directory_iterator walk(templates, ec), end; !ec && walk != end; walk.increment(ec)) {
+        if (walk->path().extension() == ".scan") return walk->path();
+    }
+    return {};
+}
+
 // Backdates the binary's mtime rather than touching it forward: some
 // filesystems/`touch` truncate mtime resolution, and a backdate is always
 // observably different from "whatever it is right now" regardless of
@@ -144,6 +154,55 @@ int main() {
 
             std::remove(path.c_str());
             std::remove(embedPath.c_str());
+            fs::remove_all(cacheDir);
+        });
+    });
+
+    describe("Template scan cache — kept between builds under KEX_CACHE", []() {
+        // The source's `run` entry is removed before each later run, so the
+        // program is compiled again and only the template scan can come from
+        // the cache.
+        const auto source =
+            "main do\n"
+            "  let page = Template.text(\"hello <%= name %>\")\n"
+            "  IO.printLine(page(\"cached\"))\n"
+            "end\n";
+
+        it("reuses a kept scan instead of scanning the template again", [source]() {
+            char cacheTmp[] = "/tmp/kex_scan_cache_test_XXXXXX";
+            std::string cacheDir = mkdtemp(cacheTmp);
+            auto path = writeTempSource(source);
+
+            assertEqual(runKex(cacheDir, path), std::string("hello cached\n"));
+            auto entry = scanCacheEntry(cacheDir);
+            assertTrue(!entry.empty(), "expected the first build to keep the template's scan");
+
+            // Same lengths, other text: only a build that read the entry
+            // prints it.
+            { std::ofstream f(entry, std::ios::binary); f << "kex-template-scan\n2 0 6\nhowdy  1 4\nname 0"; }
+            fs::remove_all(fs::path(cacheDir) / "run");
+            assertEqual(runKex(cacheDir, path), std::string("howdy cached\n"));
+
+            std::remove(path.c_str());
+            fs::remove_all(cacheDir);
+        });
+
+        it("reads a garbled entry as no entry, and scans again", [source]() {
+            char cacheTmp[] = "/tmp/kex_scan_cache_garbled_test_XXXXXX";
+            std::string cacheDir = mkdtemp(cacheTmp);
+            auto path = writeTempSource(source);
+
+            assertEqual(runKex(cacheDir, path), std::string("hello cached\n"));
+            auto entry = scanCacheEntry(cacheDir);
+            assertTrue(!entry.empty(), "expected the first build to keep the template's scan");
+
+            // A length no file holds: it used to be allocated before a byte
+            // was read, and the compile died with std::length_error.
+            { std::ofstream f(entry, std::ios::binary); f << "kex-template-scan\n1 0 18446744073709551615\nx"; }
+            fs::remove_all(fs::path(cacheDir) / "run");
+            assertEqual(runKex(cacheDir, path), std::string("hello cached\n"));
+
+            std::remove(path.c_str());
             fs::remove_all(cacheDir);
         });
     });
