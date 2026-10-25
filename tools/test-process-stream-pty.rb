@@ -58,14 +58,25 @@ abort "#{KEX} not found -- run `make build` first" unless File.exist?(KEX)
 
 failed = false
 
-def on_pty(command, line)
+# Types `line` only once the output matches `ready`: the child is running and
+# about to read. Typed any earlier, the line can go to the VM instead -- OTP
+# 27's -noshell reads the terminal while it boots, so a line already waiting
+# there is gone before the child exists. OTP 29 leaves it, and the walker
+# never reads stdin at all.
+def on_pty(command, line, ready)
   output = +''
   # PTY.spawn's block form waits on the child itself once the block returns.
   PTY.spawn(*command) do |readable, writable, pid|
-    writable.write("#{line}\n")
+    typed = false
     begin
       Timeout.timeout(60) do
-        loop { output << readable.readpartial(512) }
+        loop do
+          output << readable.readpartial(512)
+          next if typed || !output.match?(ready)
+
+          writable.write("#{line}\n")
+          typed = true
+        end
       end
     rescue EOFError, Errno::EIO
       # The child closed its end -- normal completion.
@@ -88,7 +99,7 @@ Dir.mktmpdir('kex-process-stream-pty-') do |dir|
   File.write(streams, STREAMS_SOURCE)
 
   BACKENDS.each do |backend, flags|
-    output = on_pty([KEX, '--no-colors', *flags, terminal], 'hello-from-pty')
+    output = on_pty([KEX, '--no-colors', *flags, terminal], 'hello-from-pty', /CHILD-(TTY|PIPE)/)
     if output.include?('CHILD-TTY') && output.include?('CHILD-GOT:hello-from-pty') && output.include?('EXIT:0')
       puts "PASS: #{backend}: a Process.stream child has the caller's terminal, and reads a line typed there"
     else
