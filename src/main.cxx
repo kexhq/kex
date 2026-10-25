@@ -1606,6 +1606,15 @@ auto toolchainFingerprint() -> const std::string & {
   return fingerprint;
 }
 
+// Where an expansion keeps template scans between builds, and for which
+// toolchain (kexhq/kex#323); left empty when every cache is off.
+auto setScanCache(kex::compiled::ExpandOptions &options) -> void {
+  if (const auto base = kexCacheBase()) {
+    options.scanCache = *base;
+    options.toolchainKey = toolchainFingerprint();
+  }
+}
+
 auto discoveryCacheEntry(const std::string &source)
     -> std::optional<std::filesystem::path> {
   const auto base = kexCacheBase();
@@ -1670,6 +1679,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
   // KEX_TIMINGS=1 splits dependency loading into its two costs (kexhq/kex#323).
   std::chrono::steady_clock::duration parseTime{};
   std::chrono::steady_clock::duration analyzeTime{};
+  std::chrono::steady_clock::duration expandTime{};
 
   size_t discoveryHits = 0;
   // Names a `using` or a qualified reference asked for that no file under the
@@ -1771,8 +1781,12 @@ auto resolveBeamDeps(kex::ast::Program &program,
       kex::compiled::ExpandOptions depExpandOptions;
       depExpandOptions.sourcePath = *path;
       depExpandOptions.moduleRoots = roots;
-      if (!kex::compiled::expand(*depProg, depExpandDiagnostics,
-                                 depExpandOptions)) {
+      setScanCache(depExpandOptions);
+      const auto expandStart = std::chrono::steady_clock::now();
+      const bool expanded = kex::compiled::expand(*depProg, depExpandDiagnostics,
+                                                  depExpandOptions);
+      expandTime += std::chrono::steady_clock::now() - expandStart;
+      if (!expanded) {
         for (const auto &diagnostic : depExpandDiagnostics)
           printSemanticDiagnostic(diagnostic);
         std::cerr << "error: could not expand module " << modName << "\n";
@@ -1856,9 +1870,10 @@ auto resolveBeamDeps(kex::ast::Program &program,
       return std::chrono::duration<double, std::milli>(d).count();
     };
     std::fprintf(stderr,
-                 "    %zu dependency files: parse %.1f ms, analyze %.1f ms "
-                 "(%zu from the discovery cache)\n",
-                 deps.size(), ms(parseTime), ms(analyzeTime), discoveryHits);
+                 "    %zu dependency files: parse %.1f ms, expand %.1f ms, "
+                 "analyze %.1f ms (%zu from the discovery cache)\n",
+                 deps.size(), ms(parseTime), ms(expandTime), ms(analyzeTime),
+                 discoveryHits);
   }
   return deps;
 }
@@ -1914,6 +1929,7 @@ auto expandReplProgram(kex::ast::Program &program) -> void {
   kex::compiled::ExpandOptions options;
   options.sourcePath = here;
   options.moduleRoots = moduleRootsFor(here);
+  setScanCache(options);
   if (kex::compiled::expand(program, diagnostics, options)) return;
   for (const auto &diagnostic : diagnostics)
     if (diagnostic.level == kex::semantic::Diagnostic::Level::Error)
@@ -5707,6 +5723,7 @@ int main(int argc, char *argv[]) {
       // for compiled blocks in merged-in modules).
       expandOptions.sourcePath = filepath;
       expandOptions.moduleRoots = moduleRootsFor(filepath);
+      setScanCache(expandOptions);
       if (reportCollapse) expandOptions.report = &collapseNotes;
       const bool expanded =
           kex::compiled::expand(target, expandDiagnostics, expandOptions);

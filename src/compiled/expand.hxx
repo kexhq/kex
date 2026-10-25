@@ -4,6 +4,8 @@
 #include "../semantic/analyzer.hxx"
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 // Compile-time expansion of `compiled do ... end` blocks.
@@ -74,6 +76,15 @@ struct ExpandOptions {
     // failed with "Unknown module" from every package but the library's own
     // (kexhq/kex#444). The standard library is always searched as well.
     std::vector<std::string> moduleRoots;
+    // Where template scans are kept between builds (kexhq/kex#323), and the
+    // toolchain that made them. A scan is a pure function of a template's
+    // source and the toolchain, and running it costs the sandboxed Evaluator
+    // its prelude and the whole of `Template.scan` — a fifth of a second a
+    // template, paid by every build of every module that embeds one, and
+    // twice by a `--run` (its gating pre-check expands the dependencies
+    // too). Empty: scan every time, keeping only this process's own scans.
+    std::filesystem::path scanCache;
+    std::string toolchainKey;
 };
 
 // Expands every `compiled` block in `program` in place, and folds every
