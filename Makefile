@@ -44,6 +44,7 @@ help:
 	@echo "  make tey-run      Write ./tey-run, a Tey launcher for this checkout"
 	@echo "  make spec-tey     Run Tey own spec suite (requires erlc)"
 	@echo "  make test-tey-launcher  Test tey/bin/tey's own stdin/pty handling"
+	@echo "  make test-process-stream-pty  Test that Process.stream hands its child the terminal"
 	@echo "  make docs         Generate this checkout's reference into ../docs/generated"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make check-examples  Type-check all examples"
@@ -578,6 +579,15 @@ spec-tey: build
 .PHONY: test-tey-launcher
 test-tey-launcher: build
 	@ruby tools/test-tey-pty-prompt.rb "$(KEX)" tey/bin/tey
+
+# kexhq/kex#572: Process.stream runs its child on the caller's own stdin,
+# stdout and stderr, on both backends, which is how `tey console` gives its
+# REPL a terminal. The spec suites capture through pipes and feed no stdin,
+# so only a real pty shows the child a terminal; stderr is captured apart
+# from stdout here too, which one golden file cannot ask.
+.PHONY: test-process-stream-pty
+test-process-stream-pty: build
+	@ruby tools/test-process-stream-pty.rb "$(KEX)"
 
 # Compiling Tey is itself a test: it is written in Kex, so a change to the
 # compiler can break it, and until this existed the FIRST thing to find out
