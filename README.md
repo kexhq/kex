@@ -106,9 +106,7 @@ Kex tries to make the common path feel light:
 
 ## Language Tour
 
-## The Good Parts In Code
-
-### Pipelines Over Real Data
+### Natural Function Chaining
 
 Uniform Function Call Syntax means `value.f(arg)` is equivalent to `f(value, arg)`. You get fluent pipelines while keeping functions as plain functions.
 
