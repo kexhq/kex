@@ -104,6 +104,7 @@ describe("Type") do
   it("spells nullary constructors for stored values and parses them back") do
     let choice = Type.of(ReadOnlyChoice)
     assert(choice.constructorValues == ["read_only_choice", "write_choice"])
+    assert(Type.of(Light).constructorValues == ["light"])
     assert(choice.constructorValue(ReadOnlyChoice) == Just("read_only_choice"))
     assert(choice.parse("read_only_choice") == Ok(ReadOnlyChoice))
     assert(choice.parse("write_choice") == Ok(WriteChoice))
