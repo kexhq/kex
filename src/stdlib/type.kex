@@ -252,10 +252,15 @@ make Type do
 
   # The text of each nullary constructor in a database cell or form value,
   # in declaration order. `ReadOnly` is `read_only`.
-  let constructorValues -> [String] = this.constructorNames.map { |name| this.snakedConstructor(name) }
+  let constructorValues -> [String] = this.constructors
+    .filter { |constructor| constructor.arity == 0 }
+    .map { |constructor| this.snakedConstructor(constructor.name) }
 
   # The stored value of a nullary constructor of this type.
-  let constructorValue(value: Any) -> String? = this.constructorNames.zip(this.constructorValues)
+  let constructorValue(value: Any) -> String? = this.constructors
+    .filter { |constructor| constructor.arity == 0 }
+    .map(&.name)
+    .zip(this.constructorValues)
     .find { |pair| match pair do (name, _) => name == "${value}" end }
     .map { |pair| match pair do (_, spelling) => spelling end }
 
