@@ -1,4 +1,5 @@
 type Shade = Light | Dark(Integer)
+type Choice = ReadOnlyChoice | WriteChoice
 
 record Point do
   x : Integer
@@ -98,6 +99,15 @@ describe("Type") do
     # A prelude record answers the same way.
     assert(Type.of(Time.midnight()).fieldNames ==
            ["hour", "minute", "second", "nanosecond"])
+  end
+
+  it("spells nullary constructors for stored values and parses them back") do
+    let choice = Type.of(ReadOnlyChoice)
+    assert(choice.constructorValues == ["read_only_choice", "write_choice"])
+    assert(choice.constructorValue(ReadOnlyChoice) == Just("read_only_choice"))
+    assert(choice.parse("read_only_choice") == Ok(ReadOnlyChoice))
+    assert(choice.parse("write_choice") == Ok(WriteChoice))
+    assert(choice.parse("missing").error?)
   end
 
   # `Type.returnedBy` is answered entirely by the compiler — a function value

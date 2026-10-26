@@ -250,6 +250,15 @@ make Type do
   #   IO.printLine("one of: ${Type.of(shape).constructorNames.join(", ")}")
   let constructorNames -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
 
+  # The text of each nullary constructor in a database cell or form value,
+  # in declaration order. `ReadOnly` is `read_only`.
+  let constructorValues -> [String] = this.constructorNames.map { |name| this.snakedConstructor(name) }
+
+  # The stored value of a nullary constructor of this type.
+  let constructorValue(value: Any) -> String? = this.constructorNames.zip(this.constructorValues)
+    .find { |pair| match pair do (name, _) => name == "${value}" end }
+    .map { |pair| match pair do (_, spelling) => spelling end }
+
   # Builds a record of this type from values by field name: the other half of
   # +fields+, for a library mapping data it does not define (database rows,
   # decoded JSON, form fields) onto the caller's records.
@@ -325,13 +334,19 @@ make Type do
   end
 
   private do
-    # The nullary constructor +text+ names: exactly, or else ignoring case.
+    # The nullary constructor +text+ names, including its snake-case value.
     let nullaryNamed(text: String) -> String? do
       let names = this.constructors.filter { |c| c.arity == 0 }.map(&.name)
       return match names.find { |name| name == text } do
         Just(name) => Just(name)
-        None => names.find { |name| name.lowerCase == text.lowerCase }
+        None => names.find { |name| name.lowerCase == text.lowerCase || this.snakedConstructor(name) == text }
       end
+    end
+
+    let snakedConstructor(name: String) -> String do
+      let letters = name.chars.map { |char| char.upper? then "_${char}".lowerCase else "${char}" }
+      let joined = letters.join("")
+      joined.startsWith?("_") then joined.drop(1) else joined
     end
   end
 
