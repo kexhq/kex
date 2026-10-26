@@ -162,6 +162,9 @@ auto ensureNativeContext() -> void {
 
 struct Fiber::Impl {
     emscripten_fiber_t ctx{};
+    // A fiber may be resumed by a parent fiber when module loading starts a
+    // nested evaluator. Keep the actual caller context for its next yield.
+    emscripten_fiber_t* callerContext = nullptr;
     std::vector<char> stack;
     std::vector<char> asyncifyStack;
 };
@@ -187,26 +190,43 @@ Fiber::~Fiber() = default;
 
 auto Fiber::resume() -> void {
     if (m_finished) return;
-    ensureNativeContext();
-
     Fiber* prevFiber = g_currentFiber;
+    emscripten_fiber_t nestedCaller{};
+    std::vector<char> nestedAsyncifyStack;
+    emscripten_fiber_t* caller = &g_nativeContext;
+    if (prevFiber) {
+        // Capture the parent fiber context. These locals remain alive while
+        // the parent is suspended in this resume() call.
+        nestedAsyncifyStack.resize(65536);
+        emscripten_fiber_init_from_current_context(
+            &nestedCaller, nestedAsyncifyStack.data(),
+            nestedAsyncifyStack.size());
+        caller = &nestedCaller;
+    } else {
+        ensureNativeContext();
+    }
+    m_impl->callerContext = caller;
     g_currentFiber = this;
     m_started = true;
 
-    emscripten_fiber_swap(&g_nativeContext, &m_impl->ctx);
+    emscripten_fiber_swap(caller, &m_impl->ctx);
+    m_impl->callerContext = nullptr;
     g_currentFiber = prevFiber;
 }
 
 auto Fiber::yieldToScheduler() -> void {
     Fiber* self = g_currentFiber;
     if (!self) return;
-    emscripten_fiber_swap(&self->m_impl->ctx, &g_nativeContext);
+    auto* caller = self->m_impl->callerContext;
+    if (!caller) return;
+    emscripten_fiber_swap(&self->m_impl->ctx, caller);
 }
 
 auto Fiber::trampolineBody() -> void {
     m_entry();
     m_finished = true;
-    emscripten_fiber_swap(&m_impl->ctx, &g_nativeContext);
+    if (m_impl->callerContext)
+        emscripten_fiber_swap(&m_impl->ctx, m_impl->callerContext);
 }
 
 #endif
