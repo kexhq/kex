@@ -252,7 +252,7 @@ make Type do
 
   # The text of each nullary constructor in a database cell or form value,
   # in declaration order. `ReadOnly` is `read_only`.
-  let constructorValues -> [String] = this.constructorNames.map { |name| this.snakedConstructor(name) }
+  let constructorValues -> [String] = this.constructorNames.map(~snakeCase)
 
   # The stored value of a nullary constructor of this type.
   let constructorValue(value: Any) -> String? = this.constructorNames.zip(this.constructorValues)
@@ -339,15 +339,10 @@ make Type do
       let names = this.constructors.filter { |c| c.arity == 0 }.map(&.name)
       return match names.find { |name| name == text } do
         Just(name) => Just(name)
-        None => names.find { |name| name.lowerCase == text.lowerCase || this.snakedConstructor(name) == text }
+        None => names.find { |name| name.lowerCase == text.lowerCase || name.snakeCase == text }
       end
     end
 
-    let snakedConstructor(name: String) -> String do
-      let letters = name.chars.map { |char| char.upper? then "_${char}".lowerCase else "${char}" }
-      let joined = letters.join("")
-      joined.startsWith?("_") then joined.drop(1) else joined
-    end
   end
 
   # Returns +true+ when the type is a record: that is, when it has fields.

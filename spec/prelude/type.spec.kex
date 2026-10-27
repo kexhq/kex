@@ -1,5 +1,5 @@
 type Shade = Light | Dark(Integer)
-type Choice = ReadOnlyChoice | WriteChoice
+type Choice = ReadOnlyChoice | WriteChoice | HTTPServerChoice
 
 record Point do
   x : Integer
@@ -103,10 +103,12 @@ describe("Type") do
 
   it("spells nullary constructors for stored values and parses them back") do
     let choice = Type.of(ReadOnlyChoice)
-    assert(choice.constructorValues == ["read_only_choice", "write_choice"])
+    assert(choice.constructorValues == ["read_only_choice", "write_choice", "http_server_choice"])
     assert(choice.constructorValue(ReadOnlyChoice) == Just("read_only_choice"))
     assert(choice.parse("read_only_choice") == Ok(ReadOnlyChoice))
     assert(choice.parse("write_choice") == Ok(WriteChoice))
+    assert(choice.constructorValue(HTTPServerChoice) == Just("http_server_choice"))
+    assert(choice.parse("http_server_choice") == Ok(HTTPServerChoice))
     assert(choice.parse("missing").error?)
   end
 

@@ -2730,7 +2730,7 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
 
     // Fully qualified owners are the same everywhere. Aliases are lexical:
     // two modules may both call their own, different dependency `Config`.
-    std::unordered_map<std::string, std::string> owners;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> owners;
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::string>> aliases;
     auto scanUsings = [&](auto&& self, const auto& items,
@@ -2754,31 +2754,39 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         Constants none;
         std::vector<semantic::Diagnostic> unused;
         Substituter finder{none, unused, {}, {}, {}};
+        std::string currentScope;
         finder.onSlot = [&](ast::ExprPtr& slot) {
             const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
             std::string owner;
             if (call && call->receiver && call->args.empty() &&
                 call->namedArgs.empty() && !call->block &&
                 finder.qualifierPath(*call->receiver, owner))
-                owners.emplace(owner, owner);
+                owners[currentScope].emplace(owner, owner);
             return false;
         };
-        walkBodies(program.items, [&](auto& target) {
-            using T = std::decay_t<decltype(target)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>)
-                finder.functionBody(target);
-            else
-                finder.substitute(target);
-        });
+        auto scanOwners = [&](auto&& self, auto& items, const std::string& scope) -> void {
+            currentScope = scope;
+            walkScopeBodies(items, [&](auto& target) {
+                using T = std::decay_t<decltype(target)>;
+                if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                    finder.functionBody(target);
+                else
+                    finder.substitute(target);
+            });
+            for (auto& item : items)
+                if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*mod) self(self, (*mod)->body, (*mod)->name);
+        };
+        scanOwners(scanOwners, program.items, "");
     }
 
     ScopedConstants imported;
     std::unordered_map<std::string, ScopedConstants> scopedImports;
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
-    auto gather = [&](const std::string& written, const std::string& named,
+    auto gather = [&](const std::string& written, const std::string& named, const std::string& scope,
                       ScopedConstants& destination) -> void {
-        const auto resolved = resolver.resolve(named, "");
+        const auto resolved = resolver.resolve(named, scope);
         if (!resolved) return;
         if (std::filesystem::weakly_canonical(resolved->path) ==
             std::filesystem::weakly_canonical(options.sourcePath))
@@ -2794,21 +2802,18 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         for (const auto& [type, owner] : exports->modules)
             modules.emplace(type, owner);
     };
-    for (const auto& [written, named] : owners)
-        gather(written, named, imported);
+    for (const auto& [scope, names] : owners)
+        for (const auto& [written, named] : names)
+            gather(written, named, scope, scopedImports[scope]);
     for (const auto& [scope, names] : aliases)
         for (const auto& [written, named] : names)
-            gather(written, named, scopedImports[scope]);
+            gather(written, named, scope, scopedImports[scope]);
     if (imported.empty() && scopedImports.empty()) return true;
 
     bool ok = true;
     std::unordered_set<std::string> reported;
     auto substituteScope = [&](auto&& self, auto& items,
-                               const std::string& scope) -> void {
-        ScopedConstants visible = imported;
-        if (auto root = scopedImports.find(""); root != scopedImports.end())
-            for (const auto& [name, values] : root->second)
-                visible[name] = values;
+                               const std::string& scope, ScopedConstants visible) -> void {
         if (auto local = scopedImports.find(scope);
             local != scopedImports.end())
             for (const auto& [name, values] : local->second)
@@ -2844,9 +2849,9 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         }
         for (auto& item : items)
             if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+                if (*mod) self(self, (*mod)->body, (*mod)->name, visible);
     };
-    substituteScope(substituteScope, program.items, "");
+    substituteScope(substituteScope, program.items, "", imported);
     return ok;
 }
 } // namespace

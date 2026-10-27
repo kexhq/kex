@@ -431,8 +431,14 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
             compiled::ExpandOptions expandOptions;
             expandOptions.sourcePath = *path;
             expandOptions.moduleRoots = m_moduleRoots;
-            const bool expanded =
-                compiled::expand(*program, expandDiagnostics, expandOptions);
+            bool expanded;
+            try {
+                expanded = compiled::expand(*program, expandDiagnostics, expandOptions);
+            } catch (...) {
+                expanding.erase(cacheKey);
+                m_loadingModules.erase(canonicalName);
+                throw;
+            }
             expanding.erase(cacheKey);
             if (!expanded) {
                 const auto& diagnostic = expandDiagnostics.front();
