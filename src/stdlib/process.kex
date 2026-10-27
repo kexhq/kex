@@ -8,7 +8,7 @@
 #
 #   let a = Task.start do expensiveThing(1) end
 #   let b = Task.start do expensiveThing(2) end
-#   a.await + b.await
+#   (a.await, b.await)
 #
 # +serving+ plus +Process.spawn+ gives a piece of state its own process, with
 # typed calls into it:
@@ -575,24 +575,23 @@ module Task do
   #
   # @example
   #   let t = Task.start do 1 + 1 end
-  #   t.await   # => 2
+  #   t.await   # => Ok(2)
   #
   # @example Two pieces of work at once
   #   let a = Task.start do slowThing("a") end
   #   let b = Task.start do slowThing("b") end
   #   (a.await, b.await)
-  start : Block<X> -> Task
+  start : Block<X> -> Task<X>
   foul start(f) = Kex.Intrinsic.Task.start(f)
 
   # Waits for every task in +tasks+ and returns their results, in the order
   # the tasks were given.
   #
   # Each result comes back wrapped in a +Result+, so one task failing does not
-  # cost you the others' answers. That differs from +Task.await+ on a single
-  # task, which hands back the value itself.
+  # cost you the others' answers, just as with +await+ on a single task.
   #
   # @param tasks [[Task]] the tasks to wait for
-  # @return [[X]] their results, in order
+  # @return [[Result<X, Any>]] their results, in order
   #
   # @example
   #   let tasks = [Task.start do 1 end, Task.start do 2 end]
@@ -600,32 +599,32 @@ module Task do
   #
   # @example Fanning work out over a list
   #   let results = Task.awaitAll(paths.map { |p| Task.start do process(p) end })
-  awaitAll : [Task] -> [X]
+  awaitAll : [Task<X>] -> [Result<X, Any>]
   foul awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
 end
 
-make Task do
+make Task<X> do
   # Waits for the task's result, for as long as it takes.
   #
-  # @return [X] the task's result
+  # @return [Result<X, Any>] the result or failure reason
   #
   # @example
-  #   Task.start do 1 + 1 end.await   # => 2
-  await :> X
+  #   Task.start do 1 + 1 end.await   # => Ok(2)
+  await :> Result<X, Any>
   let await = Kex.Intrinsic.Process.await(this, :infinity)
 
   # Waits for the task's result, giving up after +timeout+ milliseconds.
   #
-  # Answers +None+ if the task has not finished in time. The task itself is
+  # Answers +Error(:timeout)+ if the task has not finished in time. The task itself is
   # not stopped.
   #
   # @param timeout [Integer] how long to wait, in milliseconds
-  # @return [X] the task's result, or +None+ on timeout
+  # @return [Result<X, Any>] the result or failure reason
   #
   # @example
   #   let t = Task.start do slowThing() end
   #   t.await(1000)
-  await :> Integer -> X
+  await :> Integer -> Result<X, Any>
   let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
 

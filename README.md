@@ -77,8 +77,8 @@ make Vector2D do
     (@x - other.x).abs < 0.01 && (@y - other.y).abs < 0.01
   end
 
-  let to(String) -> String do
-    "(${@x}, ${@y})"
+  let to(String) -> String? do
+    Just("(${@x}, ${@y})")
   end
 end
 
@@ -106,9 +106,7 @@ Kex tries to make the common path feel light:
 
 ## Language Tour
 
-## The Good Parts In Code
-
-### Pipelines Over Real Data
+### Natural Function Chaining
 
 Uniform Function Call Syntax means `value.f(arg)` is equivalent to `f(value, arg)`. You get fluent pipelines while keeping functions as plain functions.
 
@@ -158,8 +156,8 @@ make Vector2D do
     return @x * other.x + @y * other.y
   end
 
-  let to(String) -> String do
-    return "(${@x}, ${@y})"
+  let to(String) -> String? do
+    return Just("(${@x}, ${@y})")
   end
 end
 
@@ -272,15 +270,15 @@ let parseInt(s: String) -> Result<Int, ParseError> do
 end
 
 let parsePort(s: String) -> Result<Int, ParseError> do
-  let n = parseInt(s)?
+  let n = parseInt(s).try
   return Error(Overflow) if n > 65535
   return Ok(n)
 end
 
 foul loadConfig(path: String) -> Result<Config, AppError> do
-  let content = IO.readFile(path)?
-  let parsed = Config.parse(content)?
-  let port = parsePort(parsed.get("port"))?
+  let content = IO.readFile(path).try
+  let parsed = Config.parse(content).try
+  let port = parsePort(parsed.get("port")).try
   return Ok(Config { port: port, host: parsed.get("host") })
 end
 ```
@@ -307,15 +305,17 @@ let bad(path: String) = readConfig(path)
 Bindings are immutable by default. `var` opts into local mutation, and `!` is reassignment sugar for functions that return an updated value — it rebinds the variable rather than mutating the underlying value in place, so aliases never see the change.
 
 ```rb
-let frozen = [1, 2, 3]
-# frozen.push!(4)
-# runtime error: Cannot use '!' on immutable binding: frozen
+main do
+  let frozen = [1, 2, 3]
+  # frozen.push!(4)
+  # runtime error: Cannot use '!' on immutable binding: frozen
 
-var list = [1, 2, 3, 4, 5]
-list.push!(6)
-list.filter!(&.even?)
-list.map! { |x| x * 10 }
-# list is now [20, 40, 60]
+  var list = [1, 2, 3, 4, 5]
+  list.push!(6)
+  list.filter!(&.even?)
+  list.map! { |x| x * 10 }
+  # list is now [20, 40, 60]
+end
 ```
 
 ### Lazy Streams and Ranges
@@ -423,6 +423,51 @@ let app = Http.routes do
 
     return Response.error("error while creating user")
   end
+end
+```
+
+A real one, from [Metro](https://github.com/kexhq/metro) — Kex's Rails-like web
+framework. A page is a tree of nodes whose children are collected from the
+block, and `render` walks it once, escaping text and attribute values on the
+way out (`Metro.Html` generates a constructor for every HTML element at
+compile time with `compiled do`; here is one of them, in full):
+
+```rb
+module Html do
+  record Tag do
+    name       : String
+    attributes : {String: String} = {}
+    children   : [Node] = []
+  end
+
+  type Node = Tag(Tag) | Text(String)
+
+  text : String -> Node
+  let text(contents) = Text(contents)
+
+  let div(attributes: {String: String}, children: Block<[Node]> = {[]}) -> Node do
+    return Tag(Tag { name: "div", attributes: attributes, children: children() })
+  end
+
+  render : Node -> String
+  let render(Text(contents)) = Template.escapeHtml(contents)
+  let render(Tag(tag)) do
+    let attributes = tag.attributes.entries.map { |name, value|
+      " ${name}=\"${Template.escapeHtml(value)}\""
+    }.join("")
+    let inner = tag.children.map { |child| render(child) }.join("")
+    return "<${tag.name}${attributes}>${inner}</${tag.name}>"
+  end
+end
+
+using Html
+
+main do
+  let page = div({"class": "menu"}) do
+    text("Not <b>markup</b>")
+  end
+  IO.printLine(Html.render(page))
+  # <div class="menu">Not &lt;b&gt;markup&lt;/b&gt;</div>
 end
 ```
 
@@ -538,7 +583,7 @@ make parse          # Parse all examples
 make repl           # Start the interactive REPL
 make run F=file     # Run a .kex file (type-checks first; use --no-check to skip)
 make check F=file         # Run semantic analysis only
-make check-prelude        # Type-check the sources selected by src/stdlib/prelude.kex
+make check-examples       # Type-check all examples
 make install              # Install build/kex to /usr/local/bin/kex
 make uninstall      # Remove the installed binary
 make clean          # Remove build artifacts
@@ -583,15 +628,15 @@ Good starting points:
 - `examples/traits.kex` - Shape trait, required/default/overridden functions, multiple traits
 - `examples/vectors_advanced.kex` - records, type-level constructors, functions called through UFCS
 - `examples/streams.kex` - lazy ranges and streams
-- `examples/html_dsl.kex` - DSL-oriented blocks
-- `examples/error_handling.kex` - `Result`, optional values, and `?`
+- `examples/template_stdlib.kex` - DSL-style template blocks (see also `examples/templates/`)
+- `examples/error_handling.kex` - `Result`, optional values, and `Result` handling
 - `spec/type_dispatch.kex` - dispatch through `make` and receiver patterns
 - `spec/operator_overloading.kex` - overloading `+`, `*`, `==` per receiver type
 - `spec/at_field_shorthand.kex` - `@field`/`@function(...)` inside `make` blocks
 - `spec/mutating_calls.kex` - `var`/`let` and `!` mutation semantics
 - `spec/record_module_constructors.kex` - constructors/constants in a `module` of the record's name stay namespaced under it
 - `spec/math.kex` - the `Math` module (`Math.PI`, `Math.sqrt`, trig, logs, ...)
-- `spec/testing_dsl.kex` - the `describe`/`it`/`assert` testing DSL itself
+- `spec/testing_dsl.spec.kex` - the `describe`/`it`/`assert` testing DSL itself
 - `spec/json_parser.spec.kex` - a spec for `examples/json_parser.kex` using `describe`/`it`/`assert` (see "Specs for example files" in `docs/testing.md`)
 
 ## Project Structure

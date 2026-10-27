@@ -252,10 +252,15 @@ make Type do
 
   # The text of each nullary constructor in a database cell or form value,
   # in declaration order. `ReadOnly` is `read_only`.
-  let constructorValues -> [String] = this.constructorNames.map(~snakeCase)
+  let constructorValues -> [String] = this.constructors
+    .filter { |constructor| constructor.arity == 0 }
+    .map { |constructor| constructor.name.snakeCase }
 
   # The stored value of a nullary constructor of this type.
-  let constructorValue(value: Any) -> String? = this.constructorNames.zip(this.constructorValues)
+  let constructorValue(value: Any) -> String? = this.constructors
+    .filter { |constructor| constructor.arity == 0 }
+    .map(&.name)
+    .zip(this.constructorValues)
     .find { |pair| match pair do (name, _) => name == "${value}" end }
     .map { |pair| match pair do (_, spelling) => spelling end }
 
@@ -300,10 +305,11 @@ make Type do
   #
   # +String+, +Integer+, +Float+, +Bool+ (+"true"+ or +"false"+) and +Char+
   # (one character) are read as written. +T?+ parses a +T+ and wraps it in
-  # +Just+. A sum type's nullary constructor is found by its name, exactly or
-  # else ignoring case, so +"channel"+ is +Channel+. There is no null: text
-  # always stands for a value, and a caller with an absent one leaves it out
-  # of +construct+'s map.
+  # +Just+. A sum type's nullary constructor accepts its exact name,
+  # case-insensitive name, or snake-case stored spelling: +"channel"+ is
+  # +Channel+, and +"read_only"+ is +ReadOnly+. Ambiguous normalized names
+  # are rejected. There is no null: text always stands for a value, and a
+  # caller with an absent one leaves it out of +construct+'s map.
   #
   # @param text [String] the text to read
   # @return [Result<Any, String>] the value, or why +text+ is not one
@@ -335,12 +341,14 @@ make Type do
 
   private do
     # The nullary constructor +text+ names, including its snake-case value.
+    # Exact constructor names take precedence; a normalized spelling must be
+    # unambiguous.
     let nullaryNamed(text: String) -> String? do
       let names = this.constructors.filter { |c| c.arity == 0 }.map(&.name)
-      return match names.find { |name| name == text } do
-        Just(name) => Just(name)
-        None => names.find { |name| name.lowerCase == text.lowerCase || name.snakeCase == text }
-      end
+      let exact = names.find { |name| name == text }
+      return exact if exact.set?
+      let matches = names.filter { |name| name.lowerCase == text.lowerCase || name.snakeCase == text }
+      matches.count == 1 then matches.first else None
     end
 
   end

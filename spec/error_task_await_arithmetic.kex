@@ -1,0 +1,5 @@
+main do
+  let task = Task.start { 7 }
+  let value = task.await(timeout: 1000)
+  IO.printLine(3 + value)
+end
