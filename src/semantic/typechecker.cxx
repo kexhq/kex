@@ -5752,9 +5752,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     node.op == TokenType::LessEq ||
                     node.op == TokenType::GreaterEq;
                 const auto right = resolve(rightType);
+                // A bound reached through a type variable was inferred, not
+                // declared: an unannotated `n` passed to `IO.inspect` is bound
+                // to `Inspectable`, but `n * 2` beside it still says what `n`
+                // is. Only an annotated `a: Showable` is known only by its trait.
+                const bool inferredBound =
+                    std::holds_alternative<TypeVar>(leftType->kind) &&
+                    std::holds_alternative<ConstrainedType>(receiver->kind);
                 const bool knownReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
-                    !std::holds_alternative<UnknownType>(receiver->kind);
+                    !std::holds_alternative<UnknownType>(receiver->kind) &&
+                    !inferredBound;
                 // A built-in `+` on the left already says when the right side
                 // does not match ("requires matching types"); the others do
                 // not check it, so `2 * point` needs saying here.

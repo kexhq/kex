@@ -3804,6 +3804,28 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                (std::holds_alternative<CharValue>(a->data) &&
                 std::holds_alternative<CharValue>(b->data));
     };
+    // A primitive receiver takes only an overload that names what it accepts,
+    // such as `make Integer do let *(m: Measure)`. Comparable's unannotated
+    // `<` would otherwise take `"x" < 1`, ask String's `compare`, which
+    // answers with `<` again, and the walker recursed until the stack ran
+    // out instead of raising "Cannot compare String and Integer".
+    auto primitive = [&](const ValuePtr& value) {
+        return numeric(value) || std::holds_alternative<StringValue>(value->data) ||
+               std::holds_alternative<CharValue>(value->data);
+    };
+    auto overloadDeclares = [&](const std::string& name) {
+        const auto defs = m_functionDefs.find(name);
+        if (defs == m_functionDefs.end()) return false;
+        for (const auto* def : defs->second) {
+            if (!def) continue;
+            for (const auto& clause : def->clauses) {
+                if (clause.params.empty()) continue;
+                const auto* declared = dispatchParamType(clause.params.back());
+                if (declared && runtimeTypeMatches(right, *declared)) return true;
+            }
+        }
+        return false;
+    };
     if (!opSymbol.empty() && !(numeric(left) && numeric(right)) &&
         !sameTextual(left, right)) {
         std::vector<ValuePtr> operatorArgs{left, right};
@@ -3813,7 +3835,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         // does not take: `let ==(value: String) -> Cond` is what `col ==
         // "x"` means, and comparing two Cols still compares them
         // (kexhq/kex#486).
-        if (methodName != opSymbol && (!equality || overloadAccepts(methodName)))
+        if (methodName != opSymbol && (!equality || overloadAccepts(methodName)) &&
+            (!primitive(left) || overloadDeclares(methodName)))
             return callFunction(methodName, {left, right}, {}, loc);
         if (rightPlaceholder)
             throw PlaceholderMisuse(rightPlaceholder->name, "this operator");
