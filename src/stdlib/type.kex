@@ -254,7 +254,7 @@ make Type do
   # in declaration order. `ReadOnly` is `read_only`.
   let constructorValues -> [String] = this.constructors
     .filter { |constructor| constructor.arity == 0 }
-    .map { |constructor| this.snakedConstructor(constructor.name) }
+    .map { |constructor| constructor.name.snakeCase }
 
   # The stored value of a nullary constructor of this type.
   let constructorValue(value: Any) -> String? = this.constructors
@@ -347,15 +347,10 @@ make Type do
       let names = this.constructors.filter { |c| c.arity == 0 }.map(&.name)
       let exact = names.find { |name| name == text }
       return exact if exact.set?
-      let matches = names.filter { |name| name.lowerCase == text.lowerCase || this.snakedConstructor(name) == text }
+      let matches = names.filter { |name| name.lowerCase == text.lowerCase || name.snakeCase == text }
       matches.count == 1 then matches.first else None
     end
 
-    let snakedConstructor(name: String) -> String do
-      let letters = name.chars.map { |char| char.upper? then "_${char}".lowerCase else "${char}" }
-      let joined = letters.join("")
-      joined.startsWith?("_") then joined.drop(1) else joined
-    end
   end
 
   # Returns +true+ when the type is a record: that is, when it has fields.

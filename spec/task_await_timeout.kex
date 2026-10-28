@@ -1,0 +1,12 @@
+# kex: run-beam
+main do
+  let slow = Task.start do
+    Task.sleep(2.seconds)
+    1
+  end
+  match slow.await(timeout: 10) do
+    Ok(_) => IO.printLine("finished")
+    Error(:timeout) => IO.printLine("timed out")
+    Error(_) => IO.printLine("failed")
+  end
+end

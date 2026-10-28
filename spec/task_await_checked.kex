@@ -1,0 +1,13 @@
+# kex: run-beam
+main do
+  let Ok(a) = Task.start { 1 }.await
+  let Ok(b) = Task.start { 2 }.await(timeout: 1000)
+  match (Task.start { 3 }.await, Task.start { 4 }.await, Task.start { 5 }.await, Task.start { 6 }.await) do
+    (Ok(_), Ok(_), Ok(_), Ok(_)) => IO.printLine(a + b)
+    _ => IO.printLine("error")
+  end
+  match Task.awaitAll([Task.start { 7 }, Task.start { 8 }]) do
+    [Ok(x), Ok(y)] => IO.printLine(x + y)
+    _ => IO.printLine("error")
+  end
+end

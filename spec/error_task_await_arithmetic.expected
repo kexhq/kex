@@ -1,0 +1,2 @@
+spec/error_task_await_arithmetic.kex:4:20: error: Operator '+' requires matching types, got Integer and Result<A, Unknown>
+Aborted: 1 type error — fix before running (use --no-check to skip).

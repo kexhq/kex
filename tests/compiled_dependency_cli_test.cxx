@@ -171,6 +171,83 @@ end
             assertTrue(result == "41\n99\n",
                        "aliases leaked across module scopes: " + result);
         });
+        it("lets a nested module see its parent's alias", []() {
+            Package package;
+            package.write("lib/library/first.kex", R"KEX(module Library.First
+compiled do
+  let VALUE = 41
+end
+)KEX");
+            package.write("app/main.kex", R"KEX(module Outer do
+  using Library.First, as: Config
+  module Inner do
+    let answer() -> Integer = Config.VALUE
+  end
+end
+main do
+  IO.printLine(Outer.Inner.answer())
+end
+)KEX");
+            const auto output = package.root / "nested-output";
+            const auto command = std::string(KEX_BINARY_PATH) +
+                " -R --no-colors --source-root " +
+                (package.root / "lib").string() + " --source-root " +
+                (package.root / "app").string() + " " +
+                (package.root / "app/main.kex").string() + " > " +
+                output.string() + " 2>&1";
+            const int status = std::system(command.c_str());
+            std::ifstream file(output);
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            const auto result = buffer.str();
+            assertTrue(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                       "nested alias fixture failed: " + result);
+            assertTrue(result == "41\n",
+                       "the nested module lost its parent's alias: " + result);
+        });
+        it("falls back to the absolute owner when the relative one is no module", []() {
+            // `Mid.Leaf` inside `module Chain` is first read as `Chain.Mid.Leaf`,
+            // which the container heuristic matches to chain/mid.kex — a file
+            // that does not declare it. The top-level `Mid.Leaf` is meant.
+            Package package;
+            std::filesystem::create_directories(package.root / "lib/chain");
+            std::filesystem::create_directories(package.root / "lib/mid");
+            package.write("lib/mid/leaf.kex", R"KEX(module Mid.Leaf
+compiled do
+  let VALUE = 7
+end
+)KEX");
+            package.write("lib/chain/mid.kex", R"KEX(module Chain.Mid
+let other() -> Integer = 1
+)KEX");
+            package.write("lib/chain.kex", R"KEX(module Chain
+using Mid.Leaf, as: Base
+let aliased() -> Integer = Base.VALUE
+let qualified() -> Integer = Mid.Leaf.VALUE
+)KEX");
+            package.write("app/main.kex", R"KEX(using Chain
+main do
+  IO.printLine(Chain.aliased())
+  IO.printLine(Chain.qualified())
+end
+)KEX");
+            const auto output = package.root / "absolute-output";
+            const auto command = std::string(KEX_BINARY_PATH) +
+                " -R --no-colors --source-root " +
+                (package.root / "lib").string() + " --source-root " +
+                (package.root / "app").string() + " " +
+                (package.root / "app/main.kex").string() + " > " +
+                output.string() + " 2>&1";
+            const int status = std::system(command.c_str());
+            std::ifstream file(output);
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            const auto result = buffer.str();
+            assertTrue(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                       "absolute owner fixture failed: " + result);
+            assertTrue(result == "7\n7\n",
+                       "the phantom relative owner shadowed the real one: " + result);
+        });
         it("collapses a compiled record containing an optional default", []() {
             Package package;
             package.write("lib/library/defaults.kex", R"KEX(module Library.Defaults
