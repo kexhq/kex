@@ -1913,7 +1913,16 @@ auto resolveBeamDeps(kex::ast::Program &program,
       const auto expandStart = std::chrono::steady_clock::now();
       const bool expanded = kex::compiled::expand(*depProg, depExpandDiagnostics,
                                                   depExpandOptions);
-      expandTime += std::chrono::steady_clock::now() - expandStart;
+      const auto expandSpent = std::chrono::steady_clock::now() - expandStart;
+      expandTime += expandSpent;
+      // The total alone says expansion is slow, not where: Slick spent 930s
+      // here across 146 files with nothing naming any of them (kexhq/kex#586).
+      if (const char *timings = std::getenv("KEX_TIMINGS");
+          timings && *timings && std::string(timings) != "0" &&
+          expandSpent > std::chrono::milliseconds(250))
+        std::fprintf(stderr, "      expand %9.1f ms  %s\n",
+                     std::chrono::duration<double, std::milli>(expandSpent).count(),
+                     shownPath(*path).c_str());
       if (!expanded) {
         for (const auto &diagnostic : depExpandDiagnostics)
           printSemanticDiagnostic(diagnostic);

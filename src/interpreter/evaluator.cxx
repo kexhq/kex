@@ -390,7 +390,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     std::shared_ptr<std::string> path;
     std::shared_ptr<ast::Program> program;
     if (const auto cached = expandedModules.find(cacheKey);
-        false && cached != expandedModules.end()) {
+        cached != expandedModules.end()) {
         path = cached->second.path;
         program = cached->second.program;
     } else {

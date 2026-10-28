@@ -1,5 +1,5 @@
 spec/error_annotation_arity_mismatch.kex:4:1: warning: type annotation for 'add' declares 1 parameter(s) but definition has 2
-spec/error_annotation_arity_mismatch.kex:4:1: error: `add` declared to return Integer but body returns (Integer, Integer)
+spec/error_annotation_arity_mismatch.kex:4:21: error: `+` is not defined for (Integer, Integer) and T0
 spec/error_annotation_arity_mismatch.kex:7:16: error: `add` expects argument 1 to be (Integer, Integer), but got Integer
 
 add : (Integer, Integer) -> A -> Integer

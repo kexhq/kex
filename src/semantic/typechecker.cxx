@@ -5738,7 +5738,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const bool knownReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
                     !std::holds_alternative<UnknownType>(receiver->kind);
+                // A built-in `+` on the left already says when the right side
+                // does not match ("requires matching types"); the others do
+                // not check it, so `2 * point` needs saying here.
+                const bool builtinPlusReports =
+                    node.op == TokenType::Plus &&
+                    !lacksBuiltinOperator(receiver, operatorName);
                 if (arithmeticOrOrder && knownReceiver && !ownsOperator &&
+                    !builtinPlusReports &&
                     !traitDeclaresOperator(receiver, operatorName) &&
                     (lacksBuiltinOperator(receiver, operatorName) ||
                      lacksBuiltinOperator(right, operatorName))) {
@@ -5746,12 +5753,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     const auto owner = bound ? bound->traitName : typeToString(receiver);
                     const bool traitOwner =
                         (bound || isTrait(owner)) && !isStructuralTrait(owner);
-                    // Only a named type has a make block to declare it in.
+                    // Only a named type has a make block to declare it in, and
+                    // only the left one is worth naming: in `3 + value` with a
+                    // `Result` on the right, the fix is the `Result`, not a
+                    // `make Integer`.
                     const bool nominal =
-                        bound || std::holds_alternative<NamedType>(receiver->kind) ||
-                        std::holds_alternative<PrimitiveType>(receiver->kind) ||
-                        std::holds_alternative<SizedIntType>(receiver->kind) ||
-                        std::holds_alternative<SizedFloatType>(receiver->kind);
+                        lacksBuiltinOperator(receiver, operatorName) &&
+                        (bound || std::holds_alternative<NamedType>(receiver->kind));
                     error(expr.location,
                           "`" + operatorName + "` is not defined for " +
                               owner + " and " + typeToString(right) +
@@ -6609,7 +6617,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                                  ? std::get<ast::FunctionCall>(argument->kind).name
                                                  : std::get<ast::MethodCall>(argument->kind).method) +
                                              "(…)`"
-                                       : typeToString(fallback)) +
+                                       // A bare `None` is typed `T?` now
+                                       // that constructors carry their ADT;
+                                       // its spelling is what the reader
+                                       // wrote.
+                                       : argument && (std::holds_alternative<ast::NoneLiteral>(argument->kind) ||
+                                                      (std::holds_alternative<ast::UpperIdentifier>(argument->kind) &&
+                                                       std::get<ast::UpperIdentifier>(argument->kind).name == "None"))
+                                           ? std::string("None")
+                                           : typeToString(fallback)) +
                                   " — `or` is what leaves the " + wrapper +
                                   "; pass a plain default, keep the value as it is, "
                                   "or `match` on it");
@@ -8027,6 +8043,20 @@ auto TypeChecker::isProcessSendTarget(const TypePtr& receiver) -> bool {
 }
 
 auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {
+    // `Block<A…, R>` still spelled as a NAMED type is the block function type
+    // it stands for; every resolver that knows it builds that. One spelling
+    // reached a record field unconverted, and `Just({ DateTime.now() })` for
+    // Mock.Clock's `onNow` was then rejected once `Just(…)` had a type.
+    const auto asBlock = [](const TypePtr& type) -> TypePtr {
+        const auto* named = std::get_if<NamedType>(&type->kind);
+        if (!named || named->name != "Block" || named->typeArgs.empty())
+            return nullptr;
+        std::vector<TypePtr> params(named->typeArgs.begin(),
+                                    named->typeArgs.end() - 1);
+        return Type::func(std::move(params), named->typeArgs.back(), true);
+    };
+    if (const auto block = asBlock(paramType)) return argMatchesParam(argType, block);
+    if (const auto block = asBlock(argType)) return argMatchesParam(block, paramType);
     auto isPermissive = [](const TypePtr& t) {
         return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
     };

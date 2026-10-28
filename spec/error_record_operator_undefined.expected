@@ -7,7 +7,7 @@ spec/error_record_operator_undefined.kex:42:26: error: `+` is not defined for In
 spec/error_record_operator_undefined.kex:51:46: error: `-` is not defined for Summable and Summable; declare it in trait `Summable`
 spec/error_record_operator_undefined.kex:25:20: error: `-` is not defined for Point and Point; declare it in a `make Point` block
 spec/error_record_operator_undefined.kex:26:20: error: `<` is not defined for Point and Point; declare it in a `make Point` block
-spec/error_record_operator_undefined.kex:27:20: error: `*` is not defined for Integer and Point; declare it in a `make Integer` block
+spec/error_record_operator_undefined.kex:27:20: error: `*` is not defined for Integer and Point
 spec/error_record_operator_undefined.kex:28:16: error: Unary '-' requires a number, got Point
 spec/error_record_operator_undefined.kex:30:27: error: `+` is not defined for Money and Money; declare it in a `make Money` block
 spec/error_record_operator_undefined.kex:31:16: error: Unary '-' requires a number, got Money
