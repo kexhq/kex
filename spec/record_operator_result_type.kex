@@ -1,0 +1,69 @@
+# kex: run-beam
+# An operator with no return annotation answers its own type, not the trait
+# the first call site happens to pass it to. Called from `main` above the make
+# block, `IO.printLine(a + b)` had bound `+` to `Showable`, so BEAM printed the
+# sum as a bare record instead of through its `showValue`. The same for an
+# ADT's operator, and for values known only by a trait (`total`, `twice`).
+main do
+  let a = Complex { real: 5, imaginary: 11 }
+  let b = Complex { real: 2, imaginary: -8 }
+  IO.printLine(a + b)
+  let difference: Complex = a - b
+  IO.printLine(difference)
+  IO.printLine(a.scaled(2))
+
+  let price = Cents(5) + Cents(7)
+  IO.printLine(price)
+  let doubled: Money = price * 2
+  IO.printLine(doubled)
+
+  let coin = Coin { value: 2 }
+  IO.printLine(total(coin, Coin { value: 3 }))
+  IO.printLine(coin.twice)
+end
+
+record Complex do
+  real : Number
+  imaginary : Number
+end
+
+make Complex, implement: Showable do
+  let +(other: This) = New { real: @real + other.real, imaginary: @imaginary + other.imaginary }
+  let -(other: This) = New { real: @real - other.real, imaginary: @imaginary - other.imaginary }
+  let scaled(factor: Number) = New { real: @real * factor, imaginary: @imaginary * factor }
+  let showValue() = @imaginary < 0 then "${@real}${@imaginary}i" else "${@real}+${@imaginary}i"
+end
+
+type Money = Cents(Integer) | Free
+
+make Money, implement: Showable do
+  let +(other: This) = match [this, other] do
+    [Cents(x), Cents(y)] => Cents(x + y)
+    _ => Free
+  end
+  let *(factor: Integer) = match this do
+    Cents(x) => Cents(x * factor)
+    Free => Free
+  end
+  let showValue() = match this do
+    Cents(x) => "${x}c"
+    Free => "free"
+  end
+end
+
+trait Addable do
+  combine : This -> This
+  let +(other: This) = this.combine(other)
+  let twice() = this + this
+end
+
+let total(x: Addable, y: Addable) = x + y
+
+record Coin do
+  value : Integer
+end
+
+make Coin, implement: Addable, Showable do
+  let combine(other: This) = New { value: @value + other.value }
+  let showValue() = "coin ${@value}"
+end

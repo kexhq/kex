@@ -11,6 +11,9 @@ struct Resolution {
     std::string path;
     // Later source-root matches hidden by `path`, in source-root order.
     std::vector<std::string> shadowedPaths;
+    // Found through the file of a module it is nested in (`DB.Store.Store`,
+    // the type `Store` in db/store.kex), not through a file of its own.
+    bool enclosing = false;
 };
 
 class Resolver {

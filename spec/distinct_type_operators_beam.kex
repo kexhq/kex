@@ -1,0 +1,27 @@
+# kex: run-beam
+# A distinct type is erased at run time: a Tuplex is a bare pair there, and
+# nothing tells it from any other. Its operators and its `showValue` are found
+# by its static type instead, on both backends. `This` in a `:>` signature is
+# the receiver, and a value its backing type admits converts with `.as`, or by
+# itself when it is a tuple literal written under the annotation.
+distinct type Tuplex = (Number, Number)
+
+make Tuplex, implement: Showable do
+  + :> This -> This
+  let +(@(n, i), (on, oi)) = (n + on, i + oi).as(Tuplex)
+
+  - :> This -> This
+  let -(@(n, i), (on, oi)) = (n - on, i - oi).as(Tuplex)
+
+  let showValue(@(n, i)) = i < 0 then "${n}${i}i" else "${n}+${i}i"
+end
+
+main do
+  let x : Tuplex = (5, 11)
+  let y = (2, -4).as(Tuplex)
+  IO.printLine(x)
+  IO.printLine(y)
+  IO.printLine(x + y)
+  IO.printLine(x - y)
+  IO.printLine("${x + y}")
+end

@@ -2350,6 +2350,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             auto left = node.left ? eval(*node.left) : Value::none();
             auto right = node.right ? eval(*node.right) : Value::none();
+            // A distinct type's own operator, chosen by the static type as a
+            // method call on it is (below): the value is the bare backing
+            // pair, so runtime dispatch found nothing and said "Cannot add
+            // Tuple and Tuple".
+            if (m_expressionTypes && node.left)
+                if (auto found = m_expressionTypes->find(node.left.get());
+                    found != m_expressionTypes->end() && found->second)
+                    if (const auto* named = std::get_if<semantic::NamedType>(
+                            &found->second->kind);
+                        named && m_erasedReceiverTypes.contains(named->name)) {
+                        const auto candidate = named->name + "::" +
+                                               std::string(tokenTypeName(node.op));
+                        if (m_functionValues.count(candidate) || m_env->get(candidate))
+                            return callFunction(candidate, {left, right}, {},
+                                                expr.location);
+                    }
             return evalBinaryOp(node.op, left, right, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
@@ -2358,9 +2374,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             std::vector<ValuePtr> args;
-            for (const auto& arg : node.args) {
-                args.push_back(arg ? eval(*arg) : Value::none());
-            }
+            for (const auto& arg : node.args)
+                args.push_back(showErasedArgument(
+                    expr, args.size(), arg.get(),
+                    arg ? eval(*arg) : Value::none()));
             NamedArgs namedArgs;
             for (const auto& [name, val] : node.namedArgs) {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
@@ -2676,9 +2693,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (isNamespaceCall) {
                 // Namespace call: Stream.Sequence(...), Math.PI, File.read(...), etc.
                 std::vector<ValuePtr> args;
-                for (const auto& arg : node.args) {
-                    args.push_back(arg ? eval(*arg) : Value::none());
-                }
+                for (const auto& arg : node.args)
+                    args.push_back(showErasedArgument(
+                        expr, args.size(), arg.get(),
+                        arg ? eval(*arg) : Value::none()));
                 NamedArgs namedArgs;
                 for (const auto& [name, val] : node.namedArgs) {
                     namedArgs.push_back({name, val ? eval(*val) : Value::none()});
@@ -2787,9 +2805,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
             std::vector<ValuePtr> args;
             args.push_back(receiver); // UFCS: receiver is first arg
-            for (const auto& arg : node.args) {
-                args.push_back(arg ? eval(*arg) : Value::none());
-            }
+            for (const auto& arg : node.args)
+                args.push_back(showErasedArgument(
+                    expr, args.size(), arg.get(),
+                    arg ? eval(*arg) : Value::none()));
             if (node.block) {
                 args.push_back(eval(**node.block));
             }
@@ -3978,6 +3997,29 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         default:
             throw RuntimeError("Unknown operator", loc);
     }
+}
+
+auto Evaluator::showErasedArgument(const ast::Expr& call, size_t index,
+                                   const ast::Expr* argument, ValuePtr value)
+    -> ValuePtr {
+    if (!m_callSignatures || !m_expressionTypes || !argument) return value;
+    const auto signature = m_callSignatures->find(&call);
+    if (signature == m_callSignatures->end() ||
+        index >= signature->second.params.size())
+        return value;
+    const auto& param = signature->second.params[index];
+    const auto* paramName = std::get_if<semantic::NamedType>(&param->kind);
+    const auto* paramBound = std::get_if<semantic::ConstrainedType>(&param->kind);
+    if (!(paramName && paramName->name == "Showable") &&
+        !(paramBound && paramBound->traitName == "Showable"))
+        return value;
+    const auto found = m_expressionTypes->find(argument);
+    if (found == m_expressionTypes->end() || !found->second) return value;
+    const auto* named = std::get_if<semantic::NamedType>(&found->second->kind);
+    if (!named || !m_erasedReceiverTypes.contains(named->name)) return value;
+    const auto method = named->name + "::showValue";
+    if (!m_functionValues.count(method) && !m_env->get(method)) return value;
+    return callFunction(method, {std::move(value)}, {}, argument->location);
 }
 
 auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,

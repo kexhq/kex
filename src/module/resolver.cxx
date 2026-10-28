@@ -129,6 +129,7 @@ auto Resolver::resolve(const std::string& moduleName,
         std::optional<Resolution> result;
         for (const auto& root : m_roots) {
             std::optional<std::string> matchedPath;
+            bool enclosing = false;
             for (const auto& relative : sourcePaths(candidateName)) {
                 auto direct = std::filesystem::path(root) / relative;
                 if (std::filesystem::is_regular_file(direct) &&
@@ -155,6 +156,7 @@ auto Resolver::resolve(const std::string& moduleName,
                     if (std::filesystem::is_regular_file(path) &&
                         !isEntryFile(path)) {
                         matchedPath = path.string();
+                        enclosing = true;
                         break;
                     }
                 }
@@ -162,7 +164,7 @@ auto Resolver::resolve(const std::string& moduleName,
 
             if (!matchedPath) continue;
             if (!result)
-                result = Resolution{candidateName, *matchedPath, {}};
+                result = Resolution{candidateName, *matchedPath, {}, enclosing};
             else if (*matchedPath != result->path)
                 result->shadowedPaths.push_back(*matchedPath);
         }

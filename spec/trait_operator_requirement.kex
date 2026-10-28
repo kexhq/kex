@@ -1,0 +1,40 @@
+# kex: run-beam
+# A trait can require an operator, as a make block declares one. A value known
+# only by the trait reaches its type's operator, and a default can use it.
+trait Summable do
+  + :> This -> This
+  < :> This -> Bool
+  let double() = this + this
+end
+
+let total(x: Summable, y: Summable) = x + y
+let smaller(x: Summable, y: Summable) = x < y then x else y
+
+main do
+  let a = Coin { value: 2 }
+  let b = Coin { value: 5 }
+  IO.printLine(total(a, b))
+  IO.printLine(smaller(a, b))
+  IO.printLine(a.double)
+  IO.printLine(total(Box { size: 3 }, Box { size: 4 }))
+end
+
+record Coin do
+  value : Integer
+end
+
+make Coin, implement: Summable, Showable do
+  let +(other: This) = New { value: @value + other.value }
+  let <(other: This) = @value < other.value
+  let showValue() = "${@value}c"
+end
+
+record Box do
+  size : Integer
+end
+
+make Box, implement: Summable, Showable do
+  let +(other: This) = New { size: @size * other.size }
+  let <(other: This) = @size < other.size
+  let showValue() = "box of ${@size}"
+end

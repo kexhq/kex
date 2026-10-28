@@ -1043,6 +1043,81 @@ auto TypeChecker::qualifiedNominalType(const std::string& qualified) const
     return std::nullopt;
 }
 
+namespace {
+// Traits whose members keep the built-in operators: numbers, and the
+// structural order and equality every value has.
+auto isStructuralTrait(const std::string& name) -> bool {
+    return name == "Number" || name == "Integer" || name == "Float" ||
+           name == "Equatable" || name == "Comparable" ||
+           name == "Inspectable" || name == "Showable";
+}
+} // namespace
+
+auto TypeChecker::lacksBuiltinOperator(const TypePtr& type,
+                                       const std::string& op) const -> bool {
+    // A tuple, map, optional, open record or function has no arithmetic,
+    // order or negation; a list only concatenates. The walker said "Cannot
+    // add Tuple and Tuple" at run time, BEAM `function_clause`.
+    if (std::holds_alternative<TupleType>(type->kind) ||
+        std::holds_alternative<MapType>(type->kind) ||
+        std::holds_alternative<RecordType>(type->kind) ||
+        std::holds_alternative<OptionalType>(type->kind) ||
+        std::holds_alternative<FuncType>(type->kind))
+        return true;
+    if (std::holds_alternative<ListType>(type->kind)) return op != "+";
+    // A distinct type keeps exactly the operators of what it erases to:
+    // `distinct type Cash = Integer` adds, `= (Number, Number)` does not.
+    if (const auto backing = distinctBacking(type);
+        backing && !typesEqual(backing, type))
+        return lacksBuiltinOperator(backing, op);
+    if (const auto* bound = std::get_if<ConstrainedType>(&type->kind)) {
+        const auto* trait = m_traits.lookup(bound->traitName);
+        return trait && !isStructuralTrait(trait->name);
+    }
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    if (!named) return false;
+    // Imported ones too: `Duration * Duration` has no operator in the
+    // prelude, and died at run time like any record of the program's own.
+    const auto name = resolveRecordName(named->name);
+    if (m_recordFields.count(name) > 0 || m_adtVariants.count(name) > 0 ||
+        (m_importedInterfaces &&
+         m_importedInterfaces->recordArities.count(name) > 0))
+        return true;
+    const auto* trait = m_traits.lookup(named->name);
+    return trait && !isStructuralTrait(trait->name);
+}
+
+auto TypeChecker::traitDeclaresOperator(const TypePtr& type,
+                                        const std::string& op) const -> bool {
+    const auto* bound = std::get_if<ConstrainedType>(&type->kind);
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    if (!bound && !named) return false;
+    if (const auto* trait = m_traits.lookup(bound ? bound->traitName : named->name)) {
+        for (const auto& required : trait->requiredMethods)
+            if (required.name == op) return true;
+        return std::find(trait->defaultMethods.begin(), trait->defaultMethods.end(),
+                         op) != trait->defaultMethods.end();
+    }
+    return m_traits.declaresMethod(m_traits.implementorKey(type), op);
+}
+
+auto TypeChecker::declaresOperatorFor(const TypePtr& type,
+                                      const std::string& op) const -> bool {
+    if (traitDeclaresOperator(type, op)) return true;
+    auto owns = [&](const Signature& signature) {
+        if (signature.params.size() != 2) return false;
+        const auto receiver = resolve(signature.params[0]);
+        return !std::holds_alternative<TypeVar>(receiver->kind) &&
+               !std::holds_alternative<UnknownType>(receiver->kind) &&
+               argMatchesParam(type, signature.params[0]);
+    };
+    if (auto local = m_methodSignatures.find(op); local != m_methodSignatures.end())
+        if (std::any_of(local->second.begin(), local->second.end(), owns))
+            return true;
+    const auto imported = importedCandidateSignatures(op);
+    return std::any_of(imported.begin(), imported.end(), owns);
+}
+
 auto TypeChecker::resolveRecordName(const std::string& name) const
     -> std::string {
     // ADTs share the records' identity rule: one declared inside
@@ -1659,6 +1734,11 @@ auto TypeChecker::representationsCompatible(const TypePtr& from,
     const auto source = distinctBacking(resolve(from));
     const auto target = distinctBacking(resolve(to));
     if (typesEqual(source, target)) return true;
+    // A value the backing type already admits: `(2, -4)` is an
+    // `(Integer, Integer)`, and `(Number, Number)` holds it. Only that way
+    // round — a `Number` given back as an `Integer` might be a Float.
+    const bool intoDistinct = !typesEqual(resolve(to), target);
+    if (intoDistinct && argMatchesParam(source, target)) return true;
     return (m_traits.satisfies(source, "Integer") &&
             m_traits.satisfies(target, "Integer")) ||
            (m_traits.satisfies(source, "Float") &&
@@ -2329,7 +2409,17 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     for (const auto& item : def.body) {
         auto add = [&](const std::unique_ptr<ast::TypeAnnotation>& ann) {
             if (!ann) return;
+            // `This` in `+ :> This -> This` is the receiver, as it is in a
+            // `let` signature (see preRegister): resolved without the make
+            // block entered, it stayed the literal placeholder, and
+            // `a + b` reported "expects argument 2 to be This, but got Rv".
+            const bool wasInMakeBlock = m_inMakeBlock;
+            const auto previousMakeType = m_currentMakeType;
+            m_inMakeBlock = true;
+            m_currentMakeType = receiver;
             auto sig = annotationToSignature(*ann, &targetVars);
+            m_inMakeBlock = wasInMakeBlock;
+            m_currentMakeType = previousMakeType;
             if (!sig) return;
             const bool replyResult = [&] {
                 auto result = resolve(sig->result);
@@ -2445,9 +2535,15 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             signature.params.push_back(
                 param.type ? resolveTypeExpr(**param.type, targetVars)
                            : freshTypeVar());
-        signature.result = clause.returnAnnotation
-            ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
-            : freshTypeVar();
+        if (clause.returnAnnotation) {
+            signature.result = resolveTypeExpr(**clause.returnAnnotation, targetVars);
+        } else {
+            // Left for the body to decide (m_pendingResults).
+            signature.result = freshTypeVar();
+            const int id = std::get<TypeVar>(signature.result->kind).id;
+            m_pendingResults[&clause] = id;
+            m_pendingResultVars.insert(id);
+        }
         m_inMakeBlock = wasInMakeBlock;
         m_currentMakeType = previousMakeType;
         // Without the names a call site cannot place named arguments, and
@@ -3991,6 +4087,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (effectiveReturnType &&
             !std::holds_alternative<TypeVar>(effectiveReturnType->kind) &&
             !std::holds_alternative<UnknownType>(effectiveReturnType->kind) &&
+            !deferIfPending(bodyType, effectiveReturnType, def.location) &&
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
             !argMatchesParam(bodyType, effectiveReturnType) &&
@@ -4021,6 +4118,21 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // annotation does not spell them.
         for (const auto& param : clause.params)
             checkedSignature.paramNames.push_back(param.name ? *param.name : "");
+        // The pre-pass's result variable for this clause gets the body's
+        // answer, before generalizing renames the clause's own variables.
+        if (auto pending = m_pendingResults.find(&clause);
+            pending != m_pendingResults.end()) {
+            const int id = pending->second;
+            m_pendingResultVars.erase(id);
+            unifyVar(id, resultType);
+            m_pendingResults.erase(pending);
+            if (auto checks = m_pendingChecks.find(id);
+                checks != m_pendingChecks.end()) {
+                auto deferred = std::move(checks->second);
+                m_pendingChecks.erase(checks);
+                for (const auto& check : deferred) check(resultType);
+            }
+        }
         // `let id(x) = x` is polymorphic, and every call site must get its own
         // instance of it rather than all of them sharing one variable.
         generalizeSignature(checkedSignature, typeVarMark);
@@ -5303,7 +5415,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // `let xs: [Colour] = []` — the annotation is what the binding IS;
             // the initializer only has to be compatible with it. Binding the
             // inferred type instead would defeat the reason for writing one.
-            auto declared = declaredBindingType(node.type, valueType, expr.location);
+            auto declared = declaredBindingType(node.type, valueType, expr.location,
+                                                node.value ? node.value.get() : nullptr);
             if (declared && node.value) {
                 auto byteType = [](const TypePtr& type) {
                     auto* sized = type ? std::get_if<SizedIntType>(&type->kind) : nullptr;
@@ -5400,7 +5513,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
-            auto declared = declaredBindingType(node.type, valueType, expr.location);
+            auto declared = declaredBindingType(node.type, valueType, expr.location,
+                                                node.value ? node.value.get() : nullptr);
             defineVar(node.name, declared ? declared : valueType);
             return Type::unit();
         }
@@ -5448,6 +5562,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             auto leftType = node.left ? inferExpr(*node.left) : Type::unknown();
             auto rightType = node.right ? inferExpr(*node.right) : Type::unknown();
+            // The left operand is what a make-block method answers before its
+            // body is checked (m_pendingResults). The built-in rules would
+            // type `price * 2` as the Integer on the right; whatever the body
+            // turns out to answer decides the operator, and is checked for one
+            // once it is known.
+            if (const auto* pending = std::get_if<TypeVar>(&resolve(leftType)->kind);
+                pending && m_pendingResultVars.count(pending->id) &&
+                (node.op == TokenType::Plus || node.op == TokenType::Minus ||
+                 node.op == TokenType::Star || node.op == TokenType::Slash ||
+                 node.op == TokenType::Percent || node.op == TokenType::Caret)) {
+                const std::string symbol(tokenTypeName(node.op));
+                const auto right = rightType;
+                const auto location = expr.location;
+                m_pendingChecks[pending->id].push_back(
+                    [this, symbol, right, location](const TypePtr& answered) {
+                        const auto left = resolve(answered);
+                        if (!lacksBuiltinOperator(left, symbol) ||
+                            declaresOperatorFor(left, symbol))
+                            return;
+                        error(location, "`" + symbol + "` is not defined for " +
+                                            typeToString(left) + " and " +
+                                            typeToString(resolve(right)) +
+                                            "; declare it in a `make " +
+                                            typeToString(left) + "` block");
+                    });
+                return Type::unknown();
+            }
             const auto operatorName = [&]() -> std::string {
                 switch (node.op) {
                     case TokenType::Plus: return "+";
@@ -5501,6 +5642,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // just the local table sent every prelude operator down the
                 // builtin numeric/string path below, which rejects any pair of
                 // differing types outright.
+                bool ownsOperator = false;
                 if (concreteReceiver) {
                     // The overloads of `name` the receiver's own type
                     // declares — a make block for it, not a generic one.
@@ -5527,6 +5669,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         return argMatchesParam(rightType, signature.params[1]);
                     };
                     auto owned = declaredFor(operatorName);
+                    ownsOperator = !owned.empty();
                     if (std::any_of(owned.begin(), owned.end(), applies))
                         return checkCall(operatorName, {leftType, rightType},
                                          expr.location, /*isMethodCall=*/true);
@@ -5573,6 +5716,51 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                              expr.location, /*isMethodCall=*/true);
                     }
                 }
+                // A record or ADT has no built-in arithmetic or order, and
+                // neither has a value known only by a trait. Without an
+                // operator of its own, `a - b` used to pass as the left
+                // operand's type and fail only at run time: "Cannot
+                // subtract" on the walker, a bare `function_clause` on
+                // BEAM. The same for `a < b`, and for `2 * a`, where the
+                // number on the left declares nothing for the record. A
+                // trait default (`let +(other: This)` in the trait) is
+                // declared for every implementor, but has no signature
+                // of its own for `owned` to find.
+                const bool arithmeticOrOrder =
+                    node.op == TokenType::Plus || node.op == TokenType::Minus ||
+                    node.op == TokenType::Star || node.op == TokenType::Slash ||
+                    node.op == TokenType::Percent || node.op == TokenType::Caret ||
+                    node.op == TokenType::LessThan ||
+                    node.op == TokenType::GreaterThan ||
+                    node.op == TokenType::LessEq ||
+                    node.op == TokenType::GreaterEq;
+                const auto right = resolve(rightType);
+                const bool knownReceiver =
+                    !std::holds_alternative<TypeVar>(receiver->kind) &&
+                    !std::holds_alternative<UnknownType>(receiver->kind);
+                if (arithmeticOrOrder && knownReceiver && !ownsOperator &&
+                    !traitDeclaresOperator(receiver, operatorName) &&
+                    (lacksBuiltinOperator(receiver, operatorName) ||
+                     lacksBuiltinOperator(right, operatorName))) {
+                    const auto* bound = std::get_if<ConstrainedType>(&receiver->kind);
+                    const auto owner = bound ? bound->traitName : typeToString(receiver);
+                    const bool traitOwner =
+                        (bound || isTrait(owner)) && !isStructuralTrait(owner);
+                    // Only a named type has a make block to declare it in.
+                    const bool nominal =
+                        bound || std::holds_alternative<NamedType>(receiver->kind) ||
+                        std::holds_alternative<PrimitiveType>(receiver->kind) ||
+                        std::holds_alternative<SizedIntType>(receiver->kind) ||
+                        std::holds_alternative<SizedFloatType>(receiver->kind);
+                    error(expr.location,
+                          "`" + operatorName + "` is not defined for " +
+                              owner + " and " + typeToString(right) +
+                              (!nominal ? std::string{}
+                               : traitOwner ? "; declare it in trait `" + owner + "`"
+                                            : "; declare it in a `make " + owner +
+                                                  "` block"));
+                    return Type::unknown();
+                }
             }
             return inferBinaryOp(node.op, leftType, rightType, expr.location);
         }
@@ -5593,6 +5781,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // Unary negation requires a numeric operand.
                 if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                     unifyVar(tv->id, Type::constrained("N", "Number"));
+                } else if (lacksBuiltinOperator(resolved, "-")) {
+                    // Negation is numbers only, on both backends: a record or ADT
+                    // reached "Cannot negate" on the walker and `badarith` on
+                    // BEAM, with nothing said while checking.
+                    error(expr.location, "Unary '-' requires a number, got " +
+                          typeToString(resolved));
+                    return Type::unknown();
                 }
                 return resolved;
             }
@@ -7159,9 +7354,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto expected = resolve(params[position++]);
                     if (auto* variable = std::get_if<TypeVar>(&expected->kind))
                         unifyVar(variable->id, actual);
-                    else if (auto* variable = std::get_if<TypeVar>(&actual->kind))
-                        unifyVar(variable->id, expected);
-                    else if (!argMatchesParam(actual, expected))
+                    else if (auto* variable = std::get_if<TypeVar>(&actual->kind)) {
+                        if (!deferIfPending(actual, expected, arg->location))
+                            unifyVar(variable->id, expected);
+                    } else if (!argMatchesParam(actual, expected))
                         typeMismatch(arg->location, expected, actual);
                 }
             }
@@ -7705,7 +7901,8 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
 // against it. Null when there is no annotation.
 auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& annotation,
                                       const TypePtr& valueType,
-                                      SourceLocation loc) -> TypePtr {
+                                      SourceLocation loc,
+                                      const ast::Expr* value) -> TypePtr {
     if (!annotation || !*annotation) return nullptr;
     std::unordered_map<std::string, TypePtr> generics;
     auto declared = resolveTypeExpr(**annotation, generics);
@@ -7719,6 +7916,17 @@ auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& ann
     const bool unsubstitutedThis =
         std::holds_alternative<NamedType>(actual->kind) &&
         std::get<NamedType>(actual->kind).name == "This";
+    if (deferIfPending(actual, declared, loc)) return declared;
+    // `let x: Tuplex = (5, 11)`: a tuple written out under a distinct type's
+    // annotation is that type, as `(5, 11).as(Tuplex)` would make it, when
+    // the backing type admits it. Only a literal: a tuple computed elsewhere
+    // still converts with `.as`, so a distinct type is never entered by
+    // accident.
+    if (value && std::holds_alternative<ast::TupleExpr>(value->kind))
+        if (const auto backing = distinctBacking(declared);
+            backing && !typesEqual(backing, declared) &&
+            argMatchesParam(actual, backing))
+            return declared;
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
         !argMatchesParam(actual, declared))
@@ -7740,6 +7948,7 @@ auto TypeChecker::declaredConstantType(const std::string& name,
     const bool unsubstitutedThis =
         std::holds_alternative<NamedType>(actual->kind) &&
         std::get<NamedType>(actual->kind).name == "This";
+    if (deferIfPending(actual, signature.result, loc)) return signature.result;
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
         !argMatchesParam(actual, signature.result))
@@ -9840,6 +10049,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 // unrelated signature's `A` mean whatever the last such call
                 // passed: after `args.at(i).or("")` (String), `(0..3).filter`
                 // returned [String] and its block param typed as String.
+                if (deferIfPending(resolved, param, loc)) continue;
                 if (tv->id >= 0 && !typeContainsVar(param)) {
                     // A receiver typed by nothing but the method's name is
                     // a guess (`item.name` makes `item` a Weekday).
@@ -10343,6 +10553,21 @@ auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected,
     error(loc, std::move(message));
 }
 
+auto TypeChecker::deferIfPending(const TypePtr& actual, const TypePtr& expected,
+                                 SourceLocation loc) -> bool {
+    const auto* pending = std::get_if<TypeVar>(&resolve(actual)->kind);
+    if (!pending || !m_pendingResultVars.count(pending->id)) return false;
+    m_pendingChecks[pending->id].push_back(
+        [this, expected, loc](const TypePtr& answered) {
+            const auto resolved = resolve(answered);
+            if (!std::holds_alternative<UnknownType>(resolved->kind) &&
+                !std::holds_alternative<TypeVar>(resolved->kind) &&
+                !argMatchesParam(resolved, resolve(expected)))
+                typeMismatch(loc, resolve(expected), resolved);
+        });
+    return true;
+}
+
 auto TypeChecker::freshTypeVar() -> TypePtr {
     return Type::typeVar(m_nextTypeVar++);
 }
@@ -10507,7 +10732,7 @@ auto TypeChecker::generalizeSignature(Signature& signature, int varMark)
 }
 
 auto TypeChecker::unifyVar(int id, TypePtr concrete) -> void {
-    if (m_subst.count(id)) return;
+    if (m_subst.count(id) || m_pendingResultVars.count(id)) return;
     // Never bind a variable to a chain that leads back to itself. `a + b`
     // with both operands unconstrained records "these two share a type" by
     // binding one to the other (inferBinaryOp's Plus case); when `a` and `b`

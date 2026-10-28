@@ -776,6 +776,26 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
                     ctor.name = gt->name.parts.back();
                     ctor.tagAtom = ctor.name;
                     ctor.arity = static_cast<int>(gt->args.size());
+                    for (const auto& arg : gt->args) {
+                        int slot = -1;
+                        const auto* named = arg
+                            ? std::get_if<kex::ast::TypeName>(&arg->kind)
+                            : nullptr;
+                        std::string variable;
+                        if (named && named->parts.size() == 1)
+                            variable = named->parts.front();
+                        else if (const auto* generic = arg
+                                     ? std::get_if<kex::ast::GenericVar>(&arg->kind)
+                                     : nullptr)
+                            variable = generic->name;
+                        if (!variable.empty())
+                            if (auto parameter = std::find(td.typeParams.begin(),
+                                                           td.typeParams.end(),
+                                                           variable);
+                                parameter != td.typeParams.end())
+                                slot = static_cast<int>(parameter - td.typeParams.begin());
+                        ctor.typeParamSlots.push_back(slot);
+                    }
                     adt.constructors.push_back(std::move(ctor));
                     te.constructors.push_back(gt->name.parts.back());
                 }

@@ -141,6 +141,11 @@ struct KexiConstructor {
     std::string tagAtom;
     std::vector<std::string> fieldNames; // empty = positional
     int arity = 0;
+    // For each payload, the ADT type parameter it is (`Just(X)` -> {0}), or
+    // -1. Without it an imported generic constructor had no result type:
+    // `Just(1)` from the prelude typed as Unknown, so `Just(1) + Just(2)`
+    // passed the checker. Absent in chunks written before it existed.
+    std::vector<int> typeParamSlots;
 };
 
 struct KexiADT {

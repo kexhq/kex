@@ -740,8 +740,17 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     arities[ctor.name] = ctor.arity;
                 }
                 interfaces.typeNames.insert(adt.name);
-                interfaces.adts.push_back(
-                    {adt.name, std::move(ctors), std::move(arities)});
+                kex::semantic::ImportedADT imported{adt.name, std::move(ctors),
+                                                    std::move(arities)};
+                // What a generic constructor builds: `Just(1)` is an
+                // `Integer?` only if `Just` is known to fill `X`.
+                imported.typeParamCount = adt.typeParams.size();
+                imported.typeParamNames = adt.typeParams;
+                for (const auto& ctor : adt.constructors)
+                    if (!ctor.typeParamSlots.empty())
+                        imported.constructorTypeParamSlots[ctor.name] =
+                            ctor.typeParamSlots;
+                interfaces.adts.push_back(std::move(imported));
             }
 
     // `metadata.adts` only holds types that have constructors. The type

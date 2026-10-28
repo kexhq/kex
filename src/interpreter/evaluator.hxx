@@ -4,6 +4,7 @@
 #include "environment.hxx"
 #include "scheduler.hxx"
 #include "value.hxx"
+#include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
 #include <chrono>
 #include <deque>
@@ -431,12 +432,29 @@ public:
         -> void {
         m_expressionTypes = types;
     }
+    // The signature the checker chose for each call. Optional, like the
+    // tables above.
+    auto setCallSignatures(
+        const std::unordered_map<const ast::Expr*, semantic::Signature>* calls)
+        -> void {
+        m_callSignatures = calls;
+    }
 
 private:
     const std::unordered_map<const ast::MethodCall*,
                              semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
     const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
         m_expressionTypes = nullptr;
+    const std::unordered_map<const ast::Expr*, semantic::Signature>*
+        m_callSignatures = nullptr;
+    // A distinct value passed where a `Showable` is expected, shown by its
+    // own `showValue`. The value is the bare backing one, and nothing at run
+    // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here
+    // while BEAM, which builds the dictionary from the static type, printed
+    // `5+11i`. `index` counts the call's arguments as its signature does.
+    auto showErasedArgument(const ast::Expr& call, size_t index,
+                            const ast::Expr* argument, ValuePtr value)
+        -> ValuePtr;
     // Current server caller/reference, saved per process by Scheduler.
     ValuePtr m_servingFrom;
     // Slots declared `-> Void`: casts. A call on a server whose type the

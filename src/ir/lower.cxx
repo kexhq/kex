@@ -550,6 +550,10 @@ struct Lowering {
     // single NAMED variant is an ADT tag (or the existing transparent alias),
     // which `variantTagSet` and `records` already speak for.
     std::unordered_map<std::string, std::string> structuralTypeAliases;
+    // `distinct type Tuplex = (Number, Number)`: erased at run time, so no
+    // dispatch guard can tell a Tuplex from any other pair. An operator on
+    // one is called by its static type instead.
+    std::unordered_set<std::string> distinctTypes;
     // What each transparent alias stands for, for the field and constructor
     // layouts `Type.fields` and `Type.constructors` answer (kexhq/kex#530).
     semantic::DeclaredAliases declaredAliases;
@@ -1596,6 +1600,35 @@ struct Lowering {
                 // uses the user's `'op'/2`, anything else the builtin op
                 // (spec/operator_overloading.kex).
                 std::string sym = opSymbol(n.op);
+                // A distinct type's own operator, picked by the static type:
+                // the runtime guard below tests a record tag that an erased
+                // `Tuplex` pair never carries, so `x + y` fell through to
+                // the prelude's `+` and died with `function_clause`.
+                if (!sym.empty() && expressionTypes && n.left) {
+                    std::string type;
+                    if (auto found = expressionTypes->find(n.left.get());
+                        found != expressionTypes->end() && found->second)
+                        type = semantic::typeToString(found->second);
+                    const auto bare = type.substr(type.rfind('.') + 1);
+                    if (!type.empty() &&
+                        (distinctTypes.count(type) || distinctTypes.count(bare)))
+                        for (const auto& owner : {type, bare}) {
+                            const auto owners = methodOwners.find(sym);
+                            if (owners == methodOwners.end() ||
+                                std::find(owners->second.begin(),
+                                          owners->second.end(),
+                                          owner) == owners->second.end())
+                                continue;
+                            auto implementation = collidingMethods.count(sym)
+                                ? mangleReceiverImplementation(sym, owner)
+                                : sym;
+                            auto lRef = snap(l); auto rRef = snap(r);
+                            auto call = std::make_unique<Expr>();
+                            call->node = Call{std::string{}, std::move(implementation),
+                                              2, two(lRef.get(), rRef.get()), false};
+                            return wrapLets(binds, std::move(call));
+                        }
+                }
                 // User == / != (outside guards, which only allow BIFs) go
                 // through the coercing runtime eq: a [Char] charlist and a
                 // String binary holding the same text ARE equal in Kex.
@@ -3288,9 +3321,15 @@ struct Lowering {
         std::string concreteType;
         if (expressionTypes) {
             if (auto found = expressionTypes->find(&value);
-                found != expressionTypes->end() && found->second)
+                found != expressionTypes->end() && found->second &&
+                !std::holds_alternative<semantic::TypeVar>(found->second->kind) &&
+                !std::holds_alternative<semantic::UnknownType>(found->second->kind) &&
+                !std::holds_alternative<semantic::ConstrainedType>(found->second->kind))
                 concreteType = semantic::typeToString(found->second);
         }
+        // A value known only by a trait (`x: Addable`, or what a trait's
+        // default answers) has no concrete type to pick an implementation by.
+        if (traitMethods.count(concreteType)) concreteType.clear();
         if (auto owner = variantOwner.find(concreteType);
             owner != variantOwner.end())
             concreteType = owner->second;
@@ -3314,7 +3353,18 @@ struct Lowering {
             const bool localOwnsType = owners != methodOwners.end() &&
                 std::find(owners->second.begin(), owners->second.end(),
                           concreteType) != owners->second.end();
-            if (localOwnsType && localMethodArities.count(
+            const bool localDispatcher =
+                owners != methodOwners.end() && !owners->second.empty() &&
+                localMethodArities.count(method.name + "/" +
+                                         std::to_string(method.arity)) > 0;
+            if (concreteType.empty() && localDispatcher) {
+                // Type not known here, and a make block in this module
+                // implements the method: its dispatcher routes on the runtime
+                // tag and falls back to the provider's, so it answers for every
+                // value. The provider's alone never reaches this module's
+                // types: `IO.printLine(total(a, b))` printed a bare record on
+                // BEAM, where the walker used the record's `showValue`.
+            } else if (localOwnsType && localMethodArities.count(
                     method.name + "/" + std::to_string(method.arity))) {
                 if (collidingMethods.count(method.name) &&
                     !concreteType.empty())
@@ -3585,6 +3635,35 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
+        // A distinct type's own method, by the receiver's static type. Its
+        // value is erased, so the dispatcher's guard never recognizes it and
+        // `"${x + y}"` on a Tuplex printed the bare pair through the
+        // prelude's `showValue` (the operator itself has the same path in
+        // BinaryOp lowering).
+        if (expressionTypes && n.receiver && n.namedArgs.empty() && !n.block &&
+            collidingMethods.count(n.method))
+            if (auto found = expressionTypes->find(n.receiver.get());
+                found != expressionTypes->end() && found->second) {
+                const auto type = semantic::typeToString(found->second);
+                const auto bare = type.substr(type.rfind('.') + 1);
+                const auto owners = methodOwners.find(n.method);
+                if ((distinctTypes.count(type) || distinctTypes.count(bare)) &&
+                    owners != methodOwners.end())
+                    for (const auto& owner : {type, bare}) {
+                        if (std::find(owners->second.begin(), owners->second.end(),
+                                      owner) == owners->second.end())
+                            continue;
+                        std::vector<ExprPtr> args;
+                        args.push_back(lower(n.receiver));
+                        for (const auto& arg : n.args) args.push_back(lower(arg));
+                        const auto arity = static_cast<int>(args.size());
+                        auto call = std::make_unique<Expr>();
+                        call->node = Call{std::string{},
+                                          mangleReceiverImplementation(n.method, owner),
+                                          arity, std::move(args), false};
+                        return call;
+                    }
+            }
         // BEAM interop: a direct call into any BEAM module, named verbatim.
         // `BEAM.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
         // `BEAM.Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
@@ -10098,6 +10177,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
+        if (td.isDistinct) L.distinctTypes.insert(td.name);
         // What an alias STANDS FOR, for the dispatch guards: a structural
         // right-hand side (`type Handler = Env -> String`), or the plain name
         // a transparent alias renames (`type Slug = String`). Either way no

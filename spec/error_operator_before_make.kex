@@ -1,0 +1,24 @@
+# kex: check-only
+# `main` above the make block is checked before `+` and `scaled` have answered
+# anything. What it asks of their results is checked once they have.
+main do
+  let a = Vec { x: 1 }
+  let s: String = a + a
+  let n: Integer = a.scaled(2)
+  takesString(a + a)
+  let t = a.scaled(3) - a
+  IO.printLine(a + a)
+end
+
+let takesString(text: String) -> String = text
+let wrongReturn(v: Vec) -> String = v + v
+
+record Vec do
+  x : Integer
+end
+
+make Vec, implement: Showable do
+  let +(other: This) = New { x: @x + other.x }
+  let scaled(k: Integer) = New { x: @x * k }
+  let showValue() = "vec ${@x}"
+end

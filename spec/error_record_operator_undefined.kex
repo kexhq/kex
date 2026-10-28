@@ -1,0 +1,51 @@
+# kex: check-only
+# A record, an ADT, or a value known only by a trait has no built-in
+# arithmetic or order: an operator nothing declares for it is a type error,
+# not a run-time "Cannot subtract" (walker) or `function_clause` (BEAM).
+record Point do
+  x : Number
+end
+
+make Point do
+  let +(other: This) = New { x: @x + other.x }
+end
+
+type Money = Cents(Integer) | Free
+
+trait Named do
+  label : String
+end
+
+let joined(a: Named, b: Named) = a + b
+
+main do
+  let a = Point { x: 1 }
+  let b = Point { x: 2 }
+  IO.printLine(a + b)
+  IO.printLine(a - b)
+  IO.printLine(a < b)
+  IO.printLine(2 * a)
+  IO.printLine(-a)
+  IO.printLine(a == b)
+  IO.printLine(Cents(1) + Cents(2))
+  IO.printLine(-Free)
+  IO.printLine(Cents(1) == Free)
+end
+
+# Structural values have no arithmetic or order either; a list only joins.
+foul structural() do
+  IO.printLine((1, 2) + (3, 4))
+  IO.printLine([1] - [2])
+  IO.printLine([1] < [2])
+  IO.printLine({a: 1} + {b: 2})
+  IO.printLine([1] + [2])
+  IO.printLine(Just(1) + Just(2))
+end
+
+# A trait that requires an operator answers it; one that does not, does not.
+trait Summable do
+  + :> This -> This
+end
+
+let summed(a: Summable, b: Summable) = a + b
+let differed(a: Summable, b: Summable) = a - b

@@ -1923,14 +1923,18 @@ auto resolveBeamDeps(kex::ast::Program &program,
       // Found by its path, but declaring another module: `using
       // App.Services.Authority` reaching app/services/authority.kex whose
       // header says `module App.Authority`. The walker refuses that file;
-      // the build compiled it and the first call failed at run time.
+      // the build compiled it and the first call failed at run time. A name
+      // found through its enclosing module's file is not checked: the type
+      // `DB.Store.Store` lives in db/store.kex, whose stem only happens to
+      // match.
       const auto lastPart =
           resolved->moduleName.substr(resolved->moduleName.rfind('.') + 1);
       const auto stem = std::filesystem::path(*path).stem().string();
       auto lowered = lastPart;
       for (auto &c : lowered)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      const bool ownFile = stem == snakeCasedPart(lastPart) || stem == lowered;
+      const bool ownFile = !resolved->enclosing &&
+                           (stem == snakeCasedPart(lastPart) || stem == lowered);
       const kex::ast::ModuleDef *header = nullptr;
       for (const auto &item : depProg->items)
         if (auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
@@ -6668,6 +6672,7 @@ int main(int argc, char *argv[]) {
       if (runAnalyzed) {
         evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
         evaluator.setExpressionTypes(&runAnalyzer.typeMap());
+        evaluator.setCallSignatures(&runAnalyzer.selectedCallSignatures());
       }
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor

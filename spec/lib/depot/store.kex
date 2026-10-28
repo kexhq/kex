@@ -1,0 +1,9 @@
+# A type named after the last part of its module: `Depot.Store.Store` is the
+# record `Store` in this file, which is `Depot.Store`.
+module Depot.Store
+
+record Store do
+  name : String
+end
+
+let open(name: String) -> Store = Store { name: name }

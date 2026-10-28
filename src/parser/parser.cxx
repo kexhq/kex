@@ -773,8 +773,10 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
       }
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef(false));
-    } else if (check(TokenType::LowerIdent)) {
-      // Required method signature: `methodName : type`
+    } else if (check(TokenType::LowerIdent) ||
+               isOverloadableOperator(peek().type)) {
+      // Required method signature: `methodName : type`, or an operator's,
+      // `+ :> This -> This`, as a make block declares one.
       def->body.push_back(parseTypeAnnotation());
     } else {
       error("Unexpected token in trait body");

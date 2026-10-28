@@ -1,0 +1,5 @@
+spec/error_operator_before_make.kex:14:1: error: Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:6:3: error: Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:8:3: error: Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:7:3: error: Type mismatch: expected Integer, got Vec
+spec/error_operator_before_make.kex:9:25: error: `-` is not defined for Vec and Vec; declare it in a `make Vec` block
