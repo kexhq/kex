@@ -88,6 +88,30 @@ trait Comparable do
   #   (-3).clamp(0, 10)    # => 0
   #   0.5.clamp(0.0, 1.0)  # => 0.5
   let clamp(low, high) = this.max(low).min(high)
+
+  # The ordering operators, from +compare+ alone: whatever is +Comparable+
+  # can be written with +<+ and +>+, a record as much as a number. The
+  # compiler knows them from here, not from a list of its own; numbers and
+  # strings still compare natively.
+  #
+  # @param other [This] the value to compare against
+  # @return [Bool] whether this value orders before +other+
+  #
+  # @example
+  #   Version { major: 1 } < Version { major: 2 }   # => true
+  let <(other) -> Bool = this.compare(other) == Less
+
+  # @param other [This] the value to compare against
+  # @return [Bool] whether this value orders after +other+
+  let >(other) -> Bool = this.compare(other) == Greater
+
+  # @param other [This] the value to compare against
+  # @return [Bool] whether this value orders before +other+ or with it
+  let <=(other) -> Bool = this.compare(other) != Greater
+
+  # @param other [This] the value to compare against
+  # @return [Bool] whether this value orders after +other+ or with it
+  let >=(other) -> Bool = this.compare(other) != Less
 end
 
 # Number carries the implementation, so Integer and Float both inherit it

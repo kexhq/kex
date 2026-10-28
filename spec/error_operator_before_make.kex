@@ -7,6 +7,11 @@ main do
   let n: Integer = a.scaled(2)
   takesString(a + a)
   let t = a.scaled(3) - a
+  # The operator is applied once `scaled` has answered: its parameter checks
+  # the right operand, and what it answers checks the annotation.
+  let u = a.scaled(2) + "text"
+  let v: String = a.scaled(2) + a
+  let w: Vec = a.scaled(2) + a + a
   IO.printLine(a + a)
 end
 

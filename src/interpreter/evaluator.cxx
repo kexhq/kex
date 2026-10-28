@@ -3794,7 +3794,18 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         }
         return false;
     };
-    if (!opSymbol.empty() && !(numeric(left) && numeric(right))) {
+    // Two strings, or two chars, are primitives the same way: they order and
+    // join natively. Dispatched like a record, `"pear" > "apple"` found
+    // Comparable's `>`, built on `compare`, which String's own `compare`
+    // answers with `<`, and the walker recursed until the stack ran out.
+    auto sameTextual = [](const ValuePtr& a, const ValuePtr& b) {
+        return (std::holds_alternative<StringValue>(a->data) &&
+                std::holds_alternative<StringValue>(b->data)) ||
+               (std::holds_alternative<CharValue>(a->data) &&
+                std::holds_alternative<CharValue>(b->data));
+    };
+    if (!opSymbol.empty() && !(numeric(left) && numeric(right)) &&
+        !sameTextual(left, right)) {
         std::vector<ValuePtr> operatorArgs{left, right};
         auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
         const bool equality = opSymbol == "==" || opSymbol == "!=";

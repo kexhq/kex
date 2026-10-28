@@ -18,6 +18,9 @@ end
 
 let joined(a: Named, b: Named) = a + b
 
+# `Showable` declares no operators, so a value known only by it has none.
+let shownSum(a: Showable, b: Showable) = a + b
+
 main do
   let a = Point { x: 1 }
   let b = Point { x: 2 }

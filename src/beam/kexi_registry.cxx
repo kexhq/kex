@@ -227,6 +227,23 @@ auto importedTrait(const KexiTraitDef& trait,
             required.name, std::move(params), imported.signature.result,
             required.isFoul});
     }
+    // The methods the trait defines a body for are in the interface too,
+    // received by the trait itself. Without them a prebuilt trait had no
+    // defaults at all: `Comparable`'s `<`, declared in comparable.kex, was
+    // unknown to the checker, which then had to know it by name instead.
+    for (const auto& method : interface.methods) {
+        if (!method.receiverType ||
+            method.receiverType->kind != KexiType::Constrained ||
+            method.receiverType->traitName != trait.name)
+            continue;
+        const bool required = std::any_of(
+            trait.requiredMethods.begin(), trait.requiredMethods.end(),
+            [&](const KexiTraitRequiredMethod& r) { return r.name == method.name; });
+        if (!required &&
+            std::find(result.defaultMethods.begin(), result.defaultMethods.end(),
+                      method.name) == result.defaultMethods.end())
+            result.defaultMethods.push_back(method.name);
+    }
     return result;
 }
 

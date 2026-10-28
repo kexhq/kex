@@ -1748,6 +1748,14 @@ struct Lowering {
                     return wrapLets(binds, derivedInequality(
                         lRef, rRef, builtinOp(lRef.get(), rRef.get())));
                 }
+                // Two numbers, two strings or two chars, known to be so: the
+                // built-in operator, with no dispatch. Comparable's `<`
+                // (comparable.kex) made every `i < n` test `is_tuple(I)` and
+                // then the Char tag before reaching `erlang:'<'`, as `+` had
+                // since a make block first overloaded it.
+                if (const auto kind = comparableKind(n.left);
+                    !kind.empty() && kind == comparableKind(n.right))
+                    return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
                 if (!sym.empty() && overloadedOps.count(sym)) {
                     auto lRef = snap(l); auto rRef = snap(r);
                     auto builtin = builtinOp(lRef.get(), rRef.get());
@@ -9217,6 +9225,18 @@ struct Lowering {
         if (auto alias = structuralTypeAliases.find(written);
             alias != structuralTypeAliases.end() && alias->second != written)
             return typeGuard(alias->second, std::move(v));
+        // `None` is an atom on BEAM, but it is the Optional value, not an
+        // Atom: `Atom`'s clause in a dispatcher caught it, so `None.to(String)`
+        // reached Atom's conversion and answered "None" where the walker, and
+        // Optional's own `showValue`, answer "".
+        if (written == "Atom")
+            if (const auto* name = std::get_if<Var>(&v->node)) {
+                const auto copy = name->name;
+                return callE("erlang", "and", 2,
+                    two(callE("erlang", "is_atom", 1, one(std::move(v))),
+                        callE("erlang", "=/=", 2,
+                              two(var(copy), lit(LitKind::Atom, "None")))));
+            }
         auto it = primGuardBifs().find(written);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));

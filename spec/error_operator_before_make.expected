@@ -1,5 +1,27 @@
-spec/error_operator_before_make.kex:14:1: error: Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:19:1: error: Type mismatch: expected String, got Vec
 spec/error_operator_before_make.kex:6:3: error: Type mismatch: expected String, got Vec
 spec/error_operator_before_make.kex:8:3: error: Type mismatch: expected String, got Vec
 spec/error_operator_before_make.kex:7:3: error: Type mismatch: expected Integer, got Vec
 spec/error_operator_before_make.kex:9:25: error: `-` is not defined for Vec and Vec; declare it in a `make Vec` block
+spec/error_operator_before_make.kex:12:25: error: `+` expects argument 2 to be Vec, but got String
+
++ : Binary -> Binary -> Binary
+
++ : Date -> Duration -> Date
+
++ : Date -> Period -> Date
+
++ : DateTime -> Duration -> DateTime
+
++ : DateTime -> Period -> DateTime
+
++ : Duration -> Duration -> Duration
+
++ : Measure -> Measure -> Result<Measure, String>
+
++ : Period -> Period -> Period
+
++ : Time -> Duration -> Time
+
++ : Vec -> Vec -> A
+spec/error_operator_before_make.kex:13:3: error: Type mismatch: expected String, got Vec

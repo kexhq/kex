@@ -242,7 +242,7 @@ int main() {
                 directOut / "Kex.Chain.Leaf.beam");
             fs::remove_all(root);
             assertEqual(output, std::string("42\n"));
-            assertTrue(directOutput.find("done") != std::string::npos,
+            assertTrue(directOutput.find("Finished") != std::string::npos,
                        directOutput);
             assertTrue(emittedLeaf,
                        "explicit source root should discover sibling module");

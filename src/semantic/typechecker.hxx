@@ -362,6 +362,9 @@ private:
     // (m_pendingResults): `main` above the make block cannot know it.
     auto deferIfPending(const TypePtr& actual, const TypePtr& expected,
                         SourceLocation loc) -> bool;
+    // A pending result has its answer: bind it, then run every check that
+    // was waiting for it (m_pendingChecks).
+    auto answerPending(int id, const TypePtr& answer) -> void;
 
     std::vector<Diagnostic>* m_diagnostics = nullptr;
     // The type a typed binding asks of the conditional or `match` it is bound

@@ -1044,12 +1044,16 @@ auto TypeChecker::qualifiedNominalType(const std::string& qualified) const
 }
 
 namespace {
-// Traits whose members keep the built-in operators: numbers, and the
-// structural order and equality every value has.
-auto isStructuralTrait(const std::string& name) -> bool {
-    return name == "Number" || name == "Integer" || name == "Float" ||
-           name == "Equatable" || name == "Comparable" ||
-           name == "Inspectable" || name == "Showable";
+// The primitive numbers, as a constraint: `N: Number` is what `n - 1` leaves
+// on an unannotated `n`, and the checker decides it by the type's shape
+// (TraitRegistry::satisfiesStructurally), not from any declaration. A value
+// known only by one of these is a primitive number, so it has the built-in
+// operators. Every other trait — `Comparable` and `Showable` included, which
+// the standard library declares like any other — gives a value exactly the
+// operators the trait itself declares (traitDeclaresOperator), and nothing
+// more by being named here.
+auto primitiveNumberTrait(const std::string& trait) -> bool {
+    return trait == "Number" || trait == "Integer" || trait == "Float";
 }
 } // namespace
 
@@ -1072,7 +1076,7 @@ auto TypeChecker::lacksBuiltinOperator(const TypePtr& type,
         return lacksBuiltinOperator(backing, op);
     if (const auto* bound = std::get_if<ConstrainedType>(&type->kind)) {
         const auto* trait = m_traits.lookup(bound->traitName);
-        return trait && !isStructuralTrait(trait->name);
+        return trait && !primitiveNumberTrait(trait->name);
     }
     const auto* named = std::get_if<NamedType>(&type->kind);
     if (!named) return false;
@@ -1084,7 +1088,7 @@ auto TypeChecker::lacksBuiltinOperator(const TypePtr& type,
          m_importedInterfaces->recordArities.count(name) > 0))
         return true;
     const auto* trait = m_traits.lookup(named->name);
-    return trait && !isStructuralTrait(trait->name);
+    return trait && !primitiveNumberTrait(trait->name);
 }
 
 auto TypeChecker::traitDeclaresOperator(const TypePtr& type,
@@ -4123,15 +4127,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (auto pending = m_pendingResults.find(&clause);
             pending != m_pendingResults.end()) {
             const int id = pending->second;
-            m_pendingResultVars.erase(id);
-            unifyVar(id, resultType);
             m_pendingResults.erase(pending);
-            if (auto checks = m_pendingChecks.find(id);
-                checks != m_pendingChecks.end()) {
-                auto deferred = std::move(checks->second);
-                m_pendingChecks.erase(checks);
-                for (const auto& check : deferred) check(resultType);
-            }
+            answerPending(id, resultType);
         }
         // `let id(x) = x` is polymorphic, and every call site must get its own
         // instance of it rather than all of them sharing one variable.
@@ -5564,30 +5561,50 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto rightType = node.right ? inferExpr(*node.right) : Type::unknown();
             // The left operand is what a make-block method answers before its
             // body is checked (m_pendingResults). The built-in rules would
-            // type `price * 2` as the Integer on the right; whatever the body
-            // turns out to answer decides the operator, and is checked for one
-            // once it is known.
+            // type `price * 2` as the Integer on the right. So the operator is
+            // applied once the body has answered, exactly as it would have
+            // been: the type's own signature checks the right operand
+            // (`x + anotherType` used to pass), the built-in rules a number,
+            // and a type with neither is an error. Until then the expression
+            // is itself a pending result, which its outcome answers, so an
+            // annotation or a further operator on it is checked too.
             if (const auto* pending = std::get_if<TypeVar>(&resolve(leftType)->kind);
                 pending && m_pendingResultVars.count(pending->id) &&
                 (node.op == TokenType::Plus || node.op == TokenType::Minus ||
                  node.op == TokenType::Star || node.op == TokenType::Slash ||
                  node.op == TokenType::Percent || node.op == TokenType::Caret)) {
                 const std::string symbol(tokenTypeName(node.op));
+                const auto op = node.op;
                 const auto right = rightType;
                 const auto location = expr.location;
+                const auto result = freshTypeVar();
+                const int resultId = std::get<TypeVar>(result->kind).id;
+                m_pendingResultVars.insert(resultId);
                 m_pendingChecks[pending->id].push_back(
-                    [this, symbol, right, location](const TypePtr& answered) {
+                    [this, symbol, op, right, location, resultId](const TypePtr& answered) {
                         const auto left = resolve(answered);
-                        if (!lacksBuiltinOperator(left, symbol) ||
-                            declaresOperatorFor(left, symbol))
-                            return;
-                        error(location, "`" + symbol + "` is not defined for " +
-                                            typeToString(left) + " and " +
-                                            typeToString(resolve(right)) +
-                                            "; declare it in a `make " +
-                                            typeToString(left) + "` block");
+                        TypePtr outcome = Type::unknown();
+                        if (traitDeclaresOperator(left, symbol)) {
+                            // A trait default: no signature of its own to
+                            // apply, but declared.
+                        } else if (declaresOperatorFor(left, symbol)) {
+                            outcome = checkCall(symbol, {left, right}, location,
+                                                /*isMethodCall=*/true);
+                        } else if (!lacksBuiltinOperator(left, symbol) &&
+                                   !lacksBuiltinOperator(resolve(right), symbol)) {
+                            outcome = inferBinaryOp(op, left, right, location);
+                        } else {
+                            error(location, "`" + symbol + "` is not defined for " +
+                                                typeToString(left) + " and " +
+                                                typeToString(resolve(right)) +
+                                                (lacksBuiltinOperator(left, symbol)
+                                                     ? "; declare it in a `make " +
+                                                           typeToString(left) + "` block"
+                                                     : std::string{}));
+                        }
+                        answerPending(resultId, outcome);
                     });
-                return Type::unknown();
+                return result;
             }
             const auto operatorName = [&]() -> std::string {
                 switch (node.op) {
@@ -5752,7 +5769,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     const auto* bound = std::get_if<ConstrainedType>(&receiver->kind);
                     const auto owner = bound ? bound->traitName : typeToString(receiver);
                     const bool traitOwner =
-                        (bound || isTrait(owner)) && !isStructuralTrait(owner);
+                        (bound || isTrait(owner)) && !primitiveNumberTrait(owner);
                     // Only a named type has a make block to declare it in, and
                     // only the left one is worth naming: in `3 + value` with a
                     // `Result` on the right, the fix is the `Result`, not a
@@ -10653,6 +10670,16 @@ auto TypeChecker::deferIfPending(const TypePtr& actual, const TypePtr& expected,
                 typeMismatch(loc, resolve(expected), resolved);
         });
     return true;
+}
+
+auto TypeChecker::answerPending(int id, const TypePtr& answer) -> void {
+    m_pendingResultVars.erase(id);
+    unifyVar(id, answer);
+    if (auto checks = m_pendingChecks.find(id); checks != m_pendingChecks.end()) {
+        auto deferred = std::move(checks->second);
+        m_pendingChecks.erase(checks);
+        for (const auto& check : deferred) check(answer);
+    }
 }
 
 auto TypeChecker::freshTypeVar() -> TypePtr {

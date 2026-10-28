@@ -1,0 +1,31 @@
+# kex: run-beam
+# `<`, `>`, `<=` and `>=` on whatever is Comparable come from comparable.kex,
+# where the trait defines them from `compare`; the compiler keeps no list of
+# its own. Numbers and strings still compare natively, and a record that only
+# says how it compares gets the operators with it.
+record Version do
+  major : Integer
+  minor : Integer
+end
+
+make Version, implement: Comparable do
+  let compare(other: This) -> Ordering do
+    return @major.compare(other.major).thenBy { @minor.compare(other.minor) }
+  end
+end
+
+let ordered(x: Comparable, y: Comparable) -> Bool = x < y
+
+main do
+  IO.printLine(1 < 2)
+  IO.printLine(2.5 >= 2)
+  IO.printLine("pear" > "apple")
+  IO.printLine(ordered(3, 4))
+  IO.printLine(ordered("b", "a"))
+  let old = Version { major: 1, minor: 4 }
+  let new = Version { major: 1, minor: 10 }
+  IO.printLine(old < new)
+  IO.printLine(old >= new)
+  IO.printLine(new <= new)
+  IO.printLine(ordered(new, old))
+end
