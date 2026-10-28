@@ -2640,6 +2640,8 @@ struct ModuleExports {
     ScopedConstants constants;
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
+    // Every module the file declares, constants or not.
+    std::unordered_set<std::string> declared;
 };
 
 // The expansion that `exportsOf` is running, and where its constants go. Only
@@ -2674,6 +2676,23 @@ auto declaresConstants(const ast::Program& program) -> bool {
     return found;
 }
 
+// The names of every module a parsed file declares, nested ones included.
+auto declaredModules(const ast::Program& program)
+    -> std::unordered_set<std::string> {
+    std::unordered_set<std::string> names;
+    auto scan = [&](auto&& self, const auto& items) -> void {
+        for (const auto& item : items)
+            if (const auto* mod =
+                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod) {
+                    names.insert((*mod)->name);
+                    self(self, (*mod)->body);
+                }
+    };
+    scan(scan, program.items);
+    return names;
+}
+
 // The constants a module's file declares, evaluated: by expanding a fresh
 // parse of it, once per file. Null for a file already being expanded for its
 // constants further up — modules that refer to each other's constants in a
@@ -2694,6 +2713,7 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
         Lexer lexer(source.str(), path);
         Parser parser(lexer.tokenizeAll(), path);
         auto program = parser.parseProgram();
+        exports.declared = declaredModules(program);
         if (parser.diagnostics().empty() && declaresConstants(program)) {
             ExpandOptions inner;
             inner.sourcePath = path;
@@ -2784,13 +2804,29 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
     std::unordered_map<std::string, ScopedConstants> scopedImports;
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
+    const auto ownModules = declaredModules(program);
     auto gather = [&](const std::string& written, const std::string& named, const std::string& scope,
                       ScopedConstants& destination) -> void {
-        const auto resolved = resolver.resolve(named, scope);
+        auto resolved = resolver.resolve(named, scope);
         if (!resolved) return;
-        if (std::filesystem::weakly_canonical(resolved->path) ==
-            std::filesystem::weakly_canonical(options.sourcePath))
-            return;
+        const auto self = [&](const module::Resolution& found) {
+            return std::filesystem::weakly_canonical(found.path) ==
+                   std::filesystem::weakly_canonical(options.sourcePath);
+        };
+        // The relative candidate did not pan out when the file it matched
+        // does not declare that module — the container heuristic accepts
+        // `mid.kex` for a nested `Mid.Leaf` it need not define. Then `Leaf`
+        // written inside `module Mid` means the top-level `Leaf`, as it does
+        // to SemanticDB::ensureModule.
+        const auto declares = [&](const module::Resolution& found) {
+            if (self(found)) return ownModules.contains(found.moduleName);
+            const auto* exports = exportsOf(found.path, options);
+            return exports && exports->declared.contains(found.moduleName);
+        };
+        if (resolved->moduleName != named && !declares(*resolved))
+            if (auto plain = resolver.resolve(named, ""))
+                resolved = std::move(plain);
+        if (self(*resolved)) return;
         const auto* exports = exportsOf(resolved->path, options);
         if (!exports) return;
         const auto theirs = exports->constants.find(resolved->moduleName);
