@@ -1059,6 +1059,9 @@ namespace {
 // moduleRootsFor (semantic checks, discovery, validation and both runtimes)
 // observe exactly the same search path.
 std::vector<std::string> cliSourceRoots;
+// `--quiet` and `--progress`: whether a build shows its steps (BuildProgress).
+bool quietBuild = false;
+bool progressRequested = false;
 
 // `--sname` / `--name` / `--cookie`: start the BEAM VM as a distributed node,
 // so the program can connect to others (`Node.connect`) and they to it. They
@@ -1796,6 +1799,89 @@ auto writeDiscoveryCache(const std::filesystem::path &entry,
   if (ec) fs::remove(staging, ec);
 }
 
+// ── Build progress (kexhq/kex#586) ───────────────────────────────────────────
+//
+// What a long build is doing, as it does it: Slick's `tey build` printed
+// nothing for 17 minutes, and KEX_TIMINGS could only say afterwards which
+// phase had taken them. One stderr line per step, written BEFORE the step
+// starts, so the last line on screen is what is running now: a stuck build
+// names the file it is stuck on. Lines, not a status line redrawn in place —
+// Tey reads this through a pipe, where `\r` redraws nothing.
+//
+//   [  0.0s]    Resolving main.kex
+//   [  1.5s]    Expanding app/live/conversations.kex
+//   [ 74.9s]     Checking 160 modules
+//   [ 96.6s]     Lowering 160 modules
+//   [101.0s]    Compiling Kex.App.Live.Conversations
+//   [154.6s]     Finished ebin/kex_main.beam in 2m 34.6s
+//
+// On by default for `kex -c`; `--progress` turns it on elsewhere (a spec run,
+// `kex file.kex`), and `--quiet` off, together with erlc's own lines.
+struct BuildProgress {
+  using Clock = std::chrono::steady_clock;
+  bool enabled = false;
+  Clock::time_point start = Clock::now();
+  // A dependency is resolved by the gating pre-check and again for the real
+  // build; the second pass is quick and would only repeat the first's lines.
+  std::unordered_set<std::string> expanded;
+
+  auto elapsed() const -> double {
+    return std::chrono::duration<double>(Clock::now() - start).count();
+  }
+
+  auto step(const char *verb, const char *colour, const std::string &what) const
+      -> void {
+    if (!enabled) return;
+    namespace c = kex::color;
+    std::fprintf(stderr, "%s[%6.1fs]%s %s%s%12s%s %s\n", c::apply(c::gray),
+                 elapsed(), c::apply(c::reset), c::apply(c::bold),
+                 c::apply(colour), verb, c::apply(c::reset), what.c_str());
+    std::fflush(stderr);
+  }
+
+  // Once per dependency file, however many passes resolve it. A standard
+  // library file is named from the library, not by the `../../..` climb from
+  // the working directory to wherever the toolchain is installed.
+  auto expanding(const std::string &path) -> void {
+    if (!enabled || !expanded.insert(path).second) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto absolute = fs::weakly_canonical(path, ec);
+    for (const auto &root : kex::standardLibraryModuleRoots()) {
+      const auto relative =
+          fs::weakly_canonical(root, ec).lexically_normal();
+      const auto inside = absolute.lexically_relative(relative);
+      if (!ec && !inside.empty() && *inside.begin() != "..") {
+        step("Expanding", kex::color::magenta, "stdlib/" + inside.string());
+        return;
+      }
+    }
+    step("Expanding", kex::color::magenta, path);
+  }
+
+  auto finished(const std::string &what) const -> void {
+    if (!enabled) return;
+    const auto total = elapsed();
+    char took[32];
+    const int minutes = static_cast<int>(total) / 60;
+    if (minutes > 0)
+      std::snprintf(took, sizeof took, "%dm %.1fs", minutes,
+                    total - 60.0 * minutes);
+    else
+      std::snprintf(took, sizeof took, "%.1fs", total);
+    namespace c = kex::color;
+    step("Finished", kex::color::green,
+         what + " " + c::apply(c::gray) + "in " + took + c::apply(c::reset));
+  }
+};
+
+BuildProgress buildProgress;
+
+// "1 module", "160 modules": what BuildProgress counts.
+auto moduleCount(std::size_t count, const char *kind = "") -> std::string {
+  return std::to_string(count) + " " + kind + (count == 1 ? "module" : "modules");
+}
+
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
                      const kex::semantic::ImportedInterfaces *interfaces,
@@ -1910,6 +1996,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
       depExpandOptions.sourcePath = *path;
       depExpandOptions.moduleRoots = roots;
       setScanCache(depExpandOptions);
+      buildProgress.expanding(shownPath(*path));
       const auto expandStart = std::chrono::steady_clock::now();
       const bool expanded = kex::compiled::expand(*depProg, depExpandDiagnostics,
                                                   depExpandOptions);
@@ -3263,6 +3350,8 @@ auto printUsage(const char *progName) -> void {
          "file for --emit-ast\n"
       << "      --source-root <dir>\n"
       << "                    Add a module source root (repeatable)\n"
+      << "      --progress    Show each build step as it starts (on for -c)\n"
+      << "  -q, --quiet       Show no build steps, not even erlc's\n"
       << "      --sname <name>, --name <name@host>\n"
       << "                    Run the BEAM VM as a distributed node (short or\n"
       << "                    fully-qualified host name), reachable by `Node.connect`\n"
@@ -3363,6 +3452,7 @@ enum Value {
   Cookie,
   Colors,
   Credits,
+  Progress,
 };
 } // namespace Option
 
@@ -3417,6 +3507,8 @@ int main(int argc, char *argv[]) {
       {"colors", no_argument, nullptr, Option::Colors},
       {"no-prelude", no_argument, nullptr, Option::NoPrelude},
       {"source-root", required_argument, nullptr, Option::SourceRoot},
+      {"quiet", no_argument, nullptr, 'q'},
+      {"progress", no_argument, nullptr, Option::Progress},
       {"sname", required_argument, nullptr, Option::Sname},
       {"name", required_argument, nullptr, Option::Name},
       {"cookie", required_argument, nullptr, Option::Cookie},
@@ -3491,7 +3583,7 @@ int main(int argc, char *argv[]) {
   if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
     kex::color::enabled = false;
 #endif
-  while ((opt = getopt_long(argc, argv, "rnlcCiRjspEe:thvK:o:", longOptions,
+  while ((opt = getopt_long(argc, argv, "rnlcCiRjspqEe:thvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
     case Option::NoPrelude:
@@ -3562,6 +3654,12 @@ int main(int argc, char *argv[]) {
       break;
     case Option::SourceRoot:
       cliSourceRoots.emplace_back(optarg);
+      break;
+    case 'q':
+      quietBuild = true;
+      break;
+    case Option::Progress:
+      progressRequested = true;
       break;
     case Option::BuildPrelude: {
       std::string dir = optarg;
@@ -3724,6 +3822,12 @@ int main(int argc, char *argv[]) {
     compileRun = true;
 #endif
   }
+
+  // A persistent `kex -c` build shows its steps; a run shows them on request,
+  // since its stderr is the program's own.
+  buildProgress.enabled =
+      !quietBuild &&
+      (progressRequested || (mode == Mode::Compile && !compileRun));
 
 #ifndef __EMSCRIPTEN__
   // The BEAM runtime is a child process, so carry the CLI color choice over
@@ -5904,6 +6008,7 @@ int main(int argc, char *argv[]) {
       PhaseTimer timings;
       // Loaded once per process and used by every phase below; timed on its
       // own so it does not hide inside whichever phase touches it first.
+      buildProgress.step("Resolving", kex::color::cyan, shownPath(filepath));
       (void)preludeSemanticInterfaces();
       timings.mark("prelude interfaces");
 
@@ -6206,6 +6311,8 @@ int main(int argc, char *argv[]) {
       if (!expandParsedProgram(program, false)) return 1;
 
       timings.mark("expand compiled blocks");
+      buildProgress.step("Checking", kex::color::blue,
+                         moduleCount(beamDeps.size() + 1));
 
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
@@ -6259,6 +6366,8 @@ int main(int argc, char *argv[]) {
       }
 
       timings.mark("type check");
+      buildProgress.step("Lowering", kex::color::yellow,
+                         moduleCount(beamDeps.size() + 1));
 
       // An explicit `main do ... end` is not required: IR lowering
       // synthesizes one from trailing bare top-level expressions, matching
@@ -6384,7 +6493,14 @@ int main(int argc, char *argv[]) {
         // failures are still caught via the exit-code check below
         // regardless of where its diagnostic text went.
         coreCmd += " > /dev/null 2>&1";
-      } else {
+      } else if (buildProgress.enabled) {
+        if (const auto cached = moduleResults.size() - toCompile.size(); cached > 0)
+          buildProgress.step("Cached", kex::color::gray,
+                             moduleCount(cached, "unchanged "));
+        for (const auto moduleIndex : toCompile)
+          buildProgress.step("Compiling", kex::color::green,
+                             moduleResults[moduleIndex].moduleName);
+      } else if (!quietBuild) {
         for (const auto moduleIndex : toCompile)
           std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
       }
@@ -6510,7 +6626,12 @@ int main(int argc, char *argv[]) {
       // booting a built program straight from the emulator (`erl -pa ebin`,
       // a package launcher) needed a renamed copy alongside it.
       std::string kxBeam = outputDir + "/" + result.moduleName + ".beam";
-      if (tempDir.empty()) std::cerr << "  done  " << kxBeam << "\n";
+      if (tempDir.empty() && buildProgress.enabled)
+        buildProgress.finished(shownPath(kxBeam));
+      else if (tempDir.empty() && !quietBuild)
+        std::cerr << "  done  " << kxBeam << "\n";
+      if (compileRun)
+        buildProgress.step("Running", kex::color::cyan, shownPath(filepath));
 
       if (compileRun) {
         // Load every freshly emitted module explicitly.  Relying on the code

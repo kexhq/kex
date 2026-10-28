@@ -10525,9 +10525,66 @@ auto TypeChecker::functionValueType(const std::string& name) -> TypePtr {
     return Type::func(std::move(params), result);
 }
 
+namespace {
+// An inference variable prints as `T7`: its number in the checker, which
+// says nothing to the reader, and changes whenever unrelated code above it
+// does. In a message it is renamed to a letter, the way a signature's generic
+// parameters are written (`A -> B`), picking letters that message does not
+// already use: `expects A -> B, but got Integer? -> T7 -> T7` reads
+// `… but got Integer? -> C -> C`. Two mentions of one variable keep one
+// letter, which is the information the number carried.
+auto nameInferenceVariables(const std::string& message) -> std::string {
+    const auto word = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+    };
+    // A variable is `T` and digits, standing alone.
+    const auto variableAt = [&](std::size_t i) -> std::size_t {
+        if (message[i] != 'T' || (i > 0 && word(message[i - 1]))) return 0;
+        std::size_t end = i + 1;
+        while (end < message.size() &&
+               std::isdigit(static_cast<unsigned char>(message[end])))
+            ++end;
+        if (end == i + 1 || (end < message.size() && word(message[end]))) return 0;
+        return end - i;
+    };
+    std::set<char> taken;
+    bool any = false;
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        if (variableAt(i)) any = true;
+        if (std::isupper(static_cast<unsigned char>(message[i])) &&
+            (i == 0 || !word(message[i - 1])) &&
+            (i + 1 == message.size() || !word(message[i + 1])))
+            taken.insert(message[i]);
+    }
+    if (!any) return message;
+    std::unordered_map<std::string, std::string> names;
+    char next = 'A';
+    std::string renamed;
+    for (std::size_t i = 0; i < message.size();) {
+        const auto length = variableAt(i);
+        if (!length) {
+            renamed += message[i++];
+            continue;
+        }
+        const auto variable = message.substr(i, length);
+        auto name = names.find(variable);
+        if (name == names.end()) {
+            while (next <= 'Z' && taken.count(next)) ++next;
+            // Out of letters: the number is still a name.
+            std::string letter = next <= 'Z' ? std::string(1, next++) : variable;
+            name = names.emplace(variable, letter).first;
+        }
+        renamed += name->second;
+        i += length;
+    }
+    return renamed;
+}
+} // namespace
+
 auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {
     if (m_diagnostics) {
-        m_diagnostics->push_back({Diagnostic::Level::Error, loc, msg});
+        m_diagnostics->push_back(
+            {Diagnostic::Level::Error, loc, nameInferenceVariables(msg)});
     }
 }
 
