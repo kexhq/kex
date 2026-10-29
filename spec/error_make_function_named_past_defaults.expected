@@ -1,0 +1,5 @@
+spec/error_make_function_named_past_defaults.kex:13:26: error: `text` expects argument 4 to be String, but got Integer
+
+text : Table -> Atom -> Bool -> String -> String
+spec/error_make_function_named_past_defaults.kex:14:26: error: Missing required argument `label` for `text`
+Aborted: 2 type errors — fix before running (use --no-check to skip).

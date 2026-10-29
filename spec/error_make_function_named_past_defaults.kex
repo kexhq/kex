@@ -1,0 +1,15 @@
+# A named argument placed past defaulted parameters is checked against its
+# own parameter, and a required one left out is named.
+record Table do
+  name : String
+end
+
+make Table do
+  let text(label: Atom, primaryKey: Bool = false, doc: String = "") -> String = "${label}"
+end
+
+main do
+  let table = Table { name: "users" }
+  IO.printLine(table.text(:id, doc: 1))
+  IO.printLine(table.text(doc: "no label"))
+end

@@ -1227,6 +1227,10 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                     // KexI does not currently store default-argument counts.
                     if (duplicate->paramNames.empty() && !function.paramNames.empty())
                         duplicate->paramNames = std::move(function.paramNames);
+                    // Only a compiled unit's interface writes its defaults
+                    // down; the call that skips one needs them.
+                    if (duplicate->defaultSources.empty())
+                        duplicate->defaultSources = std::move(function.defaultSources);
                     if (function.signature.requiredParams)
                         duplicate->signature.requiredParams = function.signature.requiredParams;
                     if (function.isConstructor) {
@@ -1264,6 +1268,8 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                     provider != base.modules.end() && provider->second.automaticImport;
                 if (!ownsAutomaticMethod || duplicate->sourceModule == function.sourceModule)
                     *duplicate = std::move(function);
+                else if (duplicate->defaultSources.empty())
+                    duplicate->defaultSources = std::move(function.defaultSources);
             }
         }
     }

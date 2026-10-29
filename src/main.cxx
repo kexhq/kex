@@ -1549,6 +1549,15 @@ auto fileExists(const std::string &path) -> bool {
   return probe.good();
 }
 
+// Defined with the prelude's other loaders below; lowering a unit on its own
+// (lowerUnitSeparately) needs them first.
+auto preludeExternalModules() -> const kex::ir::ExternalModules &;
+auto mergeExternalModules(const kex::ir::ExternalModules &base,
+                          const kex::ir::ExternalModules &overrides)
+    -> kex::ir::ExternalModules;
+auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout>;
+auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag>;
+
 namespace {
 
 auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
@@ -1934,11 +1943,343 @@ auto moduleCount(std::size_t count, const char *kind = "") -> std::string {
   return std::to_string(count) + " " + kind + (count == 1 ? "module" : "modules");
 }
 
+// The program as units (docs/plan_separate_compilation.md): its files
+// grouped into the strongly connected components of what each one uses, so
+// that a cycle of modules is one unit and every other module one of its
+// own. In build order — a unit comes after every unit it uses — with the
+// entry program, written as the empty path, last.
+struct UnitGraph {
+  std::map<std::string, std::set<std::string>> uses;
+  std::vector<std::vector<std::string>> units;
+};
+
+auto unitsOf(const std::map<std::string, std::set<std::string>> &uses)
+    -> std::vector<std::vector<std::string>> {
+  // Tarjan's algorithm: a component is complete only after every component
+  // it reaches, which is the order a build needs.
+  std::vector<std::vector<std::string>> units;
+  std::map<std::string, int> index, low;
+  std::set<std::string> onStack;
+  std::vector<std::string> stack;
+  int next = 0;
+  std::function<void(const std::string &)> visit = [&](const std::string &file) {
+    index[file] = low[file] = next++;
+    stack.push_back(file);
+    onStack.insert(file);
+    if (const auto found = uses.find(file); found != uses.end())
+      for (const auto &used : found->second) {
+        if (!index.contains(used)) {
+          visit(used);
+          low[file] = std::min(low[file], low[used]);
+        } else if (onStack.contains(used)) {
+          low[file] = std::min(low[file], index[used]);
+        }
+      }
+    if (low[file] != index[file]) return;
+    std::vector<std::string> unit;
+    std::string member;
+    do {
+      member = stack.back();
+      stack.pop_back();
+      onStack.erase(member);
+      unit.push_back(member);
+    } while (member != file);
+    std::sort(unit.begin(), unit.end());
+    units.push_back(std::move(unit));
+  };
+  // From the entry: every file is reached from it, and it is the last unit.
+  visit("");
+  for (const auto &[file, _] : uses)
+    if (!index.contains(file)) visit(file);
+  return units;
+}
+
+// KEX_SEPARATE=1, phase 2 of docs/plan_separate_compilation.md: every unit
+// checked on its own, in build order, against the interfaces of the units
+// below it — the KexI its modules would carry once compiled, read back the
+// way a compiled unit's are. The merged check still decides the build; this
+// one prints what it found, `separate:` before each line, so the two can be
+// compared until they agree.
+auto separateCheckRequested() -> bool {
+  const char *value = std::getenv("KEX_SEPARATE");
+  return value && *value && std::string(value) != "0";
+}
+
+// The entry file being built, which names the entry unit's file-local module
+// as the merged build names it.
+std::string g_separateEntryPath;
+
+// KEX_SEPARATE_CORE=<dir>, phase 3: a checked unit lowered on its own, with
+// its own analysis, against the prelude and the KexI of the units below it
+// (`registry`, which holds only those yet), its modules' Core Erlang written
+// to `dir` to be compared with the merged build's.
+auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &path,
+                         const kex::semantic::Analyzer &analyzer,
+                         const kex::beam::KexiRegistry &registry,
+                         const std::string &dir) -> void {
+  // A module this build compiles is described by its own interface. The
+  // prebuilt runtime has its own copy of an opt-in standard library module,
+  // laid out as the prelude build lays it out (`make Router` filed under
+  // `Kex.Net.HTTP.Router`, not `Kex.Net.HTTP`), and left in, it wins.
+  std::set<std::string> builtModules, builtAtoms;
+  for (const auto *module : registry.allLoadedModules()) {
+    builtModules.insert(module->chunk.metadata.sourceModule);
+    builtAtoms.insert(module->beamAtom);
+  }
+  auto prelude = preludeExternalModules();
+  const auto builtKey = [&](const std::string &key) {
+    const auto dot = key.rfind('.');
+    return dot != std::string::npos && builtModules.contains(key.substr(0, dot));
+  };
+  std::erase_if(prelude.exportToBeamFn, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.exportArity, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.exportParamNames, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.foulExports, [&](const auto &key) { return builtKey(key); });
+  for (auto &[_, functions] : prelude.receiverFunctions)
+    std::erase_if(functions, [&](const auto &function) {
+      return builtAtoms.contains(function.moduleAtom);
+    });
+  auto externals = mergeExternalModules(prelude, registry.buildExternalModules());
+  // The merge lets a unit's providers of a name replace the prelude's, as a
+  // module loaded into the REPL does; here both stand, or `handle.feed` lost
+  // the prelude's foul FileHandle provider to FS.File's, and its context.
+  for (const auto &[name, providers] : prelude.receiverFunctions) {
+    auto &merged = externals.receiverFunctions[name];
+    for (const auto &provider : providers)
+      if (std::none_of(merged.begin(), merged.end(), [&](const auto &existing) {
+            return existing.moduleAtom == provider.moduleAtom &&
+                   existing.beamFunction == provider.beamFunction &&
+                   existing.beamArity == provider.beamArity;
+          }))
+        merged.push_back(provider);
+  }
+  auto layouts = loadPreludeRecordLayouts();
+  auto variants = loadPreludeVariantTags();
+  // Where each type's `make` functions are, for the runtime's dispatch on a
+  // value: its declaring module may have none, and another unit may.
+  std::map<std::string, std::string> methodOwners;
+  for (const auto *module : registry.allLoadedModules())
+    for (const auto &method : module->chunk.typeInterface.methods)
+      if (!method.moduleFunction && !method.typeOnly && method.receiverType &&
+          method.receiverType->kind == kex::beam::KexiType::Named)
+        methodOwners.try_emplace(method.receiverType->name, module->beamAtom);
+  const auto ownerOf = [&](const std::string &type) {
+    const auto found = methodOwners.find(type);
+    return found == methodOwners.end() ? std::string{} : found->second;
+  };
+  for (const auto *module : registry.allLoadedModules()) {
+    for (const auto &record : module->chunk.metadata.records) {
+      kex::ir::ExternalRecordLayout layout;
+      layout.name = record.tagAtom.empty() ? record.name : record.tagAtom;
+      layout.moduleAtom = module->beamAtom;
+      layout.methodOwner = ownerOf(layout.name);
+      layout.declaringModule = module->chunk.metadata.sourceModule;
+      for (const auto &field : record.fields) {
+        layout.fields.push_back(field.name);
+        layout.fieldDefaults.push_back(field.defaultSource);
+      }
+      layouts.push_back(std::move(layout));
+    }
+    for (const auto &adt : module->chunk.metadata.adts)
+      for (const auto &constructor : adt.constructors)
+        variants.push_back(
+            {constructor.tagAtom, constructor.arity, adt.name, ownerOf(adt.name)});
+  }
+  const auto stem = std::filesystem::path(path).stem().string();
+  try {
+    auto modules = kex::ir::lowerModules(
+        program, stem, path, &layouts, &externals, &analyzer.resolvedCalls(),
+        /*preferExternalReceivers=*/false, &variants, &analyzer.staticTypeOfCalls(),
+        &analyzer.typeMap());
+    std::filesystem::create_directories(dir);
+    for (auto &module : modules) {
+      kex::ir::insertUpgradePoints(module);
+      const auto emitted = kex::ir::emitCore(module);
+      std::ofstream(dir + "/" + emitted.moduleName + ".core") << emitted.source;
+    }
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "separate: %s: lowering failed: %s\n", path.c_str(), error.what());
+  }
+}
+
+auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps,
+                          const std::vector<std::vector<std::string>> &units,
+                          const kex::semantic::ImportedInterfaces *interfaces) -> void {
+  kex::beam::KexiRegistry registry;
+  kex::module::PackageMetadata build;
+  build.id = "kex.build";
+  std::map<std::string, LoadedDep *> byPath;
+  for (auto &dep : deps) byPath[*dep.path] = &dep;
+  std::size_t errors = 0;
+  for (const auto &unit : units) {
+    const bool isEntry = unit.size() == 1 && unit.front().empty();
+    // The unit's files, as one program for the length of its check; their
+    // items go back where they came from afterwards.
+    kex::ast::Program program;
+    std::vector<std::pair<LoadedDep *, std::size_t>> taken;
+    if (isEntry) {
+      program.items = std::move(entry.items);
+    } else {
+      for (const auto &path : unit) {
+        const auto found = byPath.find(path);
+        if (found == byPath.end()) continue;
+        auto &items = found->second->program->items;
+        taken.push_back({found->second, items.size()});
+        for (auto &item : items) program.items.push_back(std::move(item));
+        items.clear();
+      }
+    }
+    auto below = registry.buildSemanticInterfaces();
+    for (auto &[_, functions] : below.receiverFunctions)
+      for (auto &function : functions)
+        if (function.isReceiverMethod) function.visibleByReceiver = true;
+    for (auto &[_, module] : below.modules)
+      for (auto &[__, functions] : module.exports)
+        for (auto &function : functions)
+          if (function.isReceiverMethod) function.visibleByReceiver = true;
+    // A module this build compiles is described by its own interface, not by
+    // the one the prelude derives from the standard library's source for an
+    // opt-in module: that one names where the module's functions would be
+    // in a merged program (`make Router` in `Net.HTTP`, filed under
+    // `Kex.Net.HTTP.Router`), and the merge keeps the first description.
+    auto preludeView = [&]() -> kex::semantic::ImportedInterfaces {
+      auto view = *interfaces;
+      for (const auto &[name, _] : below.modules) view.modules.erase(name);
+      for (auto &[__, functions] : view.receiverFunctions)
+        std::erase_if(functions, [&](const auto &function) {
+          return below.modules.contains(function.sourceModule);
+        });
+      return view;
+    };
+    // Taken before `below` is moved into the merge, which reads it.
+    auto prelude = interfaces ? preludeView() : kex::semantic::ImportedInterfaces{};
+    const auto available =
+        interfaces ? kex::mergeSemanticInterfaces(std::move(prelude), std::move(below))
+                   : std::move(below);
+    kex::semantic::Analyzer analyzer(&available);
+    (void)analyzer.analyze(program);
+    for (const auto &diagnostic : analyzer.diagnostics()) {
+      if (diagnostic.level != kex::semantic::Diagnostic::Level::Error) continue;
+      errors++;
+      std::fprintf(stderr, "separate: %s:%d:%d: error: %s\n",
+                   std::string(diagnostic.location.file).c_str(),
+                   diagnostic.location.line, diagnostic.location.column,
+                   diagnostic.message.c_str());
+    }
+    // Phase 3: the unit lowered on its own, against the prelude and the KexI
+    // of the units below it, as the REPL lowers code against a loaded unit.
+    const bool unitChecked =
+        std::none_of(analyzer.diagnostics().begin(), analyzer.diagnostics().end(),
+                     [](const auto &diagnostic) {
+                       return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
+                     });
+    if (const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
+        coreDir && *coreDir && unitChecked)
+      lowerUnitSeparately(program, isEntry ? g_separateEntryPath : unit.front(),
+                          analyzer, registry, coreDir);
+    if (!isEntry) {
+      // What the unit's modules would say of themselves once compiled.
+      kex::beam::LoadedUnit described;
+      std::vector<std::string> names;
+      std::vector<const kex::ast::ModuleDef *> modules;
+      // Nested ones too (`capability Ticker` inside `module Tickers` is
+      // `Tickers.Ticker`), once each: a module can come in more than one part.
+      std::function<void(const kex::ast::ModuleDef &)> describe =
+          [&](const kex::ast::ModuleDef &module) {
+            if (std::find(names.begin(), names.end(), module.name) == names.end()) {
+              names.push_back(module.name);
+              modules.push_back(&module);
+            }
+            for (const auto &item : module.body)
+              if (const auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+                if (*nested) describe(**nested);
+          };
+      for (const auto &item : program.items)
+        if (const auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+          if (*module) describe(**module);
+      // The types a bare name in a module's signatures can mean: its own,
+      // then those of the modules it uses, as the checker resolves them.
+      std::set<std::string> qualifiedTypes(available.typeNames.begin(),
+                                           available.typeNames.end());
+      for (const auto &[name, _] : available.recordArities) qualifiedTypes.insert(name);
+      for (const auto &[name, _] : available.typeAliases) qualifiedTypes.insert(name);
+      for (const auto &[name, _] : available.distinctTypes) qualifiedTypes.insert(name);
+      for (const auto *module : modules)
+        for (const auto &item : module->body) {
+          if (const auto *record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item))
+            if (*record) qualifiedTypes.insert(module->name + "." + (*record)->name);
+          if (const auto *type = std::get_if<std::unique_ptr<kex::ast::TypeDef>>(&item))
+            if (*type) qualifiedTypes.insert(module->name + "." + (*type)->name);
+        }
+      auto qualifierFor = [&](const kex::ast::ModuleDef &module) {
+        return [&](const std::string &name) -> std::string {
+          if (qualifiedTypes.contains(module.name + "." + name))
+            return module.name + "." + name;
+          for (const auto &item : module.body) {
+            const auto *use = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item);
+            if (!use || !*use || (*use)->alias) continue;
+            const auto &only = (*use)->onlyNames;
+            const auto &except = (*use)->exceptNames;
+            if (!only.empty() && std::find(only.begin(), only.end(), name) == only.end())
+              continue;
+            if (std::find(except.begin(), except.end(), name) != except.end()) continue;
+            std::string used;
+            for (const auto &part : (*use)->module.parts)
+              used += (used.empty() ? "" : ".") + part;
+            if (qualifiedTypes.contains(used + "." + name)) return used + "." + name;
+          }
+          return name;
+        };
+      };
+      for (std::size_t i = 0; i < names.size(); i++) {
+        kex::beam::CollectOptions options;
+        options.moduleAtom = "Kex." + names[i];
+        options.unitId = "Kex." + names.front();
+        options.moduleName = names[i];
+        options.role = i == 0 ? kex::beam::KexiModuleRole::Entry
+                              : kex::beam::KexiModuleRole::Companion;
+        if (i > 0) options.entryBackPointer = "Kex." + names.front();
+        options.analysis = &analyzer;
+        auto chunk = kex::beam::collectMetadata(program, options);
+        kex::beam::qualifyTypeNames(chunk, qualifierFor(*modules[i]));
+        described.modules.push_back({options.moduleAtom, "", std::move(chunk)});
+      }
+      if (!described.modules.empty()) {
+        described.entryBeamAtom = described.modules.front().beamAtom;
+        registry.registerUnit(std::move(described));
+        // The build's own units as one package, every module of them a
+        // provider: a type's `make` functions reach the units above it
+        // only through a package that says so, as the prelude's do.
+        build.unitIds.push_back("Kex." + names.front());
+        // Once each: a module can be split across files of different units.
+        for (const auto &name : names)
+          if (std::find(build.receiverProviders.begin(), build.receiverProviders.end(),
+                        name) == build.receiverProviders.end())
+            build.receiverProviders.push_back(name);
+        for (const auto &error : registry.declarePackage(build))
+          std::fprintf(stderr, "separate: package: %s\n", error.message.c_str());
+      }
+    }
+    if (isEntry) {
+      entry.items = std::move(program.items);
+    } else {
+      std::size_t at = 0;
+      for (auto &[dep, count] : taken)
+        for (std::size_t i = 0; i < count; i++)
+          dep->program->items.push_back(std::move(program.items[at++]));
+    }
+  }
+  std::fprintf(stderr, "separate: %zu units checked, %zu errors\n", units.size(),
+               errors);
+}
+
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
                      const kex::semantic::ImportedInterfaces *interfaces,
-                     const std::unordered_set<std::string> &qualifiedModules = {})
+                     const std::unordered_set<std::string> &qualifiedModules = {},
+                     UnitGraph *graph = nullptr)
     -> std::vector<LoadedDep> {
+  std::map<std::string, std::set<std::string>> uses{{"", {}}};
   std::vector<LoadedDep> deps;
   std::unordered_set<std::string> loaded;
   kex::module::Resolver resolver(roots);
@@ -1959,10 +2300,10 @@ auto resolveBeamDeps(kex::ast::Program &program,
   // may carry a merged `.spec.kex` base, so its bytes are not the whole input.
   std::function<void(const kex::ast::Program &,
                      const std::unordered_set<std::string> &,
-                     const std::string *)> resolve =
+                     const std::string *, const std::string &)> resolve =
       [&](const kex::ast::Program &prog,
           const std::unordered_set<std::string> &seedModules,
-          const std::string *source) {
+          const std::string *source, const std::string &from) {
     auto modules = collectUsingModules(prog);
     modules.insert(modules.end(), seedModules.begin(), seedModules.end());
 
@@ -2003,6 +2344,10 @@ auto resolveBeamDeps(kex::ast::Program &program,
         unresolved.insert(modName);
         continue;
       }
+      // Before the already-loaded check: a file uses what it uses, whoever
+      // loaded it first.
+      if (resolved->path != from) uses[from].insert(resolved->path);
+      uses.try_emplace(resolved->path);
       if (!loaded.insert(resolved->path).second) continue;
 
       auto path = std::make_unique<std::string>(resolved->path);
@@ -2100,11 +2445,15 @@ auto resolveBeamDeps(kex::ast::Program &program,
             resolved->moduleName + "`");
         dependencyFailure("module file " + shownPath(*path) + " declares another module");
       }
-      resolve(*depProg, {}, src.get());
+      resolve(*depProg, {}, src.get(), *path);
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
   };
-  resolve(program, qualifiedModules, nullptr);
+  resolve(program, qualifiedModules, nullptr, std::string{});
+  const auto units = unitsOf(uses);
+  // Before the dependencies are merged in, while each is still its own.
+  if (graph && separateCheckRequested())
+    checkUnitsSeparately(program, deps, units, interfaces);
 
   if (!deps.empty()) {
     std::vector<kex::ast::TopLevelItem> merged;
@@ -2162,6 +2511,17 @@ auto resolveBeamDeps(kex::ast::Program &program,
                    sandboxes.started - sandboxesBefore.started,
                    ms(sandboxes.startup - sandboxesBefore.startup),
                    ms(sandboxes.evaluation - sandboxesBefore.evaluation));
+    std::size_t largest = 0, inCycles = 0;
+    for (const auto &unit : units) {
+      largest = std::max(largest, unit.size());
+      if (unit.size() > 1) inCycles += unit.size();
+    }
+    std::fprintf(stderr, "    %zu units: largest %zu files, %zu files in cycles\n",
+                 units.size(), largest, inCycles);
+  }
+  if (graph) {
+    graph->uses = std::move(uses);
+    graph->units = units;
   }
   return deps;
 }
@@ -2347,6 +2707,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportArity[name] = arity;
   for (const auto &[name, names] : overrides.exportParamNames)
     result.exportParamNames[name] = names;
+  for (const auto &[name, defaults] : overrides.exportDefaults)
+    result.exportDefaults[name] = defaults;
   for (const auto &name : overrides.foulExports)
     result.foulExports.insert(name);
   for (const auto &name : overrides.capabilityModules)
@@ -6469,10 +6831,15 @@ int main(int argc, char *argv[]) {
           else
             ++it;
         }
+        // The separate check (and, with KEX_SEPARATE_CORE, its lowering)
+        // runs on the build's own dependencies too.
+        UnitGraph separateUnits;
+        g_separateEntryPath = filepath;
         beamDeps = resolveBeamDeps(
             program, moduleRootsFor(filepath),
             &preludeSemanticInterfaces(),
-            qualifiedModules);
+            qualifiedModules,
+            separateCheckRequested() ? &separateUnits : nullptr);
       }
 
       timings.mark("load dependencies");
@@ -7201,8 +7568,9 @@ int main(int argc, char *argv[]) {
                                             root) != stdlibRoots.end();
                          }),
           projectRoots.end());
+      UnitGraph units;
       resolveBeamDeps(program, projectRoots, &preludeSemanticInterfaces(),
-                      qualifiedModules);
+                      qualifiedModules, &units);
     }
 
     // Pass 1+2: collect symbols and resolve names via SemanticDB

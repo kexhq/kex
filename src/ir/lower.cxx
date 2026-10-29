@@ -238,6 +238,9 @@ struct Lowering {
     // Records that came in from a separately compiled module (the prelude's)
     // under their bare name, as opposed to ones this unit declares.
     std::unordered_set<std::string> externalRecordNames;
+    // A record or ADT of a unit compiled apart, by name: the module holding
+    // its `make` functions (ExternalRecordLayout::methodOwner).
+    std::unordered_map<std::string, std::string> externalMethodOwners;
     // Set while a receiver guard is built for a `make` target, which is
     // written against the block's own module rather than the use site's.
     mutable bool resolvingMakeOwner = false;
@@ -621,6 +624,9 @@ struct Lowering {
     // Top-level trailing defaults, used to expand omitted arguments at local
     // call sites just as methodDefaults does for receiver calls.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> fnDefaults;
+    // Defaults of callees compiled apart, parsed from the source text their
+    // interface carries (ResolvedCallTarget::defaultSources), once each.
+    std::unordered_map<std::string, ast::ExprPtr> importedDefaults;
     std::unordered_map<std::string,
         std::vector<std::pair<std::size_t, std::string>>> fnTraitParams;
     // Names that are real functions in this module (top-level + make methods).
@@ -932,6 +938,27 @@ struct Lowering {
     // capability context exactly as a local one does, and the consumer only
     // learns that from the interface — so every external call goes through
     // here (kexhq/kex#181).
+    //
+    // A bare name `using` imported from a separately compiled module that is a
+    // constant there (`using Statuses, only: [STATUSES]`): read as the call it
+    // is, as the same import from this unit is. Null for anything else.
+    auto externalConstant(const std::string& name) -> ExprPtr {
+        if (!externalModules || subst.count(name) || moduleImports.count(name))
+            return nullptr;
+        const auto imported = externalImports.find(name);
+        if (imported == externalImports.end()) return nullptr;
+        const auto& qualKey = imported->second;
+        const auto arity = externalModules->exportArity.find(qualKey);
+        const auto function = externalModules->exportToBeamFn.find(qualKey);
+        const auto atom = externalModules->nameToAtom.find(
+            qualKey.substr(0, qualKey.rfind('.')));
+        if (arity == externalModules->exportArity.end() || arity->second != 0 ||
+            function == externalModules->exportToBeamFn.end() ||
+            atom == externalModules->nameToAtom.end())
+            return nullptr;
+        return externalCallExpr(qualKey, atom->second, function->second, 0, {});
+    }
+
     auto externalCallExpr(const std::string& qualKey, const std::string& atom,
                           const std::string& beamFunction, int arity,
                           std::vector<ExprPtr> args) -> ExprPtr {
@@ -1410,6 +1437,7 @@ struct Lowering {
                         ex->node = localCall(imp->second, {});
                         return ex;
                     }
+                    if (auto constant = externalConstant(n.name)) return constant;
                 }
                 // Uppercase bare name not a known constant → nullary ADT
                 // constructor (matching the UpperIdentifier path). Without
@@ -1499,6 +1527,7 @@ struct Lowering {
                         ex->node = localCall(imp->second, {});
                         return ex;
                     }
+                    if (auto constant = externalConstant(n.name)) return constant;
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
@@ -2596,6 +2625,55 @@ struct Lowering {
                 misplaced = true;
         }
         return exact && misplaced;
+    }
+
+    // A callee compiled apart: no AST of its own to read a default from,
+    // only the source text its interface keeps. Parsed once; null for a
+    // parameter without one, or a default that no longer parses alone.
+    auto importedDefault(const std::string& source) -> const ast::ExprPtr* {
+        if (source.empty()) return nullptr;
+        auto [entry, added] = importedDefaults.try_emplace(source);
+        if (added) {
+            Lexer lexer(source, "<default>");
+            Parser parser(lexer.tokenizeAll(), "<default>");
+            auto expr = parser.parseExpr();
+            if (parser.diagnostics().empty()) entry->second = std::move(expr);
+        }
+        return entry->second ? &entry->second : nullptr;
+    }
+
+    // fillDefaultSlots for such a callee: `slots` are its parameters after
+    // the receiver, a missing one filled with its default, read in the
+    // callee's own module, where an earlier parameter is in scope by name.
+    auto fillImportedDefaults(const std::string& sourceModule,
+                              const std::vector<std::string>& paramNames,
+                              const std::vector<std::string>& defaultSources,
+                              std::vector<ExprPtr>& slots,
+                              std::vector<Binding>& binds) -> void {
+        const auto savedSubst = subst;
+        const auto savedModule = currentModulePath;
+        currentModulePath = sourceModule;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            if (!slots[i]) {
+                const auto* fallback = i < defaultSources.size()
+                    ? importedDefault(defaultSources[i]) : nullptr;
+                slots[i] = fallback ? atomize(*fallback, binds)
+                                    : lit(LitKind::None, "none");
+            }
+            const auto bound = fresh("DefaultArg");
+            binds.push_back({bound, std::move(slots[i])});
+            slots[i] = var(bound);
+            if (i < paramNames.size() && !paramNames[i].empty())
+                subst[paramNames[i]] = bound;
+        }
+        subst = savedSubst;
+        currentModulePath = savedModule;
+    }
+    auto fillImportedDefaults(const semantic::ResolvedCallTarget& target,
+                              std::vector<ExprPtr>& slots,
+                              std::vector<Binding>& binds) -> void {
+        fillImportedDefaults(target.sourceModule, target.paramNames,
+                             target.defaultSources, slots, binds);
     }
 
     auto fillDefaultSlots(const std::string& name,
@@ -4058,7 +4136,11 @@ struct Lowering {
                         resolved->second.backendArity -
                         (resolved->second.passesReceiver ? 1 : 0) -
                         resolved->second.traitDictionaries.size());
-                    if (pnames.size() != expected)
+                    // A foul target's arity can count the capability context
+                    // too, which is no parameter of its own.
+                    const bool contextCounted = threadsCapabilities() &&
+                        resolved->second.isFoul && pnames.size() + 1 == expected;
+                    if (pnames.size() != expected && !contextCounted)
                         throw LowerError(
                             "IR lower: named args to imported function with unknown params: " +
                             resolved->second.backendFunction);
@@ -4081,8 +4163,21 @@ struct Lowering {
                         if (next >= slots.size()) break;
                         slots[next++] = std::move(value);
                     }
+                    if (!resolved->second.defaultSources.empty())
+                        fillImportedDefaults(resolved->second, slots, binds);
                     for (auto& slot : slots)
                         if (!slot) slot = lit(LitKind::None, "none");
+                    for (auto& slot : slots) args.push_back(std::move(slot));
+                } else if (const auto expected = resolved->second.paramNames.size();
+                           !resolved->second.defaultSources.empty() &&
+                           n.args.size() + (n.block ? 1 : 0) < expected) {
+                    // Fewer arguments than parameters: the rest are the
+                    // callee's defaults, which only its interface knows.
+                    std::vector<ExprPtr> slots(expected);
+                    size_t next = 0;
+                    for (const auto& arg : n.args) slots[next++] = atomize(arg, binds);
+                    if (n.block) slots[next++] = atomize(*n.block, binds);
+                    fillImportedDefaults(resolved->second, slots, binds);
                     for (auto& slot : slots) args.push_back(std::move(slot));
                 } else {
                     for (const auto& arg : n.args)
@@ -4876,7 +4971,9 @@ struct Lowering {
                     auto imp = moduleImports.find(uid->name);
                     return imp != moduleImports.end() &&
                         emittedModuleZeroArg.count(imp->second);
-                }();
+                }() ||
+                // ...or one from a module compiled apart.
+                externalConstant(uid->name) != nullptr;
             if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
@@ -5664,6 +5761,10 @@ struct Lowering {
                         tail->second + "." + name.substr(dot + 1) == name)
                         declaring = tail;
                 }
+            if (declaring == localTypeModules.end())
+                if (auto owner = externalMethodOwners.find(name);
+                    owner != externalMethodOwners.end())
+                    return owner->second;
             return declaring != localTypeModules.end()
                 ? "Kex." + declaring->second : moduleName;
         };
@@ -7160,10 +7261,23 @@ struct Lowering {
                 if (next >= args.size()) break;
                 args[next] = std::move(p);
             }
+            if (auto defaults = externalModules->exportDefaults.find(qualKey);
+                defaults != externalModules->exportDefaults.end())
+                fillImportedDefaults(owner, pnames, defaults->second, args, binds);
             for (auto& a : args) if (!a) a = lit(LitKind::None, "none");
         } else {
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
             if (n.block) args.push_back(atomize(*n.block, binds));
+            // Fewer arguments than parameters: the rest are the callee's
+            // defaults, which only its interface knows.
+            const auto defaults = externalModules->exportDefaults.find(qualKey);
+            const auto names = externalModules->exportParamNames.find(qualKey);
+            if (defaults != externalModules->exportDefaults.end() &&
+                names != externalModules->exportParamNames.end() &&
+                args.size() < names->second.size()) {
+                args.resize(names->second.size());
+                fillImportedDefaults(owner, names->second, defaults->second, args, binds);
+            }
         }
         const int ar = static_cast<int>(args.size());
         return wrapLets(binds, externalCallExpr(qualKey, atom, beamFn, ar,
@@ -10145,7 +10259,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     if (externalRecords)
         for (const auto& record : *externalRecords) {
             L.collectRecordLayout(record.name, record.fields);
+            // A unit compiled apart: its defaults come as source text.
+            if (!record.fieldDefaults.empty()) {
+                auto& info = L.records[record.name];
+                for (size_t i = 0; i < record.fieldDefaults.size() &&
+                                   i < info.defaults.size(); ++i)
+                    info.defaults[i] = L.importedDefault(record.fieldDefaults[i]);
+                info.owner = record.declaringModule;
+            }
             L.externalRecordNames.insert(record.name);
+            if (!record.methodOwner.empty())
+                L.externalMethodOwners[record.name] = record.methodOwner;
             L.knownTypes.insert(record.name);
         }
     // Display info only — deliberately NOT added to variantTagSet, which
@@ -10155,6 +10279,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         for (const auto& variant : *externalVariants) {
             L.variantArity[variant.tag] = variant.arity;
             L.variantOwner[variant.tag] = variant.owner;
+            if (!variant.methodOwner.empty())
+                L.externalMethodOwners[variant.owner] = variant.methodOwner;
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         for (const auto& clause : fd.clauses)

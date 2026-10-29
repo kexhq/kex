@@ -1,0 +1,3 @@
+users.:id key=false null=false doc=the key
+users.:email key=false null=true doc=where to write
+users.:name key=false null=false doc=shown

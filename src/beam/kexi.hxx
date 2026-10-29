@@ -73,6 +73,13 @@ struct KexiExport {
     std::vector<KexiTypePtr> paramTypes;
     std::vector<std::string> paramNames;
     KexiTypePtr returnType;
+    // How many trailing parameters have a default, so a call may leave
+    // them out. Absent in chunks written before it existed.
+    int defaultedParams = 0;
+    // Each parameter's default as source text, "" for one with none: a
+    // unit compiled apart fills a call's missing arguments with these, as
+    // the merged build does from the callee's own AST.
+    std::vector<std::string> defaultSources;
 };
 
 struct KexiConstant {
@@ -99,6 +106,15 @@ struct KexiMethod {
     std::vector<std::string> paramNames;
     KexiTypePtr returnType;
     std::string beamFunction; // emitted BEAM function name
+    // As KexiExport::defaultedParams; the receiver never has a default.
+    int defaultedParams = 0;
+    // A `serving` slot: callers reach it through a `Server<T>` too.
+    bool isSlot = false;
+    // A module function reached by UFCS (`"x".text` for `text(String)`),
+    // visible only where its module is imported, unlike a `make` function.
+    bool moduleFunction = false;
+    // As KexiExport::defaultSources, the receiver left out.
+    std::vector<std::string> defaultSources;
 };
 
 struct KexiTypeInterface {
@@ -121,6 +137,8 @@ struct KexiCompanion {
 struct KexiRecordField {
     std::string name;
     KexiTypePtr type;
+    // Its default as source text, "" for none (KexiExport::defaultSources).
+    std::string defaultSource;
 };
 
 struct KexiRecord {

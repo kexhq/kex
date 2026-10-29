@@ -168,12 +168,17 @@ auto importedFunction(const KexiExport& exported,
     result.backendArity = exported.beamArity;
     result.sourceModule = sourceModule;
     result.paramNames = exported.paramNames;
+    result.defaultSources = exported.defaultSources;
     TypeVarMap vars;
     std::vector<kex::semantic::TypePtr> params;
     for (const auto& param : exported.paramTypes)
         params.push_back(semanticType(param, vars));
     result.signature = {exported.name, std::move(params),
                         semanticType(exported.returnType, vars), exported.isFoul};
+    result.signature.paramNames = exported.paramNames;
+    if (exported.defaultedParams > 0)
+        result.signature.requiredParams =
+            result.signature.params.size() - exported.defaultedParams;
     return result;
 }
 
@@ -188,6 +193,8 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.backendArity = receiver.beamArity;
     result.sourceModule = sourceModule;
     result.paramNames = receiver.paramNames;
+    result.defaultSources = receiver.defaultSources;
+    result.isReceiverMethod = !receiver.moduleFunction;
     TypeVarMap vars;
     auto receiverSemType = semanticType(receiver.receiverType, vars);
     std::vector<kex::semantic::TypePtr> params = {
@@ -197,6 +204,10 @@ auto importedReceiverFunction(const KexiMethod& receiver,
         params.push_back(semanticType(param, vars));
     result.signature = {receiver.name, std::move(params),
                         semanticType(receiver.returnType, vars), receiver.isFoul};
+    result.signature.paramNames = receiver.paramNames;
+    if (receiver.defaultedParams > 0)
+        result.signature.requiredParams =
+            result.signature.params.size() - receiver.defaultedParams;
     return result;
 }
 
@@ -568,6 +579,11 @@ auto KexiRegistry::getUnit(const std::string& entryAtom) const
     return it != m_units.end() ? &it->second : nullptr;
 }
 
+auto KexiRegistry::registerUnit(LoadedUnit unit) -> void {
+    m_lastLoaded = unit.entryBeamAtom;
+    m_units[unit.entryBeamAtom] = std::move(unit);
+}
+
 void KexiRegistry::unloadUnit(const std::string& entryAtom) {
     auto it = m_units.find(entryAtom);
     if (it == m_units.end()) return;
@@ -642,6 +658,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                         qualKey + "/" + std::to_string(exp.beamArity));
                 if (!exp.paramNames.empty())
                     ext.exportParamNames[qualKey] = exp.paramNames;
+                if (!exp.defaultSources.empty())
+                    ext.exportDefaults[qualKey] = exp.defaultSources;
             }
         }
     }
@@ -717,6 +735,45 @@ auto KexiRegistry::buildSemanticInterfaces() const
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom, sourceModule));
+            // A module's own ADT constructors are reached through it too
+            // (`Shapes.Circle(3)`), as the source-derived interfaces have
+            // them; a build unit's chunk does not list them as exports.
+            for (const auto& adt : module.chunk.metadata.adts) {
+                if (!adt.name.starts_with(sourceModule + ".") ||
+                    adt.name.find('.', sourceModule.size() + 1) != std::string::npos)
+                    continue;
+                for (const auto& ctor : adt.constructors) {
+                    if (imported.exports.count(ctor.name)) continue;
+                    kex::semantic::ImportedFunction function;
+                    function.sourceName = ctor.name;
+                    function.sourceModule = sourceModule;
+                    function.isConstructor = true;
+                    function.constructorOwner = adt.name;
+                    function.signature.name = ctor.name;
+                    // A nullary one is its own singleton (`Shapes.Dot`); one
+                    // with a payload builds its type (`Harmat.Schema.Text(id)`
+                    // is a `Harmat.Schema.Value`), or a list of them was a
+                    // list of `Text`.
+                    std::vector<kex::semantic::TypePtr> typeArgs;
+                    for (size_t i = 0; i < adt.typeParams.size(); ++i)
+                        typeArgs.push_back(
+                            kex::semantic::Type::typeVar(-(static_cast<int>(i) + 1)));
+                    function.signature.result = ctor.arity == 0
+                        ? kex::semantic::Type::named(ctor.name)
+                        : kex::semantic::Type::named(adt.name, std::move(typeArgs));
+                    for (int i = 0; i < ctor.arity; ++i) {
+                        const int slot = i < static_cast<int>(ctor.typeParamSlots.size())
+                            ? ctor.typeParamSlots[i] : -1;
+                        function.signature.params.push_back(slot >= 0
+                            ? kex::semantic::Type::typeVar(-(slot + 1))
+                            : kex::semantic::Type::unknown());
+                    }
+                    function.backendModule = module.beamAtom;
+                    function.backendFunction = ctor.name;
+                    function.backendArity = ctor.arity;
+                    imported.exports[ctor.name].push_back(std::move(function));
+                }
+            }
             for (const auto& trait : module.chunk.metadata.traitDefs)
                 interfaces.traits.push_back(
                     importedTrait(trait, module.chunk.typeInterface));
@@ -734,10 +791,30 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     continue;
                 for (const auto& receiver : module.chunk.typeInterface.methods) {
                     if (receiver.typeOnly) continue;
+                    auto function = importedReceiverFunction(
+                        receiver, module.beamAtom,
+                        module.chunk.metadata.sourceModule);
+                    // A slot is called on the running server as well, as
+                    // the checker's own `remoteSlotSignature` has it.
+                    if (receiver.isSlot && !function.signature.params.empty()) {
+                        auto remote = function;
+                        auto& signature = remote.signature;
+                        signature.params.front() = kex::semantic::Type::named(
+                            "Server", {signature.params.front()});
+                        const auto* reply = std::get_if<kex::semantic::NamedType>(
+                            &signature.result->kind);
+                        signature.result = reply && reply->name == "Reply" &&
+                                reply->typeArgs.size() == 1
+                            ? kex::semantic::Type::named(
+                                  "Result", {reply->typeArgs.front(),
+                                             kex::semantic::Type::named("CallError")})
+                            : kex::semantic::Type::unit();
+                        signature.isFoul = true;
+                        interfaces.receiverFunctions[receiver.name].push_back(
+                            std::move(remote));
+                    }
                     interfaces.receiverFunctions[receiver.name].push_back(
-                        importedReceiverFunction(
-                            receiver, module.beamAtom,
-                            module.chunk.metadata.sourceModule));
+                        std::move(function));
                 }
             }
     }
@@ -798,21 +875,29 @@ auto KexiRegistry::buildSemanticInterfaces() const
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
             for (const auto& te : module.chunk.typeInterface.types) {
-                interfaces.typeNames.insert(te.name);
-                if (te.isDistinct && te.backingType) {
-                    TypeVarMap vars;
-                    interfaces.distinctTypes[te.name] = {
-                        te.genericParams, semanticType(te.backingType, vars)};
-                } else if (!te.isDistinct && te.backingType &&
-                           te.constructors.empty() &&
-                           te.genericParams.empty()) {
-                    TypeVarMap vars;
-                    auto body = semanticType(te.backingType, vars);
-                    // Artifacts written before alias bodies were recorded
-                    // store an Unknown placeholder; that is not an alias.
-                    if (body && !std::holds_alternative<semantic::UnknownType>(
-                                    body->kind))
-                        interfaces.typeAliases.try_emplace(te.name, body);
+                // Signatures spell a module's own type by its qualified name
+                // (`Metro.WebRequest.Plug`), so it is known by that name too.
+                std::vector<std::string> names = {te.name};
+                if (const auto& owner = module.chunk.metadata.sourceModule;
+                    !owner.empty() && te.name.find('.') == std::string::npos)
+                    names.push_back(owner + "." + te.name);
+                for (const auto& name : names) {
+                    interfaces.typeNames.insert(name);
+                    if (te.isDistinct && te.backingType) {
+                        TypeVarMap vars;
+                        interfaces.distinctTypes[name] = {
+                            te.genericParams, semanticType(te.backingType, vars)};
+                    } else if (!te.isDistinct && te.backingType &&
+                               te.constructors.empty() &&
+                               te.genericParams.empty()) {
+                        TypeVarMap vars;
+                        auto body = semanticType(te.backingType, vars);
+                        // Artifacts written before alias bodies were recorded
+                        // store an Unknown placeholder; that is not an alias.
+                        if (body && !std::holds_alternative<semantic::UnknownType>(
+                                        body->kind))
+                            interfaces.typeAliases.try_emplace(name, body);
+                    }
                 }
             }
 
@@ -849,6 +934,61 @@ auto KexiRegistry::buildSemanticInterfaces() const
                         interfaces.traitConformances.push_back(
                             {ctorName, c.traitName});
             }
+
+    // A signature spells an alias by name (`plug : Plug -> Plug`); the
+    // source-derived interfaces give its body, so these do too. Left a name,
+    // a block handed to `plug` was never read as a `Plug`.
+    std::function<semantic::TypePtr(const semantic::TypePtr&, int)> expand =
+        [&](const semantic::TypePtr& type, int depth) -> semantic::TypePtr {
+        if (!type || depth > 8) return type;
+        auto recur = [&](const semantic::TypePtr& inner) { return expand(inner, depth + 1); };
+        return std::visit([&](const auto& kind) -> semantic::TypePtr {
+            using K = std::decay_t<decltype(kind)>;
+            if constexpr (std::is_same_v<K, semantic::NamedType>) {
+                if (kind.typeArgs.empty())
+                    if (auto alias = interfaces.typeAliases.find(kind.name);
+                        alias != interfaces.typeAliases.end())
+                        return expand(alias->second, depth + 1);
+                std::vector<semantic::TypePtr> args;
+                for (const auto& arg : kind.typeArgs) args.push_back(recur(arg));
+                if (args == kind.typeArgs) return type;
+                return semantic::Type::named(kind.name, std::move(args));
+            } else if constexpr (std::is_same_v<K, semantic::ListType>) {
+                auto element = recur(kind.element);
+                return element == kind.element ? type : semantic::Type::list(element);
+            } else if constexpr (std::is_same_v<K, semantic::OptionalType>) {
+                auto inner = recur(kind.inner);
+                return inner == kind.inner ? type : semantic::Type::optional(inner);
+            } else if constexpr (std::is_same_v<K, semantic::MapType>) {
+                auto key = recur(kind.key);
+                auto value = recur(kind.value);
+                return key == kind.key && value == kind.value ? type : semantic::Type::map(key, value);
+            } else if constexpr (std::is_same_v<K, semantic::TupleType>) {
+                std::vector<semantic::TypePtr> elements;
+                for (const auto& element : kind.elements) elements.push_back(recur(element));
+                return elements == kind.elements ? type : semantic::Type::tuple(std::move(elements));
+            } else if constexpr (std::is_same_v<K, semantic::FuncType>) {
+                std::vector<semantic::TypePtr> params;
+                for (const auto& param : kind.params) params.push_back(recur(param));
+                auto result = recur(kind.result);
+                if (params == kind.params && result == kind.result) return type;
+                return semantic::Type::func(std::move(params), result, kind.block);
+            } else {
+                return type;
+            }
+        }, type->kind);
+    };
+    auto expandSignature = [&](semantic::Signature& signature) {
+        for (auto& param : signature.params) param = expand(param, 0);
+        signature.result = expand(signature.result, 0);
+    };
+    if (!interfaces.typeAliases.empty()) {
+        for (auto& [_, module] : interfaces.modules)
+            for (auto& [__, functions] : module.exports)
+                for (auto& function : functions) expandSignature(function.signature);
+        for (auto& [_, functions] : interfaces.receiverFunctions)
+            for (auto& function : functions) expandSignature(function.signature);
+    }
 
     kex::semantic::qualifyModuleAdtNames(interfaces);
     return interfaces;

@@ -5,6 +5,7 @@
 #include "kexi.hxx"
 #include "../ast/ast.hxx"
 #include "../semantic/analyzer.hxx"
+#include <functional>
 #include <string>
 
 namespace kex::beam {
@@ -29,5 +30,14 @@ struct CollectOptions {
 
 auto collectMetadata(const kex::ast::Program& program,
                      const CollectOptions& opts) -> KexiChunk;
+
+// Every bare type name in `chunk` — in its signatures, constants, types,
+// methods and record fields — replaced by what `qualify` makes of it. A
+// signature written `deps : [Dependency]` names the module's own
+// `Dependency` or the one a `using` brought in, but read on its own, by
+// another unit, a bare name says neither (docs/plan_separate_compilation.md).
+auto qualifyTypeNames(KexiChunk& chunk,
+                      const std::function<std::string(const std::string&)>& qualify)
+    -> void;
 
 } // namespace kex::beam
