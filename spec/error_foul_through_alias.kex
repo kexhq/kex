@@ -1,0 +1,21 @@
+# kex: check-only
+# A foul function reached through a `using ..., as:` alias is as foul as it is
+# written out in full. Read as written, `Entries.fetch` was looked up as a
+# module named `Entries`, found nothing, and passed as pure — in a `make`
+# function as in a plain one (kexhq/kex#584).
+using Ledger.Entries, as: Entries
+
+record Account do
+  name : String
+end
+
+make Account do
+  let entries -> [String] = Entries.fetch(@name)
+end
+
+let entriesOf(name: String) -> [String] = Entries.fetch(name)
+
+main do
+  IO.printLine(Account { name: "cash" }.entries)
+  IO.printLine(entriesOf("cash"))
+end

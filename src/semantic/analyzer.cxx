@@ -486,6 +486,13 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (sym && sym->isFoul && !m_inFoulContext) {
                 error(expr.location,
                     "Cannot call foul function '" + node.name + "' from pure context");
+            } else if (!sym && !m_inFoulContext) {
+                // A function a `using` brought in, called bare: as foul as
+                // it is called qualified (kexhq/kex#584).
+                if (const auto module = moduleImportingName(node.name);
+                    !module.empty() && isQualifiedCallFoul(module, node.name))
+                    error(expr.location,
+                        "Cannot call foul function '" + node.name + "' from pure context");
             }
             for (const auto& arg : node.args) {
                 if (arg) analyzeExpr(*arg);
@@ -789,7 +796,22 @@ auto Analyzer::isQualifiedCallFoul(const std::string& module,
     // module whose name ends in that segment, and `Mock.System.OS` would then
     // make every `System.OS` read foul. Missing a rejection is recoverable;
     // rejecting pure code because an unrelated module shares a segment is not.
-    return known(module);
+    if (known(module)) return true;
+    // An alias is not a guess: `using Store.Repo, as: Repo` names exactly
+    // one module, and `Repo.fetch` is its `fetch`. Read as written, every
+    // foul call through an alias passed as pure (kexhq/kex#584).
+    const auto dot = module.find('.');
+    const auto head = module.substr(0, dot);
+    for (auto it = m_usings.rbegin(); it != m_usings.rend(); ++it) {
+        const auto& using_ = **it;
+        if (!using_.alias || *using_.alias != head) continue;
+        std::string target;
+        for (const auto& part : using_.module.parts)
+            target += (target.empty() ? "" : ".") + part;
+        if (dot != std::string::npos) target += module.substr(dot);
+        return known(target);
+    }
+    return false;
 }
 
 auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
@@ -1068,6 +1090,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
             if constexpr (std::is_same_v<T, ast::FunctionCall>) {
                 auto* sym = m_symbols.lookup(n.name);
                 if (sym && sym->isFoul) {
+                    error(e.location,
+                        "Cannot call foul function '" + n.name + "' in a guard");
+                } else if (const auto module = sym ? std::string{} : moduleImportingName(n.name);
+                           !module.empty() && isQualifiedCallFoul(module, n.name)) {
                     error(e.location,
                         "Cannot call foul function '" + n.name + "' in a guard");
                 } else if (m_transitivelyFoul.count(n.name)) {
