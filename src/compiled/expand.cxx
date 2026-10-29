@@ -2991,14 +2991,24 @@ auto writeStoredRound(const std::filesystem::path& entry, const std::string& bod
     if (ec) fs::remove(staging, ec);
 }
 
+// When this process started: a file modified since may have changed after the
+// sandbox read it, and its stamp, taken as the round is written, would vouch
+// for content the round was not decided from.
+const auto processStarted = std::filesystem::file_time_type::clock::now();
+
 // The entry's text for a decided round, or nullopt for one that cannot be
-// kept: a value with no literal form.
+// kept: a value with no literal form, or a dependency changed while building.
 auto storedRoundText(const std::set<std::string>& dependencies,
                      const std::vector<interpreter::ValuePtr>& values,
                      const std::vector<std::string>& failures,
                      const RecordLayouts& layouts,
                      const std::unordered_map<std::string, std::string>& modules)
     -> std::optional<std::string> {
+    for (const auto& path : dependencies) {
+        std::error_code ec;
+        const auto modified = std::filesystem::last_write_time(path, ec);
+        if (!ec && modified >= processStarted) return std::nullopt;
+    }
     StoredRound round;
     std::ostringstream outcomes;
     outcomes << values.size() << " ";

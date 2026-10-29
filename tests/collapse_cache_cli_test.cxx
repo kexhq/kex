@@ -39,8 +39,13 @@ compiled do
   let label(name: String) -> String = "${greeting()} ${name}"
 
   foul stamp(name: String) -> String = "${ENV.get("KEX_COLLAPSE_PROBE", "unset")} ${name}"
+
+  # Pure as written, but the intrinsic reads a file the program is not made of.
+  let noted(name: String) -> String = "${Kex.Intrinsic.File.read(")KEX" +
+              (root / "note.txt").string() + R"KEX(").or("none")} ${name}"
 end
 )KEX");
+        write("note.txt", "one");
         // Each in a file of its own: a round that reads the environment is
         // not kept, and with it everything else it decided.
         write("app/main.kex", R"KEX(using Words.Build, only: [label]
@@ -53,6 +58,12 @@ end
 
 main do
   IO.printLine(stamp("kex"))
+end
+)KEX");
+        write("app/noted.kex", R"KEX(using Words.Build, only: [noted]
+
+main do
+  IO.printLine(noted("kex"))
 end
 )KEX");
     }
@@ -140,6 +151,16 @@ let greeting() = "second"
             text = package.run("two", "stamped.kex");
             assertTrue(text.find("two kex\n") != std::string::npos,
                        "a collapse that read ENV was kept for the next build: " + text);
+        });
+        it("never keep one that read a file, even through a pure function", []() {
+            Package package;
+            auto text = package.run("one", "noted.kex");
+            assertTrue(text.find("one kex\n") != std::string::npos,
+                       "unexpected first build: " + text);
+            package.write("note.txt", "two");
+            text = package.run("one", "noted.kex");
+            assertTrue(text.find("two kex\n") != std::string::npos,
+                       "a collapse that read a file was kept for the next build: " + text);
         });
     });
     describe("runs kept by their entry", []() {
