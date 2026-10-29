@@ -770,6 +770,28 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 interfaces.adts.push_back(std::move(imported));
             }
 
+    // A module can export a constructor of an ADT declared in another
+    // module (Units.Hour belongs to the prelude's TimeUnit). Resolve against
+    // all loaded ADTs, preserving the singleton refinement source interfaces
+    // provide, rather than widening Hour to TimeUnit before overload lookup.
+    for (auto& [_, module] : interfaces.modules)
+        for (auto& [name, functions] : module.exports)
+            for (auto& function : functions) {
+                const auto* result = std::get_if<kex::semantic::NamedType>(
+                    &function.signature.result->kind);
+                if (!result) continue;
+                for (const auto& adt : interfaces.adts) {
+                    if (result->name != adt.name) continue;
+                    const auto constructor = adt.constructorArities.find(name);
+                    if (constructor == adt.constructorArities.end()) continue;
+                    function.isConstructor = true;
+                    function.constructorOwner = adt.name;
+                    if (constructor->second == 0 && adt.typeParamCount == 0)
+                        function.signature.result = kex::semantic::Type::named(name);
+                    break;
+                }
+            }
+
     // `metadata.adts` only holds types that have constructors. The type
     // interface lists every declared type, so aliases such as
     // `type List<X> = [X]` are picked up here rather than being invisible.
