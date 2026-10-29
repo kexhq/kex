@@ -1,0 +1,2 @@
+spec/error_foul_through_alias.kex:13:42: error: Cannot call foul function 'Entries.fetch' from pure context
+spec/error_foul_through_alias.kex:16:56: error: Cannot call foul function 'Entries.fetch' from pure context

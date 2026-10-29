@@ -1,0 +1,16 @@
+# kex: check-only
+# A foul function `using` brought in, called by its bare name. Only a local
+# definition was looked up, so the call passed as pure (kexhq/kex#584).
+using Ledger.Entries
+
+record Account do
+  name : String
+end
+
+make Account do
+  let entries -> [String] = fetch(@name)
+end
+
+main do
+  IO.printLine(Account { name: "cash" }.entries)
+end
