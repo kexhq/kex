@@ -1,0 +1,8 @@
+# A module whose reads go outside the program: `fetch` is foul, so a pure
+# caller must be told so however it names it.
+module Ledger.Entries
+
+foul fetch(account: String) -> [String] do
+  IO.printLine("reading ${account}")
+  return [account]
+end
