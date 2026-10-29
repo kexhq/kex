@@ -3570,8 +3570,10 @@ auto runManifestKey(const std::string &flags, const std::string &filepath)
   std::error_code ec;
   const auto entry = std::filesystem::weakly_canonical(filepath, ec);
   if (ec) return std::nullopt;
+  // The compiler that made the kept modules too: the .beam cache below keys
+  // on it, but a run started from this entry never reaches that cache.
   return hexSha256("kex-run-by-entry-v1\n" + toolchainFingerprint() + "\n" +
-                   entry.string() + "\n" + flags);
+                   erlcIdentity() + "\n" + entry.string() + "\n" + flags);
 }
 
 auto runManifestDir(const std::string &key) -> std::filesystem::path {

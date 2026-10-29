@@ -9,7 +9,6 @@
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
-#include <map>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -60,20 +59,23 @@ auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) 
     defineIntrinsic(name, function->native);
 }
 
-// By category, the part of the name before `::`: every built-in of these
-// reads or changes something outside the program. Two of the pure categories
-// have one that reads a file.
+// By category, the part of the name before `::`: the built-ins of these only
+// compute, and every other one may read or change something outside the
+// program (a file, a socket, the clock, the environment, the terminal). Named
+// the other way round, a category nobody listed was taken for pure: `File`,
+// `Directory` and the TCP, TLS and UDP sockets were, so a collapse that read
+// a file was kept and replayed after the file changed. Two of the pure
+// categories have one that reads a file.
 auto Evaluator::watchOutside(const std::string& name, NativeFunc fn) -> NativeFunc {
-    static const std::unordered_set<std::string> outside{
-        "await", "Code", "die", "Env", "Evaluator", "Feed", "FileHandle", "FS",
-        "Interface", "IO", "Mock", "Net", "NetDNS", "NetHTTP", "NetHTTPClient",
-        "NetHTTPServer", "NetIP", "NetUnix", "NetWebSocket", "Node", "Process",
-        "Random", "Retry", "Shared", "Stream", "Supervisor", "System", "Task",
-        "Test", "Time",
+    static const std::unordered_set<std::string> pure{
+        "AST", "Atom", "Binary", "Bits", "Char", "Digest", "Float", "Fun",
+        "inspect", "inspected", "Integer", "Json", "Kex", "List", "Math", "Mod",
+        "Namespace", "Number", "Option", "Range", "Regex", "String", "Tuple",
+        "Type", "URI", "URL",
     };
     static const std::unordered_set<std::string> reads{"AST::parseFile", "Digest::fileSha"};
     const auto category = name.substr(0, name.find("::"));
-    if (!fn || (!outside.contains(category) && !reads.contains(name))) return fn;
+    if (!fn || (pure.contains(category) && !reads.contains(name))) return fn;
     return [this, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
         m_touchedOutside = true;
         return fn(std::move(args));
@@ -376,32 +378,12 @@ auto Evaluator::resolvePendingExports() -> void {
     }
 }
 
-namespace {
-// TEMP PROBE: exclusive time per category.
-struct ProbeScope {
-    using C = std::chrono::steady_clock;
-    static inline std::map<std::string, std::pair<double,int>> totals;
-    static inline std::vector<double>* children = nullptr;
-    std::string cat; C::time_point t = C::now(); std::vector<double> mine; std::vector<double>* parent;
-    explicit ProbeScope(std::string c) : cat(std::move(c)), parent(children) { children = &mine; }
-    ~ProbeScope() {
-        double el = std::chrono::duration<double, std::milli>(C::now() - t).count();
-        double ch = 0; for (double d : mine) ch += d;
-        totals[cat].first += el - ch; totals[cat].second++;
-        children = parent; if (parent) parent->push_back(el);
-    }
-};
-struct ProbeReport { ~ProbeReport() { if (std::getenv("KEX_PROBE")) for (auto& [k, v] : ProbeScope::totals) std::fprintf(stderr, "PROBE %-12s %6d x %8.0f ms\n", k.c_str(), v.second, v.first); } } probeReport;
-}
-
 auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
                                    const std::string& currentModule) -> std::string {
     if (m_moduleRegistry.contains(moduleName)) return moduleName;
 
-    std::optional<ProbeScope> resolveProbe(std::in_place, "resolve");
     module::Resolver resolver(m_moduleRoots);
     auto resolved = resolver.resolve(moduleName, currentModule);
-    resolveProbe.reset();
     if (!resolved) {
         if (module::Resolver::isForeignNamespace(moduleName))
             throw RuntimeError("Foreign module interop is not implemented: " + moduleName, loc);
@@ -452,7 +434,6 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     static std::unordered_map<std::string, ExpandedModule> expandedModules;
     std::string cacheKey;
     {
-        ProbeScope probe("stat");
         std::error_code ec;
         const auto size = std::filesystem::file_size(resolved->path, ec);
         const auto modified =
@@ -477,7 +458,6 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
             compiled::noteDependency(resolved->path);
         }
         path = std::make_shared<std::string>(std::move(resolved->path));
-        ProbeScope probe("parse+expand");
         std::ifstream input(*path);
         std::string source((std::istreambuf_iterator<char>(input)),
                            std::istreambuf_iterator<char>());
@@ -551,7 +531,6 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         auto savedEnv = m_env;
         m_env = m_globalEnv;
         try {
-            ProbeScope probe("items");
             for (const auto& item : ownedProgram->items) execTopLevel(item);
         } catch (...) {
             m_env = std::move(savedEnv);
@@ -794,7 +773,6 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
             if (imported->second.privateNames.contains(requested))
                 throw RuntimeError("cannot reference private name `" + requested
                                    + "` from " + moduleName, block.location);
-        ProbeScope probe("import");
         for (const auto& [name, value] : imported->second.exports) {
             // `as:` alone imports nothing.
             if (block.alias && block.onlyNames.empty()) break;
