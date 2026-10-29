@@ -168,6 +168,7 @@ auto importedFunction(const KexiExport& exported,
     result.backendArity = exported.beamArity;
     result.sourceModule = sourceModule;
     result.paramNames = exported.paramNames;
+    result.defaultSources = exported.defaultSources;
     TypeVarMap vars;
     std::vector<kex::semantic::TypePtr> params;
     for (const auto& param : exported.paramTypes)
@@ -192,6 +193,7 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.backendArity = receiver.beamArity;
     result.sourceModule = sourceModule;
     result.paramNames = receiver.paramNames;
+    result.defaultSources = receiver.defaultSources;
     result.isReceiverMethod = !receiver.moduleFunction;
     TypeVarMap vars;
     auto receiverSemType = semanticType(receiver.receiverType, vars);
@@ -656,6 +658,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                         qualKey + "/" + std::to_string(exp.beamArity));
                 if (!exp.paramNames.empty())
                     ext.exportParamNames[qualKey] = exp.paramNames;
+                if (!exp.defaultSources.empty())
+                    ext.exportDefaults[qualKey] = exp.defaultSources;
             }
         }
     }

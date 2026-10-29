@@ -1549,6 +1549,15 @@ auto fileExists(const std::string &path) -> bool {
   return probe.good();
 }
 
+// Defined with the prelude's other loaders below; lowering a unit on its own
+// (lowerUnitSeparately) needs them first.
+auto preludeExternalModules() -> const kex::ir::ExternalModules &;
+auto mergeExternalModules(const kex::ir::ExternalModules &base,
+                          const kex::ir::ExternalModules &overrides)
+    -> kex::ir::ExternalModules;
+auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout>;
+auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag>;
+
 namespace {
 
 auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
@@ -1996,6 +2005,103 @@ auto separateCheckRequested() -> bool {
   return value && *value && std::string(value) != "0";
 }
 
+// The entry file being built, which names the entry unit's file-local module
+// as the merged build names it.
+std::string g_separateEntryPath;
+
+// KEX_SEPARATE_CORE=<dir>, phase 3: a checked unit lowered on its own, with
+// its own analysis, against the prelude and the KexI of the units below it
+// (`registry`, which holds only those yet), its modules' Core Erlang written
+// to `dir` to be compared with the merged build's.
+auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &path,
+                         const kex::semantic::Analyzer &analyzer,
+                         const kex::beam::KexiRegistry &registry,
+                         const std::string &dir) -> void {
+  // A module this build compiles is described by its own interface. The
+  // prebuilt runtime has its own copy of an opt-in standard library module,
+  // laid out as the prelude build lays it out (`make Router` filed under
+  // `Kex.Net.HTTP.Router`, not `Kex.Net.HTTP`), and left in, it wins.
+  std::set<std::string> builtModules, builtAtoms;
+  for (const auto *module : registry.allLoadedModules()) {
+    builtModules.insert(module->chunk.metadata.sourceModule);
+    builtAtoms.insert(module->beamAtom);
+  }
+  auto prelude = preludeExternalModules();
+  const auto builtKey = [&](const std::string &key) {
+    const auto dot = key.rfind('.');
+    return dot != std::string::npos && builtModules.contains(key.substr(0, dot));
+  };
+  std::erase_if(prelude.exportToBeamFn, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.exportArity, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.exportParamNames, [&](const auto &entry) { return builtKey(entry.first); });
+  std::erase_if(prelude.foulExports, [&](const auto &key) { return builtKey(key); });
+  for (auto &[_, functions] : prelude.receiverFunctions)
+    std::erase_if(functions, [&](const auto &function) {
+      return builtAtoms.contains(function.moduleAtom);
+    });
+  auto externals = mergeExternalModules(prelude, registry.buildExternalModules());
+  // The merge lets a unit's providers of a name replace the prelude's, as a
+  // module loaded into the REPL does; here both stand, or `handle.feed` lost
+  // the prelude's foul FileHandle provider to FS.File's, and its context.
+  for (const auto &[name, providers] : prelude.receiverFunctions) {
+    auto &merged = externals.receiverFunctions[name];
+    for (const auto &provider : providers)
+      if (std::none_of(merged.begin(), merged.end(), [&](const auto &existing) {
+            return existing.moduleAtom == provider.moduleAtom &&
+                   existing.beamFunction == provider.beamFunction &&
+                   existing.beamArity == provider.beamArity;
+          }))
+        merged.push_back(provider);
+  }
+  auto layouts = loadPreludeRecordLayouts();
+  auto variants = loadPreludeVariantTags();
+  // Where each type's `make` functions are, for the runtime's dispatch on a
+  // value: its declaring module may have none, and another unit may.
+  std::map<std::string, std::string> methodOwners;
+  for (const auto *module : registry.allLoadedModules())
+    for (const auto &method : module->chunk.typeInterface.methods)
+      if (!method.moduleFunction && !method.typeOnly && method.receiverType &&
+          method.receiverType->kind == kex::beam::KexiType::Named)
+        methodOwners.try_emplace(method.receiverType->name, module->beamAtom);
+  const auto ownerOf = [&](const std::string &type) {
+    const auto found = methodOwners.find(type);
+    return found == methodOwners.end() ? std::string{} : found->second;
+  };
+  for (const auto *module : registry.allLoadedModules()) {
+    for (const auto &record : module->chunk.metadata.records) {
+      kex::ir::ExternalRecordLayout layout;
+      layout.name = record.tagAtom.empty() ? record.name : record.tagAtom;
+      layout.moduleAtom = module->beamAtom;
+      layout.methodOwner = ownerOf(layout.name);
+      layout.declaringModule = module->chunk.metadata.sourceModule;
+      for (const auto &field : record.fields) {
+        layout.fields.push_back(field.name);
+        layout.fieldDefaults.push_back(field.defaultSource);
+      }
+      layouts.push_back(std::move(layout));
+    }
+    for (const auto &adt : module->chunk.metadata.adts)
+      for (const auto &constructor : adt.constructors)
+        variants.push_back(
+            {constructor.tagAtom, constructor.arity, adt.name, ownerOf(adt.name)});
+  }
+  const auto stem = std::filesystem::path(path).stem().string();
+  try {
+    auto modules = kex::ir::lowerModules(
+        program, stem, path, &layouts, &externals, &analyzer.resolvedCalls(),
+        /*preferExternalReceivers=*/false, &variants, &analyzer.staticTypeOfCalls(),
+        &analyzer.typeMap());
+    std::filesystem::create_directories(dir);
+    for (auto &module : modules) {
+      kex::ir::insertUpgradePoints(module);
+      const auto emitted = kex::ir::emitCore(module);
+      std::ofstream(dir + "/" + emitted.moduleName + ".core") << emitted.source;
+    }
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "separate: %s: lowering failed: %s\n", path.c_str(), error.what());
+  }
+}
+
 auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps,
                           const std::vector<std::vector<std::string>> &units,
                           const kex::semantic::ImportedInterfaces *interfaces) -> void {
@@ -2031,8 +2137,24 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       for (auto &[__, functions] : module.exports)
         for (auto &function : functions)
           if (function.isReceiverMethod) function.visibleByReceiver = true;
+    // A module this build compiles is described by its own interface, not by
+    // the one the prelude derives from the standard library's source for an
+    // opt-in module: that one names where the module's functions would be
+    // in a merged program (`make Router` in `Net.HTTP`, filed under
+    // `Kex.Net.HTTP.Router`), and the merge keeps the first description.
+    auto preludeView = [&]() -> kex::semantic::ImportedInterfaces {
+      auto view = *interfaces;
+      for (const auto &[name, _] : below.modules) view.modules.erase(name);
+      for (auto &[__, functions] : view.receiverFunctions)
+        std::erase_if(functions, [&](const auto &function) {
+          return below.modules.contains(function.sourceModule);
+        });
+      return view;
+    };
+    // Taken before `below` is moved into the merge, which reads it.
+    auto prelude = interfaces ? preludeView() : kex::semantic::ImportedInterfaces{};
     const auto available =
-        interfaces ? kex::mergeSemanticInterfaces(*interfaces, std::move(below))
+        interfaces ? kex::mergeSemanticInterfaces(std::move(prelude), std::move(below))
                    : std::move(below);
     kex::semantic::Analyzer analyzer(&available);
     (void)analyzer.analyze(program);
@@ -2044,6 +2166,17 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                    diagnostic.location.line, diagnostic.location.column,
                    diagnostic.message.c_str());
     }
+    // Phase 3: the unit lowered on its own, against the prelude and the KexI
+    // of the units below it, as the REPL lowers code against a loaded unit.
+    const bool unitChecked =
+        std::none_of(analyzer.diagnostics().begin(), analyzer.diagnostics().end(),
+                     [](const auto &diagnostic) {
+                       return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
+                     });
+    if (const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
+        coreDir && *coreDir && unitChecked)
+      lowerUnitSeparately(program, isEntry ? g_separateEntryPath : unit.front(),
+                          analyzer, registry, coreDir);
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
       kex::beam::LoadedUnit described;
@@ -2574,6 +2707,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportArity[name] = arity;
   for (const auto &[name, names] : overrides.exportParamNames)
     result.exportParamNames[name] = names;
+  for (const auto &[name, defaults] : overrides.exportDefaults)
+    result.exportDefaults[name] = defaults;
   for (const auto &name : overrides.foulExports)
     result.foulExports.insert(name);
   for (const auto &name : overrides.capabilityModules)
@@ -6696,10 +6831,15 @@ int main(int argc, char *argv[]) {
           else
             ++it;
         }
+        // The separate check (and, with KEX_SEPARATE_CORE, its lowering)
+        // runs on the build's own dependencies too.
+        UnitGraph separateUnits;
+        g_separateEntryPath = filepath;
         beamDeps = resolveBeamDeps(
             program, moduleRootsFor(filepath),
             &preludeSemanticInterfaces(),
-            qualifiedModules);
+            qualifiedModules,
+            separateCheckRequested() ? &separateUnits : nullptr);
       }
 
       timings.mark("load dependencies");

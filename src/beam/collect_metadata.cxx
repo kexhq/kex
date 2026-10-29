@@ -2,6 +2,7 @@
 #include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
+#include <fstream>
 #include <functional>
 #include <unordered_set>
 
@@ -225,6 +226,37 @@ auto methodBeamArity(const kex::ast::FunctionDef& fd,
         : static_cast<int>(params.size()) + 1;
 }
 
+// A default as written: the bytes its expression spans in its file, "" for
+// none or for one no file holds.
+auto defaultSourceOf(const std::optional<kex::ast::ExprPtr>& value) -> std::string {
+    std::string source;
+    if (!value || !*value) return source;
+    const auto& location = (*value)->location;
+    if (location.startOffset < 0 || location.endOffset <= location.startOffset ||
+        location.file.empty())
+        return source;
+    std::ifstream file{std::string(location.file), std::ios::binary};
+    file.seekg(location.startOffset);
+    source.resize(static_cast<size_t>(location.endOffset - location.startOffset));
+    if (!file.read(source.data(), static_cast<std::streamsize>(source.size())))
+        source.clear();
+    return source;
+}
+
+// Each of `params` past the first `skip`, its default as written.
+auto defaultSourcesOf(const std::vector<kex::ast::Param>& params, size_t skip)
+    -> std::vector<std::string> {
+    std::vector<std::string> sources;
+    bool any = false;
+    for (size_t i = skip; i < params.size(); ++i) {
+        auto source = defaultSourceOf(params[i].defaultValue);
+        any = any || !source.empty();
+        sources.push_back(std::move(source));
+    }
+    if (!any) sources.clear();
+    return sources;
+}
+
 // How many of `params`, past the first `skip`, end the list with a default.
 auto trailingDefaults(const std::vector<kex::ast::Param>& params, size_t skip) -> int {
     int count = 0;
@@ -295,8 +327,10 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
     if (!fd.clauses.empty())
         for (const auto& p : fd.clauses[clause].params)
             exp.paramNames.push_back(p.name ? *p.name : "");
-    if (!fd.clauses.empty())
+    if (!fd.clauses.empty()) {
         exp.defaultedParams = trailingDefaults(fd.clauses[clause].params, 0);
+        exp.defaultSources = defaultSourcesOf(fd.clauses[clause].params, 0);
+    }
     iface.exports.push_back(std::move(exp));
 }
 
@@ -383,6 +417,7 @@ auto receiverFunctionFromDef(
         for (size_t i = skipParams; i < params.size(); i++)
             method.paramNames.push_back(params[i].name ? *params[i].name : "");
         method.defaultedParams = trailingDefaults(params, skipParams);
+        method.defaultSources = defaultSourcesOf(params, skipParams);
     }
     method.beamFunction = receiverIsTrait && !firstParamIsReceiver
         ? fd.name + "/" + receiverTrait
@@ -841,6 +876,7 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
         KexiRecordField rf;
         rf.name = f.name;
         rf.type = convertTypeExpr(f.type);
+        rf.defaultSource = defaultSourceOf(f.defaultValue);
         rec.fields.push_back(std::move(rf));
     }
     meta.records.push_back(std::move(rec));

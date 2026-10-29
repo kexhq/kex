@@ -10036,6 +10036,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     false,
                     resolved->paramNames,
                 };
+                target.defaultSources = resolved->defaultSources;
                 for (std::size_t i = 0; i < matched.params.size(); ++i) {
                     const auto resolvedParam = resolve(matched.params[i]);
                     const auto addRequiredDictionary = [&](const std::string& traitName) {

@@ -24,6 +24,9 @@ struct ImportedFunction {
     int backendArity = 0;
     // Source parameter names excluding the receiver for receiver functions.
     std::vector<std::string> paramNames;
+    // Each parameter's default as source text (KexiExport::defaultSources),
+    // empty when its interface was read from source instead.
+    std::vector<std::string> defaultSources;
     Signature signature;
     // Source module that owns this export. Receiver functions are copied into
     // a name-indexed table, so retaining ownership here is what lets semantic
@@ -78,6 +81,9 @@ struct ResolvedCallTarget {
     // Source parameter names excluding the receiver when passesReceiver is
     // true; otherwise names all function parameters.
     std::vector<std::string> paramNames;
+    // Their defaults as source text, for a callee compiled apart: lowering
+    // fills a missing argument with the parsed default.
+    std::vector<std::string> defaultSources;
     // For a make-block winner compiled in the current unit, lowering chooses
     // the local implementation name. The full checked signature keeps
     // same-receiver, same-name/arity overloads distinct without teaching the

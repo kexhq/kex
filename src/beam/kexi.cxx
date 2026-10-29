@@ -248,6 +248,9 @@ auto exportToTerm(const KexiExport& exp) -> TermPtr {
     for (const auto& n : exp.paramNames) names.push_back(Term::binary(n));
     fields.push_back(Term::list(std::move(names)));
     fields.push_back(Term::integer(exp.defaultedParams));
+    std::vector<TermPtr> defaults;
+    for (const auto& source : exp.defaultSources) defaults.push_back(Term::binary(source));
+    fields.push_back(Term::list(std::move(defaults)));
     return Term::tuple(std::move(fields));
 }
 
@@ -264,6 +267,9 @@ auto termToExport(const TermPtr& term) -> KexiExport {
     for (const auto& n : t[6]->asList())
         e.paramNames.push_back(n->asBinaryStr());
     if (t.size() > 7) e.defaultedParams = static_cast<int>(t[7]->asInt());
+    if (t.size() > 8)
+        for (const auto& source : t[8]->asList())
+            e.defaultSources.push_back(source->asBinaryStr());
     return e;
 }
 
@@ -322,6 +328,9 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     fields.push_back(Term::integer(m.defaultedParams));
     fields.push_back(Term::atom(m.isSlot ? "true" : "false"));
     fields.push_back(Term::atom(m.moduleFunction ? "true" : "false"));
+    std::vector<TermPtr> defaults;
+    for (const auto& source : m.defaultSources) defaults.push_back(Term::binary(source));
+    fields.push_back(Term::list(std::move(defaults)));
     return Term::tuple(std::move(fields));
 }
 
@@ -342,6 +351,9 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     if (t.size() > 9) m.defaultedParams = static_cast<int>(t[9]->asInt());
     if (t.size() > 10) m.isSlot = t[10]->isAtom("true");
     if (t.size() > 11) m.moduleFunction = t[11]->isAtom("true");
+    if (t.size() > 12)
+        for (const auto& source : t[12]->asList())
+            m.defaultSources.push_back(source->asBinaryStr());
     return m;
 }
 
@@ -359,7 +371,10 @@ auto termToCompanion(const TermPtr& term) -> KexiCompanion {
 auto recordToTerm(const KexiRecord& r) -> TermPtr {
     std::vector<TermPtr> fields;
     for (const auto& f : r.fields)
-        fields.push_back(Term::tuple({Term::binary(f.name), typeToTerm(f.type)}));
+        fields.push_back(f.defaultSource.empty()
+            ? Term::tuple({Term::binary(f.name), typeToTerm(f.type)})
+            : Term::tuple({Term::binary(f.name), typeToTerm(f.type),
+                           Term::binary(f.defaultSource)}));
     return Term::tuple({Term::binary(r.name),
                         Term::binary(r.tagAtom.empty() ? r.name : r.tagAtom),
                         Term::list(std::move(fields))});
@@ -375,7 +390,8 @@ auto termToRecord(const TermPtr& term) -> KexiRecord {
     r.tagAtom = tagged ? t[1]->asBinaryStr() : r.name;
     for (const auto& f : t[tagged ? 2 : 1]->asList()) {
         auto& fe = f->asTuple();
-        r.fields.push_back({fe[0]->asBinaryStr(), termToType(fe[1])});
+        r.fields.push_back({fe[0]->asBinaryStr(), termToType(fe[1]),
+                            fe.size() > 2 ? fe[2]->asBinaryStr() : std::string{}});
     }
     return r;
 }

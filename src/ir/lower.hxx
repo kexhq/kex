@@ -50,6 +50,9 @@ struct ExternalModules {
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
     std::unordered_map<std::string, std::vector<std::string>> exportParamNames;
+    // Imported exports' defaults as source text, for one compiled apart
+    // (KexiExport::defaultSources), by the same key.
+    std::unordered_map<std::string, std::vector<std::string>> exportDefaults;
     // Imported exports that are `foul`. A foul function takes the capability
     // context, so a call into one has to append it — without this a consumer
     // cannot know that the prelude's `Task.start` is start/2 rather than
@@ -84,6 +87,10 @@ struct ExternalVariantTag {
     std::string tag;
     int arity = 0;
     std::string owner;
+    // The module holding the type's `make` functions, when it is a unit of
+    // this build compiled apart; empty leaves it to this module, which
+    // forwards what it lacks to the prelude.
+    std::string methodOwner;
 };
 
 struct ExternalRecordLayout {
@@ -91,6 +98,13 @@ struct ExternalRecordLayout {
     std::vector<std::string> fields;
     // BEAM module that owns the record's field accessors.
     std::string moduleAtom;
+    // As ExternalVariantTag::methodOwner.
+    std::string methodOwner;
+    // Each field's default as source text, "" for none, and the module the
+    // record is declared in, which a default is read in: a record of a unit
+    // compiled apart has no AST here to take them from.
+    std::vector<std::string> fieldDefaults;
+    std::string declaringModule;
 };
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
