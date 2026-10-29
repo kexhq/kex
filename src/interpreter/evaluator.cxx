@@ -49,7 +49,7 @@ auto Evaluator::defineIntrinsic(const std::string& name, NativeFunc fn) -> void 
     if (name.find("::") == std::string::npos)
         throw std::logic_error("intrinsic identity must be category-qualified: " + name);
     auto value = std::make_shared<Value>();
-    value->data = FunctionValue{name, std::move(fn)};
+    value->data = FunctionValue{name, watchOutside(name, std::move(fn))};
     m_intrinsicEnv->define(name, std::move(value));
 }
 
@@ -59,17 +59,41 @@ auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) 
     defineIntrinsic(name, function->native);
 }
 
+// By category, the part of the name before `::`: the built-ins of these only
+// compute, and every other one may read or change something outside the
+// program (a file, a socket, the clock, the environment, the terminal). Named
+// the other way round, a category nobody listed was taken for pure: `File`,
+// `Directory` and the TCP, TLS and UDP sockets were, so a collapse that read
+// a file was kept and replayed after the file changed. Two of the pure
+// categories have one that reads a file.
+auto Evaluator::watchOutside(const std::string& name, NativeFunc fn) -> NativeFunc {
+    static const std::unordered_set<std::string> pure{
+        "AST", "Atom", "Binary", "Bits", "Char", "Digest", "Float", "Fun",
+        "inspect", "inspected", "Integer", "Json", "Kex", "List", "Math", "Mod",
+        "Namespace", "Number", "Option", "Range", "Regex", "String", "Tuple",
+        "Type", "URI", "URL",
+    };
+    static const std::unordered_set<std::string> reads{"AST::parseFile", "Digest::fileSha"};
+    const auto category = name.substr(0, name.find("::"));
+    if (!fn || (pure.contains(category) && !reads.contains(name))) return fn;
+    return [this, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
+        m_touchedOutside = true;
+        return fn(std::move(args));
+    };
+}
+
 auto Evaluator::defineModule(const std::string& name) -> void {
     m_globalEnv->define(name, Value::module(name));
 }
 
 auto Evaluator::definePublic(const std::string& name, NativeFunc fn) -> void {
     auto val = std::make_shared<Value>();
-    val->data = FunctionValue{name, std::move(fn)};
+    val->data = FunctionValue{name, watchOutside(name, std::move(fn))};
     m_globalEnv->define(name, val);
 }
 
 auto Evaluator::defineDual(const std::string& name, NativeFunc fn) -> void {
+    fn = watchOutside(name, std::move(fn));
     auto val = std::make_shared<Value>();
     val->data = FunctionValue{name, fn};
     m_globalEnv->define(name, val);
@@ -126,7 +150,19 @@ auto Evaluator::evaluateFunction(
             execTopLevel(item);
         }
         resolvePendingExports();
+        return evaluateLoadedFunction(name, std::move(args), timeout);
+    } catch (...) {
+        m_deadline.reset();
+        throw;
+    }
+}
 
+auto Evaluator::evaluateLoadedFunction(
+    const std::string& name,
+    std::vector<ValuePtr> args,
+    std::chrono::milliseconds timeout) -> ValuePtr {
+    m_deadline = std::chrono::steady_clock::now() + timeout;
+    try {
         // Process termination is meaningful at runtime but must become an
         // ordinary validator crash during compilation, never terminate the
         // compiler process.
@@ -157,7 +193,7 @@ auto Evaluator::evaluateFunction(
 // scheduler — for the same reason evaluateFunction's call does, since
 // compile-time code may touch anything the runtime offers and the fiber
 // machinery has to be live.
-auto Evaluator::runCompileTime(const ast::Program& program,
+auto Evaluator::runCompileTime(const ast::Program* program,
                                std::chrono::milliseconds timeout,
                                const std::function<void()>& produce) -> void {
     m_deadline = std::chrono::steady_clock::now() + timeout;
@@ -171,12 +207,14 @@ auto Evaluator::runCompileTime(const ast::Program& program,
         defineIntrinsic("System::exit", blockedTermination);
 
         m_scheduler->runToCompletion(
-            [this, &program, &produce]() -> ValuePtr {
-                for (const auto& item : program.items) {
-                    checkDeadline();
-                    execTopLevel(item);
+            [this, program, &produce]() -> ValuePtr {
+                if (program) {
+                    for (const auto& item : program->items) {
+                        checkDeadline();
+                        execTopLevel(item);
+                    }
+                    resolvePendingExports();
                 }
-                resolvePendingExports();
                 produce();
                 return Value::unit();
             },
@@ -205,7 +243,7 @@ auto Evaluator::evaluateConstants(
     const std::vector<std::string>& names,
     std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> values;
-    runCompileTime(program, timeout, [&] {
+    runCompileTime(&program, timeout, [&] {
         values.reserve(names.size());
         for (const auto& name : names) {
             checkDeadline();
@@ -217,6 +255,21 @@ auto Evaluator::evaluateConstants(
 
 auto Evaluator::evaluateExpressions(
     const ast::Program& program,
+    const std::vector<ExpressionRequest>& requests,
+    std::chrono::milliseconds timeout,
+    std::vector<std::string>* reasons) -> std::vector<ValuePtr> {
+    return evaluateRequests(&program, requests, timeout, reasons);
+}
+
+auto Evaluator::evaluateMoreExpressions(
+    const std::vector<ExpressionRequest>& requests,
+    std::chrono::milliseconds timeout,
+    std::vector<std::string>* reasons) -> std::vector<ValuePtr> {
+    return evaluateRequests(nullptr, requests, timeout, reasons);
+}
+
+auto Evaluator::evaluateRequests(
+    const ast::Program* program,
     const std::vector<ExpressionRequest>& requests,
     std::chrono::milliseconds timeout,
     std::vector<std::string>* reasons) -> std::vector<ValuePtr> {
@@ -374,6 +427,9 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     struct ExpandedModule {
         std::shared_ptr<std::string> path;
         std::shared_ptr<ast::Program> program;
+        // The files its expansion read (compiled::DependencyRecorder),
+        // repeated to whoever loads it from here instead.
+        std::set<std::string> dependencies;
     };
     static std::unordered_map<std::string, ExpandedModule> expandedModules;
     std::string cacheKey;
@@ -387,13 +443,20 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
                    std::to_string(static_cast<long long>(modified));
         for (const auto& root : m_moduleRoots) cacheKey += "|" + root;
     }
+    compiled::noteDependency(resolved->path);
     std::shared_ptr<std::string> path;
     std::shared_ptr<ast::Program> program;
     if (const auto cached = expandedModules.find(cacheKey);
         cached != expandedModules.end()) {
         path = cached->second.path;
         program = cached->second.program;
+        compiled::noteDependencies(cached->second.dependencies);
     } else {
+        std::optional<compiled::DependencyRecorder> recorder;
+        if (compiled::recordingDependencies()) {
+            recorder.emplace();
+            compiled::noteDependency(resolved->path);
+        }
         path = std::make_shared<std::string>(std::move(resolved->path));
         std::ifstream input(*path);
         std::string source((std::istreambuf_iterator<char>(input)),
@@ -447,7 +510,9 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
                                        diagnostic.message,
                                    diagnostic.location);
             }
-            expandedModules.emplace(cacheKey, ExpandedModule{path, program});
+            expandedModules.emplace(
+                cacheKey, ExpandedModule{path, program,
+                                         recorder ? recorder->files() : std::set<std::string>{}});
         }
     }
 
@@ -1345,6 +1410,8 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
             ~ModuleScopeGuard() { current = std::move(saved); }
         } guard{m_currentModule, m_currentModule};
         if (!moduleScope.empty()) m_currentModule = moduleScope;
+        for (const auto* candidateDef : m_functionDefs.at(regName))
+            if (candidateDef->isFoul) m_touchedOutside = true;
         std::set<std::string> typedSignatures;
         for (const auto* candidateDef : m_functionDefs.at(regName))
             for (const auto& candidateClause : candidateDef->clauses) {

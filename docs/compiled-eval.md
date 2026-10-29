@@ -110,6 +110,15 @@ The compiler sees that `userId` isn't available at compile time, so it:
 3. The `.emit()` body builds `"... WHERE id = $1"` and puts `userId` in the params list
 4. At runtime, the original `userId` identifier is referenced in the params array
 
+A map bound to a name first is as known as one written in place, since a binding never changes. Its keys reach the builder, and its values are the runtime placeholders. Each value is still computed once, in order, where the map is bound:
+
+```kex
+let row = { id: id, created_at: Clock.milliseconds() }
+Database.insert(Users).values(row)   # collapses to "INSERT INTO users (created_at, id) ..."
+```
+
+A name bound again after the map (`let`, `var`, a block parameter, a pattern) is left for runtime, as is a map that arrives as a parameter.
+
 ## Trigger Convention
 
 `.emit()` is not a language keyword — it's a naming convention. The actual rule is:
@@ -206,6 +215,12 @@ The result of `.emit()` must have a concrete type known at compile time. The typ
 ### Error reporting
 
 If compile-time evaluation fails (type mismatch, assertion, step limit), the error points back to the original call site in user code, not into the framework's compiled block internals (unless `--verbose` is passed).
+
+### Kept between builds
+
+A build (`kex --compile`, `--check`, running a file) keeps what each collapse evaluated in the cache (`$KEX_CACHE`, else `$XDG_CACHE_HOME/kex`, else `~/.cache/kex`; `KEX_CACHE=off` turns it off), and the next build reuses it instead of evaluating again. An entry holds the evaluated values, reified again on the way back in, and lists every file it was made from: the file itself, templates it embeds, the modules whose constants it uses, and every module the evaluation loaded, with theirs. Any of them changing, or the compiler or the standard library changing, makes the next build evaluate again.
+
+An evaluation that reached outside the program — a `foul` function, or a built-in that reads the environment, files, the clock, processes or the network, such as `ENV.get()` — is never kept, so it runs again on every build. The REPL and the language server keep nothing between runs.
 
 ## Relationship to Existing `compiled` Features
 

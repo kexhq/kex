@@ -4316,10 +4316,9 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     }
     // Function definition (possibly splice: let %name(...) = ...)
     if (check(TokenType::Let) || check(TokenType::Foul)) {
-      bool isFoul = check(TokenType::Foul);
-      if (isFoul)
-        advance();
-      block->items.push_back(parseFunctionDef(isFoul));
+      // parseFunctionDef reads the `foul` itself: taking it here first left
+      // it expecting a second one, so no `foul` in a `compiled do` parsed.
+      block->items.push_back(parseFunctionDef(check(TokenType::Foul)));
     }
     // make Block inside compiled
     else if (check(TokenType::Make)) {

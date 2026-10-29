@@ -65,7 +65,7 @@ auto buildSyntaxTree(const Builder& builder, const std::vector<Token>& tokens,
         const auto first = static_cast<size_t>(firstIt - tokens.begin());
         const auto end = static_cast<size_t>(endIt - tokens.begin());
         if (first >= end) continue;
-        ranges.push_back({span.kind, first, end, order});
+        ranges.push_back({span.kind(), first, end, order});
     }
 
     // Outer before inner: earlier start first, then the longer range. Two

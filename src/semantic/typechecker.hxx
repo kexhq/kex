@@ -438,6 +438,11 @@ private:
     int m_clauseVarMark = std::numeric_limits<int>::max();
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
+    // resolveRecordName's last guess, by bare name: the imported record a
+    // name is the unique suffix of, if any. It depends on nothing but the
+    // interfaces, which are fixed for the checker's life, and a name that
+    // nothing else claims (`String`, a type parameter) asked it on every use.
+    mutable std::unordered_map<std::string, std::optional<std::string>> m_importedRecordSuffixes;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;

@@ -505,6 +505,53 @@ int main() {
                         "only the runtime chain should still call scaled");
         });
 
+        it("collapses a builder given a map bound to a name", []() {
+            // `let row = {...}` then `.values(row)` is how Slick wrote its
+            // inserts, and to the collapser `row` was one opaque runtime
+            // value: every such insert stayed a runtime chain. The binding's
+            // keys are known, so it collapses like the map written in place;
+            // a map that arrives as a parameter still cannot.
+            const std::string source =
+                "module Rows do\n"
+                "  compiled do\n"
+                "    let columns(row: {Atom: Any}) -> String = "
+                "row.keys.map { |key| \"${key}\" }.join(\",\")\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                "let bound(x: Integer, y: Integer) -> String do\n"
+                "  let row = { a: x, b: y }\n"
+                "  Rows.columns(row)\n"
+                "end\n"
+                "\n"
+                "let given(row: {Atom: Any}) -> String = Rows.columns(row)\n"
+                "\n"
+                "main do\n"
+                "  IO.printLine(bound(1, 2))\n"
+                "  IO.printLine(given({ c: 3 }))\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            std::vector<kex::compiled::CollapseNote> report;
+            kex::compiled::ExpandOptions options;
+            options.report = &report;
+            assertTrue(kex::compiled::expand(program, diagnostics, options),
+                       "expansion should succeed");
+            int collapsed = 0;
+            for (const auto& note : report) collapsed += note.collapsed ? 1 : 0;
+            assertEqual(static_cast<int>(report.size()), 2,
+                        "both calls should be collapse candidates");
+            assertEqual(collapsed, 1, "only the bound map should collapse");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+                           .source;
+            assertEqual(countOccurrences(out, "apply 'Rows.columns'"), 1,
+                        "only the parameter's call should still run the builder");
+        });
+
         it("collapses through a string argument and a nullary compiled function",
            []() {
             // Two things that both looked fine and both silently disabled

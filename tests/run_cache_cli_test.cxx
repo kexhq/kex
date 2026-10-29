@@ -120,15 +120,15 @@ int main() {
     });
 
     describe("Run cache — Kex.embed reads outside a `compiled do` block", []() {
-        it("never caches, so the embedded file's current content always wins", []() {
+        it("keeps the run, and the embedded file's current content still wins", []() {
             // `Template.text`/`Template.html` call `Kex.embed` directly, with
             // no `compiled do ... end` wrapper for `sourceMentionsCompiledBlock`
             // to see — the cache key used to be blind to this input entirely,
             // so the SECOND run silently kept serving the first run's embedded
-            // text even after the file on disk changed. The fix opts an
-            // embed-calling source out of the run cache entirely, the same way
-            // an actual `compiled do` block already does: no entry is ever
-            // written for it, so there is nothing stale to serve.
+            // text even after the file on disk changed. The content-addressed
+            // cache still writes nothing for such a source; the run is kept by
+            // its entry instead, with the embedded file among the files it was
+            // built from, so a changed file means a fresh build.
             char cacheTmp[] = "/tmp/kex_run_cache_embed_test_XXXXXX";
             std::string cacheDir = mkdtemp(cacheTmp);
             auto path = writeTempSource(
@@ -142,9 +142,8 @@ int main() {
             { std::ofstream f(embedPath); f << "version one"; }
             auto first = runKex(cacheDir, path);
             assertEqual(first, std::string("version one"));
-            assertEqual(runCacheEntryCount(cacheDir), size_t{0},
-                        "a `Kex.embed` call must opt the run out of the cache "
-                        "entirely, exactly like a `compiled do` block does");
+            assertEqual(runCacheEntryCount(cacheDir), size_t{1},
+                        "the run should be kept by its entry, and only so");
 
             { std::ofstream f(embedPath); f << "version two"; }
             auto second = runKex(cacheDir, path);

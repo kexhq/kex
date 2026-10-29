@@ -1,0 +1,46 @@
+# A map bound to a name and handed to a compiled builder collapses as if it
+# were written in place: the builder sees its keys, and its values stay the
+# runtime values they were. Each value is still computed once, in order, where
+# the map was bound — not again where the builder reads it, however many
+# times that is — and the name still holds the same map for anything else.
+module Rows do
+  compiled do
+    let columns(row: {Atom: Any}) -> String = row.keys.map { |key| "${key}" }.join(",")
+  end
+end
+
+foul trace(label: String, value: Integer) -> Integer do
+  IO.printLine("computing ${label}")
+  return value
+end
+
+# Collapsed: the keys are known, the values are runtime placeholders.
+foul bound(x: Integer, y: Integer) -> String do
+  let row = { a: trace("a", x), b: trace("b", y) }
+  IO.printLine("bound")
+  return Rows.columns(row)
+end
+
+# The same map read twice by the builder and once more besides.
+foul shared(x: Integer) -> String do
+  let row = { first: trace("first", x), second: x + 1 }
+  let both = "${Rows.columns(row)} ${Rows.columns(row)}"
+  return "${both} ${row.count}"
+end
+
+# Bound again, so `row` below is not the map: left as it was.
+foul rebound(x: Integer) -> String do
+  let row = { a: x }
+  let pick = do |row| Rows.columns(row) end
+  return pick({ z: x })
+end
+
+# Not a map known here: kept for runtime, and still right.
+let given(row: {Atom: Any}) -> String = Rows.columns(row)
+
+main do
+  IO.printLine(bound(1, 2))
+  IO.printLine(shared(5))
+  IO.printLine(rebound(7))
+  IO.printLine(given({ c: 3 }))
+end
