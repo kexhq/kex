@@ -225,6 +225,13 @@ auto methodBeamArity(const kex::ast::FunctionDef& fd,
         : static_cast<int>(params.size()) + 1;
 }
 
+// How many of `params`, past the first `skip`, end the list with a default.
+auto trailingDefaults(const std::vector<kex::ast::Param>& params, size_t skip) -> int {
+    int count = 0;
+    for (size_t i = params.size(); i > skip && params[i - 1].defaultValue; --i) ++count;
+    return count;
+}
+
 // A function folded from several typed declarations exports one entry per
 // signature it declares (`clause` picks which), as separate declarations did.
 void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
@@ -288,6 +295,8 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
     if (!fd.clauses.empty())
         for (const auto& p : fd.clauses[clause].params)
             exp.paramNames.push_back(p.name ? *p.name : "");
+    if (!fd.clauses.empty())
+        exp.defaultedParams = trailingDefaults(fd.clauses[clause].params, 0);
     iface.exports.push_back(std::move(exp));
 }
 
@@ -373,6 +382,7 @@ auto receiverFunctionFromDef(
         const auto& params = fd.clauses[clause].params;
         for (size_t i = skipParams; i < params.size(); i++)
             method.paramNames.push_back(params[i].name ? *params[i].name : "");
+        method.defaultedParams = trailingDefaults(params, skipParams);
     }
     method.beamFunction = receiverIsTrait && !firstParamIsReceiver
         ? fd.name + "/" + receiverTrait
@@ -389,6 +399,7 @@ void addReceiverFunction(const kex::ast::FunctionDef& fd,
                          size_t clause = 0) {
     auto method = receiverFunctionFromDef(fd, std::move(receiverType), analysis,
                                           firstParamIsReceiver, clause);
+    method.moduleFunction = firstParamIsReceiver;
     meta.methodOwnership.push_back({method.name, method.beamFunction});
     iface.methods.push_back(std::move(method));
 }
@@ -613,6 +624,7 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
     auto addWithSigPatch = [&](const kex::ast::FunctionDef& fd, size_t clause) {
         addReceiverFunction(fd, receiverType, iface, meta, analysis, false,
                             clause);
+        iface.methods.back().isSlot = md.isServing && fd.isSlot;
         auto it = standaloneSigs.find(fd.name);
         if (it == standaloneSigs.end()) return;
         auto method = std::move(iface.methods.back());
@@ -735,9 +747,12 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     // Transparent aliases carry their body too: without it an importing
     // module saw `FS.FilePath` as an opaque nominal name and a `{String:
     // String}` literal failed to match a `Map<FS.FilePath, String>` field.
+    // So do structural ones (`type Plug = WebRequest -> WebRequest`).
     if (td.variants && !td.variants->empty() &&
         (td.isDistinct || kex::isTransparentTypeAlias(td)))
         te.backingType = convertTypeExpr(td.variants->front());
+    else if (const auto* target = kex::aliasTarget(td))
+        te.backingType = convertTypeExprImpl(*target);
     // A union of atom literals (`type FileKind = :file | :directory`) is an
     // alias too, and without its body an importer saw an opaque `FileKind`
     // that no `:file` could satisfy.
@@ -887,8 +902,27 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                         sig->typeArgs.size() !=
                             fd.clauses[clause].params.size())
                         continue;
+                    // The signature names the receiver too (`get : String
+                    // -> Plug -> Entry`): it types the receiver, which was
+                    // left unknown — matching every receiver — when the
+                    // definition wrote no type of its own, and the rest
+                    // types the parameters after it.
                     auto overload = method;
-                    patchMethodWithSig(overload, sig);
+                    if (mentionsUnknown(overload.receiverType) &&
+                        !sig->typeArgs.empty() &&
+                        !mentionsUnknown(sig->typeArgs.front())) {
+                        overload.receiverType =
+                            std::make_shared<KexiType>(*sig->typeArgs.front());
+                        auto& receiver = overload.receiverType;
+                        if (receiver->kind == KexiType::Named &&
+                            receiver->name.find('.') == std::string::npos &&
+                            ownedByModule(receiver->name, modulePath, iface, meta))
+                            receiver->name = modulePath + "." + receiver->name;
+                    }
+                    auto rest = std::make_shared<KexiType>(*sig);
+                    if (!rest->typeArgs.empty())
+                        rest->typeArgs.erase(rest->typeArgs.begin());
+                    patchMethodWithSig(overload, rest);
                     iface.methods.push_back(std::move(overload));
                     added = true;
                 }
@@ -1088,6 +1122,10 @@ auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                               KexiTypeInterface& iface,
                               KexiStructuralMetadata& meta,
                               const kex::semantic::Analyzer* analysis) -> bool {
+    // Every part: a module can be declared more than once (`capability
+    // Metro.Storage` beside `module Metro.Storage`, or `module Float` in two
+    // files), and stopping at the first left the rest out of its interface.
+    bool found = false;
     for (const auto& item : body)
         if (auto* module =
                 std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
@@ -1095,13 +1133,13 @@ auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             if ((*module)->name == moduleName) {
                 collectFromModuleBody((*module)->body, iface, meta, analysis,
                                       moduleName);
-                return true;
+                found = true;
+            } else if (findAndCollectModuleBody((*module)->body, moduleName,
+                                                iface, meta, analysis)) {
+                found = true;
             }
-            if (findAndCollectModuleBody((*module)->body, moduleName, iface,
-                                         meta, analysis))
-                return true;
         }
-    return false;
+    return found;
 }
 
 // Find a top-level or nested ModuleDef by its qualified source name.
@@ -1110,6 +1148,7 @@ auto findAndCollectModule(const kex::ast::Program& program,
                           KexiTypeInterface& iface,
                           KexiStructuralMetadata& meta,
                           const kex::semantic::Analyzer* analysis) -> bool {
+    bool found = false;
     for (const auto& item : program.items)
         if (auto* module =
                 std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
@@ -1117,13 +1156,13 @@ auto findAndCollectModule(const kex::ast::Program& program,
             if ((*module)->name == moduleName) {
                 collectFromModuleBody((*module)->body, iface, meta, analysis,
                                       moduleName);
-                return true;
+                found = true;
+            } else if (findAndCollectModuleBody((*module)->body, moduleName,
+                                                iface, meta, analysis)) {
+                found = true;
             }
-            if (findAndCollectModuleBody((*module)->body, moduleName, iface,
-                                         meta, analysis))
-                return true;
         }
-    return false;
+    return found;
 }
 
 } // namespace
@@ -1206,6 +1245,36 @@ auto collectMetadata(const kex::ast::Program& program,
 
     chunk.interfaceHash = computeInterfaceHash(chunk);
     return chunk;
+}
+
+namespace {
+auto qualifyType(const KexiTypePtr& type,
+                 const std::function<std::string(const std::string&)>& qualify) -> void {
+    if (!type) return;
+    if (type->kind == KexiType::Named && type->name.find('.') == std::string::npos)
+        type->name = qualify(type->name);
+    for (const auto& arg : type->typeArgs) qualifyType(arg, qualify);
+    qualifyType(type->result, qualify);
+}
+} // namespace
+
+auto qualifyTypeNames(KexiChunk& chunk,
+                      const std::function<std::string(const std::string&)>& qualify)
+    -> void {
+    auto& iface = chunk.typeInterface;
+    for (auto& exported : iface.exports) {
+        for (auto& param : exported.paramTypes) qualifyType(param, qualify);
+        qualifyType(exported.returnType, qualify);
+    }
+    for (auto& constant : iface.constants) qualifyType(constant.type, qualify);
+    for (auto& type : iface.types) qualifyType(type.backingType, qualify);
+    for (auto& method : iface.methods) {
+        qualifyType(method.receiverType, qualify);
+        for (auto& param : method.paramTypes) qualifyType(param, qualify);
+        qualifyType(method.returnType, qualify);
+    }
+    for (auto& record : chunk.metadata.records)
+        for (auto& field : record.fields) qualifyType(field.type, qualify);
 }
 
 } // namespace kex::beam

@@ -38,7 +38,11 @@ public:
     // an interpolation's `${...}`, records into that parser instead, so it
     // stays inside the string token that contains it.
     struct SyntaxSpan {
-        std::string kind;
+        // The node's C++ type, named only when asked (kind): demangling it
+        // for every node the parser completes cost every build a share of
+        // its parse time, for a tree only `--emit-syntax` prints.
+        const std::type_info* type = nullptr;
+        auto kind() const -> std::string { return syntaxKindName(*type); }
         int startOffset = -1;
         int endOffset = -1;
     };
@@ -64,7 +68,7 @@ private:
         if (node && m_pos > 0)
             node->location.endOffset = m_tokens[m_pos - 1].endOffset;
         if (node)
-            m_syntaxSpans.push_back({syntaxKindOf(*node),
+            m_syntaxSpans.push_back({&syntaxKindOf(*node),
                                      node->location.startOffset,
                                      node->location.endOffset});
         return node;
@@ -72,12 +76,12 @@ private:
     // A node's syntax kind: its type's name, or — for the variant-shaped
     // Expr, Pattern and TypeExpr — the name of the alternative it holds.
     template<typename T>
-    static auto syntaxKindOf(const T& node) -> std::string {
+    static auto syntaxKindOf(const T& node) -> const std::type_info& {
         if constexpr (requires { node.kind.valueless_by_exception(); })
-            return std::visit([](const auto& alternative) {
-                return syntaxKindName(typeid(alternative));
+            return std::visit([](const auto& alternative) -> const std::type_info& {
+                return typeid(alternative);
             }, node.kind);
-        return syntaxKindName(typeid(node));
+        return typeid(node);
     }
     static auto syntaxKindName(const std::type_info& type) -> std::string;
     mutable std::vector<SyntaxSpan> m_syntaxSpans;

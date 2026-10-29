@@ -20,6 +20,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <regex>
 #include <sstream>
@@ -30,6 +31,85 @@
 namespace kex::compiled {
 
 namespace {
+// The template-scan cache settings of an expansion that has none of its own.
+auto defaultScanCache() -> ExpandOptions& {
+    static ExpandOptions defaults;
+    return defaults;
+}
+// Whether collapses are kept and reused (setReuseCollapses).
+auto reuseCollapses() -> bool& {
+    static bool reuse = false;
+    return reuse;
+}
+} // namespace
+
+auto setDefaultScanCache(std::filesystem::path root, std::string toolchainKey) -> void {
+    defaultScanCache().scanCache = std::move(root);
+    defaultScanCache().toolchainKey = std::move(toolchainKey);
+}
+
+auto setReuseCollapses(bool reuse) -> void { reuseCollapses() = reuse; }
+
+namespace {
+bool anyReachedOutside = false;
+} // namespace
+
+auto noteReachedOutside() -> void { anyReachedOutside = true; }
+auto reachedOutside() -> bool { return anyReachedOutside; }
+
+namespace {
+thread_local DependencyRecorder* innermostRecorder = nullptr;
+} // namespace
+
+DependencyRecorder::DependencyRecorder() : m_outer(innermostRecorder) {
+    innermostRecorder = this;
+}
+
+DependencyRecorder::~DependencyRecorder() { innermostRecorder = m_outer; }
+
+auto DependencyRecorder::current() -> DependencyRecorder* { return innermostRecorder; }
+
+auto recordingDependencies() -> bool { return innermostRecorder != nullptr; }
+
+// Every live recorder gets it, innermost first. One that already has it got
+// it together with all of those outside it, so the walk stops there.
+auto noteDependency(const std::string& path) -> void {
+    if (!innermostRecorder || path.empty()) return;
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(path, ec).string();
+    if (ec) canonical = path;
+    for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer)
+        if (!recorder->m_files.insert(canonical).second) break;
+}
+
+auto noteDependencies(const std::set<std::string>& paths) -> void {
+    if (!innermostRecorder) return;
+    for (const auto& path : paths)
+        for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer)
+            if (!recorder->m_files.insert(path).second) break;
+}
+
+auto sandboxTimings() -> SandboxTimings& {
+    static SandboxTimings timings;
+    return timings;
+}
+
+namespace {
+
+// Times one sandbox's start (constructing it and whatever `start` loads into
+// it) apart from what it is then asked to evaluate (sandboxTimings).
+struct SandboxClock {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point began = Clock::now();
+    auto started() -> void {
+        auto& timings = sandboxTimings();
+        ++timings.started;
+        const auto now = Clock::now();
+        timings.startup += now - began;
+        began = now;
+    }
+    ~SandboxClock() { sandboxTimings().evaluation += Clock::now() - began; }
+};
 
 // Is this `let` a VALUE BINDING rather than a function definition?
 //
@@ -812,6 +892,7 @@ struct EmbedFolder {
                         "String parameter of the enclosing function, which "
                         "then gets one clause per matching file");
         std::filesystem::path target = sourceDir / *path;
+        noteDependency(target.string());
         std::ifstream file(target, std::ios::binary);
         if (!file)
             return fail(slot->location, "Kex.embed: cannot read '" +
@@ -951,9 +1032,13 @@ auto matchEmbedPattern(const EmbedPattern& pattern,
         ? sourceDir : sourceDir / lead.substr(0, slash + 1);
     std::vector<std::vector<std::string>> matches;
     std::error_code error;
+    // The directories, not only the files that matched: one more file
+    // there is one more clause, and adding it changes its directory.
+    noteDependency(root.string());
     if (!std::filesystem::is_directory(root, error)) return matches;
     std::filesystem::recursive_directory_iterator walk(root, error), end;
     for (; !error && walk != end; walk.increment(error)) {
+        if (walk->is_directory(error)) noteDependency(walk->path().string());
         if (!walk->is_regular_file(error)) continue;
         const auto candidate = absolute
             ? walk->path().generic_string()
@@ -1177,16 +1262,21 @@ struct ScannedTemplate {
     std::vector<ExplicitParam> explicitParams;
 };
 
+// A digest written as hex, for a file name.
+template <typename Digest>
+auto hexDigest(const Digest& digest) -> std::string {
+    static const char* hex = "0123456789abcdef";
+    std::string text;
+    for (const auto byte : digest) {
+        text += hex[byte >> 4];
+        text += hex[byte & 0xF];
+    }
+    return text;
+}
+
 auto scanCacheKey(const std::string& source, const std::string& toolchainKey) -> std::string {
     const std::string material = "kex-template-scan-v1\n" + toolchainKey + "\n" + source;
-    const auto digest = beam::computeSha256(std::vector<uint8_t>(material.begin(), material.end()));
-    static const char* hex = "0123456789abcdef";
-    std::string key;
-    for (const auto byte : digest) {
-        key += hex[byte >> 4];
-        key += hex[byte & 0xF];
-    }
-    return key;
+    return hexDigest(beam::computeSha256(std::vector<uint8_t>(material.begin(), material.end())));
 }
 
 auto scanCachePath(const std::filesystem::path& root, const std::string& key) -> std::filesystem::path {
@@ -1293,7 +1383,15 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
                          std::vector<ExplicitParam>& explicitParams,
                          std::string& error) -> bool {
     static std::unordered_map<std::string, ScannedTemplate> scannedHere;
-    const std::string toolchainKey = activeOptions ? activeOptions->toolchainKey : std::string{};
+    // An expansion without settings of its own uses the process's
+    // (setDefaultScanCache): a module the semantic pass or a sandbox expands
+    // builds its own options, and scanned every template it embeds again on
+    // every build — in the tree-walker, a second or more each, 45 of the
+    // 50 s Slick's `app/views/chat.kex` spent in its sandboxes.
+    const auto& defaults = defaultScanCache();
+    const bool own = activeOptions && !activeOptions->scanCache.empty();
+    const auto& cacheRoot = own ? activeOptions->scanCache : defaults.scanCache;
+    const std::string& toolchainKey = own ? activeOptions->toolchainKey : defaults.toolchainKey;
     const auto key = scanCacheKey(source, toolchainKey);
     const auto use = [&](const ScannedTemplate& scanned) {
         nodes = scanned.nodes;
@@ -1301,9 +1399,8 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
         return true;
     };
     if (auto found = scannedHere.find(key); found != scannedHere.end()) return use(found->second);
-    const bool persistent = activeOptions && !activeOptions->scanCache.empty() &&
-                            !activeOptions->toolchainKey.empty();
-    const auto entry = persistent ? scanCachePath(activeOptions->scanCache, key)
+    const bool persistent = !cacheRoot.empty() && !toolchainKey.empty();
+    const auto entry = persistent ? scanCachePath(cacheRoot, key)
                                   : std::filesystem::path{};
     if (persistent) {
         if (auto cached = readScanCache(entry)) {
@@ -1349,8 +1446,10 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
     std::vector<interpreter::ValuePtr> results;
     std::vector<std::string> reasons;
     try {
+        SandboxClock clock;
         interpreter::Evaluator evaluator;
         evaluator.loadPrelude();
+        clock.started();
         interpreter::Evaluator::ExpressionRequest request{&callExpr, {}};
         results = evaluator.evaluateExpressions(empty, {request}, timeout, &reasons);
     } catch (const interpreter::EvaluationTimeout&) {
@@ -2356,6 +2455,7 @@ auto useModuleRoots(interpreter::Evaluator& evaluator,
 // reified schema record can still be folded through to its SQL statement.
 auto constructorsInFile(const std::string& path)
     -> const std::unordered_set<std::string>& {
+    noteDependency(path);
     static std::unordered_map<std::string, std::unordered_set<std::string>> seen;
     if (auto found = seen.find(path); found != seen.end())
         return found->second;
@@ -2407,6 +2507,7 @@ auto constructorsInFile(const std::string& path)
 // a module is `using`-ed by many files of a build, and every one of them asks.
 // A file that does not parse declares nothing here — compiling it reports why.
 auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
+    noteDependency(path);
     static std::unordered_map<std::string, CompiledNames> seen;
     if (const auto found = seen.find(path); found != seen.end())
         return found->second;
@@ -2492,13 +2593,18 @@ auto addImportedCompiledNames(const ast::Program& program,
     // module function must never be evaluated just because it has no args.
     Constants none;
     std::vector<semantic::Diagnostic> unused;
+    // Each owner once: a merged program writes `List.map` and `Grants.over`
+    // thousands of times, and every lookup asks the file system again.
+    std::unordered_map<std::string, std::optional<module::Resolution>> owners;
     Substituter finder{none, unused, {}, {}, {}};
     finder.onSlot = [&](ast::ExprPtr& slot) {
         const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
         std::string owner;
         if (call && call->receiver &&
             finder.qualifierPath(*call->receiver, owner)) {
-            if (const auto resolved = resolver.resolve(owner, "")) {
+            auto [cached, fresh] = owners.try_emplace(owner);
+            if (fresh) cached->second = resolver.resolve(owner, "");
+            if (const auto& resolved = cached->second) {
                 const auto identity = qualifiedName(resolved->moduleName,
                                                     call->method);
                 if (constructorsInFile(resolved->path).count(identity))
@@ -2514,6 +2620,607 @@ auto addImportedCompiledNames(const ast::Program& program,
         else
             finder.substitute(target);
     });
+}
+
+// What one round of collapsing a file decided (setReuseCollapses): for each
+// candidate, in the round's order, the literal it became or why it stayed a
+// runtime chain. Keyed by the file, the round, and the places of its
+// candidates in order: expanding the same file again walks the same
+// candidates in the same order, so a matching key is the same round. A place
+// alone would not do — the clones a `let %name` template generates share
+// theirs, and so do the parts of a literal an earlier round wrote.
+struct CollapseOutcome {
+    ast::ExprPtr literal;
+    std::string why;
+};
+
+// A round as this process keeps it, with the files it was made from: an
+// expansion answered from here repeats them (noteDependencies), as it
+// would have by evaluating the round itself.
+struct MemoRound {
+    std::vector<CollapseOutcome> outcomes;
+    std::set<std::string> dependencies;
+};
+
+auto collapseMemo() -> std::unordered_map<std::string, MemoRound>& {
+    static std::unordered_map<std::string, MemoRound> memo;
+    return memo;
+}
+
+// The file is named canonically: the build and a sandbox reach the same
+// module through different roots, and so by differently spelled paths.
+auto collapseRoundKey(const std::string& file, int round,
+                      const std::vector<ChainCollapser::Candidate>& candidates)
+    -> std::string {
+    std::string key = file + "#" + std::to_string(round);
+    // With each candidate's own file: a program with dependencies merged
+    // into it collapses their code too.
+    for (const auto& candidate : candidates)
+        key += ":" + std::string((*candidate.slot)->location.file) + "@" +
+               std::to_string((*candidate.slot)->location.startOffset) + "-" +
+               std::to_string((*candidate.slot)->location.endOffset);
+    return key;
+}
+
+// --- Collapses kept between builds ------------------------------------------
+//
+// A round the in-process memo cannot answer may have been decided by an
+// earlier build: under the same key, with every file it was made from as it
+// was then. Kept are the VALUES the sandbox computed, not the literals they
+// became, and they are reified again on the way back in: a placeholder is an
+// index into the round's own candidates, and its expression is taken from
+// the program as it stands, with its own location. Only a round whose sandbox
+// never reached outside the program (Evaluator::touchedOutside) is kept, and
+// only values with a literal form; anything else is decided again each build.
+
+// One round as an entry holds it.
+struct StoredRound {
+    std::vector<std::pair<std::string, std::string>> dependencies;  // path, stamp
+    RecordLayouts layouts;
+    std::unordered_map<std::string, std::string> modules;
+    struct Outcome {
+        interpreter::ValuePtr value;  // null: stayed a runtime chain
+        std::string why;
+    };
+    std::vector<Outcome> outcomes;
+};
+
+// See fileStamp.
+auto dependencyStamp(const std::string& path) -> std::string {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto status = fs::status(path, ec);
+    if (ec || !fs::exists(status)) return "-";
+    const auto modified = fs::last_write_time(path, ec).time_since_epoch().count();
+    if (ec) return "-";
+    if (fs::is_directory(status)) return "d" + std::to_string(static_cast<long long>(modified));
+    const auto size = fs::file_size(path, ec);
+    if (ec) return "-";
+    return std::to_string(static_cast<unsigned long long>(size)) + ":" +
+           std::to_string(static_cast<long long>(modified));
+}
+
+// A value in the entry's notation, a one-letter kind and what it holds, or
+// false for one with no literal form. The record types and sum types it
+// names are collected with the layouts and modules reifying it will need.
+auto writeStoredValue(std::ostream& out, const interpreter::ValuePtr& value,
+                      const RecordLayouts& layouts,
+                      const std::unordered_map<std::string, std::string>& modules,
+                      StoredRound& into) -> bool {
+    if (!value) return false;
+    auto list = [&](char kind, const std::vector<interpreter::ValuePtr>& elements) {
+        out << kind << elements.size() << " ";
+        for (const auto& element : elements)
+            if (!writeStoredValue(out, element, layouts, modules, into)) return false;
+        return true;
+    };
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, interpreter::PlaceholderValue>) {
+                out << "P" << node.index << " ";
+                writeCachedString(out, node.name);
+            } else if constexpr (std::is_same_v<T, interpreter::UnitValue>) {
+                out << "U";
+            } else if constexpr (std::is_same_v<T, interpreter::IntValue>) {
+                out << "I";
+                writeCachedString(out, std::to_string(node.value));
+            } else if constexpr (std::is_same_v<T, interpreter::BigIntValue>) {
+                out << "N";
+                writeCachedString(out, node.value.get_str());
+            } else if constexpr (std::is_same_v<T, interpreter::FloatValue>) {
+                // Exactly, as its bits: no decimal round trip to lose any.
+                std::uint64_t bits = 0;
+                std::memcpy(&bits, &node.value, sizeof bits);
+                out << "F" << bits << " ";
+            } else if constexpr (std::is_same_v<T, interpreter::StringValue>) {
+                out << "S";
+                writeCachedString(out, node.value);
+            } else if constexpr (std::is_same_v<T, interpreter::CharValue>) {
+                out << "C" << static_cast<std::uint32_t>(node.value) << " ";
+            } else if constexpr (std::is_same_v<T, interpreter::BoolValue>) {
+                out << (node.value ? "T" : "B");
+            } else if constexpr (std::is_same_v<T, interpreter::AtomValue>) {
+                out << "A";
+                writeCachedString(out, node.name);
+            } else if constexpr (std::is_same_v<T, interpreter::ListValue>) {
+                return list('L', node.elements);
+            } else if constexpr (std::is_same_v<T, interpreter::TupleValue>) {
+                return list('X', node.elements);
+            } else if constexpr (std::is_same_v<T, interpreter::MapValue>) {
+                out << "M" << node.entries.size() << " ";
+                for (const auto& [key, mapped] : node.entries)
+                    if (!writeStoredValue(out, key, layouts, modules, into) ||
+                        !writeStoredValue(out, mapped, layouts, modules, into))
+                        return false;
+            } else if constexpr (std::is_same_v<T, interpreter::RecordValue>) {
+                // In name order, so the same record writes the same entry.
+                std::vector<const std::string*> names;
+                for (const auto& [field, _] : node.fields) names.push_back(&field);
+                std::sort(names.begin(), names.end(),
+                          [](const std::string* a, const std::string* b) { return *a < *b; });
+                out << "R";
+                writeCachedString(out, node.typeName);
+                out << names.size() << " ";
+                for (const auto* field : names) {
+                    writeCachedString(out, *field);
+                    if (!writeStoredValue(out, node.fields.at(*field), layouts, modules, into))
+                        return false;
+                }
+                // valueToLiteral looks a layout up by the full name, then
+                // by its last segment.
+                const auto dot = node.typeName.rfind('.');
+                for (const auto& name :
+                     {node.typeName, dot == std::string::npos ? std::string{}
+                                                              : node.typeName.substr(dot + 1)})
+                    if (const auto found = layouts.find(name); found != layouts.end())
+                        into.layouts[name] = found->second;
+            } else if constexpr (std::is_same_v<T, interpreter::VariantValue>) {
+                out << "V";
+                writeCachedString(out, node.parentType);
+                writeCachedString(out, node.tag);
+                if (const auto found = modules.find(node.parentType); found != modules.end())
+                    into.modules[node.parentType] = found->second;
+                return list(' ', node.args);
+            } else {
+                return false;
+            }
+            return true;
+        },
+        value->data);
+}
+
+auto readStoredValue(std::istream& in, std::uintmax_t fileSize) -> interpreter::ValuePtr {
+    auto value = std::make_shared<interpreter::Value>();
+    auto count = [&](std::size_t& n) { return static_cast<bool>(in >> n) && in.get() == ' '; };
+    auto elements = [&](std::vector<interpreter::ValuePtr>& into) {
+        std::size_t n = 0;
+        if (!count(n) || n > fileSize) return false;
+        for (std::size_t i = 0; i < n; i++) {
+            auto element = readStoredValue(in, fileSize);
+            if (!element) return false;
+            into.push_back(std::move(element));
+        }
+        return true;
+    };
+    std::string text;
+    switch (in.get()) {
+    case 'P': {
+        std::size_t index = 0;
+        if (!count(index) || !readCachedString(in, fileSize, text)) return nullptr;
+        value->data = interpreter::PlaceholderValue{index, text};
+        break;
+    }
+    case 'U': value->data = interpreter::UnitValue{}; break;
+    case 'I':
+        if (!readCachedString(in, fileSize, text)) return nullptr;
+        try {
+            value->data = interpreter::IntValue{std::stoll(text)};
+        } catch (const std::exception&) {
+            return nullptr;
+        }
+        break;
+    case 'N': {
+        if (!readCachedString(in, fileSize, text)) return nullptr;
+        mpz_class big;
+        if (big.set_str(text, 10) != 0) return nullptr;
+        value->data = interpreter::BigIntValue{big};
+        break;
+    }
+    case 'F': {
+        std::uint64_t bits = 0;
+        if (!(in >> bits) || in.get() != ' ') return nullptr;
+        double number = 0;
+        std::memcpy(&number, &bits, sizeof number);
+        value->data = interpreter::FloatValue{number};
+        break;
+    }
+    case 'S': {
+        if (!readCachedString(in, fileSize, text)) return nullptr;
+        interpreter::StringValue string;
+        string.value = std::move(text);
+        value->data = std::move(string);
+        break;
+    }
+    case 'C': {
+        std::uint32_t code = 0;
+        if (!(in >> code) || in.get() != ' ') return nullptr;
+        value->data = interpreter::CharValue{static_cast<char32_t>(code)};
+        break;
+    }
+    case 'T': value->data = interpreter::BoolValue{true}; break;
+    case 'B': value->data = interpreter::BoolValue{false}; break;
+    case 'A':
+        if (!readCachedString(in, fileSize, text)) return nullptr;
+        value->data = interpreter::AtomValue{std::move(text)};
+        break;
+    case 'L': {
+        interpreter::ListValue list;
+        if (!elements(list.elements)) return nullptr;
+        value->data = std::move(list);
+        break;
+    }
+    case 'X': {
+        interpreter::TupleValue tuple;
+        if (!elements(tuple.elements)) return nullptr;
+        value->data = std::move(tuple);
+        break;
+    }
+    case 'M': {
+        interpreter::MapValue map;
+        std::size_t n = 0;
+        if (!count(n) || n > fileSize) return nullptr;
+        for (std::size_t i = 0; i < n; i++) {
+            auto key = readStoredValue(in, fileSize);
+            auto mapped = key ? readStoredValue(in, fileSize) : nullptr;
+            if (!mapped) return nullptr;
+            map.entries.emplace_back(std::move(key), std::move(mapped));
+        }
+        value->data = std::move(map);
+        break;
+    }
+    case 'R': {
+        interpreter::RecordValue record;
+        std::size_t n = 0;
+        if (!readCachedString(in, fileSize, record.typeName) || !count(n) || n > fileSize)
+            return nullptr;
+        for (std::size_t i = 0; i < n; i++) {
+            std::string field;
+            if (!readCachedString(in, fileSize, field)) return nullptr;
+            auto fieldValue = readStoredValue(in, fileSize);
+            if (!fieldValue) return nullptr;
+            record.fields.emplace(std::move(field), std::move(fieldValue));
+        }
+        value->data = std::move(record);
+        break;
+    }
+    case 'V': {
+        interpreter::VariantValue variant;
+        if (!readCachedString(in, fileSize, variant.parentType) ||
+            !readCachedString(in, fileSize, variant.tag) || in.get() != ' ' ||
+            !elements(variant.args))
+            return nullptr;
+        value->data = std::move(variant);
+        break;
+    }
+    default: return nullptr;
+    }
+    return value;
+}
+
+auto storedRoundPath(const std::filesystem::path& root, const std::string& key)
+    -> std::filesystem::path {
+    return root / "collapse" / key.substr(0, 2) / (key + ".round");
+}
+
+// The entry, or nullopt when there is none, it is garbled, or a file it was
+// made from has changed since.
+auto readStoredRound(const std::filesystem::path& entry) -> std::optional<StoredRound> {
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(entry, ec);
+    if (ec) return std::nullopt;
+    std::ifstream in(entry, std::ios::binary);
+    std::string header;
+    if (!in || !std::getline(in, header) || header != "kex-collapse-round") return std::nullopt;
+    StoredRound round;
+    std::size_t n = 0;
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    for (std::size_t i = 0; i < n; i++) {
+        std::string path, stamp;
+        if (!readCachedString(in, fileSize, path) || !readCachedString(in, fileSize, stamp))
+            return std::nullopt;
+        if (dependencyStamp(path) != stamp) return std::nullopt;
+        round.dependencies.emplace_back(std::move(path), std::move(stamp));
+    }
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    for (std::size_t i = 0; i < n; i++) {
+        std::string type;
+        std::size_t fields = 0;
+        if (!readCachedString(in, fileSize, type) || !(in >> fields) || in.get() != ' ' ||
+            fields > fileSize)
+            return std::nullopt;
+        auto& layout = round.layouts[type];
+        for (std::size_t f = 0; f < fields; f++) {
+            std::string field;
+            if (!readCachedString(in, fileSize, field)) return std::nullopt;
+            layout.push_back(std::move(field));
+        }
+    }
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    for (std::size_t i = 0; i < n; i++) {
+        std::string type, owner;
+        if (!readCachedString(in, fileSize, type) || !readCachedString(in, fileSize, owner))
+            return std::nullopt;
+        round.modules.emplace(std::move(type), std::move(owner));
+    }
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    for (std::size_t i = 0; i < n; i++) {
+        StoredRound::Outcome outcome;
+        const auto kind = in.get();
+        if (kind == 'v') {
+            outcome.value = readStoredValue(in, fileSize);
+            if (!outcome.value) return std::nullopt;
+        } else if (kind != 'w' || !readCachedString(in, fileSize, outcome.why)) {
+            return std::nullopt;
+        }
+        round.outcomes.push_back(std::move(outcome));
+    }
+    return round;
+}
+
+// Written beside the final name and renamed into place, as template scans are.
+auto writeStoredRound(const std::filesystem::path& entry, const std::string& body) -> void {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(entry.parent_path(), ec);
+    if (ec) return;
+    static const auto process = [] {
+        std::random_device device;
+        return (static_cast<unsigned long long>(device()) << 32) ^ device();
+    }();
+    static unsigned long long counter = 0;
+    auto staging = entry;
+    staging += ".tmp." + std::to_string(process) + "." + std::to_string(++counter);
+    {
+        std::ofstream out(staging, std::ios::binary);
+        if (!out) return;
+        out << "kex-collapse-round\n" << body;
+        if (!out) { out.close(); fs::remove(staging, ec); return; }
+    }
+    fs::rename(staging, entry, ec);
+    if (ec) fs::remove(staging, ec);
+}
+
+// The entry's text for a decided round, or nullopt for one that cannot be
+// kept: a value with no literal form.
+auto storedRoundText(const std::set<std::string>& dependencies,
+                     const std::vector<interpreter::ValuePtr>& values,
+                     const std::vector<std::string>& failures,
+                     const RecordLayouts& layouts,
+                     const std::unordered_map<std::string, std::string>& modules)
+    -> std::optional<std::string> {
+    StoredRound round;
+    std::ostringstream outcomes;
+    outcomes << values.size() << " ";
+    for (std::size_t i = 0; i < values.size(); i++) {
+        if (values[i]) {
+            outcomes << "v";
+            if (!writeStoredValue(outcomes, values[i], layouts, modules, round))
+                return std::nullopt;
+        } else {
+            outcomes << "w";
+            writeCachedString(outcomes, failures[i]);
+        }
+    }
+    std::ostringstream out;
+    out << dependencies.size() << " ";
+    for (const auto& path : dependencies) {
+        writeCachedString(out, path);
+        writeCachedString(out, dependencyStamp(path));
+    }
+    out << round.layouts.size() << " ";
+    for (const auto& [type, fields] : round.layouts) {
+        writeCachedString(out, type);
+        out << fields.size() << " ";
+        for (const auto& field : fields) writeCachedString(out, field);
+    }
+    out << round.modules.size() << " ";
+    for (const auto& [type, owner] : round.modules) {
+        writeCachedString(out, type);
+        writeCachedString(out, owner);
+    }
+    out << outcomes.str();
+    return out.str();
+}
+
+// Where kept rounds live, and the toolchain that decided them: the template
+// scans' settings (scanTemplateSource), or none when caching is off.
+struct RoundStore {
+    std::filesystem::path root;
+    std::string toolchainKey;
+};
+
+auto roundStore() -> std::optional<RoundStore> {
+    const auto& defaults = defaultScanCache();
+    const bool own = activeOptions && !activeOptions->scanCache.empty();
+    const auto& root = own ? activeOptions->scanCache : defaults.scanCache;
+    const auto& toolchain = own ? activeOptions->toolchainKey : defaults.toolchainKey;
+    if (root.empty() || toolchain.empty()) return std::nullopt;
+    return RoundStore{root, toolchain};
+}
+
+// The files a program's own items were read from: a dependency merged into
+// it is part of what its collapses ran.
+auto programFiles(const ast::Program& program) -> std::set<std::string> {
+    std::set<std::string> files;
+    for (const auto& item : program.items)
+        std::visit([&](const auto& node) {
+            if (node && !node->location.file.empty())
+                files.insert(std::string(node->location.file));
+        }, item);
+    return files;
+}
+
+auto canonicalFiles(const std::set<std::string>& files) -> std::set<std::string> {
+    std::set<std::string> canonical;
+    for (const auto& file : files) {
+        std::error_code ec;
+        auto path = std::filesystem::weakly_canonical(file, ec).string();
+        canonical.insert(ec ? file : std::move(path));
+    }
+    return canonical;
+}
+
+// --- A map bound to a name, read by a builder --------------------------------
+//
+// `.values({ id: id, role: role })` collapses: the keys are written, and the
+// values are runtime names the result carries as placeholders. The same map
+// bound first, `let row = { id: id, role: role }` and then `.values(row)`,
+// did not — to the collapser `row` is one opaque runtime value, and the
+// builder needs its keys. Kex bindings are immutable, so the keys are known:
+// each value is bound on its own where `row` was (in order, once, as it
+// was evaluated), and a builder that takes `row` is given the map over those
+// bindings instead. `row` keeps them, and is dropped when nothing else reads
+// it. A name bound again anywhere after it — `let`, `var`, a block's
+// parameter, a pattern — is left as it was.
+
+// Is this a call a compiled builder answers?
+auto callsBuilder(const ast::Expr& expr, const CompiledNames& compiled) -> bool {
+    if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
+        std::string owner;
+        if (call->receiver && ChainCollapser::qualifierPath(*call->receiver, owner))
+            return compiled.qualified.count(qualifiedName(owner, call->method)) > 0;
+        return compiled.methods.count(call->method) > 0;
+    }
+    if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
+        const auto dot = call->name.rfind('.');
+        return dot == std::string::npos
+            ? compiled.functions.count(call->name) > 0
+            : compiled.qualified.count(qualifiedName(call->name.substr(0, dot),
+                                                     call->name.substr(dot + 1))) > 0;
+    }
+    return false;
+}
+
+auto isNamed(const ast::Expr& expr, const std::string& name) -> bool {
+    const auto* identifier = std::get_if<ast::Identifier>(&expr.kind);
+    return identifier && identifier->name == name;
+}
+
+auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& compiled,
+                       int& counter) -> void {
+    Constants none;
+    std::vector<semantic::Diagnostic> unused;
+    for (std::size_t i = 0; i < body.size(); i++) {
+        auto* let = body[i] ? std::get_if<ast::LetExpr>(&body[i]->kind) : nullptr;
+        const auto* bound = let && let->pattern
+            ? std::get_if<ast::VarPattern>(&let->pattern->kind) : nullptr;
+        auto* map = bound && let->value ? std::get_if<ast::MapExpr>(&let->value->kind) : nullptr;
+        if (!map || map->entries.empty() || bound->name == "_") continue;
+        bool literalKeys = true;
+        for (const auto& entry : map->entries)
+            literalKeys = literalKeys && !entry.spread && entry.key && entry.value &&
+                          std::holds_alternative<ast::AtomLiteral>(entry.key->kind);
+        if (!literalKeys) continue;
+        const auto name = bound->name;
+
+        // What reads it after here: the builder arguments that become the
+        // map, and whether anything else does too.
+        std::vector<ast::ExprPtr*> givenTo;
+        bool readElsewhere = false;
+        bool rebound = false;
+        Substituter scan{none, unused, {}, {}, {}};
+        auto binds = [&](const ast::Pattern& pattern) {
+            std::vector<std::string> names;
+            scan.patternNames(pattern, names);
+            return std::find(names.begin(), names.end(), name) != names.end();
+        };
+        auto bindsIn = [&](const std::vector<ast::MatchClause>& clauses) {
+            for (const auto& clause : clauses)
+                for (const auto& pattern : clause.patterns)
+                    if (pattern && binds(*pattern)) return true;
+            return false;
+        };
+        scan.onSlot = [&](ast::ExprPtr& slot) -> bool {
+            std::visit([&](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, ast::Identifier>) {
+                    if (node.name == name) readElsewhere = true;
+                } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+                    if (node.pattern && binds(*node.pattern)) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::VarExpr> ||
+                                     std::is_same_v<T, ast::AssignExpr>) {
+                    if (node.name == name) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                    if (node.letPattern && binds(*node.letPattern)) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                    if (node.subjectBinding == name || bindsIn(node.clauses)) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+                    if (node.senderBinding == name || bindsIn(node.clauses)) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+                    for (const auto& param : node.params)
+                        if (param.name == name) rebound = true;
+                    if (node.rescue && (node.rescue->catchAllParam == name ||
+                                        bindsIn(node.rescue->clauses)))
+                        rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::MethodCall> ||
+                                     std::is_same_v<T, ast::FunctionCall>) {
+                    if (callsBuilder(*slot, compiled))
+                        for (auto& arg : node.args)
+                            if (arg && isNamed(*arg, name)) givenTo.push_back(&arg);
+                }
+            }, slot->kind);
+            return false;
+        };
+        for (std::size_t j = i + 1; j < body.size() && !rebound; j++) scan.substitute(body[j]);
+        if (rebound || givenTo.empty()) continue;
+        // Every read of the name that is not one of these arguments.
+        std::size_t reads = 0;
+        Substituter count{none, unused, {}, {}, {}};
+        count.onSlot = [&](ast::ExprPtr& slot) {
+            if (isNamed(*slot, name)) reads++;
+            return false;
+        };
+        for (std::size_t j = i + 1; j < body.size(); j++) count.substitute(body[j]);
+        readElsewhere = reads > givenTo.size();
+
+        // Each value bound on its own, in order, where the map was.
+        const auto where = body[i]->location;
+        std::vector<ast::ExprPtr> values;
+        const auto id = std::to_string(counter++);
+        for (auto& entry : map->entries) {
+            const auto& key = std::get<ast::AtomLiteral>(entry.key->kind).name;
+            const auto fresh = "__kex_" + name + "_" + key + "_" + id;
+            auto pattern = std::make_unique<ast::Pattern>();
+            pattern->location = where;
+            pattern->kind = ast::VarPattern{fresh};
+            auto binding = std::make_unique<ast::Expr>();
+            binding->location = entry.value->location;
+            binding->kind = ast::LetExpr{std::move(pattern), std::move(entry.value), std::nullopt};
+            values.push_back(std::move(binding));
+            entry.value = std::make_unique<ast::Expr>();
+            entry.value->location = where;
+            entry.value->kind = ast::Identifier{fresh};
+        }
+        for (auto* arg : givenTo) *arg = ast::clone(let->value);
+        auto at = body.begin() + static_cast<std::ptrdiff_t>(i);
+        if (!readElsewhere) at = body.erase(at);
+        const auto added = values.size();
+        body.insert(at, std::make_move_iterator(values.begin()),
+                    std::make_move_iterator(values.end()));
+        i += added - (readElsewhere ? 0 : 1);
+    }
+    // And every block's own body, wherever one sits.
+    Substituter blocks{none, unused, {}, {}, {}};
+    blocks.onSlot = [&](ast::ExprPtr& slot) {
+        // Handed over whole: the call walks the block's own blocks.
+        if (auto* lambda = std::get_if<ast::Lambda>(&slot->kind)) {
+            spreadMapBindings(lambda->body, compiled, counter);
+            return true;
+        }
+        return false;
+    };
+    for (auto& expr : body) blocks.substitute(expr);
 }
 
 // Finds every collapsible expression in `program`, evaluates them in one
@@ -2532,7 +3239,39 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
     addImportedCompiledNames(program, options, compiled);
     if (compiled.empty()) return;
 
+    int spread = 0;
+    walkBodies(
+        program.items,
+        [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                for (auto& clause : target.clauses)
+                    spreadMapBindings(clause.body, compiled, spread);
+        },
+        /*intoCompiled=*/false);
+
+    auto& memo = collapseMemo();
+    std::string file;
+    if (reuseCollapses()) {
+        std::error_code ec;
+        file = std::filesystem::weakly_canonical(options.sourcePath, ec).string();
+        if (ec || options.sourcePath.empty()) file.clear();
+    }
+    const bool reuse = !file.empty();
+    int round = 0;
     std::unordered_set<const ast::Expr*> rejected;
+    // One sandbox for every round: the program it ran in the first is the
+    // program the later ones ask about, less the chains that collapsed —
+    // and a collapsed chain is the value it stood for. Loading the program
+    // again each round was half a second a round for an application's
+    // entry file, which takes five. What the sandbox ran stays alive for
+    // it: a closure it made may point into a chain since replaced.
+    std::vector<ast::ExprPtr> replaced;
+    std::unique_ptr<interpreter::Evaluator> evaluator;
+    auto replace = [&](ast::ExprPtr& slot, ast::ExprPtr literal) {
+        if (evaluator) replaced.push_back(std::move(slot));
+        slot = std::move(literal);
+    };
     for (;;) {
         ChainCollapser collapser{compiled};
         collapser.rejected = &rejected;
@@ -2568,6 +3307,84 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             /*intoCompiled=*/false);
         if (collapser.candidates.empty()) return;
 
+        // Decided already, by an earlier expansion of the same file?
+        const auto key = reuse ? collapseRoundKey(file, round++, collapser.candidates)
+                               : std::string{};
+        const auto known = reuse ? memo.find(key) : memo.end();
+        if (known != memo.end()) {
+            noteDependencies(known->second.dependencies);
+            bool grew = false;
+            for (std::size_t i = 0; i < collapser.candidates.size(); i++) {
+                const auto& candidate = collapser.candidates[i];
+                const auto& outcome = known->second.outcomes[i];
+                const SourceLocation where = (*candidate.slot)->location;
+                if (outcome.literal) {
+                    replace(*candidate.slot, ast::clone(outcome.literal));
+                    if (options.report) options.report->push_back({where, true, {}});
+                    continue;
+                }
+                if (options.report) options.report->push_back({where, false, outcome.why});
+                grew = rejected.insert(candidate.slot->get()).second || grew;
+            }
+            if (!grew) return;
+            continue;
+        }
+
+        // Or by an earlier build, from files as they still are?
+        const auto store = reuse ? roundStore() : std::nullopt;
+        std::filesystem::path entry;
+        if (store) {
+            // With the roots: which file a module comes from depends on them,
+            // and so does every dependency an entry lists.
+            std::string material = "kex-collapse-v1\n" + store->toolchainKey + "\n";
+            for (const auto& root : options.moduleRoots) material += root + "\n";
+            material += key;
+            entry = storedRoundPath(
+                store->root,
+                hexDigest(beam::computeSha256(
+                    std::vector<uint8_t>(material.begin(), material.end()))));
+        }
+        if (auto kept = store ? readStoredRound(entry) : std::nullopt;
+            kept && kept->outcomes.size() == collapser.candidates.size()) {
+            // Reified first, every one: a value that no longer reifies
+            // leaves the round to be evaluated after all.
+            std::vector<ast::ExprPtr> literals(collapser.candidates.size());
+            bool usable = true;
+            for (std::size_t i = 0; usable && i < literals.size(); i++) {
+                const auto& candidate = collapser.candidates[i];
+                if (!kept->outcomes[i].value) continue;
+                std::string why;
+                literals[i] = valueToLiteral(kept->outcomes[i].value,
+                                             (*candidate.slot)->location, why,
+                                             {&kept->layouts, &candidate.exprs, &kept->modules});
+                usable = literals[i] != nullptr;
+            }
+            if (usable) {
+                MemoRound remembered;
+                for (const auto& [path, _] : kept->dependencies)
+                    remembered.dependencies.insert(path);
+                noteDependencies(remembered.dependencies);
+                bool grew = false;
+                for (std::size_t i = 0; i < collapser.candidates.size(); i++) {
+                    const auto& candidate = collapser.candidates[i];
+                    const SourceLocation where = (*candidate.slot)->location;
+                    if (literals[i]) {
+                        remembered.outcomes.push_back({ast::clone(literals[i]), {}});
+                        replace(*candidate.slot, std::move(literals[i]));
+                        if (options.report) options.report->push_back({where, true, {}});
+                        continue;
+                    }
+                    remembered.outcomes.push_back({nullptr, kept->outcomes[i].why});
+                    if (options.report)
+                        options.report->push_back({where, false, kept->outcomes[i].why});
+                    grew = rejected.insert(candidate.slot->get()).second || grew;
+                }
+                memo.emplace(key, std::move(remembered));
+                if (!grew) return;
+                continue;
+            }
+        }
+
         std::vector<interpreter::Evaluator::ExpressionRequest> requests;
         requests.reserve(collapser.candidates.size());
         for (const auto& candidate : collapser.candidates)
@@ -2578,20 +3395,33 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         RecordLayouts layouts;
         std::unordered_map<std::string, std::string> typeModules;
         try {
-            interpreter::Evaluator evaluator;
-            useModuleRoots(evaluator, options);
-            evaluator.loadPrelude();
-            values = evaluator.evaluateExpressions(
-                program, requests, options.timeout,
-                options.report ? &reasons : nullptr);
-            layouts = evaluator.recordFieldOrder();
-            typeModules = evaluator.typeModules();
+            SandboxClock clock;
+            if (!evaluator) {
+                evaluator = std::make_unique<interpreter::Evaluator>();
+                useModuleRoots(*evaluator, options);
+                evaluator->loadPrelude();
+                clock.started();
+                values = evaluator->evaluateExpressions(
+                    program, requests, options.timeout,
+                    options.report || reuse ? &reasons : nullptr);
+            } else {
+                values = evaluator->evaluateMoreExpressions(
+                    requests, options.timeout, options.report || reuse ? &reasons : nullptr);
+            }
+            layouts = evaluator->recordFieldOrder();
+            typeModules = evaluator->typeModules();
+            if (evaluator->touchedOutside()) noteReachedOutside();
         } catch (const std::exception&) {
             // Collapse is an optimization: if the sandbox itself cannot run,
             // the program still compiles and builds its values at runtime.
             return;
         }
 
+        std::vector<CollapseOutcome> decided;
+        // What an entry keeps: the value of each candidate that became a
+        // literal, and why each other one did not.
+        std::vector<interpreter::ValuePtr> keptValues;
+        std::vector<std::string> keptWhy;
         bool grew = false;
         for (std::size_t i = 0;
              i < collapser.candidates.size() && i < values.size(); i++) {
@@ -2607,18 +3437,49 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
                                            {&layouts, &candidate.exprs, &typeModules})
                           : nullptr;
             if (literal) {
-                *candidate.slot = std::move(literal);
+                replace(*candidate.slot, std::move(literal));
+                if (reuse) decided.push_back({ast::clone(*candidate.slot), {}});
+                if (reuse) {
+                    keptValues.push_back(values[i]);
+                    keptWhy.emplace_back();
+                }
                 if (options.report) options.report->push_back({where, true, {}});
                 continue;
             }
-            if (options.report) {
-                // `why` is set when reification failed; otherwise the reason
-                // came from evaluation.
-                if (why.empty() && i < reasons.size()) why = reasons[i];
-                if (why.empty()) why = "it could not be evaluated";
-                options.report->push_back({where, false, std::move(why)});
+            // `why` is set when reification failed; otherwise the reason came
+            // from evaluation.
+            if (why.empty() && i < reasons.size()) why = reasons[i];
+            if (why.empty()) why = "it could not be evaluated";
+            if (reuse) decided.push_back({nullptr, why});
+            if (reuse) {
+                keptValues.push_back(nullptr);
+                keptWhy.push_back(why);
             }
+            if (options.report) options.report->push_back({where, false, std::move(why)});
             grew = rejected.insert(claimed).second || grew;
+        }
+        // Only a round every candidate of which was decided.
+        if (reuse && decided.size() == collapser.candidates.size()) {
+            MemoRound remembered{std::move(decided), {}};
+            if (const auto* recorder = DependencyRecorder::current())
+                remembered.dependencies = recorder->files();
+            std::set<std::string> own = programFiles(program);
+            for (const auto& candidate : collapser.candidates)
+                own.insert(std::string((*candidate.slot)->location.file));
+            own.insert(options.sourcePath);
+            own.erase(std::string{});
+            for (auto& path : canonicalFiles(own)) remembered.dependencies.insert(std::move(path));
+            auto roots = options.moduleRoots;
+            for (auto& root : kex::standardLibraryModuleRoots()) roots.push_back(std::move(root));
+            for (auto& path : shadowsOf(remembered.dependencies, roots))
+                remembered.dependencies.insert(std::move(path));
+            // Kept for later builds only when nothing the sandbox ran so far
+            // reached outside the program.
+            if (store && !evaluator->touchedOutside())
+                if (const auto text = storedRoundText(remembered.dependencies, keptValues,
+                                                      keptWhy, layouts, typeModules))
+                    writeStoredRound(entry, *text);
+            memo.emplace(key, std::move(remembered));
         }
         if (!grew) return;
     }
@@ -2642,6 +3503,9 @@ struct ModuleExports {
     std::unordered_map<std::string, std::string> modules;
     // Every module the file declares, constants or not.
     std::unordered_set<std::string> declared;
+    // The files these were made from (DependencyRecorder), repeated to
+    // whoever is answered from this entry instead of reading them.
+    std::set<std::string> dependencies;
 };
 
 // The expansion that `exportsOf` is running, and where its constants go. Only
@@ -2701,10 +3565,18 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
     -> const ModuleExports* {
     static std::unordered_map<std::string, ModuleExports> seen;
     static std::unordered_set<std::string> underway;
-    if (const auto found = seen.find(path); found != seen.end())
+    noteDependency(path);
+    if (const auto found = seen.find(path); found != seen.end()) {
+        noteDependencies(found->second.dependencies);
         return &found->second;
+    }
     if (!underway.insert(path).second) return nullptr;
     ModuleExports exports;
+    std::optional<DependencyRecorder> recorder;
+    if (recordingDependencies()) {
+        recorder.emplace();
+        noteDependency(path);
+    }
     auto* previous = exportSink;
     try {
         std::ifstream input(path);
@@ -2731,6 +3603,7 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
     }
     exportSink = previous;
     underway.erase(path);
+    if (recorder) exports.dependencies = recorder->files();
     return &seen.emplace(path, std::move(exports)).first->second;
 }
 
@@ -2901,6 +3774,12 @@ auto expand(ast::Program& program,
         explicit ActiveOptions(const ExpandOptions& options) : previous(activeOptions) { activeOptions = &options; }
         ~ActiveOptions() { activeOptions = previous; }
     } active{options};
+    // What this file's collapses are made from, for keeping them (collapseChains).
+    std::optional<DependencyRecorder> recorder;
+    if (reuseCollapses()) {
+        recorder.emplace();
+        noteDependency(options.sourcePath);
+    }
     // --- 0. Fold Kex.embed(...) and Template.text/.html(...) everywhere.
     // Unconditional: a program using either has no `compiled do` block at
     // all, so both must run before the hasBlock check below would otherwise
@@ -3018,10 +3897,13 @@ auto expand(ast::Program& program,
             locations.empty() ? SourceLocation{} : locations.front();
         std::vector<interpreter::ValuePtr> values;
         try {
+            SandboxClock clock;
             interpreter::Evaluator evaluator;
             useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
+            clock.started();
             values = evaluator.evaluateConstants(program, names, options.timeout);
+            if (evaluator.touchedOutside()) noteReachedOutside();
             generated = evaluator.generatedDeclarations();
             layouts = evaluator.recordFieldOrder();
             typeModules = evaluator.typeModules();
@@ -3335,6 +4217,35 @@ auto expand(ast::Program& program,
     // fold them into functions the way the parser folded the written ones.
     ast::groupFunctionClauses(program);
     return ok;
+}
+
+auto fileStamp(const std::string& path) -> std::string { return dependencyStamp(path); }
+
+auto shadowsOf(const std::set<std::string>& files, const std::vector<std::string>& roots)
+    -> std::set<std::string> {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> canonicalRoots;
+    for (const auto& root : roots) {
+        std::error_code ec;
+        canonicalRoots.push_back(fs::weakly_canonical(root, ec));
+    }
+    std::set<std::string> shadows;
+    for (const auto& file : files) {
+        const fs::path path{file};
+        if (path.extension() != ".kex") continue;
+        for (const auto& root : canonicalRoots) {
+            const auto relative = path.lexically_relative(root);
+            if (relative.empty() || *relative.begin() == "..") continue;
+            for (const auto& other : canonicalRoots) {
+                shadows.insert((other / relative).lexically_normal().string());
+                for (auto parent = relative.parent_path(); !parent.empty();
+                     parent = parent.parent_path())
+                    shadows.insert(
+                        (other / parent).lexically_normal().replace_extension(".kex").string());
+            }
+        }
+    }
+    return shadows;
 }
 
 } // namespace kex::compiled

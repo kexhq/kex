@@ -36,6 +36,11 @@ struct ImportedFunction {
     // scope must not let it compete for the bare name — see ResolvePass's
     // ambiguity check (kexhq/kex#272).
     bool isReceiverMethod = false;
+    // Reached through its receiver wherever that type is, whatever the
+    // caller imports: the rule for a `make` function of a unit of the same
+    // build, as it is in a program checked whole. The standard library's
+    // stay behind their `using` (docs/plan_separate_compilation.md).
+    bool visibleByReceiver = false;
     // ADT constructors are represented as ordinary module exports so
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.

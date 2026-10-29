@@ -247,6 +247,7 @@ auto exportToTerm(const KexiExport& exp) -> TermPtr {
     std::vector<TermPtr> names;
     for (const auto& n : exp.paramNames) names.push_back(Term::binary(n));
     fields.push_back(Term::list(std::move(names)));
+    fields.push_back(Term::integer(exp.defaultedParams));
     return Term::tuple(std::move(fields));
 }
 
@@ -262,6 +263,7 @@ auto termToExport(const TermPtr& term) -> KexiExport {
     e.beamFunction = t[5]->asBinaryStr();
     for (const auto& n : t[6]->asList())
         e.paramNames.push_back(n->asBinaryStr());
+    if (t.size() > 7) e.defaultedParams = static_cast<int>(t[7]->asInt());
     return e;
 }
 
@@ -317,6 +319,9 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     std::vector<TermPtr> names;
     for (const auto& n : m.paramNames) names.push_back(Term::binary(n));
     fields.push_back(Term::list(std::move(names)));
+    fields.push_back(Term::integer(m.defaultedParams));
+    fields.push_back(Term::atom(m.isSlot ? "true" : "false"));
+    fields.push_back(Term::atom(m.moduleFunction ? "true" : "false"));
     return Term::tuple(std::move(fields));
 }
 
@@ -334,6 +339,9 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     m.typeOnly = t[7]->isAtom("true");
     for (const auto& n : t[8]->asList())
         m.paramNames.push_back(n->asBinaryStr());
+    if (t.size() > 9) m.defaultedParams = static_cast<int>(t[9]->asInt());
+    if (t.size() > 10) m.isSlot = t[10]->isAtom("true");
+    if (t.size() > 11) m.moduleFunction = t[11]->isAtom("true");
     return m;
 }
 

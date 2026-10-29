@@ -799,6 +799,26 @@ if(TARGET kex_prelude_beam)
 endif()
 add_test(NAME compiled_dependency_cli_test COMMAND compiled_dependency_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+add_executable(collapse_cache_cli_test tests/collapse_cache_cli_test.cxx)
+target_link_libraries(collapse_cache_cli_test PRIVATE kex_lib)
+target_include_directories(collapse_cache_cli_test PRIVATE tests)
+target_compile_definitions(collapse_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(collapse_cache_cli_test kex)
+if(TARGET kex_prelude_beam)
+    add_dependencies(collapse_cache_cli_test kex_prelude_beam)
+endif()
+add_test(NAME collapse_cache_cli_test COMMAND collapse_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_executable(separate_check_cli_test tests/separate_check_cli_test.cxx)
+target_link_libraries(separate_check_cli_test PRIVATE kex_lib)
+target_include_directories(separate_check_cli_test PRIVATE tests)
+target_compile_definitions(separate_check_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(separate_check_cli_test kex)
+if(TARGET kex_prelude_beam)
+    add_dependencies(separate_check_cli_test kex_prelude_beam)
+endif()
+add_test(NAME separate_check_cli_test COMMAND separate_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # Names resolved against the whole program instead of the module's own
 # declarations and imports (kexhq/kex#476). Several modules in separate files,
 # run on both backends, so this too drives the real binary.

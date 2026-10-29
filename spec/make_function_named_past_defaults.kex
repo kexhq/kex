@@ -1,0 +1,23 @@
+# A named argument to a `make` function takes its own parameter's place, even
+# past defaulted parameters it leaves out. Called through a receiver, it used
+# to be checked in the order written: `t.text(:id, doc: "the key")` checked
+# "the key" against `primaryKey`, the parameter after `label`.
+record Table do
+  name : String
+end
+
+make Table do
+  let text(label: Atom, primaryKey: Bool = false, nullable: Bool = false, doc: String = "") -> String do
+    "${@name}.${label} key=${primaryKey} null=${nullable} doc=${doc}"
+  end
+end
+
+described : Block<Table, String> -> String
+let described(column) = column(Table { name: "users" })
+
+main do
+  let table = Table { name: "users" }
+  IO.printLine(table.text(:id, doc: "the key"))
+  IO.printLine(table.text(:email, doc: "where to write", nullable: true))
+  IO.printLine(described do |t| t.text(:name, doc: "shown") end)
+end

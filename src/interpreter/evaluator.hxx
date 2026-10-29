@@ -94,6 +94,13 @@ public:
         const std::string& name,
         std::vector<ValuePtr> args,
         std::chrono::milliseconds timeout) -> ValuePtr;
+    // Another call, into the program an earlier evaluateFunction on this
+    // evaluator loaded, without loading it again: every tagged literal of a
+    // program has its validator called in the same one.
+    auto evaluateLoadedFunction(
+        const std::string& name,
+        std::vector<ValuePtr> args,
+        std::chrono::milliseconds timeout) -> ValuePtr;
     // Loads `program`'s declarations ONCE under the same cooperative deadline
     // and termination guard as evaluateFunction, then forces each named
     // binding and returns its value. That is how src/compiled/ evaluates
@@ -174,6 +181,19 @@ public:
     // program that fails to collapse still runs and prints the right answer.
     auto evaluateExpressions(
         const ast::Program& program,
+        const std::vector<ExpressionRequest>& requests,
+        std::chrono::milliseconds timeout,
+        std::vector<std::string>* reasons = nullptr) -> std::vector<ValuePtr>;
+    // Whether anything this evaluator ran reached outside the program: a
+    // `foul` function, or a built-in that reads or changes files, the
+    // environment, the clock, processes or the network. When nothing did,
+    // what it computed depends on its sources alone, and a build may keep
+    // it for the next one (compiled::setReuseCollapses).
+    auto touchedOutside() const -> bool { return m_touchedOutside; }
+    // More requests against the program an earlier evaluateExpressions on
+    // this evaluator loaded, without loading it again: what a collapse's
+    // second round asks, of a program the first round already ran.
+    auto evaluateMoreExpressions(
         const std::vector<ExpressionRequest>& requests,
         std::chrono::milliseconds timeout,
         std::vector<std::string>* reasons = nullptr) -> std::vector<ValuePtr>;
@@ -272,9 +292,15 @@ private:
     auto resolveNamespaceAlias(const std::string& name,
                                SourceLocation loc) -> std::optional<std::string>;
     auto resolvePendingExports() -> void;
-    auto runCompileTime(const ast::Program& program,
+    // `program` is loaded first, unless it is null: already loaded.
+    auto runCompileTime(const ast::Program* program,
                         std::chrono::milliseconds timeout,
                         const std::function<void()>& produce) -> void;
+    auto evaluateRequests(
+        const ast::Program* program,
+        const std::vector<ExpressionRequest>& requests,
+        std::chrono::milliseconds timeout,
+        std::vector<std::string>* reasons) -> std::vector<ValuePtr>;
     auto defineImported(const std::string& bindingName, const std::string& logicalName,
                         const std::string& sourceModule, bool explicitImport,
                         const std::string& moduleScope, ValuePtr value,
@@ -371,6 +397,9 @@ private:
     auto defineModule(const std::string& name) -> void;
     auto definePublic(const std::string& name, NativeFunc fn) -> void;
     auto defineDual(const std::string& name, NativeFunc fn) -> void;
+    // `fn`, noting in m_touchedOutside whenever it runs if `name` is a
+    // built-in that reaches outside the program.
+    auto watchOutside(const std::string& name, NativeFunc fn) -> NativeFunc;
     // Throws unless setMocksAllowed(true) — the runtime half of "Mock.* is
     // only callable from tests". `api` is the public Kex name of the entry
     // point being denied (e.g. "Mock.FS.File"), so the error names what the
@@ -640,6 +669,9 @@ private:
     // compile-time evaluation (compiled do, tagged-literal validation) is
     // exactly the place a dependency must not be able to install a mock.
     bool m_mocksAllowed = false;
+
+    // See touchedOutside.
+    bool m_touchedOutside = false;
 
     bool m_mockIO = false;
     std::string m_mockIOOutput;

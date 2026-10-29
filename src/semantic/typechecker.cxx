@@ -570,6 +570,20 @@ auto TypeChecker::check(const ast::Program& program,
     if (m_importedInterfaces)
         m_typeAliases = m_importedInterfaces->typeAliases;
 
+    // A slot of a `serving` block compiled on its own is called on its
+    // server as one declared here is: `within:` is the call's, not an
+    // argument. Only a unit of this program's (`visibleByReceiver`): the
+    // prelude's own `make Server<X>` functions (`link`) are no slots.
+    if (m_importedInterfaces)
+        for (const auto& [name, functions] : m_importedInterfaces->receiverFunctions)
+            for (const auto& function : functions)
+                if (function.visibleByReceiver && !function.signature.params.empty())
+                    if (const auto* server = std::get_if<NamedType>(
+                            &function.signature.params.front()->kind);
+                        server && server->name == "Server" &&
+                        server->typeArgs.size() == 1)
+                        m_slotMethodNames.insert(name);
+
     // Alias bodies must see the canonical built-in types. Resolving an open
     // row alias before this point made its `String` field a nominal name while
     // record declarations later used the real String type; both printed the
@@ -1171,21 +1185,31 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     // `Net.HTTP.Request` and reported its fields instead.
     if (m_recordFields.count(name) || m_adtVariants.count(name)) return name;
     if (m_importedInterfaces) {
-        std::optional<std::string> unique;
-        const auto suffix = "." + name;
-        // Records only. A module ADT is never guessed at: an unimported
-        // `Message` must not become Net.HTTP.WebSocket.Message over a local
-        // `type Message = :hello` that is resolved after this.
-        for (const auto& [candidate, _] :
-             m_importedInterfaces->recordArities) {
-            if (candidate.size() <= suffix.size() ||
-                candidate.compare(candidate.size() - suffix.size(),
-                                  suffix.size(), suffix) != 0)
-                continue;
-            if (unique && *unique != candidate) return name;
-            unique = candidate;
+        auto [cached, fresh] = m_importedRecordSuffixes.try_emplace(name);
+        if (fresh) {
+            std::optional<std::string> unique;
+            bool ambiguous = false;
+            const auto suffix = "." + name;
+            // Records only. A module ADT is never guessed at: an unimported
+            // `Message` must not become Net.HTTP.WebSocket.Message over a local
+            // `type Message = :hello` that is resolved after this.
+            for (const auto& [candidate, _] :
+                 m_importedInterfaces->recordArities) {
+                if (candidate.size() <= suffix.size() ||
+                    candidate.compare(candidate.size() - suffix.size(),
+                                      suffix.size(), suffix) != 0)
+                    continue;
+                if (unique && *unique != candidate) {
+                    ambiguous = true;
+                    break;
+                }
+                unique = candidate;
+            }
+            // Ambiguous answers the bare name at once, as it always has; no
+            // match goes on to the aliases below.
+            cached->second = ambiguous ? std::optional<std::string>{name} : unique;
         }
-        if (unique) return *unique;
+        if (cached->second) return *cached->second;
     }
     // A leading portion of `name` is a KNOWN ALIAS (`using Geometry, as:
     // Geo`) — a "Geo.Circle" reference names the record its TARGET module
@@ -4546,7 +4570,7 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
 
 auto TypeChecker::importedFunctionVisible(
     const ImportedFunction& function) const -> bool {
-    if (function.sourceModule.empty()) return true;
+    if (function.sourceModule.empty() || function.visibleByReceiver) return true;
     if (m_importedInterfaces) {
         if (auto module = m_importedInterfaces->modules.find(function.sourceModule);
             module != m_importedInterfaces->modules.end() &&
@@ -7735,6 +7759,13 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
                 if (dot == std::string::npos) break;
                 scope.resize(dot);
             }
+            // Or one a `using` brings in from a module compiled on its own.
+            if (m_importedInterfaces)
+                for (const auto& [module, interface] : m_importedInterfaces->modules)
+                    if (auto exported = interface.exports.find(name);
+                        exported != interface.exports.end() &&
+                        moduleMemberImported(module, name))
+                        return true;
             return false;
         };
         const bool rootIsSomething =
@@ -7763,11 +7794,17 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
     for (const auto& module : m_localModules)
         if (path.rfind(module + ".", 0) == 0 && module.size() > deepest.size())
             deepest = module;
-    if (!deepest.empty() &&
-        !std::any_of(m_localModules.begin(), m_localModules.end(),
-                     [&](const std::string& module) {
-                         return module == path || module.rfind(path + ".", 0) == 0;
-                     })) {
+    // A nested module compiled on its own (`App.Views.Chat.Threads` beside
+    // `App.Views.Chat`) is held there as well, through its interface.
+    const auto holds = [&](const std::string& module) {
+        return module == path || module.rfind(path + ".", 0) == 0;
+    };
+    const bool importedHere = m_importedInterfaces &&
+        std::any_of(m_importedInterfaces->modules.begin(),
+                    m_importedInterfaces->modules.end(),
+                    [&](const auto& entry) { return holds(entry.first); });
+    if (!deepest.empty() && !importedHere &&
+        !std::any_of(m_localModules.begin(), m_localModules.end(), holds)) {
         const auto rest = path.substr(deepest.size() + 1);
         const auto next = rest.substr(0, rest.find('.'));
         // An uppercase module CONSTANT (`Console.RED`, which string
@@ -9286,45 +9323,74 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // important for callback-first APIs with independent optional settings.
     // Only normalize a uniform layout: overloaded layouts need per-candidate
     // placement and must not be guessed from the first signature.
-    if ((!isMethodCall || name.find("::") != std::string::npos) && !sigs->empty()) {
+    //
+    // A call through a receiver (`t.text(:id, doc: "...")`) has the receiver
+    // as its first argument, which no parameter name covers, and its layout
+    // is read from the overloads that receiver can take: named arguments
+    // used to be checked in written order there, so skipping a defaulted
+    // parameter checked the next one against it.
+    if (!sigs->empty()) {
         const auto* functionCall = callExpr
             ? std::get_if<ast::FunctionCall>(&callExpr->kind) : nullptr;
         const auto* named = functionCall ? &functionCall->namedArgs
                                         : methodCall ? &methodCall->namedArgs : nullptr;
-        const auto& layout = sigs->front();
-        const bool uniform = !layout.paramNames.empty() &&
-            layout.paramNames.size() == layout.params.size() &&
-            std::all_of(sigs->begin(), sigs->end(), [&](const Signature& sig) {
-                return sig.paramNames == layout.paramNames &&
-                       sig.params.size() == layout.params.size() &&
-                       sig.requiredParams == layout.requiredParams;
+        const bool throughReceiver =
+            isMethodCall && name.find("::") == std::string::npos;
+        const std::size_t receiverSlots = throughReceiver ? 1 : 0;
+        std::vector<const Signature*> layouts;
+        for (const auto& sig : *sigs) {
+            if (sig.paramNames.empty() ||
+                sig.paramNames.size() + receiverSlots != sig.params.size())
+                continue;
+            // A receiver not yet known (a block's parameter) takes any.
+            if (throughReceiver) {
+                if (argTypes.empty()) continue;
+                const auto receiver = resolve(argTypes.front());
+                if (!containsOpenType(receiver) &&
+                    !argMatchesParam(receiver, resolve(sig.params.front())))
+                    continue;
+            }
+            layouts.push_back(&sig);
+        }
+        const bool uniform = !layouts.empty() &&
+            (throughReceiver || layouts.size() == sigs->size()) &&
+            std::all_of(layouts.begin(), layouts.end(), [&](const Signature* sig) {
+                return sig->paramNames == layouts.front()->paramNames &&
+                       sig->params.size() == layouts.front()->params.size() &&
+                       sig->requiredParams == layouts.front()->requiredParams;
             });
         if (named && !named->empty() && uniform) {
+            const auto& layout = *layouts.front();
             const auto positionalCount = functionCall ? functionCall->args.size()
                                                      : methodCall->args.size();
             const bool hasBlock = functionCall ? bool(functionCall->block)
                                               : bool(methodCall->block);
             std::vector<TypePtr> ordered(layout.params.size());
-            bool valid = argTypes.size() == positionalCount + named->size() + hasBlock;
+            bool valid = argTypes.size() ==
+                receiverSlots + positionalCount + named->size() + hasBlock;
+            if (valid && throughReceiver) ordered.front() = argTypes.front();
             for (size_t i = 0; valid && i < named->size(); ++i) {
                 const auto it = std::find(layout.paramNames.begin(),
                                           layout.paramNames.end(), (*named)[i].first);
                 if (it == layout.paramNames.end()) { valid = false; break; }
-                const auto slot = std::distance(layout.paramNames.begin(), it);
+                const auto slot = receiverSlots +
+                    std::distance(layout.paramNames.begin(), it);
                 if (ordered[slot]) { valid = false; break; }
-                ordered[slot] = argTypes[positionalCount + i];
+                ordered[slot] = argTypes[receiverSlots + positionalCount + i];
             }
-            size_t next = 0;
+            size_t next = receiverSlots;
             for (size_t i = 0; valid && i < positionalCount + hasBlock; ++i) {
                 while (next < ordered.size() && ordered[next]) ++next;
                 if (next == ordered.size()) { valid = false; break; }
-                ordered[next++] = argTypes[i < positionalCount ? i : argTypes.size() - 1];
+                ordered[next++] = argTypes[i < positionalCount
+                    ? receiverSlots + i : argTypes.size() - 1];
             }
             if (valid) {
                 const auto required = layout.requiredParams.value_or(layout.params.size());
                 for (size_t i = 0; i < ordered.size(); ++i) {
                     if (!ordered[i] && i < required) {
-                        error(loc, "Missing required argument `" + layout.paramNames[i] +
+                        error(loc, "Missing required argument `" +
+                                   layout.paramNames[i - receiverSlots] +
                                    "` for `" + sourceName(name) + "`");
                         return Type::unknown();
                     }
