@@ -191,11 +191,19 @@ timeout_message(Ms) ->
 %% whether it is talking to one is told yes, so a REPL run by `tey console`
 %% has its line editing, completion and history. Relayed through a pipe it
 %% had none of them, and its input was echoed back a line at a time.
+%%
+%% The VM must not read the terminal meanwhile. On OTP 27 a -noshell VM's
+%% `user_drv_reader` waits on stdin the whole time, nothing having asked it
+%% for input, and now and then a line typed for the child reached it first
+%% and was gone: measured, 1 run in 20 to 60. Suspended while the child
+%% runs, it lost none in 100. A suspension ends with the process that made
+%% it, so one left behind by a crash does not keep the VM deaf.
 stream(Command, Args) ->
     case os:find_executable(unicode:characters_to_list(Command)) of
         false -> {'Error', <<"executable not found: ", (unicode:characters_to_binary(Command))/binary>>};
         Executable ->
             Arguments = [unicode:characters_to_list(A) || A <- Args],
+            Reader = suspend_terminal_reader(),
             Port = open_port({spawn_executable, Executable},
                              [exit_status, nouse_stdio, hide, {args, Arguments}]),
             %% A port's child is in its own process group and nothing
@@ -204,8 +212,27 @@ stream(Command, Args) ->
             %% kex_child_guard.
             Guard = kex_child_guard:protect(Port),
             Status = receive {Port, {exit_status, Exited}} -> Exited end,
+            resume_terminal_reader(Reader),
             kex_child_guard:release(Guard),
             {'Ok', Status}
+    end.
+
+%% The VM's terminal reader, suspended, or `none` when there is none to
+%% suspend (no terminal driver, or it went away first).
+suspend_terminal_reader() ->
+    case whereis(user_drv_reader) of
+        undefined -> none;
+        Reader ->
+            try erlang:suspend_process(Reader) of
+                true -> Reader
+            catch error:badarg -> none
+            end
+    end.
+
+resume_terminal_reader(none) -> ok;
+resume_terminal_reader(Reader) ->
+    try erlang:resume_process(Reader), ok
+    catch error:badarg -> ok
     end.
 
 %% Runs a child and holds a conversation with it over its stdin and stdout,
