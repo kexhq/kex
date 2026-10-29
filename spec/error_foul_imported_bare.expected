@@ -1,0 +1,1 @@
+spec/error_foul_imported_bare.kex:11:29: error: Cannot call foul function 'fetch' from pure context

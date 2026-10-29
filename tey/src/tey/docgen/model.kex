@@ -31,7 +31,7 @@ module Tey.Docgen.Model do
     deprecated : String?
   end
 
-  foul emptyDoc() -> Doc do
+  let emptyDoc() -> Doc do
     return Doc { summary: "", params: [], returns: None, examples: [], deprecated: None }
   end
 
