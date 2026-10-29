@@ -12,6 +12,7 @@
 #include <functional>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace kex::validation {
 namespace {
@@ -225,8 +226,18 @@ struct ImportedModule {
     std::unique_ptr<ast::Program> program;
     Functions functions;
     // The module is analyzed on its own so its companion's signature can be
-    // checked — the caller's analyzer only knows the user program.
-    std::unique_ptr<semantic::Analyzer> analyzer;
+    // checked — the caller's analyzer only knows the user program. Only the
+    // module a tag's companion is found in, and only once one is: analyzing
+    // every module the program uses was a large share of Slick's type
+    // check, for the one module whose validator is called.
+    mutable std::unique_ptr<semantic::Analyzer> analyzer;
+    auto analyzed() const -> const semantic::Analyzer& {
+        if (!analyzer) {
+            analyzer = std::make_unique<semantic::Analyzer>();
+            analyzer->analyze(*program);
+        }
+        return *analyzer;
+    }
 };
 
 // Collects the module names a program imports with `using`, ignoring foreign
@@ -273,9 +284,14 @@ auto loadUsingModules(
         if (!use.qualifier.empty() &&
             std::find(names.begin(), names.end(), use.qualifier) == names.end())
             names.push_back(use.qualifier);
+    // Once each: a build's program is every module it uses merged into one,
+    // and the same module is `using`-ed by dozens of them.
+    std::unordered_set<std::string> seenNames;
+    std::unordered_set<std::string> seenPaths;
     for (const auto& name : names) {
+        if (!seenNames.insert(name).second) continue;
         auto resolved = resolver.resolve(name);
-        if (!resolved) continue;
+        if (!resolved || !seenPaths.insert(resolved->path).second) continue;
 
         std::ifstream input{resolved->path};
         if (!input) continue;
@@ -604,17 +620,30 @@ auto validateTaggedLiterals(
     // alive for the duration — `functions` holds raw AST pointers into it, and
     // the companion is evaluated against that module's own program (which is
     // self-contained: it can reach the prelude and intrinsics, which is all a
-    // validator is allowed to use anyway, being pure).
+    // validator is allowed to use anyway, being pure). Only once a tag is
+    // not the program's own: a build's program has every module it uses
+    // merged into it already, and parsing them all again here was most of
+    // what validation cost.
     std::vector<ImportedModule> imported;
-    if (!moduleRoots.empty() && !uses.empty())
-        imported = loadUsingModules(program, moduleRoots, uses);
-    for (auto& module : imported)
-        if (module.program) {
-            std::vector<TagUse> ignored;
-            collect(*module.program, module.functions, ignored);
-            module.analyzer = std::make_unique<semantic::Analyzer>();
-            module.analyzer->analyze(*module.program);
-        }
+    bool importedLoaded = false;
+    auto importedModules = [&]() -> const std::vector<ImportedModule>& {
+        if (importedLoaded) return imported;
+        importedLoaded = true;
+        if (!moduleRoots.empty() && !uses.empty())
+            imported = loadUsingModules(program, moduleRoots, uses);
+        for (auto& module : imported)
+            if (module.program) {
+                std::vector<TagUse> ignored;
+                collect(*module.program, module.functions, ignored);
+            }
+        return imported;
+    };
+
+    // One sandbox per program a validator lives in, loaded once and asked
+    // for every tagged literal it validates: loading a build's program again
+    // for each of them was nearly all validation cost. One whose validator
+    // timed out or crashed is dropped, and the next literal gets a fresh one.
+    std::unordered_map<const ast::Program*, std::unique_ptr<interpreter::Evaluator>> sandboxes;
 
     std::vector<semantic::Diagnostic> diagnostics;
     for (const auto& use : uses) {
@@ -635,7 +664,7 @@ auto validateTaggedLiterals(
         if (!use.qualifier.empty() && !functions.contains(qualified(owner, use.literal->tag))) {
             // A qualified tag is that module's own function: no trailing-
             // segment matching, which could find another module's tag.
-            for (const auto& module : imported)
+            for (const auto& module : importedModules())
                 if (module.functions.contains(qualified(owner, use.literal->tag)) &&
                     module.functions.contains(companionKey)) {
                     scope = &module.functions;
@@ -651,7 +680,7 @@ auto validateTaggedLiterals(
             // ("regex") — `using` brought it into scope. Match on the trailing
             // segment, and remember the qualified key for evaluation.
             const Functions* fromModule = nullptr;
-            for (const auto& module : imported) {
+            for (const auto& module : importedModules()) {
                 for (const auto& [key, definitions] : module.functions) {
                     const auto bare = key.substr(key.rfind("::") == std::string::npos
                                                      ? 0 : key.rfind("::") + 2);
@@ -679,7 +708,7 @@ auto validateTaggedLiterals(
             continue;
 
         const auto& signatureSource =
-            matchedModule ? *matchedModule->analyzer : analyzer;
+            matchedModule ? matchedModule->analyzed() : analyzer;
         if (!exactValidatorSignature(found->second, signatureSource)) {
             diagnostics.push_back({
                 semantic::Diagnostic::Level::Error,
@@ -690,16 +719,22 @@ auto validateTaggedLiterals(
             continue;
         }
 
+        const auto& validator = scope == &functions ? companionKey : moduleCompanionKey;
         try {
-            interpreter::Evaluator evaluator;
-            evaluator.loadPrelude();
-            auto result = evaluator.evaluateFunction(
-                *home,
-                scope == &functions ? companionKey : moduleCompanionKey,
-                {interpreter::Value::string(subject)},
-                timeout);
+            auto& sandbox = sandboxes[home];
+            interpreter::ValuePtr result;
+            if (sandbox) {
+                result = sandbox->evaluateLoadedFunction(
+                    validator, {interpreter::Value::string(subject)}, timeout);
+            } else {
+                sandbox = std::make_unique<interpreter::Evaluator>();
+                sandbox->loadPrelude();
+                result = sandbox->evaluateFunction(
+                    *home, validator, {interpreter::Value::string(subject)}, timeout);
+            }
             appendIssues(result, use, companion, diagnostics);
         } catch (const interpreter::EvaluationTimeout&) {
+            sandboxes.erase(home);
             semantic::Diagnostic diagnostic{
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,
@@ -711,6 +746,7 @@ auto validateTaggedLiterals(
                 "triggered by tagged literal `" + use.literal->tag + "`"});
             diagnostics.push_back(std::move(diagnostic));
         } catch (const std::exception& error) {
+            sandboxes.erase(home);
             semantic::Diagnostic diagnostic{
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,

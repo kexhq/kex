@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -103,5 +104,77 @@ struct ExpandOptions {
 auto expand(ast::Program& program,
             std::vector<semantic::Diagnostic>& diagnostics,
             const ExpandOptions& options = {}) -> bool;
+
+// Where compile-time evaluation spends its time, for KEX_TIMINGS: how many
+// sandboxed evaluators were started, how long starting them took (an empty
+// evaluator with the prelude loaded) and how long they then ran. A build
+// that expands for minutes needs to say which of the two it was.
+struct SandboxTimings {
+    std::size_t started = 0;
+    std::chrono::steady_clock::duration startup{};
+    std::chrono::steady_clock::duration evaluation{};
+};
+auto sandboxTimings() -> SandboxTimings&;
+
+// The template-scan cache an expansion uses when its options name none: a
+// module the semantic pass or a compile-time sandbox expands builds options
+// of its own, and the compiler sets these once for every one of them.
+auto setDefaultScanCache(std::filesystem::path root, std::string toolchainKey) -> void;
+
+// Keep what each builder chain collapsed to, by file and place, and reuse it
+// whenever the same file is expanded again in this process. A build expands
+// every dependency for its gating pre-check, again for the build itself, and
+// again inside each compile-time sandbox that loads it — and each collapse is
+// a sandbox run of its own. Only for a process whose files cannot change
+// while it runs (one build or check), never the REPL or the language server.
+auto setReuseCollapses(bool reuse) -> void;
+
+// The files a compile-time result was made from, so that a build may keep it
+// for the next one and know when it no longer holds (setReuseCollapses).
+// Whatever reads a source file, a template or a directory for an expansion
+// says so (noteDependency), and every recorder alive at that moment keeps
+// it: a module a sandbox loads is a dependency of what the sandbox
+// computed, and so of the expansion that ran the sandbox. A cache that
+// answers from memory repeats the files its answer came from
+// (noteDependencies), as reading them would have. Recorders exist only
+// while collapses are reused; without one, noting costs nothing.
+class DependencyRecorder {
+public:
+    DependencyRecorder();
+    ~DependencyRecorder();
+    DependencyRecorder(const DependencyRecorder&) = delete;
+    auto operator=(const DependencyRecorder&) -> DependencyRecorder& = delete;
+    auto files() const -> const std::set<std::string>& { return m_files; }
+    // The innermost live recorder, or null.
+    static auto current() -> DependencyRecorder*;
+
+private:
+    friend auto noteDependency(const std::string& path) -> void;
+    friend auto noteDependencies(const std::set<std::string>& paths) -> void;
+    std::set<std::string> m_files;
+    DependencyRecorder* m_outer;
+};
+auto noteDependency(const std::string& path) -> void;
+auto noteDependencies(const std::set<std::string>& paths) -> void;
+// Whether a recorder is live: whether reading a file needs noting.
+auto recordingDependencies() -> bool;
+
+// What a dependency looked like: its size and modification time, its
+// modification time for a directory (an entry added or removed changes
+// it), or "-" while it does not exist. Equal stamps, same file.
+auto fileStamp(const std::string& path) -> std::string;
+
+// Whether any compile-time evaluation in this process reached outside the
+// program (interpreter::Evaluator::touchedOutside): what this build made
+// then depends on more than its files, and is not kept for the next one.
+// Where a new file could take the name of a module read from one of
+// `files`: the same path under every other root, and the file of each module
+// it is nested in. A cache listing these sees a module taken over, as it
+// sees one changed.
+auto shadowsOf(const std::set<std::string>& files, const std::vector<std::string>& roots)
+    -> std::set<std::string>;
+
+auto noteReachedOutside() -> void;
+auto reachedOutside() -> bool;
 
 } // namespace kex::compiled

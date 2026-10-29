@@ -1171,21 +1171,31 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     // `Net.HTTP.Request` and reported its fields instead.
     if (m_recordFields.count(name) || m_adtVariants.count(name)) return name;
     if (m_importedInterfaces) {
-        std::optional<std::string> unique;
-        const auto suffix = "." + name;
-        // Records only. A module ADT is never guessed at: an unimported
-        // `Message` must not become Net.HTTP.WebSocket.Message over a local
-        // `type Message = :hello` that is resolved after this.
-        for (const auto& [candidate, _] :
-             m_importedInterfaces->recordArities) {
-            if (candidate.size() <= suffix.size() ||
-                candidate.compare(candidate.size() - suffix.size(),
-                                  suffix.size(), suffix) != 0)
-                continue;
-            if (unique && *unique != candidate) return name;
-            unique = candidate;
+        auto [cached, fresh] = m_importedRecordSuffixes.try_emplace(name);
+        if (fresh) {
+            std::optional<std::string> unique;
+            bool ambiguous = false;
+            const auto suffix = "." + name;
+            // Records only. A module ADT is never guessed at: an unimported
+            // `Message` must not become Net.HTTP.WebSocket.Message over a local
+            // `type Message = :hello` that is resolved after this.
+            for (const auto& [candidate, _] :
+                 m_importedInterfaces->recordArities) {
+                if (candidate.size() <= suffix.size() ||
+                    candidate.compare(candidate.size() - suffix.size(),
+                                      suffix.size(), suffix) != 0)
+                    continue;
+                if (unique && *unique != candidate) {
+                    ambiguous = true;
+                    break;
+                }
+                unique = candidate;
+            }
+            // Ambiguous answers the bare name at once, as it always has; no
+            // match goes on to the aliases below.
+            cached->second = ambiguous ? std::optional<std::string>{name} : unique;
         }
-        if (unique) return *unique;
+        if (cached->second) return *cached->second;
     }
     // A leading portion of `name` is a KNOWN ALIAS (`using Geometry, as:
     // Geo`) — a "Geo.Circle" reference names the record its TARGET module

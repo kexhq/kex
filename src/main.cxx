@@ -58,6 +58,7 @@
 #include "common/repl_commands.hxx"
 #include "semantic/completion_at.hxx"
 #include <functional>
+#include <thread>
 
 // What Tab and `/complete` complete against: the program each REPL builds to
 // type-check an input — its top-level definitions, then `main do` with the
@@ -717,6 +718,50 @@ static auto exitStatusOf(int waitStatus) -> int {
   if (WIFSIGNALED(waitStatus))
     return 128 + WTERMSIG(waitStatus);
   return waitStatus == 0 ? 0 : 1;
+}
+
+// Runs `commands` side by side and calls `finished(index, status)` for each as
+// it ends, in the order they end — which is what lets a build say how far its
+// erlc runs have got while they run. Used for erlc only: these are short
+// compiler runs in the build's own process group, so a Ctrl+C at the terminal
+// reaches them directly and nothing needs forwarding (runShellCommand's
+// reason to exist does not apply).
+static auto runShellCommandsTogether(
+    const std::vector<std::string> &commands,
+    const std::function<void(std::size_t, int)> &finished) -> void {
+#ifdef __EMSCRIPTEN__
+  for (std::size_t i = 0; i < commands.size(); ++i)
+    finished(i, runShellCommand(commands[i]));
+#else
+  std::unordered_map<pid_t, std::size_t> running;
+  for (std::size_t i = 0; i < commands.size(); ++i) {
+    const pid_t pid = fork();
+    if (pid < 0) {
+      finished(i, -1);
+      continue;
+    }
+    if (pid == 0) {
+      execl("/bin/sh", "sh", "-c", commands[i].c_str(), nullptr);
+      _exit(127);
+    }
+    running.emplace(pid, i);
+  }
+  while (!running.empty()) {
+    int status = 0;
+    const pid_t pid = waitpid(-1, &status, 0);
+    if (pid < 0) {
+      if (errno == EINTR) continue;
+      // Nothing left to wait for that we know of; report the rest failed.
+      for (const auto &[_, index] : running) finished(index, -1);
+      return;
+    }
+    if (const auto found = running.find(pid); found != running.end()) {
+      const auto index = found->second;
+      running.erase(found);
+      finished(index, status);
+    }
+  }
+#endif
 }
 
 // `kex_test:configure(Mode, Filters), ` for the `-eval` the BEAM runner
@@ -1746,6 +1791,13 @@ auto setScanCache(kex::compiled::ExpandOptions &options) -> void {
   }
 }
 
+// The same for every expansion that builds its own options: a module the
+// semantic pass or a compile-time sandbox expands.
+auto setDefaultScanCache() -> void {
+  if (const auto base = kexCacheBase())
+    kex::compiled::setDefaultScanCache(*base, toolchainFingerprint());
+}
+
 auto discoveryCacheEntry(const std::string &source)
     -> std::optional<std::filesystem::path> {
   const auto base = kexCacheBase();
@@ -1894,6 +1946,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
   std::chrono::steady_clock::duration parseTime{};
   std::chrono::steady_clock::duration analyzeTime{};
   std::chrono::steady_clock::duration expandTime{};
+  const auto sandboxesBefore = kex::compiled::sandboxTimings();
 
   size_t discoveryHits = 0;
   // Names a `using` or a qualified reference asked for that no file under the
@@ -2102,6 +2155,13 @@ auto resolveBeamDeps(kex::ast::Program &program,
                  "analyze %.1f ms (%zu from the discovery cache)\n",
                  deps.size(), ms(parseTime), ms(expandTime), ms(analyzeTime),
                  discoveryHits);
+    const auto &sandboxes = kex::compiled::sandboxTimings();
+    if (sandboxes.started > sandboxesBefore.started)
+      std::fprintf(stderr,
+                   "    %zu compile-time sandboxes: start-up %.1f ms, evaluation %.1f ms\n",
+                   sandboxes.started - sandboxesBefore.started,
+                   ms(sandboxes.startup - sandboxesBefore.startup),
+                   ms(sandboxes.evaluation - sandboxesBefore.evaluation));
   }
   return deps;
 }
@@ -2737,6 +2797,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
       countError(diag);
       printSemanticDiagnostic(diag);
     }
+    phase("tagged literal validation");
   }
 
   if (errorCount) *errorCount = errors;
@@ -2891,7 +2952,12 @@ auto beamCacheRoot() -> std::optional<std::filesystem::path> {
 // The erlc actually run, as a string that changes whenever it does: its
 // resolved path (an OTP upgrade lands in a new versioned directory) plus the
 // file's size and modification time. Asking erlc for its OTP release would
-// start a VM — the very cost the cache exists to avoid.
+// start a VM — the very cost the cache exists to avoid. `erlc` is only a
+// launcher, though: what compiles is the installation's compiler
+// application, which an update in place can replace without touching it. So
+// the release (`releases/<n>/OTP_VERSION`) and the compiler application's
+// versioned directory are part of it too, read from the files, and so is
+// `ERL_COMPILER_OPTIONS`, which erlc applies to everything it compiles.
 auto erlcIdentity() -> std::string {
   namespace fs = std::filesystem;
   std::string command = erlcExecutable();
@@ -2918,16 +2984,43 @@ auto erlcIdentity() -> std::string {
   if (ec) return command;
   const auto size = fs::file_size(canonical, ec);
   const auto modified = fs::last_write_time(canonical, ec).time_since_epoch().count();
-  return canonical.string() + "|" +
-         std::to_string(static_cast<unsigned long long>(size)) + "|" +
-         std::to_string(static_cast<long long>(modified));
+  auto identity = canonical.string() + "|" +
+                  std::to_string(static_cast<unsigned long long>(size)) + "|" +
+                  std::to_string(static_cast<long long>(modified));
+  // bin/erlc sits in the installation's root.
+  const auto root = canonical.parent_path().parent_path();
+  std::vector<std::string> parts;
+  for (const auto &release : fs::directory_iterator(root / "releases", ec)) {
+    std::ifstream input(release.path() / "OTP_VERSION");
+    std::string version;
+    if (input && std::getline(input, version))
+      parts.push_back("otp:" + release.path().filename().string() + "=" + version);
+  }
+  for (const auto &application : fs::directory_iterator(root / "lib", ec))
+    if (application.path().filename().string().rfind("compiler-", 0) == 0)
+      parts.push_back(application.path().filename().string());
+  std::sort(parts.begin(), parts.end());
+  for (const auto &part : parts) identity += "|" + part;
+  if (const char *options = std::getenv("ERL_COMPILER_OPTIONS"))
+    identity += "|options:" + std::string(options);
+  return identity;
 }
 
-// The cache key for one module: SHA-256 over everything its .beam depends on.
+// The cache key for one module: SHA-256 over everything its .beam depends on,
+// and nothing else. The compiler's own version is not part of it: whatever a
+// new kex emits differently is in the Core Erlang text, so its key moves
+// anyway. Keyed on the git revision as well, every rebuild of kex threw the
+// whole cache away, and Tey's 82 modules went back through erlc (45s of a 76s
+// build) after any commit at all.
+//
+// So the cache holds exactly what erlc wrote, and nothing of kex's own: the
+// KexI chunk is attached to the copy in the build's output, after it leaves
+// the cache, every build. Anything that changes what an entry holds — a beam
+// post-processed before it is stored, another layout — must bump the
+// `kex-beam-cache-v2` tag, or a newer kex reads an older entry as its own.
 auto beamCacheKey(const std::string &coreSource, const std::string &erlc,
                   const std::string &flags) -> std::string {
-  std::string material = "kex-beam-cache-v1\n" + kex::versionNumber() + "\n" +
-                         kex::kGitRevision + "\n" + erlc + "\n" + flags + "\n" +
+  std::string material = "kex-beam-cache-v2\n" + erlc + "\n" + flags + "\n" +
                          coreSource;
   const auto digest = kex::beam::computeSha256(
       std::vector<uint8_t>(material.begin(), material.end()));
@@ -3135,10 +3228,9 @@ auto runCacheDir(const std::string &key) -> std::filesystem::path {
 // A cache hit: every module the previous matching run produced, in the same
 // order (index 0 is the entry module — order matters for the BEAM load
 // expression and for `mainArity`, which is only meaningful on that one).
-auto tryLoadRunCache(const std::string &key, const std::string &outputDir)
+auto tryLoadRunCacheFrom(const std::filesystem::path &dir, const std::string &outputDir)
     -> std::optional<std::vector<kex::ir::EmitResult>> {
   namespace fs = std::filesystem;
-  const auto dir = runCacheDir(key);
   std::ifstream manifest(dir / "manifest.txt");
   if (!manifest) return std::nullopt;
   std::string line;
@@ -3171,37 +3263,158 @@ auto tryLoadRunCache(const std::string &key, const std::string &outputDir)
   return results;
 }
 
+auto tryLoadRunCache(const std::string &key, const std::string &outputDir)
+    -> std::optional<std::vector<kex::ir::EmitResult>> {
+  return tryLoadRunCacheFrom(runCacheDir(key), outputDir);
+}
+
 // Written beside the final name and renamed into place, matching every other
 // cache in this file — a build reading it mid-write never sees a half-copied
 // entry, and a failed write only costs the next run a cache miss.
-auto storeRunCache(const std::string &key, const std::string &outputDir,
-                   const std::vector<kex::ir::EmitResult> &results) -> void {
+auto storeRunCacheIn(const std::filesystem::path &dir, const std::string &outputDir,
+                     const std::vector<kex::ir::EmitResult> &results) -> bool {
   namespace fs = std::filesystem;
-  const auto dir = runCacheDir(key);
   std::error_code ec;
   fs::create_directories(dir, ec);
-  if (ec) return;
+  if (ec) return false;
   for (const auto &result : results) {
     const auto source = fs::path{outputDir} / (result.moduleName + ".beam");
     auto target = dir / (result.moduleName + ".beam");
     auto staging = target;
     staging += stagingSuffix();
     fs::copy_file(source, staging, fs::copy_options::overwrite_existing, ec);
-    if (ec) return;
+    if (ec) return false;
     fs::rename(staging, target, ec);
-    if (ec) { fs::remove(staging, ec); return; }
+    if (ec) { fs::remove(staging, ec); return false; }
   }
   auto manifestPath = dir / "manifest.txt";
   auto staging = manifestPath;
   staging += stagingSuffix();
   {
     std::ofstream out(staging);
-    if (!out) return;
+    if (!out) return false;
     out << "kex-run-cache-v1\n";
     for (const auto &result : results)
       out << result.moduleName << "\t" << result.mainArity << "\n";
   }
   fs::rename(staging, manifestPath, ec);
+  if (ec) {
+    fs::remove(staging, ec);
+    return false;
+  }
+  return true;
+}
+
+auto storeRunCache(const std::string &key, const std::string &outputDir,
+                   const std::vector<kex::ir::EmitResult> &results) -> void {
+  (void)storeRunCacheIn(runCacheDir(key), outputDir, results);
+}
+
+// ── Run cache by entry (kexhq/kex#323) ──────────────────────────────────────
+//
+// The cache above is keyed by the whole closure's content, so it is only
+// known once every dependency has been found — after the gating pre-check
+// and dependency loading, most of a large program's build — and it refuses
+// any program with a `compiled do` block or `Kex.embed` in it, whose result
+// depends on files no module's source names. This one is keyed by the entry
+// and the flags alone, and holds, beside the modules, every file the build
+// that made them read, with its stamp (compiled::fileStamp): the entry, its
+// `.spec.kex` base, every dependency, everything compile-time evaluation
+// loaded or embedded (the build's DependencyRecorder), and each place a new
+// file could take a module's name from it — the same relative path under
+// every other root, and every base a spec could have. When every stamp still
+// holds, the run starts from these modules at once; any one changed, and the
+// build runs as it would have.
+//
+// Not kept when a compile-time evaluation reached outside the program
+// (compiled::reachedOutside), nor when a file it read changed while it ran.
+
+// The process's own recorder, for the whole of a build that reuses
+// collapses (main): what the entry run cache lists.
+std::optional<kex::compiled::DependencyRecorder> buildRecorder;
+
+// When this process started building: a file modified since may have changed
+// after it was read, and its stamp would vouch for what was not compiled.
+const auto buildStarted = std::filesystem::file_time_type::clock::now();
+
+auto runManifestKey(const std::string &flags, const std::string &filepath)
+    -> std::optional<std::string> {
+  if (!runCacheRoot()) return std::nullopt;
+  std::error_code ec;
+  const auto entry = std::filesystem::weakly_canonical(filepath, ec);
+  if (ec) return std::nullopt;
+  return hexSha256("kex-run-by-entry-v1\n" + toolchainFingerprint() + "\n" +
+                   entry.string() + "\n" + flags);
+}
+
+auto runManifestDir(const std::string &key) -> std::filesystem::path {
+  return *runCacheRoot() / "entry" / key.substr(0, 2) / key;
+}
+
+// Whether the build an entry holds was made from files exactly as they are.
+auto runManifestCurrent(const std::string &key) -> bool {
+  std::ifstream in(runManifestDir(key) / "files.txt");
+  std::string line;
+  if (!in || !std::getline(in, line) || line != "kex-run-by-entry-v1") return false;
+  bool any = false;
+  while (std::getline(in, line)) {
+    const auto tab = line.find('\t');
+    if (tab == std::string::npos) return false;
+    if (kex::compiled::fileStamp(line.substr(tab + 1)) != line.substr(0, tab))
+      return false;
+    any = true;
+  }
+  return any;
+}
+
+// What an entry's build was made from (see above), canonically named.
+auto runManifestFiles(const std::string &filepath, const std::string &specBase,
+                      const std::vector<LoadedDep> &deps) -> std::set<std::string> {
+  namespace fs = std::filesystem;
+  std::set<std::string> files;
+  auto add = [&](const std::string &path) {
+    if (path.empty()) return;
+    std::error_code ec;
+    auto canonical = fs::weakly_canonical(path, ec);
+    files.insert(ec ? path : canonical.string());
+  };
+  if (buildRecorder) files = buildRecorder->files();
+  add(filepath);
+  add(specBase);
+  for (const auto &candidate : specBaseCandidates(filepath)) add(candidate);
+  for (const auto &dep : deps) add(*dep.path);
+  auto roots = moduleRootsFor(filepath);
+  for (auto &root : kex::standardLibraryModuleRoots()) roots.push_back(std::move(root));
+  const auto shadows = kex::compiled::shadowsOf(files, roots);
+  files.insert(shadows.begin(), shadows.end());
+  return files;
+}
+
+auto storeRunManifest(const std::string &key, const std::string &outputDir,
+                      const std::vector<kex::ir::EmitResult> &results,
+                      const std::set<std::string> &files) -> void {
+  namespace fs = std::filesystem;
+  std::string stamps;
+  for (const auto &file : files) {
+    std::error_code ec;
+    if (fs::exists(file, ec) && fs::last_write_time(file, ec) >= buildStarted)
+      return;
+    stamps += kex::compiled::fileStamp(file) + "\t" + file + "\n";
+  }
+  const auto dir = runManifestDir(key);
+  std::error_code ec;
+  // The file list last: until it is in place, the entry is not current.
+  fs::remove(dir / "files.txt", ec);
+  if (!storeRunCacheIn(dir, outputDir, results)) return;
+  auto path = dir / "files.txt";
+  auto staging = path;
+  staging += stagingSuffix();
+  {
+    std::ofstream out(staging);
+    if (!out) return;
+    out << "kex-run-by-entry-v1\n" << stamps;
+  }
+  fs::rename(staging, path, ec);
   if (ec) fs::remove(staging, ec);
 }
 
@@ -3843,6 +4056,21 @@ int main(int argc, char *argv[]) {
     setenv("KEX", currentExecutable.string().c_str(), 0);
   }
 #endif
+
+  setDefaultScanCache();
+  // One build or check, over files that stay as they are while it runs. Not
+  // the REPL or the language server, which see files change.
+  const bool oneBuild =
+      !replEval && optind < argc &&
+      (mode == Mode::Check || mode == Mode::Compile || mode == Mode::Run ||
+       mode == Mode::Unset || mode == Mode::EmitCore || mode == Mode::Expand);
+  kex::compiled::setReuseCollapses(oneBuild);
+  // Everything this build reads, for the run cache by entry.
+  if (oneBuild) buildRecorder.emplace();
+  // What the build was asked for, as written: part of that cache's key.
+  // getopt has moved every option in front of the file by now.
+  std::string buildFlags;
+  for (int i = 1; i < optind; i++) buildFlags += std::string(argv[i]) + "\n";
 
   if (mode == Mode::Lsp) {
 #ifdef KEX_HAS_LSP
@@ -6012,6 +6240,26 @@ int main(int argc, char *argv[]) {
       (void)preludeSemanticInterfaces();
       timings.mark("prelude interfaces");
 
+      // A run of this same entry with the same flags, every file it was
+      // built from still as it was (runManifestCurrent): its modules run as
+      // they are, with no pre-check, no dependencies loaded and nothing
+      // compiled.
+      // Only decided here: its modules are copied in after the runtime's
+      // (run cache lookup below), since a module of the program's own — an
+      // opt-in stdlib one compiled from source — replaces the prebuilt one
+      // of the same name.
+      std::string tempDir;
+      std::optional<std::string> manifestKey;
+      bool manifestHit = false;
+      if (mode == Mode::Compile && compileRun) {
+        manifestKey = runManifestKey(buildFlags, filepath);
+        if (manifestKey && runManifestCurrent(*manifestKey)) {
+          manifestHit = true;
+          buildProgress.step("Cached", kex::color::gray,
+                             "build of " + shownPath(filepath));
+        }
+      }
+
       // Independent gating pre-check. `mode == Mode::Check` gates against
       // PROJECT source plus the compiled stdlib INTERFACE, never an opt-in
       // stdlib module's real SOURCE (see that path's own comment on its
@@ -6052,7 +6300,7 @@ int main(int argc, char *argv[]) {
       bool preCheckFailed = false;
       std::vector<kex::semantic::Diagnostic> preCheckDiagnostics;
       int preCheckTypeErrors = 0;
-      if (mode == Mode::Compile && !skipCheck) {
+      if (mode == Mode::Compile && !skipCheck && !manifestHit) {
         kex::ast::Program checkProgram;
         checkProgram.items = std::move(program.items);
         const size_t originalCount = checkProgram.items.size();
@@ -6141,8 +6389,7 @@ int main(int argc, char *argv[]) {
 
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
-      std::string tempDir;
-      if (compileRun && !outputDirExplicit) {
+      if (compileRun && !outputDirExplicit && tempDir.empty()) {
         char tmpl[] = "/tmp/kex_XXXXXX";
         char *td = mkdtemp(tmpl);
         if (!td) {
@@ -6175,7 +6422,7 @@ int main(int argc, char *argv[]) {
       // `undef` under BEAM, since nothing here ever loaded that
       // file's declarations at all.
       for (const auto &candidate : specBaseCandidates(filepath)) {
-        if (!fileExists(candidate))
+        if (manifestHit || !fileExists(candidate))
           continue;
         beamSpecBaseFile = candidate;
 
@@ -6203,7 +6450,7 @@ int main(int argc, char *argv[]) {
       // and metadata-resolved qualified module references, parse their source
       // files, and merge them into the program so IR lowering sees every
       // definition without making qualified members lexically imported.
-      {
+      if (!manifestHit) {
         kex::semantic::Analyzer dependencyAnalysis(
             &preludeSemanticInterfaces());
         (void)dependencyAnalysis.analyze(program);
@@ -6281,7 +6528,19 @@ int main(int argc, char *argv[]) {
       std::vector<kex::ir::EmitResult> moduleResultsFromCache;
       bool haveCachedResult = false;
       std::optional<std::string> runCacheKeyValue;
-      if (mode == Mode::Compile && compileRun) {
+      if (manifestHit) {
+        auto hit = tryLoadRunCacheFrom(runManifestDir(*manifestKey), outputDir);
+        if (!hit) {
+          // Gone since it was found current: another build replacing it.
+          // Nothing was checked or loaded, so the run cannot go on from here.
+          std::cerr << "error: the cached build of " << filepath
+                    << " changed while starting; run it again\n";
+          if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
+          return 1;
+        }
+        moduleResultsFromCache = std::move(*hit);
+        haveCachedResult = true;
+      } else if (mode == Mode::Compile && compileRun) {
         runCacheKeyValue = runCacheKeyFor(
             filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
             beamSpecBaseRawSource, beamDeps);
@@ -6475,55 +6734,99 @@ int main(int argc, char *argv[]) {
         toCompile.push_back(moduleIndex);
       }
 
-      std::string coreCmd = erlcExecutable() + " " + erlcFlags + " -pa " +
-                            outputDir + " -o " + outputDir;
-      for (const auto moduleIndex : toCompile)
-        coreCmd += " " + corePaths[moduleIndex];
-      if (!tempDir.empty()) {
-        // Suppress erlc noise in temp-dir (interpreter/-R) mode —
-        // was `2>&1` (merging stderr into stdout), the OPPOSITE of
-        // what this comment always said it should do. erlc prints
-        // its own warnings (e.g. "this clause cannot match because
-        // a previous clause always matches" — confirmed harmless
-        // compiler-analysis noise, not a real logic bug: reproduced
-        // on spec/functions.kex, whose actual computed values are
-        // all correct) to its OWN STDOUT, not stderr — so both
-        // streams need silencing, not just stderr, to keep them out
-        // of the running program's own visible output. erlc
-        // failures are still caught via the exit-code check below
-        // regardless of where its diagnostic text went.
-        coreCmd += " > /dev/null 2>&1";
-      } else if (buildProgress.enabled) {
+      // erlc is one BEAM per run, and one run took every module in turn: Tey's
+      // 82 modules spent 45s in a single process on a machine with cores to
+      // spare. They go out in batches, one erlc each, side by side — at most
+      // one per core (KEX_ERLC_JOBS to say otherwise), and at least four
+      // modules apiece, since every run first starts a VM. Batches are
+      // balanced by the size of their Core Erlang, the best guess at how long
+      // each module takes. A batch reports when it ENDS, so what the build
+      // shows is how far the compiling has actually got.
+      std::size_t jobs = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+      if (const char *configured = std::getenv("KEX_ERLC_JOBS"))
+        if (const auto requested = std::atoi(configured); requested > 0)
+          jobs = static_cast<std::size_t>(requested);
+      jobs = std::min(jobs, std::max<std::size_t>(1, toCompile.size() / 4));
+      std::vector<std::vector<std::size_t>> batches(jobs);
+      {
+        auto bySize = toCompile;
+        std::sort(bySize.begin(), bySize.end(), [&](std::size_t a, std::size_t b) {
+          return moduleResults[a].source.size() > moduleResults[b].source.size();
+        });
+        std::vector<std::size_t> load(jobs, 0);
+        for (const auto moduleIndex : bySize) {
+          const auto lightest = static_cast<std::size_t>(
+              std::min_element(load.begin(), load.end()) - load.begin());
+          batches[lightest].push_back(moduleIndex);
+          load[lightest] += moduleResults[moduleIndex].source.size();
+        }
+      }
+      batches.erase(std::remove_if(batches.begin(), batches.end(),
+                                   [](const auto &batch) { return batch.empty(); }),
+                    batches.end());
+      const auto erlcCommand = [&](const std::vector<std::size_t> &batch,
+                                   bool loud) {
+        std::string command = erlcExecutable() + " " +
+                              (loud ? std::string("+from_core") : erlcFlags) +
+                              " -pa " + outputDir + " -o " + outputDir;
+        for (const auto moduleIndex : batch) command += " " + corePaths[moduleIndex];
+        // Suppress erlc noise in temp-dir (interpreter/-R) mode. erlc prints
+        // its own warnings (e.g. "this clause cannot match because a
+        // previous clause always matches" — harmless analysis of the
+        // generated code) to its OWN STDOUT, not stderr, so both streams are
+        // silenced to keep them out of the running program's own output.
+        // Failures are still caught by the exit status, and re-run loudly.
+        if (!loud && !tempDir.empty()) command += " > /dev/null 2>&1";
+        return command;
+      };
+      std::vector<std::string> commands;
+      for (const auto &batch : batches)
+        commands.push_back(erlcCommand(batch, false));
+      if (tempDir.empty() && buildProgress.enabled) {
         if (const auto cached = moduleResults.size() - toCompile.size(); cached > 0)
           buildProgress.step("Cached", kex::color::gray,
                              moduleCount(cached, "unchanged "));
-        for (const auto moduleIndex : toCompile)
-          buildProgress.step("Compiling", kex::color::green,
-                             moduleResults[moduleIndex].moduleName);
-      } else if (!quietBuild) {
+        if (!toCompile.empty())
+          buildProgress.step(
+              "Compiling", kex::color::green,
+              moduleCount(toCompile.size()) +
+                  (commands.size() > 1
+                       ? std::string(kex::color::apply(kex::color::gray)) +
+                             " in " + std::to_string(commands.size()) +
+                             " erlc runs" + kex::color::apply(kex::color::reset)
+                       : std::string{}));
+      } else if (tempDir.empty() && !quietBuild) {
         for (const auto moduleIndex : toCompile)
           std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
       }
-      int erlcRet = toCompile.empty() ? 0 : runShellCommand(coreCmd);
-      if (erlcRet == 0 && cacheRoot)
-        for (const auto moduleIndex : toCompile)
-          storeCachedBeam(cacheEntries[moduleIndex],
-                          std::filesystem::path{outputDir} /
-                              (moduleResults[moduleIndex].moduleName + ".beam"));
-      if (erlcRet != 0) {
-        // The quiet mode above swallows erlc's own diagnostic — which is the
-        // only thing that says WHY. Re-run it loudly on failure so the
-        // message reaches the terminal (and CI) instead of a bare
-        // "erlc failed", which is all a failing spec could report. erlc names
-        // the file it choked on, so the loud re-run still points at the one
-        // module that failed even though every module is passed again.
-        if (!tempDir.empty()) {
-          std::string loudCmd = erlcExecutable() + " +from_core -pa " +
-                                outputDir + " -o " + outputDir;
-          for (const auto moduleIndex : toCompile)
-            loudCmd += " " + corePaths[moduleIndex];
-          runShellCommand(loudCmd);
+      std::vector<std::size_t> failed;
+      std::size_t compiled = 0;
+      runShellCommandsTogether(commands, [&](std::size_t index, int status) {
+        const auto &batch = batches[index];
+        if (status != 0) {
+          failed.push_back(index);
+          return;
         }
+        if (cacheRoot)
+          for (const auto moduleIndex : batch)
+            storeCachedBeam(cacheEntries[moduleIndex],
+                            std::filesystem::path{outputDir} /
+                                (moduleResults[moduleIndex].moduleName + ".beam"));
+        compiled += batch.size();
+        if (tempDir.empty() && commands.size() > 1)
+          buildProgress.step("Compiled", kex::color::green,
+                             std::to_string(compiled) + "/" +
+                                 moduleCount(toCompile.size()));
+      });
+      if (!failed.empty()) {
+        // The quiet mode above swallows erlc's own diagnostic — which is the
+        // only thing that says WHY. Re-run the batches that failed loudly so
+        // the message reaches the terminal (and CI) instead of a bare "erlc
+        // failed", which is all a failing spec could report. erlc names the
+        // file it choked on.
+        if (!tempDir.empty())
+          for (const auto index : failed)
+            runShellCommand(erlcCommand(batches[index], true));
         std::cerr << "error: erlc failed\n";
         if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
         return 1;
@@ -6535,6 +6838,11 @@ int main(int argc, char *argv[]) {
       // matching invocation should be able to reuse (kexhq/kex#323).
       if (runCacheKeyValue)
         storeRunCache(*runCacheKeyValue, outputDir, moduleResults);
+      // Kept by entry as well, with every file it was built from, unless a
+      // compile-time evaluation reached outside the program.
+      if (manifestKey && !kex::compiled::reachedOutside())
+        storeRunManifest(*manifestKey, outputDir, moduleResults,
+                         runManifestFiles(filepath, beamSpecBaseFile, beamDeps));
 
       } // haveCachedResult
 

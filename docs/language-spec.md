@@ -2402,12 +2402,24 @@ module erlc is compiling.
 ```
 [  0.0s]    Resolving main.kex
 [  1.5s]    Expanding app/live/conversations.kex
-[ 74.9s]     Checking 160 modules
-[ 96.6s]     Lowering 160 modules
-[101.0s]       Cached 151 unchanged modules
-[101.0s]    Compiling Kex.App.Live.Conversations
-[154.6s]     Finished ebin/kex_main.beam in 2m 34.6s
+[ 18.5s]     Checking 160 modules
+[ 23.2s]     Lowering 160 modules
+[ 27.6s]       Cached 178 unchanged modules
+[ 27.6s]    Compiling 9 modules in 3 erlc runs
+[ 28.9s]     Compiled 9/9 modules
+[ 29.2s]     Finished ebin/kex_main.beam in 29.2s
 ```
 
 `KEX_TIMINGS=1` adds how long each phase took, and names every dependency
 whose `compiled do` expansion took longer than a quarter of a second.
+`KEX_ERLC_JOBS` sets how many erlc runs go side by side (one per core, up to
+eight, by default).
+
+A build keeps what it can for the next one in `$KEX_CACHE` (else
+`$XDG_CACHE_HOME/kex`, else `~/.cache/kex`; `KEX_CACHE=off` turns it off):
+each module's `.beam` by its Core Erlang, template scans, what compile-time
+evaluation decided (see compiled-eval.md), and, for running a file, the whole
+build by its entry. When every file that build read is as it was, `kex
+file.kex` starts it straight away (`Cached build of file.kex`); any one
+changed, added where a module could come from, or a compile-time evaluation
+that read the environment, files or the clock, and it builds as usual.
