@@ -10323,7 +10323,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
-        if (td.isDistinct) L.distinctTypes.insert(td.name);
+        if (td.isDistinct) {
+            L.distinctTypes.insert(td.name);
+            // Erased at run time, so the layouts read a field declared with
+            // one as its backing type: `Type.fields` and `Type.construct`
+            // then take the plain value it is, and no constructor is made up.
+            if (td.variants->size() == 1 && (*td.variants)[0] && td.typeParams.empty())
+                L.declaredAliases[td.name] = (*td.variants)[0].get();
+            return;
+        }
         // What an alias STANDS FOR, for the dispatch guards: a structural
         // right-hand side (`type Handler = Env -> String`), or the plain name
         // a transparent alias renames (`type Slug = String`). Either way no
