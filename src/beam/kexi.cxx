@@ -375,10 +375,13 @@ auto termToRecord(const TermPtr& term) -> KexiRecord {
 auto constructorToTerm(const KexiConstructor& c) -> TermPtr {
     std::vector<TermPtr> fieldNames;
     for (const auto& n : c.fieldNames) fieldNames.push_back(Term::binary(n));
+    std::vector<TermPtr> slots;
+    for (const auto slot : c.typeParamSlots) slots.push_back(Term::integer(slot));
     return Term::tuple({Term::binary(c.name),
                         Term::binary(c.tagAtom),
                         Term::list(std::move(fieldNames)),
-                        Term::integer(c.arity)});
+                        Term::integer(c.arity),
+                        Term::list(std::move(slots))});
 }
 
 auto termToConstructor(const TermPtr& term) -> KexiConstructor {
@@ -388,6 +391,9 @@ auto termToConstructor(const TermPtr& term) -> KexiConstructor {
     c.tagAtom = t[1]->asBinaryStr();
     for (const auto& n : t[2]->asList()) c.fieldNames.push_back(n->asBinaryStr());
     c.arity = static_cast<int>(t[3]->asInt());
+    if (t.size() > 4)
+        for (const auto& slot : t[4]->asList())
+            c.typeParamSlots.push_back(static_cast<int>(slot->asInt()));
     return c;
 }
 

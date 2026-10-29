@@ -985,6 +985,53 @@ int main() {
                              std::string::npos);
         });
 
+        test::it("restores nullary constructor refinements from KexI", []() {
+            namespace fs = std::filesystem;
+            auto root = fs::temp_directory_path() / "kex-constructor-interface-test";
+            fs::create_directories(root);
+            auto beamPath = (root / "units.beam").string();
+            KexiChunk chunk;
+            chunk.metadata.unitId = "units-fixture";
+            chunk.metadata.sourceModule = "Units";
+            chunk.metadata.moduleAtom = "kex_units_fixture";
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
+            KexiADT adt;
+            adt.name = "TimeUnit";
+            adt.constructors.push_back({"Hour", "Hour", {}, 0});
+            chunk.metadata.adts.push_back(std::move(adt));
+            KexiExport hour;
+            hour.name = "Hour";
+            hour.beamFunction = "Hour";
+            hour.returnType = kexiNamed("TimeUnit");
+            chunk.typeInterface.exports.push_back(std::move(hour));
+            auto declarations = chunk;
+            declarations.metadata.unitId = "units-declarations";
+            declarations.metadata.sourceModule = "Prelude";
+            declarations.metadata.moduleAtom = "kex_units_declarations";
+            declarations.typeInterface.exports.clear();
+            chunk.metadata.adts.clear();
+            BeamFile beam;
+            beam.setChunk("Code", {1, 2, 3, 4});
+            chunk.artifactHash = computeArtifactHash(beam);
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
+            writeBeamFile(beam, beamPath);
+            declarations.artifactHash = computeArtifactHash(beam);
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(declarations));
+            const auto declarationsPath = (root / "declarations.beam").string();
+            writeBeamFile(beam, declarationsPath);
+            KexiRegistry registry;
+            test::assertTrue(registry.loadUnit(beamPath).empty());
+            test::assertTrue(registry.loadUnit(declarationsPath).empty());
+            const auto interfaces = registry.buildSemanticInterfaces();
+            const auto& constructor = interfaces.modules.at("Units").exports.at("Hour").front();
+            test::assertTrue(constructor.isConstructor);
+            test::assertEqual(constructor.constructorOwner, std::string("TimeUnit"));
+            test::assertEqual(kex::semantic::typeToString(constructor.signature.result),
+                              std::string("Hour"));
+            fs::remove_all(root);
+        });
+
         test::it("only searches declared receiver-function providers", []() {
             namespace fs = std::filesystem;
             auto root = fs::temp_directory_path() / "kex-package-policy-test";

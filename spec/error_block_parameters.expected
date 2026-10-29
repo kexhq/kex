@@ -1,5 +1,5 @@
 spec/error_block_parameters.kex:22:5: error: Type mismatch: expected Column, got Integer
-spec/error_block_parameters.kex:24:20: error: `createTable` expects argument 2 to be Block<TableBuilder, [Column]>, but got TableBuilder -> T1 -> [Column]
+spec/error_block_parameters.kex:24:20: error: `createTable` expects argument 2 to be Block<TableBuilder, [Column]>, but got TableBuilder -> A -> [Column]
 
 createTable : String -> (Block<TableBuilder, [Column]>) -> [Column]
 spec/error_block_parameters.kex:27:21: error: `createTable` expects argument 2 to be Block<TableBuilder, [Column]>, but got () -> [String]

@@ -242,7 +242,7 @@ int main() {
                 directOut / "Kex.Chain.Leaf.beam");
             fs::remove_all(root);
             assertEqual(output, std::string("42\n"));
-            assertTrue(directOutput.find("done") != std::string::npos,
+            assertTrue(directOutput.find("Finished") != std::string::npos,
                        directOutput);
             assertTrue(emittedLeaf,
                        "explicit source root should discover sibling module");
@@ -888,7 +888,7 @@ int main() {
 
         it("renders Just(...) the same way", []() {
             auto out = runRepl("Just(42)\n");
-            assertTrue(out.find("=> Just(42) : Optional<Integer>") != std::string::npos, out);
+            assertTrue(out.find("=> Just(42) : Integer?") != std::string::npos, out);
         });
     });
 
@@ -1262,7 +1262,7 @@ int main() {
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("[Red, Red] : [Colour]")
                            != std::string::npos, out);
-                assertTrue(out.find("Just(Red) : Optional<Colour>")
+                assertTrue(out.find("Just(Red) : Colour?")
                            != std::string::npos, out);
                 assertTrue(out.find("Atom") == std::string::npos, out);
             }
@@ -1313,7 +1313,7 @@ int main() {
                 "Just(42)\n"
                 "Ok(\"ready\")\n"
                 "Error(\"bad\")\n");
-            assertTrue(out.find("=> Just(42) : Optional<Integer>")
+            assertTrue(out.find("=> Just(42) : Integer?")
                        != std::string::npos, out);
             assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>")
                        != std::string::npos, out);

@@ -227,6 +227,23 @@ auto importedTrait(const KexiTraitDef& trait,
             required.name, std::move(params), imported.signature.result,
             required.isFoul});
     }
+    // The methods the trait defines a body for are in the interface too,
+    // received by the trait itself. Without them a prebuilt trait had no
+    // defaults at all: `Comparable`'s `<`, declared in comparable.kex, was
+    // unknown to the checker, which then had to know it by name instead.
+    for (const auto& method : interface.methods) {
+        if (!method.receiverType ||
+            method.receiverType->kind != KexiType::Constrained ||
+            method.receiverType->traitName != trait.name)
+            continue;
+        const bool required = std::any_of(
+            trait.requiredMethods.begin(), trait.requiredMethods.end(),
+            [&](const KexiTraitRequiredMethod& r) { return r.name == method.name; });
+        if (!required &&
+            std::find(result.defaultMethods.begin(), result.defaultMethods.end(),
+                      method.name) == result.defaultMethods.end())
+            result.defaultMethods.push_back(method.name);
+    }
     return result;
 }
 
@@ -740,8 +757,39 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     arities[ctor.name] = ctor.arity;
                 }
                 interfaces.typeNames.insert(adt.name);
-                interfaces.adts.push_back(
-                    {adt.name, std::move(ctors), std::move(arities)});
+                kex::semantic::ImportedADT imported{adt.name, std::move(ctors),
+                                                    std::move(arities)};
+                // What a generic constructor builds: `Just(1)` is an
+                // `Integer?` only if `Just` is known to fill `X`.
+                imported.typeParamCount = adt.typeParams.size();
+                imported.typeParamNames = adt.typeParams;
+                for (const auto& ctor : adt.constructors)
+                    if (!ctor.typeParamSlots.empty())
+                        imported.constructorTypeParamSlots[ctor.name] =
+                            ctor.typeParamSlots;
+                interfaces.adts.push_back(std::move(imported));
+            }
+
+    // A module can export a constructor of an ADT declared in another
+    // module (Units.Hour belongs to the prelude's TimeUnit). Resolve against
+    // all loaded ADTs, preserving the singleton refinement source interfaces
+    // provide, rather than widening Hour to TimeUnit before overload lookup.
+    for (auto& [_, module] : interfaces.modules)
+        for (auto& [name, functions] : module.exports)
+            for (auto& function : functions) {
+                const auto* result = std::get_if<kex::semantic::NamedType>(
+                    &function.signature.result->kind);
+                if (!result) continue;
+                for (const auto& adt : interfaces.adts) {
+                    if (result->name != adt.name) continue;
+                    const auto constructor = adt.constructorArities.find(name);
+                    if (constructor == adt.constructorArities.end()) continue;
+                    function.isConstructor = true;
+                    function.constructorOwner = adt.name;
+                    if (constructor->second == 0 && adt.typeParamCount == 0)
+                        function.signature.result = kex::semantic::Type::named(name);
+                    break;
+                }
             }
 
     // `metadata.adts` only holds types that have constructors. The type

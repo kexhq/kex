@@ -2792,7 +2792,7 @@ int main() {
 
         it("IO.inspect is always allowed even in pure context", []() {
             assertTrue(noErrors(
-                "let debug(n) do\n"
+                "let debug(n: Integer) do\n"
                 "  IO.inspect(n)\n"
                 "  n * 2\n"
                 "end\n"

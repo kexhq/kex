@@ -1,0 +1,14 @@
+spec/error_record_operator_undefined.kex:19:38: error: `+` is not defined for Named and Named; declare it in trait `Named`
+spec/error_record_operator_undefined.kex:22:46: error: `+` is not defined for Showable and Showable; declare it in trait `Showable`
+spec/error_record_operator_undefined.kex:40:25: error: `+` is not defined for (Integer, Integer) and (Integer, Integer)
+spec/error_record_operator_undefined.kex:41:22: error: `-` is not defined for [Integer] and [Integer]
+spec/error_record_operator_undefined.kex:42:22: error: `<` is not defined for [Integer] and [Integer]
+spec/error_record_operator_undefined.kex:43:25: error: `+` is not defined for {Atom: Integer} and {Atom: Integer}
+spec/error_record_operator_undefined.kex:45:26: error: `+` is not defined for Integer? and Integer?
+spec/error_record_operator_undefined.kex:54:46: error: `-` is not defined for Summable and Summable; declare it in trait `Summable`
+spec/error_record_operator_undefined.kex:28:20: error: `-` is not defined for Point and Point; declare it in a `make Point` block
+spec/error_record_operator_undefined.kex:29:20: error: `<` is not defined for Point and Point; declare it in a `make Point` block
+spec/error_record_operator_undefined.kex:30:20: error: `*` is not defined for Integer and Point
+spec/error_record_operator_undefined.kex:31:16: error: Unary '-' requires a number, got Point
+spec/error_record_operator_undefined.kex:33:27: error: `+` is not defined for Money and Money; declare it in a `make Money` block
+spec/error_record_operator_undefined.kex:34:16: error: Unary '-' requires a number, got Money

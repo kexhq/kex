@@ -2391,4 +2391,23 @@ kex -l file.kex         # print token stream
 kex -E file.kex         # emit Core Erlang (.core)
 kex -s file.kex         # print public API signatures
 kex --no-colors         # disable ANSI colors
+kex --progress file.kex # show each build step as it starts (on for -c)
+kex -c -q file.kex      # build without showing any steps (--quiet)
 ```
+
+A build shows its steps on stderr, one line as each begins, so the last line
+is what is running now: the file being expanded, the phase being checked, the
+module erlc is compiling.
+
+```
+[  0.0s]    Resolving main.kex
+[  1.5s]    Expanding app/live/conversations.kex
+[ 74.9s]     Checking 160 modules
+[ 96.6s]     Lowering 160 modules
+[101.0s]       Cached 151 unchanged modules
+[101.0s]    Compiling Kex.App.Live.Conversations
+[154.6s]     Finished ebin/kex_main.beam in 2m 34.6s
+```
+
+`KEX_TIMINGS=1` adds how long each phase took, and names every dependency
+whose `compiled do` expansion took longer than a quarter of a second.

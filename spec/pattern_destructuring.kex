@@ -30,8 +30,11 @@ main do
   let { x: px, y: py } = Point { x: 5, y: 6 }
   IO.printLine(px + py)
 
-  # A wrong-arity pattern simply fails to match in a `match` (no crash).
-  match Just(1) do
+  # A wrong-arity pattern simply fails to match in a `match` (no crash). The
+  # value is typed `Any`: as `Just(1)` the checker knows `Circle` can never
+  # match, and says so.
+  let anything: Any = Just(1)
+  match anything do
     Circle(r) => IO.printLine("circle ${r}")
     Just(n)   => IO.printLine("just ${n}")
     _         => IO.printLine("other")

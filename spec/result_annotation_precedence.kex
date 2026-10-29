@@ -16,7 +16,7 @@ half : Number -> Number or! MathError
 let half(n) = Ok(n / 2)
 
 # `or` (Either) has the same precedence.
-pick : Number -> Number or String
+pick : Number -> String or Number
 let pick(n) = Right(n)
 
 # A Result-typed PARAMETER still parses; `or!` groups before the arrow.

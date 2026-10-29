@@ -6,6 +6,7 @@
 #include "traits.hxx"
 #include "types.hxx"
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <set>
 #include <string>
@@ -332,7 +333,8 @@ private:
     std::unordered_multimap<std::string, const ast::FunctionDef*>
         m_functionDeclarations;
     auto declaredBindingType(const std::optional<ast::TypeExprPtr>& annotation,
-                             const TypePtr& valueType, SourceLocation loc) -> TypePtr;
+                             const TypePtr& valueType, SourceLocation loc,
+                             const ast::Expr* value = nullptr) -> TypePtr;
     auto declaredConstantType(const std::string& name, const TypePtr& valueType,
                               SourceLocation loc) -> TypePtr;
     bool m_inSyntheticMain = false;
@@ -355,6 +357,14 @@ private:
     // Error reporting
     auto error(SourceLocation loc, const std::string& msg) -> void;
     auto typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual) -> void;
+    // True, and the check is left until the body answers, when `actual` is a
+    // make-block method's result its body has not decided yet
+    // (m_pendingResults): `main` above the make block cannot know it.
+    auto deferIfPending(const TypePtr& actual, const TypePtr& expected,
+                        SourceLocation loc) -> bool;
+    // A pending result has its answer: bind it, then run every check that
+    // was waiting for it (m_pendingChecks).
+    auto answerPending(int id, const TypePtr& answer) -> void;
 
     std::vector<Diagnostic>* m_diagnostics = nullptr;
     // The type a typed binding asks of the conditional or `match` it is bound
@@ -549,6 +559,21 @@ private:
     auto qualifiedNominalType(const std::string& qualified) const
         -> std::optional<std::string>;
     auto resolveRecordName(const std::string& name) const -> std::string;
+    // Whether the built-in `op` cannot apply to `type`: a record or ADT,
+    // declared here or imported, a tuple, map or open record, a list for
+    // anything but `+`, a distinct type over one of those, or a value typed
+    // only by a non-structural trait. Such a type has only the operators
+    // declared for it.
+    auto lacksBuiltinOperator(const TypePtr& type, const std::string& op) const
+        -> bool;
+    // Whether such a type gets `op` from a trait: one it implements, or the
+    // trait it is typed as, requiring or defaulting it.
+    auto traitDeclaresOperator(const TypePtr& type, const std::string& op) const
+        -> bool;
+    // Whether anything declares `op` for `type`: its own make block, an
+    // imported one, or a trait.
+    auto declaresOperatorFor(const TypePtr& type, const std::string& op) const
+        -> bool;
     // Resolves a bare module segment written at a call site (`Set.from(…)`)
     // against the modules `using` brought into scope, when the literal name
     // is not itself a registered module. See the .cxx for the precedence
@@ -641,6 +666,17 @@ private:
     // was unified with during body inference. Never cleared between functions
     // because TypeVar IDs are globally unique (monotonically incrementing).
     std::unordered_map<int, TypePtr> m_subst;
+
+    // The result variable the pre-pass gives a make-block method with no
+    // return annotation, per clause, until that clause's body is checked.
+    // Only the body may bind it: a call checked first used to, and pinned it
+    // to whatever it met — `IO.printLine(a + b)` made `+` answer `Showable`.
+    std::unordered_map<const ast::FunctionClause*, int> m_pendingResults;
+    std::unordered_set<int> m_pendingResultVars;
+    // Checks a use made of a pending result before the body decided it, run
+    // with what it decided.
+    std::unordered_map<int, std::vector<std::function<void(const TypePtr&)>>>
+        m_pendingChecks;
 
     // Walk m_subst to find the concrete type behind a TypeVar, following any
     // chain of substitutions. Returns `t` unchanged for non-TypeVar types.
