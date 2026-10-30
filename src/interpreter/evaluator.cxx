@@ -2512,6 +2512,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 node.args[0] && node.receiver && node.namedArgs.empty() &&
                 !node.block) {
                 auto value = eval(*node.receiver);
+                // A value only the running program has stays unknown: the
+                // conversion goes back around it when the result is reified.
+                if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data))
+                    if (const auto* target =
+                            std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
+                        auto retagged = std::make_shared<Value>();
+                        auto copy = *placeholder;
+                        copy.retags.push_back(target->name);
+                        retagged->data = std::move(copy);
+                        return retagged;
+                    }
                 if (const auto* target =
                         std::get_if<ast::UpperIdentifier>(
                             &node.args[0]->kind);

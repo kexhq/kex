@@ -237,6 +237,9 @@ struct FunctionValue {
 struct PlaceholderValue {
     std::size_t index;   // into the collapse site's captured expressions
     std::string name;    // as written, for diagnostics
+    // `.as(T)` applied to it, innermost first: still unknown, and put back
+    // around the expression when it is reified (`rootId.as(String)`).
+    std::vector<std::string> retags = {};
 };
 
 struct LambdaValue {
