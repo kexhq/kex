@@ -10176,6 +10176,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->paramNames,
                 };
                 target.defaultSources = resolved->defaultSources;
+                // A slot of another unit's serving type, called on its
+                // running server: lowered as a slot of this unit's is.
+                if (resolved->remoteSlot) {
+                    for (const auto& param : matched.params)
+                        target.localDispatchTypes.push_back(typeToString(resolve(param)));
+                    target.isServingCast = typesEqual(resolve(matched.result), Type::unit());
+                }
                 for (std::size_t i = 0; i < matched.params.size(); ++i) {
                     const auto resolvedParam = resolve(matched.params[i]);
                     const auto addRequiredDictionary = [&](const std::string& traitName) {

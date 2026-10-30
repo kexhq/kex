@@ -812,6 +812,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                                              kex::semantic::Type::named("CallError")})
                             : kex::semantic::Type::unit();
                         signature.isFoul = true;
+                        remote.remoteSlot = true;
                         interfaces.receiverFunctions[receiver.name].push_back(
                             std::move(remote));
                     }

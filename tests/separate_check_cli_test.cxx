@@ -10,6 +10,10 @@
 //
 // With KEX_SEPARATE_CORE each unit that checked cleanly is also lowered on
 // its own; compiled and run, it must print what the merged build prints.
+// For that the program also has a capability beside a module of its name,
+// whose default and replacement and helper each run, a slot called with
+// `within:` on another unit's server, a `make` block outside its module, and
+// a function of another unit called by UFCS.
 #include "test.hxx"
 #include <cstdlib>
 #include <filesystem>
@@ -175,7 +179,7 @@ end
 end
 
 make Marks.Mark do
-  let loud -> String = @text.exclaimed
+  let loud -> String = Marks.exclaimed(@text)
 end
 )KEX");
     }
@@ -213,20 +217,29 @@ end
             " --no-colors -E -o " + (root / "merged").string() + roots +
             (root / "app" / "main.kex").string() + " > " + (root / "build.out").string() +
             " 2>&1";
+        std::filesystem::create_directories(root / "merged");
         (void)std::system(build.c_str());
         const auto runAs = [&](const std::string& kind) {
             const auto cores = root / kind;
             const auto beams = root / (kind + "-beam");
             std::filesystem::create_directories(beams);
             const auto output = root / (kind + ".out");
+            // erlc's warnings are no output of the program; its errors are
+            // read back when nothing ran.
+            const auto compiled = root / (kind + "-erlc.out");
             const auto command = "erlc -o " + beams.string() + " " + cores.string() +
-                "/*.core > " + output.string() + " 2>&1 && " + std::string(KEX_BINARY_PATH) +
-                " --no-colors --run " + (beams / "kex_main.beam").string() + " >> " +
-                output.string() + " 2>&1";
+                "/*.core > " + compiled.string() + " 2>&1 && " + std::string(KEX_BINARY_PATH) +
+                " --no-colors --run " + (beams / "kex_main.beam").string() + " > " +
+                output.string() + " 2>&1 || cat " + compiled.string() + " >> " +
+                output.string();
             (void)std::system(command.c_str());
             return read(output);
         };
-        return {runAs("merged"), runAs("separate")};
+        auto merged = runAs("merged");
+        // What went wrong is in the build's own output when it emitted nothing.
+        if (merged.find("open error") != std::string::npos)
+            merged += read(root / "build.out");
+        return {std::move(merged), runAs("separate")};
     }
 
     static auto read(const std::filesystem::path& path) -> std::string {
