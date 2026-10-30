@@ -1085,9 +1085,20 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
             const auto* target = kex::aliasTarget(def);
             const auto* named = target ? std::get_if<ast::TypeName>(&target->kind) : nullptr;
             const auto key = moduleScope.empty() ? def.name : moduleScope + "::" + def.name;
-            if (named && !named->parts.empty() && !m_env->get(key))
-                if (auto token = m_env->get(named->parts.back()))
-                    m_env->define(key, token);
+            if (m_env->get(key)) return;
+            // The backing's token as written (`Accounts.Inner` is
+            // `Accounts::Inner`), then by its last segment. A backing declared
+            // further down has no token yet; the type's own stands in, as it
+            // did before distinct types were erased.
+            ValuePtr token;
+            if (named && !named->parts.empty()) {
+                std::string qualified;
+                for (const auto& part : named->parts)
+                    qualified += (qualified.empty() ? "" : "::") + part;
+                token = m_env->get(qualified);
+                if (!token) token = m_env->get(named->parts.back());
+            }
+            m_env->define(key, token ? token : Value::record(def.name, {}));
             return;
         }
         // The type's own name as a value is its token, as a record's is (see

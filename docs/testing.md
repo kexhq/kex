@@ -88,6 +88,16 @@ path rules and process handling that actually differ are unaffected by the
 atom. Testing those means running on the platform, which CI does across macOS,
 Ubuntu and Alpine.
 
+## Knowing it is a spec: `KEX_TEST`
+
+When the entry file is a spec (`kex foo.spec.kex`, `kex -R foo.spec.kex`, and so
+`tey test`), `kex` sets `KEX_TEST=1` in the environment of what it runs, unless
+it is already set. A framework reads it to pick its test settings without the
+program saying so: Metro's environment is `test` under it unless `METRO_ENV`
+says otherwise, so a spec reaches the test database rather than the
+development one. A `.beam` run directly, and a program that is not a spec, do
+not see it.
+
 ## Syntax
 
 ```kex
