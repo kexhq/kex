@@ -3694,7 +3694,8 @@ auto TypeChecker::checkRecordDef(const ast::RecordDef& def) -> void {
         auto actual = resolve(inferExpr(**field.defaultValue));
         if (!std::holds_alternative<UnknownType>(actual->kind) &&
             !std::holds_alternative<TypeVar>(actual->kind) &&
-            !argMatchesParam(actual, declared))
+            !argMatchesParam(actual, declared) &&
+            !literalCoercesTo(**field.defaultValue, declared))
             typeMismatch((*field.defaultValue)->location, declared, actual);
     }
 }
@@ -3979,7 +3980,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 auto actual = resolve(inferExpr(**param.defaultValue));
                 if (!std::holds_alternative<UnknownType>(actual->kind) &&
                     !std::holds_alternative<TypeVar>(actual->kind) &&
-                    !argMatchesParam(actual, paramType))
+                    !argMatchesParam(actual, paramType) &&
+                    !literalCoercesTo(**param.defaultValue, paramType))
                     typeMismatch((*param.defaultValue)->location, paramType,
                                  actual);
             }
@@ -4119,7 +4121,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
             !argMatchesParam(bodyType, effectiveReturnType) &&
-            !servingTransitionMatches && !servingCastTransitionMatches) {
+            !servingTransitionMatches && !servingCastTransitionMatches &&
+            // `foul first() -> BookId = 1`: a literal result enters the
+            // distinct type it is declared to return.
+            ![&] {
+                if (clause.body.empty() || !clause.body.back()) return false;
+                const ast::Expr* result = clause.body.back().get();
+                if (const auto* returned = std::get_if<ast::ReturnExpr>(&result->kind))
+                    result = returned->value.get();
+                return result && literalCoercesTo(*result, effectiveReturnType);
+            }()) {
             error(def.location,
                   "`" + def.name + "` declared to return " + typeToString(effectiveReturnType) +
                   " but body returns " + typeToString(bodyType));
@@ -5565,7 +5576,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                              node.path.front() + "`");
                 } else if (!containsOpenType(valueType) &&
                            !containsOpenType(field->second) &&
-                           !argMatchesParam(valueType, field->second)) {
+                           !argMatchesParam(valueType, field->second) &&
+                           !(node.value && literalCoercesTo(*node.value, field->second))) {
                     typeMismatch(expr.location, field->second, valueType);
                 }
                 return Type::unit();
@@ -5573,6 +5585,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (varType && !std::holds_alternative<UnknownType>(varType->kind) &&
                 !std::holds_alternative<TypeVar>(varType->kind)) {
                 if (!argMatchesParam(valueType, varType) &&
+                    !(node.value && literalCoercesTo(*node.value, varType)) &&
                     !std::holds_alternative<UnknownType>(valueType->kind) &&
                     !std::holds_alternative<TypeVar>(valueType->kind)) {
                     typeMismatch(expr.location, varType, valueType);
@@ -7144,7 +7157,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // — there the openness is nested, not at the top.
                 if (containsOpenType(valueType) || containsOpenType(expected))
                     continue;
-                if (!argMatchesParam(valueType, expected))
+                if (!argMatchesParam(valueType, expected) &&
+                    !literalCoercesTo(*val, expected))
                     error(val->location,
                           "`" + sourceName + "." + fieldName +
                           "` expects " + typeToString(expected) + ", but got " +
@@ -8005,6 +8019,7 @@ auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& ann
             backing && !typesEqual(backing, declared) &&
             argMatchesParam(actual, backing))
             return declared;
+    if (value && literalCoercesTo(*value, declared)) return declared;
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
         !argMatchesParam(actual, declared))
@@ -8102,6 +8117,37 @@ auto TypeChecker::isProcessSendTarget(const TypePtr& receiver) -> bool {
     if (auto* named = std::get_if<NamedType>(&resolved->kind))
         return named->name == "Process" || named->name == "Pid";
     return true;
+}
+
+auto TypeChecker::literalCoercesTo(const ast::Expr& value, const TypePtr& target) const
+    -> bool {
+    if (!target) return false;
+    const auto resolved = resolve(target);
+    if (const auto* optional = std::get_if<OptionalType>(&resolved->kind))
+        return literalCoercesTo(value, optional->inner);
+    if (const auto* list = std::get_if<ListType>(&resolved->kind)) {
+        const auto* written = std::get_if<ast::ListExpr>(&value.kind);
+        if (!written || written->rest || written->elements.empty()) return false;
+        for (const auto& element : written->elements)
+            if (!element || !literalCoercesTo(*element, list->element)) return false;
+        return true;
+    }
+    const auto backing = distinctBacking(resolved);
+    if (typesEqual(backing, resolved)) return false;
+    const bool literal =
+        std::holds_alternative<ast::IntLiteral>(value.kind) ||
+        std::holds_alternative<ast::FloatLiteral>(value.kind) ||
+        std::holds_alternative<ast::StringLiteral>(value.kind) ||
+        [&] {
+            const auto* negated = std::get_if<ast::UnaryOp>(&value.kind);
+            return negated && negated->op == TokenType::Minus &&
+                   negated->operand &&
+                   (std::holds_alternative<ast::IntLiteral>(negated->operand->kind) ||
+                    std::holds_alternative<ast::FloatLiteral>(negated->operand->kind));
+        }();
+    if (!literal) return false;
+    const auto written = typeOf(&value);
+    return written && argMatchesParam(written, backing);
 }
 
 auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {
@@ -8560,6 +8606,31 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             const ast::MethodCall* methodCall,
                             const ast::Expr* callExpr) -> TypePtr {
     auto argTypes = suppliedArgTypes;
+    // The arguments as written, beside their types, so a literal can go
+    // straight into a distinct type it backs (literalCoercesTo). Left empty
+    // when they do not line up with argTypes one for one.
+    // Laid out as the callers lay out argTypes: positional arguments, then
+    // named ones as written, then the block, which is never a literal.
+    std::vector<const ast::Expr*> argExprs;
+    const auto layOut = [&](const auto& call) {
+        for (const auto& arg : call.args) argExprs.push_back(arg.get());
+        for (const auto& [_, arg] : call.namedArgs) argExprs.push_back(arg.get());
+        if (call.block) argExprs.push_back(nullptr);
+    };
+    if (methodCall) {
+        argExprs.push_back(methodCall->receiver.get());
+        layOut(*methodCall);
+        if (argExprs.size() == argTypes.size() + 1) argExprs.erase(argExprs.begin());
+    } else if (callExpr) {
+        if (const auto* call = std::get_if<ast::FunctionCall>(&callExpr->kind))
+            layOut(*call);
+    }
+    if (argExprs.size() != argTypes.size()) argExprs.clear();
+    const auto fits = [&](std::size_t i, const TypePtr& param) {
+        return argMatchesParam(argTypes[i], param) ||
+               (i < argExprs.size() && argExprs[i] &&
+                literalCoercesTo(*argExprs[i], param));
+    };
     // A field promised by an open record is known more specifically than an
     // unrelated global/UFCS method with the same name. Concrete record fields
     // already receive this priority later; structural receivers need it here
@@ -8792,7 +8863,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 argTypes.size() > signature.params.size())
                 return false;
             for (size_t i = 0; i < argTypes.size(); ++i)
-                if (argTypes[i] && !argMatchesParam(argTypes[i], signature.params[i]))
+                if (argTypes[i] && !fits(i, signature.params[i]))
                     return false;
             return true;
         };
@@ -9064,7 +9135,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     auto matchesActual = [&](const Signature& signature) {
         if (signature.params.size() != argTypes.size()) return false;
         for (size_t i = 0; i < signature.params.size(); i++)
-            if (!argMatchesParam(argTypes[i], signature.params[i])) return false;
+            if (!fits(i, signature.params[i])) return false;
         return true;
     };
     // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
@@ -9465,7 +9536,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (sig.params.size() == argTypes.size()) {
                 bool matches = true;
                 for (size_t i = 0; i < sig.params.size(); i++)
-                    if (!argMatchesParam(argTypes[i], sig.params[i])) {
+                    if (!fits(i, sig.params[i])) {
                         matches = false;
                         break;
                     }
@@ -9474,7 +9545,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (sig.params.size() == argTypes.size() - 1) {
                 bool matches = true;
                 for (size_t i = 0; i < sig.params.size(); i++)
-                    if (!argMatchesParam(argTypes[i + 1], sig.params[i])) {
+                    if (!fits(i + 1, sig.params[i])) {
                         matches = false;
                         break;
                     }
@@ -9534,7 +9605,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         anyUnknownParamCandidate = true;
                         break;
                     }
-                if (argMatchesParam(argTypes[0], sig.params[0])) {
+                if (fits(0, sig.params[0])) {
                     anyFirstParamPlausible = true;
                     break;
                 }
@@ -9643,7 +9714,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // defaulted parameter has no argument to compare against.
         bool allMatch = true;
         for (size_t i = 0; i < argTypes.size(); i++) {
-            if (!argMatchesParam(argTypes[i], sig.params[i])) {
+            if (!fits(i, sig.params[i])) {
                 allMatch = false;
                 break;
             }
@@ -9849,7 +9920,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 // method name a program reused as a free function with
                 // trait-bounded parameters was unusable (kexhq/kex#208).
                 if (!am->params.empty() && !argTypes.empty() &&
-                    !argMatchesParam(argTypes[0], am->params[0]))
+                    !fits(0, am->params[0]))
                     continue;
                 hasConcrete = true;
                 break;
@@ -10439,7 +10510,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     auto mismatchCount = [&](const Signature* sig) {
         size_t count = 0;
         for (size_t i = 0; i < sig->params.size() && i < argTypes.size(); ++i)
-            if (!argMatchesParam(argTypes[i], sig->params[i])) ++count;
+            if (!fits(i, sig->params[i])) ++count;
         return count;
     };
     const Signature* firstPtr = nullptr;
@@ -10447,7 +10518,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     for (const auto* am : arityMatches) {
         if (isVacuousSig(am)) continue;
         if (isMethodCall && !am->params.empty() &&
-            !argMatchesParam(argTypes[0], am->params[0])) continue;
+            !fits(0, am->params[0])) continue;
         const auto mismatches = mismatchCount(am);
         if (!firstPtr || mismatches < fewestMismatches ||
             (mismatches == fewestMismatches && signatureOrder(am, firstPtr))) {
@@ -10477,7 +10548,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     const Signature& first = *firstPtr;
     std::string detail = "different arguments";
     for (size_t i = 0; i < first.params.size(); i++) {
-        if (!argMatchesParam(argTypes[i], first.params[i])) {
+        if (!fits(i, first.params[i])) {
             auto* constrained = std::get_if<ConstrainedType>(&first.params[i]->kind);
             std::string expected = constrained ? constrained->traitName : typeToString(first.params[i]);
             detail = "argument " + std::to_string(i + 1) + " to be " + expected +

@@ -298,6 +298,10 @@ private:
                    const ast::MethodCall* methodCall = nullptr,
                    const ast::Expr* callExpr = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    // Whether `value` is a literal written straight into a distinct type it
+    // backs: `1` as a `BookId`, `"t1"` as a `TeamId`, `[1, 2]` as `[BookId]`.
+    // Fresh where the type is in view, so it needs no `.as`.
+    auto literalCoercesTo(const ast::Expr& value, const TypePtr& target) const -> bool;
     // Whether `send`/`sendFrom` on this receiver is process messaging. A
     // user type with its own `send` (a WebSocket `Connection`, say) goes
     // through ordinary overload resolution instead (kexhq/kex#398).

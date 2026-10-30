@@ -1,0 +1,12 @@
+distinct type BookId = Integer
+distinct type TeamId = String
+
+let fetched(id: BookId) = id
+
+main do
+  let n = 3
+  let x : BookId = n
+  fetched(n)
+  fetched("1")
+  let t : TeamId = 4
+end
