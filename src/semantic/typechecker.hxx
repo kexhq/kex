@@ -278,6 +278,11 @@ private:
     // `Module::name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
+    // The functions named `name` of the modules `using` brings in from units
+    // compiled apart; `asMethod`, only those with a first parameter to be
+    // the receiver.
+    auto usingImportedMethods(const std::string& name, bool asMethod = true) const
+        -> std::vector<const ImportedFunction*>;
     auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
     auto moduleMemberImported(const std::string& module,
                               const std::string& member) const -> bool;

@@ -61,6 +61,11 @@ struct ImportedModuleInterface {
     // module boundary a stdlib capability is invisible to every consumer
     // (kexhq/kex#143).
     bool isCapability = false;
+    // One of this build's own modules, checked apart from its importers
+    // (KEX_SEPARATE): `using` it brings its functions in as a merged module
+    // of the program would, bare and by UFCS. The prelude's are reached
+    // through its receiver functions instead.
+    bool compiledApart = false;
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 

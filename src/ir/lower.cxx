@@ -883,6 +883,11 @@ struct Lowering {
         // overload as `Module.member/arity` — which is the interface.
         if (externalModules &&
             externalModules->capabilityModules.count(capability)) {
+            // Its own members, where its interface lists them: a foul helper
+            // of the module beside it (`Vault.stored`) is a plain call.
+            if (auto members = externalModules->capabilityMembers.find(capability);
+                members != externalModules->capabilityMembers.end())
+                return members->second.count(method) > 0;
             const auto prefix = capability + "." + method + "/";
             return std::any_of(externalModules->foulExports.begin(),
                                externalModules->foulExports.end(),
@@ -1860,6 +1865,26 @@ struct Lowering {
                                 std::find(methods->second.begin(), methods->second.end(),
                                           owner->second) != methods->second.end())
                                 return wrapLets(binds, std::move(userCall));
+                            // A type of a unit compiled apart, whose own
+                            // operator its interface names by receiver.
+                            const auto bare = [](const std::string& type) {
+                                return type.substr(type.rfind('.') + 1);
+                            };
+                            if (externalModules)
+                                if (auto candidates =
+                                        externalModules->receiverFunctions.find(sym);
+                                    candidates != externalModules->receiverFunctions.end())
+                                    for (const auto& candidate : candidates->second)
+                                        if (candidate.beamArity == 2 &&
+                                            !candidate.receiverType.empty() &&
+                                            bare(candidate.receiverType) == bare(owner->second)) {
+                                            auto call = std::make_unique<Expr>();
+                                            call->node = Call{candidate.moduleAtom,
+                                                              candidate.beamFunction, 2,
+                                                              two(lRef.get(), rRef.get()),
+                                                              false};
+                                            return wrapLets(binds, std::move(call));
+                                        }
                         }
                     }
                     // `==`/`!=` have a sensible structural fallback for any
@@ -2199,7 +2224,16 @@ struct Lowering {
                          imp != moduleImports.end())
                     call->node =
                         Call{"", imp->second, 2, std::move(args), false};
-                else if (subst.count(n.tag))
+                else if (auto ext = externalImports.find(n.tag);
+                         !subst.count(n.tag) && ext != externalImports.end()) {
+                    // A tag imported from a unit compiled apart, as
+                    // lowerFunctionCall calls one (`using Regex`, regex`\d`).
+                    const auto& key = ext->second;
+                    call->node = Call{
+                        externalModules->nameToAtom.at(key.substr(0, key.rfind('.'))),
+                        externalModules->exportToBeamFn.at(key), 2, std::move(args),
+                        false};
+                } else if (subst.count(n.tag))
                     call->node = CallIndirect{
                         var(currentName(n.tag)), std::move(args), false};
                 else
@@ -5225,6 +5259,77 @@ struct Lowering {
             return ret(localCallExpr(imported->second, std::move(args)));
         }
 
+        // The same for a function `using` imported from a unit compiled
+        // apart (`text.scan(re)` under `using Regex`), where nothing of this
+        // unit or of a provider answers the call at its arity.
+        if (auto external = externalImports.find(m);
+            external != externalImports.end() && !moduleImports.count(m)) {
+            const auto& key = external->second;
+            const auto actual = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+                                (n.block ? 1 : 0);
+            const auto names = externalModules->exportParamNames.find(key);
+            const auto arity = externalModules->exportArity.find(key);
+            const bool fits =
+                names != externalModules->exportParamNames.end()
+                    ? actual <= static_cast<int>(names->second.size())
+                    : arity != externalModules->exportArity.end() && arity->second == actual;
+            const auto providers = externalModules->receiverFunctions.find(m);
+            const bool answered =
+                localMethodArities.count(m + "/" + std::to_string(actual)) ||
+                (providers != externalModules->receiverFunctions.end() &&
+                 std::any_of(providers->second.begin(), providers->second.end(),
+                             [&](const auto& provider) {
+                                 return provider.beamArity == actual;
+                             }));
+            const auto owner = key.substr(0, key.rfind('.'));
+            // The checker's choice settles it when it chose this function
+            // over a provider's of the same arity (`"a-b".replace(re, "+")`
+            // is Regex's, not the prelude's String one).
+            const bool chosen = [&] {
+                if (!resolvedCalls) return false;
+                const auto resolved = resolvedCalls->find(&n);
+                return resolved != resolvedCalls->end() &&
+                       resolved->second.backendModule ==
+                           externalModules->nameToAtom.at(owner);
+            }();
+            if (fits && (!answered || chosen) &&
+                (n.namedArgs.empty() || names != externalModules->exportParamNames.end())) {
+                std::vector<ExprPtr> args;
+                if (names != externalModules->exportParamNames.end()) {
+                    const auto& params = names->second;
+                    args.resize(params.size());
+                    args[0] = rv();
+                    for (const auto& [label, value] : n.namedArgs)
+                        for (size_t i = 1; i < params.size(); i++)
+                            if (params[i] == label) {
+                                args[i] = atomize_ir(lower(value), rb);
+                                break;
+                            }
+                    size_t next = 1;
+                    const auto place = [&](ExprPtr value) {
+                        while (next < args.size() && args[next]) next++;
+                        if (next < args.size()) args[next++] = std::move(value);
+                    };
+                    for (const auto& value : n.args) place(atomize_ir(lower(value), rb));
+                    if (n.block) place(atomize_ir(lower(*n.block), rb));
+                    if (auto defaults = externalModules->exportDefaults.find(key);
+                        defaults != externalModules->exportDefaults.end())
+                        fillImportedDefaults(owner, params, defaults->second, args, rb);
+                    for (auto& slot : args)
+                        if (!slot) slot = lit(LitKind::None, "none");
+                } else {
+                    args.push_back(rv());
+                    for (const auto& value : n.args)
+                        args.push_back(atomize_ir(lower(value), rb));
+                    if (n.block) args.push_back(atomize_ir(lower(*n.block), rb));
+                }
+                const auto count = static_cast<int>(args.size());
+                return ret(externalCallExpr(key, externalModules->nameToAtom.at(owner),
+                                            externalModules->exportToBeamFn.at(key), count,
+                                            std::move(args)));
+            }
+        }
+
         // A local method only claims the call when it is defined at THIS
         // arity; otherwise the external/prelude receiver function handles it.
         // `this.map.get(k, default)` inside a `make Box do get(key) ... end`
@@ -5273,8 +5378,62 @@ struct Lowering {
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
                 bool sameModuleOverloads = false;
+                // Providers in more than one module: the one the checker
+                // chose, or else the one for the receiver's static type
+                // (`status.showValue` is Net.HTTP.Status's, not the
+                // prelude's), when that leaves a single module.
+                std::string providerModule;
+                {
+                    std::set<std::string> modules;
+                    for (const auto& candidate : found->second)
+                        if (candidate.beamArity == actualArity)
+                            modules.insert(candidate.moduleAtom);
+                    if (modules.size() > 1 && resolvedCalls)
+                        if (auto resolved = resolvedCalls->find(&n);
+                            resolved != resolvedCalls->end() &&
+                            modules.count(resolved->second.backendModule))
+                            providerModule = resolved->second.backendModule;
+                    if (modules.size() > 1 && providerModule.empty() && expressionTypes &&
+                        n.receiver)
+                        if (auto type = expressionTypes->find(n.receiver.get());
+                            type != expressionTypes->end() && type->second) {
+                            const auto bare = [](const std::string& name) {
+                                return name.substr(name.rfind('.') + 1);
+                            };
+                            const auto receiver = bare(semantic::typeToString(type->second));
+                            std::set<std::string> typed;
+                            for (const auto& candidate : found->second)
+                                if (candidate.beamArity == actualArity &&
+                                    !candidate.receiverType.empty() &&
+                                    bare(candidate.receiverType) == receiver)
+                                    typed.insert(candidate.moduleAtom);
+                            if (typed.size() == 1) providerModule = *typed.begin();
+                        }
+                    // Undecided between one unit's provider for its own type
+                    // and the prelude's: that provider, guarded on its type,
+                    // with the prelude's dispatcher for every other value
+                    // (dualProviderDispatch below), as the merged build's
+                    // local dispatcher does (`"${text}"` beside
+                    // Net.HTTP's own `showValue`).
+                    if (modules.size() == 2 && providerModule.empty() &&
+                        modules.count("kex_prelude")) {
+                        const auto other = *std::find_if(
+                            modules.begin(), modules.end(),
+                            [](const std::string& module) { return module != "kex_prelude"; });
+                        const bool typed = std::all_of(
+                            found->second.begin(), found->second.end(),
+                            [&](const auto& candidate) {
+                                return candidate.beamArity != actualArity ||
+                                       candidate.moduleAtom != other ||
+                                       !candidate.receiverType.empty();
+                            });
+                        if (typed) providerModule = other;
+                    }
+                }
                 for (const auto& candidate : found->second) {
                     if (candidate.beamArity != actualArity) continue;
+                    if (!providerModule.empty() && candidate.moduleAtom != providerModule)
+                        continue;
                     if (match) {
                         if (match->moduleAtom == candidate.moduleAtom) {
                             sameModuleOverloads = true;

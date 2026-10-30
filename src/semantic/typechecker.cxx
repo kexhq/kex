@@ -4579,6 +4579,39 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     return result;
 }
 
+// Whether `known` already offers `function`'s parameters: the prelude serves
+// a module's functions as receiver functions too (`Parsing.Input.peekAt` from
+// `kex_prelude`), and the same function from both was "ambiguous".
+static auto offeredAlready(const std::vector<const ImportedFunction*>& known,
+                           const ImportedFunction& function) -> bool {
+    return std::any_of(known.begin(), known.end(), [&](const ImportedFunction* other) {
+        const auto& left = other->signature.params;
+        const auto& right = function.signature.params;
+        if (left.size() != right.size()) return false;
+        for (size_t i = 0; i < left.size(); ++i)
+            if (typeToString(left[i]) != typeToString(right[i])) return false;
+        return true;
+    });
+}
+
+auto TypeChecker::usingImportedMethods(const std::string& name, bool asMethod) const
+    -> std::vector<const ImportedFunction*> {
+    std::vector<const ImportedFunction*> result;
+    if (!m_importedInterfaces) return result;
+    for (const auto& [moduleName, module] : m_importedInterfaces->modules) {
+        // A module of this program keeps its own signatures, and the
+        // prelude's are reached through its receiver functions already.
+        if (!module.compiledApart || m_localModules.contains(moduleName) ||
+            !moduleMemberImported(moduleName, name))
+            continue;
+        if (auto functions = module.exports.find(name); functions != module.exports.end())
+            for (const auto& function : functions->second)
+                if (!asMethod || !function.signature.params.empty())
+                    result.push_back(&function);
+    }
+    return result;
+}
+
 auto TypeChecker::importedFunctionVisible(
     const ImportedFunction& function) const -> bool {
     if (function.sourceModule.empty() || function.visibleByReceiver) return true;
@@ -4731,6 +4764,9 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
                                      std::string* skippedTo) -> std::vector<TypePtr> {
     if (skippedTo) skippedTo->clear();
     auto imported = importedCandidateSignatures(name);
+    if (isMethodCall)
+        for (const auto* function : usingImportedMethods(name))
+            imported.push_back(function->signature);
     const std::vector<Signature>* sigs = nullptr;
     if (auto scoped = m_scopedDeclaredSignatures.find(
             m_currentModulePath + "\n" + name);
@@ -4769,6 +4805,14 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
                  resolve(sig.params[nonBlockArgTypes.size()])->kind)))
             return;
         auto* blockParam = std::get_if<FuncType>(&sig.params.back()->kind);
+        // A parameter that takes a function or something else takes the
+        // block as that function (`replace : ... (String | (Match -> String))`).
+        if (auto* either = std::get_if<UnionType>(&sig.params.back()->kind); !blockParam && either)
+            for (const auto& member : either->members)
+                if (auto* function = std::get_if<FuncType>(&member->kind)) {
+                    if (blockParam) return;
+                    blockParam = function;
+                }
         if (!blockParam) return;
 
         for (size_t i = 0; i < nonBlockArgTypes.size(); i++) {
@@ -9058,7 +9102,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 for (const auto& function : functions->second)
                     if (importedFunctionVisible(function))
                         importedFunctions.push_back(&function);
-
+            // A function of a module `using` brings in from a unit compiled
+            // apart is a method on its first parameter, as one merged into
+            // the program is (`text.scan(re)` under `using Regex`).
+            // Only for a receiver it takes: `field.parse(text)` is Type.Field's,
+            // and an unrelated `parse : OptionConfig -> ...` is no candidate.
+            for (const auto* function : usingImportedMethods(name))
+                if ((argTypes.empty() ||
+                     argMatchesParam(argTypes.front(), function->signature.params.front())) &&
+                    !offeredAlready(importedFunctions, *function))
+                    importedFunctions.push_back(function);
         } else {
             // Automatically-imported module exports and receiver functions
             // (callable bare via UFCS, e.g. `even?(x)` instead of `x.even?`)
@@ -9089,7 +9142,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                              [&](const Signature& signature) {
                                  return signature.params.size() == argTypes.size();
                              }));
-            if (!declaredShadowsImport)
+            if (!declaredShadowsImport) {
                 for (const auto& [_, module] : m_importedInterfaces->modules) {
                     if (!module.automaticImport) continue;
                     if (auto functions = module.exports.find(name);
@@ -9097,6 +9150,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         for (const auto& function : functions->second)
                             importedFunctions.push_back(&function);
                 }
+                // And those of a module `using` brings in from a unit
+                // compiled apart (`regex("-")` under `using Regex`).
+                for (const auto* function : usingImportedMethods(name, false))
+                    if (!offeredAlready(importedFunctions, *function))
+                        importedFunctions.push_back(function);
+            }
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 !declaredShadowsImport &&
                 functions != m_importedInterfaces->receiverFunctions.end())

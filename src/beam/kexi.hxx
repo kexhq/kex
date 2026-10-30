@@ -214,6 +214,11 @@ struct KexiStructuralMetadata {
     // capability is invisible to every program that imports it
     // (kexhq/kex#143).
     bool isCapability = false;
+    // The members the capability itself declares. A module of the same name
+    // may add helpers beside them (`capability Vault` next to `module
+    // Vault`), and only the members are replaced by `with`. Empty when the
+    // writer did not say, as for the prelude's.
+    std::vector<std::string> capabilityMembers;
     // Present only on a package entry module. An empty id means that this
     // compilation unit does not carry package policy.
     kex::module::PackageMetadata package;

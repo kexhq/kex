@@ -63,6 +63,10 @@ struct ExternalModules {
     // dispatch for it — otherwise `with FS.File = ...` silently keeps calling
     // the real implementation (kexhq/kex#143).
     std::unordered_set<std::string> capabilityModules;
+    // A capability's own members where its interface lists them
+    // (KexiStructuralMetadata::capabilityMembers); otherwise its foul exports
+    // stand for them.
+    std::unordered_map<std::string, std::unordered_set<std::string>> capabilityMembers;
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;

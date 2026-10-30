@@ -2092,6 +2092,104 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
         /*preferExternalReceivers=*/false, &variants, &analyzer.staticTypeOfCalls(),
         &analyzer.typeMap());
     std::filesystem::create_directories(dir);
+    // The unit's own module registers its records' layouts as it loads, but
+    // only the entry's `main` used to run, and a call goes to a companion
+    // (`Kex.RecordValue.Sessions`): its loading loads that module first, or
+    // `Type.of(Session)` met a record nothing had registered.
+    const auto fileModule = "kex_" + stem;
+    const auto registers = std::any_of(modules.begin(), modules.end(), [&](const auto &module) {
+      return module.name == fileModule && !module.onLoad.empty();
+    });
+    for (auto &module : modules) {
+      if (!registers || module.name == fileModule || !module.onLoad.empty()) continue;
+      auto load = std::make_unique<kex::ir::Expr>();
+      std::vector<kex::ir::ExprPtr> args;
+      args.push_back(std::make_unique<kex::ir::Expr>());
+      args.back()->node = kex::ir::Lit{kex::ir::LitKind::Atom, fileModule};
+      load->node = kex::ir::Call{"code", "ensure_loaded", 1, std::move(args), false};
+      auto ok = std::make_unique<kex::ir::Expr>();
+      ok->node = kex::ir::Lit{kex::ir::LitKind::Atom, "ok"};
+      auto body = std::make_unique<kex::ir::Expr>();
+      body->node = kex::ir::Let{"_Loaded", std::move(load), std::move(ok)};
+      kex::ir::FunDef onLoad;
+      onLoad.name = "__kex_on_load";
+      onLoad.exported = false;
+      kex::ir::FunClause clause;
+      clause.body = std::move(body);
+      onLoad.clauses.push_back(std::move(clause));
+      module.functions.push_back(std::move(onLoad));
+      module.onLoad = "__kex_on_load";
+    }
+    // What the unit's interface names in a module's companion and lowering
+    // emitted in the unit's own module, the companion forwards there:
+    //   * a free function sharing its name with a `make` function of the same
+    //     module (`Kex.Vault:get` is `kex_vault:'Vault.get$free'`);
+    //   * the functions of a `make` block written outside the module for one
+    //     of its types (`make Type.Field` after `module Type`).
+    std::map<std::string, std::set<std::string>> outsideMakes;
+    for (const auto &item : program.items) {
+      const auto *make = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item);
+      if (!make || !*make || !(*make)->target) continue;
+      const auto *target = std::get_if<kex::ast::TypeName>(&(*make)->target->kind);
+      if (!target || target->parts.size() < 2) continue;
+      std::string owner;
+      for (std::size_t i = 0; i + 1 < target->parts.size(); i++)
+        owner += (owner.empty() ? "" : ".") + target->parts[i];
+      const auto note = [&](const kex::ast::FunctionDef &function) {
+        outsideMakes["Kex." + owner].insert(function.name);
+      };
+      for (const auto &member : (*make)->body)
+        if (const auto *function = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&member);
+            function && *function)
+          note(**function);
+        else if (const auto *block = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&member);
+                 block && *block && (*block)->isPublic)
+          for (const auto &inner : (*block)->items)
+            if (const auto *function = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&inner);
+                function && *function)
+              note(**function);
+    }
+    std::vector<std::tuple<std::string, std::string, std::string, int>> forwards;
+    for (const auto &module : modules) {
+      if (module.name != fileModule) continue;
+      for (const auto &function : module.functions) {
+        for (const auto &[companion, names] : outsideMakes)
+          if (names.contains(function.name) && function.exported)
+            forwards.emplace_back(companion, function.name, function.name, function.arity);
+        const auto dot = function.name.rfind('.');
+        if (dot == std::string::npos || !function.name.ends_with("$free")) continue;
+        forwards.emplace_back("Kex." + function.name.substr(0, dot),
+                              function.name.substr(dot + 1, function.name.size() - dot - 6),
+                              function.name, function.arity);
+      }
+    }
+    for (const auto &[companion, name, target, arity] : forwards)
+      for (auto &module : modules) {
+        if (module.name != companion ||
+            std::any_of(module.functions.begin(), module.functions.end(),
+                        [&](const auto &function) {
+                          return function.name == name && function.arity == arity;
+                        }))
+          continue;
+        kex::ir::FunClause clause;
+        std::vector<kex::ir::ExprPtr> args;
+        for (int i = 0; i < arity; i++) {
+          const auto param = "_Arg" + std::to_string(i);
+          auto pattern = std::make_unique<kex::ir::Pattern>();
+          pattern->kind = kex::ir::PatKind::Var;
+          pattern->name = param;
+          clause.params.push_back(std::move(pattern));
+          args.push_back(std::make_unique<kex::ir::Expr>());
+          args.back()->node = kex::ir::Var{param};
+        }
+        clause.body = std::make_unique<kex::ir::Expr>();
+        clause.body->node = kex::ir::Call{fileModule, target, arity, std::move(args), true};
+        kex::ir::FunDef forward;
+        forward.name = name;
+        forward.arity = arity;
+        forward.clauses.push_back(std::move(clause));
+        module.functions.push_back(std::move(forward));
+      }
     for (auto &module : modules) {
       kex::ir::insertUpgradePoints(module);
       const auto emitted = kex::ir::emitCore(module);
@@ -2130,6 +2228,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       }
     }
     auto below = registry.buildSemanticInterfaces();
+    for (auto &[_, module] : below.modules) module.compiledApart = true;
     for (auto &[_, functions] : below.receiverFunctions)
       for (auto &function : functions)
         if (function.isReceiverMethod) function.visibleByReceiver = true;
@@ -2144,10 +2243,28 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     // `Kex.Net.HTTP.Router`), and the merge keeps the first description.
     auto preludeView = [&]() -> kex::semantic::ImportedInterfaces {
       auto view = *interfaces;
-      for (const auto &[name, _] : below.modules) view.modules.erase(name);
+      // A type's `make` functions are filed under the type (`Regex.Match`),
+      // inside the module this build compiles (`Regex`).
+      const auto builtHere = [&](std::string module) {
+        for (;;) {
+          if (below.modules.contains(module)) return true;
+          const auto dot = module.rfind('.');
+          if (dot == std::string::npos) return false;
+          module.resize(dot);
+        }
+      };
+      std::erase_if(view.modules, [&](const auto &module) { return builtHere(module.first); });
+      // The prelude files its own copies under `Prelude`; a receiver of a
+      // type declared in such a module (`Regex.Match`) gives them away.
+      const auto onBuiltType = [&](const kex::semantic::ImportedFunction &function) {
+        if (function.signature.params.empty()) return false;
+        const auto *named =
+            std::get_if<kex::semantic::NamedType>(&function.signature.params.front()->kind);
+        return named && named->name.find('.') != std::string::npos && builtHere(named->name);
+      };
       for (auto &[__, functions] : view.receiverFunctions)
         std::erase_if(functions, [&](const auto &function) {
-          return below.modules.contains(function.sourceModule);
+          return builtHere(function.sourceModule) || onBuiltType(function);
         });
       return view;
     };
@@ -2174,9 +2291,17 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                        return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
                      });
     if (const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
-        coreDir && *coreDir && unitChecked)
+        coreDir && *coreDir && unitChecked) {
+      // A prelude trait the unit claims gives it its default bodies, from
+      // the trait's source, as the merged build backfills them; taken out
+      // again, since the unit's items go back to their files below.
+      const auto ownItems = program.items.size();
+      kex::backfillExternalTraitDefaults(program);
       lowerUnitSeparately(program, isEntry ? g_separateEntryPath : unit.front(),
                           analyzer, registry, coreDir);
+      program.items.erase(program.items.begin() + static_cast<std::ptrdiff_t>(ownItems),
+                          program.items.end());
+    }
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
       kex::beam::LoadedUnit described;
@@ -2240,6 +2365,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                               : kex::beam::KexiModuleRole::Companion;
         if (i > 0) options.entryBackPointer = "Kex." + names.front();
         options.analysis = &analyzer;
+        options.unitCompiledApart = true;
         auto chunk = kex::beam::collectMetadata(program, options);
         kex::beam::qualifyTypeNames(chunk, qualifierFor(*modules[i]));
         described.modules.push_back({options.moduleAtom, "", std::move(chunk)});
@@ -2713,6 +2839,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.foulExports.insert(name);
   for (const auto &name : overrides.capabilityModules)
     result.capabilityModules.insert(name);
+  for (const auto &[name, members] : overrides.capabilityMembers)
+    result.capabilityMembers[name] = members;
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
   for (const auto &[name, methods] : overrides.traitMethods)

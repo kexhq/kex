@@ -1248,16 +1248,51 @@ auto collectMetadata(const kex::ast::Program& program,
             if (const auto* mod =
                     std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
                 if (*mod && visit(**mod)) break;
+        // Every part declared `capability` names its members.
+        std::function<void(const ast::ModuleDef&)> members =
+            [&](const ast::ModuleDef& mod) {
+            if (mod.name == opts.moduleName && mod.isCapability)
+                for (const auto& item : mod.body)
+                    if (const auto* function =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                        function && *function &&
+                        std::find(chunk.metadata.capabilityMembers.begin(),
+                                  chunk.metadata.capabilityMembers.end(),
+                                  (*function)->name) ==
+                            chunk.metadata.capabilityMembers.end())
+                        chunk.metadata.capabilityMembers.push_back((*function)->name);
+            for (const auto& item : mod.body)
+                if (const auto* nested =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*nested) members(**nested);
+        };
+        if (opts.unitCompiledApart)
+            for (const auto& item : program.items)
+                if (const auto* mod =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*mod) members(**mod);
     }
 
     if (!opts.noCheck) {
         if (opts.flattenModules)
             collectFlattenedProgram(program, chunk.typeInterface, chunk.metadata,
                                     opts.analysis);
-        else if (!opts.collectTopLevel && !opts.moduleName.empty())
+        else if (!opts.collectTopLevel && !opts.moduleName.empty()) {
             findAndCollectModule(program, opts.moduleName,
                                  chunk.typeInterface, chunk.metadata,
                                  opts.analysis);
+            // A `make` block written outside the module for one of its types
+            // (`make Type.Field` after `module Type`) is the module's too.
+            if (opts.unitCompiledApart) {
+                for (const auto& item : program.items)
+                    if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+                        make && *make &&
+                        makeTargetName(convertTypeExpr((*make)->target))
+                                .rfind(opts.moduleName + ".", 0) == 0)
+                        collectFromMakeDef(**make, chunk.typeInterface, chunk.metadata,
+                                           opts.analysis);
+            }
+        }
         else
             collectFromTopLevel(program, chunk.typeInterface, chunk.metadata,
                                 opts.analysis);

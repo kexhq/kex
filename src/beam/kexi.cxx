@@ -560,6 +560,9 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         auto& entries = std::get<Term::Map>(structural->value).pairs;
         entries.emplace_back(Term::atom("unit_id"),
                              Term::binary(chunk.metadata.unitId));
+        if (!chunk.metadata.capabilityMembers.empty())
+            entries.emplace_back(Term::atom("capability_members"),
+                                 stringsToTerm(chunk.metadata.capabilityMembers));
         entries.emplace_back(Term::atom("source_module"),
                              Term::binary(chunk.metadata.sourceModule));
         if (!chunk.metadata.package.id.empty())
@@ -763,6 +766,8 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.metadata.methodOwnership.push_back(termToMethodOwnership(o));
     if (auto cap = sm->mapGet("is_capability"))
         chunk.metadata.isCapability = cap->isAtom("true");
+    if (auto members = sm->mapGet("capability_members"))
+        chunk.metadata.capabilityMembers = termToStrings(members);
     if (auto pe = sm->mapGet("public_exports"))
         for (const auto& e : pe->asList())
             chunk.metadata.publicExports.push_back(e->asBinaryStr());
