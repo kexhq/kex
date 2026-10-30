@@ -3,6 +3,7 @@
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../semantic/declared_type.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
@@ -5300,7 +5301,7 @@ auto Evaluator::registerBuiltins() -> void {
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
-        defineIntrinsic("Fun::convertTo", [](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun::convertTo", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             const auto& val = args[0];
             std::string targetName;
@@ -5315,6 +5316,11 @@ auto Evaluator::registerBuiltins() -> void {
                     if (auto* n = std::get_if<StringValue>(&field->second->data))
                         targetName = n->value;
             }
+            // A distinct type converts as its backing type does, as on the
+            // BEAM (kex_intrinsic_type:distinct_backing/1).
+            if (!targetName.empty())
+                targetName = semantic::expandDeclaredAliases(
+                    semantic::StructuredType{targetName, {}}, m_declaredAliases).name;
 
             // Optional third argument: `.to(String, radix: 16)` /
             // `.to(Integer, radix: 2)`. Only Integer <-> String is base
