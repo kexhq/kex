@@ -5708,7 +5708,7 @@ struct Lowering {
     auto withDisplayInfo(ExprPtr body, const std::string& moduleName = "")
         -> ExprPtr {
         bool anyVariant = !variantArity.empty();
-        if (records.empty() && !anyVariant) return std::move(body);
+        if (records.empty() && !anyVariant && distinctTypes.empty()) return std::move(body);
         auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
         auto mapFrom = [&](std::vector<ExprPtr> pairs) {
             auto lst = std::make_unique<Expr>();
@@ -5858,6 +5858,26 @@ struct Lowering {
                                  two(mapFrom(std::move(recordEntries)),
                                      mapFrom(std::move(adtEntries)))),
                            std::move(body));
+        }
+        if (!distinctTypes.empty()) {
+            // What each distinct type is erased to, for code that names one
+            // at run time: `.to(UserId)` converts to the backing type, and
+            // `Type.of(UserId)` answers with it.
+            std::vector<ExprPtr> backings;
+            for (const auto& name : distinctTypes) {
+                semantic::StructuredType named;
+                named.name = name;
+                const auto backing = semantic::expandDeclaredAliases(named, declaredAliases);
+                if (backing.name == name) continue;
+                auto pair = std::make_unique<Expr>();
+                pair->node = MakeTuple{two(atomLit(name), structuredTypeLiteral(backing))};
+                backings.push_back(std::move(pair));
+            }
+            if (!backings.empty())
+                body = makeLet(fresh("Distinct"),
+                               callE("kex_intrinsic_type", "register_distinct", 1,
+                                     one(mapFrom(std::move(backings)))),
+                               std::move(body));
         }
         return makeLet(fresh("Disp"),
             callE("kex_io", "register_display", 2,
@@ -10323,15 +10343,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
-        if (td.isDistinct) {
-            L.distinctTypes.insert(td.name);
-            // Erased at run time, so the layouts read a field declared with
-            // one as its backing type: `Type.fields` and `Type.construct`
-            // then take the plain value it is, and no constructor is made up.
-            if (td.variants->size() == 1 && (*td.variants)[0] && td.typeParams.empty())
-                L.declaredAliases[td.name] = (*td.variants)[0].get();
-            return;
-        }
+        if (td.isDistinct) L.distinctTypes.insert(td.name);
         // What an alias STANDS FOR, for the dispatch guards: a structural
         // right-hand side (`type Handler = Env -> String`), or the plain name
         // a transparent alias renames (`type Slug = String`). Either way no
@@ -10344,7 +10356,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 renderDispatchType(*(*td.variants)[0]);
         if (const auto* target = kex::aliasTarget(td))
             L.declaredAliases[td.name] = target;
-        if (kex::isTransparentTypeAlias(td)) return;
+        // A distinct type is erased to its backing type: it has no
+        // constructors of its own to lay out.
+        if (td.isDistinct || kex::isTransparentTypeAlias(td)) return;
         auto& layout = L.adtLayouts[td.name];
         layout.clear();
         for (const auto& v : *td.variants) {
@@ -11024,6 +11038,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto savedImports = L.moduleImports;
                         auto savedAliases = L.moduleAliases;
+                        auto savedUsing = L.usingModules;
                         auto prefix = m.name + ".";
                         for (const auto& [key, val] : L.moduleFunctions)
                             if (key.rfind(prefix, 0) == 0) {
@@ -11040,7 +11055,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     mod.functions.push_back(
                                         moduleConstructorDef(
                                             constructor, m.name));
-                            if (kex::isTransparentTypeAlias(*td))
+                            // As at the top level (kex::typeConstructors):
+                            // a distinct type has no tags of its own.
+                            if (td->isDistinct ||
+                                kex::isTransparentTypeAlias(*td))
                                 return;
                             std::vector<std::string> tags;
                             for (const auto& variant :
@@ -11069,6 +11087,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     srcMod += (*ub)->module.parts[i];
                                 }
                                 if ((*ub)->alias) L.moduleAliases[*(*ub)->alias] = srcMod;
+                                // What the module names its records by: a
+                                // bare `Event` it imports is that module's,
+                                // even when another module declares one too.
+                                L.usingModules.insert(srcMod);
                                 for (const auto& [key, _] : L.moduleFunctions) {
                                     const auto prefix = srcMod + ".";
                                     if (key.rfind(prefix, 0) != 0) continue;
@@ -11164,6 +11186,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         }
                         L.moduleImports = std::move(savedImports);
                         L.moduleAliases = std::move(savedAliases);
+                        L.usingModules = std::move(savedUsing);
                         L.currentModulePath = std::move(savedModulePath);
                     };
                     lowerModuleBody(*node);

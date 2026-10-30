@@ -1062,19 +1062,33 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     // name (`type FilePath = String`) or a callable shape
     // (`type Handler = Request -> Response`) — since those are the ones a
     // parameter annotation names when the runtime has no such type of its
-    // own to match against.
+    // own to match against — as a distinct type is, erased to its backing.
     if (def.variants && def.variants->size() == 1 && (*def.variants)[0]) {
         const auto& only = (*def.variants)[0];
         if (std::holds_alternative<ast::FunctionType>(only->kind) ||
             std::holds_alternative<ast::BlockType>(only->kind) ||
             std::holds_alternative<ast::TypeQuery>(only->kind) ||
-            kex::isTransparentTypeAlias(def))
+            kex::isTransparentTypeAlias(def) ||
+            (def.isDistinct && def.typeParams.empty()))
             m_typeAliases[def.name] = only.get();
     }
     if (const auto* target = kex::aliasTarget(def))
         m_declaredAliases[def.name] = target;
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
+        // A distinct type is erased to its backing type, as on the BEAM: no
+        // constructors of its own, and its name as a value is the backing
+        // type's token, so `.to(UserId)` and `Type.of(UserId)` read the
+        // backing type.
+        if (def.isDistinct) {
+            const auto* target = kex::aliasTarget(def);
+            const auto* named = target ? std::get_if<ast::TypeName>(&target->kind) : nullptr;
+            const auto key = moduleScope.empty() ? def.name : moduleScope + "::" + def.name;
+            if (named && !named->parts.empty() && !m_env->get(key))
+                if (auto token = m_env->get(named->parts.back()))
+                    m_env->define(key, token);
+            return;
+        }
         // The type's own name as a value is its token, as a record's is (see
         // execRecordDef): `select(as: Kind)` passes it, and `Type.of` reads
         // the type off it (kexhq/kex#509). Named as its values' parentType

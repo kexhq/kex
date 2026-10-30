@@ -1,0 +1,30 @@
+# kex: run-beam
+# The BEAM twin of distinct_type_reflection.kex.
+
+distinct type UserId = String
+distinct type Width = Integer
+
+module Accounts do
+  distinct type AccountId = Integer
+end
+
+record Holder do
+  id : UserId
+  width : Width
+  account : Accounts.AccountId
+end
+
+foul converted(value: Any, as: T) -> T? = value.to(as)
+
+main(args) do
+  Type.of(Holder).fields.each { |field| IO.printLine("${field.name}: ${field.valueType.name}") }
+
+  let values : {String: Any} = {"id": "u1", "width": 3, "account": 7}
+  let built : Result<Holder, String> = Type.of(Holder).construct(values)
+  IO.printLine(built.map { |holder| holder.id.as(String) }.or("not built"))
+
+  IO.printLine(converted("u2", UserId).showValue)
+  IO.printLine(converted("12", Width).showValue)
+  IO.printLine(Type.of(UserId).name)
+  IO.printLine(Type.of(Width).constructorNames)
+end
