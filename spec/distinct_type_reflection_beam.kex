@@ -14,9 +14,6 @@ record Holder do
   account : Accounts.AccountId
 end
 
-# What converting to a type only known at run time can answer is `Any?`.
-foul converted(value: Any, as: Type) -> Any? = value.to(as)
-
 main(args) do
   Type.of(Holder).fields.each { |field| IO.printLine("${field.name}: ${field.valueType.name}") }
 
@@ -25,7 +22,7 @@ main(args) do
   IO.printLine(built.map { |holder| holder.id.as(String) }.or("not built"))
 
   IO.printLine("u2".to(UserId).showValue)
-  IO.printLine(converted("12", Type.of(Width)).showValue)
+  IO.printLine("12".to(Width).showValue)
   IO.printLine(Type.of(UserId).name)
   IO.printLine(Type.of(Width).constructorNames)
 end
