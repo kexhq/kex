@@ -8123,6 +8123,15 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
     };
     if (isPermissive(argType) || isPermissive(paramType)) return true;
+    // A distinct type goes where its backing type is expected — a `UserId`
+    // to a `String` parameter, or to a text column's `==` — but never the
+    // other way: a `String` still enters a `UserId` only through `.as`, and
+    // one distinct type never stands for another.
+    if (const auto backing = distinctBacking(argType);
+        !typesEqual(backing, argType) &&
+        typesEqual(distinctBacking(paramType), paramType) &&
+        argMatchesParam(backing, paramType))
+        return true;
     // Never is the bottom type — a Never-typed expression (never returns) is
     // compatible with any expected type.
     if (std::holds_alternative<VoidType>(argType->kind)) return true;
