@@ -1,0 +1,30 @@
+# A distinct type is erased to its backing type at run time, and reflection
+# says so on either backend: a field declared with one reads as the backing
+# type, `Type.construct` takes the plain value, `.to(UserId)` converts as the
+# backing type does, and no constructor is made up for it.
+
+distinct type UserId = String
+distinct type Width = Integer
+
+module Accounts do
+  distinct type AccountId = Integer
+end
+
+record Holder do
+  id : UserId
+  width : Width
+  account : Accounts.AccountId
+end
+
+main(args) do
+  Type.of(Holder).fields.each { |field| IO.printLine("${field.name}: ${field.valueType.name}") }
+
+  let values : {String: Any} = {"id": "u1", "width": 3, "account": 7}
+  let built : Result<Holder, String> = Type.of(Holder).construct(values)
+  IO.printLine(built.map { |holder| holder.id.as(String) }.or("not built"))
+
+  IO.printLine("u2".to(UserId).showValue)
+  IO.printLine("12".to(Width).showValue)
+  IO.printLine(Type.of(UserId).name)
+  IO.printLine(Type.of(Width).constructorNames)
+end

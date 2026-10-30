@@ -50,6 +50,17 @@ auto valueToLiteral(const ValuePtr& value,
                     const_cast<ast::Expr*>((*context.placeholders)[node.index]));
                 auto copy = ast::clone(borrowed);
                 (void)borrowed.release();
+                for (const auto& retag : node.retags) {
+                    auto target = make(location);
+                    target->kind = ast::UpperIdentifier{retag};
+                    ast::MethodCall call;
+                    call.receiver = std::move(copy);
+                    call.method = "as";
+                    call.args.push_back(std::move(target));
+                    call.parenthesized = true;
+                    copy = make(location);
+                    copy->kind = std::move(call);
+                }
                 return copy;
             } else
             if constexpr (std::is_same_v<T, interpreter::UnitValue>) {

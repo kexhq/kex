@@ -2337,6 +2337,16 @@ struct ChainCollapser {
                     return node.operand && isStatic(*node.operand);
                 } else if constexpr (std::is_same_v<T, ast::MethodCall> ||
                                      std::is_same_v<T, ast::FunctionCall>) {
+                    // `id.as(String)` only retags, statically: what it holds
+                    // is what `id` holds, so it is known when `id` is. The
+                    // argument names a type, not a runtime value.
+                    if constexpr (std::is_same_v<T, ast::MethodCall>)
+                        if (node.method == "as" && node.receiver &&
+                            node.args.size() == 1 && node.namedArgs.empty() &&
+                            !node.block && node.args[0] &&
+                            std::holds_alternative<ast::UpperIdentifier>(
+                                node.args[0]->kind))
+                            return isStatic(*node.receiver);
                     // Only a call into compiled code counts: an ordinary
                     // runtime call on literals stays where the author put it.
                     return isCollapsible(expr);
@@ -2718,6 +2728,9 @@ auto writeStoredValue(std::ostream& out, const interpreter::ValuePtr& value,
         [&](const auto& node) -> bool {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, interpreter::PlaceholderValue>) {
+                // The stored form has no room for a retag; such a result is
+                // simply not cached.
+                if (!node.retags.empty()) return false;
                 out << "P" << node.index << " ";
                 writeCachedString(out, node.name);
             } else if constexpr (std::is_same_v<T, interpreter::UnitValue>) {

@@ -4,7 +4,7 @@ distinct type OrderId = Integer
 let acceptUser(id: UserId) = id
 
 main do
-  acceptUser(1)
+  acceptUser(1 + 1)
   let order = 1.as(OrderId)
   acceptUser(order)
 end

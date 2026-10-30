@@ -1,0 +1,17 @@
+# A distinct type goes where its backing type is expected — to a parameter
+# of that type, inside a list too — but not the other way, and not to
+# another distinct type (see error_distinct_type_mismatch.kex).
+
+distinct type UserId = String
+distinct type Cents = Integer
+
+foul shout(text: String) -> String = text.upperCase
+foul joined(texts: [String]) -> String = texts.join(",")
+foul doubled(amount: Integer) -> Integer = amount * 2
+
+main(args) do
+  let id = "u1".as(UserId)
+  IO.printLine(shout(id))
+  IO.printLine(joined([id, "u2".as(UserId)]))
+  IO.printLine(doubled(21.as(Cents)))
+end

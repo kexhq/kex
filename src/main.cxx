@@ -6247,6 +6247,12 @@ int main(int argc, char *argv[]) {
 
   std::string filepath = argv[optind];
   kex::module::Resolver::setEntryFile(filepath);
+#ifndef __EMSCRIPTEN__
+  // A spec says it is one to what it runs, the BEAM child included, so a
+  // framework can pick its test settings without being told: Metro's
+  // environment is `test` under it unless METRO_ENV says otherwise.
+  if (isSpecEntry(filepath)) setenv("KEX_TEST", "1", 0);
+#endif
 
   const bool compiledInput =
       filepath.size() > 5 &&

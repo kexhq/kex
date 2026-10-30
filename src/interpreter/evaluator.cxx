@@ -3,6 +3,7 @@
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../semantic/declared_type.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
@@ -1062,19 +1063,44 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     // name (`type FilePath = String`) or a callable shape
     // (`type Handler = Request -> Response`) — since those are the ones a
     // parameter annotation names when the runtime has no such type of its
-    // own to match against.
+    // own to match against — as a distinct type is, erased to its backing.
     if (def.variants && def.variants->size() == 1 && (*def.variants)[0]) {
         const auto& only = (*def.variants)[0];
         if (std::holds_alternative<ast::FunctionType>(only->kind) ||
             std::holds_alternative<ast::BlockType>(only->kind) ||
             std::holds_alternative<ast::TypeQuery>(only->kind) ||
-            kex::isTransparentTypeAlias(def))
+            kex::isTransparentTypeAlias(def) ||
+            (def.isDistinct && def.typeParams.empty()))
             m_typeAliases[def.name] = only.get();
     }
     if (const auto* target = kex::aliasTarget(def))
         m_declaredAliases[def.name] = target;
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
+        // A distinct type is erased to its backing type, as on the BEAM: no
+        // constructors of its own, and its name as a value is the backing
+        // type's token, so `.to(UserId)` and `Type.of(UserId)` read the
+        // backing type.
+        if (def.isDistinct) {
+            const auto* target = kex::aliasTarget(def);
+            const auto* named = target ? std::get_if<ast::TypeName>(&target->kind) : nullptr;
+            const auto key = moduleScope.empty() ? def.name : moduleScope + "::" + def.name;
+            if (m_env->get(key)) return;
+            // The backing's token as written (`Accounts.Inner` is
+            // `Accounts::Inner`), then by its last segment. A backing declared
+            // further down has no token yet; the type's own stands in, as it
+            // did before distinct types were erased.
+            ValuePtr token;
+            if (named && !named->parts.empty()) {
+                std::string qualified;
+                for (const auto& part : named->parts)
+                    qualified += (qualified.empty() ? "" : "::") + part;
+                token = m_env->get(qualified);
+                if (!token) token = m_env->get(named->parts.back());
+            }
+            m_env->define(key, token ? token : Value::record(def.name, {}));
+            return;
+        }
         // The type's own name as a value is its token, as a record's is (see
         // execRecordDef): `select(as: Kind)` passes it, and `Type.of` reads
         // the type off it (kexhq/kex#509). Named as its values' parentType
@@ -2497,6 +2523,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 node.args[0] && node.receiver && node.namedArgs.empty() &&
                 !node.block) {
                 auto value = eval(*node.receiver);
+                // A value only the running program has stays unknown: the
+                // conversion goes back around it when the result is reified.
+                if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data))
+                    if (const auto* target =
+                            std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
+                        auto retagged = std::make_shared<Value>();
+                        auto copy = *placeholder;
+                        copy.retags.push_back(target->name);
+                        retagged->data = std::move(copy);
+                        return retagged;
+                    }
                 if (const auto* target =
                         std::get_if<ast::UpperIdentifier>(
                             &node.args[0]->kind);
@@ -5286,7 +5323,7 @@ auto Evaluator::registerBuiltins() -> void {
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
-        defineIntrinsic("Fun::convertTo", [](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun::convertTo", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             const auto& val = args[0];
             std::string targetName;
@@ -5301,6 +5338,11 @@ auto Evaluator::registerBuiltins() -> void {
                     if (auto* n = std::get_if<StringValue>(&field->second->data))
                         targetName = n->value;
             }
+            // A distinct type converts as its backing type does, as on the
+            // BEAM (kex_intrinsic_type:distinct_backing/1).
+            if (!targetName.empty())
+                targetName = semantic::expandDeclaredAliases(
+                    semantic::StructuredType{targetName, {}}, m_declaredAliases).name;
 
             // Optional third argument: `.to(String, radix: 16)` /
             // `.to(Integer, radix: 2)`. Only Integer <-> String is base

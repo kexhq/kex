@@ -8,6 +8,7 @@
 -module(kex_intrinsic_type).
 -export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1, 'updateRecord'/3,
          'fieldLayoutsOf'/1, 'constructorLayoutsOf'/1, register_layouts/2,
+         register_distinct/1, distinct_backing/1,
          'construct'/2, 'constructVariant'/3, 'recordValues'/1]).
 
 'updateRecord'(Record, Field, Value) when is_tuple(Record), tuple_size(Record) > 0 ->
@@ -107,7 +108,11 @@ type_token(Name) ->
         none ->
             case layout_entry(persistent_term:get(kex_adt_layouts, #{}), Name) of
                 {Key, _} -> named(atom_to_binary(Key, utf8));
-                none -> named(<<"Atom">>)
+                none ->
+                    case layout_entry(persistent_term:get(kex_distinct_types, #{}), Name) of
+                        {_, Backing} -> Backing;
+                        none -> named(<<"Atom">>)
+                    end
             end
     end.
 
@@ -142,6 +147,22 @@ register_layouts(Records, Adts) ->
     persistent_term:put(kex_adt_layouts,
                         maps:merge(persistent_term:get(kex_adt_layouts, #{}), Adts)),
     ok.
+
+%% register_distinct/1 — called when a module loads, with what each distinct
+%% type is erased to (#{Name => Type}). A distinct type has no value of its
+%% own at run time, so whatever names one there means its backing type.
+register_distinct(Backings) ->
+    persistent_term:put(kex_distinct_types,
+                        maps:merge(persistent_term:get(kex_distinct_types, #{}), Backings)),
+    ok.
+
+%% The backing type of the distinct type named Name, or `none`.
+distinct_backing(Name) when is_atom(Name) ->
+    case layout_entry(persistent_term:get(kex_distinct_types, #{}), atom_to_binary(Name, utf8)) of
+        {_, Backing} -> Backing;
+        none -> none
+    end;
+distinct_backing(_) -> none.
 
 'fieldLayoutsOf'(Name) ->
     [{FieldName, Type, Optional, HasDefault}

@@ -99,10 +99,17 @@ using DeclaredAliases = std::unordered_map<std::string, const ast::TypeExpr*>;
 // hop limit stops an alias cycle the checker reports anyway.
 inline auto expandDeclaredAliases(StructuredType type, const DeclaredAliases& aliases,
                                   int hops = 0) -> StructuredType {
-    if (type.args.empty() && hops < 16)
-        if (auto found = aliases.find(type.name); found != aliases.end() && found->second)
+    if (type.args.empty() && hops < 16) {
+        // An alias declared in a module is kept by its own name and may be
+        // written qualified (`Accounts.AccountId`).
+        auto found = aliases.find(type.name);
+        if (found == aliases.end())
+            if (const auto dot = type.name.rfind('.'); dot != std::string::npos)
+                found = aliases.find(type.name.substr(dot + 1));
+        if (found != aliases.end() && found->second)
             return expandDeclaredAliases(structuredTypeOfDeclared(*found->second),
                                          aliases, hops + 1);
+    }
     for (auto& arg : type.args) arg = expandDeclaredAliases(std::move(arg), aliases, hops);
     return type;
 }

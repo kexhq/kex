@@ -59,6 +59,12 @@ convertTo(V, 'Atom') when is_binary(V) ->
     end;
 convertTo(V, 'Atom') when is_atom(V), V =/= true, V =/= false, V =/= 'None' ->
     {'Just', V};
+%% A distinct type is erased to its backing type, and converts as that does.
+convertTo(V, T) when is_atom(T) ->
+    case kex_intrinsic_type:distinct_backing(T) of
+        none -> 'None';
+        Backing -> convertTo(V, Backing)
+    end;
 convertTo(_, _) -> 'None'.
 
 %% Base-aware Integer <-> String, `.to(String, radix: 16)`. Only that pair is

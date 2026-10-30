@@ -1,0 +1,9 @@
+spec/error_distinct_literal_coercion.kex:8:3: error: Type mismatch: expected BookId, got Integer
+spec/error_distinct_literal_coercion.kex:9:3: error: `fetched` expects argument 1 to be BookId, but got Integer
+
+fetched : BookId -> BookId
+spec/error_distinct_literal_coercion.kex:10:3: error: `fetched` expects argument 1 to be BookId, but got String
+
+fetched : BookId -> BookId
+spec/error_distinct_literal_coercion.kex:11:3: error: Type mismatch: expected TeamId, got Integer
+Aborted: 4 type errors — fix before running (use --no-check to skip).

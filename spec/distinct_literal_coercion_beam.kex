@@ -1,0 +1,30 @@
+# kex: run-beam
+# The BEAM twin of distinct_literal_coercion.kex.
+
+distinct type BookId = Integer
+distinct type TeamId = String
+distinct type Cents = Integer
+
+record Shelf do
+  team : TeamId = "".as(TeamId)
+  books : [BookId] = []
+end
+
+foul fetched(id: BookId) -> Integer = id.as(Integer)
+foul named(team: TeamId) -> String = team.as(String)
+foul first() -> BookId = 1
+
+main(args) do
+  let x : BookId = 7
+  let shelf = Shelf { team: "t1", books: [1, 2] }
+  let owed : Cents = -5
+  var y : BookId = 1
+  y = 2
+  IO.printLine(fetched(1) + x.as(Integer))
+  IO.printLine(fetched(id: 4))
+  IO.printLine(named("t${1}"))
+  IO.printLine(shelf.team.as(String))
+  IO.printLine(shelf.books.count)
+  IO.printLine(owed.as(Integer))
+  IO.printLine(y.as(Integer) + first().as(Integer))
+end
