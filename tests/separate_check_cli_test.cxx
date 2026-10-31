@@ -7,6 +7,13 @@
 // a nested module compiled on its own, and a module function another
 // module's `make` function shares a name with, or one that takes no
 // receiver its signature line does not name.
+//
+// With KEX_SEPARATE_CORE each unit that checked cleanly is also lowered on
+// its own; compiled and run, it must print what the merged build prints.
+// For that the program also has a capability beside a module of its name,
+// whose default and replacement and helper each run, a slot called with
+// `within:` on another unit's server, a `make` block outside its module, and
+// a function of another unit called by UFCS.
 #include "test.hxx"
 #include <cstdlib>
 #include <filesystem>
@@ -14,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <utility>
 
 using namespace test;
 
@@ -139,6 +147,41 @@ let shown() = Outer.Inner.named()
 named : String
 let named() = "inner"
 )KEX");
+        write("lib/notes.kex", R"KEX(capability Notes do
+  foul take(key: String) -> String do
+    return Notes.local().take(key)
+  end
+end
+
+module Notes do
+  record Local do
+    prefix : String
+  end
+
+  make Local, implement: Notes do
+    foul take(key: String) -> String = "${@prefix}${key}"
+  end
+
+  local : Local
+  foul local = Local { prefix: "local:" }
+
+  noted : String -> String
+  foul noted(key) = "noted ${Notes.take(key)}"
+end
+)KEX");
+        write("lib/marks.kex", R"KEX(module Marks do
+  record Mark do
+    text : String
+  end
+
+  exclaimed : String -> String
+  let exclaimed(text) = "${text}!"
+end
+
+make Marks.Mark do
+  let loud -> String = Marks.exclaimed(@text)
+end
+)KEX");
     }
 
     ~Package() {
@@ -161,7 +204,46 @@ let named() = "inner"
             (root / "app").string() + " --source-root " + (root / "lib").string() + " " +
             (root / "app" / "main.kex").string() + " > " + output.string() + " 2>&1";
         (void)std::system(command.c_str());
-        std::ifstream file(output);
+        return read(output);
+    }
+
+    // The program built as one and as units lowered apart, each compiled and
+    // run: what each printed, merged first.
+    auto run() -> std::pair<std::string, std::string> {
+        const auto roots = " --source-root " + (root / "app").string() +
+            " --source-root " + (root / "lib").string() + " ";
+        const auto build = "KEX_SEPARATE=1 KEX_SEPARATE_CORE=" + (root / "separate").string() +
+            " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
+            " --no-colors -E -o " + (root / "merged").string() + roots +
+            (root / "app" / "main.kex").string() + " > " + (root / "build.out").string() +
+            " 2>&1";
+        std::filesystem::create_directories(root / "merged");
+        (void)std::system(build.c_str());
+        const auto runAs = [&](const std::string& kind) {
+            const auto cores = root / kind;
+            const auto beams = root / (kind + "-beam");
+            std::filesystem::create_directories(beams);
+            const auto output = root / (kind + ".out");
+            // erlc's warnings are no output of the program; its errors are
+            // read back when nothing ran.
+            const auto compiled = root / (kind + "-erlc.out");
+            const auto command = "erlc -o " + beams.string() + " " + cores.string() +
+                "/*.core > " + compiled.string() + " 2>&1 && " + std::string(KEX_BINARY_PATH) +
+                " --no-colors --run " + (beams / "kex_main.beam").string() + " > " +
+                output.string() + " 2>&1 || cat " + compiled.string() + " >> " +
+                output.string();
+            (void)std::system(command.c_str());
+            return read(output);
+        };
+        auto merged = runAs("merged");
+        // What went wrong is in the build's own output when it emitted nothing.
+        if (merged.find("open error") != std::string::npos)
+            merged += read(root / "build.out");
+        return {std::move(merged), runAs("separate")};
+    }
+
+    static auto read(const std::filesystem::path& path) -> std::string {
+        std::ifstream file(path);
         std::stringstream buffer;
         buffer << file.rdbuf();
         return buffer.str();
@@ -178,6 +260,8 @@ using Tickers
 using Statuses, only: [STATUSES]
 using Outer
 using Web.Route, only: [get]
+using Notes
+using Marks
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -207,6 +291,13 @@ main do
   IO.printLine(shapes().length)
   IO.printLine({"a": 1}.get("a"))
   IO.printLine(Web.Route.get("ab", 2))
+  IO.printLine(Notes.take("a"))
+  with Notes = Notes.Local { prefix: "with:" } do
+    IO.printLine(Notes.take("b"))
+    IO.printLine(Notes.noted("c"))
+  end
+  IO.printLine(Mark { text: "m" }.loud)
+  IO.printLine("hey".exclaimed)
 end
 )KEX";
 
@@ -249,6 +340,16 @@ let skipped() -> String = define do |t| t.text(:id, doc: 1) end
                 assertTrue(reports(text, expected, true),
                            "the separate check missed \"" + expected + "\": " + text);
             }
+        });
+    });
+    describe("lowering unit by unit", []() {
+        it("runs as the merged build runs", []() {
+            Package package;
+            package.write("app/main.kex", program);
+            const auto [merged, separate] = package.run();
+            assertTrue(merged.find("error") == std::string::npos && !merged.empty(),
+                       "the merged build did not run: " + merged);
+            assertEqual(separate, merged);
         });
     });
     return runAll();

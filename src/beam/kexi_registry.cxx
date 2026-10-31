@@ -643,6 +643,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
             ext.nameToAtom[shortName] = mod.beamAtom;
             if (mod.chunk.metadata.isCapability)
                 ext.capabilityModules.insert(shortName);
+            for (const auto& member : mod.chunk.metadata.capabilityMembers)
+                ext.capabilityMembers[shortName].insert(member);
 
             for (const auto& exp : mod.chunk.typeInterface.exports) {
                 auto qualKey = shortName + "." + exp.name;
@@ -810,6 +812,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                                              kex::semantic::Type::named("CallError")})
                             : kex::semantic::Type::unit();
                         signature.isFoul = true;
+                        remote.remoteSlot = true;
                         interfaces.receiverFunctions[receiver.name].push_back(
                             std::move(remote));
                     }

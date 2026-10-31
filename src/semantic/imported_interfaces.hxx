@@ -48,6 +48,9 @@ struct ImportedFunction {
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.
     bool isConstructor = false;
+    // A `serving` slot as called on the running server (`Server<T>`), which
+    // lowers to a call to that server rather than to this function.
+    bool remoteSlot = false;
     // Owning ADT, retained when constructor spellings collide across modules.
     std::string constructorOwner;
 };
@@ -61,6 +64,11 @@ struct ImportedModuleInterface {
     // module boundary a stdlib capability is invisible to every consumer
     // (kexhq/kex#143).
     bool isCapability = false;
+    // One of this build's own modules, checked apart from its importers
+    // (KEX_SEPARATE): `using` it brings its functions in as a merged module
+    // of the program would, bare and by UFCS. The prelude's are reached
+    // through its receiver functions instead.
+    bool compiledApart = false;
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 

@@ -25,6 +25,11 @@ struct CollectOptions {
     // Used when several source modules are intentionally emitted as one BEAM
     // module, such as the current prelude bootstrap artifact.
     bool flattenModules = false;
+    // With `moduleName`, for a unit compiled apart from its importers, which
+    // has to describe itself: also the top-level `make` blocks for the
+    // module's own types (`make Type.Field` after `module Type`), and a
+    // capability's own members (`capabilityMembers`).
+    bool unitCompiledApart = false;
     const kex::semantic::Analyzer* analysis = nullptr;
 };
 

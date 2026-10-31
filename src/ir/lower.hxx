@@ -44,6 +44,10 @@ struct ExternalModules {
         // `exportToBeamFn` — so its foulness has to live here too
         // (kexhq/kex#181).
         bool isFoul = false;
+        // Provided by one of this build's own units, lowered apart from the
+        // unit calling it (KEX_SEPARATE): for its own types it comes before
+        // the prelude's generic function and its structural `==`.
+        bool compiledApart = false;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;
@@ -63,6 +67,14 @@ struct ExternalModules {
     // dispatch for it — otherwise `with FS.File = ...` silently keeps calling
     // the real implementation (kexhq/kex#143).
     std::unordered_set<std::string> capabilityModules;
+    // A capability's own members where its interface lists them
+    // (KexiStructuralMetadata::capabilityMembers); otherwise its foul exports
+    // stand for them.
+    std::unordered_map<std::string, std::unordered_set<std::string>> capabilityMembers;
+    // The source modules of this build's own units lowered apart (KEX_SEPARATE):
+    // `using` one makes its functions callable by UFCS and as tags, as a
+    // module merged into the program is.
+    std::unordered_set<std::string> compiledApartModules;
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
