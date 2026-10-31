@@ -1764,9 +1764,31 @@ struct Lowering {
                 // `!(a == b)` always agree; the checker allows it only where
                 // that `==` answers a Bool (kexhq/kex#486). `otherwise` is
                 // what is left: the built-in comparison.
+                // `==` of a type of a unit compiled apart (`Data.Queue`'s,
+                // which compares the elements, not how they are split), for a
+                // left value of that type; `otherwise` for every other. With
+                // `negate`, its `!=`.
+                auto externalEquality = [&](const auto& lRef, const auto& rRef,
+                                            ExprPtr otherwise, bool negate) -> ExprPtr {
+                    if (!externalModules) return otherwise;
+                    const auto providers = externalModules->receiverFunctions.find("==");
+                    if (providers == externalModules->receiverFunctions.end()) return otherwise;
+                    for (const auto& provider : providers->second) {
+                        if (provider.beamArity != 2 || provider.receiverType.empty() ||
+                            !provider.compiledApart)
+                            continue;
+                        auto equal = callE(provider.moduleAtom, provider.beamFunction, 2,
+                                           two(lRef.get(), rRef.get()));
+                        if (negate) equal = callE("erlang", "not", 1, one(std::move(equal)));
+                        otherwise = matchBool(typeGuard(provider.receiverType, lRef.get()),
+                                              std::move(equal), std::move(otherwise));
+                    }
+                    return otherwise;
+                };
                 auto derivedInequality = [&](const auto& lRef, const auto& rRef,
                                              ExprPtr otherwise) -> ExprPtr {
-                    if (!knownFns.count("==")) return otherwise;
+                    if (!knownFns.count("=="))
+                        return externalEquality(lRef, rRef, std::move(otherwise), true);
                     auto guard = overloadGuard("==", lRef, rRef);
                     if (!guard) return otherwise;
                     auto equal = std::make_unique<Expr>();
@@ -1802,11 +1824,34 @@ struct Lowering {
                     if (!knownFns.count(sym) && externalModules) {
                         if (auto it = externalModules->receiverFunctions.find(sym);
                             it != externalModules->receiverFunctions.end()) {
+                            // The one for the left operand's static type when
+                            // there is one: units compiled apart each provide
+                            // their own (`Units.Dynamic`'s `/` and
+                            // `Dimensions`'), and the first of them took
+                            // every other type's values too.
+                            const auto bare = [](std::string name) {
+                                name.resize(std::min(name.size(), name.find('<')));
+                                return name.substr(name.rfind('.') + 1);
+                            };
+                            std::string left;
+                            if (expressionTypes && n.left)
+                                if (auto type = expressionTypes->find(n.left.get());
+                                    type != expressionTypes->end() && type->second)
+                                    left = bare(semantic::typeToString(type->second));
+                            const ExternalModules::ReceiverFunction* chosen = nullptr;
                             for (const auto& candidate : it->second) {
                                 if (candidate.beamArity != 2) continue;
-                                userModule = candidate.moduleAtom;
-                                userFunction = candidate.beamFunction;
-                                break;
+                                if (!chosen) chosen = &candidate;
+                                if (!left.empty() && candidate.compiledApart &&
+                                    !candidate.receiverType.empty() &&
+                                    bare(candidate.receiverType) == left) {
+                                    chosen = &candidate;
+                                    break;
+                                }
+                            }
+                            if (chosen) {
+                                userModule = chosen->moduleAtom;
+                                userFunction = chosen->beamFunction;
                             }
                         }
                     }
@@ -1876,6 +1921,7 @@ struct Lowering {
                                     candidates != externalModules->receiverFunctions.end())
                                     for (const auto& candidate : candidates->second)
                                         if (candidate.beamArity == 2 &&
+                                            candidate.compiledApart &&
                                             !candidate.receiverType.empty() &&
                                             bare(candidate.receiverType) == bare(owner->second)) {
                                             auto call = std::make_unique<Expr>();
@@ -1923,6 +1969,8 @@ struct Lowering {
                             }
                         if (opKind == Op::Neq)
                             builtin = derivedInequality(lRef, rRef, std::move(builtin));
+                        else if (!ownerGuard)
+                            builtin = externalEquality(lRef, rRef, std::move(builtin), false);
                         auto dispatch = ownerGuard
                             ? matchBool(std::move(ownerGuard),
                                         std::move(userCall), std::move(builtin))
@@ -2225,7 +2273,9 @@ struct Lowering {
                     call->node =
                         Call{"", imp->second, 2, std::move(args), false};
                 else if (auto ext = externalImports.find(n.tag);
-                         !subst.count(n.tag) && ext != externalImports.end()) {
+                         !subst.count(n.tag) && ext != externalImports.end() &&
+                         externalModules->compiledApartModules.contains(
+                             ext->second.substr(0, ext->second.rfind('.')))) {
                     // A tag imported from a unit compiled apart, as
                     // lowerFunctionCall calls one (`using Regex`, regex`\d`).
                     const auto& key = ext->second;
@@ -4097,6 +4147,32 @@ struct Lowering {
                 !std::holds_alternative<ast::UpperIdentifier>(
                     n.receiver->kind) &&
                 moduleImports.count(n.method);
+            // The prelude's generic function (a trait default, `any?`) where
+            // a unit compiled apart provides it for the receiver's own type
+            // (`Data.Set`, which claims `Foldable`): that provider, chosen by
+            // the receiver functions below.
+            if (resolved != resolvedCalls->end() &&
+                resolved->second.backendModule == "kex_prelude" && externalModules &&
+                expressionTypes && n.receiver)
+                if (auto type = expressionTypes->find(n.receiver.get());
+                    type != expressionTypes->end() && type->second)
+                    if (auto providers = externalModules->receiverFunctions.find(n.method);
+                        providers != externalModules->receiverFunctions.end()) {
+                        // By its last segment, without type arguments:
+                        // `Set<Integer>` under `using Data.Set` is a `Data.Set`.
+                        const auto bare = [](std::string name) {
+                            name.resize(std::min(name.size(), name.find('<')));
+                            return name.substr(name.rfind('.') + 1);
+                        };
+                        const auto receiver = bare(semantic::typeToString(type->second));
+                        stalePreludeTarget = stalePreludeTarget ||
+                            std::any_of(providers->second.begin(), providers->second.end(),
+                                        [&](const auto& provider) {
+                                            return provider.compiledApart &&
+                                                   !provider.receiverType.empty() &&
+                                                   bare(provider.receiverType) == receiver;
+                                        });
+                    }
             // A bare `x.field` whose name is also an imported receiver method
             // (`name` is Weekday's and Type's) must go through THIS module's
             // accessor, which matches the record tags and delegates to the
@@ -4104,9 +4180,21 @@ struct Lowering {
             // record arms, so an erased receiver — `opaque(p).name`, or any
             // REPL value — died with "Undefined method: name for Person"
             // while a statically typed `p.name` read the field fine.
+            // Unless the checker named a function of a unit compiled apart:
+            // `speed.value` is `Units.Dynamic`'s, where only other units'
+            // records (`Net.Port`) have a `value` field.
+            const bool resolvedApart =
+                resolved != resolvedCalls->end() && externalModules &&
+                std::any_of(externalModules->compiledApartModules.begin(),
+                            externalModules->compiledApartModules.end(),
+                            [&](const std::string& module) {
+                                const auto atom = externalModules->nameToAtom.find(module);
+                                return atom != externalModules->nameToAtom.end() &&
+                                       atom->second == resolved->second.backendModule;
+                            });
             const bool localFieldAccessor =
                 n.args.empty() && n.namedArgs.empty() && !n.block &&
-                !n.mutating && fieldAccessors.count(n.method);
+                !n.mutating && fieldAccessors.count(n.method) && !resolvedApart;
             // `Outer.Inner.greet(n)` is a call INTO a module, but once any
             // make block defines a method of the same name the resolver picks
             // that receiver method and the dotted path is then lowered as a
@@ -5263,7 +5351,9 @@ struct Lowering {
         // apart (`text.scan(re)` under `using Regex`), where nothing of this
         // unit or of a provider answers the call at its arity.
         if (auto external = externalImports.find(m);
-            external != externalImports.end() && !moduleImports.count(m)) {
+            external != externalImports.end() && !moduleImports.count(m) &&
+            externalModules->compiledApartModules.contains(
+                external->second.substr(0, external->second.rfind('.')))) {
             const auto& key = external->second;
             const auto actual = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                                 (n.block ? 1 : 0);
@@ -5391,19 +5481,26 @@ struct Lowering {
                     if (modules.size() > 1 && resolvedCalls)
                         if (auto resolved = resolvedCalls->find(&n);
                             resolved != resolvedCalls->end() &&
-                            modules.count(resolved->second.backendModule))
+                            modules.count(resolved->second.backendModule) &&
+                            // The prelude's is its generic fallback, which a
+                            // provider for the receiver's own type comes before.
+                            resolved->second.backendModule != "kex_prelude")
                             providerModule = resolved->second.backendModule;
                     if (modules.size() > 1 && providerModule.empty() && expressionTypes &&
                         n.receiver)
                         if (auto type = expressionTypes->find(n.receiver.get());
                             type != expressionTypes->end() && type->second) {
-                            const auto bare = [](const std::string& name) {
+                            // Its last segment, without type arguments
+                            // (`Data.Set<Integer>` is `Set`).
+                            const auto bare = [](std::string name) {
+                                name.resize(std::min(name.size(), name.find('<')));
                                 return name.substr(name.rfind('.') + 1);
                             };
                             const auto receiver = bare(semantic::typeToString(type->second));
                             std::set<std::string> typed;
                             for (const auto& candidate : found->second)
                                 if (candidate.beamArity == actualArity &&
+                                    candidate.compiledApart &&
                                     !candidate.receiverType.empty() &&
                                     bare(candidate.receiverType) == receiver)
                                     typed.insert(candidate.moduleAtom);
