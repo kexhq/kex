@@ -3106,6 +3106,7 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        if (std::getenv("KEX_PROBE") && (n.name == "addIndex" || n.name == "createTable")) std::fprintf(stderr, "[probe] call %s ext=%d mod=%d subst=%d known=%d imports=%zu\n", n.name.c_str(), (int)externalImports.count(n.name), (int)moduleImports.count(n.name), (int)subst.count(n.name), (int)knownFns.count(n.name), externalImports.size()); /* TEMP PROBE */
         // A `using` import from a separately compiled module. A local binding
         // or an import from this unit still wins; anything else follows the
         // rule that a `using` import outranks a same-named function.
@@ -5359,9 +5360,40 @@ struct Lowering {
                                 (n.block ? 1 : 0);
             const auto names = externalModules->exportParamNames.find(key);
             const auto arity = externalModules->exportArity.find(key);
+            // Shorter than the function only by parameters with defaults: a
+            // missing required one is no call to it, not a `none` argument.
+            const auto defaults = externalModules->exportDefaults.find(key);
+            const auto defaulted = [&](int from, int to) {
+                for (int i = from; i < to; i++)
+                    if (defaults == externalModules->exportDefaults.end() ||
+                        static_cast<int>(defaults->second.size()) <= i ||
+                        defaults->second[static_cast<size_t>(i)].empty())
+                        return false;
+                return true;
+            };
+            // Where the arguments land: the receiver first, each label at its
+            // parameter, then positional ones and the block in the slots left.
+            const auto unfilledDefaulted = [&] {
+                const auto& params = names->second;
+                std::vector<bool> filled(params.size(), false);
+                filled[0] = true;
+                for (const auto& [label, _] : n.namedArgs) {
+                    const auto at = std::find(params.begin() + 1, params.end(), label);
+                    if (at == params.end()) return false;
+                    filled[static_cast<size_t>(at - params.begin())] = true;
+                }
+                auto left = n.args.size() + (n.block ? 1 : 0);
+                for (size_t i = 1; i < filled.size() && left > 0; i++)
+                    if (!filled[i]) { filled[i] = true; left--; }
+                for (size_t i = 0; i < filled.size(); i++)
+                    if (!filled[i] && !defaulted(static_cast<int>(i), static_cast<int>(i) + 1))
+                        return false;
+                return left == 0;
+            };
             const bool fits =
                 names != externalModules->exportParamNames.end()
-                    ? actual <= static_cast<int>(names->second.size())
+                    ? actual <= static_cast<int>(names->second.size()) &&
+                          !names->second.empty() && unfilledDefaulted()
                     : arity != externalModules->exportArity.end() && arity->second == actual;
             const auto providers = externalModules->receiverFunctions.find(m);
             const bool answered =
@@ -5468,6 +5500,9 @@ struct Lowering {
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
                 bool sameModuleOverloads = false;
+                // Units' providers decided between at run time, by their
+                // receiver types, before the match below (the prelude's).
+                std::vector<const ExternalModules::ReceiverFunction*> runtimeProviders;
                 // Providers in more than one module: the one the checker
                 // chose, or else the one for the receiver's static type
                 // (`status.showValue` is Net.HTTP.Status's, not the
@@ -5506,25 +5541,44 @@ struct Lowering {
                                     typed.insert(candidate.moduleAtom);
                             if (typed.size() == 1) providerModule = *typed.begin();
                         }
-                    // Undecided between one unit's provider for its own type
-                    // and the prelude's: that provider, guarded on its type,
-                    // with the prelude's dispatcher for every other value
-                    // (dualProviderDispatch below), as the merged build's
-                    // local dispatcher does (`"${text}"` beside
-                    // Net.HTTP's own `showValue`).
-                    if (modules.size() == 2 && providerModule.empty() &&
-                        modules.count("kex_prelude")) {
-                        const auto other = *std::find_if(
+                    // Still undecided between units' providers for their own
+                    // types and the prelude's: each of them for a value of its
+                    // type, the prelude's dispatcher for every other, decided
+                    // at run time as the merged build's local dispatcher
+                    // decides (`"${text}"` beside Net.HTTP's own `showValue`).
+                    const bool typedBesidePrelude =
+                        modules.size() > 1 && providerModule.empty() &&
+                        modules.count("kex_prelude") &&
+                        std::all_of(found->second.begin(), found->second.end(),
+                                    [&](const auto& candidate) {
+                                        return candidate.beamArity != actualArity ||
+                                               candidate.moduleAtom == "kex_prelude" ||
+                                               !candidate.receiverType.empty();
+                                    });
+                    if (typedBesidePrelude && modules.size() == 2) {
+                        // One unit: its provider is the call, whose labels
+                        // its own parameters place; dualProviderDispatch
+                        // below guards it and falls back to the prelude.
+                        providerModule = *std::find_if(
                             modules.begin(), modules.end(),
                             [](const std::string& module) { return module != "kex_prelude"; });
-                        const bool typed = std::all_of(
-                            found->second.begin(), found->second.end(),
-                            [&](const auto& candidate) {
-                                return candidate.beamArity != actualArity ||
-                                       candidate.moduleAtom != other ||
-                                       !candidate.receiverType.empty();
-                            });
-                        if (typed) providerModule = other;
+                    } else if (typedBesidePrelude && n.namedArgs.empty()) {
+                        // Several: one guard each, so only a type a guard can
+                        // test without matching every value (a known record,
+                        // a primitive) — and positional arguments, which mean
+                        // the same slots to every provider.
+                        std::vector<const ExternalModules::ReceiverFunction*> guarded;
+                        for (const auto& candidate : found->second)
+                            if (candidate.beamArity == actualArity &&
+                                candidate.moduleAtom != "kex_prelude")
+                                guarded.push_back(&candidate);
+                        if (std::all_of(guarded.begin(), guarded.end(), [&](const auto* provider) {
+                                return records.count(canonicalRecordName(provider->receiverType)) ||
+                                       primGuardBifs().count(provider->receiverType);
+                            })) {
+                            providerModule = "kex_prelude";
+                            runtimeProviders = std::move(guarded);
+                        }
                     }
                 }
                 for (const auto& candidate : found->second) {
@@ -5640,6 +5694,28 @@ struct Lowering {
                     // arity, keep BOTH: guard on the provider's receiver type
                     // and fall back to the prelude's dispatcher, which is the
                     // walker's runtime dispatch spelled in Core Erlang.
+                    if (!runtimeProviders.empty()) {
+                        // The prelude's call for every value no unit's
+                        // provider takes, each of those for its own type.
+                        // The arguments are atoms, so each arm repeats them.
+                        auto dispatch = callE(match->moduleAtom, function, actualArity,
+                                              [&] {
+                                                  std::vector<ExprPtr> copies;
+                                                  for (const auto& arg : pargs)
+                                                      copies.push_back(clone(arg));
+                                                  return copies;
+                                              }());
+                        for (const auto* provider : runtimeProviders) {
+                            std::vector<ExprPtr> copies;
+                            for (const auto& arg : pargs) copies.push_back(clone(arg));
+                            dispatch = matchBool(
+                                typeGuard(provider->receiverType, clone(pargs.front())),
+                                callE(provider->moduleAtom, provider->beamFunction,
+                                      actualArity, std::move(copies)),
+                                std::move(dispatch));
+                        }
+                        return ret(std::move(dispatch));
+                    }
                     if (auto dual = dualProviderDispatch(
                             n, m, match->receiverType, match->moduleAtom,
                             function, actualArity, pargs))

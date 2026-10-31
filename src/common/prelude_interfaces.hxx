@@ -1255,7 +1255,11 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
             auto duplicate = std::find_if(
                 destination.begin(), destination.end(),
                 [&](const kex::semantic::ImportedFunction& existing) {
+                    // A type's `make` function and another module's function
+                    // of the same shape are two (`Team.create(by)` and
+                    // `Teams.create(team, by)`).
                     return existing.sourceName == function.sourceName &&
+                        existing.isReceiverMethod == function.isReceiverMethod &&
                         sameSignature(existing.signature, function.signature);
                 });
             if (duplicate == destination.end())
@@ -1288,6 +1292,10 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         base.recordFields.try_emplace(name, std::move(fields));
     for (auto& [name, body] : extra.typeAliases)
         base.typeAliases.try_emplace(name, std::move(body));
+    // And what each distinct type backs, without which none takes a literal
+    // of its backing type or widens to it (`UserId` from another unit).
+    for (auto& [name, distinct] : extra.distinctTypes)
+        base.distinctTypes.try_emplace(name, std::move(distinct));
     base.typeNames.insert(extra.typeNames.begin(), extra.typeNames.end());
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),
