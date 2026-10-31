@@ -94,6 +94,8 @@ end
 serving Counter do
   get ::> Reply<Integer>
   slot get -> Reply<Integer> = Kex.Intrinsic.Process.reply(@count)
+  reset :> Void
+  slot reset -> Void = Kex.Intrinsic.Process.cast
 end
 )KEX");
         write("lib/store.kex", R"KEX(capability Store do
@@ -331,10 +333,13 @@ int main() {
 let wrong() -> String = Shapes.Dot
 
 let skipped() -> String = define do |t| t.text(:id, doc: 1) end
+
+foul timed(server: Server<Counter>) = server.reset(within: 10)
 )KEX");
             const auto text = package.check();
             for (const std::string expected : {"`wrong` declared to return String but body returns Dot",
-                                               "`text` expects argument 5 to be String, but got Integer"}) {
+                                               "`text` expects argument 5 to be String, but got Integer",
+                                               "`within:` is not valid on an asynchronous cast slot"}) {
                 assertTrue(reports(text, expected, false),
                            "the merged check missed \"" + expected + "\": " + text);
                 assertTrue(reports(text, expected, true),

@@ -10182,6 +10182,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     for (const auto& param : matched.params)
                         target.localDispatchTypes.push_back(typeToString(resolve(param)));
                     target.isServingCast = typesEqual(resolve(matched.result), Type::unit());
+                    // As for a slot of this unit's: a cast has no reply to
+                    // wait for, and lowering would drop the timeout.
+                    if (target.isServingCast)
+                        for (const auto& [label, value] : methodCall->namedArgs)
+                            if (label == "within")
+                                error(value ? value->location : methodCall->receiver->location,
+                                      "`within:` is not valid on an asynchronous cast slot");
                 }
                 for (std::size_t i = 0; i < matched.params.size(); ++i) {
                     const auto resolvedParam = resolve(matched.params[i]);

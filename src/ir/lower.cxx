@@ -5359,9 +5359,22 @@ struct Lowering {
                                 (n.block ? 1 : 0);
             const auto names = externalModules->exportParamNames.find(key);
             const auto arity = externalModules->exportArity.find(key);
+            // Shorter than the function only by parameters with defaults: a
+            // missing required one is no call to it, not a `none` argument.
+            const auto defaults = externalModules->exportDefaults.find(key);
+            const auto defaulted = [&](int from, int to) {
+                for (int i = from; i < to; i++)
+                    if (defaults == externalModules->exportDefaults.end() ||
+                        static_cast<int>(defaults->second.size()) <= i ||
+                        defaults->second[static_cast<size_t>(i)].empty())
+                        return false;
+                return true;
+            };
             const bool fits =
                 names != externalModules->exportParamNames.end()
-                    ? actual <= static_cast<int>(names->second.size())
+                    ? actual <= static_cast<int>(names->second.size()) &&
+                          (!n.namedArgs.empty() ||
+                           defaulted(actual, static_cast<int>(names->second.size())))
                     : arity != externalModules->exportArity.end() && arity->second == actual;
             const auto providers = externalModules->receiverFunctions.find(m);
             const bool answered =
@@ -5468,6 +5481,9 @@ struct Lowering {
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
                 bool sameModuleOverloads = false;
+                // Units' providers decided between at run time, by their
+                // receiver types, before the match below (the prelude's).
+                std::vector<const ExternalModules::ReceiverFunction*> runtimeProviders;
                 // Providers in more than one module: the one the checker
                 // chose, or else the one for the receiver's static type
                 // (`status.showValue` is Net.HTTP.Status's, not the
@@ -5506,25 +5522,24 @@ struct Lowering {
                                     typed.insert(candidate.moduleAtom);
                             if (typed.size() == 1) providerModule = *typed.begin();
                         }
-                    // Undecided between one unit's provider for its own type
-                    // and the prelude's: that provider, guarded on its type,
-                    // with the prelude's dispatcher for every other value
-                    // (dualProviderDispatch below), as the merged build's
-                    // local dispatcher does (`"${text}"` beside
-                    // Net.HTTP's own `showValue`).
-                    if (modules.size() == 2 && providerModule.empty() &&
-                        modules.count("kex_prelude")) {
-                        const auto other = *std::find_if(
-                            modules.begin(), modules.end(),
-                            [](const std::string& module) { return module != "kex_prelude"; });
-                        const bool typed = std::all_of(
-                            found->second.begin(), found->second.end(),
-                            [&](const auto& candidate) {
-                                return candidate.beamArity != actualArity ||
-                                       candidate.moduleAtom != other ||
-                                       !candidate.receiverType.empty();
-                            });
-                        if (typed) providerModule = other;
+                    // Still undecided between units' providers for their own
+                    // types and the prelude's: each of them for a value of its
+                    // type, the prelude's dispatcher for every other, decided
+                    // at run time as the merged build's local dispatcher
+                    // decides (`"${text}"` beside Net.HTTP's own `showValue`).
+                    if (modules.size() > 1 && providerModule.empty() &&
+                        modules.count("kex_prelude") &&
+                        std::all_of(found->second.begin(), found->second.end(),
+                                    [&](const auto& candidate) {
+                                        return candidate.beamArity != actualArity ||
+                                               candidate.moduleAtom == "kex_prelude" ||
+                                               !candidate.receiverType.empty();
+                                    })) {
+                        providerModule = "kex_prelude";
+                        for (const auto& candidate : found->second)
+                            if (candidate.beamArity == actualArity &&
+                                candidate.moduleAtom != "kex_prelude")
+                                runtimeProviders.push_back(&candidate);
                     }
                 }
                 for (const auto& candidate : found->second) {
@@ -5640,6 +5655,28 @@ struct Lowering {
                     // arity, keep BOTH: guard on the provider's receiver type
                     // and fall back to the prelude's dispatcher, which is the
                     // walker's runtime dispatch spelled in Core Erlang.
+                    if (!runtimeProviders.empty()) {
+                        // The prelude's call for every value no unit's
+                        // provider takes, each of those for its own type.
+                        // The arguments are atoms, so each arm repeats them.
+                        auto dispatch = callE(match->moduleAtom, function, actualArity,
+                                              [&] {
+                                                  std::vector<ExprPtr> copies;
+                                                  for (const auto& arg : pargs)
+                                                      copies.push_back(clone(arg));
+                                                  return copies;
+                                              }());
+                        for (const auto* provider : runtimeProviders) {
+                            std::vector<ExprPtr> copies;
+                            for (const auto& arg : pargs) copies.push_back(clone(arg));
+                            dispatch = matchBool(
+                                typeGuard(provider->receiverType, clone(pargs.front())),
+                                callE(provider->moduleAtom, provider->beamFunction,
+                                      actualArity, std::move(copies)),
+                                std::move(dispatch));
+                        }
+                        return ret(std::move(dispatch));
+                    }
                     if (auto dual = dualProviderDispatch(
                             n, m, match->receiverType, match->moduleAtom,
                             function, actualArity, pargs))
