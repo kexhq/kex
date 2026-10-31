@@ -9197,6 +9197,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!fits(i, signature.params[i])) return false;
         return true;
     };
+    // A type's own `make` function comes before another module's function
+    // reached by UFCS with the same parameters, as it does once both are of
+    // the program: `user.enroll(password)` is `User`'s, beside
+    // `DB.Repositories.Users.enroll(user, hash)` (two units compiled apart).
+    if (isMethodCall) {
+        const auto offered = importedFunctions;
+        std::erase_if(importedFunctions, [&](const ImportedFunction* function) {
+            return !function->isReceiverMethod && matchesActual(function->signature) &&
+                   std::any_of(offered.begin(), offered.end(),
+                               [&](const ImportedFunction* method) {
+                                   return method->isReceiverMethod &&
+                                          method->backendModule != function->backendModule &&
+                                          matchesActual(method->signature) &&
+                                          sameParams(method->signature, function->signature);
+                               });
+        });
+    }
     // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
     // so both which pair a nested loop meets FIRST and which name within a
     // pair ends up `left` vs `right` depend on the host's hash order, not

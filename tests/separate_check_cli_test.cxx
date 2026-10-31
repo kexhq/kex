@@ -171,6 +171,30 @@ module Notes do
   foul noted(key) = "noted ${Notes.take(key)}"
 end
 )KEX");
+        write("lib/ids.kex", R"KEX(module Ids
+
+distinct type UserId = String
+)KEX");
+        write("lib/boxes.kex", R"KEX(module Boxes
+
+record Box do
+  label : String
+end
+
+make Box, implement: Showable do
+  let showValue -> String = "box ${@label}"
+end
+)KEX");
+        write("lib/crates.kex", R"KEX(module Crates
+
+record Crate do
+  count : Integer
+end
+
+make Crate, implement: Showable do
+  let showValue -> String = "crate of ${@count}"
+end
+)KEX");
         write("lib/marks.kex", R"KEX(module Marks do
   record Mark do
     text : String
@@ -264,6 +288,9 @@ using Outer
 using Web.Route, only: [get]
 using Notes
 using Marks
+using Boxes, only: [Box]
+using Crates, only: [Crate]
+using Ids, only: [UserId]
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -275,6 +302,13 @@ let passed() -> Step = step do |request|
 end
 
 let flagged() -> Pair = (1, true)
+
+# Which `showValue` runs is known only from the value: each unit's for its
+# own type, the prelude's for an Integer.
+let presented(value: Showable) -> String = "${value}"
+
+# A literal of what it backs is a distinct type of another unit too.
+let owner(id: UserId) -> String = "owner ${id}"
 
 main do
   IO.printLine(Shapes.area(Shapes.Circle(3)))
@@ -300,6 +334,10 @@ main do
   end
   IO.printLine(Mark { text: "m" }.loud)
   IO.printLine("hey".exclaimed)
+  IO.printLine(presented(Box { label: "b" }))
+  IO.printLine(presented(Crate { count: 3 }))
+  IO.printLine(presented(7))
+  IO.printLine(owner("u1"))
 end
 )KEX";
 
