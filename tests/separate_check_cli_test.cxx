@@ -20,6 +20,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unistd.h>
 #include <utility>
 
@@ -133,6 +134,26 @@ foul stamp() -> String = "at ${Ticker.now()}"
 
 get : String -> Integer -> String
 let get(path, times) = "${path} ${times}"
+routeSummary : String -> String
+let routeSummary(path) = "route ${path}"
+)KEX");
+        write("lib/uses_route.kex", R"KEX(module UsesRoute
+
+using Web.Route, only: [routeSummary]
+
+let summarized() = routeSummary("inside")
+)KEX");
+        write("lib/kinds.kex", R"KEX(module Kinds
+
+type Kind = Red | Blue
+)KEX");
+        write("lib/one/widget.kex", R"KEX(module One.Widget
+
+type OneKind = First | Second
+)KEX");
+        write("lib/two/widget.kex", R"KEX(module Two.Widget
+
+type TwoKind = Other | Another
 )KEX");
         write("lib/statuses.kex", R"KEX(module Statuses
 
@@ -169,6 +190,31 @@ module Notes do
 
   noted : String -> String
   foul noted(key) = "noted ${Notes.take(key)}"
+end
+)KEX");
+        write("lib/ids.kex", R"KEX(module Ids
+
+distinct type UserId = String
+)KEX");
+        write("lib/boxes.kex", R"KEX(module Boxes
+
+record Box do
+  label : String
+end
+
+make Box, implement: Showable do
+  let named(label: String) -> Box = Box { label: label }
+  let showValue -> String = "box ${@label}"
+end
+)KEX");
+        write("lib/crates.kex", R"KEX(module Crates
+
+record Crate do
+  count : Integer
+end
+
+make Crate, implement: Showable do
+  let showValue -> String = "crate of ${@count}"
 end
 )KEX");
         write("lib/marks.kex", R"KEX(module Marks do
@@ -211,7 +257,7 @@ end
 
     // The program built as one and as units lowered apart, each compiled and
     // run: what each printed, merged first.
-    auto run() -> std::pair<std::string, std::string> {
+    auto run() -> std::tuple<std::string, std::string, std::string> {
         const auto roots = " --source-root " + (root / "app").string() +
             " --source-root " + (root / "lib").string() + " ";
         const auto build = "KEX_SEPARATE=1 KEX_SEPARATE_CORE=" + (root / "separate").string() +
@@ -241,7 +287,18 @@ end
         // What went wrong is in the build's own output when it emitted nothing.
         if (merged.find("open error") != std::string::npos)
             merged += read(root / "build.out");
-        return {std::move(merged), runAs("separate")};
+        auto separate = runAs("separate");
+        std::filesystem::create_directories(root / "actual");
+        const auto actualBuild = "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 KEX_CACHE=" +
+            (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
+            " --no-colors -E -o " + (root / "actual").string() + roots +
+            (root / "app" / "main.kex").string() + " > " +
+            (root / "actual-build.out").string() + " 2>&1";
+        (void)std::system(actualBuild.c_str());
+        auto actual = runAs("actual");
+        if (actual.find("open error") != std::string::npos)
+            actual += read(root / "actual-build.out");
+        return {std::move(merged), std::move(separate), std::move(actual)};
     }
 
     static auto read(const std::filesystem::path& path) -> std::string {
@@ -262,8 +319,15 @@ using Tickers
 using Statuses, only: [STATUSES]
 using Outer
 using Web.Route, only: [get]
+using UsesRoute
+using Kinds
+using One.Widget
+using Two.Widget
 using Notes
 using Marks
+using Boxes, only: [Box]
+using Crates, only: [Crate]
+using Ids, only: [UserId]
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -275,6 +339,13 @@ let passed() -> Step = step do |request|
 end
 
 let flagged() -> Pair = (1, true)
+
+# Which `showValue` runs is known only from the value: each unit's for its
+# own type, the prelude's for an Integer.
+let presented(value: Showable) -> String = "${value}"
+
+# A literal of what it backs is a distinct type of another unit too.
+let owner(id: UserId) -> String = "owner ${id}"
 
 main do
   IO.printLine(Shapes.area(Shapes.Circle(3)))
@@ -293,6 +364,10 @@ main do
   IO.printLine(shapes().length)
   IO.printLine({"a": 1}.get("a"))
   IO.printLine(Web.Route.get("ab", 2))
+  IO.printLine(UsesRoute.summarized())
+  IO.printLine(Type.of(Kinds.Red).constructors.map(&.name))
+  IO.printLine(Type.of(One.Widget.First).constructors.map(&.name))
+  IO.printLine(Type.of(Two.Widget.Other).constructors.map(&.name))
   IO.printLine(Notes.take("a"))
   with Notes = Notes.Local { prefix: "with:" } do
     IO.printLine(Notes.take("b"))
@@ -300,6 +375,11 @@ main do
   end
   IO.printLine(Mark { text: "m" }.loud)
   IO.printLine("hey".exclaimed)
+  IO.printLine(presented(Box { label: "b" }))
+  IO.printLine(Box.named("named").label)
+  IO.printLine(presented(Crate { count: 3 }))
+  IO.printLine(presented(7))
+  IO.printLine(owner("u1"))
 end
 )KEX";
 
@@ -351,10 +431,11 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
         it("runs as the merged build runs", []() {
             Package package;
             package.write("app/main.kex", program);
-            const auto [merged, separate] = package.run();
+            const auto [merged, separate, actual] = package.run();
             assertTrue(merged.find("error") == std::string::npos && !merged.empty(),
                        "the merged build did not run: " + merged);
             assertEqual(separate, merged);
+            assertEqual(actual, merged);
         });
     });
     return runAll();

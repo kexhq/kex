@@ -3106,6 +3106,7 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        if (std::getenv("KEX_PROBE") && (n.name == "addIndex" || n.name == "createTable")) std::fprintf(stderr, "[probe] call %s ext=%d mod=%d subst=%d known=%d imports=%zu\n", n.name.c_str(), (int)externalImports.count(n.name), (int)moduleImports.count(n.name), (int)subst.count(n.name), (int)knownFns.count(n.name), externalImports.size()); /* TEMP PROBE */
         // A `using` import from a separately compiled module. A local binding
         // or an import from this unit still wins; anything else follows the
         // rule that a `using` import outranks a same-named function.
@@ -3944,6 +3945,41 @@ struct Lowering {
                 if (recorded->second.evaluateArgument)
                     for (const auto& arg : n.args)
                         if (arg) binds.push_back({fresh("TypeArg"), lower(arg)});
+                // A type token from another unit contains no call to that
+                // unit. Load its companion before `Type.constructors` (or
+                // record-field reflection) reads the layouts it registers.
+                if (externalModules) {
+                    auto owner = recorded->second.type.name;
+                    // `Type.of(Kinds.Red)` can record only the bare ADT name
+                    // (`Kind`); the written constructor still names its unit.
+                    if (!n.args.empty() && n.args.front())
+                        if (const auto* named = std::get_if<ast::MethodCall>(
+                                &n.args.front()->kind)) {
+                            std::vector<std::string> path;
+                            if (named->receiver && modulePath(*named->receiver, path)) {
+                                std::string source;
+                                for (const auto& part : path)
+                                    source += (source.empty() ? "" : ".") + part;
+                                if (auto module = externalModules->nameToAtom.find(source);
+                                    module != externalModules->nameToAtom.end())
+                                    binds.push_back({fresh("TypeLoaded"),
+                                        callE("code", "ensure_loaded", 1,
+                                              one(lit(LitKind::Atom, module->second)))});
+                            }
+                        }
+                    for (;;) {
+                        const auto dot = owner.rfind('.');
+                        if (dot == std::string::npos) break;
+                        owner.resize(dot);
+                        if (auto module = externalModules->nameToAtom.find(owner);
+                            module != externalModules->nameToAtom.end()) {
+                            binds.push_back({fresh("TypeLoaded"),
+                                callE("code", "ensure_loaded", 1,
+                                      one(lit(LitKind::Atom, module->second)))});
+                            break;
+                        }
+                    }
+                }
                 return wrapLets(binds, structuredTypeLiteral(recorded->second.type));
             }
         }
@@ -4932,6 +4968,52 @@ struct Lowering {
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, localCallExpr(it->second, std::move(args)));
             }
+            // A type imported from another unit can name one of its `make`
+            // methods without an instance: `Organization.slugged(name)`.
+            // Its companion expects the type atom as the receiver.
+            if (externalModules && !typeOwnsStaticFunction(uid->name, n.method)) {
+                if (auto found = externalModules->receiverFunctions.find(n.method);
+                    found != externalModules->receiverFunctions.end()) {
+                    for (const auto& provider : found->second) {
+                        const auto dot = provider.receiverType.rfind('.');
+                        if (dot == std::string::npos ||
+                            provider.receiverType.substr(dot + 1) != uid->name ||
+                            !usingModules.contains(provider.receiverType.substr(0, dot)) ||
+                            !provider.compiledApart)
+                            continue;
+                        std::vector<ExprPtr> args;
+                        args.push_back(lit(LitKind::Atom, provider.receiverType));
+                        if (!n.namedArgs.empty()) {
+                            std::vector<ExprPtr> slots(provider.paramNames.size());
+                            for (const auto& [name, value] : n.namedArgs)
+                                for (size_t i = 0; i < provider.paramNames.size(); ++i)
+                                    if (provider.paramNames[i] == name)
+                                        slots[i] = atomize(value, binds);
+                            size_t next = 0;
+                            for (const auto& value : n.args) {
+                                while (next < slots.size() && slots[next]) ++next;
+                                if (next < slots.size()) slots[next++] = atomize(value, binds);
+                            }
+                            if (n.block) {
+                                while (next < slots.size() && slots[next]) ++next;
+                                if (next < slots.size()) slots[next] = atomize(*n.block, binds);
+                            }
+                            if (std::any_of(slots.begin(), slots.end(),
+                                            [](const auto& value) { return !value; }))
+                                continue;
+                            for (auto& value : slots) args.push_back(std::move(value));
+                        } else {
+                            for (const auto& value : n.args) args.push_back(atomize(value, binds));
+                            if (n.block) args.push_back(atomize(*n.block, binds));
+                        }
+                        if (provider.isFoul) args.push_back(currentContext());
+                        if (static_cast<int>(args.size()) != provider.beamArity) continue;
+                        return wrapLets(binds, callE(provider.moduleAtom,
+                                                     provider.beamFunction,
+                                                     provider.beamArity, std::move(args)));
+                    }
+                }
+            }
             // External module dispatch — but skip when the receiver names a
             // local type that owns this method (local types shadow prelude
             // modules with the same name, e.g. a user `record Parser` shadows
@@ -5370,11 +5452,29 @@ struct Lowering {
                         return false;
                 return true;
             };
+            // Where the arguments land: the receiver first, each label at its
+            // parameter, then positional ones and the block in the slots left.
+            const auto unfilledDefaulted = [&] {
+                const auto& params = names->second;
+                std::vector<bool> filled(params.size(), false);
+                filled[0] = true;
+                for (const auto& [label, _] : n.namedArgs) {
+                    const auto at = std::find(params.begin() + 1, params.end(), label);
+                    if (at == params.end()) return false;
+                    filled[static_cast<size_t>(at - params.begin())] = true;
+                }
+                auto left = n.args.size() + (n.block ? 1 : 0);
+                for (size_t i = 1; i < filled.size() && left > 0; i++)
+                    if (!filled[i]) { filled[i] = true; left--; }
+                for (size_t i = 0; i < filled.size(); i++)
+                    if (!filled[i] && !defaulted(static_cast<int>(i), static_cast<int>(i) + 1))
+                        return false;
+                return left == 0;
+            };
             const bool fits =
                 names != externalModules->exportParamNames.end()
                     ? actual <= static_cast<int>(names->second.size()) &&
-                          (!n.namedArgs.empty() ||
-                           defaulted(actual, static_cast<int>(names->second.size())))
+                          !names->second.empty() && unfilledDefaulted()
                     : arity != externalModules->exportArity.end() && arity->second == actual;
             const auto providers = externalModules->receiverFunctions.find(m);
             const bool answered =
@@ -5527,19 +5627,39 @@ struct Lowering {
                     // type, the prelude's dispatcher for every other, decided
                     // at run time as the merged build's local dispatcher
                     // decides (`"${text}"` beside Net.HTTP's own `showValue`).
-                    if (modules.size() > 1 && providerModule.empty() &&
+                    const bool typedBesidePrelude =
+                        modules.size() > 1 && providerModule.empty() &&
                         modules.count("kex_prelude") &&
                         std::all_of(found->second.begin(), found->second.end(),
                                     [&](const auto& candidate) {
                                         return candidate.beamArity != actualArity ||
                                                candidate.moduleAtom == "kex_prelude" ||
                                                !candidate.receiverType.empty();
-                                    })) {
-                        providerModule = "kex_prelude";
+                                    });
+                    if (typedBesidePrelude && modules.size() == 2) {
+                        // One unit: its provider is the call, whose labels
+                        // its own parameters place; dualProviderDispatch
+                        // below guards it and falls back to the prelude.
+                        providerModule = *std::find_if(
+                            modules.begin(), modules.end(),
+                            [](const std::string& module) { return module != "kex_prelude"; });
+                    } else if (typedBesidePrelude && n.namedArgs.empty()) {
+                        // Several: one guard each, so only a type a guard can
+                        // test without matching every value (a known record,
+                        // a primitive) — and positional arguments, which mean
+                        // the same slots to every provider.
+                        std::vector<const ExternalModules::ReceiverFunction*> guarded;
                         for (const auto& candidate : found->second)
                             if (candidate.beamArity == actualArity &&
                                 candidate.moduleAtom != "kex_prelude")
-                                runtimeProviders.push_back(&candidate);
+                                guarded.push_back(&candidate);
+                        if (std::all_of(guarded.begin(), guarded.end(), [&](const auto* provider) {
+                                return records.count(canonicalRecordName(provider->receiverType)) ||
+                                       primGuardBifs().count(provider->receiverType);
+                            })) {
+                            providerModule = "kex_prelude";
+                            runtimeProviders = std::move(guarded);
+                        }
                     }
                 }
                 for (const auto& candidate : found->second) {
@@ -11330,6 +11450,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         std::set<std::string> declaredRecords;
                         kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto savedImports = L.moduleImports;
+                        auto savedExternalImports = L.externalImports;
                         auto savedAliases = L.moduleAliases;
                         auto savedUsing = L.usingModules;
                         auto prefix = m.name + ".";
@@ -11416,6 +11537,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                                 L.moduleImports[bare] = val;
                                         }
                                 }
+                                if (!(*ub)->alias || !(*ub)->onlyNames.empty())
+                                    L.importExternalModule(srcMod, (*ub)->onlyNames,
+                                                           (*ub)->exceptNames);
                                 continue;
                             } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
@@ -11478,6 +11602,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         noteRecordScope(**vrd);
                         }
                         L.moduleImports = std::move(savedImports);
+                        L.externalImports = std::move(savedExternalImports);
                         L.moduleAliases = std::move(savedAliases);
                         L.usingModules = std::move(savedUsing);
                         L.currentModulePath = std::move(savedModulePath);
