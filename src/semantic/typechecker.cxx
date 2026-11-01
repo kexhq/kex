@@ -6322,7 +6322,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         return Type::named("Type");
                     }
                 }
-                if (auto signature = namedFunctionSignature(*node.args[0])) {
+                // An imported nullary constructor is also represented by a
+                // companion function. `Type.of(Kinds.Red)` asks for the
+                // constructor VALUE's ADT, not that function's signature.
+                const auto* constructor =
+                    std::get_if<ast::MethodCall>(&node.args[0]->kind);
+                const bool constructorValue = constructor && !constructor->method.empty() &&
+                    std::isupper(static_cast<unsigned char>(constructor->method.front()));
+                if (auto signature = constructorValue
+                                         ? nullptr
+                                         : namedFunctionSignature(*node.args[0])) {
                     StructuredType function;
                     function.name = "Function";
                     function.pure = !signature->isFoul;
@@ -9197,6 +9206,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!fits(i, signature.params[i])) return false;
         return true;
     };
+    // A type's own `make` function comes before another module's function
+    // reached by UFCS with the same parameters, as it does once both are of
+    // the program: `user.enroll(password)` is `User`'s, beside
+    // `DB.Repositories.Users.enroll(user, hash)` (two units compiled apart).
+    if (isMethodCall) {
+        const auto offered = importedFunctions;
+        std::erase_if(importedFunctions, [&](const ImportedFunction* function) {
+            return !function->isReceiverMethod && matchesActual(function->signature) &&
+                   std::any_of(offered.begin(), offered.end(),
+                               [&](const ImportedFunction* method) {
+                                   return method->isReceiverMethod &&
+                                          method->backendModule != function->backendModule &&
+                                          matchesActual(method->signature) &&
+                                          sameParams(method->signature, function->signature);
+                               });
+        });
+    }
     // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
     // so both which pair a nested loop meets FIRST and which name within a
     // pair ends up `left` vs `right` depend on the host's hash order, not
@@ -10182,6 +10208,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     for (const auto& param : matched.params)
                         target.localDispatchTypes.push_back(typeToString(resolve(param)));
                     target.isServingCast = typesEqual(resolve(matched.result), Type::unit());
+                    // As for a slot of this unit's: a cast has no reply to
+                    // wait for, and lowering would drop the timeout.
+                    if (target.isServingCast)
+                        for (const auto& [label, value] : methodCall->namedArgs)
+                            if (label == "within")
+                                error(value ? value->location : methodCall->receiver->location,
+                                      "`within:` is not valid on an asynchronous cast slot");
                 }
                 for (std::size_t i = 0; i < matched.params.size(); ++i) {
                     const auto resolvedParam = resolve(matched.params[i]);

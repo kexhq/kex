@@ -78,6 +78,9 @@ struct ExternalModules {
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
+    // External serving type -> module that owns its slots, and their names.
+    std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>>
+        servingSlots;
     // Trait name -> required method names in declaration order. Dictionaries
     // use this stable order for their hidden function slots.
     std::unordered_map<std::string, std::vector<TraitMethod>> traitMethods;

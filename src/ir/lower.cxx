@@ -1352,6 +1352,23 @@ struct Lowering {
         currentModulePath = info.owner;
         if (!info.imports.empty()) moduleImports = info.imports;
         if (!info.aliases.empty()) moduleAliases = info.aliases;
+        // KexI carries an external record's default source, but not the
+        // declaring file's `using` clauses. Resolve a short module name in
+        // that source when exactly one loaded module has it (`Headers.empty`
+        // in Metro.WebRequest's default is Net.HTTP.Headers.empty).
+        if (info.imports.empty() && info.aliases.empty() && externalModules) {
+            std::unordered_map<std::string, std::string> shortModules;
+            std::unordered_set<std::string> ambiguous;
+            for (const auto& [name, _] : externalModules->nameToAtom) {
+                const auto dot = name.rfind('.');
+                const auto shortName = name.substr(dot == std::string::npos ? 0 : dot + 1);
+                auto [it, added] = shortModules.try_emplace(shortName, name);
+                if (!added && it->second != name) ambiguous.insert(shortName);
+            }
+            for (const auto& [shortName, name] : shortModules)
+                if (!ambiguous.count(shortName))
+                    moduleAliases.try_emplace(shortName, name);
+        }
         auto result = lower(e);
         currentModulePath = std::move(savedPath);
         moduleImports = std::move(savedImports);
@@ -1569,6 +1586,35 @@ struct Lowering {
                 if (n.op == TokenType::AmpAmp || n.op == TokenType::PipePipe) {
                     const bool isAnd = n.op == TokenType::AmpAmp;
                     const std::string sym = isAnd ? "&&" : "||";
+                    // An external union's value carries a variant tag, not
+                    // the union name. Its overloaded operator is known from
+                    // the static receiver type, so call that implementation
+                    // directly instead of treating the value as a Bool.
+                    if (expressionTypes && externalModules && n.left) {
+                        if (auto found = expressionTypes->find(n.left.get());
+                            found != expressionTypes->end() && found->second) {
+                            auto type = semantic::typeToString(found->second);
+                            type.resize(std::min(type.size(), type.find('<')));
+                            const auto bare = [](const std::string& name) {
+                                return name.substr(name.rfind('.') + 1);
+                            };
+                            if (auto candidates = externalModules->receiverFunctions.find(sym);
+                                candidates != externalModules->receiverFunctions.end())
+                                for (const auto& candidate : candidates->second) {
+                                    if (candidate.beamArity != 2 ||
+                                        candidate.receiverType.empty() ||
+                                        (candidate.receiverType != type &&
+                                         bare(candidate.receiverType) != bare(type)))
+                                        continue;
+                                    std::vector<Binding> binds;
+                                    auto left = atomize(n.left, binds);
+                                    auto right = atomize(n.right, binds);
+                                    return wrapLets(binds,
+                                        callE(candidate.moduleAtom, candidate.beamFunction,
+                                              2, two(std::move(left), std::move(right))));
+                                }
+                        }
+                    }
                     if (!overloadedOps.count(sym))
                         return isAnd
                             ? matchBool(lower(n.left), lower(n.right), litBool(false))
@@ -3106,6 +3152,7 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        if (std::getenv("KEX_PROBE") && (n.name == "addIndex" || n.name == "createTable")) std::fprintf(stderr, "[probe] call %s ext=%d mod=%d subst=%d known=%d imports=%zu\n", n.name.c_str(), (int)externalImports.count(n.name), (int)moduleImports.count(n.name), (int)subst.count(n.name), (int)knownFns.count(n.name), externalImports.size()); /* TEMP PROBE */
         // A `using` import from a separately compiled module. A local binding
         // or an import from this unit still wins; anything else follows the
         // rule that a `using` import outranks a same-named function.
@@ -3944,6 +3991,41 @@ struct Lowering {
                 if (recorded->second.evaluateArgument)
                     for (const auto& arg : n.args)
                         if (arg) binds.push_back({fresh("TypeArg"), lower(arg)});
+                // A type token from another unit contains no call to that
+                // unit. Load its companion before `Type.constructors` (or
+                // record-field reflection) reads the layouts it registers.
+                if (externalModules) {
+                    auto owner = recorded->second.type.name;
+                    // `Type.of(Kinds.Red)` can record only the bare ADT name
+                    // (`Kind`); the written constructor still names its unit.
+                    if (!n.args.empty() && n.args.front())
+                        if (const auto* named = std::get_if<ast::MethodCall>(
+                                &n.args.front()->kind)) {
+                            std::vector<std::string> path;
+                            if (named->receiver && modulePath(*named->receiver, path)) {
+                                std::string source;
+                                for (const auto& part : path)
+                                    source += (source.empty() ? "" : ".") + part;
+                                if (auto module = externalModules->nameToAtom.find(source);
+                                    module != externalModules->nameToAtom.end())
+                                    binds.push_back({fresh("TypeLoaded"),
+                                        callE("code", "ensure_loaded", 1,
+                                              one(lit(LitKind::Atom, module->second)))});
+                            }
+                        }
+                    for (;;) {
+                        const auto dot = owner.rfind('.');
+                        if (dot == std::string::npos) break;
+                        owner.resize(dot);
+                        if (auto module = externalModules->nameToAtom.find(owner);
+                            module != externalModules->nameToAtom.end()) {
+                            binds.push_back({fresh("TypeLoaded"),
+                                callE("code", "ensure_loaded", 1,
+                                      one(lit(LitKind::Atom, module->second)))});
+                            break;
+                        }
+                    }
+                }
                 return wrapLets(binds, structuredTypeLiteral(recorded->second.type));
             }
         }
@@ -3990,6 +4072,16 @@ struct Lowering {
                             declaring != localTypeModules.end())
                             servingModule =
                                 mangleModulePath("Kex." + declaring->second);
+                        if (slotAtoms.empty() && externalModules) {
+                            auto external = externalModules->servingSlots.find(stateType);
+                            if (external == externalModules->servingSlots.end())
+                                external = externalModules->servingSlots.find(key);
+                            if (external != externalModules->servingSlots.end()) {
+                                servingModule = external->second.first;
+                                for (const auto& slot : external->second.second)
+                                    slotAtoms.push_back(lit(LitKind::Atom, slot));
+                            }
+                        }
                     }
                 }
                 auto allowedSlots = std::make_unique<Expr>();
@@ -4173,6 +4265,35 @@ struct Lowering {
                                                    bare(provider.receiverType) == receiver;
                                         });
                     }
+            // A checker candidate for an erased receiver does not determine
+            // its runtime method. With `value: Any`, FS.Path.join/2 can be a
+            // candidate while the actual value is a List; the prelude's
+            // join/2 must remain available to the receiver dispatch below.
+            if (resolved != resolvedCalls->end() && externalModules &&
+                expressionTypes && n.receiver &&
+                resolved->second.backendModule != "kex_prelude")
+                if (auto type = expressionTypes->find(n.receiver.get());
+                    type != expressionTypes->end() && type->second) {
+                    const auto& kind = type->second->kind;
+                    const auto unknown =
+                        std::holds_alternative<semantic::UnknownType>(kind) ||
+                        std::holds_alternative<semantic::TypeVar>(kind) ||
+                        (std::holds_alternative<semantic::NamedType>(kind) &&
+                         std::get<semantic::NamedType>(kind).name == "Any");
+                    if (unknown)
+                        if (auto providers = externalModules->receiverFunctions.find(n.method);
+                            providers != externalModules->receiverFunctions.end()) {
+                            const auto arity = static_cast<int>(n.args.size() +
+                                n.namedArgs.size() + 1 + (n.block ? 1 : 0));
+                            stalePreludeTarget = stalePreludeTarget ||
+                                std::any_of(providers->second.begin(),
+                                            providers->second.end(),
+                                            [&](const auto& provider) {
+                                                return provider.moduleAtom == "kex_prelude" &&
+                                                       provider.beamArity == arity;
+                                            });
+                        }
+                }
             // A bare `x.field` whose name is also an imported receiver method
             // (`name` is Weekday's and Type's) must go through THIS module's
             // accessor, which matches the record tags and delegates to the
@@ -4848,6 +4969,20 @@ struct Lowering {
                                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                                 if (n.block) args.push_back(atomize(*n.block, binds));
                                 int ar = static_cast<int>(args.size());
+                                // A zero-argument binding can hold a callable
+                                // value, such as a Template. Apply the value
+                                // returned by `page/0`; there is no `page/1`
+                                // in the other unit to call directly.
+                                if (auto declared = externalModules->exportArity.find(qualKey);
+                                    ar > 0 && declared != externalModules->exportArity.end() &&
+                                    declared->second == 0) {
+                                    auto callee = externalCallExpr(
+                                        qualKey, ait->second, eit->second, 0, {});
+                                    auto indirect = std::make_unique<Expr>();
+                                    indirect->node = CallIndirect{
+                                        std::move(callee), std::move(args), false};
+                                    return wrapLets(binds, std::move(indirect));
+                                }
                                 return wrapLets(binds,
                                     externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
                             }
@@ -4931,6 +5066,52 @@ struct Lowering {
                 }
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, localCallExpr(it->second, std::move(args)));
+            }
+            // A type imported from another unit can name one of its `make`
+            // methods without an instance: `Organization.slugged(name)`.
+            // Its companion expects the type atom as the receiver.
+            if (externalModules && !typeOwnsStaticFunction(uid->name, n.method)) {
+                if (auto found = externalModules->receiverFunctions.find(n.method);
+                    found != externalModules->receiverFunctions.end()) {
+                    for (const auto& provider : found->second) {
+                        const auto dot = provider.receiverType.rfind('.');
+                        if (dot == std::string::npos ||
+                            provider.receiverType.substr(dot + 1) != uid->name ||
+                            !usingModules.contains(provider.receiverType.substr(0, dot)) ||
+                            !provider.compiledApart)
+                            continue;
+                        std::vector<ExprPtr> args;
+                        args.push_back(lit(LitKind::Atom, provider.receiverType));
+                        if (!n.namedArgs.empty()) {
+                            std::vector<ExprPtr> slots(provider.paramNames.size());
+                            for (const auto& [name, value] : n.namedArgs)
+                                for (size_t i = 0; i < provider.paramNames.size(); ++i)
+                                    if (provider.paramNames[i] == name)
+                                        slots[i] = atomize(value, binds);
+                            size_t next = 0;
+                            for (const auto& value : n.args) {
+                                while (next < slots.size() && slots[next]) ++next;
+                                if (next < slots.size()) slots[next++] = atomize(value, binds);
+                            }
+                            if (n.block) {
+                                while (next < slots.size() && slots[next]) ++next;
+                                if (next < slots.size()) slots[next] = atomize(*n.block, binds);
+                            }
+                            if (std::any_of(slots.begin(), slots.end(),
+                                            [](const auto& value) { return !value; }))
+                                continue;
+                            for (auto& value : slots) args.push_back(std::move(value));
+                        } else {
+                            for (const auto& value : n.args) args.push_back(atomize(value, binds));
+                            if (n.block) args.push_back(atomize(*n.block, binds));
+                        }
+                        if (provider.isFoul) args.push_back(currentContext());
+                        if (static_cast<int>(args.size()) != provider.beamArity) continue;
+                        return wrapLets(binds, callE(provider.moduleAtom,
+                                                     provider.beamFunction,
+                                                     provider.beamArity, std::move(args)));
+                    }
+                }
             }
             // External module dispatch — but skip when the receiver names a
             // local type that owns this method (local types shadow prelude
@@ -5359,9 +5540,40 @@ struct Lowering {
                                 (n.block ? 1 : 0);
             const auto names = externalModules->exportParamNames.find(key);
             const auto arity = externalModules->exportArity.find(key);
+            // Shorter than the function only by parameters with defaults: a
+            // missing required one is no call to it, not a `none` argument.
+            const auto defaults = externalModules->exportDefaults.find(key);
+            const auto defaulted = [&](int from, int to) {
+                for (int i = from; i < to; i++)
+                    if (defaults == externalModules->exportDefaults.end() ||
+                        static_cast<int>(defaults->second.size()) <= i ||
+                        defaults->second[static_cast<size_t>(i)].empty())
+                        return false;
+                return true;
+            };
+            // Where the arguments land: the receiver first, each label at its
+            // parameter, then positional ones and the block in the slots left.
+            const auto unfilledDefaulted = [&] {
+                const auto& params = names->second;
+                std::vector<bool> filled(params.size(), false);
+                filled[0] = true;
+                for (const auto& [label, _] : n.namedArgs) {
+                    const auto at = std::find(params.begin() + 1, params.end(), label);
+                    if (at == params.end()) return false;
+                    filled[static_cast<size_t>(at - params.begin())] = true;
+                }
+                auto left = n.args.size() + (n.block ? 1 : 0);
+                for (size_t i = 1; i < filled.size() && left > 0; i++)
+                    if (!filled[i]) { filled[i] = true; left--; }
+                for (size_t i = 0; i < filled.size(); i++)
+                    if (!filled[i] && !defaulted(static_cast<int>(i), static_cast<int>(i) + 1))
+                        return false;
+                return left == 0;
+            };
             const bool fits =
                 names != externalModules->exportParamNames.end()
-                    ? actual <= static_cast<int>(names->second.size())
+                    ? actual <= static_cast<int>(names->second.size()) &&
+                          !names->second.empty() && unfilledDefaulted()
                     : arity != externalModules->exportArity.end() && arity->second == actual;
             const auto providers = externalModules->receiverFunctions.find(m);
             const bool answered =
@@ -5377,6 +5589,22 @@ struct Lowering {
             // is Regex's, not the prelude's String one).
             const bool chosen = [&] {
                 if (!resolvedCalls) return false;
+                // An `Any` receiver leaves the runtime method open: the
+                // checker's free-function candidate cannot override a
+                // receiver provider such as List.join/2.
+                if (expressionTypes && n.receiver)
+                    if (auto type = expressionTypes->find(n.receiver.get());
+                        type != expressionTypes->end() && type->second) {
+                        if (std::holds_alternative<semantic::UnknownType>(
+                                type->second->kind) ||
+                            std::holds_alternative<semantic::TypeVar>(
+                                type->second->kind))
+                            return false;
+                        if (auto named = std::get_if<semantic::NamedType>(
+                                &type->second->kind);
+                            named && named->name == "Any")
+                            return false;
+                    }
                 const auto resolved = resolvedCalls->find(&n);
                 return resolved != resolvedCalls->end() &&
                        resolved->second.backendModule ==
@@ -5468,6 +5696,9 @@ struct Lowering {
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
                 bool sameModuleOverloads = false;
+                // Units' providers decided between at run time, by their
+                // receiver types, before the match below (the prelude's).
+                std::vector<const ExternalModules::ReceiverFunction*> runtimeProviders;
                 // Providers in more than one module: the one the checker
                 // chose, or else the one for the receiver's static type
                 // (`status.showValue` is Net.HTTP.Status's, not the
@@ -5478,15 +5709,11 @@ struct Lowering {
                     for (const auto& candidate : found->second)
                         if (candidate.beamArity == actualArity)
                             modules.insert(candidate.moduleAtom);
-                    if (modules.size() > 1 && resolvedCalls)
-                        if (auto resolved = resolvedCalls->find(&n);
-                            resolved != resolvedCalls->end() &&
-                            modules.count(resolved->second.backendModule) &&
-                            // The prelude's is its generic fallback, which a
-                            // provider for the receiver's own type comes before.
-                            resolved->second.backendModule != "kex_prelude")
-                            providerModule = resolved->second.backendModule;
-                    if (modules.size() > 1 && providerModule.empty() && expressionTypes &&
+                    // A concrete receiver type settles an overloaded name
+                    // before a free function reached by UFCS. In particular,
+                    // `[String].join` belongs to the prelude's List method,
+                    // even when FS.Path.join/2 is also in the build.
+                    if (modules.size() > 1 && expressionTypes &&
                         n.receiver)
                         if (auto type = expressionTypes->find(n.receiver.get());
                             type != expressionTypes->end() && type->second) {
@@ -5496,35 +5723,84 @@ struct Lowering {
                                 name.resize(std::min(name.size(), name.find('<')));
                                 return name.substr(name.rfind('.') + 1);
                             };
-                            const auto receiver = bare(semantic::typeToString(type->second));
+                            auto receiver = bare(semantic::typeToString(type->second));
+                            if (std::holds_alternative<semantic::ListType>(type->second->kind))
+                                receiver = "List";
+                            else if (std::holds_alternative<semantic::MapType>(type->second->kind))
+                                receiver = "Map";
+                            else if (std::holds_alternative<semantic::TupleType>(type->second->kind))
+                                receiver = "Tuple";
                             std::set<std::string> typed;
                             for (const auto& candidate : found->second)
                                 if (candidate.beamArity == actualArity &&
-                                    candidate.compiledApart &&
                                     !candidate.receiverType.empty() &&
                                     bare(candidate.receiverType) == receiver)
                                     typed.insert(candidate.moduleAtom);
                             if (typed.size() == 1) providerModule = *typed.begin();
                         }
-                    // Undecided between one unit's provider for its own type
-                    // and the prelude's: that provider, guarded on its type,
-                    // with the prelude's dispatcher for every other value
-                    // (dualProviderDispatch below), as the merged build's
-                    // local dispatcher does (`"${text}"` beside
-                    // Net.HTTP's own `showValue`).
-                    if (modules.size() == 2 && providerModule.empty() &&
-                        modules.count("kex_prelude")) {
+                    // A semantic winner for an `Any` receiver is not enough
+                    // to bypass the prelude's runtime method dispatch. That
+                    // made a list reached through a match arm call
+                    // FS.Path.join/2 instead of List.join/2.
+                    if (modules.size() > 1 && !modules.count("kex_prelude") &&
+                        providerModule.empty() && resolvedCalls)
+                        if (auto resolved = resolvedCalls->find(&n);
+                            resolved != resolvedCalls->end() &&
+                            modules.count(resolved->second.backendModule) &&
+                            // The prelude's is its generic fallback, which a
+                            // provider for the receiver's own type comes before.
+                            resolved->second.backendModule != "kex_prelude")
+                            providerModule = resolved->second.backendModule;
+                    // Still undecided between units' providers for their own
+                    // types and the prelude's: each of them for a value of its
+                    // type, the prelude's dispatcher for every other, decided
+                    // at run time as the merged build's local dispatcher
+                    // decides (`"${text}"` beside Net.HTTP's own `showValue`).
+                    const bool typedBesidePrelude =
+                        modules.size() > 1 && providerModule.empty() &&
+                        modules.count("kex_prelude") &&
+                        std::all_of(found->second.begin(), found->second.end(),
+                                    [&](const auto& candidate) {
+                                        return candidate.beamArity != actualArity ||
+                                               candidate.moduleAtom == "kex_prelude" ||
+                                               !candidate.receiverType.empty();
+                                    });
+                    if (typedBesidePrelude && modules.size() == 2) {
+                        // One unit: its provider is the call, whose labels
+                        // its own parameters place; dualProviderDispatch
+                        // below guards it and falls back to the prelude.
                         const auto other = *std::find_if(
                             modules.begin(), modules.end(),
                             [](const std::string& module) { return module != "kex_prelude"; });
-                        const bool typed = std::all_of(
+                        const bool guardable = std::all_of(
                             found->second.begin(), found->second.end(),
                             [&](const auto& candidate) {
-                                return candidate.beamArity != actualArity ||
-                                       candidate.moduleAtom != other ||
-                                       !candidate.receiverType.empty();
+                                if (candidate.beamArity != actualArity ||
+                                    candidate.moduleAtom != other) return true;
+                                return records.count(canonicalRecordName(candidate.receiverType)) ||
+                                       primGuardBifs().count(candidate.receiverType);
                             });
-                        if (typed) providerModule = other;
+                        // A type alias such as FilePath has no safe runtime
+                        // guard here. For an erased receiver, the prelude's
+                        // dispatcher handles List.join/2 and Range.join/2.
+                        providerModule = guardable ? other : "kex_prelude";
+                    } else if (typedBesidePrelude && n.namedArgs.empty()) {
+                        // Several: one guard each, so only a type a guard can
+                        // test without matching every value (a known record,
+                        // a primitive) — and positional arguments, which mean
+                        // the same slots to every provider.
+                        std::vector<const ExternalModules::ReceiverFunction*> guarded;
+                        for (const auto& candidate : found->second)
+                            if (candidate.beamArity == actualArity &&
+                                candidate.moduleAtom != "kex_prelude")
+                                guarded.push_back(&candidate);
+                        if (std::all_of(guarded.begin(), guarded.end(), [&](const auto* provider) {
+                                return records.count(canonicalRecordName(provider->receiverType)) ||
+                                       primGuardBifs().count(provider->receiverType);
+                            })) {
+                            providerModule = "kex_prelude";
+                            runtimeProviders = std::move(guarded);
+                        }
                     }
                 }
                 for (const auto& candidate : found->second) {
@@ -5640,6 +5916,28 @@ struct Lowering {
                     // arity, keep BOTH: guard on the provider's receiver type
                     // and fall back to the prelude's dispatcher, which is the
                     // walker's runtime dispatch spelled in Core Erlang.
+                    if (!runtimeProviders.empty()) {
+                        // The prelude's call for every value no unit's
+                        // provider takes, each of those for its own type.
+                        // The arguments are atoms, so each arm repeats them.
+                        auto dispatch = callE(match->moduleAtom, function, actualArity,
+                                              [&] {
+                                                  std::vector<ExprPtr> copies;
+                                                  for (const auto& arg : pargs)
+                                                      copies.push_back(clone(arg));
+                                                  return copies;
+                                              }());
+                        for (const auto* provider : runtimeProviders) {
+                            std::vector<ExprPtr> copies;
+                            for (const auto& arg : pargs) copies.push_back(clone(arg));
+                            dispatch = matchBool(
+                                typeGuard(provider->receiverType, clone(pargs.front())),
+                                callE(provider->moduleAtom, provider->beamFunction,
+                                      actualArity, std::move(copies)),
+                                std::move(dispatch));
+                        }
+                        return ret(std::move(dispatch));
+                    }
                     if (auto dual = dualProviderDispatch(
                             n, m, match->receiverType, match->moduleAtom,
                             function, actualArity, pargs))
@@ -8909,11 +9207,11 @@ struct Lowering {
             found != expressionTypes->end() && found->second)
             if (auto* named =
                     std::get_if<semantic::NamedType>(&found->second->kind))
-                staticReceiver = canonicalRecordName(named->name);
-        // Nominal providers only — a record whose tag a guard can actually
-        // test. For a builtin receiver (String, List, Map) the tables below
-        // are an incomplete view of who answers, so guarding on one would
-        // reorder dispatch for values they know nothing about.
+                if (named->name != "Any")
+                    staticReceiver = canonicalRecordName(named->name);
+        // Only receiver shapes whose guards can safely be tested here.
+        // The prelude's List.join/2 must beat an imported FS.Path.join/2
+        // for a list held as Any, as it does in the merged dispatcher.
         struct Provider {
             std::string receiverType;   // as written, for the guard
             std::string moduleAtom;
@@ -8929,7 +9227,8 @@ struct Lowering {
                             const std::string& function, bool local = false) {
             if (receiverType.empty()) return;
             const auto canonical = canonicalRecordName(receiverType);
-            if (!records.count(canonical)) return;
+            if (!records.count(canonical) && !primGuardBifs().count(receiverType))
+                return;
             if (!seen.insert(canonical).second) return;
             providers.push_back({receiverType, moduleAtom, function, local});
         };
@@ -11293,6 +11592,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         std::set<std::string> declaredRecords;
                         kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto savedImports = L.moduleImports;
+                        auto savedExternalImports = L.externalImports;
                         auto savedAliases = L.moduleAliases;
                         auto savedUsing = L.usingModules;
                         auto prefix = m.name + ".";
@@ -11379,6 +11679,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                                 L.moduleImports[bare] = val;
                                         }
                                 }
+                                if (!(*ub)->alias || !(*ub)->onlyNames.empty())
+                                    L.importExternalModule(srcMod, (*ub)->onlyNames,
+                                                           (*ub)->exceptNames);
                                 continue;
                             } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
@@ -11441,6 +11744,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         noteRecordScope(**vrd);
                         }
                         L.moduleImports = std::move(savedImports);
+                        L.externalImports = std::move(savedExternalImports);
                         L.moduleAliases = std::move(savedAliases);
                         L.usingModules = std::move(savedUsing);
                         L.currentModulePath = std::move(savedModulePath);

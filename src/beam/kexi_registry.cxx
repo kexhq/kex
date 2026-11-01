@@ -30,6 +30,9 @@ auto typeNameStr(const KexiTypePtr& t) -> std::string {
     switch (t->kind) {
     case KexiType::Primitive: return t->name;
     case KexiType::Named:     return t->name;
+    case KexiType::List:      return "List";
+    case KexiType::Map:       return "Map";
+    case KexiType::Tuple:     return "Tuple";
     default:                  return "";
     }
 }
@@ -646,6 +649,17 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
             for (const auto& member : mod.chunk.metadata.capabilityMembers)
                 ext.capabilityMembers[shortName].insert(member);
 
+            for (const auto& method : mod.chunk.typeInterface.methods) {
+                if (!method.isSlot || !method.receiverType) continue;
+                const auto type = typeNameStr(method.receiverType);
+                if (type.empty()) continue;
+                auto& serving = ext.servingSlots[type];
+                serving.first = mod.beamAtom;
+                if (std::find(serving.second.begin(), serving.second.end(), method.name) ==
+                    serving.second.end())
+                    serving.second.push_back(method.name);
+            }
+
             for (const auto& exp : mod.chunk.typeInterface.exports) {
                 auto qualKey = shortName + "." + exp.name;
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
@@ -679,36 +693,32 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
                     if (receiverFn.typeOnly) continue;
                     auto& vec = ext.receiverFunctions[receiverFn.name];
-                    const bool protocolReceiver = std::any_of(
-                        ext.traitMethods.begin(), ext.traitMethods.end(),
-                        [&](const auto& trait) {
-                            return std::any_of(
-                                trait.second.begin(), trait.second.end(),
-                                [&](const auto& method) {
-                                    return method.name == receiverFn.name;
-                                });
-                        });
                     bool duplicate = false;
                     // Overloads that name their parameters differently stay
                     // apart: a labelled call is placed by the names, and the
                     // prelude's `to(String, in: TimeUnit)` shares its BEAM
                     // function and arity with `to(String, decimals: Integer)`.
-                    // Appended after the first, so a positional lookup still
-                    // finds what it did.
+                    // So do overloads for different receivers behind one
+                    // dispatcher: lowering guards each receiver type, and
+                    // keeping only the first routed the rest to the fallback
+                    // (a `TextColumn == x` answered `false` by numeric
+                    // equality). Appended after the first, so a positional
+                    // lookup still finds what it did.
+                    const auto receiverType =
+                        typeNameStr(receiverFn.receiverType);
                     for (const auto& existing : vec)
                         if (existing.moduleAtom == mod.beamAtom &&
                             existing.beamFunction == receiverFn.beamFunction &&
                             existing.beamArity == receiverFn.beamArity &&
                             existing.paramNames == receiverFn.paramNames &&
-                            (!protocolReceiver || existing.receiverType ==
-                                typeNameStr(receiverFn.receiverType))) {
+                            existing.receiverType == receiverType) {
                             duplicate = true; break;
                         }
                     if (!duplicate)
                         vec.push_back({mod.beamAtom, receiverFn.beamFunction,
                                        receiverFn.beamArity,
                                        receiverFn.paramNames,
-                                       typeNameStr(receiverFn.receiverType),
+                                       receiverType,
                                        receiverFn.isFoul});
                 }
             }

@@ -2067,7 +2067,9 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
       if (std::none_of(merged.begin(), merged.end(), [&](const auto &existing) {
             return existing.moduleAtom == provider.moduleAtom &&
                    existing.beamFunction == provider.beamFunction &&
-                   existing.beamArity == provider.beamArity;
+                   existing.beamArity == provider.beamArity &&
+                   existing.receiverType == provider.receiverType &&
+                   existing.paramNames == provider.paramNames;
           }))
         merged.push_back(provider);
   }
@@ -2132,7 +2134,21 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
         variants.push_back(
             {constructor.tagAtom, constructor.arity, adt.name, ownerOf(adt.name)});
   }
-  const auto stem = std::filesystem::path(path).stem().string();
+  // Several units can have the same basename (`app/models/conversation.kex`
+  // and `app/views/chat/conversation.kex`). Their file modules must not
+  // overwrite one another. Keep the entry's traditional `kex_main` name.
+  const auto baseStem = std::filesystem::path(path).stem().string();
+  auto stem = baseStem;
+  if (path != g_separateEntryPath) {
+    static const char *hex = "0123456789abcdef";
+    const auto digest = kex::beam::computeSha256(
+        std::vector<uint8_t>(path.begin(), path.end()));
+    stem += "_";
+    for (std::size_t i = 0; i < 8; ++i) {
+      stem += hex[digest[i] >> 4];
+      stem += hex[digest[i] & 0xf];
+    }
+  }
   try {
     auto modules = kex::ir::lowerModules(
         program, stem, path, &layouts, &externals, &analyzer.resolvedCalls(),
@@ -2254,6 +2270,70 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
         forward.clauses.push_back(std::move(clause));
         module.functions.push_back(std::move(forward));
       }
+    // KexI advertises a receiver method at its plain name. A unit can emit
+    // only the receiver-qualified implementation when an imported field or
+    // method shares that name (`Grant.teamId`, `OrganizationId.empty?`).
+    // Give the companion the advertised entry point when it has one local
+    // owner and no dispatcher of its own.
+    std::map<std::string, std::set<std::string>> ownTypes;
+    std::function<void(const kex::ast::ModuleDef &)> noteTypes =
+        [&](const kex::ast::ModuleDef &definition) {
+          auto &types = ownTypes["Kex." + definition.name];
+          for (const auto &item : definition.body) {
+            std::string name;
+            if (const auto *record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item);
+                record && *record) name = (*record)->name;
+            if (const auto *type = std::get_if<std::unique_ptr<kex::ast::TypeDef>>(&item);
+                type && *type) name = (*type)->name;
+            if (!name.empty()) {
+              types.insert(name);
+              types.insert(definition.name + "." + name);
+            }
+            if (const auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+                nested && *nested) noteTypes(**nested);
+          }
+        };
+    for (const auto &item : program.items)
+      if (const auto *definition = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+          definition && *definition) noteTypes(**definition);
+    for (auto &module : modules) {
+      std::map<std::pair<std::string, int>, std::vector<std::string>> implementations;
+      for (const auto &function : module.functions) {
+        if (!function.exported) continue;
+        const auto slash = function.name.find('/');
+        if (slash == std::string::npos) continue;
+        const auto owner = function.name.substr(slash + 1);
+        if (!ownTypes[module.name].contains(owner)) continue;
+        implementations[{function.name.substr(0, slash), function.arity}]
+            .push_back(function.name);
+      }
+      for (const auto &[key, targets] : implementations) {
+        if (targets.size() != 1 ||
+            std::any_of(module.functions.begin(), module.functions.end(),
+                        [&](const auto &function) {
+                          return function.name == key.first && function.arity == key.second;
+                        })) continue;
+        kex::ir::FunDef forward;
+        forward.name = key.first;
+        forward.arity = key.second;
+        kex::ir::FunClause clause;
+        std::vector<kex::ir::ExprPtr> args;
+        for (int i = 0; i < key.second; ++i) {
+          const auto param = "_Arg" + std::to_string(i);
+          auto pattern = std::make_unique<kex::ir::Pattern>();
+          pattern->kind = kex::ir::PatKind::Var;
+          pattern->name = param;
+          clause.params.push_back(std::move(pattern));
+          args.push_back(std::make_unique<kex::ir::Expr>());
+          args.back()->node = kex::ir::Var{param};
+        }
+        clause.body = std::make_unique<kex::ir::Expr>();
+        clause.body->node = kex::ir::Call{"", targets.front(), key.second,
+                                          std::move(args), true};
+        forward.clauses.push_back(std::move(clause));
+        module.functions.push_back(std::move(forward));
+      }
+    }
     std::vector<kex::ir::EmitResult> emitted;
     for (auto &module : modules) {
       kex::ir::insertUpgradePoints(module);
@@ -2270,10 +2350,8 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
 
 auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps,
                           const std::vector<std::vector<std::string>> &units,
+                          const std::map<std::string, std::set<std::string>> &uses,
                           const kex::semantic::ImportedInterfaces *interfaces) -> void {
-  kex::beam::KexiRegistry registry;
-  kex::module::PackageMetadata build;
-  build.id = "kex.build";
   std::map<std::string, LoadedDep *> byPath;
   for (auto &dep : deps) byPath[*dep.path] = &dep;
   std::size_t errors = 0;
@@ -2281,8 +2359,49 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
   // checked and lowered.
   std::vector<kex::ir::EmitResult> separateModules;
   bool allLowered = true;
+  // What each unit checked so far says of itself, with its files and the
+  // modules it provides.
+  struct Described {
+    std::set<std::string> files;
+    std::vector<std::string> names;
+    kex::beam::LoadedUnit unit;
+  };
+  std::vector<Described> describedUnits;
   for (const auto &unit : units) {
     const bool isEntry = unit.size() == 1 && unit.front().empty();
+    // A unit is checked and lowered against the units its files reach, and
+    // no others: one it does not use (`Harmat` from `Parsing`) offers it
+    // nothing, not even an operator on an `Unknown` value.
+    std::set<std::string> reached;
+    std::vector<std::string> pending(unit.begin(), unit.end());
+    while (!pending.empty()) {
+      const auto file = pending.back();
+      pending.pop_back();
+      if (const auto used = uses.find(file); used != uses.end())
+        for (const auto &next : used->second)
+          if (reached.insert(next).second) pending.push_back(next);
+    }
+    kex::beam::KexiRegistry registry;
+    kex::module::PackageMetadata build;
+    build.id = "kex.build";
+    for (const auto &below : describedUnits) {
+      if (std::none_of(below.files.begin(), below.files.end(),
+                       [&](const std::string &file) { return reached.contains(file); }))
+        continue;
+      build.unitIds.push_back(below.unit.modules.front().chunk.metadata.unitId);
+      // Once each: a module can be split across files of different units.
+      for (const auto &name : below.names)
+        if (std::find(build.receiverProviders.begin(), build.receiverProviders.end(), name) ==
+            build.receiverProviders.end())
+          build.receiverProviders.push_back(name);
+      registry.registerUnit(below.unit);
+    }
+    // The build's own units as one package, every module of them a
+    // provider: a type's `make` functions reach the units above it only
+    // through a package that says so, as the prelude's do.
+    if (!build.unitIds.empty())
+      for (const auto &error : registry.declarePackage(build))
+        std::fprintf(stderr, "separate: package: %s\n", error.message.c_str());
     // The unit's files, as one program for the length of its check; their
     // items go back where they came from afterwards.
     kex::ast::Program program;
@@ -2366,6 +2485,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                      });
     const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
     const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
+    std::map<std::string, std::string> unitCoreExports;
     if (lowerApart && !unitChecked) allLowered = false;
     if (lowerApart && unitChecked) {
       // A prelude trait the unit claims gives it its default bodies, from
@@ -2379,7 +2499,11 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                           program.items.end());
       if (!lowered) allLowered = false;
       else
-        for (auto &module : *lowered) separateModules.push_back(std::move(module));
+        for (auto &module : *lowered) {
+          unitCoreExports[module.moduleName] =
+              module.source.substr(0, module.source.find('\n'));
+          separateModules.push_back(std::move(module));
+        }
     }
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
@@ -2447,22 +2571,35 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         options.unitCompiledApart = true;
         auto chunk = kex::beam::collectMetadata(program, options);
         kex::beam::qualifyTypeNames(chunk, qualifierFor(*modules[i]));
+        // A plain receiver dispatcher may only accept tagged records. A
+        // distinct value is erased to its backing value, so another unit
+        // must call the receiver-specific implementation when one was
+        // emitted (`empty?/ThingId`, not `empty?/1` on a String).
+        if (auto core = unitCoreExports.find(options.moduleAtom);
+            core != unitCoreExports.end())
+          for (auto &method : chunk.typeInterface.methods) {
+            if (method.moduleFunction || method.typeOnly || !method.receiverType ||
+                method.receiverType->kind != kex::beam::KexiType::Named)
+              continue;
+            const auto &receiver = method.receiverType->name;
+            const auto slash = receiver.rfind('.');
+            const auto shortReceiver = receiver.substr(
+                slash == std::string::npos ? 0 : slash + 1);
+            for (const auto &owner : {receiver, shortReceiver}) {
+              const auto target = method.name + "/" + owner;
+              const auto exported = "'" + target + "'/" +
+                  std::to_string(method.beamArity);
+              if (core->second.find(exported) == std::string::npos) continue;
+              method.beamFunction = target;
+              break;
+            }
+          }
         described.modules.push_back({options.moduleAtom, "", std::move(chunk)});
       }
       if (!described.modules.empty()) {
         described.entryBeamAtom = described.modules.front().beamAtom;
-        registry.registerUnit(std::move(described));
-        // The build's own units as one package, every module of them a
-        // provider: a type's `make` functions reach the units above it
-        // only through a package that says so, as the prelude's do.
-        build.unitIds.push_back("Kex." + names.front());
-        // Once each: a module can be split across files of different units.
-        for (const auto &name : names)
-          if (std::find(build.receiverProviders.begin(), build.receiverProviders.end(),
-                        name) == build.receiverProviders.end())
-            build.receiverProviders.push_back(name);
-        for (const auto &error : registry.declarePackage(build))
-          std::fprintf(stderr, "separate: package: %s\n", error.message.c_str());
+        describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()), names,
+                                  std::move(described)});
       }
     }
     if (isEntry) {
@@ -2675,7 +2812,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
   const auto units = unitsOf(uses);
   // Before the dependencies are merged in, while each is still its own.
   if (graph && separateCheckRequested())
-    checkUnitsSeparately(program, deps, units, interfaces);
+    checkUnitsSeparately(program, deps, units, uses, interfaces);
 
   if (!deps.empty()) {
     std::vector<kex::ast::TopLevelItem> merged;
@@ -2937,6 +3074,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.capabilityModules.insert(name);
   for (const auto &[name, members] : overrides.capabilityMembers)
     result.capabilityMembers[name] = members;
+  for (const auto &[type, serving] : overrides.servingSlots)
+    result.servingSlots[type] = serving;
   result.compiledApartModules.insert(overrides.compiledApartModules.begin(),
                                      overrides.compiledApartModules.end());
   for (const auto &[name, functions] : overrides.receiverFunctions)
