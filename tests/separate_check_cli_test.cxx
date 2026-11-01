@@ -12,8 +12,10 @@
 // its own; compiled and run, it must print what the merged build prints.
 // For that the program also has a capability beside a module of its name,
 // whose default and replacement and helper each run, a slot called with
-// `within:` on another unit's server, a `make` block outside its module, and
-// a function of another unit called by UFCS.
+// `within:` on another unit's server, a `make` block outside its module,
+// a function of another unit called by UFCS, an operator one unit
+// overloads for two of its types, called on each from another unit, and a
+// method only one type of another unit owns, called on it from this one.
 #include "test.hxx"
 #include <cstdlib>
 #include <filesystem>
@@ -217,6 +219,48 @@ make Crate, implement: Showable do
   let showValue -> String = "crate of ${@count}"
 end
 )KEX");
+        write("lib/fields.kex", R"KEX(module Fields
+
+record IntField do
+  label : String
+end
+
+record TextField do
+  label : String
+end
+
+make IntField do
+  let ==(val: Integer) -> String = "intfield ${@label} == ${val}"
+end
+
+make TextField do
+  let ==(val: String) -> String = "textfield ${@label} == ${val}"
+end
+)KEX");
+        write("lib/tokens.kex", R"KEX(module Tokens
+
+distinct type Token = String
+
+make Token do
+  let blank? -> Bool = this.as(String).empty?
+end
+)KEX");
+        write("lib/paths.kex", R"KEX(module Paths
+
+join : String -> String -> String
+let join(first, second) = "${first}/${second}"
+)KEX");
+        write("lib/pages.kex", R"KEX(module Pages
+
+let page = { |text| "page ${text}" }
+)KEX");
+        write("lib/thing_ids.kex", R"KEX(module ThingIds
+
+distinct type ThingId = String
+make ThingId do
+  let empty? -> Bool = true
+end
+)KEX");
         write("lib/marks.kex", R"KEX(module Marks do
   record Mark do
     text : String
@@ -328,6 +372,10 @@ using Marks
 using Boxes, only: [Box]
 using Crates, only: [Crate]
 using Ids, only: [UserId]
+using Fields, only: [IntField, TextField]
+using Tokens, only: [Token]
+using FS
+using ThingIds, only: [ThingId]
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -346,6 +394,9 @@ let presented(value: Showable) -> String = "${value}"
 
 # A literal of what it backs is a distinct type of another unit too.
 let owner(id: UserId) -> String = "owner ${id}"
+
+let tokenBlank(token: Token) -> Bool = token.blank?
+let joined(value: Any) -> String = value.join(", ")
 
 main do
   IO.printLine(Shapes.area(Shapes.Circle(3)))
@@ -380,6 +431,15 @@ main do
   IO.printLine(presented(Crate { count: 3 }))
   IO.printLine(presented(7))
   IO.printLine(owner("u1"))
+  IO.printLine(IntField { label: "n" } == 1)
+  IO.printLine(TextField { label: "name" } == "x")
+  IO.printLine(tokenBlank("abc"))
+  IO.printLine(tokenBlank(""))
+  IO.printLine(["?"].join(", "))
+  IO.printLine(joined(["?"]))
+  IO.printLine(Paths.join("a", "b"))
+  IO.printLine(Pages.page("x"))
+  IO.printLine("x".as(ThingId).empty?)
 end
 )KEX";
 
@@ -436,6 +496,10 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
                        "the merged build did not run: " + merged);
             assertEqual(separate, merged);
             assertEqual(actual, merged);
+            assertTrue(merged.find("\n?\n?\n") != std::string::npos,
+                       "list.join called a path join: " + merged);
+            assertTrue(merged.find("\npage x\ntrue\n") != std::string::npos,
+                       "cross-unit callable or distinct method did not run: " + merged);
         });
     });
     return runAll();

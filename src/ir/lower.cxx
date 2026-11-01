@@ -4026,6 +4026,16 @@ struct Lowering {
                             declaring != localTypeModules.end())
                             servingModule =
                                 mangleModulePath("Kex." + declaring->second);
+                        if (slotAtoms.empty() && externalModules) {
+                            auto external = externalModules->servingSlots.find(stateType);
+                            if (external == externalModules->servingSlots.end())
+                                external = externalModules->servingSlots.find(key);
+                            if (external != externalModules->servingSlots.end()) {
+                                servingModule = external->second.first;
+                                for (const auto& slot : external->second.second)
+                                    slotAtoms.push_back(lit(LitKind::Atom, slot));
+                            }
+                        }
                     }
                 }
                 auto allowedSlots = std::make_unique<Expr>();
@@ -4209,6 +4219,35 @@ struct Lowering {
                                                    bare(provider.receiverType) == receiver;
                                         });
                     }
+            // A checker candidate for an erased receiver does not determine
+            // its runtime method. With `value: Any`, FS.Path.join/2 can be a
+            // candidate while the actual value is a List; the prelude's
+            // join/2 must remain available to the receiver dispatch below.
+            if (resolved != resolvedCalls->end() && externalModules &&
+                expressionTypes && n.receiver &&
+                resolved->second.backendModule != "kex_prelude")
+                if (auto type = expressionTypes->find(n.receiver.get());
+                    type != expressionTypes->end() && type->second) {
+                    const auto& kind = type->second->kind;
+                    const auto unknown =
+                        std::holds_alternative<semantic::UnknownType>(kind) ||
+                        std::holds_alternative<semantic::TypeVar>(kind) ||
+                        (std::holds_alternative<semantic::NamedType>(kind) &&
+                         std::get<semantic::NamedType>(kind).name == "Any");
+                    if (unknown)
+                        if (auto providers = externalModules->receiverFunctions.find(n.method);
+                            providers != externalModules->receiverFunctions.end()) {
+                            const auto arity = static_cast<int>(n.args.size() +
+                                n.namedArgs.size() + 1 + (n.block ? 1 : 0));
+                            stalePreludeTarget = stalePreludeTarget ||
+                                std::any_of(providers->second.begin(),
+                                            providers->second.end(),
+                                            [&](const auto& provider) {
+                                                return provider.moduleAtom == "kex_prelude" &&
+                                                       provider.beamArity == arity;
+                                            });
+                        }
+                }
             // A bare `x.field` whose name is also an imported receiver method
             // (`name` is Weekday's and Type's) must go through THIS module's
             // accessor, which matches the record tags and delegates to the
@@ -4884,6 +4923,20 @@ struct Lowering {
                                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                                 if (n.block) args.push_back(atomize(*n.block, binds));
                                 int ar = static_cast<int>(args.size());
+                                // A zero-argument binding can hold a callable
+                                // value, such as a Template. Apply the value
+                                // returned by `page/0`; there is no `page/1`
+                                // in the other unit to call directly.
+                                if (auto declared = externalModules->exportArity.find(qualKey);
+                                    ar > 0 && declared != externalModules->exportArity.end() &&
+                                    declared->second == 0) {
+                                    auto callee = externalCallExpr(
+                                        qualKey, ait->second, eit->second, 0, {});
+                                    auto indirect = std::make_unique<Expr>();
+                                    indirect->node = CallIndirect{
+                                        std::move(callee), std::move(args), false};
+                                    return wrapLets(binds, std::move(indirect));
+                                }
                                 return wrapLets(binds,
                                     externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
                             }
@@ -5490,6 +5543,22 @@ struct Lowering {
             // is Regex's, not the prelude's String one).
             const bool chosen = [&] {
                 if (!resolvedCalls) return false;
+                // An `Any` receiver leaves the runtime method open: the
+                // checker's free-function candidate cannot override a
+                // receiver provider such as List.join/2.
+                if (expressionTypes && n.receiver)
+                    if (auto type = expressionTypes->find(n.receiver.get());
+                        type != expressionTypes->end() && type->second) {
+                        if (std::holds_alternative<semantic::UnknownType>(
+                                type->second->kind) ||
+                            std::holds_alternative<semantic::TypeVar>(
+                                type->second->kind))
+                            return false;
+                        if (auto named = std::get_if<semantic::NamedType>(
+                                &type->second->kind);
+                            named && named->name == "Any")
+                            return false;
+                    }
                 const auto resolved = resolvedCalls->find(&n);
                 return resolved != resolvedCalls->end() &&
                        resolved->second.backendModule ==
@@ -5594,15 +5663,11 @@ struct Lowering {
                     for (const auto& candidate : found->second)
                         if (candidate.beamArity == actualArity)
                             modules.insert(candidate.moduleAtom);
-                    if (modules.size() > 1 && resolvedCalls)
-                        if (auto resolved = resolvedCalls->find(&n);
-                            resolved != resolvedCalls->end() &&
-                            modules.count(resolved->second.backendModule) &&
-                            // The prelude's is its generic fallback, which a
-                            // provider for the receiver's own type comes before.
-                            resolved->second.backendModule != "kex_prelude")
-                            providerModule = resolved->second.backendModule;
-                    if (modules.size() > 1 && providerModule.empty() && expressionTypes &&
+                    // A concrete receiver type settles an overloaded name
+                    // before a free function reached by UFCS. In particular,
+                    // `[String].join` belongs to the prelude's List method,
+                    // even when FS.Path.join/2 is also in the build.
+                    if (modules.size() > 1 && expressionTypes &&
                         n.receiver)
                         if (auto type = expressionTypes->find(n.receiver.get());
                             type != expressionTypes->end() && type->second) {
@@ -5612,16 +5677,34 @@ struct Lowering {
                                 name.resize(std::min(name.size(), name.find('<')));
                                 return name.substr(name.rfind('.') + 1);
                             };
-                            const auto receiver = bare(semantic::typeToString(type->second));
+                            auto receiver = bare(semantic::typeToString(type->second));
+                            if (std::holds_alternative<semantic::ListType>(type->second->kind))
+                                receiver = "List";
+                            else if (std::holds_alternative<semantic::MapType>(type->second->kind))
+                                receiver = "Map";
+                            else if (std::holds_alternative<semantic::TupleType>(type->second->kind))
+                                receiver = "Tuple";
                             std::set<std::string> typed;
                             for (const auto& candidate : found->second)
                                 if (candidate.beamArity == actualArity &&
-                                    candidate.compiledApart &&
                                     !candidate.receiverType.empty() &&
                                     bare(candidate.receiverType) == receiver)
                                     typed.insert(candidate.moduleAtom);
                             if (typed.size() == 1) providerModule = *typed.begin();
                         }
+                    // A semantic winner for an `Any` receiver is not enough
+                    // to bypass the prelude's runtime method dispatch. That
+                    // made a list reached through a match arm call
+                    // FS.Path.join/2 instead of List.join/2.
+                    if (modules.size() > 1 && !modules.count("kex_prelude") &&
+                        providerModule.empty() && resolvedCalls)
+                        if (auto resolved = resolvedCalls->find(&n);
+                            resolved != resolvedCalls->end() &&
+                            modules.count(resolved->second.backendModule) &&
+                            // The prelude's is its generic fallback, which a
+                            // provider for the receiver's own type comes before.
+                            resolved->second.backendModule != "kex_prelude")
+                            providerModule = resolved->second.backendModule;
                     // Still undecided between units' providers for their own
                     // types and the prelude's: each of them for a value of its
                     // type, the prelude's dispatcher for every other, decided
@@ -5640,9 +5723,21 @@ struct Lowering {
                         // One unit: its provider is the call, whose labels
                         // its own parameters place; dualProviderDispatch
                         // below guards it and falls back to the prelude.
-                        providerModule = *std::find_if(
+                        const auto other = *std::find_if(
                             modules.begin(), modules.end(),
                             [](const std::string& module) { return module != "kex_prelude"; });
+                        const bool guardable = std::all_of(
+                            found->second.begin(), found->second.end(),
+                            [&](const auto& candidate) {
+                                if (candidate.beamArity != actualArity ||
+                                    candidate.moduleAtom != other) return true;
+                                return records.count(canonicalRecordName(candidate.receiverType)) ||
+                                       primGuardBifs().count(candidate.receiverType);
+                            });
+                        // A type alias such as FilePath has no safe runtime
+                        // guard here. For an erased receiver, the prelude's
+                        // dispatcher handles List.join/2 and Range.join/2.
+                        providerModule = guardable ? other : "kex_prelude";
                     } else if (typedBesidePrelude && n.namedArgs.empty()) {
                         // Several: one guard each, so only a type a guard can
                         // test without matching every value (a known record,
@@ -9066,11 +9161,11 @@ struct Lowering {
             found != expressionTypes->end() && found->second)
             if (auto* named =
                     std::get_if<semantic::NamedType>(&found->second->kind))
-                staticReceiver = canonicalRecordName(named->name);
-        // Nominal providers only — a record whose tag a guard can actually
-        // test. For a builtin receiver (String, List, Map) the tables below
-        // are an incomplete view of who answers, so guarding on one would
-        // reorder dispatch for values they know nothing about.
+                if (named->name != "Any")
+                    staticReceiver = canonicalRecordName(named->name);
+        // Only receiver shapes whose guards can safely be tested here.
+        // The prelude's List.join/2 must beat an imported FS.Path.join/2
+        // for a list held as Any, as it does in the merged dispatcher.
         struct Provider {
             std::string receiverType;   // as written, for the guard
             std::string moduleAtom;
@@ -9086,7 +9181,8 @@ struct Lowering {
                             const std::string& function, bool local = false) {
             if (receiverType.empty()) return;
             const auto canonical = canonicalRecordName(receiverType);
-            if (!records.count(canonical)) return;
+            if (!records.count(canonical) && !primGuardBifs().count(receiverType))
+                return;
             if (!seen.insert(canonical).second) return;
             providers.push_back({receiverType, moduleAtom, function, local});
         };

@@ -2067,7 +2067,9 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
       if (std::none_of(merged.begin(), merged.end(), [&](const auto &existing) {
             return existing.moduleAtom == provider.moduleAtom &&
                    existing.beamFunction == provider.beamFunction &&
-                   existing.beamArity == provider.beamArity;
+                   existing.beamArity == provider.beamArity &&
+                   existing.receiverType == provider.receiverType &&
+                   existing.paramNames == provider.paramNames;
           }))
         merged.push_back(provider);
   }
@@ -2268,6 +2270,70 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
         forward.clauses.push_back(std::move(clause));
         module.functions.push_back(std::move(forward));
       }
+    // KexI advertises a receiver method at its plain name. A unit can emit
+    // only the receiver-qualified implementation when an imported field or
+    // method shares that name (`Grant.teamId`, `OrganizationId.empty?`).
+    // Give the companion the advertised entry point when it has one local
+    // owner and no dispatcher of its own.
+    std::map<std::string, std::set<std::string>> ownTypes;
+    std::function<void(const kex::ast::ModuleDef &)> noteTypes =
+        [&](const kex::ast::ModuleDef &definition) {
+          auto &types = ownTypes["Kex." + definition.name];
+          for (const auto &item : definition.body) {
+            std::string name;
+            if (const auto *record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item);
+                record && *record) name = (*record)->name;
+            if (const auto *type = std::get_if<std::unique_ptr<kex::ast::TypeDef>>(&item);
+                type && *type) name = (*type)->name;
+            if (!name.empty()) {
+              types.insert(name);
+              types.insert(definition.name + "." + name);
+            }
+            if (const auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+                nested && *nested) noteTypes(**nested);
+          }
+        };
+    for (const auto &item : program.items)
+      if (const auto *definition = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+          definition && *definition) noteTypes(**definition);
+    for (auto &module : modules) {
+      std::map<std::pair<std::string, int>, std::vector<std::string>> implementations;
+      for (const auto &function : module.functions) {
+        if (!function.exported) continue;
+        const auto slash = function.name.find('/');
+        if (slash == std::string::npos) continue;
+        const auto owner = function.name.substr(slash + 1);
+        if (!ownTypes[module.name].contains(owner)) continue;
+        implementations[{function.name.substr(0, slash), function.arity}]
+            .push_back(function.name);
+      }
+      for (const auto &[key, targets] : implementations) {
+        if (targets.size() != 1 ||
+            std::any_of(module.functions.begin(), module.functions.end(),
+                        [&](const auto &function) {
+                          return function.name == key.first && function.arity == key.second;
+                        })) continue;
+        kex::ir::FunDef forward;
+        forward.name = key.first;
+        forward.arity = key.second;
+        kex::ir::FunClause clause;
+        std::vector<kex::ir::ExprPtr> args;
+        for (int i = 0; i < key.second; ++i) {
+          const auto param = "_Arg" + std::to_string(i);
+          auto pattern = std::make_unique<kex::ir::Pattern>();
+          pattern->kind = kex::ir::PatKind::Var;
+          pattern->name = param;
+          clause.params.push_back(std::move(pattern));
+          args.push_back(std::make_unique<kex::ir::Expr>());
+          args.back()->node = kex::ir::Var{param};
+        }
+        clause.body = std::make_unique<kex::ir::Expr>();
+        clause.body->node = kex::ir::Call{"", targets.front(), key.second,
+                                          std::move(args), true};
+        forward.clauses.push_back(std::move(clause));
+        module.functions.push_back(std::move(forward));
+      }
+    }
     std::vector<kex::ir::EmitResult> emitted;
     for (auto &module : modules) {
       kex::ir::insertUpgradePoints(module);
@@ -2980,6 +3046,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.capabilityModules.insert(name);
   for (const auto &[name, members] : overrides.capabilityMembers)
     result.capabilityMembers[name] = members;
+  for (const auto &[type, serving] : overrides.servingSlots)
+    result.servingSlots[type] = serving;
   result.compiledApartModules.insert(overrides.compiledApartModules.begin(),
                                      overrides.compiledApartModules.end());
   for (const auto &[name, functions] : overrides.receiverFunctions)
