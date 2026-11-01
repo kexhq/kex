@@ -206,6 +206,11 @@ private:
     // treats untyped params, just recursing into pattern structure.
     auto bindPatternVars(
         const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
+    // A destructuring `let`/`var` against its value's type: arity first,
+    // then an early constructor-mismatch error (so `var` and `let` agree),
+    // then the bindings a `match` arm gets from its subject.
+    auto bindDestructuredPattern(
+        const ast::Pattern& pat, const TypePtr& valueType) -> void;
     auto registerTraits(const ast::Program& program) -> void;
     auto registerCapabilityTraits(const ast::Program& program) -> void;
     // Qualified names of every module declared `capability`. `with` may only

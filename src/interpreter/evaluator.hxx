@@ -377,7 +377,13 @@ private:
     std::unordered_map<std::string, ValuePtr> m_functionValues;
 
     // Pattern matching
-    auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
+    auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
+                      bool isMutable = false) -> bool;
+    // Binds a `let`/`var` pattern against an already-evaluated value, with
+    // the same per-shape semantics for both — `var` only marks the bindings
+    // mutable (kexhq/kex#602).
+    auto bindPattern(const ast::Pattern& pattern, const ValuePtr& value,
+                     SourceLocation loc, bool isMutable) -> void;
 
     // Try/rescue support
     auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,

@@ -1,0 +1,2 @@
+spec/error_single_letter_binding.kex:6:7: error: Cannot bind 'N': single-letter uppercase names are reserved for type parameters
+Aborted: 1 syntax error — fix before running.

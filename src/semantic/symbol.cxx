@@ -10,6 +10,10 @@ auto Scope::define(Symbol symbol) -> bool {
     return inserted;
 }
 
+auto Scope::redefine(Symbol symbol) -> void {
+    m_symbols[symbol.name] = std::move(symbol);
+}
+
 auto Scope::lookup(const std::string& name) const -> const Symbol* {
     if (auto it = m_symbols.find(name); it != m_symbols.end()) {
         return &it->second;
@@ -58,6 +62,10 @@ auto SymbolTable::currentScope() -> Scope& {
 
 auto SymbolTable::define(Symbol symbol) -> bool {
     return m_current->define(std::move(symbol));
+}
+
+auto SymbolTable::redefine(Symbol symbol) -> void {
+    m_current->redefine(std::move(symbol));
 }
 
 auto SymbolTable::lookup(const std::string& name) const -> const Symbol* {

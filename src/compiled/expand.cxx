@@ -328,8 +328,11 @@ struct Substituter {
                         if (shadowed.insert(name).second) locals.push_back(name);
                     }
                 } else if (auto* var = std::get_if<ast::VarExpr>(&expression->kind)) {
-                    if (shadowed.insert(var->name).second)
-                        locals.push_back(var->name);
+                    std::vector<std::string> names;
+                    if (var->pattern) patternNames(*var->pattern, names);
+                    for (const auto& name : names) {
+                        if (shadowed.insert(name).second) locals.push_back(name);
+                    }
                 }
             }
         });
@@ -3171,8 +3174,9 @@ auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& com
                     if (node.name == name) readElsewhere = true;
                 } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
                     if (node.pattern && binds(*node.pattern)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::VarExpr> ||
-                                     std::is_same_v<T, ast::AssignExpr>) {
+                } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
+                    if (node.pattern && binds(*node.pattern)) rebound = true;
+                } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
                     if (node.name == name) rebound = true;
                 } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
                     if (node.letPattern && binds(*node.letPattern)) rebound = true;

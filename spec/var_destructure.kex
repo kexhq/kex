@@ -1,0 +1,15 @@
+# `var` destructures tuples just like `let`, binding each element mutably
+# (kexhq/kex#602).
+main do
+  let (a, b) = (1, 2)
+  IO.printLine(a)
+  IO.printLine(b)
+
+  var (i, j) = (1, 2)
+  IO.printLine(i)
+  IO.printLine(j)
+  i = 10
+  j = 20
+  IO.printLine(i)
+  IO.printLine(j)
+end

@@ -1,0 +1,8 @@
+# Single-letter uppercase names are type parameters, so they cannot bind
+# values with `let` (kexhq/kex#603). Longer uppercase names are local
+# constants (see local_constant.kex); top-level and module constants keep
+# working, including single letters like Math's E.
+main do
+  let N = 5
+  IO.printLine(N)
+end

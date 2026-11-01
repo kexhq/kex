@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include <cctype>
 #include <memory>
 #include <optional>
 #include <string>
@@ -378,7 +379,9 @@ struct LetExpr {
 };
 
 struct VarExpr {
-    std::string name;
+    // A pattern like `let` takes, so `var (i, j) = pair` destructures with
+    // each element mutable (kexhq/kex#602). Plain `var x = v` is a VarPattern.
+    PatternPtr pattern;
     ExprPtr value;
     std::optional<TypeExprPtr> type;
 };
@@ -823,6 +826,20 @@ struct Program {
 inline auto isMergedDeclaration(const TopLevelItem& item) -> bool {
     const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
     return !main || ((*main)->synthetic && !(*main)->isExplicitMain);
+}
+
+// A local `let UPPER = ...` constant: an uppercase name bound to the zero-arg
+// function the parser wraps the value in (kexhq/kex#603). Lowercase names
+// bound the same way are ordinary local functions, and single letters never
+// reach here — the parser rejects them as type-parameter names.
+inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value) -> bool {
+    if (!pattern || !value) return false;
+    const auto* varPat = std::get_if<VarPattern>(&pattern->kind);
+    if (!varPat || varPat->name.empty() ||
+        !std::isupper(static_cast<unsigned char>(varPat->name.front())))
+        return false;
+    const auto* lambda = std::get_if<Lambda>(&value->kind);
+    return lambda && lambda->namedFunction && lambda->params.empty();
 }
 
 } // namespace kex::ast

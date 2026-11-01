@@ -3466,6 +3466,26 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
 
   if (isLetFunctionDefAhead()) {
     // Parse as inline function def, wrap in a dummy expr
+    // Single-letter uppercase names are type parameters, so a local
+    // `let N = ...` binds a name no reference can ever read — bare `N`
+    // means the type, not the value (kexhq/kex#603). Reject it here at the
+    // `let` rather than letting it decay into an atom downstream. Only the
+    // constant shape is rejected (`let Ok(v) = ...` stays a pattern), and
+    // only in expression position: top-level and module constants go
+    // through parseFunctionDef directly and keep working.
+    if (peekNext().type == TokenType::UpperIdent &&
+        peekNext().value.size() == 1 &&
+        peekAt(2).type != TokenType::LParen &&
+        peekAt(2).type != TokenType::LBrace) {
+      // Consumed BEFORE reporting, like `foul` above: error() throws, and
+      // leaving `let` in place would put recovery straight back on it.
+      // The report then points at the offending name itself.
+      auto name = peekNext().value;
+      advance(); // let
+      error("Cannot bind '" + name +
+            "': single-letter uppercase names are reserved for type "
+            "parameters");
+    }
     auto funcDef = parseFunctionDef();
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
@@ -3549,7 +3569,9 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
   expr->location = currentLocation();
   expect(TokenType::Var, "Expected 'var'");
 
-  auto name = expect(TokenType::LowerIdent, "Expected variable name").value;
+  // Same patterns `let` accepts (`var (i, j) = pair`, `var { x } = rec`):
+  // each bound name is mutable (kexhq/kex#602).
+  auto pattern = parsePattern();
 
   // Optional type annotation: var x: Type = value
   std::optional<ast::TypeExprPtr> declaredType;
@@ -3559,8 +3581,8 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
   expect(TokenType::Equals, "Expected '=' in var binding");
   auto value = parseExpr();
 
-  expr->kind =
-      ast::VarExpr{std::move(name), std::move(value), std::move(declaredType)};
+  expr->kind = ast::VarExpr{std::move(pattern), std::move(value),
+                            std::move(declaredType)};
   return expr;
 }
 

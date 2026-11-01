@@ -748,7 +748,7 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, VarExpr>) {
                 return expressionVariant("Var", {
-                    m_builder.string(node.name), optionalType(node.type),
+                    patternRef(*node.pattern), optionalType(node.type),
                     expressionPtr(node.value),
                 });
             } else if constexpr (std::is_same_v<T, LetExpr>) {

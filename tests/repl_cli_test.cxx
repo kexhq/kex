@@ -691,6 +691,41 @@ int main() {
             }
         });
 
+        it("supports compound assignment to a persisted var", []() {
+            // kexhq/kex#604: the BEAM REPL spotted `n = ...` textually and
+            // ran it as a statement, but `n += 1` fell through to the
+            // expression path — `IO.inspect(n += 1)` — where AssignExpr
+            // does not lower ("unimplemented expr node AssignExpr").
+            const std::string input =
+                "var n = 5\n"
+                "n * 2\n"
+                "n += 1\n"
+                "n *= 2\n"
+                "n\n"
+                "n == 12\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("unimplemented expr node")
+                           == std::string::npos, out);
+                assertTrue(out.find("=> 10 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 12 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> true : Bool") != std::string::npos,
+                           out);
+            }
+        });
+
+        it("shows the bound value's type for var, not Void", []() {
+            // kexhq/kex#604: `var n = 1` echoed `1 : Void` while `let x = 5`
+            // echoes `5 : Integer` — the REPL showed the declaration's own
+            // unit type instead of unwrapping to the bound value like `let`.
+            for (const auto& out :
+                 {runRepl("var n = 1\n"), runBeamRepl("var n = 1\n")}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
+                           out);
+            }
+        });
+
         it("binds an ALL-CAPS constant to its value, not its function", []() {
             // `let UPPER = expr` is a zero-arg constant definition. Classified
             // with the destructuring patterns (`let Just(x) = ...`), the name

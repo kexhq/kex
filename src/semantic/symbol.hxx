@@ -32,6 +32,11 @@ struct Symbol {
     // For types
     std::vector<std::string> typeParams;
     std::vector<std::string> parents;
+
+    // An implicit clause binding (`new`/`from` in a make method), not a
+    // declaration the user wrote: an explicit binding shadows it rather
+    // than redeclaring it (kexhq/kex#601).
+    bool isImplicit = false;
 };
 
 class Scope {
@@ -39,6 +44,9 @@ public:
     explicit Scope(Scope* parent = nullptr, bool isFoul = false);
 
     auto define(Symbol symbol) -> bool;
+    // Overwrites any same-scope entry: an explicit binding replacing the
+    // implicit `new`/`from` it shadows (kexhq/kex#601).
+    auto redefine(Symbol symbol) -> void;
     auto lookup(const std::string& name) const -> const Symbol*;
     auto lookupLocal(const std::string& name) const -> const Symbol*;
     auto parent() const -> Scope*;
@@ -58,6 +66,7 @@ public:
     auto popScope() -> void;
     auto currentScope() -> Scope&;
     auto define(Symbol symbol) -> bool;
+    auto redefine(Symbol symbol) -> void;
     auto lookup(const std::string& name) const -> const Symbol*;
 
 private:

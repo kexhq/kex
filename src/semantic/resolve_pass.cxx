@@ -734,7 +734,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             if (node.value) resolveExpr(*node.value);
-            defineLocal(node.name);
+            if (node.pattern) resolvePattern(*node.pattern);
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             if (node.value) resolveExpr(*node.value);

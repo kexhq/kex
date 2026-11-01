@@ -123,8 +123,10 @@ private:
     // Defines every variable a pattern introduces (VarPattern, shorthand
     // record fields, nested constructor/list/tuple args) as a Symbol in
     // the current scope — mirrors TypeChecker::bindPatternVars, just
-    // populating SymbolTable instead of TypeEnv.
-    auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void;
+    // populating SymbolTable instead of TypeEnv. `isVar` marks the bindings
+    // mutable and reports a same-kind redeclare as one (kexhq/kex#601).
+    auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
+                         bool isVar = false) -> void;
 
     // Records which member of which module is foul, for the modules declared
     // in THIS compilation unit. Runs before Phase 1 so a call can be checked

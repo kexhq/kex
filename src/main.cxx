@@ -4239,8 +4239,9 @@ auto replBindingEqualsPos(const std::string &source, size_t from) -> size_t {
   return std::string::npos;
 }
 
-// Names bound by a REPL input's trailing `let`, or empty if it is not one.
-auto replLetBoundNames(const std::string &source) -> std::vector<std::string> {
+// Names bound by a REPL input's trailing `let`/`var`, or empty if it is
+// not one.
+auto replBoundNames(const std::string &source) -> std::vector<std::string> {
   std::vector<std::string> names;
   kex::Lexer lexer("main do\n" + source + "\nend\n");
   kex::Parser parser(lexer.tokenizeAll());
@@ -4249,9 +4250,14 @@ auto replLetBoundNames(const std::string &source) -> std::vector<std::string> {
   for (const auto &item : program.items) {
     const auto *main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
     if (!main || !*main || (*main)->body.empty()) continue;
-    const auto *binding =
-        std::get_if<kex::ast::LetExpr>(&(*main)->body.back()->kind);
-    if (binding && binding->pattern) collectPatternNames(*binding->pattern, names);
+    const auto &kind = (*main)->body.back()->kind;
+    if (const auto *binding = std::get_if<kex::ast::LetExpr>(&kind)) {
+      if (binding->pattern) collectPatternNames(*binding->pattern, names);
+    } else if (const auto *mutableBinding =
+                   std::get_if<kex::ast::VarExpr>(&kind)) {
+      if (mutableBinding->pattern)
+        collectPatternNames(*mutableBinding->pattern, names);
+    }
   }
   return names;
 }
@@ -5406,7 +5412,7 @@ int main(int argc, char *argv[]) {
           isFuncDef = true;
         } else if (destructuringPattern) {
           // `let Just(x) = ...` binds through the pattern; persist each name.
-          patternLetNames = replLetBoundNames(source);
+          patternLetNames = replBoundNames(source);
           isLocalLet = !patternLetNames.empty();
           if (!isLocalLet) isFuncDef = true;
         } else if (off != std::string::npos) {
@@ -5445,13 +5451,24 @@ int main(int argc, char *argv[]) {
           }
         }
         if (isMutableLet) {
-          size_t i = 4;
-          while (i < source.size() &&
-                 (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
-            i++;
-          letVarName = source.substr(4, i - 4);
-          isLocalLet = !letVarName.empty() &&
-                       source.find('=', i) != std::string::npos;
+          const char lead = 4 < source.size() ? source[4] : '\0';
+          const bool patternForm =
+              lead == '(' || lead == '[' || lead == '{' ||
+              std::isupper((unsigned char)lead);
+          if (patternForm) {
+            // `var (i, j) = ...` binds through its pattern like `let` does;
+            // replayed per-name as `var` below (kexhq/kex#602).
+            patternLetNames = replBoundNames(source);
+            isLocalLet = !patternLetNames.empty();
+          } else {
+            size_t i = 4;
+            while (i < source.size() &&
+                   (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+              i++;
+            letVarName = source.substr(4, i - 4);
+            isLocalLet = !letVarName.empty() &&
+                         source.find('=', i) != std::string::npos;
+          }
           isMutableLet = isLocalLet;
         }
       }
@@ -5625,6 +5642,10 @@ int main(int argc, char *argv[]) {
                     std::get_if<kex::ast::LetExpr>(&last->kind);
                 binding && binding->value)
               typedExpr = binding->value.get();
+            else if (const auto *mutableBinding =
+                         std::get_if<kex::ast::VarExpr>(&last->kind);
+                     mutableBinding && mutableBinding->value)
+              typedExpr = mutableBinding->value.get();
             beamSemanticType = displayTypeOf(semanticAnalyzer, typedExpr);
             break;
           }
@@ -5669,14 +5690,52 @@ int main(int argc, char *argv[]) {
                    (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
               i++;
             const auto head = source.substr(0, i);
-            const auto rest = source.find_first_not_of(" \t", i);
-            const bool reassigns = rest != std::string::npos &&
-                                   source[rest] == '=' &&
-                                   rest + 1 < source.size() &&
-                                   source[rest + 1] != '=';
-            const bool mutates = rest != std::string::npos &&
-                                 source[rest] == '.' &&
-                                 source.find('!', rest) != std::string::npos;
+            const auto headRest = source.find_first_not_of(" \t", i);
+            // `.field` segments after the head: `p.x = v` writes through the
+            // head binding, so the operator scan below starts past them.
+            // Segments may sit apart (`p . x = 1` lexes the same).
+            size_t seg = i;
+            while (true) {
+              const auto dot = source.find_first_not_of(" \t", seg);
+              if (dot == std::string::npos || source[dot] != '.') break;
+              auto k = source.find_first_not_of(" \t", dot + 1);
+              if (k == std::string::npos ||
+                  !(std::isalnum((unsigned char)source[k]) ||
+                    source[k] == '_'))
+                break;
+              while (k < source.size() &&
+                     (std::isalnum((unsigned char)source[k]) ||
+                      source[k] == '_'))
+                k++;
+              seg = k;
+            }
+            const auto opPos = source.find_first_not_of(" \t", seg);
+            // `n = v` reassigns; so do the compound forms (`n += v`, `n -=
+            // v`, `n *= v`, `n /= v`, `n %= v`, `n &&= v`, `n ||= v` — the
+            // same set parseAssignment desugars). A compound operator is one
+            // token, so its `=` sits directly against it: `n * 2` stays an
+            // expression, and `n == v` stays a comparison (kexhq/kex#604).
+            const bool reassigns = [&] {
+              if (opPos == std::string::npos) return false;
+              if (source[opPos] == '=') {
+                return opPos + 1 < source.size() &&
+                       source[opPos + 1] != '=';
+              }
+              const char op = source[opPos];
+              if (op == '+' || op == '-' || op == '*' || op == '/' ||
+                  op == '%') {
+                return opPos + 1 < source.size() &&
+                       source[opPos + 1] == '=';
+              }
+              if (op == '&' || op == '|') {
+                return opPos + 2 < source.size() &&
+                       source[opPos + 1] == op && source[opPos + 2] == '=';
+              }
+              return false;
+            }();
+            const bool mutates = headRest != std::string::npos &&
+                                 source[headRest] == '.' &&
+                                 source.find('!', headRest) != std::string::npos;
             if (!head.empty() && isMutableBind(head) && (reassigns || mutates))
               mutatedName = head;
           }
@@ -6465,9 +6524,13 @@ int main(int argc, char *argv[]) {
             // the NEXT line's analysis reports `x` undefined.
             if (const auto *mutableBinding =
                     std::get_if<kex::ast::VarExpr>(&lastKind)) {
-              if (!mutableBinding->name.empty()) {
-                bindingName = mutableBinding->name;
-                boundNames = {mutableBinding->name};
+              if (mutableBinding->pattern) {
+                std::vector<std::string> names;
+                collectPatternNames(*mutableBinding->pattern, names);
+                if (!names.empty()) {
+                  bindingName = names.front();
+                  boundNames = std::move(names);
+                }
               }
               continue;
             }
@@ -6552,6 +6615,10 @@ int main(int argc, char *argv[]) {
                         std::get_if<kex::ast::LetExpr>(&last->kind);
                     binding && binding->value)
                   typedExpr = binding->value.get();
+                else if (const auto *mutableBinding =
+                             std::get_if<kex::ast::VarExpr>(&last->kind);
+                         mutableBinding && mutableBinding->value)
+                  typedExpr = mutableBinding->value.get();
                 semanticType = displayTypeOf(replAnalyzer, typedExpr);
                 break;
               }

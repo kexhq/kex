@@ -1,0 +1,13 @@
+# Redeclaring a name in the same scope is rejected, however it was first
+# declared: `var` over `var`, `var` over `let`, `let` over `let`, and
+# `let` over `var` (kexhq/kex#601).
+main do
+  var y = 10
+  var y = 20
+
+  let x = 1
+  let x = "hello"
+
+  let y = 11
+  var x = 2
+end

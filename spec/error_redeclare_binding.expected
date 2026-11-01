@@ -1,0 +1,5 @@
+spec/error_redeclare_binding.kex:6:3: error: Cannot redeclare 'y': already declared with 'var'
+spec/error_redeclare_binding.kex:9:3: error: Cannot redeclare immutable binding: x
+spec/error_redeclare_binding.kex:11:3: error: Cannot redeclare 'y': was declared with 'var'
+spec/error_redeclare_binding.kex:12:3: error: Cannot redeclare immutable binding: x
+Aborted: 4 type errors — fix before running (use --no-check to skip).

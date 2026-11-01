@@ -333,7 +333,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, VarExpr>) {
                 VarExpr copy;
-                copy.name = node.name;
+                copy.pattern = clone(node.pattern);
                 copy.value = clone(node.value);
                 copy.type = cloneOpt(node.type);
                 out->kind = std::move(copy);
