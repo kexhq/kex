@@ -25,8 +25,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-auto runKex(const std::string& cacheDir, const std::string& sourcePath) -> std::string {
-    std::string cmd = "KEX_CACHE=" + cacheDir + " " + std::string(KEX_BINARY_PATH) +
+auto runKex(const std::string& cacheDir, const std::string& sourcePath,
+            bool separate = false) -> std::string {
+    std::string cmd = (separate ? "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 " : "") +
+                       std::string("KEX_CACHE=") + cacheDir + " " + std::string(KEX_BINARY_PATH) +
                        " --run --no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -91,6 +93,24 @@ auto backdateFile(const std::string& path) -> void {
 } // namespace
 
 int main() {
+    describe("Run cache — merged and separate builds", []() {
+        it("keeps their artifacts under different keys", []() {
+            char cacheTmp[] = "/tmp/kex_run_cache_modes_XXXXXX";
+            std::string cacheDir = mkdtemp(cacheTmp);
+            auto path = writeTempSource("main do\n  IO.printLine(\"modes\")\nend\n");
+
+            assertEqual(runKex(cacheDir, path), std::string("modes\n"));
+            const auto mergedEntries = runCacheEntryCount(cacheDir);
+            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
+            assertTrue(runCacheEntryCount(cacheDir) > mergedEntries,
+                       "a separate build reused the merged build's run-cache entry");
+            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
+
+            std::remove(path.c_str());
+            fs::remove_all(cacheDir);
+        });
+    });
+
     describe("Run cache — fingerprint reacts to the compiler binary itself", []() {
         it("misses the cache when the kex binary's mtime changes under an unchanged git HEAD", []() {
             char cacheTmp[] = "/tmp/kex_run_cache_test_XXXXXX";
@@ -112,7 +132,8 @@ int main() {
             auto afterSecond = runCacheEntryCount(cacheDir);
             assertTrue(afterSecond > afterFirst,
                        "a changed binary mtime should mint a new cache entry, not reuse "
-                       "the old one (kexhq/kex#372)");
+                       "the old one (kexhq/kex#372): " +
+                       std::to_string(afterFirst) + " -> " + std::to_string(afterSecond));
 
             std::remove(path.c_str());
             fs::remove_all(cacheDir);
