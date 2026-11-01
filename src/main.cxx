@@ -4262,6 +4262,32 @@ auto replBoundNames(const std::string &source) -> std::vector<std::string> {
   return names;
 }
 
+// A line rebinding only SOME names of an earlier pattern (`var (i, j)`
+// then `var j = 5`) cannot replay: the earlier line is atomic, so replaying
+// it redeclares `j` while dropping it loses `i`. Report what to do instead
+// before analysis fails later with a redeclare (PR #607 review).
+auto throwIfPartialPatternRebind(
+    const std::vector<std::string> &bound,
+    const std::vector<std::pair<std::string, std::string>> &binds) -> void {
+  if (bound.empty()) return;
+  for (const auto &[_, line] : binds) {
+    const auto prior = replBoundNames(line);
+    if (prior.size() < 2) continue;
+    std::string first;
+    bool all = true;
+    for (const auto &p : prior) {
+      const bool rebound =
+          std::find(bound.begin(), bound.end(), p) != bound.end();
+      if (rebound && first.empty()) first = p;
+      all = all && rebound;
+    }
+    if (!first.empty() && !all)
+      throw std::runtime_error(
+          "Cannot rebind '" + first +
+          "' alone: re-enter the whole pattern to rebind a destructured name");
+  }
+}
+
 auto printUsage(const char *progName) -> void {
   std::cerr
       << "Usage: " << progName << " [options] <file.kex>\n"
@@ -5478,6 +5504,13 @@ int main(int argc, char *argv[]) {
           isReplCompiledBlock(source))
         isFuncDef = true;
 
+      // Every name the current line binds: one for `let x`/`var x`, the
+      // whole pattern for `let (a, b)`/`var (i, j)`.
+      const std::vector<std::string> lineBoundNames =
+          !isLocalLet                ? std::vector<std::string>{}
+          : !patternLetNames.empty() ? patternLetNames
+                                     : std::vector<std::string>{letVarName};
+
       try {
         if (isFuncDef) {
           // Validate by parsing against accumulated defs.
@@ -5571,9 +5604,11 @@ int main(int argc, char *argv[]) {
           // stashed in the process dictionary so subsequent evals
           // retrieve it (avoiding re-evaluation of side-effectful
           // expressions like Ets.new).
+          throwIfPartialPatternRebind(lineBoundNames, beamSemanticBinds);
           std::string semanticBindSource;
           for (const auto &[name, binding] : beamSemanticBinds)
-            if (!isLocalLet || name != letVarName)
+            if (std::find(lineBoundNames.begin(), lineBoundNames.end(),
+                           name) == lineBoundNames.end())
               semanticBindSource += "  " + binding + "\n";
           const auto withExcept =
               pendingWith ? pendingWith->capability : std::string();
@@ -5646,6 +5681,10 @@ int main(int argc, char *argv[]) {
                          std::get_if<kex::ast::VarExpr>(&last->kind);
                      mutableBinding && mutableBinding->value)
               typedExpr = mutableBinding->value.get();
+            else if (const auto *assigned =
+                         std::get_if<kex::ast::AssignExpr>(&last->kind);
+                     assigned && assigned->value)
+              typedExpr = assigned->value.get();
             beamSemanticType = displayTypeOf(semanticAnalyzer, typedExpr);
             break;
           }
@@ -5954,9 +5993,7 @@ int main(int argc, char *argv[]) {
             // introduced has to be replayed, not just a single variable —
             // otherwise `let Just(x) = ...` stored x but later inputs could
             // not see it.
-            std::vector<std::string> replayNames =
-                patternLetNames.empty() ? std::vector<std::string>{letVarName}
-                                        : patternLetNames;
+            const std::vector<std::string> &replayNames = lineBoundNames;
             if (isLambda)
               localBinds += "  " + source + "\n";
             else
@@ -6550,10 +6587,16 @@ int main(int argc, char *argv[]) {
           // displayed type is the source-level type rather than FileHandle.
           std::optional<std::string> semanticType;
           std::optional<std::string> semanticError;
+          // Before the try: its catch-all swallows exceptions so a stale
+          // semantic history cannot break evaluation — this error must
+          // surface instead.
+          throwIfPartialPatternRebind(boundNames, replBindings);
           try {
             std::string bindingSource;
             for (const auto &[name, binding] : replBindings)
-              if (!bindingName || name != *bindingName)
+              if (!bindingName ||
+                  std::find(boundNames.begin(), boundNames.end(), name) ==
+                      boundNames.end())
                 bindingSource += binding + "\n";
             // A `/with` value is checked against its capability before it is
             // kept; its type is not shown, so the check can go last.
@@ -6619,6 +6662,10 @@ int main(int argc, char *argv[]) {
                              std::get_if<kex::ast::VarExpr>(&last->kind);
                          mutableBinding && mutableBinding->value)
                   typedExpr = mutableBinding->value.get();
+                else if (const auto *assigned =
+                             std::get_if<kex::ast::AssignExpr>(&last->kind);
+                         assigned && assigned->value)
+                  typedExpr = assigned->value.get();
                 semanticType = displayTypeOf(replAnalyzer, typedExpr);
                 break;
               }

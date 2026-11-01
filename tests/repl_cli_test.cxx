@@ -708,9 +708,53 @@ int main() {
                            == std::string::npos, out);
                 assertTrue(out.find("=> 10 : Integer") != std::string::npos,
                            out);
+                assertTrue(out.find("=> 6 : Integer") != std::string::npos,
+                           out);
                 assertTrue(out.find("=> 12 : Integer") != std::string::npos,
                            out);
                 assertTrue(out.find("=> true : Bool") != std::string::npos,
+                           out);
+            }
+        });
+
+        it("rejects a partial pattern rebind with what to do instead", []() {
+            // PR #607 review: `var (i, j)` then `var j = 5` used to fail
+            // with a redeclare that retrying never cleared — the earlier
+            // line is atomic, so replaying it redeclares `j` while dropping
+            // it loses `i`. Full-pattern re-entry works and siblings keep
+            // working, for `var` and `let` patterns alike.
+            const std::vector<std::string> inputs = {
+                "var (i, j) = (1, 2)\n"
+                "var j = 5\n"
+                "i\n"
+                "var (i, j) = (3, 4)\n"
+                "i\n"
+                "j\n",
+                "let (a, b) = (1, 2)\n"
+                "var b = 7\n"
+                "a\n",
+            };
+            for (const auto& input : inputs) {
+                for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                    assertTrue(out.find("Cannot rebind '") != std::string::npos,
+                               out);
+                    assertTrue(out.find("re-enter the whole pattern") !=
+                                   std::string::npos,
+                               out);
+                }
+            }
+            for (const auto& out :
+                 {runRepl(inputs[0]), runBeamRepl(inputs[0])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 3 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 4 : Integer") != std::string::npos,
+                           out);
+            }
+            for (const auto& out :
+                 {runRepl(inputs[1]), runBeamRepl(inputs[1])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
                            out);
             }
         });

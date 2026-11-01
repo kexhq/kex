@@ -12,4 +12,9 @@ main do
   j = 20
   IO.printLine(i)
   IO.printLine(j)
+
+  var Just(z) = Just(3)
+  IO.printLine(z)
+  z = 30
+  IO.printLine(z)
 end

@@ -3569,6 +3569,18 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
   expr->location = currentLocation();
   expect(TokenType::Var, "Expected 'var'");
 
+  // A bare `var Name = ...` binds nothing: an uppercase name in pattern
+  // position is a constructor match, not a binding — `var Just(x) = ...`
+  // stays a pattern (PR #607 review). Reject it here rather than failing
+  // later with a resolve error or a runtime mismatch. Already positioned
+  // at the name, so the report points at it with nothing to consume.
+  if (peek().type == TokenType::UpperIdent &&
+      (peekNext().type == TokenType::Equals ||
+       peekNext().type == TokenType::Colon)) {
+    error("Cannot bind '" + peek().value +
+          "' with 'var': patterns only bind lowercase names");
+  }
+
   // Same patterns `let` accepts (`var (i, j) = pair`, `var { x } = rec`):
   // each bound name is mutable (kexhq/kex#602).
   auto pattern = parsePattern();
