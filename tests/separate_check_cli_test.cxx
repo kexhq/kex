@@ -261,6 +261,15 @@ make ThingId do
   let empty? -> Bool = true
 end
 )KEX");
+        write("lib/conditions.kex", R"KEX(module Conditions
+
+type Cond = One(Integer) | Any([Cond]) | All([Cond])
+
+make Cond do
+  let ||(other: Cond) -> Cond = Any([this, other])
+  let &&(other: Cond) -> Cond = All([this, other])
+end
+)KEX");
         write("lib/marks.kex", R"KEX(module Marks do
   record Mark do
     text : String
@@ -376,6 +385,7 @@ using Fields, only: [IntField, TextField]
 using Tokens, only: [Token]
 using FS
 using ThingIds, only: [ThingId]
+using Conditions, only: [Cond]
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -397,6 +407,8 @@ let owner(id: UserId) -> String = "owner ${id}"
 
 let tokenBlank(token: Token) -> Bool = token.blank?
 let joined(value: Any) -> String = value.join(", ")
+let either(left: Cond, right: Cond) -> Cond = left || right
+let both(left: Cond, right: Cond) -> Cond = left && right
 
 main do
   IO.printLine(Shapes.area(Shapes.Circle(3)))
@@ -440,6 +452,8 @@ main do
   IO.printLine(Paths.join("a", "b"))
   IO.printLine(Pages.page("x"))
   IO.printLine("x".as(ThingId).empty?)
+  IO.printLine(either(Conditions.One(1), Conditions.One(2)))
+  IO.printLine(both(Conditions.One(1), Conditions.One(2)))
 end
 )KEX";
 
@@ -500,6 +514,9 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
                        "list.join called a path join: " + merged);
             assertTrue(merged.find("\npage x\ntrue\n") != std::string::npos,
                        "cross-unit callable or distinct method did not run: " + merged);
+            assertTrue(merged.find("Any([One(1), One(2)])") != std::string::npos &&
+                       merged.find("All([One(1), One(2)])") != std::string::npos,
+                       "external union boolean operators did not run: " + merged);
         });
     });
     return runAll();

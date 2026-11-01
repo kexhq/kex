@@ -2485,6 +2485,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                      });
     const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
     const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
+    std::map<std::string, std::string> unitCoreExports;
     if (lowerApart && !unitChecked) allLowered = false;
     if (lowerApart && unitChecked) {
       // A prelude trait the unit claims gives it its default bodies, from
@@ -2498,7 +2499,11 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                           program.items.end());
       if (!lowered) allLowered = false;
       else
-        for (auto &module : *lowered) separateModules.push_back(std::move(module));
+        for (auto &module : *lowered) {
+          unitCoreExports[module.moduleName] =
+              module.source.substr(0, module.source.find('\n'));
+          separateModules.push_back(std::move(module));
+        }
     }
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
@@ -2566,6 +2571,29 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         options.unitCompiledApart = true;
         auto chunk = kex::beam::collectMetadata(program, options);
         kex::beam::qualifyTypeNames(chunk, qualifierFor(*modules[i]));
+        // A plain receiver dispatcher may only accept tagged records. A
+        // distinct value is erased to its backing value, so another unit
+        // must call the receiver-specific implementation when one was
+        // emitted (`empty?/ThingId`, not `empty?/1` on a String).
+        if (auto core = unitCoreExports.find(options.moduleAtom);
+            core != unitCoreExports.end())
+          for (auto &method : chunk.typeInterface.methods) {
+            if (method.moduleFunction || method.typeOnly || !method.receiverType ||
+                method.receiverType->kind != kex::beam::KexiType::Named)
+              continue;
+            const auto &receiver = method.receiverType->name;
+            const auto slash = receiver.rfind('.');
+            const auto shortReceiver = receiver.substr(
+                slash == std::string::npos ? 0 : slash + 1);
+            for (const auto &owner : {receiver, shortReceiver}) {
+              const auto target = method.name + "/" + owner;
+              const auto exported = "'" + target + "'/" +
+                  std::to_string(method.beamArity);
+              if (core->second.find(exported) == std::string::npos) continue;
+              method.beamFunction = target;
+              break;
+            }
+          }
         described.modules.push_back({options.moduleAtom, "", std::move(chunk)});
       }
       if (!described.modules.empty()) {

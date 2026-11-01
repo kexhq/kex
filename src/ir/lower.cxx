@@ -1352,6 +1352,23 @@ struct Lowering {
         currentModulePath = info.owner;
         if (!info.imports.empty()) moduleImports = info.imports;
         if (!info.aliases.empty()) moduleAliases = info.aliases;
+        // KexI carries an external record's default source, but not the
+        // declaring file's `using` clauses. Resolve a short module name in
+        // that source when exactly one loaded module has it (`Headers.empty`
+        // in Metro.WebRequest's default is Net.HTTP.Headers.empty).
+        if (info.imports.empty() && info.aliases.empty() && externalModules) {
+            std::unordered_map<std::string, std::string> shortModules;
+            std::unordered_set<std::string> ambiguous;
+            for (const auto& [name, _] : externalModules->nameToAtom) {
+                const auto dot = name.rfind('.');
+                const auto shortName = name.substr(dot == std::string::npos ? 0 : dot + 1);
+                auto [it, added] = shortModules.try_emplace(shortName, name);
+                if (!added && it->second != name) ambiguous.insert(shortName);
+            }
+            for (const auto& [shortName, name] : shortModules)
+                if (!ambiguous.count(shortName))
+                    moduleAliases.try_emplace(shortName, name);
+        }
         auto result = lower(e);
         currentModulePath = std::move(savedPath);
         moduleImports = std::move(savedImports);
@@ -1569,6 +1586,35 @@ struct Lowering {
                 if (n.op == TokenType::AmpAmp || n.op == TokenType::PipePipe) {
                     const bool isAnd = n.op == TokenType::AmpAmp;
                     const std::string sym = isAnd ? "&&" : "||";
+                    // An external union's value carries a variant tag, not
+                    // the union name. Its overloaded operator is known from
+                    // the static receiver type, so call that implementation
+                    // directly instead of treating the value as a Bool.
+                    if (expressionTypes && externalModules && n.left) {
+                        if (auto found = expressionTypes->find(n.left.get());
+                            found != expressionTypes->end() && found->second) {
+                            auto type = semantic::typeToString(found->second);
+                            type.resize(std::min(type.size(), type.find('<')));
+                            const auto bare = [](const std::string& name) {
+                                return name.substr(name.rfind('.') + 1);
+                            };
+                            if (auto candidates = externalModules->receiverFunctions.find(sym);
+                                candidates != externalModules->receiverFunctions.end())
+                                for (const auto& candidate : candidates->second) {
+                                    if (candidate.beamArity != 2 ||
+                                        candidate.receiverType.empty() ||
+                                        (candidate.receiverType != type &&
+                                         bare(candidate.receiverType) != bare(type)))
+                                        continue;
+                                    std::vector<Binding> binds;
+                                    auto left = atomize(n.left, binds);
+                                    auto right = atomize(n.right, binds);
+                                    return wrapLets(binds,
+                                        callE(candidate.moduleAtom, candidate.beamFunction,
+                                              2, two(std::move(left), std::move(right))));
+                                }
+                        }
+                    }
                     if (!overloadedOps.count(sym))
                         return isAnd
                             ? matchBool(lower(n.left), lower(n.right), litBool(false))
