@@ -75,7 +75,9 @@ add_signal_handler(Handler, OsPid) ->
     end.
 
 %% The owner is gone and the child is not: nobody is reading its output and
-%% nobody will reap it.
+%% nobody will reap it. A port child's descendants inherit its process group,
+%% so terminate the group as well; killing only the direct child leaves a
+%% server it launched alive with its listener still bound.
 guard(Owner, OsPid) ->
     erlang:monitor(process, Owner),
     receive
@@ -87,7 +89,7 @@ guard(Owner, OsPid) ->
 %% listener, and anything ignoring it was going to need SIGKILL from a person
 %% either way.
 terminate_os_process(OsPid) when is_integer(OsPid), OsPid > 0 ->
-    try os:cmd("kill -TERM " ++ erlang:integer_to_list(OsPid))
+    try os:cmd("kill -TERM -- -" ++ erlang:integer_to_list(OsPid))
     catch _:_ -> ok
     end,
     ok;
