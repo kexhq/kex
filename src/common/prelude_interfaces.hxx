@@ -2,6 +2,7 @@
 
 #include "../ast/function_groups.hxx"
 #include "mangle.hxx"
+#include "../beam/interface_cache.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
@@ -9,6 +10,7 @@
 #include "../semantic/imported_interfaces.hxx"
 #include "prelude_loader.hxx"
 #include "type_def_utils.hxx"
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1354,6 +1356,30 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
     return base;
 }
 
+inline auto hashHex(const kex::beam::Hash128& hash) -> std::string {
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(hash.size() * 2);
+    for (const auto b : hash) {
+        out += digits[b >> 4];
+        out += digits[b & 0xf];
+    }
+    return out;
+}
+
+inline auto preludeInterfaceCachePath(const std::string& key)
+    -> std::optional<std::filesystem::path> {
+    const char* xdg = std::getenv("XDG_CACHE_HOME");
+    std::filesystem::path base;
+    if (xdg && *xdg)
+        base = std::filesystem::path{xdg};
+    else if (const char* home = std::getenv("HOME"); home && *home)
+        base = std::filesystem::path{home} / ".cache";
+    else
+        return std::nullopt;
+    return base / "kex" / "prelude-interface" / (key + ".bin");
+}
+
 // Build the ImportedInterfaces snapshot from the prebuilt prelude beam in
 // `runtimeDir`. Cached per process; safe to call from any thread after
 // first construction. Falls back to source-based extraction when no
@@ -1361,7 +1387,7 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
 inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
     static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
-        // KEX_TIMINGS=1 splits this one-time load in two (kexhq/kex#323).
+        // KEX_TIMINGS=1 splits this one-time load (kexhq/kex#323).
         const bool timed = [] {
             const char* value = std::getenv("KEX_TIMINGS");
             return value && *value && std::string(value) != "0";
@@ -1374,14 +1400,65 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
                          std::chrono::duration<double, std::milli>(now - phaseStart).count());
             phaseStart = now;
         };
-        auto interfaces = runtimeDir.empty()
-            ? sourcePreludeSemanticInterfaces()
-            : preludeRegistry(runtimeDir).buildSemanticInterfaces();
+
+        // The snapshot is a pure function of the stdlib sources, so it is
+        // cached on disk keyed by their hash (plus the kex version, since a
+        // new compiler derives a different interface from the same sources).
+        std::optional<std::filesystem::path> cachePath;
+        if (!runtimeDir.empty()) {
+            const auto artifact = standardLibraryArtifactSourceFiles();
+            if (!artifact.empty()) {
+                const auto key = hashHex(preludeSourceHash(artifact)) + "-" +
+                                 std::to_string(KEX_VERSION_MAJOR) + "." +
+                                 std::to_string(KEX_VERSION_MINOR) + "." +
+                                 std::to_string(KEX_VERSION_PATCH);
+                cachePath = preludeInterfaceCachePath(key);
+            }
+        }
+        if (cachePath) {
+            std::ifstream input(*cachePath, std::ios::binary);
+            if (input) {
+                std::vector<uint8_t> bytes(
+                    (std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+                if (auto loaded =
+                        kex::beam::deserializeImportedInterfaces(bytes)) {
+                    phase("prelude interface cache");
+                    return std::move(*loaded);
+                }
+            }
+        }
+
+        auto interfaces = [&]() -> kex::semantic::ImportedInterfaces {
+            if (runtimeDir.empty()) return sourcePreludeSemanticInterfaces();
+            const auto& registry = preludeRegistry(runtimeDir);
+            return registry.buildSemanticInterfaces();
+        }();
         phase("prebuilt KexI interfaces");
         auto stdlib = sourceSemanticInterfaces(
             standardLibrarySourceFiles(), false, true);
         phase("opt-in stdlib from source");
-        return mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
+        auto merged =
+            mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
+
+        if (cachePath) {
+            std::error_code ec;
+            std::filesystem::create_directories(cachePath->parent_path(), ec);
+            // Write to a unique staging file and rename into place, so
+            // concurrent builders never see (or clobber) a half-written cache.
+            static std::atomic<unsigned long long> counter{0};
+            auto staging = *cachePath;
+            staging += ".tmp." + std::to_string(counter.fetch_add(1));
+            std::ofstream output(staging, std::ios::binary | std::ios::trunc);
+            if (output) {
+                auto bytes = kex::beam::serializeImportedInterfaces(merged);
+                output.write(reinterpret_cast<const char*>(bytes.data()),
+                             static_cast<std::streamsize>(bytes.size()));
+                output.close();
+                std::filesystem::rename(staging, *cachePath, ec);
+            }
+        }
+        return merged;
     }();
     return cached;
 }
