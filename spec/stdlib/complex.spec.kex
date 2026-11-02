@@ -1,0 +1,92 @@
+using Complex
+
+describe("Complex arithmetic") do
+  it("adds, subtracts, multiplies and divides") do
+    let a = Rectangular { re: 3, im: 4 }
+    let b = Rectangular { re: 1, im: -2 }
+    let sum = a + b
+    assert(sum.re == 4 && sum.im == 2)
+    let difference = a - b
+    assert(difference.re == 2 && difference.im == 6)
+    let product = a * b
+    assert(product.re == 11 && product.im == -2)
+    let quotient = a / b
+    assert(quotient.re == -1 && quotient.im == 2)
+    let half = Rectangular { re: 1, im: 1 } / Rectangular { re: 2, im: 0 }
+    assert(half.re == 0.5 && half.im == 0.5)
+  end
+
+  it("provides identities and conjugation") do
+    assert((Complex.I * Complex.I).re == -1)
+    assert((Complex.I * Complex.NEG_I).re == 1)
+    let imaginary = Complex.I
+    let conjugated: Rectangular = Complex.conjugateOf(imaginary)
+    assert(conjugated.im == -1)
+    let byMethod: Rectangular = imaginary.conjugate
+    assert(byMethod.im == -1)
+    assert((Complex.ONE + Complex.ZERO).re == 1)
+  end
+
+  it("combines complex values with real scalars") do
+    let z = Rectangular { re: 1, im: 2 }
+    let sum = z + 3
+    let difference = z - 3
+    let product = z * 3
+    let quotient = z / 2
+    assert(sum.re == 4 && sum.im == 2)
+    assert(difference.re == -2 && difference.im == 2)
+    assert(product.re == 3 && product.im == 6)
+    assert(quotient.re == 0.5 && quotient.im == 1.0)
+  end
+
+  it("shows rectangular and polar values") do
+    let positive = Rectangular { re: 3, im: 4 }
+    let negative = Rectangular { re: 3, im: -4 }
+    assert(positive.showValue == "3+4i")
+    assert(negative.showValue == "3-4i")
+    let polar = Polar { radius: 2, theta: 0 }
+    assert(polar.showValue == "(2, 0)")
+  end
+end
+
+describe("Complex elementary functions") do
+  it("computes roots, powers, exponentials and logarithms") do
+    let zero = Complex.ZERO
+    let one = Complex.ONE
+    assert(zero.exp.re == 1.0 && zero.exp.im == 0.0)
+    assert(one.log.re == 0.0 && one.log.im == 0.0)
+    assert((Complex.I ^ 2).re == -1.0)
+    let root = (Rectangular { re: -1, im: 0 }).sqrt
+    assert(Math.abs(root.re) < 0.0000001 && Math.abs(root.im - 1.0) < 0.0000001)
+    let power = Complex.I ^ Rectangular { re: 2, im: 0 }
+    assert(Math.abs(power.re + 1.0) < 0.0000001)
+  end
+
+  it("computes complex trigonometric functions") do
+    let zero = Complex.ZERO
+    assert(zero.sin.re == 0.0 && zero.sin.im == 0.0)
+    assert(zero.cos.re == 1.0 && zero.cos.im == 0.0)
+    assert(zero.tan.re == 0.0 && zero.tan.im == 0.0)
+    let imaginary = Complex.I
+    assert(imaginary.sin.re == 0.0)
+    assert(Math.abs(imaginary.sin.im - Math.sinh(1.0)) < 0.0000001)
+  end
+end
+
+describe("Complex polar coordinates") do
+  it("computes magnitude and argument") do
+    let z = Rectangular { re: 3, im: 4 }
+    assert(z.absSquared == 25)
+    assert(z.abs == 5.0)
+    assert(Complex.I.arg == Math.PI / 2.0)
+    assert(z.polar.radius == 5.0)
+  end
+
+  it("converts polar coordinates to rectangular form") do
+    let z: Rectangular = Complex.fromPolar(2, 0)
+    assert(z.re == 2.0 && z.im == 0.0)
+    let polar = Polar { radius: 2, theta: 0 }
+    assert(polar.rectangular.re == 2.0)
+    assert(Complex.fromPolarCoordinates(polar).im == 0.0)
+  end
+end

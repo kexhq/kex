@@ -9252,6 +9252,24 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                                           sameParams(method->signature, function->signature);
                                });
         });
+        // Root-level opt-in stdlib modules are also present in the prebuilt
+        // artifact. Once explicitly imported, their owned receiver method
+        // supersedes the artifact's duplicate Prelude provider.
+        const auto owned = importedFunctions;
+        const auto receiver = argTypes.empty() ? Type::unknown()
+            : resolve(argTypes.front());
+        const auto* namedReceiver = std::get_if<NamedType>(&receiver->kind);
+        std::erase_if(importedFunctions, [&](const ImportedFunction* function) {
+            if (!namedReceiver || function->sourceModule != "Prelude" ||
+                !matchesActual(function->signature)) return false;
+            return std::any_of(owned.begin(), owned.end(),
+                               [&](const ImportedFunction* method) {
+                return method != function && method->isReceiverMethod &&
+                    method->sourceModule == namedReceiver->name &&
+                    matchesActual(method->signature) &&
+                    sameParams(method->signature, function->signature);
+            });
+        });
     }
     // `importedFunctions` is built from `m_importedInterfaces`'s hash maps,
     // so both which pair a nested loop meets FIRST and which name within a

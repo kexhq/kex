@@ -1,0 +1,278 @@
+# Complex numbers with real and imaginary components, plus polar conversion.
+#
+# Components accept +Number+ values. Trigonometric angles are in radians.
+#
+#   using Complex
+#   let z = Rectangular { re: 3, im: 4 }
+#   z.abs   # => 5.0
+module Complex
+
+# A complex number in rectangular form: +re+ is the real part and +im+ is the
+# imaginary part.
+record Rectangular do
+  re : Number
+  im : Number
+end
+
+# A complex number in polar form, with a non-negative radius and angle in
+# radians.
+record Polar do
+  radius : Number
+  theta : Number
+end
+
+# The additive identity, +0 + 0i+.
+let ZERO = Rectangular { re: 0, im: 0 }
+# The multiplicative identity, +1 + 0i+.
+let ONE = Rectangular { re: 1, im: 0 }
+# The imaginary unit, +0 + 1i+.
+let I = Rectangular { re: 0, im: 1 }
+# The negative imaginary unit, +0 - 1i+.
+let NEG_I = Rectangular { re: 0, im: -1 }
+
+# Constructs a complex number from a radius and an angle in radians.
+#
+# @param radius [Number] distance from the origin
+# @param theta [Number] angle in radians
+# @return [Rectangular] the rectangular representation
+#
+# @example A quarter turn
+#   Complex.fromPolar(2, Math.PI / 2).im   # approximately 2.0
+let fromPolar(radius: Number, theta: Number) -> Rectangular do
+  return Rectangular {
+    re: radius * Math.cos(theta),
+    im: radius * Math.sin(theta)
+  }
+end
+
+# Constructs a complex number from a +Polar+ value.
+#
+# @param polar [Polar] radius and angle in radians
+# @return [Rectangular] the rectangular representation
+#
+# @example
+#   Complex.fromPolarCoordinates(Polar { radius: 3, theta: 0 }).re # => 3.0
+let fromPolarCoordinates(polar: Polar) -> Rectangular do
+  fromPolar(polar.radius, polar.theta)
+end
+
+# Returns the conjugate of a complex number.
+#
+# @param value [Rectangular] the number to conjugate
+# @return [Rectangular] the number with its imaginary sign reversed
+#
+# @example
+#   Complex.conjugateOf(Complex.I).im # => -1
+let conjugateOf(value: Rectangular) -> Rectangular = Rectangular { re: value.re, im: -value.im }
+
+module Polar do
+  let ZERO = Polar { radius: 0, theta: 0 }
+end
+
+make Rectangular, implement: Showable do
+  # Renders the number in rectangular form, such as +3+4i+.
+  #
+  # @return [String] the real and signed imaginary components
+  #
+  # @example
+  #   (Rectangular { re: 3, im: -4 }).showValue # => "3-4i"
+  let showValue -> String do
+    return @im < 0 then "${@re}${@im}i" else "${@re}+${@im}i"
+  end
+
+  # Adds two complex numbers component by component.
+  #
+  # @example
+  #   (Rectangular { re: 1, im: 2 } + Complex.I).im # => 3
+  let +(other: Rectangular) -> Rectangular do
+    return New {
+      re: @re + other.re,
+      im: @im + other.im
+    }
+  end
+
+  # Subtracts +other+ from this complex number.
+  #
+  # @example
+  #   (Rectangular { re: 1, im: 2 } - Complex.I).im # => 1
+  let -(other: Rectangular) -> Rectangular do
+    return New {
+      re: @re - other.re,
+      im: @im - other.im
+    }
+  end
+
+  # Multiplies two complex numbers.
+  #
+  # @example
+  #   (Complex.I * Complex.I).re # => -1
+  let *(other: Rectangular) -> Rectangular do
+    return New {
+      re: @re * other.re - @im * other.im,
+      im: @re * other.im + @im * other.re
+    }
+  end
+
+  # Divides by +other+ using the complex conjugate formula. The divisor must
+  # be non-zero.
+  #
+  # @example
+  #   (Complex.I / Complex.I).re # => 1.0
+  let /(other: Rectangular) -> Rectangular do
+    let d = (other.re * other.re + other.im * other.im) * 1.0
+
+    return New {
+      re: (@re * other.re + @im * other.im) / d,
+      im: (@im * other.re - @re * other.im) / d
+    }
+  end
+
+  # Adds a real number to the real component.
+  #
+  # @example
+  #   (Complex.I + 2).re # => 2
+  let +(other: Number) -> Rectangular = New { re: @re + other }
+
+  # Subtracts a real number from the real component.
+  #
+  # @example
+  #   (Complex.I - 2).re # => -2
+  let -(other: Number) -> Rectangular = New { re: @re - other }
+
+  # Multiplies both components by a real number.
+  #
+  # @example
+  #   (Complex.I * 2).im # => 2
+  let *(other: Number) -> Rectangular = New { re: @re * other, im: @im * other }
+
+  # Divides both components by a non-zero real number.
+  #
+  # @example
+  #   (Complex.I / 2).im # => 0.5
+  let /(other: Number) -> Rectangular do
+    let divisor = other * 1.0
+    return New { re: @re / divisor, im: @im / divisor }
+  end
+
+  # Returns the complex conjugate, negating the imaginary part.
+  #
+  # @example
+  #   let conjugated: Rectangular = Complex.conjugateOf(Complex.I)
+  #   conjugated.im # => -1
+  let conjugate -> Rectangular = New { im: -@im }
+
+  # Returns the principal square root. The result's argument lies in the
+  # right half-plane.
+  #
+  # @example
+  #   (Rectangular { re: -1, im: 0 }).sqrt.im # approximately 1.0
+  let sqrt -> Rectangular = Complex.fromPolar(Math.sqrt(this.abs), this.arg / 2.0)
+
+  # Returns e raised to this complex number.
+  #
+  # @example
+  #   Complex.ZERO.exp.re # => 1.0
+  let exp -> Rectangular do
+    let magnitude = Math.exp(@re)
+    return New { re: magnitude * Math.cos(@im), im: magnitude * Math.sin(@im) }
+  end
+
+  # Returns the principal natural logarithm. Zero has no logarithm.
+  #
+  # @example
+  #   Complex.ONE.log.re # => 0.0
+  let log -> Rectangular = New { re: Math.log(this.abs), im: this.arg }
+
+  # Returns the complex sine.
+  #
+  # @example
+  #   Complex.ZERO.sin.re # => 0.0
+  let sin -> Rectangular do
+    return New {
+      re: Math.sin(@re) * Math.cosh(@im),
+      im: Math.cos(@re) * Math.sinh(@im)
+    }
+  end
+
+  # Returns the complex cosine.
+  #
+  # @example
+  #   Complex.ZERO.cos.re # => 1.0
+  let cos -> Rectangular do
+    return New {
+      re: Math.cos(@re) * Math.cosh(@im),
+      im: -(Math.sin(@re) * Math.sinh(@im))
+    }
+  end
+
+  # Returns the complex tangent.
+  #
+  # @example
+  #   Complex.ZERO.tan.re # => 0.0
+  let tan -> Rectangular = this.sin / this.cos
+
+  # Raises this number to a real power using the principal argument.
+  #
+  # @example
+  #   (Complex.I ^ 2).re # approximately -1.0
+  let ^(exponent: Number) -> Rectangular do
+    return Complex.fromPolar(Math.pow(this.abs, exponent), this.arg * exponent)
+  end
+
+  # Raises this number to a complex power using the principal logarithm.
+  # Zero has no complex power through this formula.
+  #
+  # @example
+  #   (Complex.I ^ Rectangular { re: 2, im: 0 }).re # approximately -1.0
+  let ^(exponent: Rectangular) -> Rectangular = (exponent * this.log).exp
+
+  # Returns the square of the magnitude.
+  #
+  # @return [Number] real² + imaginary²
+  #
+  # @example
+  #   (Rectangular { re: 3, im: 4 }).absSquared # => 25
+  let absSquared -> Number = @re * @re + @im * @im
+
+  # Returns the magnitude of this complex number.
+  #
+  # @return [Float] distance from the origin
+  #
+  # @example
+  #   (Rectangular { re: 3, im: 4 }).abs # => 5.0
+  let abs -> Float = Math.hypot(@re, @im)
+
+  # Returns the argument in radians, in the range chosen by +Math.atan2+.
+  #
+  # @return [Float] angle in radians
+  #
+  # @example
+  #   Complex.I.arg # => Math.PI / 2.0
+  let arg -> Float = Math.atan2(@im, @re)
+
+  # Converts this number to polar coordinates.
+  #
+  # @return [Polar] magnitude and argument in radians
+  #
+  # @example
+  #   (Rectangular { re: 3, im: 4 }).polar.radius # => 5.0
+  let polar -> Polar = Polar { radius: @abs, theta: @arg }
+end
+
+make Polar, implement: Showable do
+  # Renders the radius and angle in radians.
+  #
+  # @return [String] the polar coordinates
+  #
+  # @example
+  #   (Polar { radius: 2, theta: 0 }).showValue # => "(2, 0)"
+  let showValue -> String = "(${@radius}, ${@theta})"
+
+  # Converts these polar coordinates to a complex number.
+  #
+  # @return [Rectangular] the rectangular representation
+  #
+  # @example
+  #   (Polar { radius: 2, theta: 0 }).rectangular.re # => 2.0
+  let rectangular -> Rectangular = Complex.fromPolar(@radius, @theta)
+end

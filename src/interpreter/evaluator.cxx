@@ -4590,6 +4590,8 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return true;
             auto actual = dispatchTypeName(value);
             if (matchesName(actual, expected)) return true;
+            if (expected == "Number" &&
+                (actual == "Integer" || actual == "Float")) return true;
             if (auto parent = m_variantParent.find(actual);
                 parent != m_variantParent.end() && parent->second == expected)
                 return true;
