@@ -281,8 +281,11 @@ struct Emitter {
     auto emitIntrinsic(const Intrinsic& in) -> std::string {
         auto a = [&](int i) { return emit(in.args[i]); };
         switch (in.op) {
-            // + is polymorphic (numeric add / string concat) at runtime.
-            case Op::Add:    return "call 'kex_intrinsic_number':'add'(" + a(0) + ", " + a(1) + ")";
+            // + is polymorphic (numeric add / string concat) at runtime; the
+            // lowerer routes everything except provably-integer addition
+            // through kex_intrinsic_number:add, so reaching here means both
+            // operands are integers and the raw BIF is exact.
+            case Op::Add:    return "call 'erlang':'+'(" + a(0) + ", " + a(1) + ")";
             case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
             case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
             case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";

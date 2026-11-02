@@ -18,6 +18,7 @@
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
 #include "compiled/expand.hxx"
+#include "module/discovery.hxx"
 #include "module/resolver.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
@@ -51,15 +52,43 @@
 // readline — every native dev machine so far has had it available via
 // Homebrew.
 #include "common/completion.hxx"
+#include "common/diagnostics.hxx"
+#include "common/file_io.hxx"
 #ifdef KEX_HAS_LSP
 #include "lsp/server.hxx"
 #endif
 #include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
+#include "common/process.hxx"
 #include "common/repl_commands.hxx"
+#include "common/string_utils.hxx"
 #include "semantic/completion_at.hxx"
 #include <functional>
 #include <thread>
+
+using kex::process::BeamVm;
+using kex::process::beamTestGate;
+using kex::process::exitStatusOf;
+using kex::process::runShellCommand;
+using kex::process::runShellCommandsTogether;
+using kex::process::shellSingleQuote;
+using kex::readFile;
+using kex::diagnostics::colorizeMessage;
+using kex::diagnostics::errorCountPhrase;
+using kex::diagnostics::extractHint;
+using kex::diagnostics::jsonEscape;
+using kex::diagnostics::printCollapseReport;
+using kex::diagnostics::printSemanticDiagnostic;
+using kex::diagnostics::typeExprToString;
+using kex::module::collectUsingModules;
+using kex::module::declaredModuleNames;
+using kex::module::fileDeclaringModule;
+using kex::module::moduleHeaderOf;
+using kex::module::moduleNameForPath;
+using kex::module::shownPath;
+using kex::module::skippedByModuleWalk;
+using kex::module::standardModuleRoots;
+using kex::snakeCased;
 
 // What Tab and `/complete` complete against: the program each REPL builds to
 // type-check an input — its top-level definitions, then `main do` with the
@@ -107,46 +136,6 @@ static auto replInputIsDeclaration(const std::string &input) -> bool {
 }
 
 auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string>;
-
-// A file's module header: the name its first significant line declares, and
-// that line's number. Nothing when that line is anything else — only one line
-// is read from a file that is not a module.
-struct ModuleHeader {
-  std::string name;
-  int line;
-};
-
-auto moduleHeaderOf(const std::filesystem::path &file)
-    -> std::optional<ModuleHeader> {
-  std::ifstream input(file);
-  std::string line;
-  for (int number = 1; std::getline(input, line); ++number) {
-    const auto start = line.find_first_not_of(" \t");
-    if (start == std::string::npos || line[start] == '#') continue;
-    if (line.compare(start, 7, "module ") != 0) return std::nullopt;
-    const auto rest = line.substr(start + 7);
-    return ModuleHeader{rest.substr(0, rest.find_first_of(" \t\r")), number};
-  }
-  return std::nullopt;
-}
-
-// The directories a walk for modules under a source root does not enter.
-auto skippedByModuleWalk(const std::string &directory) -> bool {
-  return directory.starts_with(".") || directory == "ebin" ||
-         directory == "build" || directory == "_build" ||
-         directory == "node_modules";
-}
-
-// The standard library's roots, canonical: a walk for the project's own
-// modules leaves them to the prelude.
-auto standardModuleRoots() -> std::unordered_set<std::string> {
-  std::unordered_set<std::string> standard;
-  for (const auto &root : kex::standardLibraryModuleRoots()) {
-    std::error_code ec;
-    standard.insert(std::filesystem::weakly_canonical(root, ec).string());
-  }
-  return standard;
-}
 
 // The modules under the REPL's source roots, by the name each file declares:
 // what a dotted name typed at the prompt can lead to. Read once a session —
@@ -233,15 +222,10 @@ static auto replCompleteAt(const std::string &line, size_t point)
                          ? line
                          : g_replPendingInput + "\n" + line;
   const bool declaration = replInputIsDeclaration(input);
-  const auto prefix = context.definitions +
-                      (declaration ? "" : "main do\n" + context.bindings);
-  const auto program = prefix + input + kex::semantic::completionClosers(input) +
-                       (declaration ? "\n" : "\nend\n");
-  const size_t lineStart = prefix.size() + (input.size() - line.size());
-  auto completion = kex::semantic::completeAt(
-      *g_replCompletionDb, *g_replAnalysisDb, "<repl-completion>", program,
-      lineStart + std::min(point, line.size()), &preludeSemanticInterfaces());
-  completion.replaceFrom -= lineStart;
+  auto completion = kex::semantic::completeReplInput(
+      *g_replCompletionDb, *g_replAnalysisDb, context.definitions,
+      context.bindings, input, line, point, declaration,
+      &preludeSemanticInterfaces());
   // A name that is not an expression's member — `DB.`, `DB.Repositories.Us`,
   // `Conf` — may be a module under a source root the index has not loaded.
   if (completion.qualifier.empty()) {
@@ -388,12 +372,6 @@ static auto throwOnParseErrors(const kex::Parser &parser) -> void {
     message += diagnostic.message;
   }
   throw std::runtime_error(message);
-}
-
-// "3 type errors" / "1 type error" — the count is what makes a long
-// fix-compile-repeat loop legible: it shows whether the last edit helped.
-static auto errorCountPhrase(int count, const char *kind) -> std::string {
-  return std::to_string(count) + " " + kind + (count == 1 ? " error" : " errors");
 }
 
 // The parameter patterns of a clause, with variable names flattened to `_`:
@@ -598,333 +576,6 @@ static auto replTrimLeadingIndent(std::string source) -> std::string {
   return source;
 }
 
-// Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
-// embedded `'` via the standard close-quote/escaped-literal-quote/reopen
-// idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
-// quoted atoms (e.g. a module name with a literal '.' in its stem, like
-// "kex_json_parser.spec") — naively embedding those quotes directly inside
-// an outer single-quoted shell argument is fragile: shell single-quote
-// parsing is stateful (quote/unquote toggles as it scans), so whether a
-// hand-placed escape sequence lands in "quoted" or "unquoted" context
-// depends on the exact quote parity of everything BEFORE it, not just
-// what's written at that one spot — verified the hard way (a `\''`
-// sequence that worked correctly right after the argument's own opening
-// quote broke once embedded deeper into a longer string, because an
-// earlier quoted/unquoted flip had already changed the state at that
-// point). Applying this uniformly across the whole string is what makes
-// it position-independent and actually robust (spec/json_parser.spec.kex).
-// `std::system` hands back a wait STATUS, not an exit code — returning it
-// straight from main() truncates to the low 8 bits, which are zero for every
-// normal exit: `System.exit(3)` reported 0 under `-R` where the walker
-// reported 3, and `die` reported 0 where the walker reported 1.
-#ifdef __EMSCRIPTEN__
-// The browser build has no processes to fork, signal, or wait on — and the
-// POSIX headers the implementation below needs are not included there either
-// (see the guard at the top of this file). Keep the one entry point so every
-// call site stays shared, and let `std::system` answer the way it did before
-// the signal-forwarding version existed.
-static auto runShellCommand(const std::string &command) -> int {
-  return std::system(command.c_str());
-}
-#else
-// The pid of the program `runShellCommand` is currently waiting on, for the
-// signal handler to forward to. A signal handler may only touch a
-// `volatile sig_atomic_t`, so the pid lives here rather than in a closure.
-static volatile sig_atomic_t g_childPid = -1;
-
-// SIGINT is forwarded as SIGTERM, and that substitution is the whole reason a
-// Ctrl+C stops leaking the port's OS child.
-//
-// SIGINT is the one signal Erlang cannot be handed: `os:set_signal(sigint,
-// handle)` is a `badarg`, so it never reaches `erl_signal_server` and no Erlang
-// code runs — `kex_child_guard`, which is what kills a port's child, is a
-// gen_event handler there. It instead reaches the VM's BREAK handler, which
-// takes TWO SIGINTs to abort: measured, the first leaves `beam.smp` running and
-// the second kills it outright, cleaning up nothing. That is why Ctrl+C at a
-// terminal left an HTTP server holding its port — the terminal signals the
-// whole process group, so the VM took one SIGINT directly and one from this
-// forward, hit the abort path, and the child outlived it.
-//
-// SIGTERM does reach `erl_signal_server`, and the guard on it is already proven
-// clean end to end. So the child a `Process.stream` spawned is claimed on the
-// way down instead of being orphaned. The other three signals pass through
-// unchanged — only SIGINT has the break handler in the way.
-extern "C" void forwardSignalToChild(int sig) {
-  if (g_childPid > 0)
-    kill(static_cast<pid_t>(g_childPid), sig == SIGINT ? SIGTERM : sig);
-}
-
-// Run a shell command and wait for it, the way `std::system` does — except
-// that POSIX requires `system()` to IGNORE SIGINT and SIGQUIT in the calling
-// process for the whole call, and gives back no pid. So `kex` could not
-// observe Ctrl+C at all, had no child to forward it to, and left whatever
-// `sh` started reparented to init: a `tey run` server kept serving and kept
-// its port after its launcher was gone, and `eaddrinuse` met the next run.
-//
-// The child stays in this process group deliberately, so a terminal's
-// Ctrl+C keeps reaching `erl` directly the way it already did. What is new
-// is the second path: a signal delivered to the LAUNCHER alone now reaches
-// the child too, and a launcher going down takes the child with it.
-//
-// Returns a wait status, as `std::system` does — pass it to `exitStatusOf`.
-static auto runShellCommand(const std::string &command) -> int {
-  pid_t pid = fork();
-  if (pid < 0)
-    return -1;
-  if (pid == 0) {
-    // Whatever the parent chose to ignore, the program itself should not.
-    signal(SIGINT, SIG_DFL);
-    signal(SIGTERM, SIG_DFL);
-    signal(SIGHUP, SIG_DFL);
-    signal(SIGQUIT, SIG_DFL);
-    execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
-    _exit(127);
-  }
-  g_childPid = pid;
-  struct sigaction forward {};
-  forward.sa_handler = forwardSignalToChild;
-  sigemptyset(&forward.sa_mask);
-  forward.sa_flags = 0; // no SA_RESTART: waitpid must return EINTR
-  struct sigaction previousInt {}, previousTerm {}, previousHup {},
-      previousQuit {};
-  sigaction(SIGINT, &forward, &previousInt);
-  sigaction(SIGTERM, &forward, &previousTerm);
-  sigaction(SIGHUP, &forward, &previousHup);
-  sigaction(SIGQUIT, &forward, &previousQuit);
-
-  int status = 0;
-  while (waitpid(pid, &status, 0) < 0) {
-    if (errno == EINTR)
-      continue; // a forwarded signal; keep waiting for the child to act on it
-    // Waiting failed for a reason retrying cannot fix. Never leave the child
-    // behind holding its port — that is the orphaned `beam.smp` this exists
-    // to prevent.
-    kill(pid, SIGTERM);
-    status = -1;
-    break;
-  }
-
-  sigaction(SIGINT, &previousInt, nullptr);
-  sigaction(SIGTERM, &previousTerm, nullptr);
-  sigaction(SIGHUP, &previousHup, nullptr);
-  sigaction(SIGQUIT, &previousQuit, nullptr);
-  g_childPid = -1;
-  return status;
-}
-#endif
-
-static auto exitStatusOf(int waitStatus) -> int {
-  if (WIFEXITED(waitStatus))
-    return WEXITSTATUS(waitStatus);
-  if (WIFSIGNALED(waitStatus))
-    return 128 + WTERMSIG(waitStatus);
-  return waitStatus == 0 ? 0 : 1;
-}
-
-// Runs `commands` side by side and calls `finished(index, status)` for each as
-// it ends, in the order they end — which is what lets a build say how far its
-// erlc runs have got while they run. Used for erlc only: these are short
-// compiler runs in the build's own process group, so a Ctrl+C at the terminal
-// reaches them directly and nothing needs forwarding (runShellCommand's
-// reason to exist does not apply).
-static auto runShellCommandsTogether(
-    const std::vector<std::string> &commands,
-    const std::function<void(std::size_t, int)> &finished) -> void {
-#ifdef __EMSCRIPTEN__
-  for (std::size_t i = 0; i < commands.size(); ++i)
-    finished(i, runShellCommand(commands[i]));
-#else
-  std::unordered_map<pid_t, std::size_t> running;
-  for (std::size_t i = 0; i < commands.size(); ++i) {
-    const pid_t pid = fork();
-    if (pid < 0) {
-      finished(i, -1);
-      continue;
-    }
-    if (pid == 0) {
-      execl("/bin/sh", "sh", "-c", commands[i].c_str(), nullptr);
-      _exit(127);
-    }
-    running.emplace(pid, i);
-  }
-  while (!running.empty()) {
-    int status = 0;
-    const pid_t pid = waitpid(-1, &status, 0);
-    if (pid < 0) {
-      if (errno == EINTR) continue;
-      // Nothing left to wait for that we know of; report the rest failed.
-      for (const auto &[_, index] : running) finished(index, -1);
-      return;
-    }
-    if (const auto found = running.find(pid); found != running.end()) {
-      const auto index = found->second;
-      running.erase(found);
-      finished(index, status);
-    }
-  }
-#endif
-}
-
-// `kex_test:configure(Mode, Filters), ` for the `-eval` the BEAM runner
-// builds, or "" for an ordinary run (kexhq/kex#199). Like the Mock.* grant
-// next to it, the reporting mode is the RUNNER's to set: an emitted .beam
-// handed straight to `erl` prints the ✓/✗ prose a person reads.
-static auto beamTestGate(
-    kex::interpreter::Evaluator::TestReportMode mode,
-    const std::vector<std::string> &filters) -> std::string {
-  using Mode = kex::interpreter::Evaluator::TestReportMode;
-  if (mode == Mode::Pretty && filters.empty()) return "";
-  std::string modeAtom = mode == Mode::Json    ? "json"
-                         : mode == Mode::List  ? "list"
-                                               : "pretty";
-  std::string list;
-  for (const auto &filter : filters) {
-    if (!list.empty()) list += ",";
-    // An Erlang binary literal inside an -eval string: only `"` and `\` can
-    // end it early, and both survive as themselves once escaped.
-    list += "<<\"";
-    for (char c : filter) {
-      if (c == '"' || c == '\\') list += '\\';
-      list += c;
-    }
-    list += "\"/utf8>>";
-  }
-  return "kex_test:configure(" + modeAtom + ", [" + list + "]), ";
-}
-
-static auto shellSingleQuote(const std::string &s) -> std::string {
-  std::string out = "'";
-  for (char c : s) {
-    if (c == '\'')
-      out += "'\\''";
-    else
-      out += c;
-  }
-  out += "'";
-  return out;
-}
-
-#ifndef __EMSCRIPTEN__
-// Persistent-VM driver for the BEAM REPL. Keeps one `erl -noshell` process
-// alive for the whole REPL session, talking to runtime/src/kex_repl_driver.erl
-// over stdin/stdout with a nonce-delimited protocol (see that module's header
-// for the full rationale). This is what makes the BEAM REPL a real persistent
-// VM — spawned processes, registered names, and ETS tables survive across
-// inputs, and the recompiled session module is hot-loaded via
-// code:load_binary rather than re-running a cold `erl` per line.
-struct BeamVm {
-  pid_t pid = -1;
-  int inFd = -1;  // write end → child stdin
-  int outFd = -1; // read end ← child stdout
-
-  auto start(const std::vector<std::string> &argv) -> bool {
-    signal(SIGPIPE, SIG_IGN); // a dead erl shouldn't SIGPIPE the REPL
-    int inPipe[2], outPipe[2];
-    if (pipe(inPipe) != 0 || pipe(outPipe) != 0)
-      return false;
-    pid = fork();
-    if (pid < 0)
-      return false;
-    if (pid == 0) {
-      dup2(inPipe[0], STDIN_FILENO);
-      dup2(outPipe[1], STDOUT_FILENO);
-      ::close(inPipe[0]);
-      ::close(inPipe[1]);
-      ::close(outPipe[0]);
-      ::close(outPipe[1]);
-      std::vector<char *> args;
-      for (auto &a : argv)
-        args.push_back(const_cast<char *>(a.c_str()));
-      args.push_back(nullptr);
-      execvp(args[0], args.data());
-      _exit(127);
-    }
-    ::close(inPipe[0]);
-    ::close(outPipe[1]);
-    inFd = inPipe[1];
-    outFd = outPipe[0];
-    return true;
-  }
-
-  void writeLine(const std::string &s) {
-    if (inFd < 0)
-      return;
-    std::string line = s + "\n";
-    const char *p = line.data();
-    size_t remaining = line.size();
-    while (remaining > 0) {
-      ssize_t n = write(inFd, p, remaining);
-      if (n <= 0) {
-        if (errno == EINTR)
-          continue;
-        break;
-      }
-      p += n;
-      remaining -= n;
-    }
-  }
-
-  // Read child stdout line-by-line until a line beginning with
-  // `sentinelPrefix` (e.g. "KEX_REPL_DONE <nonce> "). Returns everything
-  // read before that line (the command's program output); sets `status` to
-  // the token ("ok"/"error") following the nonce on the sentinel line.
-  auto readUntilSentinel(const std::string &sentinelPrefix, std::string &status)
-      -> std::string {
-    std::string collected, line;
-    char ch;
-    while (true) {
-      ssize_t r = read(outFd, &ch, 1);
-      if (r <= 0) {
-        status = "eof";
-        return collected;
-      }
-      if (ch == '\n') {
-        if (line.rfind(sentinelPrefix, 0) == 0) {
-          status = line.substr(sentinelPrefix.size());
-          return collected;
-        }
-        collected += line;
-        collected += '\n';
-        line.clear();
-      } else {
-        line += ch;
-      }
-    }
-  }
-
-  void close() {
-    if (inFd >= 0) {
-      ::close(inFd);
-      inFd = -1;
-    }
-    if (outFd >= 0) {
-      ::close(outFd);
-      outFd = -1;
-    }
-    if (pid > 0) {
-      kill(pid, SIGTERM);
-      int st;
-      waitpid(pid, &st, 0);
-      pid = -1;
-    }
-  }
-};
-#else
-// Emscripten has no fork/exec/pipe, and the BEAM REPL is meaningless under
-// wasm anyway (no erl in a browser/Node context). Stub so main.cxx compiles
-// unchanged — start() fails and the beam-repl path reports unavailable.
-struct BeamVm {
-  int pid = -1;
-  auto start(const std::vector<std::string> &) -> bool { return false; }
-  void writeLine(const std::string &) {}
-  auto readUntilSentinel(const std::string &, std::string &s) -> std::string {
-    s = "eof";
-    return {};
-  }
-  void close() {}
-};
-#endif
-
 #ifdef HAS_READLINE
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -1087,17 +738,6 @@ auto readLine(const std::string &prompt) -> std::pair<std::string, bool> {
 #endif
 }
 
-auto readFile(const std::string &path) -> std::string {
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    std::cerr << "Error: could not open file: " << path << "\n";
-    return "";
-  }
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  return buffer.str();
-}
-
 namespace {
 
 // Additional project roots supplied by repeatable `--source-root` options.
@@ -1146,348 +786,6 @@ auto nodeNameProblem(const std::string &name, bool shortName) -> std::string {
     return "a short name's host cannot contain '.'; use --name for a "
            "fully qualified host";
   return "";
-}
-
-auto isIdentChar(char c) -> bool {
-  return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-}
-
-// ===== TypeExpr pretty-printer =====
-
-auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string;
-
-auto typeNameToString(const kex::ast::TypeName &tn) -> std::string {
-  std::string r;
-  for (size_t i = 0; i < tn.parts.size(); i++) {
-    if (i)
-      r += ".";
-    r += tn.parts[i];
-  }
-  return r;
-}
-
-auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
-  return std::visit(
-      [](const auto &node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
-          return typeNameToString(node);
-        } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
-          std::string r = typeNameToString(node.name) + "<";
-          for (size_t i = 0; i < node.args.size(); i++) {
-            if (i)
-              r += ", ";
-            if (node.args[i])
-              r += typeExprToString(*node.args[i]);
-          }
-          return r + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::FunctionType>) {
-          std::string l = node.param ? typeExprToString(*node.param) : "?";
-          std::string r = node.result ? typeExprToString(*node.result) : "?";
-          return l + " -> " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
-          std::string r = "(";
-          for (size_t i = 0; i < node.elements.size(); i++) {
-            if (i)
-              r += ", ";
-            if (node.elements[i])
-              r += typeExprToString(*node.elements[i]);
-          }
-          return r + ")";
-        } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
-          return "[" + (node.element ? typeExprToString(*node.element) : "?") +
-                 "]";
-        } else if constexpr (std::is_same_v<T, kex::ast::MapType>) {
-          std::string k = node.key ? typeExprToString(*node.key) : "?";
-          std::string v = node.value ? typeExprToString(*node.value) : "?";
-          return "Map<" + k + ", " + v + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::UnionType>) {
-          std::string l = node.left ? typeExprToString(*node.left) : "?";
-          std::string r = node.right ? typeExprToString(*node.right) : "?";
-          return l + " | " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::IntersectionType>) {
-          std::string l = node.left ? typeExprToString(*node.left) : "?";
-          std::string r = node.right ? typeExprToString(*node.right) : "?";
-          return l + " & " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::RecordType>) {
-          std::string result = "{";
-          for (size_t i = 0; i < node.fields.size(); i++) {
-            if (i) result += ", ";
-            result += node.fields[i].first + ": " +
-                (node.fields[i].second
-                     ? typeExprToString(*node.fields[i].second) : "?");
-          }
-          return result + "}";
-        } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
-          return (node.inner ? typeExprToString(*node.inner) : "?") + "?";
-        } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
-          std::string r = "Block<";
-          for (const auto &param : node.params)
-            r += (param ? typeExprToString(*param) : "?") + ", ";
-          return r + (node.inner ? typeExprToString(*node.inner) : "?") + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
-          return ":" + node.name;
-        } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
-          return node.name;
-        }
-        return "?";
-      },
-      te.kind);
-}
-
-// ===== JSON helpers (no external dep — hand-rolled) =====
-
-auto jsonEscape(const std::string &s) -> std::string {
-  std::string out;
-  out.reserve(s.size() + 4);
-  for (char c : s) {
-    switch (c) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\r':
-      out += "\\r";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      out += c;
-    }
-  }
-  return out;
-}
-
-// Extract the "did you mean `X`?" portion from a diagnostic message, if any.
-auto extractHint(const std::string &msg) -> std::string {
-  const std::string needle = "did you mean `";
-  auto pos = msg.find(needle);
-  if (pos == std::string::npos)
-    return "";
-  pos += needle.size();
-  auto end = msg.find('`', pos);
-  if (end == std::string::npos)
-    return "";
-  return msg.substr(pos, end - pos);
-}
-
-// Syntax-highlights a diagnostic message body using a palette kept distinct
-// from Value::inspect's literal coloring: type names / type vars become cyan
-// (matching the REPL/IO.inspect type suffix), function names become bold
-// (backtick spans and signature heads), arrows (->) become magenta, and
-// backtick delimiters become gray. Cyan-vs-bold keeps functions and types
-// distinguishable. Honors kex::color::enabled.
-auto colorizeMessage(const std::string &msg) -> std::string {
-  using namespace kex::color;
-  std::string out;
-  out.reserve(msg.size() * 2);
-  const auto n = msg.size();
-  bool atLineStart = true;
-  for (size_t i = 0; i < n;) {
-    char c = msg[i];
-
-    if (c == '`') {
-      size_t end = msg.find('`', i + 1);
-      if (end == std::string::npos) {
-        out += c;
-        i++;
-        continue;
-      }
-      out += apply(gray);
-      out += '`';
-      out += apply(reset);
-      out += apply(bold);
-      out.append(msg, i + 1, end - i - 1);
-      out += apply(reset);
-      out += apply(gray);
-      out += '`';
-      out += apply(reset);
-      i = end + 1;
-      atLineStart = false;
-      continue;
-    }
-
-    if (atLineStart) {
-      bool startsLower = std::isalpha(static_cast<unsigned char>(c)) &&
-                         std::islower(static_cast<unsigned char>(c));
-      bool identStart = std::isalpha(static_cast<unsigned char>(c)) || c == '_';
-      if (startsLower || (c == '_' && identStart)) {
-        size_t j = i + 1;
-        while (j < n && isIdentChar(msg[j]))
-          j++;
-        if (j < n && (msg[j] == '?' || msg[j] == '!'))
-          j++;
-        size_t k = j;
-        while (k < n && msg[k] == ' ')
-          k++;
-        if (k < n && msg[k] == ':') {
-          out += apply(bold);
-          out.append(msg, i, j - i);
-          out += apply(reset);
-          i = j;
-          atLineStart = false;
-          continue;
-        }
-      }
-    }
-
-    if (c == '-' && i + 1 < n && msg[i + 1] == '>') {
-      out += apply(magenta);
-      out += "->";
-      out += apply(reset);
-      i += 2;
-      atLineStart = false;
-      continue;
-    }
-
-    if (std::isupper(static_cast<unsigned char>(c)) &&
-        (i == 0 || !isIdentChar(msg[i - 1]))) {
-      size_t j = i + 1;
-      while (j < n && isIdentChar(msg[j]))
-        j++;
-      out += apply(cyan);
-      out.append(msg, i, j - i);
-      out += apply(reset);
-      i = j;
-      atLineStart = false;
-      continue;
-    }
-
-    if (c == '\n') {
-      out += c;
-      i++;
-      atLineStart = true;
-      continue;
-    }
-    out += c;
-    i++;
-    atLineStart = false;
-  }
-  return out;
-}
-
-// `--collapse-report`: what `compiled do` chain collapse folded away, and why
-// the rest did not.
-//
-// Goes to stderr and says nothing at all for a program with no `compiled`
-// block, so it composes with every other mode — you can ask about a run, a
-// check or an emit without changing what any of them print.
-auto printCollapseReport(const std::vector<kex::compiled::CollapseNote> &notes)
-    -> void {
-  if (notes.empty()) return;
-
-  // Source order, not the order collapse worked in: a chain that failed and
-  // was retried from the inside reports its outer attempt in a later round,
-  // and reading the file top to bottom is what a user wants.
-  auto ordered = notes;
-  std::stable_sort(ordered.begin(), ordered.end(),
-                   [](const auto &a, const auto &b) {
-                     if (a.location.file != b.location.file)
-                       return a.location.file < b.location.file;
-                     if (a.location.line != b.location.line)
-                       return a.location.line < b.location.line;
-                     return a.location.column < b.location.column;
-                   });
-
-  // Retrying a failed chain from the inside re-reports the parts it tries
-  // again, and everything written inside one `"${...}"` shares that string's
-  // position — so the same verdict can arrive several times over. Identical
-  // lines say nothing extra. A location with BOTH verdicts keeps both: those
-  // are genuinely different sub-expressions that happen to start together.
-  ordered.erase(std::unique(ordered.begin(), ordered.end(),
-                            [](const auto &a, const auto &b) {
-                              return a.location.file == b.location.file &&
-                                     a.location.line == b.location.line &&
-                                     a.location.column == b.location.column &&
-                                     a.collapsed == b.collapsed &&
-                                     a.reason == b.reason;
-                            }),
-                ordered.end());
-
-  std::size_t collapsed = 0;
-  for (const auto &note : ordered)
-    if (note.collapsed) collapsed++;
-
-  std::cerr << kex::color::apply(kex::color::bold) << "collapse:"
-            << kex::color::apply(kex::color::reset) << " " << collapsed << " of "
-            << ordered.size() << " evaluated at compile time\n";
-  for (const auto &note : ordered) {
-    std::cerr << "  " << kex::color::apply(kex::color::gray)
-              << note.location.file << ":" << note.location.line << ":"
-              << note.location.column << kex::color::apply(kex::color::reset)
-              << " ";
-    if (note.collapsed) {
-      std::cerr << kex::color::apply(kex::color::green) << "collapsed"
-                << kex::color::apply(kex::color::reset) << "\n";
-    } else {
-      std::cerr << kex::color::apply(kex::color::magenta) << "kept"
-                << kex::color::apply(kex::color::reset) << " — " << note.reason
-                << "\n";
-    }
-  }
-}
-
-auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
-  bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-  std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
-            << ":" << diag.location.line << ":" << diag.location.column;
-  if (diag.endLocation) {
-    std::cerr << "-" << diag.endLocation->line << ":"
-              << diag.endLocation->column;
-  }
-  std::cerr << ":" << kex::color::apply(kex::color::reset) << " "
-            << kex::color::apply(kex::color::bold)
-            << (isError ? kex::color::apply(kex::color::red)
-                        : kex::color::apply(kex::color::magenta))
-            << (isError ? "error" : "warning") << ":"
-            << kex::color::apply(kex::color::reset) << " "
-            << colorizeMessage(diag.message) << "\n";
-
-  if (diag.endLocation) {
-    auto source = readFile(std::string(diag.location.file));
-    if (!source.empty()) {
-      std::istringstream lines{source};
-      std::string line;
-      for (int current = 1;
-           current <= diag.location.line && std::getline(lines, line);
-           ++current) {
-        if (current != diag.location.line)
-          continue;
-        const auto start = std::max(1, diag.location.column);
-        int finish = static_cast<int>(line.size()) + 1;
-        if (diag.endLocation->line == diag.location.line)
-          finish = std::max(start + 1, diag.endLocation->column);
-        const auto width = std::max(1, finish - start);
-        std::cerr << "  " << current << " | " << line << "\n"
-                  << "    | "
-                  << std::string(static_cast<size_t>(start - 1), ' ')
-                  << kex::color::apply(
-                         isError ? kex::color::red : kex::color::magenta)
-                  << "^" << std::string(static_cast<size_t>(width - 1), '~')
-                  << kex::color::apply(kex::color::reset) << "\n";
-        if (diag.endLocation->line != diag.location.line)
-          std::cerr << "    | ... through line " << diag.endLocation->line
-                    << ", column " << diag.endLocation->column << "\n";
-      }
-    }
-  }
-
-  for (const auto &note : diag.notes) {
-    std::cerr << kex::color::apply(kex::color::gray)
-              << note.location.file << ":" << note.location.line << ":"
-              << note.location.column << ":"
-              << kex::color::apply(kex::color::reset) << " "
-              << kex::color::apply(kex::color::bold)
-              << kex::color::apply(kex::color::cyan) << "note:"
-              << kex::color::apply(kex::color::reset) << " "
-              << note.message << "\n";
-  }
 }
 
 } // namespace
@@ -1564,98 +862,11 @@ auto sourceMentionsEmbed(const std::string &src) -> bool;
 
 namespace {
 
-auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
-  std::vector<std::string> result;
-  auto addFrom = [&](const kex::ast::TypeName &tn) {
-    std::string name;
-    for (size_t i = 0; i < tn.parts.size(); i++) {
-      if (i) name += ".";
-      name += tn.parts[i];
-    }
-    if (!kex::module::Resolver::isForeignNamespace(name))
-      result.push_back(std::move(name));
-  };
-  auto scanModuleBody = [&](auto &self,
-                            const std::vector<kex::ast::ModuleItem> &body) -> void {
-    for (const auto &item : body) {
-      if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
-        if (*ub) addFrom((*ub)->module);
-      if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-        if (*md) self(self, (*md)->body);
-    }
-  };
-  for (const auto &item : program.items) {
-    if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
-      if (*ub) addFrom((*ub)->module);
-    if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-      if (*md) scanModuleBody(scanModuleBody, (*md)->body);
-  }
-  return result;
-}
-
 struct LoadedDep {
   std::unique_ptr<std::string> source;
   std::unique_ptr<std::string> path;
   std::unique_ptr<kex::ast::Program> program;
 };
-
-// Every module a program declares, a nested one by its full name and by the
-// name it is written with.
-auto declaredModuleNames(const kex::ast::Program &program)
-    -> std::unordered_set<std::string> {
-  std::unordered_set<std::string> names;
-  const auto add = [&](auto &self, const kex::ast::ModuleDef &module,
-                       const std::string &prefix) -> void {
-    const auto full = prefix.empty() ? module.name : prefix + "." + module.name;
-    names.insert(module.name);
-    names.insert(full);
-    for (const auto &item : module.body)
-      if (auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-        if (*nested) self(self, **nested, full);
-  };
-  for (const auto &item : program.items)
-    if (auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-      if (*module) add(add, **module, "");
-  return names;
-}
-
-// The module name a file's place under `root` gives it:
-// `app/services/authority.kex` is `App.Services.Authority`.
-auto moduleNameForPath(const std::filesystem::path &relative) -> std::string {
-  std::string name;
-  for (auto part : relative) {
-    auto text = part.replace_extension().string();
-    if (!name.empty()) name += ".";
-    bool upper = true;
-    for (const auto c : text) {
-      if (c == '_') { upper = true; continue; }
-      name += upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
-      upper = false;
-    }
-  }
-  return name;
-}
-
-// The file name a module name part is conventionally written as:
-// `RichText` is `rich_text`.
-auto snakeCasedPart(const std::string &part) -> std::string {
-  std::string result;
-  for (size_t i = 0; i < part.size(); ++i) {
-    const auto c = static_cast<unsigned char>(part[i]);
-    if (i > 0 && std::isupper(c) &&
-        std::islower(static_cast<unsigned char>(part[i - 1])))
-      result += '_';
-    result += static_cast<char>(std::tolower(c));
-  }
-  return result;
-}
-
-// A path as a diagnostic shows it: relative to the working directory.
-auto shownPath(const std::filesystem::path &path) -> std::string {
-  std::error_code ec;
-  auto relative = std::filesystem::relative(path, ec);
-  return ec || relative.empty() ? path.string() : relative.string();
-}
 
 // An error about a module's file, at its header.
 // Whether a dependency that cannot be loaded ends the process (a build) or
@@ -1676,41 +887,6 @@ auto reportModuleFileError(const std::filesystem::path &file, int line,
             << kex::color::apply(kex::color::bold)
             << kex::color::apply(kex::color::red) << "error:"
             << kex::color::apply(kex::color::reset) << " " << message << "\n";
-}
-
-struct DeclaringFile {
-  std::filesystem::path root;
-  std::filesystem::path file;
-  int line;
-};
-
-// The file under one of the program's own source roots (not the standard
-// library's) that declares `module <name>` as its header, with the root it
-// was found under.
-auto fileDeclaringModule(const std::string &name,
-                         const std::vector<std::string> &roots)
-    -> std::optional<DeclaringFile> {
-  namespace fs = std::filesystem;
-  const auto standard = standardModuleRoots();
-  for (const auto &root : roots) {
-    std::error_code ec;
-    if (standard.contains(fs::weakly_canonical(root, ec).string())) continue;
-    fs::recursive_directory_iterator walk(
-        root, fs::directory_options::skip_permission_denied, ec);
-    for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
-      const auto &entry = *walk;
-      const auto base = entry.path().filename().string();
-      if (entry.is_directory(ec)) {
-        if (skippedByModuleWalk(base)) walk.disable_recursion_pending();
-        continue;
-      }
-      if (entry.path().extension() != ".kex") continue;
-      if (const auto header = moduleHeaderOf(entry.path());
-          header && header->name == name)
-        return DeclaringFile{fs::path(root), entry.path(), header->line};
-    }
-  }
-  return std::nullopt;
 }
 
 // A suffix no other writer of the same cache entry will pick, for the
@@ -2848,11 +2024,9 @@ auto resolveBeamDeps(kex::ast::Program &program,
       const auto lastPart =
           resolved->moduleName.substr(resolved->moduleName.rfind('.') + 1);
       const auto stem = std::filesystem::path(*path).stem().string();
-      auto lowered = lastPart;
-      for (auto &c : lowered)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const auto lowered = kex::lowered(lastPart);
       const bool ownFile = !resolved->enclosing &&
-                           (stem == snakeCasedPart(lastPart) || stem == lowered);
+                           (stem == snakeCased(lastPart) || stem == lowered);
       const kex::ast::ModuleDef *header = nullptr;
       for (const auto &item : depProg->items)
         if (auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
@@ -2923,7 +2097,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
       auto expected = found->root;
       std::stringstream parts(name);
       for (std::string part; std::getline(parts, part, '.');)
-        expected /= snakeCasedPart(part);
+        expected /= snakeCased(part);
       expected += ".kex";
       reportModuleFileError(
           found->file, found->line,
