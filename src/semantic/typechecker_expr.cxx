@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../common/mangle.hxx"
 #include "typechecker.hxx"
 #include "typechecker_internal.hxx"
 #include "analyzer.hxx"
@@ -1478,7 +1479,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // constructor (`Temperature.Fahrenheit(212)`) stay untouched.
             const bool isLocalNamespace = importedPath &&
                 m_localModules.contains(*importedPath) &&
-                m_userSignatures.count(*importedPath + "::" + node.method) > 0;
+                m_userSignatures.count(kex::mangle::qualify(*importedPath, node.method)) > 0;
             // ...and, being a namespace, its receiver is not an argument. A
             // dotted local module (`Tey.Commands`) is not a bare
             // UpperIdentifier, so `isNamespaceReceiver` alone missed it and the
@@ -1555,11 +1556,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             }
             if (isImportedNamespace || isLocalNamespace) {
-                callName = *importedPath + "::" + node.method;
+                callName = kex::mangle::qualify(*importedPath, node.method);
             } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
-                callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
-                           "::" + node.method;
+                callName = kex::mangle::qualify(std::get<ast::UpperIdentifier>(node.receiver->kind).name, node.method);
             }
             // `Type.of(Hello)` where `Hello` NAMES a type answers with that
             // type. A bare type name is already a value elsewhere (`x.to(String)`),
@@ -1701,7 +1701,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                            qualified && qualified->args.empty() &&
                            qualified->receiver) {
                     if (auto path = importedModulePath(*qualified->receiver))
-                        functionName = *path + "::" + qualified->method;
+                        functionName = kex::mangle::qualify(*path, qualified->method);
                 }
                 std::vector<Signature> candidates;
                 if (!functionName.empty()) {
@@ -2610,7 +2610,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 candidates.push_back(std::move(signature));
             } else {
                 const auto key = node.module.empty()
-                    ? node.name : node.module + "::" + node.name;
+                    ? node.name : kex::mangle::qualify(node.module, node.name);
                 if (auto user = m_userSignatures.find(key);
                     user != m_userSignatures.end())
                     candidates = user->second;
@@ -3073,7 +3073,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
                 m_scopedDeclaredSignatures.count(m_currentModulePath + "\n" + name))
                 return true;
             for (auto scope = m_currentModulePath; !scope.empty();) {
-                if (m_userSignatures.count(scope + "::" + name)) return true;
+                if (m_userSignatures.count(kex::mangle::qualify(scope, name))) return true;
                 const auto dot = scope.rfind('.');
                 if (dot == std::string::npos) break;
                 scope.resize(dot);
@@ -3130,7 +3130,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
         // interpolation calls a method on) is held like a nested module.
         const bool held =
             !std::isupper(static_cast<unsigned char>(next.front())) ||
-            m_userSignatures.count(deepest + "::" + next) ||
+            m_userSignatures.count(kex::mangle::qualify(deepest, next)) ||
             m_scopedDeclaredSignatures.count(deepest + "\n" + next) ||
             m_recordFields.count(resolveRecordName(next)) ||
             m_recordFields.count(deepest + "." + next) ||
@@ -3157,7 +3157,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
         m_recordFields.count(path) || m_adtVariants.count(last) ||
         m_typeAliases.count(last))
         return std::nullopt;
-    if (m_userSignatures.count(path + "::" + method) ||
+    if (m_userSignatures.count(kex::mangle::qualify(path, method)) ||
         m_scopedDeclaredSignatures.count(path + "\n" + method) ||
         m_localModules.contains(path + "." + method))
         return std::nullopt;
@@ -3166,7 +3166,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
         constructors->second.count(method))
         return std::nullopt;
     std::vector<std::string> members;
-    const auto prefix = path + "::";
+    const auto prefix = path + std::string(kex::mangle::kSeparator);
     for (const auto& [name, _] : m_userSignatures)
         if (name.rfind(prefix, 0) == 0) members.push_back(name.substr(prefix.size()));
     std::sort(members.begin(), members.end());
@@ -3198,7 +3198,7 @@ auto TypeChecker::namedFunctionSignature(const ast::Expr& expr)
                           : std::nullopt;
         };
         if (auto module = path(*qualified->receiver))
-            functionName = *module + "::" + qualified->method;
+            functionName = kex::mangle::qualify(*module, qualified->method);
     }
     if (functionName.empty()) return nullptr;
     if (auto user = m_userSignatures.find(functionName);
@@ -3236,7 +3236,7 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
                           : std::nullopt;
         };
         if (auto module = path(*qualified->receiver))
-            functionName = *module + "::" + qualified->method;
+            functionName = kex::mangle::qualify(*module, qualified->method);
     }
 
     std::vector<Signature> candidates;
@@ -4008,7 +4008,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // A local function binding (`let f(x) ...` inside an expression block)
     // is represented as a FuncType variable rather than a top-level
     // FunctionDef signature. Resolve it before consulting global overloads.
-    if (!isMethodCall && name.find("::") == std::string::npos) {
+    if (!isMethodCall && !kex::mangle::hasScope(name)) {
         auto local = lookupVar(name);
         auto resolvedLocal = local ? resolve(local) : nullptr;
         if (resolvedLocal)
@@ -4116,10 +4116,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // under its qualified name, so the bare-name lookup below would pick
     // another module's same-named function instead — `Template.render`,
     // once the Template source is merged into the build (kexhq/kex#385).
-    else if (auto own = m_userSignatures.find(m_currentModulePath + "::" +
-                                               name);
+    else if (auto own = m_userSignatures.find(kex::mangle::qualify(m_currentModulePath, name));
              !isMethodCall && !m_currentModulePath.empty() &&
-             name.find("::") == std::string::npos &&
+             !kex::mangle::hasScope(name) &&
              own != m_userSignatures.end() && !own->second.empty())
         userSignatures = &own->second;
     else if (auto user = m_userSignatures.find(name);
@@ -4132,7 +4131,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // for the `table` this module imported (#494).
     std::vector<Signature> visibleUserSignatures;
     if (userSignatures && !isMethodCall &&
-        name.find("::") == std::string::npos) {
+        !kex::mangle::hasScope(name)) {
         std::set<std::string> hiddenModules;
         for (const auto& signature : *userSignatures) {
             if (freeFunctionVisible(signature.declaringModule, name))
@@ -4348,9 +4347,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::vector<const ImportedFunction*> importedFunctions;
     std::string qualifiedModule;
     if (m_importedInterfaces) {
-        if (auto separator = name.find("::"); separator != std::string::npos) {
-            qualifiedModule = name.substr(0, separator);
-            auto functionName = name.substr(separator + 2);
+        if (kex::mangle::hasScope(name)) {
+            qualifiedModule = kex::mangle::headOf(name);
+            auto functionName = kex::mangle::tailOf(name);
             if (auto module = m_importedInterfaces->modules.find(qualifiedModule);
                 module != m_importedInterfaces->modules.end())
                 if (auto functions = module->second.exports.find(functionName);
@@ -4520,7 +4519,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
     if (ambiguous) {
         error(loc, "ambiguous imported " +
-            std::string(isMethodCall && name.find("::") == std::string::npos
+            std::string(isMethodCall && !kex::mangle::hasScope(name)
                 ? "receiver function '" : "function '") + sourceName(name) +
             "' is provided by both '" + ambiguous->first + "' and '" +
             ambiguous->second + "'");
@@ -4721,7 +4720,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                    !std::holds_alternative<UnknownType>(receiver->kind);
         }();
         if (isMethodCall && concreteReceiver && !name.empty() &&
-            name.find("::") == std::string::npos &&
+            !kex::mangle::hasScope(name) &&
             !std::isupper(static_cast<unsigned char>(name.front()))) {
             // `Kex.BACKEND.major` checked clean because `major` is a field
             // of Kex.Version, then died at runtime with badarg. The field
@@ -4770,7 +4769,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const auto* named = functionCall ? &functionCall->namedArgs
                                         : methodCall ? &methodCall->namedArgs : nullptr;
         const bool throughReceiver =
-            isMethodCall && name.find("::") == std::string::npos;
+            isMethodCall && !kex::mangle::hasScope(name);
         const std::size_t receiverSlots = throughReceiver ? 1 : 0;
         std::vector<const Signature*> layouts;
         for (const auto& sig : *sigs) {
@@ -5032,7 +5031,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const auto* named = functionCall ? &functionCall->namedArgs
                                         : methodCall ? &methodCall->namedArgs : nullptr;
         if (named && !named->empty() &&
-            (!isMethodCall || name.find("::") != std::string::npos) &&
+            (!isMethodCall || kex::mangle::hasScope(name)) &&
             sig.paramNames.size() == sig.params.size()) {
             std::vector<std::string> labels;
             for (const auto& [label, _] : *named) labels.push_back(label);
@@ -5340,7 +5339,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // receiver's type.
         bool ambiguousReceiver = false;
         if (methodCall) {
-            bool isReceiver = name.find("::") == std::string::npos;
+            bool isReceiver = !kex::mangle::hasScope(name);
             const ImportedFunction* resolved = nullptr;
             // `merged` is importedSigs ++ local methods ++ user functions, so
             // the winner's index says where it came from. When it came from a
