@@ -1,0 +1,8 @@
+# A bare `var Name = ...` binds nothing: an uppercase name in pattern
+# position is a constructor match, not a binding — so it is rejected with
+# a dedicated error (PR #607 review). `var Just(x) = ...` stays a pattern
+# (see var_destructure.kex).
+main do
+  var Num = 5
+  IO.printLine(Num)
+end

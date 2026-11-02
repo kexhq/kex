@@ -1,0 +1,2 @@
+spec/error_var_uppercase_binding.kex:6:7: error: Cannot bind 'Num' with 'var': patterns only bind lowercase names
+Aborted: 1 syntax error — fix before running.

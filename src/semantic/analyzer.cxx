@@ -36,57 +36,71 @@ auto receiverModuleName(const ast::Expr& receiver) -> std::string {
 
 } // namespace
 
-auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void {
-    std::visit([this, loc](const auto& node) {
+auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
+                               bool isVar) -> void {
+    std::visit([this, loc, isVar](const auto& node) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
             if (node.name != "_") {
                 auto* existing = m_symbols.currentScope().lookupLocal(node.name);
-                if (existing && existing->kind == SymbolKind::Variable) {
+                const bool shadowsImplicit =
+                    existing && existing->kind == SymbolKind::Variable &&
+                    existing->isImplicit;
+                if (existing && existing->kind == SymbolKind::Variable &&
+                    !existing->isImplicit) {
                     if (existing->isMutable) {
-                        error(loc, "Cannot redeclare '" + node.name + "': was declared with 'var'");
+                        error(loc, "Cannot redeclare '" + node.name + "': " +
+                                     (isVar ? "already declared with 'var'"
+                                            : "was declared with 'var'"));
                     } else {
                         error(loc, "Cannot redeclare immutable binding: " + node.name);
                     }
                 }
-                m_symbols.define(Symbol{node.name, SymbolKind::Variable, false, false, true, loc});
+                Symbol bound{node.name, SymbolKind::Variable, false, isVar,
+                             true, loc};
+                // Replaces the implicit binding so a second explicit one
+                // still redeclares (and a `let` shadow is immutable).
+                if (shadowsImplicit)
+                    m_symbols.redefine(std::move(bound));
+                else
+                    m_symbols.define(std::move(bound));
             }
         }
         else if constexpr (std::is_same_v<T, ast::TypePattern>) {
             if (!node.name.empty() && node.name != "_")
                 m_symbols.define(Symbol{node.name, SymbolKind::Variable, false,
-                                        false, true, loc});
+                                        isVar, true, loc});
         }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
-            if (node.inner) bindPatternVars(*node.inner, loc);
+            if (node.inner) bindPatternVars(*node.inner, loc, isVar);
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
             for (const auto& arg : node.args) {
-                if (arg) bindPatternVars(*arg, loc);
+                if (arg) bindPatternVars(*arg, loc, isVar);
             }
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
             for (const auto& field : node.fields) {
-                if (field.pattern) bindPatternVars(**field.pattern, loc);
+                if (field.pattern) bindPatternVars(**field.pattern, loc, isVar);
                 else if (!field.isStringKey) {
-                    m_symbols.define(Symbol{field.name, SymbolKind::Variable, false, false, true, loc});
+                    m_symbols.define(Symbol{field.name, SymbolKind::Variable, false, isVar, true, loc});
                 }
             }
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
             for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem, loc);
+                if (elem) bindPatternVars(*elem, loc, isVar);
             }
-            if (node.rest) bindPatternVars(**node.rest, loc);
+            if (node.rest) bindPatternVars(**node.rest, loc, isVar);
         }
         else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
             for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem, loc);
+                if (elem) bindPatternVars(*elem, loc, isVar);
             }
         }
         else if constexpr (std::is_same_v<T, ast::RangePattern>) {
-            if (node.start) bindPatternVars(*node.start, loc);
-            if (node.end) bindPatternVars(*node.end, loc);
+            if (node.start) bindPatternVars(*node.start, loc, isVar);
+            if (node.end) bindPatternVars(*node.end, loc, isVar);
         }
         // LiteralPattern, WildcardPattern introduce nothing.
     }, pat.kind);
@@ -356,12 +370,18 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
 
     for (const auto& clause : def.clauses) {
         m_symbols.pushScope(m_inFoulContext);
-        if (m_inMakeBlock)
-            m_symbols.define(Symbol{"new", SymbolKind::Variable, false, true,
-                                    true, def.location});
-        if (def.isSlot)
-            m_symbols.define(Symbol{"from", SymbolKind::Variable, false, false,
-                                    true, def.location});
+        if (m_inMakeBlock) {
+            Symbol implicitNew{"new", SymbolKind::Variable, false, true,
+                               true, def.location};
+            implicitNew.isImplicit = true;
+            m_symbols.define(std::move(implicitNew));
+        }
+        if (def.isSlot) {
+            Symbol implicitFrom{"from", SymbolKind::Variable, false, false,
+                                true, def.location};
+            implicitFrom.isImplicit = true;
+            m_symbols.define(std::move(implicitFrom));
+        }
 
         // Register parameters as variables
         for (const auto& param : clause.params) {
@@ -449,8 +469,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             if (node.value) analyzeExpr(*node.value);
-            m_symbols.define(Symbol{
-                node.name, SymbolKind::Variable, false, true, true, expr.location});
+            // Same shapes `let` accepts; the redeclare check rides along,
+            // keyed on the new declaration being a `var` (kexhq/kex#601).
+            if (node.pattern) bindPatternVars(*node.pattern, expr.location,
+                                              /*isVar=*/true);
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             if (node.value) analyzeExpr(*node.value);

@@ -24,6 +24,11 @@ using ast::methodDispatchTypes;
 using ast::renderDispatchType;
 using ast::separableOverloadSignatures;
 
+// Defined near the module-assembly helpers below; the statement sequencers
+// above need it to mark `var`-destructured names mutable.
+static auto patternBoundNames(const ast::PatternPtr& p,
+                              std::vector<std::string>& out) -> void;
+
 // Backend-local symbol construction lives here so every producer and reader
 // changes together. Dots identify qualified/module membership; slash
 // introduces a receiver/argument overload signature.
@@ -1518,7 +1523,12 @@ struct Lowering {
                 // `Undefined function: EARLIEST_YEAR.showValue`, while the
                 // walker read the binding (rodolfo docs/kex-issues.md #14,
                 // kexhq/kex#282).
-                if (!subst.count(n.name)) {
+                // A local binding — a `let UPPER` constant — shadows any
+                // same-named constructor or top-level constant, as on the
+                // walker (kexhq/kex#603). Without this the reference below
+                // decayed into the atom 'Name'.
+                if (subst.count(n.name)) return var(currentName(n.name));
+                else {
                     if (topLevelConstants.count(n.name) ||
                         zeroArgFns.count(n.name)) {
                         auto ex = std::make_unique<Expr>();
@@ -7390,6 +7400,21 @@ struct Lowering {
                        std::move(e));
     }
 
+    // A `let` binding's value: a local `let UPPER = ...` binds the body's
+    // value, not the zero-arg function the parser wraps it in, so apply the
+    // fun immediately (kexhq/kex#603). The fun's own return scope keeps a
+    // `return` inside the body from escaping, matching the walker's eager
+    // call; anything else lowers as written.
+    auto lowerBindingValue(const ast::LetExpr& le) -> ExprPtr {
+        if (!ast::isLocalConstantBind(le.pattern, le.value))
+            return lower(le.value);
+        std::vector<Binding> binds;
+        auto fun = atomize(le.value, binds);
+        auto call = std::make_unique<Expr>();
+        call->node = CallIndirect{std::move(fun), {}, false};
+        return wrapLets(binds, std::move(call));
+    }
+
     // If `e` is a break/next/return, its loop-control IR; else nullptr.
     auto loopControl(const ast::ExprPtr& e, const std::string& loopFn,
                      const std::vector<std::string>& mutVars) -> ExprPtr {
@@ -7437,14 +7462,33 @@ struct Lowering {
             return makeLet(nv, std::move(val), cont());
         }
         if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-            auto val = lower(ve->value);
-            std::string nv = fresh(ve->name); subst[ve->name] = nv;
-            immutableBindings.erase(ve->name);
-            return makeLet(nv, std::move(val), cont());
+            if (auto* vp = ve->pattern
+                    ? std::get_if<ast::VarPattern>(&ve->pattern->kind)
+                    : nullptr) {
+                auto val = lower(ve->value);
+                std::string nv = fresh(vp->name); subst[vp->name] = nv;
+                immutableBindings.erase(vp->name);
+                if (const auto* curry = std::get_if<ast::CurryExpr>(&ve->value->kind);
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    curryOrigin[vp->name] = curry->name;
+                else
+                    curryOrigin.erase(vp->name);
+                return makeLet(nv, std::move(val), cont());
+            }
+            auto val = lower(ve->value); auto pat = lowerPattern(ve->pattern);
+            // Destructured names are mutable: reassignment and `!` rebind
+            // them, so they must not linger in immutableBindings.
+            if (ve->pattern) {
+                std::vector<std::string> names;
+                patternBoundNames(ve->pattern, names);
+                for (const auto& name : names) immutableBindings.erase(name);
+            }
+            return makeMatch1(std::move(val), std::move(pat), cont());
         }
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
-                auto val = lower(le->value);
+                auto val = lowerBindingValue(*le);
                 std::string nv = fresh(vp->name); subst[vp->name] = nv;
                 immutableBindings.insert(vp->name);
                 if (const auto* curry = std::get_if<ast::CurryExpr>(&le->value->kind);
@@ -7930,7 +7974,7 @@ struct Lowering {
         // let PATTERN = value
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
-                auto val = lower(le->value);
+                auto val = lowerBindingValue(*le);
                 std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
                 subst[vp->name] = ssa;
                 immutableBindings.insert(vp->name);
@@ -7976,14 +8020,64 @@ struct Lowering {
             auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
             return makeMatch1(std::move(val), std::move(pat), std::move(rest));
         }
-        // var name = value  (a fresh mutable binding)
+        // var PATTERN = value  (fresh mutable bindings)
         if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+            if (auto* vp = ve->pattern
+                    ? std::get_if<ast::VarPattern>(&ve->pattern->kind)
+                    : nullptr) {
+                auto val = lower(ve->value);
+                std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
+                subst[vp->name] = ssa;
+                immutableBindings.erase(vp->name);
+                if (const auto* curry = std::get_if<ast::CurryExpr>(&ve->value->kind);
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    curryOrigin[vp->name] = curry->name;
+                else
+                    curryOrigin.erase(vp->name);
+                auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
+                return makeLet(ssa, std::move(val), std::move(rest));
+            }
+            // Record destructure, mirroring `let` above — bound mutable.
+            if (auto* rp = ve->pattern
+                    ? std::get_if<ast::RecordPattern>(&ve->pattern->kind)
+                    : nullptr) {
+                if (rp->typeName.empty()) {
+                    std::string rv = fresh("Anon");
+                    std::vector<std::string> names;
+                    collectRecordBindings(*rp, names);
+                    for (const auto& name : names) {
+                        subst[name] = name;
+                        immutableBindings.erase(name);
+                    }
+                    auto rest = isLast ? lit(LitKind::Atom, "ok")
+                                       : lowerBodyFrom(body, i + 1);
+                    currentLoc = &e->location;
+                    return makeLet(
+                        rv, lower(ve->value),
+                        wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
+                }
+                std::string rv = fresh("rec");
+                std::vector<std::pair<std::string, ExprPtr>> prefix;
+                destructureRecordPattern(rv, *rp, prefix);
+                for (auto& [nm, _] : prefix) {
+                    subst[nm] = nm;
+                    immutableBindings.erase(nm);
+                }
+                auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
+                for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+                    rest = makeLet(it->first, std::move(it->second), std::move(rest));
+                return makeLet(rv, lower(ve->value), std::move(rest));
+            }
             auto val = lower(ve->value);
-            std::string ssa = subst.count(ve->name) ? fresh(ve->name) : ve->name;
-            subst[ve->name] = ssa;
-            immutableBindings.erase(ve->name);
-            auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
-            return makeLet(ssa, std::move(val), std::move(rest));
+            auto pat = lowerPattern(ve->pattern);
+            if (ve->pattern) {
+                std::vector<std::string> names;
+                patternBoundNames(ve->pattern, names);
+                for (const auto& name : names) immutableBindings.erase(name);
+            }
+            auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
+            return makeMatch1(std::move(val), std::move(pat), std::move(rest));
         }
         // name = value  (reassignment → fresh SSA name, value sees the OLD one)
         if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {

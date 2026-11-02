@@ -1,0 +1,20 @@
+# An uppercase `let` inside a function body is a local constant: it binds
+# the value, not an atom or a function (kexhq/kex#603). Single letters
+# stay reserved for type parameters (see error_single_letter_binding.kex).
+main do
+  let Num = 5
+  IO.printLine(Num)
+  IO.printLine(Num + 1)
+
+  let NUM = 7
+  IO.printLine(NUM)
+  IO.printLine(NUM * 2)
+
+  var i = 1
+  var j = 1
+  while i <= Num do
+    j = j * i
+    i = i + 1
+  end
+  IO.printLine(j)
+end

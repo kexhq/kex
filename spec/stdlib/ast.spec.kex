@@ -280,7 +280,7 @@ describe("Kex.AST") do
             Just(ListType(NamedType("Integer", []))),
             Identifier("values")
           ),
-          Var("count", Just(NamedType("Integer", [])), LitInt(0))
+          Var(BindPattern("count"), Just(NamedType("Integer", [])), LitInt(0))
         ])
         _ => assert(false, "expected one bindings clause")
       end

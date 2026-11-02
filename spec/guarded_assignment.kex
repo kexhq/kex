@@ -30,14 +30,14 @@ main do
 
   # Inside a `loop` and a `while`, where the mutable variable has to survive
   # the branch that did not run.
-  var total = 0
+  var evenTotal = 0
   var index = 0
   loop do
     break if index >= 5
-    total = total + index if index % 2 == 0
+    evenTotal = evenTotal + index if index % 2 == 0
     index = index + 1
   end
-  IO.printLine("even ${total}")
+  IO.printLine("even ${evenTotal}")
 
   var count = 0
   var n = 0

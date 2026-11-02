@@ -691,6 +691,85 @@ int main() {
             }
         });
 
+        it("supports compound assignment to a persisted var", []() {
+            // kexhq/kex#604: the BEAM REPL spotted `n = ...` textually and
+            // ran it as a statement, but `n += 1` fell through to the
+            // expression path — `IO.inspect(n += 1)` — where AssignExpr
+            // does not lower ("unimplemented expr node AssignExpr").
+            const std::string input =
+                "var n = 5\n"
+                "n * 2\n"
+                "n += 1\n"
+                "n *= 2\n"
+                "n\n"
+                "n == 12\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("unimplemented expr node")
+                           == std::string::npos, out);
+                assertTrue(out.find("=> 10 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 6 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 12 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> true : Bool") != std::string::npos,
+                           out);
+            }
+        });
+
+        it("rejects a partial pattern rebind with what to do instead", []() {
+            // PR #607 review: `var (i, j)` then `var j = 5` used to fail
+            // with a redeclare that retrying never cleared — the earlier
+            // line is atomic, so replaying it redeclares `j` while dropping
+            // it loses `i`. Full-pattern re-entry works and siblings keep
+            // working, for `var` and `let` patterns alike.
+            const std::vector<std::string> inputs = {
+                "var (i, j) = (1, 2)\n"
+                "var j = 5\n"
+                "i\n"
+                "var (i, j) = (3, 4)\n"
+                "i\n"
+                "j\n",
+                "let (a, b) = (1, 2)\n"
+                "var b = 7\n"
+                "a\n",
+            };
+            for (const auto& input : inputs) {
+                for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                    assertTrue(out.find("Cannot rebind '") != std::string::npos,
+                               out);
+                    assertTrue(out.find("re-enter the whole pattern") !=
+                                   std::string::npos,
+                               out);
+                }
+            }
+            for (const auto& out :
+                 {runRepl(inputs[0]), runBeamRepl(inputs[0])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 3 : Integer") != std::string::npos,
+                           out);
+                assertTrue(out.find("=> 4 : Integer") != std::string::npos,
+                           out);
+            }
+            for (const auto& out :
+                 {runRepl(inputs[1]), runBeamRepl(inputs[1])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
+                           out);
+            }
+        });
+
+        it("shows the bound value's type for var, not Void", []() {
+            // kexhq/kex#604: `var n = 1` echoed `1 : Void` while `let x = 5`
+            // echoes `5 : Integer` — the REPL showed the declaration's own
+            // unit type instead of unwrapping to the bound value like `let`.
+            for (const auto& out :
+                 {runRepl("var n = 1\n"), runBeamRepl("var n = 1\n")}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
+                           out);
+            }
+        });
+
         it("binds an ALL-CAPS constant to its value, not its function", []() {
             // `let UPPER = expr` is a zero-arg constant definition. Classified
             // with the destructuring patterns (`let Just(x) = ...`), the name

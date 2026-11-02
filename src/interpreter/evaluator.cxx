@@ -2302,82 +2302,30 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
             auto value = node.value ? eval(*node.value) : Value::none();
-            if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
-                m_env->define(varPat->name, value);
-            } else if (auto* tuplePat = std::get_if<ast::TuplePattern>(&node.pattern->kind)) {
-                if (auto* tupleVal = std::get_if<TupleValue>(&value->data)) {
-                    // Delegate each element to the general matchPattern() so
-                    // nested patterns (e.g. `let (JsonString(key), rest) =
-                    // ...`, a ConstructorPattern element) bind correctly —
-                    // not just bare variable names.
-                    for (size_t i = 0; i < tuplePat->elements.size() && i < tupleVal->elements.size(); i++) {
-                        matchPattern(*tuplePat->elements[i], tupleVal->elements[i]);
+            // A local `let UPPER = ...` is a constant: call the zero-arg
+            // function now and bind its value (kexhq/kex#603). Top-level
+            // constants stay lazy (auto-called at each use); a local one
+            // evaluates once, like every other local binding. The closure's
+            // own frame keeps a `return` inside the body from escaping.
+            if (ast::isLocalConstantBind(node.pattern, node.value))
+                if (auto* func = std::get_if<FunctionValue>(&value->data);
+                    func && func->native) {
+                    auto savedEnv = m_env;
+                    try {
+                        value = func->native({});
+                    } catch (...) {
+                        m_env = savedEnv;
+                        throw;
                     }
                 }
-            } else if (auto* recPat = std::get_if<ast::RecordPattern>(&node.pattern->kind)) {
-                // `field.pattern` holds the rename/sub-pattern for
-                // `{ "key": shortName }` or `{ field: subPattern }` — must
-                // bind/recurse through it when present; only fall back to
-                // `field.name` (the key itself) for the shorthand `{ name }`
-                // form with no explicit pattern.
-                if (auto* recVal = std::get_if<RecordValue>(&value->data)) {
-                    if (!recPat->typeName.empty() && recVal->typeName != recPat->typeName)
-                        throw RuntimeError("pattern mismatch — expected record " +
-                                           recPat->typeName, expr.location);
-                    for (const auto& field : recPat->fields) {
-                        if (auto it = recVal->fields.find(field.name); it != recVal->fields.end()) {
-                            if (field.pattern && *field.pattern) {
-                                matchPattern(**field.pattern, it->second);
-                            } else {
-                                m_env->define(field.name, it->second);
-                            }
-                        }
-                    }
-                } else if (recPat->typeName.empty()) {
-                  // The anonymous `{ k }` form also destructures maps by key; a
-                  // named `Foo { k }` is record-only (maps carry no type name).
-                  // The key is `"k"` or, in an atom-keyed map such as
-                  // `{ k: 1 }`, `:k` — the string key first when a map has
-                  // both, as on BEAM. A missing key is a pattern mismatch
-                  // here, rather than a name left unbound.
-                  if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
-                    for (const auto& field : recPat->fields) {
-                        ValuePtr found;
-                        for (const auto& [k, v] : mapVal->entries)
-                            if (auto* sk = std::get_if<StringValue>(&k->data);
-                                sk && sk->value == field.name) {
-                                found = v;
-                                break;
-                            }
-                        if (!found)
-                            for (const auto& [k, v] : mapVal->entries)
-                                if (auto* ak = std::get_if<AtomValue>(&k->data);
-                                    ak && ak->name == field.name) {
-                                    found = v;
-                                    break;
-                                }
-                        if (!found)
-                            throw RuntimeError("pattern mismatch", expr.location);
-                        if (field.pattern && *field.pattern) {
-                            matchPattern(**field.pattern, found);
-                        } else {
-                            m_env->define(field.name, found);
-                        }
-                    }
-                  }
-                }
-            } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
-                if (!matchPattern(*node.pattern, value))
-                    throw RuntimeError("pattern mismatch — expected " + constrPat->name, expr.location);
-            } else if (std::get_if<ast::ListPattern>(&node.pattern->kind)) {
-                if (!matchPattern(*node.pattern, value))
-                    throw RuntimeError("pattern mismatch", expr.location);
-            }
+            if (node.pattern) bindPattern(*node.pattern, value, expr.location,
+                                          /*isMutable=*/false);
             return value;
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             auto value = node.value ? eval(*node.value) : Value::none();
-            m_env->define(node.name, value, /*isMutable=*/true);
+            if (node.pattern) bindPattern(*node.pattern, value, expr.location,
+                                          /*isMutable=*/true);
             return value;
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
@@ -5059,8 +5007,9 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
     return val;
 }
 
-auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool {
-    return std::visit([this, &value](const auto& pat) -> bool {
+auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
+                               bool isMutable) -> bool {
+    return std::visit([this, &value, isMutable](const auto& pat) -> bool {
         using T = std::decay_t<decltype(pat)>;
 
         if constexpr (std::is_same_v<T, ast::WildcardPattern>) {
@@ -5069,17 +5018,17 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             // @pattern — match the inner pattern against 'this' (the value)
             if (pat.inner) {
-                return matchPattern(*pat.inner, value);
+                return matchPattern(*pat.inner, value, isMutable);
             }
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            m_env->define(pat.name, value);
+            m_env->define(pat.name, value, isMutable);
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::TypePattern>) {
             if (!pat.type || !runtimeTypeMatches(value, *pat.type)) return false;
-            if (!pat.name.empty()) m_env->define(pat.name, value);
+            if (!pat.name.empty()) m_env->define(pat.name, value, isMutable);
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
@@ -5137,7 +5086,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             auto* tv = std::get_if<TupleValue>(&value->data);
             if (!tv || tv->elements.size() != pat.elements.size()) return false;
             for (size_t i = 0; i < pat.elements.size(); i++) {
-                if (!matchPattern(*pat.elements[i], tv->elements[i])) return false;
+                if (!matchPattern(*pat.elements[i], tv->elements[i], isMutable)) return false;
             }
             return true;
         }
@@ -5150,8 +5099,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             auto endVal = rv->upper ? rv->upper : rv->isChar
                 ? Value::character(static_cast<char32_t>(rv->end))
                 : Value::integer(rv->end);
-            if (!matchPattern(*pat.start, startVal)) return false;
-            if (!matchPattern(*pat.end, endVal)) return false;
+            if (!matchPattern(*pat.start, startVal, isMutable)) return false;
+            if (!matchPattern(*pat.end, endVal, isMutable)) return false;
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
@@ -5179,7 +5128,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 if (elements->size() != pat.elements.size()) return false;
             }
             for (size_t i = 0; i < pat.elements.size(); i++) {
-                if (!matchPattern(*pat.elements[i], (*elements)[i])) return false;
+                if (!matchPattern(*pat.elements[i], (*elements)[i], isMutable)) return false;
             }
             if (pat.rest) {
                 // Reconstruct tail: if original was a String, tail is also a String
@@ -5189,10 +5138,10 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                         if (auto* cv = std::get_if<CharValue>(&(*elements)[i]->data))
                             tail += utf8::encode(cv->value);
                     }
-                    if (!matchPattern(**pat.rest, Value::string(tail))) return false;
+                    if (!matchPattern(**pat.rest, Value::string(tail), isMutable)) return false;
                 } else {
                     std::vector<ValuePtr> rest(elements->begin() + pat.elements.size(), elements->end());
-                    if (!matchPattern(**pat.rest, Value::list(std::move(rest)))) return false;
+                    if (!matchPattern(**pat.rest, Value::list(std::move(rest)), isMutable)) return false;
                 }
             }
             return true;
@@ -5247,7 +5196,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 if (var->tag != pat.name) return false;
                 if (var->args.size() != pat.args.size()) return false;
                 for (size_t i = 0; i < pat.args.size(); i++) {
-                    if (!matchPattern(*pat.args[i], var->args[i])) return false;
+                    if (!matchPattern(*pat.args[i], var->args[i], isMutable)) return false;
                 }
                 return true;
             }
@@ -5258,7 +5207,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 for (size_t i = 0; i < pat.args.size(); i++) {
                     auto it = rec->fields.find(std::to_string(i));
                     if (it == rec->fields.end()) return false;
-                    if (!matchPattern(*pat.args[i], it->second)) return false;
+                    if (!matchPattern(*pat.args[i], it->second, isMutable)) return false;
                 }
                 return true;
             }
@@ -5274,8 +5223,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 for (const auto& field : pat.fields) {
                     auto it = rv->fields.find(field.name);
                     if (it == rv->fields.end()) return false;
-                    if (field.pattern && !matchPattern(**field.pattern, it->second)) return false;
-                    if (!field.pattern) m_env->define(field.name, it->second);
+                    if (field.pattern && !matchPattern(**field.pattern, it->second, isMutable)) return false;
+                    if (!field.pattern) m_env->define(field.name, it->second, isMutable);
                 }
                 return true;
             }
@@ -5285,6 +5234,81 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             return false;
         }
     }, pattern.kind);
+}
+
+auto Evaluator::bindPattern(const ast::Pattern& pattern, const ValuePtr& value,
+                            SourceLocation loc, bool isMutable) -> void {
+    if (auto* varPat = std::get_if<ast::VarPattern>(&pattern.kind)) {
+        m_env->define(varPat->name, value, isMutable);
+    } else if (auto* tuplePat = std::get_if<ast::TuplePattern>(&pattern.kind)) {
+        if (auto* tupleVal = std::get_if<TupleValue>(&value->data)) {
+            // Delegate each element to the general matchPattern() so
+            // nested patterns (e.g. `let (JsonString(key), rest) =
+            // ...`, a ConstructorPattern element) bind correctly —
+            // not just bare variable names.
+            for (size_t i = 0; i < tuplePat->elements.size() && i < tupleVal->elements.size(); i++) {
+                matchPattern(*tuplePat->elements[i], tupleVal->elements[i], isMutable);
+            }
+        }
+    } else if (auto* recPat = std::get_if<ast::RecordPattern>(&pattern.kind)) {
+        // `field.pattern` holds the rename/sub-pattern for
+        // `{ "key": shortName }` or `{ field: subPattern }` — must
+        // bind/recurse through it when present; only fall back to
+        // `field.name` (the key itself) for the shorthand `{ name }`
+        // form with no explicit pattern.
+        if (auto* recVal = std::get_if<RecordValue>(&value->data)) {
+            if (!recPat->typeName.empty() && recVal->typeName != recPat->typeName)
+                throw RuntimeError("pattern mismatch — expected record " +
+                                   recPat->typeName, loc);
+            for (const auto& field : recPat->fields) {
+                if (auto it = recVal->fields.find(field.name); it != recVal->fields.end()) {
+                    if (field.pattern && *field.pattern) {
+                        matchPattern(**field.pattern, it->second, isMutable);
+                    } else {
+                        m_env->define(field.name, it->second, isMutable);
+                    }
+                }
+            }
+        } else if (recPat->typeName.empty()) {
+          // The anonymous `{ k }` form also destructures maps by key; a
+          // named `Foo { k }` is record-only (maps carry no type name).
+          // The key is `"k"` or, in an atom-keyed map such as
+          // `{ k: 1 }`, `:k` — the string key first when a map has
+          // both, as on BEAM. A missing key is a pattern mismatch
+          // here, rather than a name left unbound.
+          if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
+            for (const auto& field : recPat->fields) {
+                ValuePtr found;
+                for (const auto& [k, v] : mapVal->entries)
+                    if (auto* sk = std::get_if<StringValue>(&k->data);
+                        sk && sk->value == field.name) {
+                        found = v;
+                        break;
+                    }
+                if (!found)
+                    for (const auto& [k, v] : mapVal->entries)
+                        if (auto* ak = std::get_if<AtomValue>(&k->data);
+                            ak && ak->name == field.name) {
+                            found = v;
+                            break;
+                        }
+                if (!found)
+                    throw RuntimeError("pattern mismatch", loc);
+                if (field.pattern && *field.pattern) {
+                    matchPattern(**field.pattern, found, isMutable);
+                } else {
+                    m_env->define(field.name, found, isMutable);
+                }
+            }
+          }
+        }
+    } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
+        if (!matchPattern(pattern, value, isMutable))
+            throw RuntimeError("pattern mismatch — expected " + constrPat->name, loc);
+    } else if (std::get_if<ast::ListPattern>(&pattern.kind)) {
+        if (!matchPattern(pattern, value, isMutable))
+            throw RuntimeError("pattern mismatch", loc);
+    }
 }
 
 auto Evaluator::registerBuiltins() -> void {

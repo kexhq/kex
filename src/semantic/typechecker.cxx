@@ -3617,6 +3617,42 @@ auto TypeChecker::bindPatternVars(
     }, pat.kind);
 }
 
+auto TypeChecker::bindDestructuredPattern(
+    const ast::Pattern& pat, const TypePtr& valueType) -> void {
+    checkPatternArity(pat);
+    // Reject constructor mismatches early, e.g.
+    //   let Ok(v) = parsePrefix(...)   when parsePrefix returns Optional
+    //   let Just(v) = parse(...)       when parse returns Result
+    bool mismatchReported = false;
+    if (auto* cp = std::get_if<ast::ConstructorPattern>(&pat.kind)) {
+        auto resolved = resolve(valueType);
+        if (std::holds_alternative<UnknownType>(resolved->kind) ||
+            std::holds_alternative<TypeVar>(resolved->kind))
+            ; // permissive — can't determine the type at compile time
+        else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind)) {
+            error(pat.location, "cannot match `Just` — expected Optional, got " + typeToString(resolved));
+            mismatchReported = true;
+        }
+        else if (cp->name == "Ok" || cp->name == "Error") {
+            if (auto* nt = std::get_if<NamedType>(&resolved->kind)) {
+                if (nt->name != "Result") {
+                    error(pat.location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                    mismatchReported = true;
+                }
+            } else {
+                error(pat.location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                mismatchReported = true;
+            }
+        }
+    }
+    // With the value's type, as a `match` arm gets its subject's:
+    // bound without it, `let Just(i) = Just(2)` typed `i` from
+    // the constructor's declared payload instead (kexhq/kex#249).
+    // Not after a mismatch already reported above, which the
+    // owner check inside would only report a second time.
+    bindPatternVars(pat, mismatchReported ? nullptr : valueType);
+}
+
 auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
     std::visit([this](const auto& node) {
         using T = std::decay_t<decltype(node)>;
@@ -5488,6 +5524,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::exchange(m_branchExpectation, branchExpectation);
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             m_branchExpectation = outerExpectation;
+            // A local `let UPPER = ...` binds the body's value, not the
+            // zero-arg function the parser wraps it in (kexhq/kex#603):
+            // unwrap here so the annotation check and the binding below
+            // both see the value's type.
+            if (ast::isLocalConstantBind(node.pattern, node.value)) {
+                auto resolvedValue = resolve(valueType);
+                if (auto* func = std::get_if<FuncType>(&resolvedValue->kind))
+                    if (func->params.empty()) valueType = func->result;
+            }
             // `let xs: [Colour] = []` — the annotation is what the binding IS;
             // the initializer only has to be compatible with it. Binding the
             // inferred type instead would defeat the reason for writing one.
@@ -5551,39 +5596,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 else
                     m_curryOrigin.erase(varPat->name);
             } else if (node.pattern) {
-                checkPatternArity(*node.pattern);
-                // Reject constructor mismatches early, e.g.
-                //   let Ok(v) = parsePrefix(...)   when parsePrefix returns Optional
-                //   let Just(v) = parse(...)       when parse returns Result
-                bool mismatchReported = false;
-                if (auto* cp = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
-                    auto resolved = resolve(valueType);
-                    if (std::holds_alternative<UnknownType>(resolved->kind) ||
-                        std::holds_alternative<TypeVar>(resolved->kind))
-                        ; // permissive — can't determine the type at compile time
-                    else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind)) {
-                        error(node.pattern->location, "cannot match `Just` — expected Optional, got " + typeToString(resolved));
-                        mismatchReported = true;
-                    }
-                    else if (cp->name == "Ok" || cp->name == "Error") {
-                        if (auto* nt = std::get_if<NamedType>(&resolved->kind)) {
-                            if (nt->name != "Result") {
-                                error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
-                                mismatchReported = true;
-                            }
-                        } else {
-                            error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
-                            mismatchReported = true;
-                        }
-                    }
-                }
-                // With the value's type, as a `match` arm gets its subject's:
-                // bound without it, `let Just(i) = Just(2)` typed `i` from
-                // the constructor's declared payload instead (kexhq/kex#249).
-                // Not after a mismatch already reported above, which the
-                // owner check inside would only report a second time.
-                bindPatternVars(*node.pattern,
-                                mismatchReported ? nullptr : valueType);
+                bindDestructuredPattern(*node.pattern, valueType);
             }
             return Type::unit();
         }
@@ -5591,7 +5604,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             auto declared = declaredBindingType(node.type, valueType, expr.location,
                                                 node.value ? node.value.get() : nullptr);
-            defineVar(node.name, declared ? declared : valueType);
+            if (auto* varPat = node.pattern
+                    ? std::get_if<ast::VarPattern>(&node.pattern->kind)
+                    : nullptr) {
+                defineVar(varPat->name, declared ? declared : valueType);
+                // Same origin tracking as `let`, so a named-argument call
+                // through `var f = ~greet` finds `greet`'s real parameter
+                // names (kexhq/kex#309).
+                if (const auto* curry = node.value
+                        ? std::get_if<ast::CurryExpr>(&node.value->kind)
+                        : nullptr;
+                    curry && curry->argGroups.empty() && !curry->isOperator &&
+                    curry->module.empty())
+                    m_curryOrigin[varPat->name] = curry->name;
+                else
+                    m_curryOrigin.erase(varPat->name);
+            } else if (node.pattern) {
+                bindDestructuredPattern(*node.pattern, valueType);
+            }
             return Type::unit();
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
