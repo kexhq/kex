@@ -177,6 +177,8 @@ add_library(kex_lib
     src/semantic/types.cxx
     src/semantic/traits.cxx
     src/semantic/typechecker.cxx
+    src/semantic/typechecker_unify.cxx
+    src/semantic/typechecker_expr.cxx
     src/semantic/db.cxx
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
@@ -189,6 +191,7 @@ add_library(kex_lib
     src/compiled/expand.cxx
     src/compiled/reify.cxx
     src/module/resolver.cxx
+    src/module/discovery.cxx
     src/module/package_metadata.cxx
     src/validation/tag_validator.cxx
     src/interpreter/value.cxx
@@ -227,6 +230,8 @@ add_library(kex_lib
     src/beam/collect_metadata.cxx
     src/beam/kexi_registry.cxx
     src/cache/separate_unit.cxx
+    src/common/process.cxx
+    src/common/diagnostics.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
