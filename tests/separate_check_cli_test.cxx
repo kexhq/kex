@@ -250,6 +250,13 @@ end
 join : String -> String -> String
 let join(first, second) = "${first}/${second}"
 )KEX");
+        write("lib/path_user.kex", R"KEX(module PathUser
+
+using Paths
+
+shown : String
+let shown = Paths.join("x", "y")
+)KEX");
         write("lib/pages.kex", R"KEX(module Pages
 
 let page = { |text| "page ${text}" }
@@ -351,6 +358,26 @@ end
         auto actual = runAs("actual");
         if (actual.find("open error") != std::string::npos)
             actual += read(root / "actual-build.out");
+        (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
+        const auto warmBuild = read(root / "actual-build.out");
+        assertTrue(warmBuild.find("unit cache hit:") != std::string::npos,
+                   "the warm separate build did not reuse a unit: " + warmBuild);
+        assertEqual(runAs("actual"), actual);
+        write("lib/paths.kex", R"KEX(module Paths
+
+join : String -> String -> String
+let join(first, second) = "${first}:${second}"
+)KEX");
+        (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
+        const auto changedBuild = read(root / "actual-build.out");
+        assertTrue(changedBuild.find("unit cache hit: " +
+                    std::filesystem::weakly_canonical(
+                        root / "lib" / "path_user.kex").string()) != std::string::npos,
+                   "a dependent unit with unchanged interfaces was rebuilt: " + changedBuild);
+        assertTrue(runAs("actual").find("\na:b\n") != std::string::npos,
+                   "the changed unit's body was not rebuilt: " + changedBuild);
+        assertTrue(runAs("actual").find("\nx:y\n") != std::string::npos,
+                   "a cached dependent called the old implementation: " + changedBuild);
         return {std::move(merged), std::move(separate), std::move(actual)};
     }
 
@@ -450,6 +477,7 @@ main do
   IO.printLine(["?"].join(", "))
   IO.printLine(joined(["?"]))
   IO.printLine(Paths.join("a", "b"))
+  IO.printLine(PathUser.shown())
   IO.printLine(Pages.page("x"))
   IO.printLine("x".as(ThingId).empty?)
   IO.printLine(either(Conditions.One(1), Conditions.One(2)))

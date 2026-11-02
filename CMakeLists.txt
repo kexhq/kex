@@ -202,6 +202,7 @@ add_library(kex_lib
     src/beam/kexi.cxx
     src/beam/collect_metadata.cxx
     src/beam/kexi_registry.cxx
+    src/cache/separate_unit.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)

@@ -3,6 +3,7 @@
 #include "beam/etf.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
+#include "cache/separate_unit.hxx"
 #include "beam/term_builder.hxx"
 #include "ast/convert.hxx"
 #include "ast/syntax.hxx"
@@ -1557,6 +1558,9 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     -> kex::ir::ExternalModules;
 auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout>;
 auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag>;
+auto prebuiltRuntimeBeamDir() -> std::string;
+auto sourceMentionsCompiledBlock(const std::string &src) -> bool;
+auto sourceMentionsEmbed(const std::string &src) -> bool;
 
 namespace {
 
@@ -2020,6 +2024,7 @@ std::string g_separateEntryPath;
 // Every unit's modules, set when each unit was lowered apart and a separate
 // build was asked for.
 std::optional<std::vector<kex::ir::EmitResult>> g_separateModules;
+std::vector<std::string> g_separateDiagnostics;
 
 // Phase 3: a checked unit lowered on its own, with its own analysis, against
 // the prelude and the KexI of the units below it (`registry`, which holds only
@@ -2352,6 +2357,8 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                           const std::vector<std::vector<std::string>> &units,
                           const std::map<std::string, std::set<std::string>> &uses,
                           const kex::semantic::ImportedInterfaces *interfaces) -> void {
+  g_separateModules.reset();
+  g_separateDiagnostics.clear();
   std::map<std::string, LoadedDep *> byPath;
   for (auto &dep : deps) byPath[*dep.path] = &dep;
   std::size_t errors = 0;
@@ -2367,6 +2374,9 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     kex::beam::LoadedUnit unit;
   };
   std::vector<Described> describedUnits;
+  std::optional<kex::cache::SeparateUnitCache> unitCache;
+  if (auto root = kexCacheBase(); root && separateBuildRequested())
+    unitCache.emplace(*root);
   for (const auto &unit : units) {
     const bool isEntry = unit.size() == 1 && unit.front().empty();
     // A unit is checked and lowered against the units its files reach, and
@@ -2402,6 +2412,58 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     if (!build.unitIds.empty())
       for (const auto &error : registry.declarePackage(build))
         std::fprintf(stderr, "separate: package: %s\n", error.message.c_str());
+    std::optional<std::string> cacheKey;
+    if (!isEntry && unitCache) {
+      std::vector<kex::cache::SeparateUnitCache::Source> sources;
+      bool safe = true;
+      for (const auto &path : unit) {
+        const auto found = byPath.find(path);
+        if (found == byPath.end()) { safe = false; break; }
+        const auto &source = *found->second->source;
+        if (sourceMentionsCompiledBlock(source) || sourceMentionsEmbed(source) ||
+            source.find("Template") != std::string::npos) {
+          safe = false;
+          break;
+        }
+        sources.push_back({path, source});
+      }
+      std::vector<const kex::beam::LoadedUnit*> dependencies;
+      for (const auto &below : describedUnits) {
+        if (std::none_of(below.files.begin(), below.files.end(),
+                         [&](const std::string &file) { return reached.contains(file); }))
+          continue;
+        dependencies.push_back(&below.unit);
+      }
+      if (safe) {
+        const auto runtime = prebuiltRuntimeBeamDir();
+        cacheKey = unitCache->keyFor(
+            toolchainFingerprint(),
+            "runtime:" + runtime + ":" +
+                kex::compiled::fileStamp(runtime + "/kex_prelude.beam"),
+            std::move(sources), dependencies);
+        if (auto cached = unitCache->load(*cacheKey)) {
+          if (const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
+              coreDir && *coreDir) {
+            std::filesystem::create_directories(coreDir);
+            for (const auto &module : cached->modules)
+              std::ofstream(std::string(coreDir) + "/" + module.moduleName + ".core")
+                  << module.source;
+          }
+          for (auto &module : cached->modules)
+            separateModules.push_back(std::move(module));
+          std::vector<std::string> names;
+          for (const auto &module : cached->interface.modules)
+            names.push_back(module.chunk.metadata.sourceModule);
+          describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()),
+                                    std::move(names), std::move(cached->interface)});
+          if (std::getenv("KEX_TIMINGS"))
+            std::fprintf(stderr, "  unit cache hit: %s\n", unit.front().c_str());
+          continue;
+        }
+      }
+    }
+    const auto emittedBefore = separateModules.size();
+    const auto describedBefore = describedUnits.size();
     // The unit's files, as one program for the length of its check; their
     // items go back where they came from afterwards.
     kex::ast::Program program;
@@ -2469,8 +2531,14 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     for (const auto &diagnostic : analyzer.diagnostics()) {
       if (diagnostic.level != kex::semantic::Diagnostic::Level::Error) continue;
       errors++;
-      // A separate build falls back to the merged one, which reports it.
-      if (separateBuildRequested()) continue;
+      if (separateBuildRequested()) {
+        g_separateDiagnostics.push_back(
+            std::string(diagnostic.location.file) + ":" +
+            std::to_string(diagnostic.location.line) + ":" +
+            std::to_string(diagnostic.location.column) + ": error: " +
+            diagnostic.message);
+        continue;
+      }
       std::fprintf(stderr, "separate: %s:%d:%d: error: %s\n",
                    std::string(diagnostic.location.file).c_str(),
                    diagnostic.location.line, diagnostic.location.column,
@@ -2485,6 +2553,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                      });
     const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
     const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
+    bool unitLowered = false;
     std::map<std::string, std::string> unitCoreExports;
     if (lowerApart && !unitChecked) allLowered = false;
     if (lowerApart && unitChecked) {
@@ -2498,12 +2567,14 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       program.items.erase(program.items.begin() + static_cast<std::ptrdiff_t>(ownItems),
                           program.items.end());
       if (!lowered) allLowered = false;
-      else
+      else {
+        unitLowered = true;
         for (auto &module : *lowered) {
           unitCoreExports[module.moduleName] =
               module.source.substr(0, module.source.find('\n'));
           separateModules.push_back(std::move(module));
         }
+      }
     }
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
@@ -2601,6 +2672,15 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()), names,
                                   std::move(described)});
       }
+    }
+    if (cacheKey && unitChecked && unitLowered &&
+        describedUnits.size() > describedBefore) {
+      kex::cache::CachedSeparateUnit cached;
+      cached.interface = describedUnits.back().unit;
+      cached.modules.assign(separateModules.begin() +
+                                static_cast<std::ptrdiff_t>(emittedBefore),
+                            separateModules.end());
+      unitCache->store(*cacheKey, cached);
     }
     if (isEntry) {
       entry.items = std::move(program.items);
@@ -3927,8 +4007,9 @@ auto runCacheKeyFor(const std::string &filepath, bool skipCheck,
   std::sort(sorted.begin(), sorted.end(), [](const auto *a, const auto *b) {
     return *a->path < *b->path;
   });
-  std::string material = "kex-run-cache-v1\n" + toolchainFingerprint() +
-                        "\n" + filepath + "\n" +
+  std::string material = "kex-run-cache-v2\n" + toolchainFingerprint() +
+                        "\n" + (separateBuildRequested() ? "separate\n" : "merged\n") +
+                        filepath + "\n" +
                         (skipCheck ? "nocheck\n" : "check\n");
   material += "entry:" + hexSha256(entryRawSource) + "\n";
   if (!specBaseFile.empty())
@@ -4066,15 +4147,16 @@ const auto buildStarted = std::filesystem::file_time_type::clock::now();
 
 auto runManifestKey(const std::string &flags, const std::string &filepath)
     -> std::optional<std::string> {
-  // A separate build is a validation mode: what it runs has to be built.
-  if (!runCacheRoot() || separateBuildRequested()) return std::nullopt;
+  if (!runCacheRoot()) return std::nullopt;
   std::error_code ec;
   const auto entry = std::filesystem::weakly_canonical(filepath, ec);
   if (ec) return std::nullopt;
   // The compiler that made the kept modules too: the .beam cache below keys
   // on it, but a run started from this entry never reaches that cache.
-  return hexSha256("kex-run-by-entry-v1\n" + toolchainFingerprint() + "\n" +
-                   erlcIdentity() + "\n" + entry.string() + "\n" + flags);
+  return hexSha256("kex-run-by-entry-v2\n" + toolchainFingerprint() + "\n" +
+                   erlcIdentity() + "\n" +
+                   (separateBuildRequested() ? "separate\n" : "merged\n") +
+                   entry.string() + "\n" + flags);
 }
 
 auto runManifestDir(const std::string &key) -> std::filesystem::path {
@@ -7150,7 +7232,8 @@ int main(int argc, char *argv[]) {
       bool preCheckFailed = false;
       std::vector<kex::semantic::Diagnostic> preCheckDiagnostics;
       int preCheckTypeErrors = 0;
-      if (mode == Mode::Compile && !skipCheck && !manifestHit) {
+      if (mode == Mode::Compile && !skipCheck && !manifestHit &&
+          !separateBuildRequested()) {
         kex::ast::Program checkProgram;
         checkProgram.items = std::move(program.items);
         const size_t originalCount = checkProgram.items.size();
@@ -7477,6 +7560,18 @@ int main(int argc, char *argv[]) {
                     << " (use --no-check to skip).\n";
           return 1;
         }
+        if (gatingAnalysis && !g_separateDiagnostics.empty()) {
+          for (const auto &diagnostic : g_separateDiagnostics)
+            std::cerr << diagnostic << '\n';
+          std::cerr << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::magenta)
+                    << "Aborted:" << kex::color::apply(kex::color::reset)
+                    << " " << errorCountPhrase(
+                           static_cast<int>(g_separateDiagnostics.size()), "type")
+                    << " — fix before " << (compileRun ? "running" : "compiling")
+                    << " (use --no-check to skip).\n";
+          return 1;
+        }
       }
 
       timings.mark("type check");
@@ -7488,17 +7583,26 @@ int main(int argc, char *argv[]) {
       // the tree-walker's implicit top-level execution behavior.
       // Prelude record layouts come from the embedded compiled interface, not
       // from reparsing stdlib source or injecting declarations into the user AST.
-      std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
-      try {
-        preludeRecordLayouts = loadPreludeRecordLayouts();
-      } catch (const std::exception &e) {
-        std::cerr << "error: invalid prebuilt standard library: " << e.what()
-                  << "\n";
-        if (compileRun && !outputDirExplicit && !tempDir.empty())
-          std::filesystem::remove_all(tempDir);
-        return 1;
-      }
-      try {
+      if (g_separateModules) {
+        moduleResults = std::move(*g_separateModules);
+        g_separateModules.reset();
+        std::stable_partition(moduleResults.begin(), moduleResults.end(),
+                              [&](const auto &module) {
+                                return module.moduleName == "kex_" + stem;
+                              });
+        result = moduleResults.front();
+      } else {
+        std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
+        try {
+          preludeRecordLayouts = loadPreludeRecordLayouts();
+        } catch (const std::exception &e) {
+          std::cerr << "error: invalid prebuilt standard library: " << e.what()
+                    << "\n";
+          if (compileRun && !outputDirExplicit && !tempDir.empty())
+            std::filesystem::remove_all(tempDir);
+          return 1;
+        }
+        try {
         auto preludeVariantTags = loadPreludeVariantTags();
         auto irModules = kex::ir::lowerModules(program, stem,
                                                filepath,
@@ -7519,23 +7623,13 @@ int main(int argc, char *argv[]) {
           kex::ir::insertUpgradePoints(irMod);
           moduleResults.push_back(kex::ir::emitCore(irMod));
         }
-        // A separate build's modules are its units', the entry's file module
-        // first as the merged build has it.
-        if (g_separateModules) {
-          const auto entryModule = moduleResults.front().moduleName;
-          moduleResults = std::move(*g_separateModules);
-          g_separateModules.reset();
-          std::stable_partition(moduleResults.begin(), moduleResults.end(),
-                                [&](const auto &module) {
-                                  return module.moduleName == entryModule;
-                                });
-        }
         result = moduleResults.front();
-      } catch (const kex::ir::LowerError &e) {
-        std::cerr << "error: " << e.what() << "\n";
-        if (compileRun && !outputDirExplicit && !tempDir.empty())
-          std::filesystem::remove_all(tempDir);
-        return 1;
+        } catch (const kex::ir::LowerError &e) {
+          std::cerr << "error: " << e.what() << "\n";
+          if (compileRun && !outputDirExplicit && !tempDir.empty())
+            std::filesystem::remove_all(tempDir);
+          return 1;
+        }
       }
 
       timings.mark("lower + emit core");
