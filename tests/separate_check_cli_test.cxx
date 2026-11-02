@@ -371,7 +371,8 @@ let join(first, second) = "${first}:${second}"
         (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
         const auto changedBuild = read(root / "actual-build.out");
         assertTrue(changedBuild.find("unit cache hit: " +
-                    (root / "lib" / "path_user.kex").string()) != std::string::npos,
+                    std::filesystem::weakly_canonical(
+                        root / "lib" / "path_user.kex").string()) != std::string::npos,
                    "a dependent unit with unchanged interfaces was rebuilt: " + changedBuild);
         assertTrue(runAs("actual").find("\na:b\n") != std::string::npos,
                    "the changed unit's body was not rebuilt: " + changedBuild);
