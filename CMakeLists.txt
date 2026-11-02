@@ -203,6 +203,7 @@ add_library(kex_lib
     src/beam/beam_file.cxx
     src/beam/etf.cxx
     src/beam/kexi.cxx
+    src/beam/interface_cache.cxx
     src/beam/collect_metadata.cxx
     src/beam/kexi_registry.cxx
     src/cache/separate_unit.cxx
@@ -624,6 +625,26 @@ add_executable(beam_test tests/beam_test.cxx)
 target_link_libraries(beam_test PRIVATE kex_lib)
 target_include_directories(beam_test PRIVATE tests)
 add_test(NAME beam_test COMMAND beam_test)
+
+add_executable(mangle_test tests/mangle_test.cxx)
+target_link_libraries(mangle_test PRIVATE kex_lib)
+target_include_directories(mangle_test PRIVATE tests)
+add_test(NAME mangle_test COMMAND mangle_test)
+
+add_executable(string_utils_test tests/string_utils_test.cxx)
+target_link_libraries(string_utils_test PRIVATE kex_lib)
+target_include_directories(string_utils_test PRIVATE tests)
+add_test(NAME string_utils_test COMMAND string_utils_test)
+
+add_executable(diagnostics_test tests/diagnostics_test.cxx)
+target_link_libraries(diagnostics_test PRIVATE kex_lib)
+target_include_directories(diagnostics_test PRIVATE tests)
+add_test(NAME diagnostics_test COMMAND diagnostics_test)
+
+add_executable(interface_cache_test tests/interface_cache_test.cxx)
+target_link_libraries(interface_cache_test PRIVATE kex_lib)
+target_include_directories(interface_cache_test PRIVATE tests)
+add_test(NAME interface_cache_test COMMAND interface_cache_test)
 
 add_executable(codegen_test tests/codegen_test.cxx)
 target_link_libraries(codegen_test PRIVATE kex_lib)

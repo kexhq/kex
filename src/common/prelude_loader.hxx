@@ -83,9 +83,12 @@ inline auto standardLibraryRootCandidates()
 }
 
 inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
-    std::vector<std::string> roots;
-    for (const auto& root : standardLibraryRootCandidates())
-        roots.push_back(root.string());
+    static const std::vector<std::string> roots = [] {
+        std::vector<std::string> result;
+        for (const auto& root : standardLibraryRootCandidates())
+            result.push_back(root.string());
+        return result;
+    }();
     return roots;
 }
 
@@ -202,27 +205,34 @@ inline auto preludeSourceFiles() -> std::vector<std::string> {
 // Returns the first available opt-in standard-library source set. This mirrors
 // preludeSourceFiles(), excluding both the manifest and everything it imports.
 inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
-    for (const auto& rootString : standardLibraryModuleRoots()) {
-        const auto root = std::filesystem::path(rootString);
-        if (!preludeManifestPath(root)) continue;
-        std::error_code ec;
-        std::vector<std::string> files;
-        std::unordered_set<std::string> automatic;
-        for (const auto& path : preludeFilesFromRoot(root))
-            automatic.insert(
-                std::filesystem::path(path).lexically_normal().string());
-        for (const auto& entry :
-             std::filesystem::recursive_directory_iterator(root, ec))
-            if (entry.path().extension() == ".kex" &&
-                entry.path().filename() != "prelude.kex" &&
-                !automatic.contains(entry.path().lexically_normal().string()))
-                files.push_back(entry.path().string());
-        if (!ec) {
-            std::sort(files.begin(), files.end());
-            return files;
+    // The stdlib does not change within a process; the manifest read and the
+    // recursive directory walk below are paid once per invocation instead of
+    // once per caller (preludeSourceHash, sourceSemanticInterfaces,
+    // toolchainFingerprint, ...).
+    static const std::vector<std::string> files = [] {
+        for (const auto& rootString : standardLibraryModuleRoots()) {
+            const auto root = std::filesystem::path(rootString);
+            if (!preludeManifestPath(root)) continue;
+            std::error_code ec;
+            std::vector<std::string> result;
+            std::unordered_set<std::string> automatic;
+            for (const auto& path : preludeFilesFromRoot(root))
+                automatic.insert(
+                    std::filesystem::path(path).lexically_normal().string());
+            for (const auto& entry :
+                 std::filesystem::recursive_directory_iterator(root, ec))
+                if (entry.path().extension() == ".kex" &&
+                    entry.path().filename() != "prelude.kex" &&
+                    !automatic.contains(entry.path().lexically_normal().string()))
+                    result.push_back(entry.path().string());
+            if (!ec) {
+                std::sort(result.begin(), result.end());
+                return result;
+            }
         }
-    }
-    return {};
+        return std::vector<std::string>{};
+    }();
+    return files;
 }
 
 // Sources compiled into the installed stdlib artifact: the manifest-selected
@@ -230,13 +240,15 @@ inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
 // library modules remain independently loadable source dependencies.
 inline auto standardLibraryArtifactSourceFiles()
     -> std::vector<std::string> {
-    auto files = preludeSourceFiles();
-    if (files.empty()) return {};
-    const auto root =
-        std::filesystem::path(files.front()).parent_path();
-    for (const auto& source : standardLibrarySourceFiles())
-        if (std::filesystem::path(source).parent_path() == root)
-            files.push_back(source);
+    static const std::vector<std::string> files = [] {
+        auto result = preludeSourceFiles();
+        if (result.empty()) return result;
+        const auto root = std::filesystem::path(result.front()).parent_path();
+        for (const auto& source : standardLibrarySourceFiles())
+            if (std::filesystem::path(source).parent_path() == root)
+                result.push_back(source);
+        return result;
+    }();
     return files;
 }
 
