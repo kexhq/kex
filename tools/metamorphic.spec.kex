@@ -1,0 +1,44 @@
+describe("metamorphic generator") do
+  it("emits every relation as two losslessly parsed programs") do
+    var seed = 0
+    while seed < 33 do
+      let item = relation(seed)
+      assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
+      assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
+      seed += 1
+    end
+  end
+
+  it("places the binder inside the generated loop") do
+    let item = relation(1)
+    let tree = Kex.AST.parseSyntax(item.changed).try
+    assert(syntaxHas(tree, "WhileExpr"))
+    assert(syntaxHas(tree, "IfExpr"))
+    assert(item.changed.contains?("IO.printLine(value)"))
+  end
+
+  it("turns a valid annotation into a checker rejection") do
+    let item = relation(6)
+    assert(item.rejectChanged)
+    assert(item.original.contains?("let value: Integer"))
+    assert(item.changed.contains?("Just("))
+  end
+
+  it("uses an existing spec as a seed") do
+    let item = relation(8)
+    assert(item.original.contains?("# if let"))
+    assert(item.changed.contains?("metamorphicUnused"))
+  end
+
+  it("selects a literal node from an existing spec") do
+    let item = relation(10)
+    assert(item.changed.contains?("let METAMORPHIC_LITERAL = "))
+    assert(item.changed.contains?("METAMORPHIC_LITERAL"))
+  end
+
+  it("moves a function to a separate source module") do
+    let item = relation(9)
+    assert(item.moduleSource.contains?("module MetamorphicHelper"))
+    assert(item.changed.contains?("MetamorphicHelper.double"))
+  end
+end

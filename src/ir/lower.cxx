@@ -7511,6 +7511,45 @@ struct Lowering {
                 elseP = matchBool(std::move(c), std::move(body),
                                   std::move(elseP));
             }
+            if (ie->letPattern) {
+                // A loop branch must bind the pattern in the same scope as
+                // its body and continuation. Treating the scrutinee as a Bool
+                // lost the pattern variables before lowering the body.
+                auto subject = lower(ie->condition);
+                auto snap = subst;
+                if (auto* record = std::get_if<ast::RecordPattern>(
+                        &ie->letPattern->kind);
+                    record && record->typeName.empty()) {
+                    auto name = fresh("Anon");
+                    std::vector<std::string> names;
+                    collectRecordBindings(*record, names);
+                    for (const auto& bound : names) subst[bound] = bound;
+                    auto thenP = wrapAnonymousRecordPattern(
+                        name, *record, lowerLoopBodyFrom(
+                            ie->thenBody, 0, loopFn, mutVars, branchEnd));
+                    subst = snap;
+                    return makeLet(name, std::move(subject),
+                                   matchBool(anonymousRecordTest(name, *record),
+                                             std::move(thenP), std::move(elseP)));
+                }
+                auto pattern = lowerPattern(ie->letPattern);
+                auto thenP = lowerLoopBodyFrom(
+                    ie->thenBody, 0, loopFn, mutVars, branchEnd);
+                subst = snap;
+                Match match;
+                match.subjects.push_back(std::move(subject));
+                MatchClause hit;
+                hit.patterns.push_back(std::move(pattern));
+                hit.body = std::move(thenP);
+                MatchClause miss;
+                miss.patterns.push_back(wildPat());
+                miss.body = std::move(elseP);
+                match.clauses.push_back(std::move(hit));
+                match.clauses.push_back(std::move(miss));
+                auto result = std::make_unique<Expr>();
+                result->node = std::move(match);
+                return result;
+            }
             auto c = lower(ie->condition);
             auto thenP = branch(ie->thenBody);
             return matchBool(std::move(c), std::move(thenP),

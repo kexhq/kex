@@ -5670,14 +5670,22 @@ int main(int argc, char *argv[]) {
               i++;
             const auto head = source.substr(0, i);
             const auto rest = source.find_first_not_of(" \t", i);
-            const bool reassigns = rest != std::string::npos &&
-                                   source[rest] == '=' &&
-                                   rest + 1 < source.size() &&
-                                   source[rest + 1] != '=';
+            const bool plainAssign = rest != std::string::npos &&
+                                     source[rest] == '=' &&
+                                     rest + 1 < source.size() &&
+                                     source[rest + 1] != '=';
+            const bool compoundAssign = rest != std::string::npos && (
+                ((source[rest] == '+' || source[rest] == '-' ||
+                  source[rest] == '*' || source[rest] == '/' ||
+                  source[rest] == '%') && rest + 1 < source.size() &&
+                 source[rest + 1] == '=') ||
+                source.compare(rest, 3, "&&=") == 0 ||
+                source.compare(rest, 3, "||=") == 0);
             const bool mutates = rest != std::string::npos &&
                                  source[rest] == '.' &&
                                  source.find('!', rest) != std::string::npos;
-            if (!head.empty() && isMutableBind(head) && (reassigns || mutates))
+            if (!head.empty() && isMutableBind(head) &&
+                (plainAssign || compoundAssign || mutates))
               mutatedName = head;
           }
 

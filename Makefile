@@ -65,6 +65,9 @@ help:
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
 	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
+	@echo "  make test-metamorphic  Gate deterministic meaning-preserving program changes"
+	@echo "  make metamorphic-search  Run replayable relation cases, including known open bugs"
+	@echo "  make metamorphic-coverage  Run a wider search with LLVM compiler coverage"
 	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
 	@echo "                    programs (tools/fuzz.kex). Override with"
 	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
@@ -132,13 +135,31 @@ test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-ex
           spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
 
 # Harness and generator regressions, including simulated crashes/timeouts.
-.PHONY: test-fuzz test-spec-beam-runner
+.PHONY: test-fuzz test-spec-beam-runner test-metamorphic
 test-spec-beam-runner: build
 	@"$(KEX)" --run-walker --no-colors tools/spec_beam_runner.spec.kex
 
 test-fuzz: build
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz_cli.spec.kex
+
+# Fixed relations gate CI. The full seeded search also runs the known open
+# failures (assignment as a value and Optional accepted as Integer).
+METAMORPHIC_OUTDIR ?= /tmp/kex-metamorphic
+METAMORPHIC_SEED ?= 0
+METAMORPHIC_CASES ?= 30
+test-metamorphic: build
+	@"$(KEX)" --run-walker --no-colors tools/metamorphic.spec.kex
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex 0 9 "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 gate
+
+.PHONY: metamorphic-search metamorphic-coverage
+metamorphic-search: build
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 search
+
+metamorphic-coverage:
+	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \
+		METAMORPHIC_CASES="$(METAMORPHIC_CASES)" \
+		bash tools/metamorphic_coverage.sh
 
 # Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
 # programs and requires the walker and BEAM backends to agree on every one.
