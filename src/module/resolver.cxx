@@ -1,5 +1,7 @@
 #include "resolver.hxx"
 
+#include "../common/string_utils.hxx"
+
 #include <cctype>
 #include <filesystem>
 #include <sstream>
@@ -35,31 +37,6 @@ auto Resolver::setEntryFile(const std::string& path) -> void {
 }
 
 namespace {
-
-auto lowered(const std::string& part) -> std::string {
-    std::string result = part;
-    for (auto& c : result)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return result;
-}
-
-// `MockData` names `mockdata.kex` and `mock_data.kex` alike: a module name is
-// CamelCase and a file name is conventionally snake_case, so the resolver has
-// to try both spellings rather than force the run-together one.
-auto snakeCased(const std::string& part) -> std::string {
-    std::string result;
-    for (std::size_t i = 0; i < part.size(); ++i) {
-        const auto c = static_cast<unsigned char>(part[i]);
-        const bool boundary = i > 0 && std::isupper(c)
-            && (std::islower(static_cast<unsigned char>(part[i - 1]))
-                || std::isdigit(static_cast<unsigned char>(part[i - 1]))
-                || (i + 1 < part.size()
-                    && std::islower(static_cast<unsigned char>(part[i + 1]))));
-        if (boundary && !result.empty() && result.back() != '_') result += '_';
-        result += static_cast<char>(std::tolower(c));
-    }
-    return result;
-}
 
 // A part that opens with a letter and a number — `N0001CreateUsers`, the
 // first of a directory of migrations — is a file somebody numbered so the

@@ -69,4 +69,21 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
                 size_t cursor, const ImportedInterfaces* interfaces)
     -> CompletionAt;
 
+// Completions for a REPL input line, shared by the native REPL (main.cxx) and
+// the wasm REPL (wasm_repl.cxx) so their program-splicing cannot drift.
+// `definitions` are the session's top-level declarations and `bindings` its
+// `main do` local bindings; `input` is the full text being typed (earlier
+// continuation lines + the current `line`), `line` the current line, and
+// `point` the cursor's byte offset within `line`. The input is spliced into a
+// program — `definitions`, then `main do` with the bindings replayed — so the
+// analyzer types the receiver exactly as it is being typed. `declaration`
+// selects the definition splice (no `main do`/`end` wrapper). The result's
+// `replaceFrom` is an offset within `line`.
+auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
+                       const std::string& definitions,
+                       const std::string& bindings,
+                       const std::string& input, const std::string& line,
+                       size_t point, bool declaration,
+                       const ImportedInterfaces* interfaces) -> CompletionAt;
+
 } // namespace kex::semantic

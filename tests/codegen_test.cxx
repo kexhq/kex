@@ -339,8 +339,13 @@ int main() {
         });
 
         it("emits polymorphic equality through the number intrinsic", []() {
-            auto out = emit("main do\n  1 == 1\nend\n");
+            auto out = emit("main do\n  \"a\" == \"a\"\nend\n");
             assertTrue(contains(out, "call 'kex_intrinsic_number':'eq'"), out);
+        });
+
+        it("emits integer equality as the raw BIF", []() {
+            auto out = emit("main do\n  1 == 1\nend\n");
+            assertTrue(contains(out, "call 'erlang':'=:='"), out);
         });
 
         it("emits less-than via erlang:'<'", []() {

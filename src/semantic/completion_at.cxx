@@ -279,4 +279,22 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
     return result;
 }
 
+auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
+                       const std::string& definitions,
+                       const std::string& bindings,
+                       const std::string& input, const std::string& line,
+                       size_t point, bool declaration,
+                       const ImportedInterfaces* interfaces) -> CompletionAt {
+    const auto prefix =
+        definitions + (declaration ? "" : "main do\n" + bindings);
+    const auto program = prefix + input + completionClosers(input) +
+                         (declaration ? "\n" : "\nend\n");
+    const size_t lineStart = prefix.size() + (input.size() - line.size());
+    auto completion = completeAt(db, analysisDb, "<repl-completion>", program,
+                                 lineStart + std::min(point, line.size()),
+                                 interfaces);
+    completion.replaceFrom -= lineStart;
+    return completion;
+}
+
 } // namespace kex::semantic

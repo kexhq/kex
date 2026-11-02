@@ -300,16 +300,11 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
     std::string text(textIn ? textIn : "");
     const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
                                     line.size());
-    const auto prefix =
-        session->replAccumSource + "main do\n" + session->replBindings;
-    const auto program = prefix + line + semantic::completionClosers(line) +
-                         "\nend\n";
-    auto completion = semantic::completeAt(
-        session->replDb, session->analysisDb, "<repl-completion>", program,
-        prefix.size() + std::min(wordStart + text.size(), line.size()),
+    auto completion = semantic::completeReplInput(
+        session->replDb, session->analysisDb, session->replAccumSource,
+        session->replBindings, line, line, wordStart + text.size(), false,
         nullptr);
-    const auto replaceFrom =
-        std::max(completion.replaceFrom - prefix.size(), wordStart);
+    const auto replaceFrom = std::max(completion.replaceFrom, wordStart);
     const auto lead = line.substr(wordStart, replaceFrom - wordStart);
 
     std::string joined;
