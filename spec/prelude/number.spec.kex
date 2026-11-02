@@ -17,6 +17,31 @@ describe("Integer — predicates") do
   end
 end
 
+describe("Integer — dividesBy?") do
+  it("dividesBy? is true for exact divisors") do
+    assert(10.dividesBy?(5))
+    assert(10.dividesBy?(2))
+    assert(7.dividesBy?(7))
+    assert(0.dividesBy?(5))
+  end
+
+  it("dividesBy? is false otherwise") do
+    assert(!10.dividesBy?(3))
+    assert(!7.dividesBy?(2))
+  end
+
+  it("dividesBy? ignores signs") do
+    assert((-10).dividesBy?(5))
+    assert(10.dividesBy?(-5))
+    assert(!(-10).dividesBy?(3))
+  end
+
+  it("dividesBy? is false for a zero divisor") do
+    assert(!5.dividesBy?(0))
+    assert(!0.dividesBy?(0))
+  end
+end
+
 describe("Integer — abs") do
   it("abs returns the absolute value") do
     assert(5.abs == 5)

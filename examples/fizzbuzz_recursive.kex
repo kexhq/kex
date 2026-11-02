@@ -2,10 +2,10 @@
 # Demonstrates recursion and tail-call optimization potential
 
 let fizzBuzzString(n: Int) -> String do
-  match (n.modulo(3), n.modulo(5)) do
-    (0, 0) => "FizzBuzz"
-    (0, _) => "Fizz"
-    (_, 0) => "Buzz"
+  match (n.dividesBy?(3), n.dividesBy?(5)) do
+    (true, true) => "FizzBuzz"
+    (true, _) => "Fizz"
+    (_, true) => "Buzz"
     (_, _) => "${n}"
   end
 end

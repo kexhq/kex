@@ -39,6 +39,31 @@ make Integer do
   odd? :> Bool
   let odd? = this.modulo(2) != 0
 
+  # Returns +true+ when the integer divides evenly by +n+.
+  #
+  # Zero is divisible by every non-zero integer, and nothing is divisible
+  # by zero — not even zero itself.
+  #
+  # @param n [Integer] the divisor
+  # @return [Bool] +true+ when the integer divides evenly by +n+
+  #
+  # @example
+  #   10.dividesBy?(5)   # => true
+  #   10.dividesBy?(3)   # => false
+  #   5.dividesBy?(0)    # => false
+  #
+  # @example FizzBuzz without spelling out the remainder
+  #   if i.dividesBy?(15)
+  #     IO.printLine("FizzBuzz")
+  #   elif i.dividesBy?(3)
+  #     IO.printLine("Fizz")
+  #   elif i.dividesBy?(5)
+  #     IO.printLine("Buzz")
+  #   end
+  dividesBy? :> Integer -> Bool
+  let dividesBy?(0) = false
+  let dividesBy?(n) = this.modulo(n) == 0
+
   # Returns the magnitude of the integer, discarding its sign.
   #
   # @return [Integer] the absolute value

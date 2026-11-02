@@ -7,11 +7,11 @@
 
 main do
   (1..100).each do |i|
-    if i.modulo(15) == 0
+    if i.dividesBy?(15)
       IO.printLine("FizzBuzz")
-    elif i.modulo(3) == 0
+    elif i.dividesBy?(3)
       IO.printLine("Fizz")
-    elif i.modulo(5) == 0
+    elif i.dividesBy?(5)
       IO.printLine("Buzz")
     else
       IO.printLine("${i}")
