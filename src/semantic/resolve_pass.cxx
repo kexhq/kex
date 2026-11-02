@@ -1,5 +1,6 @@
 #include "resolve_pass.hxx"
 #include "analyzer.hxx"
+#include "../common/mangle.hxx"
 #include <algorithm>
 #include <cctype>
 #include <variant>
@@ -895,9 +896,9 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
         }
     }
     if (m_imports) {
-        if (auto sep = name.find("::"); sep != std::string::npos) {
-            auto mod = name.substr(0, sep);
-            auto fn = name.substr(sep + 2);
+        if (kex::mangle::hasScope(name)) {
+            auto mod = kex::mangle::headOf(name);
+            auto fn = kex::mangle::memberOf(name);
             if (auto it = m_imports->modules.find(mod); it != m_imports->modules.end())
                 if (it->second.exports.count(fn)) return true;
         } else {

@@ -1,5 +1,6 @@
 #include "evaluator.hxx"
 #include "../common/utf8.hxx"
+#include "../common/mangle.hxx"
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
@@ -47,7 +48,7 @@ Evaluator::Evaluator() {
 }
 
 auto Evaluator::defineIntrinsic(const std::string& name, NativeFunc fn) -> void {
-    if (name.find("::") == std::string::npos)
+    if (!kex::mangle::hasScope(name))
         throw std::logic_error("intrinsic identity must be category-qualified: " + name);
     auto value = std::make_shared<Value>();
     value->data = FunctionValue{name, watchOutside(name, std::move(fn))};
@@ -75,7 +76,7 @@ auto Evaluator::watchOutside(const std::string& name, NativeFunc fn) -> NativeFu
         "Type", "URI", "URL",
     };
     static const std::unordered_set<std::string> reads{"AST::parseFile", "Digest::fileSha"};
-    const auto category = name.substr(0, name.find("::"));
+    const auto category = kex::mangle::headOf(name);
     if (!fn || (pure.contains(category) && !reads.contains(name))) return fn;
     return [this, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
         m_touchedOutside = true;
@@ -365,7 +366,7 @@ auto Evaluator::resolvePendingExports() -> void {
                 if (std::find(pending.decl->exceptNames.begin(), pending.decl->exceptNames.end(), name)
                     != pending.decl->exceptNames.end()) continue;
                 view.exports.emplace(name, value);
-                m_env->define(viewName + "::" + name, value);
+                m_env->define(kex::mangle::qualify(viewName, name), value);
             }
             if (view.exports.empty())
                 throw RuntimeError("module export exposes no public names from " + targetName,
@@ -374,7 +375,7 @@ auto Evaluator::resolvePendingExports() -> void {
             auto& owner = m_moduleRegistry[pending.owner];
             owner.submodules[alias] = viewName;
             m_moduleRegistry[viewName] = std::move(view);
-            m_env->define(pending.owner + "::" + alias, Value::module(viewName));
+            m_env->define(kex::mangle::qualify(pending.owner, alias), Value::module(viewName));
         }
     }
 }
@@ -617,7 +618,7 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
                                SourceLocation loc) -> void {
     ImportOrigin* existing = nullptr;
     if (!moduleScope.empty()) {
-        const auto key = moduleScope + "::" + logicalName;
+        const auto key = kex::mangle::qualify(moduleScope, logicalName);
         if (auto it = m_moduleImportOrigins.find(key); it != m_moduleImportOrigins.end())
             existing = &it->second;
         if (!existing) m_moduleImportOrigins[key] = {sourceModule, explicitImport};
@@ -649,7 +650,7 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
     // None. The import stays reachable: resolveMethodName finds it through
     // m_importScopes when the receiver actually matches.
     if (m_env->get(bindingName)) {
-        auto defs = m_functionDefs.find(sourceModule + "::" + logicalName);
+        auto defs = m_functionDefs.find(kex::mangle::qualify(sourceModule, logicalName));
         if (defs != m_functionDefs.end())
             for (const auto* def : defs->second)
                 for (const auto& clause : def->clauses) {
@@ -782,13 +783,13 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
                     == block.onlyNames.end()) continue;
             if (std::find(block.exceptNames.begin(), block.exceptNames.end(), name)
                 != block.exceptNames.end()) continue;
-            const auto binding = scoped || moduleScope.empty() ? name : moduleScope + "::" + name;
+            const auto binding = scoped || moduleScope.empty() ? name : kex::mangle::qualify(moduleScope, name);
             defineImported(binding, name, moduleName, !block.onlyNames.empty(),
                            scoped ? "" : moduleScope, value, block.location);
         }
         if (block.alias) {
             const auto binding = scoped || moduleScope.empty()
-                ? *block.alias : moduleScope + "::" + *block.alias;
+                ? *block.alias : kex::mangle::qualify(moduleScope, *block.alias);
             defineImported(binding, *block.alias, moduleName, true,
                            scoped ? "" : moduleScope, Value::module(moduleName), block.location);
         }
@@ -879,7 +880,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
         std::visit([this, &moduleName, &hasPublicNative](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                auto nativeName = moduleName + "::" + node->name;
+                auto nativeName = kex::mangle::qualify(moduleName, node->name);
                 // Only an explicit PUBLIC native binding may own a public
                 // module slot. A same-named private intrinsic is the runtime
                 // target of the Kex wrapper, not a reason to suppress it.
@@ -887,10 +888,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
                 // functions such as variadic IO calls) remain preserved.
                 bool hasNative = hasPublicNative(nativeName);
                 if (!hasNative && nativeName.find('.') != std::string::npos) {
-                    std::string alt;
-                    for (char c : moduleName)
-                        alt += (c == '.') ? "::" : std::string(1, c);
-                    const auto altName = alt + "::" + node->name;
+                    const auto altName =
+                        kex::mangle::qualify(kex::mangle::manglePath(moduleName),
+                                             node->name);
                     hasNative = hasPublicNative(altName);
                 }
                 if (!hasNative)
@@ -922,7 +922,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     ModuleEntry entry;
     entry.privateNames = std::move(privateNames);
     entry.submodules = std::move(m_moduleRegistry[moduleName].submodules);
-    const auto prefix = moduleName + "::";
+    const auto prefix = moduleName + std::string(kex::mangle::kSeparator);
     for (const auto& name : publicNames) {
         const auto qualified = prefix + name;
         if (auto value = m_env->get(qualified))
@@ -949,7 +949,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
             const auto child = moduleName.substr(dot + 1, next - dot - 1);
             const auto qualified = moduleName.substr(0, next);
             const auto owner = moduleName.substr(0, dot);
-            m_env->define(owner + "::" + child, Value::module(qualified));
+            m_env->define(kex::mangle::qualify(owner, child), Value::module(qualified));
             auto& parentEntry = m_moduleRegistry[owner];
             parentEntry.submodules[child] = qualified;
             dot = next;
@@ -1084,7 +1084,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
         if (def.isDistinct) {
             const auto* target = kex::aliasTarget(def);
             const auto* named = target ? std::get_if<ast::TypeName>(&target->kind) : nullptr;
-            const auto key = moduleScope.empty() ? def.name : moduleScope + "::" + def.name;
+            const auto key = moduleScope.empty() ? def.name : kex::mangle::qualify(moduleScope, def.name);
             if (m_env->get(key)) return;
             // The backing's token as written (`Accounts.Inner` is
             // `Accounts::Inner`), then by its last segment. A backing declared
@@ -1093,8 +1093,10 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
             ValuePtr token;
             if (named && !named->parts.empty()) {
                 std::string qualified;
-                for (const auto& part : named->parts)
-                    qualified += (qualified.empty() ? "" : "::") + part;
+                for (const auto& part : named->parts) {
+                    if (!qualified.empty()) qualified += kex::mangle::kSeparator;
+                    qualified += part;
+                }
                 token = m_env->get(qualified);
                 if (!token) token = m_env->get(named->parts.back());
             }
@@ -1111,7 +1113,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
         // and so does a constructor visible from outside — `JSON.Error`
         // must not take `Error(...)` from the code of module JSON.
         if (const auto key = moduleScope.empty() ? def.name
-                                                 : moduleScope + "::" + def.name;
+                                                 : kex::mangle::qualify(moduleScope, def.name);
             !m_env->get(key) && !m_env->get(def.name))
             m_env->define(key, Value::record(def.name, {}));
         if (!moduleScope.empty()) m_typeModules[def.name] = moduleScope;
@@ -1137,7 +1139,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
 
             if (arity == 0) {
                 const auto binding = moduleScope.empty()
-                    ? variantName : moduleScope + "::" + variantName;
+                    ? variantName : kex::mangle::qualify(moduleScope, variantName);
                 m_env->define(binding,
                               Value::variant(variantName, def.name));
                 continue;
@@ -1152,7 +1154,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
                     return Value::variant(variantName, defName, std::move(varArgs));
                 }};
             const auto binding = moduleScope.empty()
-                ? variantName : moduleScope + "::" + variantName;
+                ? variantName : kex::mangle::qualify(moduleScope, variantName);
             m_env->define(binding, val);
         }
     }
@@ -1166,7 +1168,7 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
         m_recordDefs[def.name] = &def;
     }
     if (!moduleScope.empty()) {
-        const auto scoped = moduleScope + "::" + def.name;
+        const auto scoped = kex::mangle::qualify(moduleScope, def.name);
         m_env->define(scoped, Value::record(typeName, {}));
         m_recordDefs[scoped] = &def;
         m_recordDefs[typeName] = &def;
@@ -1177,7 +1179,7 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
         RecordScope captured;
         captured.module = moduleScope;
         for (auto scope = moduleScope; !scope.empty();) {
-            const auto prefix = scope + "::";
+            const auto prefix = scope + std::string(kex::mangle::kSeparator);
             for (const auto& [name, _] : m_moduleImportOrigins)
                 if (name.rfind(prefix, 0) == 0)
                     if (auto value = m_env->get(name))
@@ -1293,7 +1295,7 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
                                     bool hasImplicitReceiver,
                                     const std::string& enclosingModule) -> void {
     std::unordered_set<std::string> importsBefore;
-    const auto prefix = typeScope.empty() ? std::string{} : typeScope + "::";
+    const auto prefix = typeScope.empty() ? std::string{} : typeScope + std::string(kex::mangle::kSeparator);
     for (const auto& [name, _] : m_moduleImportOrigins)
         if (!prefix.empty() && name.rfind(prefix, 0) == 0) importsBefore.insert(name);
 
@@ -1356,7 +1358,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
             const auto name = upper ? upper->name : lower ? lower->name : std::string{};
             if (name == def.name)
                 if (auto aliased = m_env->get(def.name)) {
-                    m_env->define(typeScope + "::" + def.name, std::move(aliased));
+                    m_env->define(kex::mangle::qualify(typeScope, def.name), std::move(aliased));
                     return;
                 }
         }
@@ -1401,7 +1403,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     // Register under mangled name if in a type scope
     std::string regName = def.name;
     if (!typeScope.empty()) {
-        regName = typeScope + "::" + def.name;
+        regName = kex::mangle::qualify(typeScope, def.name);
     }
 
     m_functionDefs[regName].push_back(&def);
@@ -1423,7 +1425,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     bool isMethod = hasImplicitReceiver;
     std::vector<std::pair<std::string, ValuePtr>> capturedImports;
     if (!moduleScope.empty()) {
-        const auto prefix = moduleScope + "::";
+        const auto prefix = moduleScope + std::string(kex::mangle::kSeparator);
         for (const auto& [name, _] : m_moduleImportOrigins)
             if (name.rfind(prefix, 0) == 0)
                 if (auto value = m_env->get(name)) capturedImports.push_back({name, value});
@@ -1621,7 +1623,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                                 global != m_functionValues.end())
                                 target = global->second;
                         if (!target) {
-                            const auto fallback = type->parts.front() + "::" + method;
+                            const auto fallback = kex::mangle::qualify(type->parts.front(), method);
                             target = m_env->get(fallback);
                             if (!target)
                                 if (auto global = m_functionValues.find(fallback);
@@ -1641,8 +1643,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                                 return function->native(std::move(callArgs));
                             }};
                         dictionaries.push_back({
-                            "__trait_dictionary__" + *param.name + "::" +
-                                method,
+                            "__trait_dictionary__" + kex::mangle::qualify(*param.name, method),
                             std::move(dictionary)});
                     }
                 }
@@ -1987,7 +1988,7 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
         !m_moduleDeclaredTypes[enclosingModule].count(typeName) && !ownRecord) {
         for (const auto& [method, arity] : ownMethods) {
             (void)arity;
-            const auto qualified = typeName + "::" + method;
+            const auto qualified = kex::mangle::qualify(typeName, method);
             // A name defined before this block — by the prelude, a top-level
             // `make` or another module — is not this module's to gate: only
             // its own definitions are (m_gatedMakeDefs below). Gating the
@@ -2034,7 +2035,7 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
     for (const auto& written : def.implements) {
         const auto traitName = traitIdentityOf(written, enclosingModule, true);
         if (traitName.empty()) continue;
-        std::string prefix = traitName + "::";
+        std::string prefix = traitName + std::string(kex::mangle::kSeparator);
         std::vector<const ast::FunctionDef*> inheritedMethods;
         for (const auto& [key, fns] : m_functionDefs) {
             if (key.rfind(prefix, 0) != 0) continue; // doesn't start with prefix
@@ -2250,7 +2251,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // scope, so `private do let defaultPort = 3000 end` was invisible
             // to every function in its own module.
             for (auto scope = m_currentModule; !val && !scope.empty();) {
-                val = m_env->get(scope + "::" + node.name);
+                val = m_env->get(kex::mangle::qualify(scope, node.name));
                 const auto dot = scope.rfind('.');
                 if (dot == std::string::npos) break;
                 scope.resize(dot);
@@ -2401,8 +2402,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (const auto* named = std::get_if<semantic::NamedType>(
                             &found->second->kind);
                         named && m_erasedReceiverTypes.contains(named->name)) {
-                        const auto candidate = named->name + "::" +
-                                               std::string(tokenTypeName(node.op));
+                        const auto candidate = kex::mangle::qualify(named->name, std::string(tokenTypeName(node.op)));
                         if (m_functionValues.count(candidate) || m_env->get(candidate))
                             return callFunction(candidate, {left, right}, {},
                                                 expr.location);
@@ -2519,7 +2519,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     // authoritative; ordinary/bare intrinsic
                                     // fallback would leak across categories.
                                     auto val = m_intrinsicEnv->get(
-                                        catMc->method + "::" + node.method);
+                                        kex::mangle::qualify(catMc->method, node.method));
                                     if (!val)
                                         throw RuntimeError("Undefined intrinsic: " + catMc->method
                                                            + "." + node.method, expr.location);
@@ -2591,7 +2591,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     // this same enclosing-module search.
                     for (auto scope = m_currentModule;
                          !existing && !scope.empty();) {
-                        existing = m_env->get(scope + "::" + upperIdent->name);
+                        existing = m_env->get(kex::mangle::qualify(scope, upperIdent->name));
                         const auto dot = scope.rfind('.');
                         if (dot == std::string::npos) break;
                         scope.resize(dot);
@@ -2622,7 +2622,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     } else if (!isKnownVariant &&
                                !existing) {
                         auto resolved = (!m_currentModule.empty())
-                            ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
+                            ? m_env->get(kex::mangle::qualify(m_currentModule, upperIdent->name)) : ValuePtr{};
                         if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
                             namespaceName = std::get<ModuleValue>(resolved->data).name;
                         } else if (auto aliased =
@@ -2768,12 +2768,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // globals. Falls back to the plain name for namespaces that were
                 // registered without a mangled prefix (e.g. Stream.Sequence).
                 std::string dispatchName = node.method;
-                auto mangled = namespaceName + "::" + node.method;
+                auto mangled = kex::mangle::qualify(namespaceName, node.method);
                 if (namespaceName.find('.') != std::string::npos && !m_env->get(mangled)) {
-                    std::string alt;
-                    for (char c : namespaceName)
-                        alt += (c == '.') ? "::" : std::string(1, c);
-                    mangled = alt + "::" + node.method;
+                    mangled = kex::mangle::qualify(
+                        kex::mangle::manglePath(namespaceName), node.method);
                 }
                 if (auto target = m_env->get(mangled)) {
                     if (node.args.empty() && node.namedArgs.empty() &&
@@ -2873,8 +2871,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (const auto* identifier =
                     std::get_if<ast::Identifier>(&node.receiver->kind)) {
                 auto dictionary = m_env->get(
-                    "__trait_dictionary__" + identifier->name + "::" +
-                    node.method);
+                    "__trait_dictionary__" + kex::mangle::qualify(identifier->name, node.method));
                 if (dictionary) {
                     auto* function =
                         std::get_if<FunctionValue>(&dictionary->data);
@@ -2900,13 +2897,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     found != m_expressionTypes->end() && found->second) {
                     if (const auto* named = std::get_if<semantic::NamedType>(
                             &found->second->kind)) {
-                        const auto candidate = named->name + "::" + node.method;
+                        const auto candidate = kex::mangle::qualify(named->name, node.method);
                         const auto runtimeType = dispatchTypeName(receiver);
                         const auto runtimeDot = runtimeType.rfind('.');
                         const bool resolvedShortRecordMethod =
                             runtimeDot != std::string::npos &&
                             specificMethod == runtimeType.substr(runtimeDot + 1) +
-                                "::" + node.method;
+                                std::string(kex::mangle::kSeparator) + node.method;
                         if ((m_erasedReceiverTypes.contains(named->name) ||
                              named->name == runtimeType) &&
                             !resolvedShortRecordMethod &&
@@ -3481,7 +3478,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     const auto firstDot = ns.find('.');
                     const auto head = ns.substr(0, firstDot);
                     auto bound = m_currentModule.empty()
-                        ? ValuePtr{} : m_env->get(m_currentModule + "::" + head);
+                        ? ValuePtr{} : m_env->get(kex::mangle::qualify(m_currentModule, head));
                     if (!bound) bound = m_env->get(head);
                     if (bound)
                         if (const auto* aliased =
@@ -3503,7 +3500,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     throw RuntimeError("cannot access private name `" + node.name
                                        + "` from " + ns, expr.location);
                 }
-                const auto mangled = ns + "::" + node.name;
+                const auto mangled = kex::mangle::qualify(ns, node.name);
                 if (!m_env->get(mangled))
                     throw RuntimeError("`" + node.module + "." + node.name
                                        + "` is not a function", expr.location);
@@ -3669,7 +3666,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // `Session` into the global scope (kexhq/kex#539).
             ValuePtr val;
             for (auto scope = m_currentModule; !val && !scope.empty();) {
-                val = m_env->get(scope + "::" + node.name);
+                val = m_env->get(kex::mangle::qualify(scope, node.name));
                 const auto dot = scope.rfind('.');
                 if (dot == std::string::npos) break;
                 scope.resize(dot);
@@ -4145,7 +4142,7 @@ auto Evaluator::knownModuleValue(const std::string& name) const -> bool {
     auto binding = m_env->get(name);
     if (binding && std::holds_alternative<ModuleValue>(binding->data)) return true;
     if (m_currentModule.empty()) return false;
-    auto scoped = m_env->get(m_currentModule + "::" + name);
+    auto scoped = m_env->get(kex::mangle::qualify(m_currentModule, name));
     return scoped && std::holds_alternative<ModuleValue>(scoped->data);
 }
 
@@ -4193,12 +4190,12 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     if (loc.line > 0) m_lastCallLocation = loc;
 
     std::string lookupName = name;
-    if (!m_currentModule.empty() && name.find("::") == std::string::npos) {
+    if (!m_currentModule.empty() && !kex::mangle::hasScope(name)) {
         // Innermost module first, then each enclosing one — the same lexical
         // rule the resolver applies, so `Outer.Inner` sees `Outer`'s names
         // and every module body sees the file's.
         for (auto scope = m_currentModule; !scope.empty();) {
-            const auto scopedName = scope + "::" + name;
+            const auto scopedName = kex::mangle::qualify(scope, name);
             if (m_env->get(scopedName)) { lookupName = scopedName; break; }
             const auto dot = scope.rfind('.');
             if (dot == std::string::npos) break;
@@ -4210,7 +4207,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         for (const auto& [modName, entry] : m_moduleRegistry) {
             auto eit = entry.exports.find(name);
             if (eit != entry.exports.end()) {
-                lookupName = modName + "::" + name;
+                lookupName = kex::mangle::qualify(modName, name);
                 val = eit->second;
                 break;
             }
@@ -4219,7 +4216,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     // Bare UFCS (`map(xs, f)`) is equivalent to receiver syntax
     // (`xs.map(f)`). Once a public native alias is removed, route the call to
     // the source-owned receiver method selected from argument zero.
-    if (!val && !args.empty() && name.find("::") == std::string::npos) {
+    if (!val && !args.empty() && !kex::mangle::hasScope(name)) {
         auto methodName = resolveMethodName(args[0], name, &args);
         if (methodName != name) {
             lookupName = std::move(methodName);
@@ -4232,7 +4229,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     // it a method could not call a sibling — or itself recursively — without
     // spelling `this.`, and the attempt died here as "Undefined function"
     // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
-    if (!val && name.find("::") == std::string::npos) {
+    if (!val && !kex::mangle::hasScope(name)) {
         if (auto receiver = m_env->get("this")) {
             std::vector<ValuePtr> withReceiver{receiver};
             withReceiver.insert(withReceiver.end(), args.begin(), args.end());
@@ -4278,8 +4275,8 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                 // `supervisor(restart: :all, [...])` passed the list as
                 // `restart`.
                 if (!m_functionDefs.count(defLookupKey) &&
-                    defLookupKey.find("::") == std::string::npos) {
-                    const auto suffix = "::" + defLookupKey;
+                    !kex::mangle::hasScope(defLookupKey)) {
+                    const auto suffix = std::string(kex::mangle::kSeparator) + defLookupKey;
                     for (const auto& [key, _] : m_functionDefs)
                         if (key.size() > suffix.size() &&
                             key.compare(key.size() - suffix.size(),
@@ -4300,9 +4297,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     // BEAM raises the same from lowering.
                     if (!selected || !namedArgsTypeFit(*selected, namedArgs, true))
                         if (auto module = gatedModuleTaking(defLookupKey, namedArgs)) {
-                            const auto separator = defLookupKey.rfind("::");
-                            const auto method = separator == std::string::npos
-                                ? defLookupKey : defLookupKey.substr(separator + 2);
+                            const auto method = kex::mangle::memberOf(defLookupKey);
                             throw RuntimeError(
                                 "Undefined method: " + method + " for " +
                                 (offset && !args.empty() ? dispatchTypeName(args[0])
@@ -4323,10 +4318,8 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                                 + ":` for `" + sourceName(defLookupKey) + "`";
                             if (auto module =
                                     moduleSupplyingNamedClause(defLookupKey, namedArgs)) {
-                                const auto separator = defLookupKey.rfind("::");
                                 message += " — `" + *module + "` defines a matching `"
-                                    + (separator == std::string::npos
-                                        ? defLookupKey : defLookupKey.substr(separator + 2))
+                                    + kex::mangle::memberOf(defLookupKey)
                                     + "`; add `using " + *module + "`";
                             }
                             throw RuntimeError(message, loc);
@@ -4460,15 +4453,12 @@ auto Evaluator::unknownNamedArgument(const std::string& functionName,
 auto Evaluator::moduleSupplyingNamedClause(const std::string& functionName,
                                            const NamedArgs& namedArgs) const
     -> std::optional<std::string> {
-    const auto separator = functionName.rfind("::");
-    const auto shortName = separator == std::string::npos
-        ? functionName : functionName.substr(separator + 2);
+    const auto shortName = kex::mangle::memberOf(functionName);
 
     for (const auto& [key, _] : m_functionDefs) {
-        const auto keySeparator = key.rfind("::");
-        if (keySeparator == std::string::npos) continue;
-        if (key.substr(keySeparator + 2) != shortName) continue;
-        auto scope = key.substr(0, keySeparator);
+        if (!kex::mangle::hasScope(key)) continue;
+        if (kex::mangle::memberOf(key) != shortName) continue;
+        auto scope = kex::mangle::scopeOf(key);
         if (key == functionName || !m_moduleRegistry.contains(scope)) continue;
         if (findNamedClause(key, namedArgs)) return scope;
     }
@@ -4486,7 +4476,7 @@ auto Evaluator::findImportedNamedOverload(const std::string& functionName,
         auto imported = scope->find(functionName);
         if (imported == scope->end()) continue;
 
-        auto qualified = imported->second.module + "::" + functionName;
+        auto qualified = kex::mangle::qualify(imported->second.module, functionName);
         if (const auto* clause = findNamedClause(qualified, namedArgs, positionalCount)) {
             if (!clause->params.empty() && clause->params.front().type &&
                 *clause->params.front().type &&
@@ -4503,10 +4493,9 @@ auto Evaluator::receiverArgumentOffset(const std::string& functionName,
                                        const std::vector<ValuePtr>& args) const -> size_t {
     if (args.empty()) return 0;
 
-    auto separator = functionName.rfind("::");
-    if (separator == std::string::npos) return 0;
+    if (!kex::mangle::hasScope(functionName)) return 0;
 
-    auto scope = functionName.substr(0, separator);
+    auto scope = kex::mangle::scopeOf(functionName);
     auto receiverType = dispatchTypeName(args[0]);
     if (scope == receiverType) return 1;
     // Module-owned records retain their qualified runtime identity
@@ -4537,7 +4526,7 @@ auto Evaluator::registerRuntimeSignature(
     }
     auto name = scope.empty()
         ? annotation.name
-        : scope + "::" + annotation.name;
+        : kex::mangle::qualify(scope, annotation.name);
     m_runtimeSignatures[name].push_back(std::move(signature));
 }
 
@@ -4781,12 +4770,12 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // Records and their own make functions share the qualified identity.
     // Keep short-name fallback for existing generic/foreign registrations.
     if (const auto dot = receiverType.rfind('.'); dot != std::string::npos) {
-        const auto qualified = receiverType + "::" + method;
+        const auto qualified = kex::mangle::qualify(receiverType, method);
         const auto shortType = receiverType.substr(dot + 1);
         if (!m_env->get(qualified) && !m_functionValues.count(qualified))
             receiverType = std::move(shortType);
     }
-    auto typed = receiverType + "::" + method;
+    auto typed = kex::mangle::qualify(receiverType, method);
     const bool protocolMethod = std::any_of(
         m_traitMethods.begin(), m_traitMethods.end(),
         [&](const auto& trait) {
@@ -4804,7 +4793,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         for (const auto& [traitName, methods] : m_traitMethods) {
             if (std::find(methods.begin(), methods.end(), method) == methods.end())
                 continue;
-            const auto candidate = traitName + "::" + method;
+            const auto candidate = kex::mangle::qualify(traitName, method);
             if (!m_functionValues.count(candidate)) continue;
             if (!protocolFallback.empty()) {
                 protocolFallback.clear();
@@ -4899,7 +4888,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         if (checkable(method) && matches(method)) {
             if (!typedMatches && checkable(typed)) rejected.insert(typed);
             for (const auto& super : dispatchSupertypes(receiverType))
-                if (auto candidate = super + "::" + method;
+                if (auto candidate = kex::mangle::qualify(super, method);
                     checkable(candidate) && !matches(candidate))
                     rejected.insert(std::move(candidate));
         }
@@ -4908,7 +4897,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
              scope != m_importScopes.rend(); ++scope) {
             auto origin = scope->find(method);
             if (origin == scope->end()) continue;
-            auto candidate = origin->second.module + "::" + method;
+            auto candidate = kex::mangle::qualify(origin->second.module, method);
             if (matches(candidate)) imported = std::move(candidate);
             break;
         }
@@ -4925,7 +4914,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         // import: the receiver's own module is the more specific answer.
         if (const auto full = dispatchTypeName(receiver);
             full.rfind('.') != std::string::npos) {
-            auto own = full.substr(0, full.rfind('.')) + "::" + method;
+            auto own = kex::mangle::qualify(full.substr(0, full.rfind('.')), method);
             if (matches(own)) return own;
         }
         if (!imported.empty()) return imported;
@@ -4938,7 +4927,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // lookup above, so a type defining the method itself still wins, and
     // above the trait fallback, since it is a real implementation.
     for (const auto& super : dispatchSupertypes(receiverType)) {
-        auto typedBySuper = super + "::" + method;
+        auto typedBySuper = kex::mangle::qualify(super, method);
         if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper) &&
             !rejected.count(typedBySuper))
             return typedBySuper;
@@ -4951,7 +4940,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // `make Showable` default, exactly as `Date::showValue` does.
     auto parentIt = m_variantParent.find(receiverType);
     if (parentIt != m_variantParent.end()) {
-        auto typedByParent = parentIt->second + "::" + method;
+        auto typedByParent = kex::mangle::qualify(parentIt->second, method);
         if (m_env->get(typedByParent)) return typedByParent;
     }
 
@@ -4972,7 +4961,7 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
     auto defIt = m_functionDefs.find(name);
     for (auto scope = m_currentModule;
          defIt == m_functionDefs.end() && !scope.empty();) {
-        defIt = m_functionDefs.find(scope + "::" + name);
+        defIt = m_functionDefs.find(kex::mangle::qualify(scope, name));
         const auto dot = scope.rfind('.');
         if (dot == std::string::npos) break;
         scope.resize(dot);
@@ -4987,7 +4976,7 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
              defIt == m_functionDefs.end() && scope != m_importScopes.rend();
              ++scope)
             if (auto found = scope->find(name); found != scope->end())
-                defIt = m_functionDefs.find(found->second.module + "::" + name);
+                defIt = m_functionDefs.find(kex::mangle::qualify(found->second.module, name));
     if (defIt == m_functionDefs.end() || defIt->second.empty()) return val;
     if (!defIt->second[0]->clauses[0].params.empty()) return val;
 

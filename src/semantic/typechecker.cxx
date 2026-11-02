@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../common/mangle.hxx"
 #include "typechecker.hxx"
 #include "analyzer.hxx"
 #include "declaration_validator.hxx"
@@ -999,7 +1000,7 @@ auto TypeChecker::resolveModulePath(const std::string& name,
     auto resolved = resolveImportedModulePath(name, member);
     const auto exportsMember = [&](const std::string& module) {
         if (m_localModules.contains(module) &&
-            m_userSignatures.contains(module + "::" + member))
+            m_userSignatures.contains(kex::mangle::qualify(module, member)))
             return true;
         if (!m_importedInterfaces) return false;
         auto found = m_importedInterfaces->modules.find(module);
@@ -1040,7 +1041,7 @@ auto TypeChecker::resolveImportedModulePath(const std::string& name,
     // literally; the literal module must actually export `member`.
     auto exportsMember = [&](const std::string& module) {
         if (m_localModules.contains(module) &&
-            m_userSignatures.contains(module + "::" + member))
+            m_userSignatures.contains(kex::mangle::qualify(module, member)))
             return true;
         if (!m_importedInterfaces) return false;
         auto found = m_importedInterfaces->modules.find(module);
@@ -1198,7 +1199,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
             }
         }
         result.modulePath = modulePath;
-        const auto key = modulePath.empty() ? *name : modulePath + "::" + *name;
+        const auto key = modulePath.empty() ? *name : kex::mangle::qualify(modulePath, *name);
         m_constructorResult[key] = std::move(result);
     }
 }
@@ -1293,7 +1294,7 @@ auto TypeChecker::constructorResultType(
     // constructor with the same spelling (for example a local Done versus
     // Control.Retry's Done). Do not let stdlib interfaces choose its ADT.
     for (auto module = m_currentModulePath; !module.empty();) {
-        found = m_constructorResult.find(module + "::" + name);
+        found = m_constructorResult.find(kex::mangle::qualify(module, name));
         if (found != m_constructorResult.end()) break;
         const auto dot = module.rfind('.');
         if (dot == std::string::npos) break;
@@ -2006,8 +2007,8 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
         // Reachable qualified before its definition is checked, so a call
         // above the definition resolves to it (#103). Not marked published:
         // the definition's own check still replaces this with what it checks.
-        if (!m_qualifiedPublished.contains(modulePath + "::" + ann.name))
-            m_userSignatures[modulePath + "::" + ann.name].push_back(*sig);
+        if (!m_qualifiedPublished.contains(kex::mangle::qualify(modulePath, ann.name)))
+            m_userSignatures[kex::mangle::qualify(modulePath, ann.name)].push_back(*sig);
         if (exposeUnqualified)
             m_userSignatures[ann.name].insert(
                 m_userSignatures[ann.name].begin(), std::move(*sig));
@@ -2503,7 +2504,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
             enrich(scoped->second);
             auto qualified = m_userSignatures.find(
                 m_currentModulePath.empty() ? def.name
-                                           : m_currentModulePath + "::" + def.name);
+                                           : kex::mangle::qualify(m_currentModulePath, def.name));
             if (qualified != m_userSignatures.end()) enrich(qualified->second);
         }
         // `m_annotationDeclared` is keyed by the bare name, so an annotation in
@@ -2511,7 +2512,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         // source) also skipped this module's unannotated `sha256` — and with it
         // the qualified `Tool::sha256` a call above the definition needs
         // (#103). File that key here; the bare-name set stays untouched.
-        const auto qualified = m_currentModulePath + "::" + def.name;
+        const auto qualified = kex::mangle::qualify(m_currentModulePath, def.name);
         if (!m_currentModulePath.empty() &&
             !m_scopedDeclaredSignatures.count(m_currentModulePath + "\n" + def.name) &&
             !m_qualifiedPublished.contains(qualified)) {
@@ -2609,7 +2610,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // name, and resolved to `Digest.sha256` (#103). Not marked published, so
     // the definition's own check replaces these provisional signatures.
     if (!m_currentModulePath.empty()) {
-        const auto qualified = m_currentModulePath + "::" + def.name;
+        const auto qualified = kex::mangle::qualify(m_currentModulePath, def.name);
         if (!m_qualifiedPublished.contains(qualified))
             for (const auto& signature : provisional)
                 m_userSignatures[qualified].push_back(signature);
@@ -3190,7 +3191,7 @@ auto TypeChecker::bindPatternVars(
             // rather than the record's own field.
             for (auto module = m_currentModulePath;
                  !declaration && !module.empty();) {
-                if (auto found = m_constructorResult.find(module + "::" + node.name);
+                if (auto found = m_constructorResult.find(kex::mangle::qualify(module, node.name));
                     found != m_constructorResult.end()) {
                     declaration = &found->second;
                     break;
@@ -3202,7 +3203,7 @@ auto TypeChecker::bindPatternVars(
             if (!declaration && expected)
                 if (const auto* scrutinee =
                         std::get_if<NamedType>(&resolve(expected)->kind)) {
-                    const auto suffix = "::" + node.name;
+                    const auto suffix = std::string(kex::mangle::kSeparator) + node.name;
                     for (const auto& [key, candidate] : m_constructorResult)
                         if (key.size() > suffix.size() && key.ends_with(suffix) &&
                             namedTypesMatch(candidate.adtName, scrutinee->name)) {
@@ -4088,7 +4089,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
 auto TypeChecker::publishQualifiedSignatures(
     const std::string& name, const std::vector<Signature>& signatures) -> void {
     if (m_currentModulePath.empty() || signatures.empty()) return;
-    const auto key = m_currentModulePath + "::" + name;
+    const auto key = kex::mangle::qualify(m_currentModulePath, name);
     // Only THIS definition's signatures: `Date.parse` and `Time.parse` share
     // the bare name `parse`, and publishing the accumulated set gave Date's
     // qualified key Time's result type.
@@ -4314,10 +4315,10 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     -> std::vector<Signature> {
     std::vector<Signature> result;
     if (!m_importedInterfaces) return result;
-    if (auto separator = name.find("::"); separator != std::string::npos) {
-        auto module = m_importedInterfaces->modules.find(name.substr(0, separator));
+    if (kex::mangle::hasScope(name)) {
+        auto module = m_importedInterfaces->modules.find(kex::mangle::headOf(name));
         if (module != m_importedInterfaces->modules.end())
-            if (auto functions = module->second.exports.find(name.substr(separator + 2));
+            if (auto functions = module->second.exports.find(kex::mangle::tailOf(name));
                 functions != module->second.exports.end())
                 for (const auto& function : functions->second)
                     result.push_back(function.signature);

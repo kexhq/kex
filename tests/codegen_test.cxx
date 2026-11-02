@@ -316,11 +316,16 @@ int main() {
 
     describe("IR Core Erlang emitter — binary operators", []() {
          it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
-            auto out = emit("main do\n  1 + 2\nend\n");
+            auto out = emit("main do\n  \"a\" + \"b\"\nend\n");
             // + dispatches through kex_intrinsic_number:add/2 which handles both number
             // addition (erlang:'+') and string concatenation (erlang:'++')
             // at runtime based on the operand types.
             assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
+        });
+
+        it("emits integer addition via erlang:'+'", []() {
+            auto out = emit("main do\n  1 + 2\nend\n");
+            assertTrue(contains(out, "call 'erlang':'+'"), out);
         });
 
         it("emits subtraction via erlang:'-'", []() {
@@ -339,7 +344,7 @@ int main() {
         });
 
         it("emits polymorphic equality through the number intrinsic", []() {
-            auto out = emit("main do\n  \"a\" == \"a\"\nend\n");
+            auto out = emit("main do\n  1 == 1.0\nend\n");
             assertTrue(contains(out, "call 'kex_intrinsic_number':'eq'"), out);
         });
 
@@ -1409,7 +1414,7 @@ int main() {
                 "end\n");
             assertTrue(contains(out, "apply 'inspectTag'/2"), out);
             assertTrue(
-                contains(out, "kex_intrinsic_number':'add'"), out);
+                contains(out, "erlang':'+'"), out);
             assertFalse(contains(out, "kex_io':'to_string'"), out);
         });
     });
