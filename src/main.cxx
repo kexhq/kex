@@ -3,6 +3,7 @@
 #include "beam/etf.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
+#include "cache/separate_unit.hxx"
 #include "beam/term_builder.hxx"
 #include "ast/convert.hxx"
 #include "ast/syntax.hxx"
@@ -27,8 +28,6 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
-#include <limits>
 #include <getopt.h>
 #include <iostream>
 #include <sstream>
@@ -2354,111 +2353,6 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
   return std::nullopt;
 }
 
-struct CachedSeparateUnit {
-  kex::beam::LoadedUnit interface;
-  std::vector<std::string> names;
-  std::vector<kex::ir::EmitResult> modules;
-};
-
-auto separateUnitCachePath(const std::string &key) -> std::filesystem::path {
-  return *kexCacheBase() / "units" / key.substr(0, 2) / key;
-}
-
-auto cacheDigest(const std::string &bytes) -> std::string {
-  static constexpr char digits[] = "0123456789abcdef";
-  const auto hash = kex::beam::computeSha256(
-      std::vector<uint8_t>(bytes.begin(), bytes.end()));
-  std::string result;
-  for (const auto byte : hash) {
-    result += digits[byte >> 4];
-    result += digits[byte & 15];
-  }
-  return result;
-}
-
-auto loadSeparateUnit(const std::string &key) -> std::optional<CachedSeparateUnit> {
-  const auto dir = separateUnitCachePath(key);
-  std::ifstream manifest(dir / "manifest.txt");
-  std::string line;
-  if (!std::getline(manifest, line) || line != "kex-unit-v1") return std::nullopt;
-  CachedSeparateUnit cached;
-  if (!std::getline(manifest, cached.interface.entryBeamAtom)) return std::nullopt;
-  std::size_t count = 0;
-  if (!(manifest >> count) || count > 1000) return std::nullopt;
-  manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-  for (std::size_t i = 0; i < count; ++i) {
-    std::string atom, digest;
-    if (!std::getline(manifest, atom) || !std::getline(manifest, digest))
-      return std::nullopt;
-    std::ifstream file(dir / (std::to_string(i) + ".kexi"), std::ios::binary);
-    if (!file) return std::nullopt;
-    const std::string bytes((std::istreambuf_iterator<char>(file)), {});
-    if (cacheDigest(bytes) != digest) return std::nullopt;
-    try {
-      cached.interface.modules.push_back({atom, "", kex::beam::deserializeKexi(
-          std::vector<uint8_t>(bytes.begin(), bytes.end()))});
-    } catch (...) {
-      return std::nullopt;
-    }
-    cached.names.push_back(cached.interface.modules.back().chunk.metadata.sourceModule);
-  }
-  if (!(manifest >> count) || count > 1000) return std::nullopt;
-  manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-  for (std::size_t i = 0; i < count; ++i) {
-    std::string name, digest;
-    int arity = 0;
-    if (!std::getline(manifest, name) || !(manifest >> arity)) return std::nullopt;
-    manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    if (!std::getline(manifest, digest)) return std::nullopt;
-    std::ifstream file(dir / (std::to_string(i) + ".core"), std::ios::binary);
-    if (!file) return std::nullopt;
-    std::string source((std::istreambuf_iterator<char>(file)), {});
-    if (cacheDigest(source) != digest) return std::nullopt;
-    cached.modules.push_back({std::move(source), std::move(name), arity});
-  }
-  if (cached.interface.modules.empty() || cached.modules.empty()) return std::nullopt;
-  return cached;
-}
-
-auto storeSeparateUnit(const std::string &key, const CachedSeparateUnit &unit) -> void {
-  namespace fs = std::filesystem;
-  const auto target = separateUnitCachePath(key);
-  std::error_code error;
-  if (fs::exists(target / "manifest.txt", error)) return;
-  const auto temporary = fs::path(target.string() + ".tmp." +
-      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-  fs::create_directories(temporary, error);
-  if (error) return;
-  std::string manifest = "kex-unit-v1\n" + unit.interface.entryBeamAtom + "\n" +
-                         std::to_string(unit.interface.modules.size()) + "\n";
-  for (std::size_t i = 0; i < unit.interface.modules.size(); ++i) {
-    const auto &module = unit.interface.modules[i];
-    const auto data = kex::beam::serializeKexi(module.chunk);
-    const std::string bytes(data.begin(), data.end());
-    std::ofstream file(temporary / (std::to_string(i) + ".kexi"), std::ios::binary);
-    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    if (!file) { fs::remove_all(temporary, error); return; }
-    manifest += module.beamAtom + "\n" + cacheDigest(bytes) + "\n";
-  }
-  manifest += std::to_string(unit.modules.size()) + "\n";
-  for (std::size_t i = 0; i < unit.modules.size(); ++i) {
-    const auto &module = unit.modules[i];
-    std::ofstream file(temporary / (std::to_string(i) + ".core"), std::ios::binary);
-    file.write(module.source.data(), static_cast<std::streamsize>(module.source.size()));
-    if (!file) { fs::remove_all(temporary, error); return; }
-    manifest += module.moduleName + "\n" + std::to_string(module.mainArity) +
-                "\n" + cacheDigest(module.source) + "\n";
-  }
-  {
-    std::ofstream file(temporary / "manifest.txt", std::ios::binary);
-    file << manifest;
-    if (!file) { fs::remove_all(temporary, error); return; }
-  }
-  fs::create_directories(target.parent_path(), error);
-  if (!error) fs::rename(temporary, target, error);
-  if (error) fs::remove_all(temporary, error);
-}
-
 auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps,
                           const std::vector<std::vector<std::string>> &units,
                           const std::map<std::string, std::set<std::string>> &uses,
@@ -2480,6 +2374,9 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     kex::beam::LoadedUnit unit;
   };
   std::vector<Described> describedUnits;
+  std::optional<kex::cache::SeparateUnitCache> unitCache;
+  if (auto root = kexCacheBase(); root && separateBuildRequested())
+    unitCache.emplace(*root);
   for (const auto &unit : units) {
     const bool isEntry = unit.size() == 1 && unit.front().empty();
     // A unit is checked and lowered against the units its files reach, and
@@ -2516,15 +2413,10 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       for (const auto &error : registry.declarePackage(build))
         std::fprintf(stderr, "separate: package: %s\n", error.message.c_str());
     std::optional<std::string> cacheKey;
-    if (!isEntry && separateBuildRequested() && kexCacheBase()) {
-      std::string material = "kex-unit-v1\n" + toolchainFingerprint() + "\n";
-      const auto runtime = prebuiltRuntimeBeamDir();
-      material += "runtime:" + runtime + ":" +
-          kex::compiled::fileStamp(runtime + "/kex_prelude.beam") + "\n";
+    if (!isEntry && unitCache) {
+      std::vector<kex::cache::SeparateUnitCache::Source> sources;
       bool safe = true;
-      auto paths = unit;
-      std::sort(paths.begin(), paths.end());
-      for (const auto &path : paths) {
+      for (const auto &path : unit) {
         const auto found = byPath.find(path);
         if (found == byPath.end()) { safe = false; break; }
         const auto &source = *found->second->source;
@@ -2533,21 +2425,23 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
           safe = false;
           break;
         }
-        material += path + ":" + cacheDigest(source) + "\n";
+        sources.push_back({path, source});
       }
+      std::vector<const kex::beam::LoadedUnit*> dependencies;
       for (const auto &below : describedUnits) {
         if (std::none_of(below.files.begin(), below.files.end(),
                          [&](const std::string &file) { return reached.contains(file); }))
           continue;
-        for (const auto &module : below.unit.modules) {
-          const auto data = kex::beam::serializeKexi(module.chunk);
-          material += module.beamAtom + ":" +
-              cacheDigest(std::string(data.begin(), data.end())) + "\n";
-        }
+        dependencies.push_back(&below.unit);
       }
       if (safe) {
-        cacheKey = cacheDigest(material);
-        if (auto cached = loadSeparateUnit(*cacheKey)) {
+        const auto runtime = prebuiltRuntimeBeamDir();
+        cacheKey = unitCache->keyFor(
+            toolchainFingerprint(),
+            "runtime:" + runtime + ":" +
+                kex::compiled::fileStamp(runtime + "/kex_prelude.beam"),
+            std::move(sources), dependencies);
+        if (auto cached = unitCache->load(*cacheKey)) {
           if (const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
               coreDir && *coreDir) {
             std::filesystem::create_directories(coreDir);
@@ -2557,9 +2451,11 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
           }
           for (auto &module : cached->modules)
             separateModules.push_back(std::move(module));
+          std::vector<std::string> names;
+          for (const auto &module : cached->interface.modules)
+            names.push_back(module.chunk.metadata.sourceModule);
           describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()),
-                                    std::move(cached->names),
-                                    std::move(cached->interface)});
+                                    std::move(names), std::move(cached->interface)});
           if (std::getenv("KEX_TIMINGS"))
             std::fprintf(stderr, "  unit cache hit: %s\n", unit.front().c_str());
           continue;
@@ -2779,13 +2675,12 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     }
     if (cacheKey && unitChecked && unitLowered &&
         describedUnits.size() > describedBefore) {
-      CachedSeparateUnit cached;
+      kex::cache::CachedSeparateUnit cached;
       cached.interface = describedUnits.back().unit;
-      cached.names = describedUnits.back().names;
       cached.modules.assign(separateModules.begin() +
                                 static_cast<std::ptrdiff_t>(emittedBefore),
                             separateModules.end());
-      storeSeparateUnit(*cacheKey, cached);
+      unitCache->store(*cacheKey, cached);
     }
     if (isEntry) {
       entry.items = std::move(program.items);
