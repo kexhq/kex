@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/function_groups.hxx"
+#include "mangle.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
@@ -919,7 +920,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 ? mod.name : parent + "." + mod.name;
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) moduleAnnotated.insert(moduleName + "::" + (*ann)->name);
+                    if (*ann) moduleAnnotated.insert(kex::mangle::qualify(moduleName, (*ann)->name));
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
                     if (*nested) collectAnnotatedNames(**nested, moduleName);
             }
@@ -949,7 +950,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) {
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
-                        if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
+                        if (!moduleAnnotated.count(kex::mangle::qualify(moduleName, (*fn)->name)))
                             for (const auto* clause : ast::signatureClauses(**fn)) {
                                 auto sig = inlineSignature(**fn, *clause, nullptr);
                                 if (!sig) continue;

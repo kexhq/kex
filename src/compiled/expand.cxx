@@ -4,6 +4,7 @@
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
 #include "../beam/kexi.hxx"
+#include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../interpreter/evaluator.hxx"
@@ -147,7 +148,7 @@ using ScopedConstants = std::unordered_map<std::string, Constants>;
 
 auto qualifiedName(const std::string& scope, const std::string& name)
     -> std::string {
-    return scope.empty() ? name : scope + "::" + name;
+    return kex::mangle::qualify(scope, name);
 }
 
 // Stable identity for a generation template, whichever declaration shape it
@@ -2564,11 +2565,11 @@ auto addImportedCompiledNames(const ast::Program& program,
         const auto resolved = resolver.resolve(name, scope);
         if (!resolved) return;
         const auto& theirs = compiledNamesInFile(resolved->path);
-        const auto prefix = resolved->moduleName + "::";
+        const auto prefix = resolved->moduleName + std::string(kex::mangle::kSeparator);
         for (const auto& identity : theirs.qualified) {
             if (identity.rfind(prefix, 0) != 0) continue;
             const auto bare = identity.substr(prefix.size());
-            if (bare.find("::") != std::string::npos) continue;
+            if (kex::mangle::hasScope(bare)) continue;
             into.qualified.insert(identity);
             if (name != resolved->moduleName)
                 into.qualified.insert(qualifiedName(name, bare));
@@ -3315,9 +3316,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             for (const auto& name : compiled.methods)
                 if (text.find(name) != std::string::npos) return true;
             for (const auto& identity : compiled.qualified) {
-                const auto split = identity.rfind("::");
-                const auto name = split == std::string::npos
-                    ? identity : identity.substr(split + 2);
+                const auto name = kex::mangle::memberOf(identity);
                 if (text.find(name) != std::string::npos) return true;
             }
             return false;
@@ -3768,13 +3767,12 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         for (const auto& reference : substituter.remaining) {
             if (!reported.insert(qualifiedName(scope, reference)).second)
                 continue;
-            const auto split = reference.rfind("::");
             std::string why;
-            if (split != std::string::npos)
-                if (const auto found = visible.find(reference.substr(0, split));
+            if (kex::mangle::hasScope(reference))
+                if (const auto found = visible.find(kex::mangle::scopeOf(reference));
                     found != visible.end())
                     if (const auto value = found->second.find(
-                            reference.substr(split + 2));
+                            kex::mangle::memberOf(reference));
                         value != found->second.end())
                         (void)valueToLiteral(value->second, SourceLocation{},
                                              why, {&layouts, nullptr, &modules});
@@ -3947,11 +3945,8 @@ auto expand(ast::Program& program,
         }
         for (std::size_t i = 0; i < names.size() && i < values.size(); i++) {
             if (!values[i]) continue;
-            const auto split = names[i].rfind("::");
-            const auto scope = split == std::string::npos
-                ? std::string{} : names[i].substr(0, split);
-            const auto bare = split == std::string::npos
-                ? names[i] : names[i].substr(split + 2);
+            const auto scope = kex::mangle::scopeOf(names[i]);
+            const auto bare = kex::mangle::memberOf(names[i]);
             constants[scope].emplace(bare, values[i]);
         }
     }
@@ -3982,11 +3977,9 @@ auto expand(ast::Program& program,
                     substituter.substitute(target);
             });
             for (const auto& reference : substituter.remaining) {
-                const auto split = reference.rfind("::");
-                const auto name = split == std::string::npos
-                    ? reference : reference.substr(split + 2);
-                const auto owner = split != std::string::npos
-                    ? reference.substr(0, split)
+                const auto name = kex::mangle::memberOf(reference);
+                const auto owner = kex::mangle::hasScope(reference)
+                    ? kex::mangle::scopeOf(reference)
                     : (constants[scope].count(name) ? scope : std::string{});
                 const auto identity = qualifiedName(owner, name);
                 keep.insert(identity);

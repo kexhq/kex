@@ -3,6 +3,7 @@
 #include "lower.hxx"
 #include "lower_internal.hxx"
 #include "../ast/function_groups.hxx"
+#include "../common/mangle.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
@@ -899,9 +900,7 @@ struct Lowering {
                               const std::string& label) -> ExprPtr {
         auto message = "unknown named argument `" + label + ":` for `" +
                        sourceName(qualified) + "`";
-        const auto separator = qualified.rfind("::");
-        const auto plain = separator == std::string::npos
-            ? qualified : qualified.substr(separator + 2);
+        const auto plain = kex::mangle::memberOf(qualified);
         // A module named `Mod.fn` whose `fn` declares this label. Three places
         // hold that, depending on where the module came from: compiled in this
         // same unit (`Units.SI` is, since the program names it), imported as an
@@ -1154,6 +1153,29 @@ struct Lowering {
             return "num";
         if (name == "String") return "str";
         if (name == "Char") return "char";
+        return {};
+    }
+
+    // A type for which Kex `==` is exact Erlang identity: Integer, String and
+    // Char. Float is deliberately absent — `-0.0` and NaN make `=:=` disagree
+    // with Kex's numeric equality. Empty when the type is not pinned down.
+    auto exactEqualityType(const ast::ExprPtr& e) const -> std::string {
+        if (!e) return {};
+        if (std::holds_alternative<ast::IntLiteral>(e->kind)) return "Integer";
+        if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "String";
+        if (std::holds_alternative<ast::CharLiteral>(e->kind)) return "Char";
+        if (auto* id = std::get_if<ast::Identifier>(&e->kind))
+            if (auto declared = declaredParamTypes.find(id->name);
+                declared != declaredParamTypes.end() &&
+                (declared->second == "Integer" || declared->second == "String" ||
+                 declared->second == "Char"))
+                return declared->second;
+        if (!expressionTypes) return {};
+        auto found = expressionTypes->find(e.get());
+        if (found == expressionTypes->end() || !found->second) return {};
+        const auto name = semantic::typeToString(found->second);
+        if (name == "Integer" || name == "String" || name == "Char")
+            return name;
         return {};
     }
 
@@ -1554,12 +1576,14 @@ struct Lowering {
                 auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
                     Op op = opOf(n.op);
                     if (op == Op::Eq || op == Op::Neq) {
-                        // Two provably-integer operands: Kex `==` is exact
+                        // Two provably-identical exact-comparable operands
+                        // (Integer, String or Char): Kex `==` is exact
                         // identity there (no charlist/string coercion, no
                         // Int/Float widening), so the raw BIF answers it and
                         // the 12-clause kex_intrinsic_number:eq/neq call is
                         // skipped on the hot path.
-                        if (isIntegerOperand(n.left) && isIntegerOperand(n.right)) {
+                        const auto lhs = exactEqualityType(n.left);
+                        if (!lhs.empty() && lhs == exactEqualityType(n.right)) {
                             auto ex = std::make_unique<Expr>();
                             ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
                             return ex;
@@ -5751,7 +5775,7 @@ struct Lowering {
                                 found != expressionTypes->end() && found->second)
                                 owner = semantic::typeToString(found->second);
                         const auto qualified =
-                            owner.empty() ? m : owner + "::" + m;
+                            kex::mangle::qualify(owner, m);
                         // The selected clause does not declare the labels it
                         // was given — the walker's "unknown named argument",
                         // reported the same way here.

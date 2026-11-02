@@ -1,5 +1,6 @@
 #include "tag_validator.hxx"
 
+#include "../common/mangle.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
@@ -43,7 +44,7 @@ using Functions =
 
 auto qualified(const std::string& scope, const std::string& name)
     -> std::string {
-    return scope.empty() ? name : scope + "::" + name;
+    return kex::mangle::qualify(scope, name);
 }
 
 auto companionName(const std::string& tag) -> std::string {
@@ -682,8 +683,7 @@ auto validateTaggedLiterals(
             const Functions* fromModule = nullptr;
             for (const auto& module : importedModules()) {
                 for (const auto& [key, definitions] : module.functions) {
-                    const auto bare = key.substr(key.rfind("::") == std::string::npos
-                                                     ? 0 : key.rfind("::") + 2);
+                    const auto bare = kex::mangle::memberOf(key);
                     if (bare != use.literal->tag) continue;
                     const auto prefix =
                         key.size() > bare.size() ? key.substr(0, key.size() - bare.size())
