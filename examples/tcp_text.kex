@@ -1,0 +1,27 @@
+using Net.Socket
+
+main do
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  IO.printLine("listening on 127.0.0.1:${port}")
+
+  let server = Task.start do
+    let peer = listener.accept.try
+    IO.printLine("server heard: ${peer.getLine.try.or("")}")
+    peer.close
+  end
+
+  # The block's value comes back; the connection is closed for us.
+  let answer = TCP.connectTo("127.0.0.1:${port}") do |conn|
+    conn.printLine("hi")
+    42
+  end
+  IO.printLine("client got: ${answer.or(0)}")
+  server.await
+
+  # One generic function closes any handle: files and sockets alike.
+  shutdown(listener)
+  IO.printLine("shut down")
+end
+
+foul shutdown(handle: Closeable) = handle.close
