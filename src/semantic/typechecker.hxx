@@ -89,6 +89,11 @@ public:
                           const Signature& sig) const -> std::string;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto resolvedTraits() const
+        -> const std::unordered_map<const ast::MakeDef*,
+                                    std::vector<std::string>>& {
+        return m_resolvedTraits;
+    }
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_selectedCallSignatures;
@@ -458,6 +463,12 @@ private:
     // nothing else claims (`String`, a type parameter) asked it on every use.
     mutable std::unordered_map<std::string, std::optional<std::string>> m_importedRecordSuffixes;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    // `implement:` identities per make block, in written order — the
+    // lowerer's `inheritedDefaults` consumes these instead of
+    // re-resolving from its pre-pass usings (whose import order,
+    // aliases, and only/except filtering differ from the checker's).
+    std::unordered_map<const ast::MakeDef*, std::vector<std::string>>
+        m_resolvedTraits;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;

@@ -800,6 +800,29 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
         for (const auto& v : *td.variants) members.push_back(convertTypeExpr(v));
         te.backingType = kexiUnion(std::move(members));
     }
+    // Generic structural aliases (`type List<X> = [X]`) and unions of types:
+    // like TypeChecker::registerTypeAliases' final rule, anything that is
+    // not an ADT carries its body, so importers expand it. Without this the
+    // compile path never learns `List`/`Map` (the reader side records them
+    // now) while the Run path (sources parsed) always did, so a static
+    // `List.first(x)` failed with "Unknown module `List`" on BEAM only
+    // (risk #1). Parameters stay in te.genericParams; the reader binds them
+    // in declared order.
+    if (!te.backingType && td.variants && !td.variants->empty() &&
+        !td.isDistinct) {
+        const auto ctors = kex::typeConstructors(td);
+        if (!ctors || ctors->empty()) {
+            if (td.variants->size() == 1) {
+                te.backingType = convertTypeExpr(td.variants->front());
+            } else {
+                std::vector<KexiTypePtr> members;
+                for (const auto& v : *td.variants)
+                    if (v) members.push_back(convertTypeExpr(v));
+                if (!members.empty())
+                    te.backingType = kexiUnion(std::move(members));
+            }
+        }
+    }
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.
     if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td)) {

@@ -150,7 +150,7 @@ test-fuzz: build
 # programs and requires the walker and BEAM backends to agree on every one.
 # Fixed seed by default, so a failure replays with the same invocation.
 FUZZ_SEED ?= 42
-FUZZ_CASES ?= 200
+FUZZ_CASES ?= 400
 FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
 fuzz: build

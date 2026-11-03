@@ -1,0 +1,2 @@
+spec/error_using_body_scope.kex:13:15: error: Undefined function: `answer` — `M.answer` is not imported here
+spec/error_using_body_scope.kex:20:14: error: Undefined function: `answer` — `M.answer` is not imported here

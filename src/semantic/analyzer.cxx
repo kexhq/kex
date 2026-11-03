@@ -1,5 +1,6 @@
 #include "analyzer.hxx"
 #include "receiver_conflicts.hxx"
+#include "resolve_core.hxx"
 
 #include <algorithm>
 #include <cctype>
@@ -782,12 +783,8 @@ auto Analyzer::moduleImportingName(const std::string& name) const -> std::string
         const auto& using_ = **it;
         // `using M as A` makes `A.name` available, not a bare `name`.
         if (using_.alias) continue;
-        if (!using_.onlyNames.empty() &&
-            std::find(using_.onlyNames.begin(), using_.onlyNames.end(), name) ==
-                using_.onlyNames.end())
-            continue;
-        if (std::find(using_.exceptNames.begin(), using_.exceptNames.end(), name) !=
-            using_.exceptNames.end())
+        if (!resolve_core::usingSelectsName(name, using_.onlyNames,
+                                            using_.exceptNames))
             continue;
         std::string module;
         for (const auto& part : using_.module.parts)

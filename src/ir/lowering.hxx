@@ -325,7 +325,11 @@ struct Lowering {
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
-    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
+    // `implement:` identities per make block, in written order, resolved by
+    // semantic analysis. Absent without analysis (`--no-check`), in which
+    // case `inheritedDefaults` resolves from its pre-pass usings as before.
+    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
+        resolvedTraits = nullptr;    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
     const ExpressionTypes* expressionTypes = nullptr;
     // Lexical source binding -> trait -> hidden dictionary IR binding.
     std::unordered_map<std::string,
@@ -480,8 +484,9 @@ struct Lowering {
         if (found == fnNamedClauses.end()) return nullptr;
         std::vector<std::string> labels;
         for (const auto& [label, _] : named) labels.push_back(label);
-        for (const auto* clause : found->second)
-            if (namedArgumentsFit(*clause, labels, positionalCount)) return clause;
+        if (const auto* clause =
+                selectClause(found->second, labels, positionalCount))
+            return clause;
         throw LowerError("IR lower: no overload of " + name +
                          " accepts these named arguments and argument count");
     }
@@ -713,6 +718,11 @@ struct Lowering {
 
     auto applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved;
     auto restoreUsingBindings(UsingBindingsSaved saved) -> void;
+    auto snapshotUsingBindings() const -> UsingBindingsSaved;
+    auto applyUsingCore(const std::string& srcMod,
+                        const std::optional<std::string>& alias,
+                        const std::vector<std::string>& onlyNames,
+                        const std::vector<std::string>& exceptNames) -> void;
 
     // ---- Body lowering ----------------------------------------------------
     auto lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr;

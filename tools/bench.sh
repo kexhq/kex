@@ -282,7 +282,7 @@ sed 's/^/  /' "$WORK/timings"
 miss="$(grep -o '\[cache\] miss: [a-z-]*' "$WORK/timings" | head -1)"
 if [ -n "$miss" ]; then
   echo "cache: MISS ($miss — a warm compile should hit)"
-elif grep -q '\[cache\] decode' "$WORK/timings"; then
+elif grep -q '\[cache\] decode\|\[cache\] sax' "$WORK/timings"; then
   echo "cache: HIT"
 else
   echo "cache: unknown (no [cache] line under KEX_TIMINGS)"

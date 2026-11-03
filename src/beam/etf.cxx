@@ -394,4 +394,132 @@ auto decodeEtf(const std::vector<uint8_t>& bytes) -> TermPtr {
     return decodeEtf(bytes.data(), bytes.size());
 }
 
+// ── SAX reading ────────────────────────────────────────────────────────
+
+struct SaxReader::Cursor {
+    Decoder dec;
+    // Per open list, whether a NIL tail is pending (NIL reads as an
+    // empty list with nothing to close; nesting needs the stack).
+    std::vector<bool> listTails;
+};
+
+SaxReader::SaxReader(const uint8_t* data, size_t len)
+    : m_cursor(new Cursor{{data, len, 1}, {}}) {
+    if (len < 2) throw EtfError("ETF data too short");
+    if (data[0] != ETF_VERSION)
+        throw EtfError("unsupported ETF version: " + std::to_string(data[0]));
+}
+
+SaxReader::~SaxReader() = default;
+
+auto SaxReader::beginTuple() -> size_t {
+    auto& dec = m_cursor->dec;
+    const uint8_t tag = dec.read8();
+    if (tag == SMALL_TUPLE_EXT) return dec.read8();
+    if (tag == LARGE_TUPLE_EXT) return dec.read32();
+    throw EtfError("ETF SAX: expected tuple, got tag " +
+                   std::to_string(tag));
+}
+
+auto SaxReader::beginList() -> size_t {
+    auto& dec = m_cursor->dec;
+    if (dec.pos >= dec.len) throw EtfError("unexpected end of ETF data");
+    if (dec.data[dec.pos] == NIL_EXT) {
+        dec.pos += 1;
+        m_cursor->listTails.push_back(false);
+        return 0;
+    }
+    const uint8_t tag = dec.read8();
+    if (tag != LIST_EXT)
+        throw EtfError("ETF SAX: expected list, got tag " +
+                       std::to_string(tag));
+    m_cursor->listTails.push_back(true);
+    return dec.read32();
+}
+
+auto SaxReader::endList() -> void {
+    auto& tails = m_cursor->listTails;
+    if (tails.empty()) throw EtfError("ETF SAX: endList without beginList");
+    const bool tail = tails.back();
+    tails.pop_back();
+    if (!tail) return;
+    // Strict where the tree decoder is lenient (it builds and drops the
+    // tail): our writers only emit proper lists, so anything else is
+    // corruption either way.
+    if (m_cursor->dec.read8() != NIL_EXT)
+        throw EtfError("ETF SAX: improper list tail");
+}
+
+auto SaxReader::readAtom() -> std::string {
+    auto& dec = m_cursor->dec;
+    const uint8_t tag = dec.read8();
+    if (tag == ATOM_EXT || tag == ATOM_UTF8_EXT)
+        return dec.readString(dec.read16());
+    if (tag == SMALL_ATOM_EXT || tag == SMALL_ATOM_UTF8_EXT)
+        return dec.readString(dec.read8());
+    throw EtfError("ETF SAX: expected atom, got tag " +
+                   std::to_string(tag));
+}
+
+auto SaxReader::readInt() -> int64_t {
+    auto& dec = m_cursor->dec;
+    const uint8_t tag = dec.read8();
+    if (tag == SMALL_INTEGER_EXT) return dec.read8();
+    if (tag == INTEGER_EXT) return static_cast<int32_t>(dec.read32());
+    if (tag == SMALL_BIG_EXT || tag == LARGE_BIG_EXT) {
+        // Mirror readBig's fit rule (a fitting big reads as an integer;
+        // the tree walk fails the same input when asInt meets BigInt).
+        const size_t count =
+            (tag == SMALL_BIG_EXT) ? dec.read8() : dec.read32();
+        const auto sign = dec.read8();
+        uint64_t magnitude = 0;
+        for (size_t i = 0; i < count; ++i) {
+            if (dec.pos >= dec.len)
+                throw EtfError("unexpected end of ETF data");
+            const uint64_t byte = dec.data[dec.pos++];
+            if (i < 8)
+                magnitude |= byte << (8 * i);
+            else if (byte != 0)
+                throw EtfError("ETF SAX: integer out of range");
+        }
+        if (sign) {
+            if (magnitude > (uint64_t(1) << 63))
+                throw EtfError("ETF SAX: integer out of range");
+            if (magnitude == (uint64_t(1) << 63)) return INT64_MIN;
+            return -static_cast<int64_t>(magnitude);
+        }
+        if (magnitude > uint64_t(INT64_MAX))
+            throw EtfError("ETF SAX: integer out of range");
+        return static_cast<int64_t>(magnitude);
+    }
+    throw EtfError("ETF SAX: expected integer, got tag " +
+                   std::to_string(tag));
+}
+
+auto SaxReader::readBinary() -> std::string {
+    auto& dec = m_cursor->dec;
+    if (dec.read8() != BINARY_EXT)
+        throw EtfError("ETF SAX: expected binary");
+    return dec.readString(dec.read32());
+}
+
+auto SaxReader::nextIsTuple() const -> bool {
+    const auto& dec = m_cursor->dec;
+    if (dec.pos >= dec.len) return false;
+    const uint8_t tag = dec.data[dec.pos];
+    return tag == SMALL_TUPLE_EXT || tag == LARGE_TUPLE_EXT;
+}
+
+auto SaxReader::nextIsAtom() const -> bool {
+    const auto& dec = m_cursor->dec;
+    if (dec.pos >= dec.len) return false;
+    const uint8_t tag = dec.data[dec.pos];
+    return tag == ATOM_EXT || tag == SMALL_ATOM_EXT ||
+           tag == ATOM_UTF8_EXT || tag == SMALL_ATOM_UTF8_EXT;
+}
+
+auto SaxReader::atEnd() const -> bool {
+    return m_cursor->dec.pos >= m_cursor->dec.len;
+}
+
 } // namespace kex::beam

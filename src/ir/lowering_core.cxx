@@ -1,5 +1,6 @@
 // core methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
 
@@ -73,27 +74,21 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
 // their historical bare name. Prefer the innermost lexical module before
 // a same-named top-level record.
 auto Lowering::canonicalRecordName(const std::string& name) const -> std::string {
-    if (!currentModulePath.empty()) {
-        auto scope = currentModulePath;
-        while (!scope.empty()) {
-            const auto candidate = scope + "." + name;
-            if (records.count(candidate)) return candidate;
-            const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
-            scope.resize(dot);
-        }
-    }
+    if (auto scoped = kex::semantic::resolve_core::resolveInScopes(
+            currentModulePath, name, [&](const std::string& candidate) {
+                return records.count(candidate) > 0;
+            }))
+        return *scoped;
     // A non-record type the module being lowered declares itself — an
     // opaque `type Connection` — is that type. Carrying on would hand the
     // name to whichever other module declares a RECORD called
     // `Connection`, and the guard built from it then matched none of this
     // module's values: "Undefined method: send for Tuple" (kexhq/kex#476).
-    for (auto scope = currentModulePath; !scope.empty();) {
-        if (declaredTypeIdentities.count(scope + "." + name)) return name;
-        const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
-        scope.resize(dot);
-    }
+    if (kex::semantic::resolve_core::resolveInScopes(
+            currentModulePath, name, [&](const std::string& candidate) {
+                return declaredTypeIdentities.count(candidate) > 0;
+            }))
+        return name;
     if (resolvingMakeOwner && currentModulePath.empty())
         if (auto declaring = localTypeModules.find(name);
             declaring != localTypeModules.end() &&
@@ -149,18 +144,11 @@ auto Lowering::canonicalRecordName(const std::string& name) const -> std::string
             if (records.count(imported + "." + name))
                 return imported + "." + name;
         {
-            const auto qualifiedSuffix = "." + name;
-            std::string qualified;
-            for (const auto& [candidate, _] : records) {
-                if (candidate.size() <= qualifiedSuffix.size() ||
-                    candidate.compare(
-                        candidate.size() - qualifiedSuffix.size(),
-                        qualifiedSuffix.size(), qualifiedSuffix) != 0)
-                    continue;
-                if (!qualified.empty()) { qualified.clear(); break; }
-                qualified = candidate;
-            }
-            if (!qualified.empty()) return qualified;
+            const auto match = kex::semantic::resolve_core::matchSuffix(
+                records, "." + name);
+            if (match.kind ==
+                kex::semantic::resolve_core::SuffixMatchKind::unique)
+                return match.name;
         }
         // A leading PORTION of the qualifier is a KNOWN ALIAS: either a
         // `using Geometry, as: Geo` single-segment alias, or a
@@ -198,17 +186,10 @@ auto Lowering::canonicalRecordName(const std::string& name) const -> std::string
     for (const auto& imported : usingModules)
         if (records.count(imported + "." + name))
             return imported + "." + name;
-    const auto suffix = "." + name;
-    std::string unique;
-    for (const auto& [candidate, _] : records) {
-        if (candidate.size() <= suffix.size() ||
-            candidate.compare(candidate.size() - suffix.size(),
-                              suffix.size(), suffix) != 0)
-            continue;
-        if (!unique.empty()) return name;
-        unique = candidate;
-    }
-    if (!unique.empty()) return unique;
+    const auto match =
+        kex::semantic::resolve_core::matchSuffix(records, "." + name);
+    if (match.kind == kex::semantic::resolve_core::SuffixMatchKind::unique)
+        return match.name;
     return name;
 }
 

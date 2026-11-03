@@ -7,6 +7,7 @@
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
 #include "typechecker_internal.hxx"
+#include "resolve_core.hxx"
 #include <cctype>
 #include <functional>
 #include <set>
@@ -574,12 +575,8 @@ auto TypeChecker::reportUnknownMethods() -> void {
         if (!callImports) return false;
         auto selected = [](const ImportSelection& import,
                            const std::string& name) {
-            if (!import.onlyNames.empty() &&
-                std::find(import.onlyNames.begin(), import.onlyNames.end(),
-                          name) == import.onlyNames.end())
-                return false;
-            return std::find(import.exceptNames.begin(), import.exceptNames.end(),
-                             name) == import.exceptNames.end();
+            return resolve_core::usingSelectsName(name, import.onlyNames,
+                                                  import.exceptNames);
         };
         for (const auto& import : *callImports) {
             const auto& path = import.module;
@@ -871,26 +868,15 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
                (m_importedInterfaces &&
                 m_importedInterfaces->recordArities.count(candidate));
     };
-    if (!m_currentModulePath.empty()) {
-        auto scope = m_currentModulePath;
-        while (!scope.empty()) {
-            const auto candidate = scope + "." + name;
-            if (recordExists(candidate)) return candidate;
-            const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
-            scope.resize(dot);
-        }
-    }
+    if (auto scoped = resolve_core::resolveInScopes(
+            m_currentModulePath, name, recordExists))
+        return *scoped;
     auto importedRecord = [&](const ImportSelection& import)
         -> std::optional<std::string> {
         const auto candidate = import.module + "." + name;
         if (!recordExists(candidate)) return std::nullopt;
-        if (!import.onlyNames.empty() &&
-            std::find(import.onlyNames.begin(), import.onlyNames.end(), name) ==
-                import.onlyNames.end())
-            return std::nullopt;
-        if (std::find(import.exceptNames.begin(), import.exceptNames.end(),
-                      name) != import.exceptNames.end())
+        if (!resolve_core::usingSelectsName(name, import.onlyNames,
+                                            import.exceptNames))
             return std::nullopt;
         return candidate;
     };
@@ -911,27 +897,17 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     if (m_importedInterfaces) {
         auto [cached, fresh] = m_importedRecordSuffixes.try_emplace(name);
         if (fresh) {
-            std::optional<std::string> unique;
-            bool ambiguous = false;
-            const auto suffix = "." + name;
             // Records only. A module ADT is never guessed at: an unimported
             // `Message` must not become Net.HTTP.WebSocket.Message over a local
             // `type Message = :hello` that is resolved after this.
-            for (const auto& [candidate, _] :
-                 m_importedInterfaces->recordArities) {
-                if (candidate.size() <= suffix.size() ||
-                    candidate.compare(candidate.size() - suffix.size(),
-                                      suffix.size(), suffix) != 0)
-                    continue;
-                if (unique && *unique != candidate) {
-                    ambiguous = true;
-                    break;
-                }
-                unique = candidate;
-            }
+            const auto match = resolve_core::matchSuffix(
+                m_importedInterfaces->recordArities, "." + name);
             // Ambiguous answers the bare name at once, as it always has; no
             // match goes on to the aliases below.
-            cached->second = ambiguous ? std::optional<std::string>{name} : unique;
+            if (match.kind == resolve_core::SuffixMatchKind::unique)
+                cached->second = match.name;
+            else if (match.kind == resolve_core::SuffixMatchKind::ambiguous)
+                cached->second = name;
         }
         if (cached->second) return *cached->second;
     }
@@ -1016,15 +992,13 @@ auto TypeChecker::resolveModulePath(const std::string& name,
     // settled here; a nested name that resolves to nothing is left as it is,
     // for the lookups after this one.
     if (!exportsMember(resolved)) return resolved;
-    for (auto scope = m_currentModulePath; !scope.empty();) {
-        const auto nested = scope + "." + name;
-        if (nested != resolved && m_localModules.contains(nested) &&
-            exportsMember(nested))
-            return nested;
-        const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
-        scope.resize(dot);
-    }
+    if (auto nested = resolve_core::resolveInScopes(
+            m_currentModulePath, name, [&](const std::string& candidate) {
+                return candidate != resolved &&
+                       m_localModules.contains(candidate) &&
+                       exportsMember(candidate);
+            }))
+        return *nested;
     return resolved;
 }
 
@@ -1696,12 +1670,8 @@ auto TypeChecker::resolveTraitReference(
         // `using Geo, as: G` then `G.Shape`.
         if (import.alias && written.starts_with(*import.alias + "."))
             throughAlias = import.module + written.substr(import.alias->size());
-        if (!import.onlyNames.empty() &&
-            std::find(import.onlyNames.begin(), import.onlyNames.end(), bare) ==
-                import.onlyNames.end())
-            return;
-        if (std::find(import.exceptNames.begin(), import.exceptNames.end(), bare) !=
-            import.exceptNames.end())
+        if (!resolve_core::usingSelectsName(bare, import.onlyNames,
+                                            import.exceptNames))
             return;
         modules.push_back(import.module);
     };
@@ -4293,8 +4263,12 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
             } else {
                 error(def.location, "Unknown trait: " + written);
             }
+            // Unresolved stays empty so the recorded list aligns with
+            // `def.implements` by index; the lowerer skips it as a miss.
+            m_resolvedTraits[&def].push_back({});
             continue;
         }
+        m_resolvedTraits[&def].push_back(traitName);
         std::string prefix = "make " + (typeName.empty() ? "?" : typeName) +
                              ", implement: " + written + " — ";
         for (const auto& req : trait->requiredMethods) {

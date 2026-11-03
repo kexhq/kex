@@ -27,10 +27,6 @@ using kex::semantic::Type;
 using kex::semantic::TypePtr;
 using namespace kex::semantic;
 
-auto isTuple(const TermPtr& t) -> bool {
-    return std::holds_alternative<Term::Tuple>(t->value);
-}
-
 constexpr int kMagic = 0x4b584946;      // "KXIF"
 // Bump with ANY shape change below: old files must read as bad-version,
 // never misparse.
@@ -83,7 +79,7 @@ auto checkedTuple(std::vector<TermPtr> elems, size_t expected, const char* what)
 // Adding a Type alternative without extending the codec below would
 // silently degrade to "unknown" — fail the build instead.
 static_assert(std::variant_size_v<decltype(Type::kind)> == 16,
-              "Type gained an alternative: extend typeToTerm/typeFromTerm "
+              "Type gained an alternative: extend typeToTerm/typeFromSax "
               "and the round-trip agreement test");
 
 auto typeToTerm(const TypePtr& t) -> TermPtr;
@@ -170,18 +166,32 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
     }, t->kind);
 }
 
-// Throws EtfError on any malformed term.
-auto typeFromTerm(const TermPtr& term) -> TypePtr {
-    if (term->isAtom("null")) return nullptr;
-    if (term->isAtom("unknown")) return std::make_shared<Type>(Type{UnknownType{}});
-    if (!isTuple(term)) throw EtfError("type: expected tuple");
-    const auto& elems = term->asTuple();
-    if (elems.empty()) throw EtfError("type: empty tuple");
-    const auto tag = elems[0]->asAtom();
+// SAX twin of the deleted tree walk: same wire, same checks, same errors,
+// straight into the structs (no tree, no second pass).
+// Throws EtfError on any malformed input.
+auto typeFromSax(SaxReader& sax) -> TypePtr {
+    if (!sax.nextIsTuple()) {
+        if (!sax.nextIsAtom()) throw EtfError("type: expected tuple");
+        const auto bare = sax.readAtom();
+        if (bare == "null") return nullptr;
+        if (bare == "unknown")
+            return std::make_shared<Type>(Type{UnknownType{}});
+        throw EtfError("type: expected tuple");
+    }
+    const auto arity = sax.beginTuple();
+    if (arity == 0) throw EtfError("type: empty tuple");
+    const auto tag = sax.readAtom();
+    auto readTypes = [&](std::vector<TypePtr>& out) {
+        const auto count = sax.beginList();
+        out.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            out.push_back(typeFromSax(sax));
+        sax.endList();
+    };
     if (tag == "primitive") {
-        if (elems.size() != schema::kPrimitive) throw EtfError("primitive: arity");
+        if (arity != schema::kPrimitive) throw EtfError("primitive: arity");
         PrimitiveType::Kind kind;
-        const auto name = elems[1]->asAtom();
+        const auto name = sax.readAtom();
         if (name == "Integer") kind = PrimitiveType::Integer;
         else if (name == "Char") kind = PrimitiveType::Char;
         else if (name == "String") kind = PrimitiveType::String;
@@ -190,93 +200,95 @@ auto typeFromTerm(const TermPtr& term) -> TypePtr {
         else if (name == "Unit") kind = PrimitiveType::Unit;
         else throw EtfError("primitive: bad kind");
         return std::make_shared<Type>(Type{PrimitiveType{
-            kind, elems[2]->asBinaryStr()}});
+            kind, sax.readBinary()}});
     }
     if (tag == "sized_int") {
-        if (elems.size() != schema::kSizedInt) throw EtfError("sized_int: arity");
+        if (arity != schema::kSizedInt) throw EtfError("sized_int: arity");
         return std::make_shared<Type>(Type{SizedIntType{
-            static_cast<int>(elems[1]->asInt()),
-            elems[2]->isAtom("true")}});
+            static_cast<int>(sax.readInt()), sax.readAtom() == "true"}});
     }
     if (tag == "sized_float") {
-        if (elems.size() != schema::kSizedFloat) throw EtfError("sized_float: arity");
+        if (arity != schema::kSizedFloat) throw EtfError("sized_float: arity");
         return std::make_shared<Type>(Type{SizedFloatType{
-            static_cast<int>(elems[1]->asInt())}});
+            static_cast<int>(sax.readInt())}});
     }
     if (tag == "named") {
-        if (elems.size() != schema::kNamed) throw EtfError("named: arity");
-        NamedType named{elems[1]->asBinaryStr(), {}};
-        for (const auto& arg : elems[2]->asList())
-            named.typeArgs.push_back(typeFromTerm(arg));
+        if (arity != schema::kNamed) throw EtfError("named: arity");
+        NamedType named{sax.readBinary(), {}};
+        readTypes(named.typeArgs);
         return std::make_shared<Type>(Type{std::move(named)});
     }
     if (tag == "func") {
-        if (elems.size() != schema::kFunc) throw EtfError("func: arity");
+        if (arity != schema::kFunc) throw EtfError("func: arity");
         FuncType fn;
-        for (const auto& param : elems[1]->asList())
-            fn.params.push_back(typeFromTerm(param));
-        fn.result = typeFromTerm(elems[2]);
-        fn.block = elems[3]->isAtom("true");
+        readTypes(fn.params);
+        fn.result = typeFromSax(sax);
+        fn.block = sax.readAtom() == "true";
         return std::make_shared<Type>(Type{std::move(fn)});
     }
     if (tag == "tuple") {
-        if (elems.size() != schema::kTuple) throw EtfError("tuple: arity");
+        if (arity != schema::kTuple) throw EtfError("tuple: arity");
         TupleType tuple;
-        for (const auto& element : elems[1]->asList())
-            tuple.elements.push_back(typeFromTerm(element));
+        readTypes(tuple.elements);
         return std::make_shared<Type>(Type{std::move(tuple)});
     }
     if (tag == "list") {
-        if (elems.size() != schema::kList) throw EtfError("list: arity");
-        return std::make_shared<Type>(Type{ListType{typeFromTerm(elems[1])}});
+        if (arity != schema::kList) throw EtfError("list: arity");
+        return std::make_shared<Type>(Type{ListType{typeFromSax(sax)}});
     }
     if (tag == "map") {
-        if (elems.size() != schema::kMap) throw EtfError("map: arity");
-        return std::make_shared<Type>(Type{MapType{typeFromTerm(elems[1]),
-                                                   typeFromTerm(elems[2])}});
+        if (arity != schema::kMap) throw EtfError("map: arity");
+        auto key = typeFromSax(sax);
+        auto value = typeFromSax(sax);
+        return std::make_shared<Type>(
+            Type{MapType{std::move(key), std::move(value)}});
     }
     if (tag == "optional") {
-        if (elems.size() != schema::kOptional) throw EtfError("optional: arity");
-        return std::make_shared<Type>(Type{OptionalType{typeFromTerm(elems[1])}});
+        if (arity != schema::kOptional) throw EtfError("optional: arity");
+        return std::make_shared<Type>(Type{OptionalType{typeFromSax(sax)}});
     }
     if (tag == "union") {
-        if (elems.size() != schema::kUnion) throw EtfError("union: arity");
+        if (arity != schema::kUnion) throw EtfError("union: arity");
         UnionType unionType;
-        for (const auto& member : elems[1]->asList())
-            unionType.members.push_back(typeFromTerm(member));
+        readTypes(unionType.members);
         return std::make_shared<Type>(Type{std::move(unionType)});
     }
     if (tag == "intersection") {
-        if (elems.size() != schema::kIntersection) throw EtfError("intersection: arity");
+        if (arity != schema::kIntersection) throw EtfError("intersection: arity");
         IntersectionType intersection;
-        for (const auto& member : elems[1]->asList())
-            intersection.members.push_back(typeFromTerm(member));
+        readTypes(intersection.members);
         return std::make_shared<Type>(Type{std::move(intersection)});
     }
     if (tag == "record") {
-        if (elems.size() != schema::kRecord) throw EtfError("record: arity");
+        if (arity != schema::kRecord) throw EtfError("record: arity");
         RecordType record;
-        for (const auto& field : elems[1]->asList()) {
-            const auto& pair = field->asTuple();
-            record.fields.emplace_back(pair[0]->asBinaryStr(),
-                                       typeFromTerm(pair[1]));
+        const auto count = sax.beginList();
+        record.fields.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
+            auto fieldType = typeFromSax(sax);
+            record.fields.emplace_back(std::move(name), std::move(fieldType));
         }
+        sax.endList();
         return std::make_shared<Type>(Type{std::move(record)});
     }
     if (tag == "typevar") {
-        if (elems.size() != schema::kTypeVar) throw EtfError("typevar: arity");
+        if (arity != schema::kTypeVar) throw EtfError("typevar: arity");
         return std::make_shared<Type>(Type{TypeVar{
-            static_cast<int>(elems[1]->asInt())}});
+            static_cast<int>(sax.readInt())}});
     }
     if (tag == "void") {
-        if (elems.size() != schema::kVoid) throw EtfError("void: arity");
-        return std::make_shared<Type>(Type{VoidType{elems[1]->asBinaryStr()}});
+        if (arity != schema::kVoid) throw EtfError("void: arity");
+        return std::make_shared<Type>(Type{VoidType{sax.readBinary()}});
     }
     if (tag == "constrained") {
-        if (elems.size() != schema::kConstrained) throw EtfError("constrained: arity");
+        if (arity != schema::kConstrained) throw EtfError("constrained: arity");
+        auto varName = sax.readBinary();
+        auto traitName = sax.readBinary();
         return std::make_shared<Type>(Type{ConstrainedType{
-            elems[1]->asBinaryStr(), elems[2]->asBinaryStr(),
-            static_cast<int>(elems[3]->asInt())}});
+            std::move(varName), std::move(traitName),
+            static_cast<int>(sax.readInt())}});
     }
     throw EtfError("type: unknown tag " + tag);
 }
@@ -300,23 +312,33 @@ auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
                         schema::kSignature, "signature");
 }
 
-auto signatureFromTerm(const TermPtr& term) -> kex::semantic::Signature {
-    const auto& elems = term->asTuple();
-    if (elems.size() != schema::kSignature || !elems[0]->isAtom("signature"))
-        throw EtfError("signature: shape");
+auto signatureFromSax(SaxReader& sax) -> kex::semantic::Signature {
+    const auto arity = sax.beginTuple();
+    if (arity != schema::kSignature) throw EtfError("signature: shape");
+    if (sax.readAtom() != "signature") throw EtfError("signature: shape");
     kex::semantic::Signature sig;
-    sig.name = elems[1]->asBinaryStr();
-    for (const auto& p : elems[2]->asList()) sig.params.push_back(typeFromTerm(p));
-    sig.result = typeFromTerm(elems[3]);
-    sig.isFoul = elems[4]->isAtom("true");
-    if (isTuple(elems[5])) {
-        const auto& req = elems[5]->asTuple();
-        sig.requiredParams = static_cast<size_t>(req[1]->asInt());
+    sig.name = sax.readBinary();
+    const auto paramCount = sax.beginList();
+    sig.params.reserve(paramCount);
+    for (size_t i = 0; i < paramCount; ++i)
+        sig.params.push_back(typeFromSax(sax));
+    sax.endList();
+    sig.result = typeFromSax(sax);
+    sig.isFoul = sax.readAtom() == "true";
+    if (sax.nextIsTuple()) {
+        sax.beginTuple();
+        sax.readAtom();
+        sig.requiredParams = static_cast<size_t>(sax.readInt());
+    } else {
+        sax.readAtom();
     }
-    for (const auto& n : elems[6]->asList())
-        sig.paramNames.push_back(n->asBinaryStr());
-    sig.makeModule = elems[7]->asBinaryStr();
-    sig.declaringModule = elems[8]->asBinaryStr();
+    const auto nameCount = sax.beginList();
+    sig.paramNames.reserve(nameCount);
+    for (size_t i = 0; i < nameCount; ++i)
+        sig.paramNames.push_back(sax.readBinary());
+    sax.endList();
+    sig.makeModule = sax.readBinary();
+    sig.declaringModule = sax.readBinary();
     return sig;
 }
 
@@ -343,24 +365,32 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
                         schema::kFn, "fn");
 }
 
-auto functionFromTerm(const TermPtr& term) -> kex::semantic::ImportedFunction {
-    const auto& elems = term->asTuple();
-    if (elems.size() != schema::kFn || !elems[0]->isAtom("fn"))
-        throw EtfError("fn: shape");
+auto functionFromSax(SaxReader& sax) -> kex::semantic::ImportedFunction {
+    const auto arity = sax.beginTuple();
+    if (arity != schema::kFn) throw EtfError("fn: shape");
+    if (sax.readAtom() != "fn") throw EtfError("fn: shape");
     kex::semantic::ImportedFunction fn;
-    fn.sourceName = elems[1]->asBinaryStr();
-    fn.backendFunction = elems[2]->asBinaryStr();
-    fn.backendModule = elems[3]->asBinaryStr();
-    fn.backendArity = static_cast<int>(elems[4]->asInt());
-    for (const auto& n : elems[5]->asList()) fn.paramNames.push_back(n->asBinaryStr());
-    for (const auto& d : elems[6]->asList()) fn.defaultSources.push_back(d->asBinaryStr());
-    fn.signature = signatureFromTerm(elems[7]);
-    fn.sourceModule = elems[8]->asBinaryStr();
-    fn.isReceiverMethod = elems[9]->isAtom("true");
-    fn.visibleByReceiver = elems[10]->isAtom("true");
-    fn.isConstructor = elems[11]->isAtom("true");
-    fn.remoteSlot = elems[12]->isAtom("true");
-    fn.constructorOwner = elems[13]->asBinaryStr();
+    fn.sourceName = sax.readBinary();
+    fn.backendFunction = sax.readBinary();
+    fn.backendModule = sax.readBinary();
+    fn.backendArity = static_cast<int>(sax.readInt());
+    const auto nameCount = sax.beginList();
+    fn.paramNames.reserve(nameCount);
+    for (size_t i = 0; i < nameCount; ++i)
+        fn.paramNames.push_back(sax.readBinary());
+    sax.endList();
+    const auto defaultCount = sax.beginList();
+    fn.defaultSources.reserve(defaultCount);
+    for (size_t i = 0; i < defaultCount; ++i)
+        fn.defaultSources.push_back(sax.readBinary());
+    sax.endList();
+    fn.signature = signatureFromSax(sax);
+    fn.sourceModule = sax.readBinary();
+    fn.isReceiverMethod = sax.readAtom() == "true";
+    fn.visibleByReceiver = sax.readAtom() == "true";
+    fn.isConstructor = sax.readAtom() == "true";
+    fn.remoteSlot = sax.readAtom() == "true";
+    fn.constructorOwner = sax.readBinary();
     return fn;
 }
 
@@ -379,16 +409,22 @@ auto traitToTerm(const kex::semantic::TraitDef& trait) -> TermPtr {
                         schema::kTrait, "trait");
 }
 
-auto traitFromTerm(const TermPtr& term) -> kex::semantic::TraitDef {
-    const auto& elems = term->asTuple();
-    if (elems.size() != schema::kTrait || !elems[0]->isAtom("trait"))
-        throw EtfError("trait: shape");
+auto traitFromSax(SaxReader& sax) -> kex::semantic::TraitDef {
+    const auto arity = sax.beginTuple();
+    if (arity != schema::kTrait) throw EtfError("trait: shape");
+    if (sax.readAtom() != "trait") throw EtfError("trait: shape");
     kex::semantic::TraitDef trait;
-    trait.name = elems[1]->asBinaryStr();
-    for (const auto& sig : elems[2]->asList())
-        trait.requiredMethods.push_back(signatureFromTerm(sig));
-    for (const auto& name : elems[3]->asList())
-        trait.defaultMethods.push_back(name->asBinaryStr());
+    trait.name = sax.readBinary();
+    const auto requiredCount = sax.beginList();
+    trait.requiredMethods.reserve(requiredCount);
+    for (size_t i = 0; i < requiredCount; ++i)
+        trait.requiredMethods.push_back(signatureFromSax(sax));
+    sax.endList();
+    const auto defaultCount = sax.beginList();
+    trait.defaultMethods.reserve(defaultCount);
+    for (size_t i = 0; i < defaultCount; ++i)
+        trait.defaultMethods.push_back(sax.readBinary());
+    sax.endList();
     return trait;
 }
 
@@ -419,31 +455,60 @@ auto adtToTerm(const kex::semantic::ImportedADT& adt) -> TermPtr {
                         schema::kAdt, "adt");
 }
 
-auto adtFromTerm(const TermPtr& term) -> kex::semantic::ImportedADT {
-    const auto& elems = term->asTuple();
-    if (elems.size() != schema::kAdt || !elems[0]->isAtom("adt"))
-        throw EtfError("adt: shape");
+auto adtFromSax(SaxReader& sax) -> kex::semantic::ImportedADT {
+    const auto arity = sax.beginTuple();
+    if (arity != schema::kAdt) throw EtfError("adt: shape");
+    if (sax.readAtom() != "adt") throw EtfError("adt: shape");
     kex::semantic::ImportedADT adt;
-    adt.name = elems[1]->asBinaryStr();
-    for (const auto& c : elems[2]->asList()) adt.constructors.push_back(c->asBinaryStr());
-    for (const auto& pair : elems[3]->asList()) {
-        const auto& p = pair->asTuple();
-        adt.constructorArities[p[0]->asBinaryStr()] = static_cast<int>(p[1]->asInt());
+    adt.name = sax.readBinary();
+    const auto ctorCount = sax.beginList();
+    adt.constructors.reserve(ctorCount);
+    for (size_t i = 0; i < ctorCount; ++i)
+        adt.constructors.push_back(sax.readBinary());
+    sax.endList();
+    const auto arityCount = sax.beginList();
+    adt.constructorArities.reserve(arityCount);
+    for (size_t i = 0; i < arityCount; ++i) {
+        sax.beginTuple();
+        auto ctor = sax.readBinary();
+        const auto value = static_cast<int>(sax.readInt());
+        adt.constructorArities[std::move(ctor)] = value;
     }
-    adt.typeParamCount = static_cast<size_t>(elems[4]->asInt());
-    for (const auto& pair : elems[5]->asList()) {
-        const auto& p = pair->asTuple();
+    sax.endList();
+    adt.typeParamCount = static_cast<size_t>(sax.readInt());
+    const auto slotCount = sax.beginList();
+    adt.constructorTypeParamSlots.reserve(slotCount);
+    for (size_t i = 0; i < slotCount; ++i) {
+        sax.beginTuple();
+        auto ctor = sax.readBinary();
         std::vector<int> idx;
-        for (const auto& i : p[1]->asList()) idx.push_back(static_cast<int>(i->asInt()));
-        adt.constructorTypeParamSlots[p[0]->asBinaryStr()] = std::move(idx);
+        const auto idxCount = sax.beginList();
+        idx.reserve(idxCount);
+        for (size_t j = 0; j < idxCount; ++j)
+            idx.push_back(static_cast<int>(sax.readInt()));
+        sax.endList();
+        adt.constructorTypeParamSlots[std::move(ctor)] = std::move(idx);
     }
-    for (const auto& n : elems[6]->asList()) adt.typeParamNames.push_back(n->asBinaryStr());
-    for (const auto& pair : elems[7]->asList()) {
-        const auto& p = pair->asTuple();
+    sax.endList();
+    const auto paramNameCount = sax.beginList();
+    adt.typeParamNames.reserve(paramNameCount);
+    for (size_t i = 0; i < paramNameCount; ++i)
+        adt.typeParamNames.push_back(sax.readBinary());
+    sax.endList();
+    const auto paramTypeCount = sax.beginList();
+    adt.constructorParamTypes.reserve(paramTypeCount);
+    for (size_t i = 0; i < paramTypeCount; ++i) {
+        sax.beginTuple();
+        auto ctor = sax.readBinary();
         std::vector<TypePtr> types;
-        for (const auto& t : p[1]->asList()) types.push_back(typeFromTerm(t));
-        adt.constructorParamTypes[p[0]->asBinaryStr()] = std::move(types);
+        const auto typeCount = sax.beginList();
+        types.reserve(typeCount);
+        for (size_t j = 0; j < typeCount; ++j)
+            types.push_back(typeFromSax(sax));
+        sax.endList();
+        adt.constructorParamTypes[std::move(ctor)] = std::move(types);
     }
+    sax.endList();
     return adt;
 }
 
@@ -455,14 +520,17 @@ auto distinctToTerm(const kex::semantic::ImportedDistinctType& distinct) -> Term
                         schema::kDistinct, "distinct");
 }
 
-auto distinctFromTerm(const TermPtr& term) -> kex::semantic::ImportedDistinctType {
-    const auto& elems = term->asTuple();
-    if (elems.size() != schema::kDistinct || !elems[0]->isAtom("distinct"))
-        throw EtfError("distinct: shape");
+auto distinctFromSax(SaxReader& sax) -> kex::semantic::ImportedDistinctType {
+    const auto arity = sax.beginTuple();
+    if (arity != schema::kDistinct) throw EtfError("distinct: shape");
+    if (sax.readAtom() != "distinct") throw EtfError("distinct: shape");
     kex::semantic::ImportedDistinctType distinct;
-    for (const auto& p : elems[1]->asList())
-        distinct.typeParams.push_back(p->asBinaryStr());
-    distinct.backingType = typeFromTerm(elems[2]);
+    const auto paramCount = sax.beginList();
+    distinct.typeParams.reserve(paramCount);
+    for (size_t i = 0; i < paramCount; ++i)
+        distinct.typeParams.push_back(sax.readBinary());
+    sax.endList();
+    distinct.backingType = typeFromSax(sax);
     return distinct;
 }
 
@@ -576,110 +644,171 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
     };
     const auto t0 = std::chrono::steady_clock::now();
     try {
-        auto root = decodeEtf(bytes);
-        const auto t1 = std::chrono::steady_clock::now();
-        const auto& elems = root->asTuple();
-        if (elems.size() != schema::kIfaces || !elems[0]->isAtom("ifaces")) {
+        SaxReader sax(bytes.data(), bytes.size());
+        const auto arity = sax.beginTuple();
+        if (arity != schema::kIfaces) {
             note(CacheMissReason::corrupt);
             return std::nullopt;
         }
-        if (elems[1]->asInt() != kMagic) {
+        if (sax.readAtom() != "ifaces") {
+            note(CacheMissReason::corrupt);
+            return std::nullopt;
+        }
+        if (sax.readInt() != kMagic) {
             note(CacheMissReason::badMagic);
             return std::nullopt;
         }
-        if (elems[2]->asInt() != kVersion) {
+        if (sax.readInt() != kVersion) {
             note(CacheMissReason::badVersion);
             return std::nullopt;
         }
 
         kex::semantic::ImportedInterfaces ifaces;
 
-        for (const auto& mod : elems[3]->asList()) {
-            const auto& pair = mod->asTuple();
-            if (pair.size() != schema::kModulePair)
+        const auto moduleCount = sax.beginList();
+        ifaces.modules.reserve(moduleCount);
+        for (size_t i = 0; i < moduleCount; ++i) {
+            const auto pairArity = sax.beginTuple();
+            if (pairArity != schema::kModulePair)
                 throw EtfError("module pair: shape");
-            const auto& body = pair[1]->asTuple();
-            if (body.size() != schema::kModuleBody)
+            auto name = sax.readBinary();
+            const auto bodyArity = sax.beginTuple();
+            if (bodyArity != schema::kModuleBody)
                 throw EtfError("module body: shape");
             kex::semantic::ImportedModuleInterface module;
-            module.sourceModule = body[0]->asBinaryStr();
-            module.backendModule = body[1]->asBinaryStr();
-            module.automaticImport = body[2]->isAtom("true");
-            module.isCapability = body[3]->isAtom("true");
-            module.compiledApart = body[4]->isAtom("true");
-            for (const auto& entry : body[5]->asList()) {
-                const auto& e = entry->asTuple();
+            module.sourceModule = sax.readBinary();
+            module.backendModule = sax.readBinary();
+            module.automaticImport = sax.readAtom() == "true";
+            module.isCapability = sax.readAtom() == "true";
+            module.compiledApart = sax.readAtom() == "true";
+            const auto exportCount = sax.beginList();
+            module.exports.reserve(exportCount);
+            for (size_t j = 0; j < exportCount; ++j) {
+                sax.beginTuple();
+                auto member = sax.readBinary();
                 std::vector<kex::semantic::ImportedFunction> fns;
-                for (const auto& fn : e[1]->asList())
-                    fns.push_back(functionFromTerm(fn));
-                module.exports[e[0]->asBinaryStr()] = std::move(fns);
+                const auto fnCount = sax.beginList();
+                fns.reserve(fnCount);
+                for (size_t k = 0; k < fnCount; ++k)
+                    fns.push_back(functionFromSax(sax));
+                sax.endList();
+                module.exports[std::move(member)] = std::move(fns);
             }
-            ifaces.modules[pair[0]->asBinaryStr()] = std::move(module);
+            sax.endList();
+            ifaces.modules[std::move(name)] = std::move(module);
         }
+        sax.endList();
 
-        for (const auto& recv : elems[4]->asList()) {
-            const auto& pair = recv->asTuple();
+        const auto recvCount = sax.beginList();
+        ifaces.receiverFunctions.reserve(recvCount);
+        for (size_t i = 0; i < recvCount; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
             std::vector<kex::semantic::ImportedFunction> fns;
-            for (const auto& fn : pair[1]->asList())
-                fns.push_back(functionFromTerm(fn));
-            ifaces.receiverFunctions[pair[0]->asBinaryStr()] = std::move(fns);
+            const auto fnCount = sax.beginList();
+            fns.reserve(fnCount);
+            for (size_t j = 0; j < fnCount; ++j)
+                fns.push_back(functionFromSax(sax));
+            sax.endList();
+            ifaces.receiverFunctions[std::move(name)] = std::move(fns);
         }
+        sax.endList();
 
-        for (const auto& c : elems[5]->asList()) {
-            const auto& p = c->asTuple();
-            ifaces.traitConformances.push_back({p[0]->asBinaryStr(),
-                                                p[1]->asBinaryStr()});
+        const auto conformanceCount = sax.beginList();
+        ifaces.traitConformances.reserve(conformanceCount);
+        for (size_t i = 0; i < conformanceCount; ++i) {
+            sax.beginTuple();
+            auto typeName = sax.readBinary();
+            auto traitName = sax.readBinary();
+            ifaces.traitConformances.push_back(
+                {std::move(typeName), std::move(traitName)});
         }
+        sax.endList();
 
-        for (const auto& adt : elems[6]->asList())
-            ifaces.adts.push_back(adtFromTerm(adt));
+        const auto adtCount = sax.beginList();
+        ifaces.adts.reserve(adtCount);
+        for (size_t i = 0; i < adtCount; ++i)
+            ifaces.adts.push_back(adtFromSax(sax));
+        sax.endList();
 
-        for (const auto& entry : elems[7]->asList()) {
-            const auto& p = entry->asTuple();
-            ifaces.recordArities[p[0]->asBinaryStr()] =
-                static_cast<size_t>(p[1]->asInt());
+        const auto recordArityCount = sax.beginList();
+        ifaces.recordArities.reserve(recordArityCount);
+        for (size_t i = 0; i < recordArityCount; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
+            const auto value = static_cast<size_t>(sax.readInt());
+            ifaces.recordArities[std::move(name)] = value;
         }
+        sax.endList();
 
-        for (const auto& entry : elems[8]->asList()) {
-            const auto& p = entry->asTuple();
+        const auto fieldNameCount = sax.beginList();
+        ifaces.recordFieldNames.reserve(fieldNameCount);
+        for (size_t i = 0; i < fieldNameCount; ++i) {
+            sax.beginTuple();
+            auto record = sax.readBinary();
             std::unordered_set<std::string> fields;
-            for (const auto& f : p[1]->asList()) fields.insert(f->asBinaryStr());
-            ifaces.recordFieldNames[p[0]->asBinaryStr()] = std::move(fields);
+            const auto fieldCount = sax.beginList();
+            fields.reserve(fieldCount);
+            for (size_t j = 0; j < fieldCount; ++j)
+                fields.insert(sax.readBinary());
+            sax.endList();
+            ifaces.recordFieldNames[std::move(record)] = std::move(fields);
         }
+        sax.endList();
 
-        for (const auto& entry : elems[9]->asList()) {
-            const auto& p = entry->asTuple();
+        const auto recordFieldCount = sax.beginList();
+        ifaces.recordFields.reserve(recordFieldCount);
+        for (size_t i = 0; i < recordFieldCount; ++i) {
+            sax.beginTuple();
+            auto record = sax.readBinary();
             std::unordered_map<std::string, TypePtr> fields;
-            for (const auto& pair : p[1]->asList()) {
-                const auto& f = pair->asTuple();
-                fields[f[0]->asBinaryStr()] = typeFromTerm(f[1]);
+            const auto fieldCount = sax.beginList();
+            fields.reserve(fieldCount);
+            for (size_t j = 0; j < fieldCount; ++j) {
+                sax.beginTuple();
+                auto field = sax.readBinary();
+                fields[std::move(field)] = typeFromSax(sax);
             }
-            ifaces.recordFields[p[0]->asBinaryStr()] = std::move(fields);
+            sax.endList();
+            ifaces.recordFields[std::move(record)] = std::move(fields);
         }
+        sax.endList();
 
-        for (const auto& entry : elems[10]->asList()) {
-            const auto& p = entry->asTuple();
-            ifaces.typeAliases[p[0]->asBinaryStr()] = typeFromTerm(p[1]);
+        const auto aliasCount = sax.beginList();
+        ifaces.typeAliases.reserve(aliasCount);
+        for (size_t i = 0; i < aliasCount; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
+            ifaces.typeAliases[std::move(name)] = typeFromSax(sax);
         }
+        sax.endList();
 
-        for (const auto& name : elems[11]->asList())
-            ifaces.typeNames.insert(name->asBinaryStr());
+        const auto typeNameCount = sax.beginList();
+        ifaces.typeNames.reserve(typeNameCount);
+        for (size_t i = 0; i < typeNameCount; ++i)
+            ifaces.typeNames.insert(sax.readBinary());
+        sax.endList();
 
-        for (const auto& entry : elems[12]->asList()) {
-            const auto& p = entry->asTuple();
-            ifaces.distinctTypes[p[0]->asBinaryStr()] = distinctFromTerm(p[1]);
+        const auto distinctCount = sax.beginList();
+        ifaces.distinctTypes.reserve(distinctCount);
+        for (size_t i = 0; i < distinctCount; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
+            ifaces.distinctTypes[std::move(name)] = distinctFromSax(sax);
         }
+        sax.endList();
 
-        for (const auto& trait : elems[13]->asList())
-            ifaces.traits.push_back(traitFromTerm(trait));
+        const auto traitCount = sax.beginList();
+        ifaces.traits.reserve(traitCount);
+        for (size_t i = 0; i < traitCount; ++i)
+            ifaces.traits.push_back(traitFromSax(sax));
+        sax.endList();
 
         if (timed) {
-            const auto t2 = std::chrono::steady_clock::now();
-            const auto ms = [](auto d) {
-                return std::chrono::duration<double, std::milli>(d).count();
-            };
-            std::fprintf(stderr, "      [cache] decode %.1fms walk %.1fms\n",
-                         ms(t1 - t0), ms(t2 - t1));
+            const auto t1 = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "      [cache] sax %.1fms\n",
+                         std::chrono::duration<double, std::milli>(t1 - t0)
+                             .count());
         }
         return ifaces;
     } catch (const std::exception&) {

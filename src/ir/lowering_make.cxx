@@ -1,5 +1,6 @@
 // Make blocks methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
 
@@ -628,12 +629,8 @@ auto Lowering::registerModuleAliases(const std::string& srcMod,
                            const std::vector<std::string>& exceptNames)
     -> void {
     auto allowed = [&](const std::string& name) {
-        if (!onlyNames.empty() &&
-            std::find(onlyNames.begin(), onlyNames.end(), name) ==
-                onlyNames.end())
-            return false;
-        return std::find(exceptNames.begin(), exceptNames.end(), name) ==
-            exceptNames.end();
+        return kex::semantic::resolve_core::usingSelectsName(
+            name, onlyNames, exceptNames);
     };
     std::unordered_set<std::string> moduleNames;
     for (const auto& [key, _] : moduleFunctions) {
