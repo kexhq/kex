@@ -45,6 +45,22 @@ inline auto executableDirectory() -> std::filesystem::path {
     return path.empty() ? path : path.parent_path();
 }
 
+// "size|mtime" stamp of the running compiler binary ("" when the executable
+// path is unknown, e.g. wasm): the #372 run-cache pattern. Any rebuild moves
+// the stamp, so same-version compiler rebuilds never share cache entries.
+inline auto compilerBinaryStamp() -> std::string {
+    const auto exe = executablePath();
+    if (exe.empty()) return "";
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(exe, ec);
+    if (ec) return "";
+    const auto modified =
+        std::filesystem::last_write_time(exe, ec).time_since_epoch().count();
+    if (ec) return "";
+    return std::to_string(static_cast<unsigned long long>(size)) + "|" +
+           std::to_string(static_cast<long long>(modified));
+}
+
 // All standard-library sources share one root. `prelude.kex` is the manifest
 // that selects the automatically visible subset; every other module remains
 // opt-in through `using`.

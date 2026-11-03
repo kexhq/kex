@@ -165,6 +165,17 @@ add_custom_command(
 
 add_library(kex_lib
     src/ir/lower.cxx
+    src/ir/lowering_body.cxx
+    src/ir/lowering_calls.cxx
+    src/ir/lowering_control.cxx
+    src/ir/lowering_core.cxx
+    src/ir/lowering_expr.cxx
+    src/ir/lowering_function.cxx
+    src/ir/lowering_helpers.cxx
+    src/ir/lowering_make.cxx
+    src/ir/lowering_method_call.cxx
+    src/ir/lowering_pattern.cxx
+    src/ir/lowering_record.cxx
     src/ir/emit_core.cxx
     src/ir/upgrade.cxx
     src/lexer/token.cxx
@@ -911,6 +922,16 @@ target_include_directories(run_cache_cli_test PRIVATE tests)
 target_compile_definitions(run_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(run_cache_cli_test kex)
 add_test(NAME run_cache_cli_test COMMAND run_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Risk #2: the prelude interface cache keyed on stdlib sources + version
+# only, so a same-version compiler rebuild served the previous build's
+# interfaces. Same shape as run_cache_cli_test above.
+add_executable(interface_cache_cli_test tests/interface_cache_cli_test.cxx)
+target_link_libraries(interface_cache_cli_test PRIVATE kex_lib)
+target_include_directories(interface_cache_cli_test PRIVATE tests)
+target_compile_definitions(interface_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(interface_cache_cli_test kex)
+add_test(NAME interface_cache_cli_test COMMAND interface_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Regression test for kexhq/kex#377: a `serving` block in a sibling module
 # (not the entrypoint) failed its first slot call once `Net.HTTP` was

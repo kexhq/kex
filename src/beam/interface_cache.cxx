@@ -1,11 +1,18 @@
 #include "interface_cache.hxx"
 
 #include "etf.hxx"
+#include "kexi.hxx"
 
 #include "../semantic/imported_interfaces.hxx"
 #include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -25,9 +32,59 @@ auto isTuple(const TermPtr& t) -> bool {
 }
 
 constexpr int kMagic = 0x4b584946;      // "KXIF"
+// Bump with ANY shape change below: old files must read as bad-version,
+// never misparse.
 constexpr int kVersion = 1;
 
+// Every tuple shape in the format, named once and shared by the encoder
+// and the decoder. Named shapes (ifaces, fn, signature, ...) go through
+// checkedTuple on write and an explicit size check on read; type-tag
+// shapes pin their size on read only (a tag is a closed vocabulary entry,
+// not an extension point); anonymous key/value pairs rely on the
+// decoder's exception path (short input throws EtfError → corrupt).
+// When you add a field: extend the shape on BOTH sides, bump kVersion,
+// and extend the round-trip agreement test — the test is what catches a
+// field the decoder silently drops.
+namespace schema {
+constexpr size_t kIfaces = 14;
+constexpr size_t kModulePair = 2;
+constexpr size_t kModuleBody = 6;
+constexpr size_t kSignature = 9;
+constexpr size_t kFn = 14;
+constexpr size_t kTrait = 4;
+constexpr size_t kAdt = 8;
+constexpr size_t kDistinct = 3;
+constexpr size_t kPrimitive = 3;
+constexpr size_t kSizedInt = 3;
+constexpr size_t kSizedFloat = 2;
+constexpr size_t kNamed = 3;
+constexpr size_t kFunc = 4;
+constexpr size_t kTuple = 2;
+constexpr size_t kList = 2;
+constexpr size_t kMap = 3;
+constexpr size_t kOptional = 2;
+constexpr size_t kUnion = 2;
+constexpr size_t kIntersection = 2;
+constexpr size_t kRecord = 2;
+constexpr size_t kTypeVar = 2;
+constexpr size_t kVoid = 2;
+constexpr size_t kConstrained = 4;
+} // namespace schema
+
+auto checkedTuple(std::vector<TermPtr> elems, size_t expected, const char* what)
+    -> TermPtr {
+    if (elems.size() != expected)
+        throw EtfError(std::string("encode: ") + what + " shape");
+    return Term::tuple(std::move(elems));
+}
+
 // ---- Type <-> Term ---------------------------------------------------------
+
+// Adding a Type alternative without extending the codec below would
+// silently degrade to "unknown" — fail the build instead.
+static_assert(std::variant_size_v<decltype(Type::kind)> == 16,
+              "Type gained an alternative: extend typeToTerm/typeFromTerm "
+              "and the round-trip agreement test");
 
 auto typeToTerm(const TypePtr& t) -> TermPtr;
 
@@ -51,7 +108,10 @@ auto primitiveKindAtom(PrimitiveType::Kind k) -> const char* {
 }
 
 auto typeToTerm(const TypePtr& t) -> TermPtr {
-    if (!t) return Term::atom("unknown");
+    // A null type is NOT UnknownType: it round-trips as "null" so a cache
+    // hit observes exactly what a cache miss derived. ("unknown" stays the
+    // UnknownType tag, so old files decode unchanged.)
+    if (!t) return Term::atom("null");
     return std::visit([&](const auto& node) -> TermPtr {
         using K = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<K, PrimitiveType>) {
@@ -112,13 +172,14 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
 
 // Throws EtfError on any malformed term.
 auto typeFromTerm(const TermPtr& term) -> TypePtr {
+    if (term->isAtom("null")) return nullptr;
     if (term->isAtom("unknown")) return std::make_shared<Type>(Type{UnknownType{}});
     if (!isTuple(term)) throw EtfError("type: expected tuple");
     const auto& elems = term->asTuple();
     if (elems.empty()) throw EtfError("type: empty tuple");
     const auto tag = elems[0]->asAtom();
     if (tag == "primitive") {
-        if (elems.size() != 3) throw EtfError("primitive: arity");
+        if (elems.size() != schema::kPrimitive) throw EtfError("primitive: arity");
         PrimitiveType::Kind kind;
         const auto name = elems[1]->asAtom();
         if (name == "Integer") kind = PrimitiveType::Integer;
@@ -132,25 +193,25 @@ auto typeFromTerm(const TermPtr& term) -> TypePtr {
             kind, elems[2]->asBinaryStr()}});
     }
     if (tag == "sized_int") {
-        if (elems.size() != 3) throw EtfError("sized_int: arity");
+        if (elems.size() != schema::kSizedInt) throw EtfError("sized_int: arity");
         return std::make_shared<Type>(Type{SizedIntType{
             static_cast<int>(elems[1]->asInt()),
             elems[2]->isAtom("true")}});
     }
     if (tag == "sized_float") {
-        if (elems.size() != 2) throw EtfError("sized_float: arity");
+        if (elems.size() != schema::kSizedFloat) throw EtfError("sized_float: arity");
         return std::make_shared<Type>(Type{SizedFloatType{
             static_cast<int>(elems[1]->asInt())}});
     }
     if (tag == "named") {
-        if (elems.size() != 3) throw EtfError("named: arity");
+        if (elems.size() != schema::kNamed) throw EtfError("named: arity");
         NamedType named{elems[1]->asBinaryStr(), {}};
         for (const auto& arg : elems[2]->asList())
             named.typeArgs.push_back(typeFromTerm(arg));
         return std::make_shared<Type>(Type{std::move(named)});
     }
     if (tag == "func") {
-        if (elems.size() != 4) throw EtfError("func: arity");
+        if (elems.size() != schema::kFunc) throw EtfError("func: arity");
         FuncType fn;
         for (const auto& param : elems[1]->asList())
             fn.params.push_back(typeFromTerm(param));
@@ -159,41 +220,41 @@ auto typeFromTerm(const TermPtr& term) -> TypePtr {
         return std::make_shared<Type>(Type{std::move(fn)});
     }
     if (tag == "tuple") {
-        if (elems.size() != 2) throw EtfError("tuple: arity");
+        if (elems.size() != schema::kTuple) throw EtfError("tuple: arity");
         TupleType tuple;
         for (const auto& element : elems[1]->asList())
             tuple.elements.push_back(typeFromTerm(element));
         return std::make_shared<Type>(Type{std::move(tuple)});
     }
     if (tag == "list") {
-        if (elems.size() != 2) throw EtfError("list: arity");
+        if (elems.size() != schema::kList) throw EtfError("list: arity");
         return std::make_shared<Type>(Type{ListType{typeFromTerm(elems[1])}});
     }
     if (tag == "map") {
-        if (elems.size() != 3) throw EtfError("map: arity");
+        if (elems.size() != schema::kMap) throw EtfError("map: arity");
         return std::make_shared<Type>(Type{MapType{typeFromTerm(elems[1]),
                                                    typeFromTerm(elems[2])}});
     }
     if (tag == "optional") {
-        if (elems.size() != 2) throw EtfError("optional: arity");
+        if (elems.size() != schema::kOptional) throw EtfError("optional: arity");
         return std::make_shared<Type>(Type{OptionalType{typeFromTerm(elems[1])}});
     }
     if (tag == "union") {
-        if (elems.size() != 2) throw EtfError("union: arity");
+        if (elems.size() != schema::kUnion) throw EtfError("union: arity");
         UnionType unionType;
         for (const auto& member : elems[1]->asList())
             unionType.members.push_back(typeFromTerm(member));
         return std::make_shared<Type>(Type{std::move(unionType)});
     }
     if (tag == "intersection") {
-        if (elems.size() != 2) throw EtfError("intersection: arity");
+        if (elems.size() != schema::kIntersection) throw EtfError("intersection: arity");
         IntersectionType intersection;
         for (const auto& member : elems[1]->asList())
             intersection.members.push_back(typeFromTerm(member));
         return std::make_shared<Type>(Type{std::move(intersection)});
     }
     if (tag == "record") {
-        if (elems.size() != 2) throw EtfError("record: arity");
+        if (elems.size() != schema::kRecord) throw EtfError("record: arity");
         RecordType record;
         for (const auto& field : elems[1]->asList()) {
             const auto& pair = field->asTuple();
@@ -203,16 +264,16 @@ auto typeFromTerm(const TermPtr& term) -> TypePtr {
         return std::make_shared<Type>(Type{std::move(record)});
     }
     if (tag == "typevar") {
-        if (elems.size() != 2) throw EtfError("typevar: arity");
+        if (elems.size() != schema::kTypeVar) throw EtfError("typevar: arity");
         return std::make_shared<Type>(Type{TypeVar{
             static_cast<int>(elems[1]->asInt())}});
     }
     if (tag == "void") {
-        if (elems.size() != 2) throw EtfError("void: arity");
+        if (elems.size() != schema::kVoid) throw EtfError("void: arity");
         return std::make_shared<Type>(Type{VoidType{elems[1]->asBinaryStr()}});
     }
     if (tag == "constrained") {
-        if (elems.size() != 4) throw EtfError("constrained: arity");
+        if (elems.size() != schema::kConstrained) throw EtfError("constrained: arity");
         return std::make_shared<Type>(Type{ConstrainedType{
             elems[1]->asBinaryStr(), elems[2]->asBinaryStr(),
             static_cast<int>(elems[3]->asInt())}});
@@ -231,16 +292,17 @@ auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
         : Term::atom("none");
     std::vector<TermPtr> names;
     for (const auto& n : sig.paramNames) names.push_back(Term::binary(n));
-    return Term::tuple({Term::atom("signature"), Term::binary(sig.name),
-                        Term::list(std::move(params)), typeToTerm(sig.result),
-                        Term::atom(sig.isFoul ? "true" : "false"), required,
-                        Term::list(std::move(names)), Term::binary(sig.makeModule),
-                        Term::binary(sig.declaringModule)});
+    return checkedTuple({Term::atom("signature"), Term::binary(sig.name),
+                         Term::list(std::move(params)), typeToTerm(sig.result),
+                         Term::atom(sig.isFoul ? "true" : "false"), required,
+                         Term::list(std::move(names)), Term::binary(sig.makeModule),
+                         Term::binary(sig.declaringModule)},
+                        schema::kSignature, "signature");
 }
 
 auto signatureFromTerm(const TermPtr& term) -> kex::semantic::Signature {
     const auto& elems = term->asTuple();
-    if (elems.size() != 9 || !elems[0]->isAtom("signature"))
+    if (elems.size() != schema::kSignature || !elems[0]->isAtom("signature"))
         throw EtfError("signature: shape");
     kex::semantic::Signature sig;
     sig.name = elems[1]->asBinaryStr();
@@ -265,24 +327,25 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
     for (const auto& n : fn.paramNames) names.push_back(Term::binary(n));
     std::vector<TermPtr> defaults;
     for (const auto& d : fn.defaultSources) defaults.push_back(Term::binary(d));
-    return Term::tuple({Term::atom("fn"), Term::binary(fn.sourceName),
-                        Term::binary(fn.backendFunction),
-                        Term::binary(fn.backendModule),
-                        Term::integer(fn.backendArity),
-                        Term::list(std::move(names)),
-                        Term::list(std::move(defaults)),
-                        signatureToTerm(fn.signature),
-                        Term::binary(fn.sourceModule),
-                        Term::atom(fn.isReceiverMethod ? "true" : "false"),
-                        Term::atom(fn.visibleByReceiver ? "true" : "false"),
-                        Term::atom(fn.isConstructor ? "true" : "false"),
-                        Term::atom(fn.remoteSlot ? "true" : "false"),
-                        Term::binary(fn.constructorOwner)});
+    return checkedTuple({Term::atom("fn"), Term::binary(fn.sourceName),
+                         Term::binary(fn.backendFunction),
+                         Term::binary(fn.backendModule),
+                         Term::integer(fn.backendArity),
+                         Term::list(std::move(names)),
+                         Term::list(std::move(defaults)),
+                         signatureToTerm(fn.signature),
+                         Term::binary(fn.sourceModule),
+                         Term::atom(fn.isReceiverMethod ? "true" : "false"),
+                         Term::atom(fn.visibleByReceiver ? "true" : "false"),
+                         Term::atom(fn.isConstructor ? "true" : "false"),
+                         Term::atom(fn.remoteSlot ? "true" : "false"),
+                         Term::binary(fn.constructorOwner)},
+                        schema::kFn, "fn");
 }
 
 auto functionFromTerm(const TermPtr& term) -> kex::semantic::ImportedFunction {
     const auto& elems = term->asTuple();
-    if (elems.size() != 14 || !elems[0]->isAtom("fn"))
+    if (elems.size() != schema::kFn || !elems[0]->isAtom("fn"))
         throw EtfError("fn: shape");
     kex::semantic::ImportedFunction fn;
     fn.sourceName = elems[1]->asBinaryStr();
@@ -310,14 +373,15 @@ auto traitToTerm(const kex::semantic::TraitDef& trait) -> TermPtr {
     std::vector<TermPtr> defaults;
     for (const auto& name : trait.defaultMethods)
         defaults.push_back(Term::binary(name));
-    return Term::tuple({Term::atom("trait"), Term::binary(trait.name),
-                        Term::list(std::move(required)),
-                        Term::list(std::move(defaults))});
+    return checkedTuple({Term::atom("trait"), Term::binary(trait.name),
+                         Term::list(std::move(required)),
+                         Term::list(std::move(defaults))},
+                        schema::kTrait, "trait");
 }
 
 auto traitFromTerm(const TermPtr& term) -> kex::semantic::TraitDef {
     const auto& elems = term->asTuple();
-    if (elems.size() != 4 || !elems[0]->isAtom("trait"))
+    if (elems.size() != schema::kTrait || !elems[0]->isAtom("trait"))
         throw EtfError("trait: shape");
     kex::semantic::TraitDef trait;
     trait.name = elems[1]->asBinaryStr();
@@ -347,16 +411,17 @@ auto adtToTerm(const kex::semantic::ImportedADT& adt) -> TermPtr {
     std::vector<TermPtr> paramTypes;
     for (const auto& [ctor, types] : adt.constructorParamTypes)
         paramTypes.push_back(Term::tuple({Term::binary(ctor), listOf(types)}));
-    return Term::tuple({Term::atom("adt"), Term::binary(adt.name),
-                        Term::list(std::move(ctors)), Term::list(std::move(arities)),
-                        Term::integer(static_cast<int64_t>(adt.typeParamCount)),
-                        Term::list(std::move(slots)), Term::list(std::move(paramNames)),
-                        Term::list(std::move(paramTypes))});
+    return checkedTuple({Term::atom("adt"), Term::binary(adt.name),
+                         Term::list(std::move(ctors)), Term::list(std::move(arities)),
+                         Term::integer(static_cast<int64_t>(adt.typeParamCount)),
+                         Term::list(std::move(slots)), Term::list(std::move(paramNames)),
+                         Term::list(std::move(paramTypes))},
+                        schema::kAdt, "adt");
 }
 
 auto adtFromTerm(const TermPtr& term) -> kex::semantic::ImportedADT {
     const auto& elems = term->asTuple();
-    if (elems.size() != 8 || !elems[0]->isAtom("adt"))
+    if (elems.size() != schema::kAdt || !elems[0]->isAtom("adt"))
         throw EtfError("adt: shape");
     kex::semantic::ImportedADT adt;
     adt.name = elems[1]->asBinaryStr();
@@ -385,13 +450,14 @@ auto adtFromTerm(const TermPtr& term) -> kex::semantic::ImportedADT {
 auto distinctToTerm(const kex::semantic::ImportedDistinctType& distinct) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : distinct.typeParams) params.push_back(Term::binary(p));
-    return Term::tuple({Term::atom("distinct"), Term::list(std::move(params)),
-                        typeToTerm(distinct.backingType)});
+    return checkedTuple({Term::atom("distinct"), Term::list(std::move(params)),
+                         typeToTerm(distinct.backingType)},
+                        schema::kDistinct, "distinct");
 }
 
 auto distinctFromTerm(const TermPtr& term) -> kex::semantic::ImportedDistinctType {
     const auto& elems = term->asTuple();
-    if (elems.size() != 3 || !elems[0]->isAtom("distinct"))
+    if (elems.size() != schema::kDistinct || !elems[0]->isAtom("distinct"))
         throw EtfError("distinct: shape");
     kex::semantic::ImportedDistinctType distinct;
     for (const auto& p : elems[1]->asList())
@@ -415,13 +481,16 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
             exports.push_back(Term::tuple({Term::binary(member),
                                            Term::list(std::move(fns))}));
         }
-        modules.push_back(Term::tuple({Term::binary(name),
-            Term::tuple({Term::binary(module.sourceModule),
-                         Term::binary(module.backendModule),
-                         Term::atom(module.automaticImport ? "true" : "false"),
-                         Term::atom(module.isCapability ? "true" : "false"),
-                         Term::atom(module.compiledApart ? "true" : "false"),
-                         Term::list(std::move(exports))})}));
+        modules.push_back(checkedTuple(
+            {Term::binary(name),
+             checkedTuple({Term::binary(module.sourceModule),
+                           Term::binary(module.backendModule),
+                           Term::atom(module.automaticImport ? "true" : "false"),
+                           Term::atom(module.isCapability ? "true" : "false"),
+                           Term::atom(module.compiledApart ? "true" : "false"),
+                           Term::list(std::move(exports))},
+                          schema::kModuleBody, "module body")},
+            schema::kModulePair, "module pair"));
     }
 
     std::vector<TermPtr> receivers;
@@ -477,39 +546,61 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
     std::vector<TermPtr> traits;
     for (const auto& trait : ifaces.traits) traits.push_back(traitToTerm(trait));
 
-    auto root = Term::tuple({
-        Term::atom("ifaces"),
-        Term::integer(kMagic),
-        Term::integer(kVersion),
-        Term::list(std::move(modules)),
-        Term::list(std::move(receivers)),
-        Term::list(std::move(conformances)),
-        Term::list(std::move(adts)),
-        Term::list(std::move(recordArities)),
-        Term::list(std::move(recordFieldNames)),
-        Term::list(std::move(recordFields)),
-        Term::list(std::move(typeAliases)),
-        Term::list(std::move(typeNames)),
-        Term::list(std::move(distinctTypes)),
-        Term::list(std::move(traits)),
-    });
+    auto root = checkedTuple(
+        {
+            Term::atom("ifaces"),
+            Term::integer(kMagic),
+            Term::integer(kVersion),
+            Term::list(std::move(modules)),
+            Term::list(std::move(receivers)),
+            Term::list(std::move(conformances)),
+            Term::list(std::move(adts)),
+            Term::list(std::move(recordArities)),
+            Term::list(std::move(recordFieldNames)),
+            Term::list(std::move(recordFields)),
+            Term::list(std::move(typeAliases)),
+            Term::list(std::move(typeNames)),
+            Term::list(std::move(distinctTypes)),
+            Term::list(std::move(traits)),
+        },
+        schema::kIfaces, "ifaces");
     return encodeEtf(root);
 }
 
-auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes)
+auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
+                                   CacheMissReason* reason)
     -> std::optional<kex::semantic::ImportedInterfaces> {
+    const bool timed = std::getenv("KEX_TIMINGS") != nullptr;
+    const auto note = [&](CacheMissReason r) {
+        if (reason) *reason = r;
+    };
+    const auto t0 = std::chrono::steady_clock::now();
     try {
         auto root = decodeEtf(bytes);
+        const auto t1 = std::chrono::steady_clock::now();
         const auto& elems = root->asTuple();
-        if (elems.size() != 14 || !elems[0]->isAtom("ifaces")) return std::nullopt;
-        if (elems[1]->asInt() != kMagic) return std::nullopt;
-        if (elems[2]->asInt() != kVersion) return std::nullopt;
+        if (elems.size() != schema::kIfaces || !elems[0]->isAtom("ifaces")) {
+            note(CacheMissReason::corrupt);
+            return std::nullopt;
+        }
+        if (elems[1]->asInt() != kMagic) {
+            note(CacheMissReason::badMagic);
+            return std::nullopt;
+        }
+        if (elems[2]->asInt() != kVersion) {
+            note(CacheMissReason::badVersion);
+            return std::nullopt;
+        }
 
         kex::semantic::ImportedInterfaces ifaces;
 
         for (const auto& mod : elems[3]->asList()) {
             const auto& pair = mod->asTuple();
+            if (pair.size() != schema::kModulePair)
+                throw EtfError("module pair: shape");
             const auto& body = pair[1]->asTuple();
+            if (body.size() != schema::kModuleBody)
+                throw EtfError("module body: shape");
             kex::semantic::ImportedModuleInterface module;
             module.sourceModule = body[0]->asBinaryStr();
             module.backendModule = body[1]->asBinaryStr();
@@ -582,10 +673,94 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes)
         for (const auto& trait : elems[13]->asList())
             ifaces.traits.push_back(traitFromTerm(trait));
 
+        if (timed) {
+            const auto t2 = std::chrono::steady_clock::now();
+            const auto ms = [](auto d) {
+                return std::chrono::duration<double, std::milli>(d).count();
+            };
+            std::fprintf(stderr, "      [cache] decode %.1fms walk %.1fms\n",
+                         ms(t1 - t0), ms(t2 - t1));
+        }
         return ifaces;
     } catch (const std::exception&) {
+        note(CacheMissReason::corrupt);
         return std::nullopt;
     }
+}
+
+auto cacheMissReasonName(CacheMissReason reason) -> const char* {
+    switch (reason) {
+    case CacheMissReason::badMagic:   return "bad-magic";
+    case CacheMissReason::badVersion: return "bad-version";
+    case CacheMissReason::corrupt:    return "corrupt";
+    }
+    return "corrupt";
+}
+
+auto interfaceCacheKey(const std::string& sourceHashHex,
+                       const std::string& compilerStamp) -> std::string {
+    std::string key = sourceHashHex + "-" + std::to_string(KEX_VERSION_MAJOR) +
+                      "." + std::to_string(KEX_VERSION_MINOR) + "." +
+                      std::to_string(KEX_VERSION_PATCH);
+    if (compilerStamp.empty()) return key;
+    const std::vector<uint8_t> bytes(compilerStamp.begin(), compilerStamp.end());
+    const auto digest = computeSha256(bytes);
+    static const char* digits = "0123456789abcdef";
+    std::string shortHash;
+    for (size_t i = 0; i < 8; i++) {
+        shortHash += digits[digest[i] >> 4];
+        shortHash += digits[digest[i] & 0xf];
+    }
+    return key + "-" + shortHash;
+}
+
+auto writeInterfaceCacheFile(const std::filesystem::path& path,
+                             const std::vector<uint8_t>& bytes) -> bool {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    // A unique staging file renamed into place, so concurrent builders
+    // never see (or clobber) a half-written cache.
+    static std::atomic<unsigned long long> counter{0};
+    auto staging = path;
+    staging += ".tmp." + std::to_string(counter.fetch_add(1));
+    std::ofstream output(staging, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output) {
+        std::filesystem::remove(staging, ec);
+        return false;
+    }
+    std::filesystem::rename(staging, path, ec);
+    return !ec;
+}
+
+auto pruneInterfaceCacheDirectory(const std::filesystem::path& dir,
+                                  const std::filesystem::path& keep,
+                                  size_t keepNewest) -> void {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec) || ec) return;
+    struct Entry {
+        std::filesystem::path path;
+        std::filesystem::file_time_type mtime;
+    };
+    std::vector<Entry> entries;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) return;
+        if (!entry.is_regular_file(ec) || ec) continue;
+        if (entry.path().extension() != ".bin") continue;
+        if (entry.path().filename() == keep.filename()) continue;
+        const auto mtime = std::filesystem::last_write_time(entry.path(), ec);
+        if (ec) continue;
+        entries.push_back({entry.path(), mtime});
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) { return a.mtime > b.mtime; });
+    // `keep` holds one slot: the directory converges to `keepNewest` files.
+    const size_t budget = keepNewest > 0 ? keepNewest - 1 : 0;
+    for (size_t i = budget; i < entries.size(); i++)
+        std::filesystem::remove(entries[i].path, ec);
 }
 
 } // namespace kex::beam
