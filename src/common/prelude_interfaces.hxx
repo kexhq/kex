@@ -10,7 +10,6 @@
 #include "../semantic/imported_interfaces.hxx"
 #include "prelude_loader.hxx"
 #include "type_def_utils.hxx"
-#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1397,31 +1396,40 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
             phaseStart = now;
         };
 
-        // The snapshot is a pure function of the stdlib sources, so it is
-        // cached on disk keyed by their hash (plus the kex version, since a
-        // new compiler derives a different interface from the same sources).
+        // The snapshot is a pure function of the stdlib sources AND the
+        // compiler that derives it, so it is cached on disk keyed by both:
+        // the sources' content hash plus the compiler version and binary
+        // stamp. A same-version rebuild must never serve the previous
+        // build's interfaces (risk #2, the #372 class).
         std::optional<std::filesystem::path> cachePath;
         if (!runtimeDir.empty()) {
             const auto artifact = standardLibraryArtifactSourceFiles();
             if (!artifact.empty()) {
-                const auto key = hashHex(preludeSourceHash(artifact)) + "-" +
-                                 std::to_string(KEX_VERSION_MAJOR) + "." +
-                                 std::to_string(KEX_VERSION_MINOR) + "." +
-                                 std::to_string(KEX_VERSION_PATCH);
+                const auto key = kex::beam::interfaceCacheKey(
+                    hashHex(preludeSourceHash(artifact)),
+                    kex::compilerBinaryStamp());
                 cachePath = preludeInterfaceCachePath(key);
             }
         }
+        const auto noteMiss = [&](const char* why) {
+            if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
+        };
         if (cachePath) {
             std::ifstream input(*cachePath, std::ios::binary);
-            if (input) {
+            if (!input) {
+                noteMiss("absent");
+            } else {
                 std::vector<uint8_t> bytes(
                     (std::istreambuf_iterator<char>(input)),
                     std::istreambuf_iterator<char>());
-                if (auto loaded =
-                        kex::beam::deserializeImportedInterfaces(bytes)) {
+                kex::beam::CacheMissReason reason =
+                    kex::beam::CacheMissReason::corrupt;
+                if (auto loaded = kex::beam::deserializeImportedInterfaces(
+                        bytes, &reason)) {
                     phase("prelude interface cache");
                     return std::move(*loaded);
                 }
+                noteMiss(kex::beam::cacheMissReasonName(reason));
             }
         }
 
@@ -1438,21 +1446,10 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
             mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
 
         if (cachePath) {
-            std::error_code ec;
-            std::filesystem::create_directories(cachePath->parent_path(), ec);
-            // Write to a unique staging file and rename into place, so
-            // concurrent builders never see (or clobber) a half-written cache.
-            static std::atomic<unsigned long long> counter{0};
-            auto staging = *cachePath;
-            staging += ".tmp." + std::to_string(counter.fetch_add(1));
-            std::ofstream output(staging, std::ios::binary | std::ios::trunc);
-            if (output) {
-                auto bytes = kex::beam::serializeImportedInterfaces(merged);
-                output.write(reinterpret_cast<const char*>(bytes.data()),
-                             static_cast<std::streamsize>(bytes.size()));
-                output.close();
-                std::filesystem::rename(staging, *cachePath, ec);
-            }
+            auto bytes = kex::beam::serializeImportedInterfaces(merged);
+            if (kex::beam::writeInterfaceCacheFile(*cachePath, bytes))
+                kex::beam::pruneInterfaceCacheDirectory(
+                    cachePath->parent_path(), *cachePath);
         }
         return merged;
     }();
