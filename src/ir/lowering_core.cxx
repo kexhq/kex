@@ -1,6 +1,7 @@
 // core methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
 #include "../semantic/resolve_core.hxx"
+#include <cstdlib>
 
 namespace kex::ir {
 
@@ -749,6 +750,12 @@ auto Lowering::orderingFunction(Op op) -> std::string {
 // Is this expression statically an Integer? Only then may an arithmetic
 // operator stay on the raw BIF — see the `-`/`*` routing in lowerBinary.
 auto Lowering::isIntegerOperand(const ast::ExprPtr& e) const -> bool {
+    // KEX_NO_OP_DEVIRT=1 (before/after measurement, emergency use): plead
+    // ignorance so operators take the checked kex_intrinsic_number path —
+    // the same path unchecked code takes today, so semantics are unchanged.
+    // The KEX_NO_DEVIRT precedent for receiver calls; the other two
+    // operator-devirt predicates below carry the same guard.
+    if (std::getenv("KEX_NO_OP_DEVIRT")) return false;
     if (!e) return false;
     if (std::holds_alternative<ast::IntLiteral>(e->kind)) return true;
     if (auto* id = std::get_if<ast::Identifier>(&e->kind))
@@ -765,6 +772,7 @@ auto Lowering::isIntegerOperand(const ast::ExprPtr& e) const -> bool {
 // known to belong to ("num" / "str" / "char"), or "" when lowering cannot
 // tell. Only used to keep a provably well-typed comparison on the BIF.
 auto Lowering::comparableKind(const ast::ExprPtr& e) const -> std::string {
+    if (std::getenv("KEX_NO_OP_DEVIRT")) return {};
     if (!e) return {};
     if (std::holds_alternative<ast::IntLiteral>(e->kind) ||
         std::holds_alternative<ast::FloatLiteral>(e->kind))
@@ -786,6 +794,7 @@ auto Lowering::comparableKind(const ast::ExprPtr& e) const -> std::string {
 // Char. Float is deliberately absent — `-0.0` and NaN make `=:=` disagree
 // with Kex's numeric equality. Empty when the type is not pinned down.
 auto Lowering::exactEqualityType(const ast::ExprPtr& e) const -> std::string {
+    if (std::getenv("KEX_NO_OP_DEVIRT")) return {};
     if (!e) return {};
     if (std::holds_alternative<ast::IntLiteral>(e->kind)) return "Integer";
     if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "String";
