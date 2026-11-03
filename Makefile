@@ -138,13 +138,16 @@ test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-ex
           spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
 
 # Harness and generator regressions, including simulated crashes/timeouts.
-.PHONY: test-fuzz test-spec-beam-runner
+.PHONY: test-fuzz test-spec-beam-runner test-devirt
 test-spec-beam-runner: build
 	@"$(KEX)" --run-walker --no-colors tools/spec_beam_runner.spec.kex
 
 test-fuzz: build
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz_cli.spec.kex
+
+test-devirt: build
+	@tools/devirt-correspondence.sh "$(KEX)" $(BEAM_SPEC_FILES)
 
 # Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
 # programs and requires the walker and BEAM backends to agree on every one.

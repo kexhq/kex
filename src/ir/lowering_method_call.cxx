@@ -727,6 +727,37 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     }
                 }
             }
+            // A proven `name/Head` for an imported make-block method —
+            // unless the receiver takes a trait dictionary (clause
+            // (10)), which names trait dispatch the mangled spelling
+            // cannot serve. (Set only for imported receiver calls, so
+            // index 0 is the receiver and `localDispatchTypes` — the
+            // same-unit path above — is empty.)
+            if (!resolved->second.importDispatchSpelling.empty()) {
+                bool receiverHasDictionary = false;
+                for (const auto& [argument, _] :
+                     resolved->second.traitDictionaries)
+                    if (argument == 0) receiverHasDictionary = true;
+                if (!receiverHasDictionary) {
+                    backendFunction =
+                        resolved->second.importDispatchSpelling;
+                    // Applied-spelling audit for `make test-devirt`:
+                    // `module name/Head beamArity`, one line per call
+                    // site, appended (O_APPEND keeps parallel spec
+                    // runs from interleaving).
+                    if (const char* audit =
+                            std::getenv("KEX_DEVIRT_AUDIT")) {
+                        if (FILE* out = std::fopen(audit, "a")) {
+                            std::fprintf(
+                                out, "%s %s %d\n",
+                                resolved->second.backendModule.c_str(),
+                                backendFunction.c_str(),
+                                resolved->second.backendArity);
+                            std::fclose(out);
+                        }
+                    }
+                }
+            }
             // Same as externalCallExpr: the imported-foul append belongs
             // with dropping the gate, not before it (kexhq/kex#181).
             if (!capabilityTarget.empty()) {

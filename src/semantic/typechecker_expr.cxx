@@ -1,5 +1,6 @@
 #include "../ast/function_groups.hxx"
 #include "../common/mangle.hxx"
+#include "resolve_core.hxx"
 #include "typechecker.hxx"
 #include "typechecker_internal.hxx"
 #include "analyzer.hxx"
@@ -5514,6 +5515,30 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     else if (const auto* named =
                                  std::get_if<NamedType>(&resolvedParam->kind))
                         addRequiredDictionary(named->name);
+                }
+                if (isReceiver && !matched.params.empty() &&
+                    !argTypes.empty() && m_importedInterfaces) {
+                    const auto raw =
+                        m_importedInterfaces->receiverFunctions.find(name);
+                    if (raw !=
+                        m_importedInterfaces->receiverFunctions.end()) {
+                        // The CALL-SITE receiver (`argTypes[0]`), not the
+                        // winner's: matching the winner against itself
+                        // covers tautologically, which miscompiled
+                        // `None.blank?` to `blank?/Bool` and `None.to`
+                        // to `to/Atom`.
+                        auto spelling =
+                            resolve_core::importDispatchSpelling(
+                                raw->second, *resolved,
+                                resolve(argTypes[0]),
+                                *m_importedInterfaces,
+                                [this](const TypePtr& type) {
+                                    return expandTypeAliases(type);
+                                });
+                        if (spelling)
+                            target.importDispatchSpelling =
+                                std::move(*spelling);
+                    }
                 }
                 m_resolvedCalls[methodCall] = std::move(target);
             } else if (winnerIsMakeMethod) {

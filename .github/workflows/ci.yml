@@ -302,6 +302,9 @@ jobs:
       - name: BEAM spec runner regression checks
         run: make -o build test-spec-beam-runner
 
+      - name: Devirt correspondence checks
+        run: make -o build test-devirt
+
       # Fresh programs each workflow run; reruns keep the seed for replay.
       # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
       # includes failing seeds in artifact filenames (kexhq/kex#306).
