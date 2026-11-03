@@ -101,6 +101,11 @@ struct ResolvedCallTarget {
     // entry names the zero-based source argument whose concrete value chooses
     // the implementation and the trait contract the dictionary represents.
     std::vector<std::pair<std::size_t, std::string>> traitDictionaries;
+    // Proven `name/Head` spelling for an imported make-block method
+    // (`resolve_core::importDispatchSpelling`), empty to keep the
+    // dispatcher. Lowering applies it unless the receiver takes a
+    // trait dictionary (clause (10)).
+    std::string importDispatchSpelling;
 };
 
 struct ImportedTraitConformance {

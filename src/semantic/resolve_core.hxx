@@ -1,6 +1,8 @@
 #pragma once
 
 #include "db.hxx"
+#include "imported_interfaces.hxx"
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -112,6 +114,88 @@ auto matchSuffix(const Map& candidates, const std::string& suffix)
     }
     return match;
 }
+
+// Devirtualization spelling (Phase 4). The BEAM emitter mangles a
+// colliding make-block method as `name/Type`, but the interface only
+// carries the plain dispatcher name. The consumer re-derives the
+// mangled spelling when it can PROVE the definition exists from
+// interface-visible facts; anything unprovable keeps the dispatcher.
+// The interface's receiver types are WRITTEN-derived (`convertTypeExpr`
+// in collect_metadata.cxx), so in the common cases the head IS the
+// spelling — the predicate's job is excluding every case where the
+// written spelling diverges from the emitted one (aliases, opaque
+// types, undeclared targets, `''`-emitting forms) or the dispatcher
+// would route differently (trait peers, shadowed guards, generic
+// fallbacks). Each clause mirrors a documented emitter rule
+// (`makeTargetNames`, lowering_make.cxx's `name/Type`-vs-bare-vs-
+// signature choice, `owners.size() > 1`, `makeDispatcher` order),
+// erring to the dispatcher (`nullopt`).
+
+// An emitted `name/Head` head with its provenance: nominal heads
+// (written type names) must still prove they name a declared
+// record/ADT/distinct type; kind heads (primitives, List, Map) have
+// unanimous written-to-emitted spellings and skip that check.
+struct TargetHead {
+    std::string spelling;
+    bool nominal = false;
+};
+
+// The head the emitter used for an interface receiver type, or
+// nullopt when the type's spelling is unprovable or the head is cut
+// for v1: sized numerics (no BIF guard — devirt would change baseline
+// behavior), unit, `Block`/`Optional` nominals (the former emits `''`,
+// the latter's generic form decodes indistinguishably from `T?`),
+// and every `''`-emitting or non-dispatchable kind (optionals,
+// unions, records-structural, tuples, funcs, vars, unknown, void,
+// constrained).
+auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead>;
+
+// Signature identity up to type-variable renaming: same length,
+// same constructors in the same positions, vars equal when their
+// first-occurrence order matches. Atom literal spellings are
+// display-only (mirroring `typesEqual`); block-ness counts (the
+// emitter renders `Block<…>` distinctly).
+auto signaturesAlphaEqual(const std::vector<TypePtr>& a,
+                         const std::vector<TypePtr>& b) -> bool;
+
+// Transparent-alias expansion callback: the caller's scope tables own
+// aliases (`TypeChecker::expandTypeAliases`), resolve_core stays pure.
+using AliasExpander = std::function<TypePtr(const TypePtr&)>;
+
+// Whether a (resolved, alias-expanded) call receiver reaches the
+// `name/Head` implementation: exact or last-segment spelling for
+// nominals (uniqueness below vetoes suffix collisions), head-only
+// for List/Map, record-table membership for structural receivers
+// (resolution already picked the winner), nothing else.
+auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
+                        const ImportedInterfaces& ifaces) -> bool;
+
+// Derive the mangled `name/Head` spelling for an imported receiver
+// call, or nullopt to keep the dispatcher. `candidates` must be the
+// RAW same-name table (`receiverFunctions[name]`): visibility
+// filtering and offer-dedup hide overloads the emitter counted.
+// `winner` is the resolved candidate, `receiverType` the resolved
+// static receiver. Clauses: (0) pure make-block winner with a
+// receiver (foul calls take their context through a registry keyed
+// on the bare name); (1) provable head; (1b) nominal-head membership
+// in the interface's record/ADT/distinct tables (excludes aliases,
+// opaques, undeclared targets); (5) the (module, source-arity,
+// head) bucket is single-signature (else only `name/Head,args…`
+// exists), foul-equality included; (12) the winner's head is the
+// ONLY covering head at (module, arity) (trait peers excluded —
+// the dispatcher tries them last); `''` peers and covering
+// module-function peers veto (both merge ahead of the receiver
+// dispatcher); (13b) the defining module has ≥2 distinct heads at
+// this name (else the definition kept the BARE name and no
+// `name/Head` exists); (DS) Range/Pid winners shadowed by List/Task
+// keep dispatcher behavior. (10) (no trait dictionary for the
+// receiver) is checked by lowering, which owns the computed
+// dictionaries.
+auto importDispatchSpelling(
+    const std::vector<ImportedFunction>& candidates,
+    const ImportedFunction& winner, const TypePtr& receiverType,
+    const ImportedInterfaces& ifaces, AliasExpander expandAlias)
+    -> std::optional<std::string>;
 
 } // namespace resolve_core
 
