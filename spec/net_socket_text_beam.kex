@@ -1,0 +1,51 @@
+# kex: run-beam
+#
+# Text-oriented TCP helpers: string addresses and filehandle-style lines.
+
+using Net.Socket
+
+main do
+  let ep = TCP.Endpoint.parse("127.0.0.1:8080").try
+  assert(ep.host == "127.0.0.1")
+  assert(ep.port.string == "8080")
+  let v6 = TCP.Endpoint.parse("::1:8080").try
+  assert(v6.host == "::1")
+  assert(v6.port.string == "8080")
+  match TCP.Endpoint.parse("noport") do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "address without a port must fail")
+  end
+  match TCP.Endpoint.parse("127.0.0.1:http") do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "non-numeric port must fail")
+  end
+  assert(TCP.Endpoint.parse("127.0.0.1:99999").error?, "out-of-range port must fail")
+  assert(TCP.Endpoint.parse("127.0.0.1:").error?, "empty port must fail")
+
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  let server = Task.start do
+    let peer = listener.accept.try
+    assert(peer.getLine.try == Just("hello"))
+    assert(peer.getLine.try == Just(" spaced "))
+    assert(peer.getLine.try == Just("raw"))
+    match peer.getLine do
+      Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
+      Ok(_) => assert(false, "invalid UTF-8 must not decode")
+    end
+    peer.printLine("back")
+    assert(peer.getLine.try == None)
+    peer.close
+  end
+  let client = TCP.connectTo("127.0.0.1:${port}").try
+  client.printLine("hello")
+  client.write(" sp")
+  client.printLine("aced ")
+  client.writeBytes("raw\r\n".to(Binary).try)
+  client.writeBytes(Binary.fromBytes([255, 10]))
+  assert(client.getLine.try == Just("back"))
+  client.close
+  server.await
+  listener.close
+  IO.printLine("ok")
+end

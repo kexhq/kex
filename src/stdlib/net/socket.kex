@@ -84,6 +84,30 @@ module TCP do
     #   TCP.Endpoint.loopback(Port.from(0).try)
     loopback : Net.Port -> Endpoint
     let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
+    # Splits a "host:port" address instead of assembling an endpoint by parts.
+    #
+    # Only the port is validated here; the host rides through to the backend,
+    # which reports +Resolve+ for an unknown name. The host may itself contain
+    # colons, so an IPv6 literal needs no brackets.
+    #
+    # @return [Result<Endpoint, NetError>] the endpoint or a +Parse+ failure
+    #
+    # @example Connecting without a Port value in hand
+    #   TCP.connect(TCP.Endpoint.parse("127.0.0.1:9000").try).try
+    foul parse(address: String) -> Result<Endpoint, NetError> do
+      let parts = address.split(":")
+      if parts.count < 2
+        return Error(NetError { kind: Parse, operation: TCP, message: "expected host:port, got \"${address}\"" })
+      end
+      let host = parts.take(parts.count - 1).join(":")
+      match Integer.parse(parts.last.or("")) do
+        Ok(n) => match Net.Port.from(n) do
+          Ok(port) => Ok(Endpoint { host: host, port: port })
+          Error(e) => Error(e)
+        end
+        Error(_) => Error(NetError { kind: Parse, operation: TCP, message: "bad port in \"${address}\"" })
+      end
+    end
   end
 
   # Connects to a TCP endpoint with the backend's bounded connect deadline.
@@ -97,6 +121,19 @@ module TCP do
   foul connect(endpoint) = Kex.Intrinsic.NetTCP.connect(endpoint)
   connect : Endpoint -> ConnectOptions -> Result<TCPConnection, NetError>
   foul connect(endpoint, options) = Kex.Intrinsic.NetTCP.connectWith(endpoint, options)
+  # Connects to a "host:port" address with the default options.
+  #
+  # A separate name (not a +connect+ overload) until #619 is fixed: mixing
+  # arities and same-arity type overloads breaks call resolution.
+  #
+  # @example Talking to a local echo server
+  #   let connection = TCP.connectTo("127.0.0.1:12321").try
+  foul connectTo(address: String) -> Result<TCPConnection, NetError> do
+    match Endpoint.parse(address) do
+      Ok(endpoint) => connect(endpoint)
+      Error(e) => Error(e)
+    end
+  end
   # Binds and starts listening. Port zero selects an ephemeral local port.
   #
   # @return [Result<TCPListener, NetError>] a listener or +Connect+
@@ -108,6 +145,16 @@ module TCP do
   foul listen(endpoint) = Kex.Intrinsic.NetTCP.listen(endpoint)
   listen : Endpoint -> ListenOptions -> Result<TCPListener, NetError>
   foul listen(endpoint, options) = Kex.Intrinsic.NetTCP.listenWith(endpoint, options)
+  # Binds and starts listening on a "host:port" address.
+  #
+  # @example A Rosetta-style echo server socket
+  #   let listener = TCP.bind("127.0.0.1:12321").try
+  foul bind(address: String) -> Result<TCPListener, NetError> do
+    match Endpoint.parse(address) do
+      Ok(endpoint) => listen(endpoint)
+      Error(e) => Error(e)
+    end
+  end
 
   # Sends every byte, retrying partial operating-system writes internally.
   #
@@ -117,6 +164,53 @@ module TCP do
   # @example Sending one newline-delimited request
   #   connection.sendAll("status\n".to(Binary).try).try
   foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.write("name? ")
+  foul write(connection: TCPConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline.
+  #
+  # @example Answering a line-oriented client
+  #   connection.printLine("hello")
+  foul printLine(connection: TCPConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
+    ()
+  end
+  # Writes raw bytes with no trailing newline and no rendering.
+  #
+  # @example Echoing a received line verbatim
+  #   connection.writeBytes(line)
+  foul writeBytes(connection: TCPConnection, content: Binary) -> Void do
+    connection.sendAll(content).try
+    ()
+  end
+  # Reads the next line as text, without its newline.
+  #
+  # Answers +Ok(None)+ at end of input, like +FileHandle.getLine+. Lines are
+  # capped at 64 KiB; a longer line fails with +Limit+ instead of growing
+  # without bound.
+  #
+  # @example Echoing one line back to its sender
+  #   match connection.getLine.try do
+  #     Just(line) => connection.printLine(line)
+  #     None => connection.close
+  #   end
+  foul getLine(connection: TCPConnection) -> Result<String?, NetError> do
+    match connection.receiveLine(65536) do
+      Ok(bytes) => match bytes.to(String) do
+        Just(text) => do
+          let t = text.endsWith?("\n") then text.take(text.count - 1) else text
+          Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
+        end
+        None => Error(NetError { kind: Parse, operation: TCP, message: "received line is not valid UTF-8" })
+      end
+      Error(e) => e.kind == Closed then Ok(None) else Error(e)
+    end
+  end
 
   # Receives up to +limit+ bytes; EOF is reported as +Closed+.
   #
