@@ -1876,10 +1876,17 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
   if (separateBuildRequested() && allLowered) g_separateModules = std::move(separateModules);
 }
 
+// `qualifiedModules` is the caller's own fresh discovery result for `program`
+// (referencedModules, automatic-import filtered), or nullopt when the caller
+// did not analyze: the entry program is then analyzed here instead. A
+// PROVIDED set — even an empty one — is authoritative and skips that
+// re-analyze (3b); the recursion into dependency files always passes nullopt
+// and uses the discovery cache as before.
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
                      const kex::semantic::ImportedInterfaces *interfaces,
-                     const std::unordered_set<std::string> &qualifiedModules = {},
+                     const std::optional<std::unordered_set<std::string>>
+                         &qualifiedModules = std::nullopt,
                      UnitGraph *graph = nullptr)
     -> std::vector<LoadedDep> {
   std::map<std::string, std::set<std::string>> uses{{"", {}}};
@@ -1902,13 +1909,14 @@ auto resolveBeamDeps(kex::ast::Program &program,
   // the entry program passes nullptr, since its AST is already expanded and
   // may carry a merged `.spec.kex` base, so its bytes are not the whole input.
   std::function<void(const kex::ast::Program &,
-                     const std::unordered_set<std::string> &,
+                     const std::optional<std::unordered_set<std::string>> &,
                      const std::string *, const std::string &)> resolve =
       [&](const kex::ast::Program &prog,
-          const std::unordered_set<std::string> &seedModules,
+          const std::optional<std::unordered_set<std::string>> &seedModules,
           const std::string *source, const std::string &from) {
     auto modules = collectUsingModules(prog);
-    modules.insert(modules.end(), seedModules.begin(), seedModules.end());
+    if (seedModules)
+      modules.insert(modules.end(), seedModules->begin(), seedModules->end());
 
     // Each newly parsed source file can introduce qualified-only dependency
     // edges of its own. Analyze it here rather than only analyzing the entry
@@ -1920,7 +1928,17 @@ auto resolveBeamDeps(kex::ast::Program &program,
     const auto cacheEntry =
         source ? discoveryCacheEntry(*source) : std::nullopt;
     std::vector<std::string> referencedOrdered;
-    if (auto cached = cacheEntry ? readDiscoveryCache(*cacheEntry) : std::nullopt) {
+    if (seedModules) {
+      // The caller analyzed this exact program with these exact
+      // interfaces already: the seed IS the discovery result. Sorting
+      // keeps `referencedOrdered` identical to what the analyze below
+      // would have produced (it sorts too), so resolution order — and
+      // hence merge order — is unchanged while the re-analyze is gone.
+      referencedOrdered.assign(seedModules->begin(), seedModules->end());
+      std::sort(referencedOrdered.begin(), referencedOrdered.end());
+    } else if (auto cached =
+                   cacheEntry ? readDiscoveryCache(*cacheEntry)
+                              : std::nullopt) {
       referencedOrdered = std::move(*cached);
       ++discoveryHits;
     } else {
@@ -2046,7 +2064,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
             resolved->moduleName + "`");
         dependencyFailure("module file " + shownPath(*path) + " declares another module");
       }
-      resolve(*depProg, {}, src.get(), *path);
+      resolve(*depProg, std::nullopt, src.get(), *path);
       deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
   };

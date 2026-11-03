@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench test-bench
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -71,6 +71,12 @@ help:
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
+	@echo "  make bench        Repeat-and-median benchmark (compile warm/"
+	@echo "                    cold-kex/dev-loop, fib, loop; informational only,"
+	@echo "                    per docs/compiler-refactor-plan.md). Override with"
+	@echo "                    BENCH_RUNS / BENCH_FIB_N / BENCH_LOOP_N / KEX."
+	@echo "  make test-bench   Smoke-test the bench harness itself (1 run,"
+	@echo "                    small scenarios; checks it runs and reports)."
 	@echo ""
 
 # Configure quietly, but NEVER quietly: piping cmake into `tail` discarded its
@@ -149,6 +155,16 @@ FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
 fuzz: build
 	@"$(KEX)" --run-walker --no-colors -- tools/fuzz.kex "$(FUZZ_SEED)" "$(FUZZ_CASES)" "$(KEX)" "$(FUZZ_OUTDIR)" "$(FUZZ_BUDGET_MS)"
+
+# Informational benchmark harness (see tools/bench.sh and the plan's
+# measurement methodology). Not a gate: reports median + IQR, exits 0.
+bench: build
+	@tools/bench.sh $(BENCH_SCENARIOS)
+
+# The harness's own smoke test — that it runs, times, and reports — with
+# one run of the two cheapest scenarios, fib shrunk to stay quick.
+test-bench: build
+	@BENCH_RUNS=1 BENCH_FIB_N=25 tools/bench.sh compile-warm fib
 
 SHELL := /bin/bash
 
