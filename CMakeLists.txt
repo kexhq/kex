@@ -194,6 +194,7 @@ add_library(kex_lib
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/semantic/resolve_core.cxx
     src/ast/clone.cxx
     src/help/api_help.cxx
     src/skill/skill.cxx
@@ -665,6 +666,16 @@ add_executable(mangle_test tests/mangle_test.cxx)
 target_link_libraries(mangle_test PRIVATE kex_lib)
 target_include_directories(mangle_test PRIVATE tests)
 add_test(NAME mangle_test COMMAND mangle_test)
+
+add_executable(resolve_core_test tests/resolve_core_test.cxx)
+target_link_libraries(resolve_core_test PRIVATE kex_lib)
+target_include_directories(resolve_core_test PRIVATE tests)
+add_test(NAME resolve_core_test COMMAND resolve_core_test)
+
+add_executable(named_arguments_test tests/named_arguments_test.cxx)
+target_link_libraries(named_arguments_test PRIVATE kex_lib)
+target_include_directories(named_arguments_test PRIVATE tests)
+add_test(NAME named_arguments_test COMMAND named_arguments_test)
 
 add_executable(string_utils_test tests/string_utils_test.cxx)
 target_link_libraries(string_utils_test PRIVATE kex_lib)

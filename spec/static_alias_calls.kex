@@ -1,0 +1,11 @@
+# Static calls on a structural type alias root (`type List<X> = [X]`).
+# The walker (namespace dispatch) always accepted these; BEAM rejected
+# them — first the check ("Unknown module `List`", because the compile
+# path never learned top-level or structural aliases), then lowering
+# ("Undefined method: first for List"). Both backends must agree.
+IO.printLine(List.first([4, 5, 6]))
+IO.printLine(List.first([]))
+IO.printLine(Map.get({"a": 1}, "a", 0))
+let xs : List<Integer> = [1, 2, 3]
+IO.printLine(xs)
+IO.printLine(List.map([1, 2, 3]) do |n| n * 10 end)
