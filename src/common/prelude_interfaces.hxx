@@ -489,9 +489,12 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // does the same expansion for prebuilt artifacts.
     // Each claim keeps the module its `make` block sits in, since the
     // target's identity is only known once every type has been read.
+    // `fullTypeName` keeps the target exactly as written: a multi-part
+    // spelling is already an absolute identity and needs no lookup.
     struct TraitClaim {
         std::string owner;
         std::string typeName;
+        std::string fullTypeName;
         std::string traitName;
     };
     std::vector<TraitClaim> traitClaims;
@@ -639,12 +642,32 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             return "";
         };
 
+        auto makeTargetSpelling = [](const ast::MakeDef& make) -> std::string {
+            auto join = [](const std::vector<std::string>& parts) {
+                std::string out;
+                for (size_t i = 0; i < parts.size(); ++i) {
+                    if (i) out += ".";
+                    out += parts[i];
+                }
+                return out;
+            };
+            if (!make.target) return "";
+            if (const auto* tn = std::get_if<ast::TypeName>(&make.target->kind))
+                return join(tn->parts);
+            if (const auto* gt = std::get_if<ast::GenericType>(&make.target->kind))
+                return join(gt->name.parts);
+            if (std::get_if<ast::ListType>(&make.target->kind)) return "List";
+            if (std::get_if<ast::MapType>(&make.target->kind)) return "Map";
+            return "";
+        };
+
         auto collectMakeAnnotations = [&](const ast::MakeDef& make,
                                           const std::string& owner = "") {
             auto typeName = makeTargetName(make);
             if (!typeName.empty())
                 for (const auto& trait : make.implements)
-                    traitClaims.push_back({owner, typeName, trait});
+                    traitClaims.push_back(
+                        {owner, typeName, makeTargetSpelling(make), trait});
             // `make Set<A> do ... end` sits directly in a file-header
             // module's body (`module Data`), not inside the nested
             // `module Set do ... end` that provides the qualified static
@@ -1164,10 +1187,32 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
 
     // `make Animal, implement: Speaker` makes every Animal constructor a
     // Speaker too, since a nullary constructor's value type is its own name.
-    for (const auto& [owner, spelled, traitName] : traitClaims) {
-        const auto owned = moduleAdtIn(owner, spelled);
-        const auto& typeName = owned.empty() ? spelled : owned;
+    for (const auto& [owner, spelled, full, traitName] : traitClaims) {
+        // A multi-part target spells its identity absolutely
+        // (`make Net.Socket.Mock.TCP`), so it needs no module lookup. A
+        // bare one names an ADT of an enclosing module — or, what the ADT
+        // table never holds, a record of the module the `make` block sits
+        // in. The KexI path covers that case by also claiming the
+        // module-qualified spelling (kexhq/kex#143: `make Files` inside
+        // `module Mock` conforms `Mock.Files`); without the same claim
+        // here, `with Net.Socket.TCP = Mock.TCP { ... }` is rejected as
+        // not implementing the capability it implements.
+        const bool absolute = full.find('.') != std::string::npos;
+        const auto owned = absolute ? full : moduleAdtIn(owner, spelled);
+        const std::string typeName = owned.empty() ? spelled : owned;
         ifaces.traitConformances.push_back({typeName, traitName});
+        if (!absolute && owned.empty() && !owner.empty())
+            ifaces.traitConformances.push_back(
+                {owner + "." + spelled, traitName});
+        // Values of an absolutely-named type come in both spellings: a
+        // module-path construction (`Mock.TCP { ... }`) types qualified,
+        // while an imported signature types its results exactly as written
+        // (`foul close(connection: TCPConnection)` yields bare
+        // `TCPConnection`). The registry lookup is exact, so the claim must
+        // cover both — bare-only used to be all there was, and qualified-only
+        // broke every trait bound over socket handles.
+        if (absolute && full != spelled)
+            ifaces.traitConformances.push_back({spelled, traitName});
         if (auto constructors = adtConstructors.find(typeName);
             constructors != adtConstructors.end())
             for (const auto& constructor : constructors->second)

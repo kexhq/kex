@@ -564,6 +564,16 @@ private:
             const auto dot = scope.rfind('.');
             scope = dot == std::string::npos ? std::string() : scope.substr(0, dot);
         }
+        // A `using` import spells it bare too: `TCP.connectTo(...)` after
+        // `using Net.Socket` is `Net.Socket.TCP`, and without that rewrite
+        // the call misses the `with` binding and silently reaches the real
+        // implementation — the fail-open `with` exists to prevent. BEAM
+        // tries the same candidates when it lowers the call.
+        for (auto it = m_usingModules.rbegin(); it != m_usingModules.rend(); ++it)
+            for (const auto& imported : *it)
+                if (auto full = imported + "." + name;
+                    m_capabilityMembers.contains(full))
+                    return full;
         return name;
     }
     auto lookupCapability(const std::string& name) const -> ValuePtr {

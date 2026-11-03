@@ -117,6 +117,25 @@ trait Writable do
   writeBytes :> Binary -> Void
 end
 
+# +Closeable+: anything that holds a releasable resource.
+#
+# File handles, socket connections, listeners, and datagram sockets are all
+# +Closeable+. Closing is idempotent everywhere, so a shared cleanup path
+# never has to track who closed what.
+#
+#   foul shutdown(first: Closeable, second: Closeable) -> Void do
+#     first.close
+#     second.close
+#   end
+#
+#   shutdown(handle, listener)
+trait Closeable do
+  # Releases the underlying resource. Idempotent: closing twice is fine.
+  #
+  # @return [Void]
+  close :> Void
+end
+
 # An open file, obtained from +FS.File.open+.
 #
 # The two type parameters record what the handle is allowed to do: +R+ is
@@ -322,25 +341,6 @@ make FileHandle<R, CanWrite>, implement: Writable do
 end
 
 make FileHandle<R, W> do
-  # Closes the handle, flushing anything still buffered.
-  #
-  # Close every handle you open. A written file is not guaranteed to be
-  # complete on disk until its handle is closed. Passing +FS.File.open+ a
-  # block closes the handle for you.
-  #
-  # @return [Void]
-  #
-  # @example
-  #   match FS.File.open("out.txt", Write) do
-  #     Ok(handle) => do
-  #       handle.printLine("hello")
-  #       handle.close
-  #     end
-  #     Error(_) => IO.printError("cannot open out.txt")
-  #   end
-  close :> Void
-  foul close = Kex.Intrinsic.FileHandle.close(this)
-
   # Moves the handle's cursor to an absolute byte offset from the start of
   # the file. Read and write share one cursor, so this repositions both —
   # a `readLine` right after `seek(0)` starts over from the top, and a
@@ -370,4 +370,25 @@ make FileHandle<R, W> do
   #   let secondPass = handle.read.or("")
   reset :> Result<Void, ReadError>
   foul reset = Kex.Intrinsic.FileHandle.reset(this)
+end
+
+make FileHandle<R, W>, implement: Closeable do
+  # Closes the handle, flushing anything still buffered.
+  #
+  # Close every handle you open. A written file is not guaranteed to be
+  # complete on disk until its handle is closed. Passing +FS.File.open+ a
+  # block closes the handle for you.
+  #
+  # @return [Void]
+  #
+  # @example
+  #   match FS.File.open("out.txt", Write) do
+  #     Ok(handle) => do
+  #       handle.printLine("hello")
+  #       handle.close
+  #     end
+  #     Error(_) => IO.printError("cannot open out.txt")
+  #   end
+  close :> Void
+  foul close = Kex.Intrinsic.FileHandle.close(this)
 end

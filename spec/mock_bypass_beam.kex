@@ -1,0 +1,27 @@
+# kex: run-beam
+#
+# Trait methods bypass `with` substitution: `close` is a `Closeable`
+# method, not a capability member, so it keeps working on real handles
+# inside a mocked region. The server observing EOF proves the close
+# really happened.
+
+using Net.Socket
+
+main do
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  let server = Task.start do
+    let peer = listener.accept.try
+    assert(peer.getLine.try == Just("hi"))
+    assert(peer.getLine.try == None)
+    peer.close
+  end
+  let client = TCP.connectTo("127.0.0.1:${port}").try
+  client.printLine("hi")
+  with Net.Socket.TCP = Mock.TCP {} do
+    client.close
+  end
+  server.await
+  listener.close
+  IO.printLine("ok")
+end

@@ -4780,12 +4780,23 @@ struct Lowering {
                         (capabilityModules.count(candidate) ||
                          importedCapability) &&
                         capabilityInterfaceHas(candidate, n.method) &&
-                        n.namedArgs.empty() && !n.block) {
+                        n.namedArgs.empty()) {
                         std::vector<Binding> binds;
                         std::vector<std::string> argVars;
                         for (const auto& a : n.args) {
                             auto name = fresh("CapArg");
                             binds.push_back({name, atomize(a, binds)});
+                            argVars.push_back(name);
+                        }
+                        // A trailing block is a source argument like any
+                        // other; leaving it out called the replacement
+                        // short one argument, which is why block-form
+                        // capability calls used to skip substitution
+                        // entirely and silently reach the real
+                        // implementation.
+                        if (n.block) {
+                            auto name = fresh("CapArg");
+                            binds.push_back({name, atomize(*n.block, binds)});
                             argVars.push_back(name);
                         }
                         auto argsFrom = [&](const std::string& lead) {
@@ -4931,14 +4942,30 @@ struct Lowering {
                             threadsCapabilities() &&
                             isCapabilityModule(candidate) &&
                             capabilityInterfaceHas(candidate, n.method) &&
-                            n.namedArgs.empty() && !n.block) {
+                            n.namedArgs.empty()) {
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
                                 const auto atom = ait->second;
                                 const auto beamFn = eit->second;
                                 const auto key = qualKey;
-                                return capabilityDispatch(
-                                    candidate, n.method, n.args,
+                                // A trailing block is a source argument like
+                                // any other: without it the dispatch below
+                                // would call the replacement short one
+                                // argument, which is why block-form
+                                // capability calls used to skip substitution
+                                // entirely and silently reach the real
+                                // implementation.
+                                std::vector<Binding> blockBinds;
+                                std::vector<ExprPtr> loweredArgs;
+                                for (const auto& arg : n.args)
+                                    loweredArgs.push_back(
+                                        atomize(arg, blockBinds));
+                                if (n.block)
+                                    loweredArgs.push_back(
+                                        atomize(*n.block, blockBinds));
+                                return capabilityDispatchLowered(
+                                    candidate, n.method,
+                                    std::move(loweredArgs), blockBinds,
                                     [&](std::vector<ExprPtr> callArgs) {
                                         const int ar =
                                             static_cast<int>(callArgs.size());
@@ -5136,14 +5163,24 @@ struct Lowering {
                 if (eit != externalModules->exportToBeamFn.end() &&
                     threadsCapabilities() && isCapabilityModule(uid->name) &&
                     capabilityInterfaceHas(uid->name, n.method) &&
-                    n.namedArgs.empty() && !n.block) {
+                    n.namedArgs.empty()) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
                         const auto atom = ait->second;
                         const auto beamFn = eit->second;
                         const auto key = qualKey;
-                        return capabilityDispatch(
-                            uid->name, n.method, n.args,
+                        // A trailing block is a source argument like any
+                        // other; see the external-qualified route above.
+                        std::vector<Binding> blockBinds;
+                        std::vector<ExprPtr> loweredArgs;
+                        for (const auto& arg : n.args)
+                            loweredArgs.push_back(atomize(arg, blockBinds));
+                        if (n.block)
+                            loweredArgs.push_back(
+                                atomize(*n.block, blockBinds));
+                        return capabilityDispatchLowered(
+                            uid->name, n.method, std::move(loweredArgs),
+                            blockBinds,
                             [&](std::vector<ExprPtr> callArgs) {
                                 const int ar =
                                     static_cast<int>(callArgs.size());

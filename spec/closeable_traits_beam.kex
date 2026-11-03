@@ -1,0 +1,34 @@
+# kex: run-beam
+#
+# Closeable: one bound for files, listeners, and connections.
+
+using Net.Socket
+
+foul shutdown(first: Closeable, second: Closeable) -> Void do
+  first.close
+  second.close
+end
+
+main do
+  let path = "/tmp/kex-closeable-spec.txt"
+  FS.File.delete(path)
+  let handle = FS.File.open(path, Write).try
+  handle.printLine("hello")
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  let client = TCP.connectTo("127.0.0.1:${port}").try
+  shutdown(handle, listener)
+  shutdown(client, listener)
+  assert(FS.File.read(path).or("") == "hello\n")
+  FS.File.delete(path)
+
+  let sockPath = "/tmp/kex-closeable-spec.sock"
+  FS.File.delete(sockPath)
+  let unixListener = Unix.bind(sockPath).try
+  let unixClient = Unix.connectTo(sockPath).try
+  shutdown(unixClient, unixListener)
+  FS.File.delete(sockPath)
+
+  shutdown(UDP.bindTo("127.0.0.1:0").try, TCP.bind("127.0.0.1:0").try)
+  IO.printLine("ok")
+end

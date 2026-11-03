@@ -10,7 +10,7 @@
 #   client.sendAll("ping".to(Binary).try).try
 #   listener.close
 module Net.Socket
-module TCP do
+capability TCP do
   # Marker for an unencrypted stream.
   type Plain
   # An opaque connected TCP stream.
@@ -95,17 +95,9 @@ module TCP do
     # @example Connecting without a Port value in hand
     #   TCP.connect(TCP.Endpoint.parse("127.0.0.1:9000").try).try
     foul parse(address: String) -> Result<Endpoint, NetError> do
-      let parts = address.split(":")
-      if parts.count < 2
-        return Error(NetError { kind: Parse, operation: TCP, message: "expected host:port, got \"${address}\"" })
-      end
-      let host = parts.take(parts.count - 1).join(":")
-      match Integer.parse(parts.last.or("")) do
-        Ok(n) => match Net.Port.from(n) do
-          Ok(port) => Ok(Endpoint { host: host, port: port })
-          Error(e) => Error(e)
-        end
-        Error(_) => Error(NetError { kind: Parse, operation: TCP, message: "bad port in \"${address}\"" })
+      match splitHostPort(address, TCP) do
+        Ok(hostPort) => Ok(Endpoint { host: hostPort.host, port: hostPort.port })
+        Error(e) => Error(e)
       end
     end
   end
@@ -128,10 +120,37 @@ module TCP do
   #
   # @example Talking to a local echo server
   #   let connection = TCP.connectTo("127.0.0.1:12321").try
-  foul connectTo(address: String) -> Result<TCPConnection, NetError> do
+  connectTo : String -> Result<TCPConnection, NetError>
+  foul connectTo(address) do
     match Endpoint.parse(address) do
       Ok(endpoint) => connect(endpoint)
       Error(e) => Error(e)
+    end
+  end
+  # Block form: connects to +address+, runs the block with the connection,
+  # and closes it.
+  #
+  # +Ok+ carries whatever the block returned. The close is NOT an +ensure+:
+  # a block that raises still leaks the handle (use +trying+ inside the
+  # block to cover that), exactly like +FS.File.open+.
+  #
+  # @param address [String] the "host:port" to connect to
+  # @param block [TCPConnection -> A] what to do with the open connection
+  # @return [Result<A, NetError>] the block's value, or the failure
+  #
+  # @example One exchange with no +close+ to forget
+  #   TCP.connectTo("127.0.0.1:9000") do |conn|
+  #     conn.printLine("hello")
+  #   end
+  connectTo : String -> (TCPConnection -> A) -> Result<A, NetError>
+  foul connectTo(address, block) do
+    match connectTo(address) do
+      Error(e) => Error(e)
+      Ok(conn) => do
+        let result = block(conn)
+        conn.close
+        Ok(result)
+      end
     end
   end
   # Binds and starts listening. Port zero selects an ephemeral local port.
@@ -149,10 +168,37 @@ module TCP do
   #
   # @example A Rosetta-style echo server socket
   #   let listener = TCP.bind("127.0.0.1:12321").try
-  foul bind(address: String) -> Result<TCPListener, NetError> do
+  bind : String -> Result<TCPListener, NetError>
+  foul bind(address) do
     match Endpoint.parse(address) do
       Ok(endpoint) => listen(endpoint)
       Error(e) => Error(e)
+    end
+  end
+  # Block form: binds +address+, runs the block with the listener, and
+  # closes it.
+  #
+  # +Ok+ carries whatever the block returned. The close is NOT an +ensure+:
+  # a block that raises still leaks the handle (use +trying+ inside the
+  # block to cover that), exactly like +FS.File.open+.
+  #
+  # @param address [String] the "host:port" to listen on
+  # @param block [TCPListener -> A] what to do with the open listener
+  # @return [Result<A, NetError>] the block's value, or the failure
+  #
+  # @example Accepting one connection with no +close+ to forget
+  #   TCP.bind("127.0.0.1:9000") do |listener|
+  #     listener.accept(5.seconds).try
+  #   end
+  bind : String -> (TCPListener -> A) -> Result<A, NetError>
+  foul bind(address, block) do
+    match bind(address) do
+      Error(e) => Error(e)
+      Ok(listener) => do
+        let result = block(listener)
+        listener.close
+        Ok(result)
+      end
     end
   end
 
@@ -186,6 +232,16 @@ module TCP do
   #   connection.writeBytes(line)
   foul writeBytes(connection: TCPConnection, content: Binary) -> Void do
     connection.sendAll(content).try
+    ()
+  end
+  # Writes +content+ with no trailing newline. The same as +write+.
+  foul print(connection: TCPConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline. The same as +printLine+.
+  foul writeLine(connection: TCPConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
     ()
   end
   # Reads the next line as text, without its newline.
@@ -259,10 +315,6 @@ module TCP do
   #   let client = listener.accept(5.seconds).try
   foul accept(listener: TCPListener) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.accept(listener)
   foul accept(listener: TCPListener, timeout: Duration) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.acceptWithin(listener, timeout)
-  # Idempotently closes a connected stream.
-  foul close(connection: TCPConnection) -> Void = Kex.Intrinsic.NetTCP.close(connection)
-  # Idempotently closes a listener and releases its port.
-  foul close(listener: TCPListener) -> Void = Kex.Intrinsic.NetTCP.close(listener)
   # @return [Bool] whether the connected stream owner has stopped
   foul closed?(connection: TCPConnection) -> Bool = Kex.Intrinsic.NetTCP.closed?(connection)
   # @return [Bool] whether the listener owner has stopped
@@ -280,7 +332,7 @@ module TCP do
 
 end
 
-module UDP do
+capability UDP do
   # Connectionless datagrams. A receive limit rejects an oversized datagram
   # instead of returning a silently truncated payload.
   #
@@ -338,6 +390,22 @@ module UDP do
     #   UDP.Endpoint.loopback(Port.from(0).try)
     loopback : Net.Port -> Endpoint
     let loopback(port) = Endpoint { host: "127.0.0.1", port: port }
+    # Splits a "host:port" address instead of assembling an endpoint by parts.
+    #
+    # Only the port is validated here; the host rides through to the backend,
+    # which reports +Resolve+ for an unknown name. The host may itself contain
+    # colons, so an IPv6 literal needs no brackets.
+    #
+    # @return [Result<Endpoint, NetError>] the endpoint or a +Parse+ failure
+    #
+    # @example Binding without a Port value in hand
+    #   UDP.bind(UDP.Endpoint.parse("127.0.0.1:9000").try).try
+    foul parse(address: String) -> Result<Endpoint, NetError> do
+      match splitHostPort(address, UDP) do
+        Ok(hostPort) => Ok(Endpoint { host: hostPort.host, port: hostPort.port })
+        Error(e) => Error(e)
+      end
+    end
   end
   # Binds a datagram socket. Port zero selects an ephemeral local port.
   #
@@ -349,6 +417,46 @@ module UDP do
   # Binds with explicit broadcast, multicast, and receive-timeout policy.
   bind : Endpoint -> BindOptions -> Result<Socket, NetError>
   foul bind(endpoint, options) = Kex.Intrinsic.NetUDP.bindWith(endpoint, options)
+  # Binds a datagram socket on a "host:port" address.
+  #
+  # A separate name (not a +bind+ overload) until #619 is fixed: mixing
+  # arities and same-arity type overloads breaks call resolution.
+  #
+  # @example Receiving on an ephemeral port
+  #   let socket = UDP.bindTo("127.0.0.1:0").try
+  bindTo : String -> Result<Socket, NetError>
+  foul bindTo(address) do
+    match Endpoint.parse(address) do
+      Ok(endpoint) => bind(endpoint)
+      Error(e) => Error(e)
+    end
+  end
+  # Block form: binds +address+, runs the block with the socket, and
+  # closes it.
+  #
+  # +Ok+ carries whatever the block returned. The close is NOT an +ensure+:
+  # a block that raises still leaks the handle (use +trying+ inside the
+  # block to cover that), exactly like +FS.File.open+.
+  #
+  # @param address [String] the "host:port" to bind
+  # @param block [Socket -> A] what to do with the open socket
+  # @return [Result<A, NetError>] the block's value, or the failure
+  #
+  # @example One exchange with no +close+ to forget
+  #   UDP.bindTo("127.0.0.1:0") do |socket|
+  #     socket.localAddress.try.port.string
+  #   end
+  bindTo : String -> (Socket -> A) -> Result<A, NetError>
+  foul bindTo(address, block) do
+    match bindTo(address) do
+      Error(e) => Error(e)
+      Ok(socket) => do
+        let result = block(socket)
+        socket.close
+        Ok(result)
+      end
+    end
+  end
 
   # Sends one complete datagram and returns its byte count.
   #
@@ -367,8 +475,6 @@ module UDP do
   #   let packet = socket.receiveFrom(4096).try
   #   socket.sendTo(packet.source, packet.data).try
   foul receiveFrom(socket: Socket, limit: Integer) -> Result<Datagram, NetError> = Kex.Intrinsic.NetUDP.receiveFrom(socket, limit)
-  # Idempotently closes the socket.
-  foul close(socket: Socket) -> Void = Kex.Intrinsic.NetUDP.close(socket)
   # @return [Bool] whether the socket owner has stopped
   foul closed?(socket: Socket) -> Bool = Kex.Intrinsic.NetUDP.closed?(socket)
   # Returns the bound endpoint, including an ephemeral assigned port.
@@ -381,7 +487,7 @@ module UDP do
 
 end
 
-module Unix do
+capability Unix do
   # Filesystem-domain streams for local IPC. The listener owns and removes
   # only the socket path it successfully created.
   #
@@ -449,9 +555,137 @@ module Unix do
   # regular files, directories, and other path types are always preserved.
   listen : Address -> ListenOptions -> Result<UnixListener, NetError>
   foul listen(address, options) = Kex.Intrinsic.NetUnix.listenWith(address, options)
+  # Connects to the listener at +path+ with the default options.
+  #
+  # @example Talking to a per-user background service
+  #   let daemon = Unix.connectTo("/tmp/my-app.sock").try
+  connectTo : String -> Result<UnixConnection, NetError>
+  foul connectTo(path) do
+    match Address.path(path) do
+      Ok(address) => connect(address)
+      Error(e) => Error(e)
+    end
+  end
+  # Block form: connects to +path+, runs the block with the connection,
+  # and closes it.
+  #
+  # +Ok+ carries whatever the block returned. The close is NOT an +ensure+:
+  # a block that raises still leaks the handle (use +trying+ inside the
+  # block to cover that), exactly like +FS.File.open+.
+  #
+  # @param path [String] the socket path to connect to
+  # @param block [UnixConnection -> A] what to do with the open connection
+  # @return [Result<A, NetError>] the block's value, or the failure
+  #
+  # @example One exchange with no +close+ to forget
+  #   Unix.connectTo("/tmp/my-app.sock") do |conn|
+  #     conn.printLine("hello")
+  #   end
+  connectTo : String -> (UnixConnection -> A) -> Result<A, NetError>
+  foul connectTo(path, block) do
+    match connectTo(path) do
+      Error(e) => Error(e)
+      Ok(conn) => do
+        let result = block(conn)
+        conn.close
+        Ok(result)
+      end
+    end
+  end
+  # Binds and starts listening on the socket at +path+.
+  #
+  # @example A Rosetta-style IPC listener
+  #   let listener = Unix.bind("/tmp/my-app.sock").try
+  bind : String -> Result<UnixListener, NetError>
+  foul bind(path) do
+    match Address.path(path) do
+      Ok(address) => listen(address)
+      Error(e) => Error(e)
+    end
+  end
+  # Block form: binds +path+, runs the block with the listener, and closes
+  # it.
+  #
+  # +Ok+ carries whatever the block returned. The close is NOT an +ensure+:
+  # a block that raises still leaks the handle (use +trying+ inside the
+  # block to cover that), exactly like +FS.File.open+.
+  #
+  # @param path [String] the socket path to listen on
+  # @param block [UnixListener -> A] what to do with the open listener
+  # @return [Result<A, NetError>] the block's value, or the failure
+  #
+  # @example Accepting one connection with no +close+ to forget
+  #   Unix.bind("/tmp/my-app.sock") do |listener|
+  #     listener.accept.try
+  #   end
+  bind : String -> (UnixListener -> A) -> Result<A, NetError>
+  foul bind(path, block) do
+    match bind(path) do
+      Error(e) => Error(e)
+      Ok(listener) => do
+        let result = block(listener)
+        listener.close
+        Ok(result)
+      end
+    end
+  end
 
   # Sends every byte and returns the count.
   foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.write("name? ")
+  foul write(connection: UnixConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline.
+  #
+  # @example Answering a line-oriented peer
+  #   connection.printLine("hello")
+  foul printLine(connection: UnixConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
+    ()
+  end
+  # Writes raw bytes with no trailing newline and no rendering.
+  #
+  # @example Echoing a received line verbatim
+  #   connection.writeBytes(line)
+  foul writeBytes(connection: UnixConnection, content: Binary) -> Void do
+    connection.sendAll(content).try
+    ()
+  end
+  # Writes +content+ with no trailing newline. The same as +write+.
+  foul print(connection: UnixConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline. The same as +printLine+.
+  foul writeLine(connection: UnixConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
+    ()
+  end
+  # Reads the next line as text, without its newline.
+  #
+  # Answers +Ok(None)+ at end of input, like +FileHandle.getLine+. Lines are
+  # capped at 64 KiB; a longer line fails with +Limit+ instead of growing
+  # without bound.
+  #
+  # @example Printing one received line
+  #   IO.printLine(connection.getLine.try.or("(closed)"))
+  foul getLine(connection: UnixConnection) -> Result<String?, NetError> do
+    match Kex.Intrinsic.NetUnix.receiveLine(connection, 65536) do
+      Ok(bytes) => match bytes.to(String) do
+        Just(text) => do
+          let t = text.endsWith?("\n") then text.take(text.count - 1) else text
+          Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
+        end
+        None => Error(NetError { kind: Parse, operation: Unix, message: "received line is not valid UTF-8" })
+      end
+      Error(e) => e.kind == Closed then Ok(None) else Error(e)
+    end
+  end
   # Receives one bounded chunk; EOF is +Closed+.
   foul receiveChunk(connection: UnixConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetUnix.receiveChunk(connection, limit)
   # Receives exactly +count+ bytes or returns a typed EOF/timeout failure.
@@ -466,10 +700,6 @@ module Unix do
   foul shutdownWrite(connection: UnixConnection) -> Result<Void, NetError> = Kex.Intrinsic.NetUnix.shutdownWrite(connection)
   # Waits for and returns the next stream connection.
   foul accept(listener: UnixListener) -> Result<UnixConnection, NetError> = Kex.Intrinsic.NetUnix.accept(listener)
-  # Idempotently closes a stream.
-  foul close(connection: UnixConnection) -> Void = Kex.Intrinsic.NetUnix.close(connection)
-  # Closes the listener and unlinks only the path it successfully created.
-  foul close(listener: UnixListener) -> Void = Kex.Intrinsic.NetUnix.close(listener)
   # @return [Bool] whether the stream owner has stopped
   foul closed?(connection: UnixConnection) -> Bool = Kex.Intrinsic.NetUnix.closed?(connection)
   # @return [Bool] whether the listener owner has stopped
@@ -477,7 +707,7 @@ module Unix do
 
 end
 
-module TLS do
+capability TLS do
   # TLS client streams. Certificate and hostname verification are enabled by
   # default; disabling verification must be an explicit configuration choice.
   #
@@ -513,11 +743,267 @@ module TLS do
 
   # Sends every plaintext byte through the TLS stream.
   foul sendAll(connection: TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTLS.sendAll(connection, data)
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.write("name? ")
+  foul write(connection: TLSConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline.
+  #
+  # @example Answering a line-oriented peer
+  #   connection.printLine("hello")
+  foul printLine(connection: TLSConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
+    ()
+  end
+  # Writes raw bytes with no trailing newline and no rendering.
+  #
+  # @example Echoing a received line verbatim
+  #   connection.writeBytes(line)
+  foul writeBytes(connection: TLSConnection, content: Binary) -> Void do
+    connection.sendAll(content).try
+    ()
+  end
+  # Writes +content+ with no trailing newline. The same as +write+.
+  foul print(connection: TLSConnection, content: Showable) -> Void do
+    connection.sendAll(content.showValue.to(Binary).try).try
+    ()
+  end
+  # Writes +content+ followed by a newline. The same as +printLine+.
+  foul writeLine(connection: TLSConnection, content: Showable) -> Void do
+    connection.sendAll((content.showValue + "\n").to(Binary).try).try
+    ()
+  end
   # Receives one decrypted chunk no larger than +limit+.
   foul receiveChunk(connection: TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTLS.receiveChunk(connection, limit)
-  # Idempotently closes the TLS stream.
-  foul close(connection: TLSConnection) -> Void = Kex.Intrinsic.NetTLS.close(connection)
   # @return [Bool] whether the TLS connection owner has stopped
   foul closed?(connection: TLSConnection) -> Bool = Kex.Intrinsic.NetTLS.closed?(connection)
 
+end
+
+make Net.Socket.TCP.TCPConnection, implement: Closeable do
+  # Idempotently closes a connected stream.
+  close :> Void
+  foul close = Kex.Intrinsic.NetTCP.close(this)
+end
+
+make Net.Socket.TCP.TCPListener, implement: Closeable do
+  # Idempotently closes a listener and releases its port.
+  close :> Void
+  foul close = Kex.Intrinsic.NetTCP.close(this)
+end
+
+make Net.Socket.UDP.Socket, implement: Closeable do
+  # Idempotently closes the socket.
+  close :> Void
+  foul close = Kex.Intrinsic.NetUDP.close(this)
+end
+
+make Net.Socket.Unix.UnixConnection, implement: Closeable do
+  # Idempotently closes a stream.
+  close :> Void
+  foul close = Kex.Intrinsic.NetUnix.close(this)
+end
+
+make Net.Socket.Unix.UnixListener, implement: Closeable do
+  # Closes the listener and unlinks only the path it successfully created.
+  close :> Void
+  foul close = Kex.Intrinsic.NetUnix.close(this)
+end
+
+make Net.Socket.TLS.TLSConnection, implement: Closeable do
+  # Idempotently closes the TLS stream.
+  close :> Void
+  foul close = Kex.Intrinsic.NetTLS.close(this)
+end
+
+# Failure-injection stand-ins for the socket capabilities.
+#
+# Lives here rather than in +Mock+ because the prebuilt companions only
+# cover top-level stdlib files: this subdir module compiles per run, so
+# only code compiled alongside it can implement its capabilities.
+module Mock do
+  # A stand-in for the +Net.Socket.TCP+ capability.
+  #
+  # Constructors answer +failure+ when set, so a test can force a refused
+  # connection or a timeout deterministically; everything else answers a
+  # canned +MockEmpty+, because a refused constructor leaves no connection
+  # for it to run on. Scripted success needs backend connection devices,
+  # which do not exist yet — until then, test success paths against
+  # loopback (see +spec/net_socket_text_beam.kex+).
+  #
+  #   with Net.Socket.TCP = Mock.TCP {} do
+  #     TCP.connectTo("127.0.0.1:9")
+  #   end
+  record TCP do
+    failure : NetError? = None
+  end
+
+  # A stand-in for the +Net.Socket.UDP+ capability. Same deal as +Mock.TCP+:
+  # constructors answer +failure+ when set, everything else answers canned
+  # +MockEmpty+.
+  #
+  #   with Net.Socket.UDP = Mock.UDP {} do
+  #     UDP.bindTo("127.0.0.1:0")
+  #   end
+  record UDP do
+    failure : NetError? = None
+  end
+
+  # A stand-in for the +Net.Socket.Unix+ capability. Same deal as +Mock.TCP+:
+  # constructors answer +failure+ when set, everything else answers canned
+  # +MockEmpty+.
+  #
+  #   with Net.Socket.Unix = Mock.Unix {} do
+  #     Unix.connectTo("/tmp/app.sock")
+  #   end
+  record Unix do
+    failure : NetError? = None
+  end
+
+  # A stand-in for the +Net.Socket.TLS+ capability. Same deal as +Mock.TCP+:
+  # constructors answer +failure+ when set, everything else answers canned
+  # +MockEmpty+.
+  #
+  #   with Net.Socket.TLS = Mock.TLS {} do
+  #     TLS.connect(endpoint, config)
+  #   end
+  record TLS do
+    failure : NetError? = None
+  end
+
+  make TCP, implement: Net.Socket.TCP do
+    foul connect(endpoint) = refusing(@failure, Net.TCP, "TCP refused to connect")
+    foul connect(endpoint, options) = refusing(@failure, Net.TCP, "TCP refused to connect")
+    foul connectTo(address) = refusing(@failure, Net.TCP, "TCP refused to connect")
+    foul connectTo(address, block) = refusing(@failure, Net.TCP, "TCP refused to connect")
+    foul listen(endpoint) = refusing(@failure, Net.TCP, "TCP refused to listen")
+    foul listen(endpoint, options) = refusing(@failure, Net.TCP, "TCP refused to listen")
+    foul bind(address) = refusing(@failure, Net.TCP, "TCP refused to listen")
+    foul bind(address, block) = refusing(@failure, Net.TCP, "TCP refused to listen")
+    foul accept(listener) = refusing(@failure, Net.TCP, "TCP refused to accept")
+    foul accept(listener, timeout) = refusing(@failure, Net.TCP, "TCP refused to accept")
+    foul sendAll(connection, data) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul write(connection, content) = ()
+    foul printLine(connection, content) = ()
+    foul writeBytes(connection, content) = ()
+    foul print(connection, content) = ()
+    foul writeLine(connection, content) = ()
+    foul getLine(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul receiveChunk(connection, limit) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul receiveChunk(connection, limit, timeout) do
+      refusing(@failure, Net.TCP, "TCP has no connection")
+    end
+    foul receiveExactly(connection, count) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul receiveExactly(connection, count, timeout) do
+      refusing(@failure, Net.TCP, "TCP has no connection")
+    end
+    foul receiveUntil(connection, delimiter, limit) do
+      refusing(@failure, Net.TCP, "TCP has no connection")
+    end
+    foul receiveUntil(connection, delimiter, limit, timeout) do
+      refusing(@failure, Net.TCP, "TCP has no connection")
+    end
+    foul receiveLine(connection, limit) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul receiveLine(connection, limit, timeout) do
+      refusing(@failure, Net.TCP, "TCP has no connection")
+    end
+    foul shutdownWrite(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul closed?(handle) = true
+    foul localAddress(handle) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul peerAddress(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
+  end
+
+  make UDP, implement: Net.Socket.UDP do
+    foul bind(endpoint) = refusing(@failure, Net.UDP, "UDP refused to bind")
+    foul bind(endpoint, options) = refusing(@failure, Net.UDP, "UDP refused to bind")
+    foul bindTo(address) = refusing(@failure, Net.UDP, "UDP refused to bind")
+    foul bindTo(address, block) = refusing(@failure, Net.UDP, "UDP refused to bind")
+    foul sendTo(socket, endpoint, data) = refusing(@failure, Net.UDP, "UDP has no socket")
+    foul receiveFrom(socket, limit) = refusing(@failure, Net.UDP, "UDP has no socket")
+    foul closed?(socket) = true
+    foul localAddress(socket) = refusing(@failure, Net.UDP, "UDP has no socket")
+    foul joinMulticast(socket, group, interface) do
+      refusing(@failure, Net.UDP, "UDP has no socket")
+    end
+    foul leaveMulticast(socket, group, interface) do
+      refusing(@failure, Net.UDP, "UDP has no socket")
+    end
+  end
+
+  make Unix, implement: Net.Socket.Unix do
+    foul connect(address) = refusing(@failure, Net.Unix, "Unix refused to connect")
+    foul connect(address, options) = refusing(@failure, Net.Unix, "Unix refused to connect")
+    foul listen(address) = refusing(@failure, Net.Unix, "Unix refused to listen")
+    foul listen(address, options) = refusing(@failure, Net.Unix, "Unix refused to listen")
+    foul connectTo(path) = refusing(@failure, Net.Unix, "Unix refused to connect")
+    foul connectTo(path, block) = refusing(@failure, Net.Unix, "Unix refused to connect")
+    foul bind(path) = refusing(@failure, Net.Unix, "Unix refused to listen")
+    foul bind(path, block) = refusing(@failure, Net.Unix, "Unix refused to listen")
+    foul accept(listener) = refusing(@failure, Net.Unix, "Unix refused to accept")
+    foul sendAll(connection, data) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul write(connection, content) = ()
+    foul printLine(connection, content) = ()
+    foul writeBytes(connection, content) = ()
+    foul print(connection, content) = ()
+    foul writeLine(connection, content) = ()
+    foul getLine(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul receiveChunk(connection, limit) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul receiveExactly(connection, count) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul receiveUntil(connection, delimiter, limit) do
+      refusing(@failure, Net.Unix, "Unix has no connection")
+    end
+    foul receiveLine(connection, limit) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul shutdownWrite(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul closed?(handle) = true
+  end
+
+  make TLS, implement: Net.Socket.TLS do
+    foul connect(endpoint, config) = refusing(@failure, Net.TLS, "TLS refused to connect")
+    foul sendAll(connection, data) = refusing(@failure, Net.TLS, "TLS has no connection")
+    foul write(connection, content) = ()
+    foul printLine(connection, content) = ()
+    foul writeBytes(connection, content) = ()
+    foul print(connection, content) = ()
+    foul writeLine(connection, content) = ()
+    foul receiveChunk(connection, limit) = refusing(@failure, Net.TLS, "TLS has no connection")
+    foul closed?(connection) = true
+  end
+end
+
+private do
+  # A split "host:port" address: the shared result of +splitHostPort+.
+  record HostPort do
+    host : String
+    port : Net.Port
+  end
+
+  # Splits a "host:port" address into its host and validated port.
+  #
+  # Shared by the endpoint parsers so the colon logic lives in one
+  # place. Failures carry the caller's +operation+.
+  foul splitHostPort(address: String, operation: NetOperation) -> Result<HostPort, NetError> do
+    let parts = address.split(":")
+    if parts.count < 2
+      return Error(NetError { kind: Parse, operation: operation, message: "expected host:port, got \"${address}\"" })
+    end
+    let host = parts.take(parts.count - 1).join(":")
+    match Integer.parse(parts.last.or("")) do
+      Ok(n) => match Net.Port.from(n) do
+        Ok(port) => Ok(HostPort { host: host, port: port })
+        Error(e) => Error(e)
+      end
+      Error(_) => Error(NetError { kind: Parse, operation: operation, message: "bad port in \"${address}\"" })
+    end
+  end
+
+  # Answers +failure+ when a test injected one, else a canned +MockEmpty+.
+  #
+  # Shared by the socket stand-ins above: every refusing member is one call.
+  foul refusing(failure, operation, what) do
+    Error(failure.or(NetError { kind: MockEmpty, operation: operation, message: what }))
+  end
 end
