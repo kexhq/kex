@@ -296,28 +296,16 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
 
     // `as:` binds the module to a name and imports nothing (docs/modules.md);
     // an `only:` list beside it still asks for those names by hand.
-    const bool importsNames = !alias || !onlyNames.empty();
+    const bool importsNames =
+        resolve_core::usingImportsNames(alias, onlyNames);
 
     std::string requested;
     for (size_t i = 0; i < module.parts.size(); ++i) {
         if (i) requested += ".";
         requested += module.parts[i];
     }
-    std::string resolved = requested;
-    if (m_db && !m_db->hasModule(resolved)) {
-        if (auto discovered = m_db->ensureModule(requested, m_currentModule))
-            resolved = *discovered;
-    }
-    if (m_db && !m_db->hasModule(resolved) && !m_currentModule.empty()) {
-        auto context = m_currentModule;
-        while (!context.empty()) {
-            const auto relative = context + "." + requested;
-            if (m_db->hasModule(relative)) { resolved = relative; break; }
-            const auto dot = context.rfind('.');
-            if (dot == std::string::npos) break;
-            context.resize(dot);
-        }
-    }
+    const std::string resolved = resolve_core::resolveSourceModulePath(
+        m_db, m_currentModule, requested);
 
     // Packaged and prelude-derived interfaces may be available without a
     // corresponding source module in the resolver roots. `using` still has
@@ -334,12 +322,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
             const bool explicitImport = !onlyNames.empty();
             for (const auto& [name, overloads] : exports) {
                 if (!importsNames) break;
-                if (!onlyNames.empty()
-                    && std::find(onlyNames.begin(), onlyNames.end(), name)
-                        == onlyNames.end())
-                    continue;
-                if (std::find(exceptNames.begin(), exceptNames.end(), name)
-                    != exceptNames.end())
+                if (!resolve_core::usingSelectsName(name, onlyNames, exceptNames))
                     continue;
 
                 // Same rule as the source-module path below: a name every one
@@ -353,35 +336,14 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                                     return fn.isReceiverMethod;
                                 });
 
-                ImportOrigin* previous = nullptr;
-                for (auto it = m_importScopes.rbegin();
-                     it != m_importScopes.rend();
-                     ++it) {
-                    if (auto found = it->find(name); found != it->end()) {
-                        previous = &found->second;
-                        break;
-                    }
+                const auto merged = resolve_core::mergeImportOrigin(
+                    m_importScopes, name,
+                    {requested, explicitImport, receiverMethod});
+                if (merged.ambiguity) {
+                    error(loc, *merged.ambiguity);
+                    continue;
                 }
-                if (previous && previous->module != requested) {
-                    if (receiverMethod) {
-                        // Nothing to claim; leave the standing origin alone.
-                    } else if (previous->receiverMethod) {
-                        *previous = {requested, explicitImport, false};
-                    } else if (explicitImport && !previous->explicitImport) {
-                        *previous = {requested, true, false};
-                    } else if (!explicitImport && previous->explicitImport) {
-                        continue;
-                    } else {
-                        error(loc, "ambiguous name `" + name
-                                   + "`, imported from both `"
-                                   + previous->module + "` and `" + requested
-                                   + "`");
-                        continue;
-                    }
-                } else if (!previous) {
-                    m_importScopes.back()[name] =
-                        {requested, explicitImport, receiverMethod};
-                }
+                if (!merged.proceed) continue;
                 defineLocal(name);
             }
             if (alias) defineLocal(*alias);
@@ -416,9 +378,8 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
     const bool explicitImport = !onlyNames.empty();
     for (auto* symbol : m_db->exportsFor(resolved)) {
         if (!importsNames) break;
-        if (!onlyNames.empty()
-            && std::find(onlyNames.begin(), onlyNames.end(), symbol->name) == onlyNames.end()) continue;
-        if (std::find(exceptNames.begin(), exceptNames.end(), symbol->name) != exceptNames.end()) continue;
+        if (!resolve_core::usingSelectsName(symbol->name, onlyNames, exceptNames))
+            continue;
 
         // A method declared in a `make T do` block is reached through a typed
         // receiver — `bag.get(name)` dispatches on `Bag` — and has no bare-name
@@ -429,34 +390,14 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         // the program ever wrote a bare `get` (kexhq/kex#272).
         const bool receiverMethod = !symbol->makeTarget.empty();
 
-        ImportOrigin* previous = nullptr;
-        for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it)
-            if (auto found = it->find(symbol->name); found != it->end()) {
-                previous = &found->second;
-                break;
-            }
-        if (previous && previous->module != resolved) {
-            // Only two BARE names can collide. Either side being a receiver
-            // method settles it: the bare name belongs to whichever import
-            // actually claims it, and a second receiver method changes nothing.
-            if (receiverMethod) {
-                // Leave the standing origin alone — a bare-name owner keeps the
-                // name, and another method has nothing to claim.
-            } else if (previous->receiverMethod) {
-                *previous = {resolved, explicitImport, false};
-            } else if (explicitImport && !previous->explicitImport) {
-                *previous = {resolved, true, false};
-            } else if (!explicitImport && previous->explicitImport) {
-                continue;
-            } else {
-                error(loc, "ambiguous name `" + symbol->name + "`, imported from both `"
-                           + previous->module + "` and `" + resolved + "`");
-                continue;
-            }
-        } else if (!previous) {
-            m_importScopes.back()[symbol->name] =
-                {resolved, explicitImport, receiverMethod};
+        const auto merged = resolve_core::mergeImportOrigin(
+            m_importScopes, symbol->name,
+            {resolved, explicitImport, receiverMethod});
+        if (merged.ambiguity) {
+            error(loc, *merged.ambiguity);
+            continue;
         }
+        if (!merged.proceed) continue;
         defineLocal(symbol->name);
         symbol->references.push_back(loc);
     }

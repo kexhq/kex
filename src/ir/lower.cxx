@@ -32,12 +32,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   bool preferExternalReceivers,
                   const std::vector<ExternalVariantTag>* externalVariants,
                   const StaticTypeOfCalls* staticTypeOfCalls,
-                  const ExpressionTypes* expressionTypes)
+                  const ExpressionTypes* expressionTypes,
+                  const std::unordered_map<const ast::MakeDef*,
+                      std::vector<std::string>>* resolvedTraits)
     -> Module {
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
+    L.resolvedTraits = resolvedTraits;
     L.preferExternalReceivers = preferExternalReceivers;
     L.staticTypeOfCalls = staticTypeOfCalls;
     L.expressionTypes = expressionTypes;
@@ -112,9 +115,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (mk.implements.empty()) return out;
         auto own = ownMethodNames(mk);
         std::set<MethodKey> added;
+        // Semantic analysis already settled each `implement:` name with
+        // the checker's import order, aliases, and only/except rules;
+        // without analysis (`--no-check`), resolve from the pre-pass
+        // usings as before.
+        const std::vector<std::string>* identities = nullptr;
+        if (L.resolvedTraits)
+            if (auto resolved = L.resolvedTraits->find(&mk);
+                resolved != L.resolvedTraits->end())
+                identities = &resolved->second;
         const auto visible = kex::usingsVisibleIn(scopeUsings, scope);
-        for (const auto& tn : mk.implements) {
-            auto it = traitDefs.find(L.traitIdentityOf(tn, scope, true, &visible));
+        for (size_t i = 0; i < mk.implements.size(); ++i) {
+            const auto identity =
+                identities && i < identities->size()
+                    ? (*identities)[i]
+                    : L.traitIdentityOf(mk.implements[i], scope, true,
+                                        &visible);
+            auto it = traitDefs.find(identity);
             if (it == traitDefs.end()) continue;
             // Kex writes a multi-clause function as separate `let`
             // declarations, so ONE trait default can be several FunctionDefs
@@ -745,6 +762,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Bare top-level expressions → one synthetic main/0, or, beside an
     // explicit `main`, spliced around its body in source order.
     std::vector<const ast::ExprPtr*> bareExprs;
+    // Declaration-level `using M do ... end` bodies (top level and module
+    // bodies), lowered immediately under their scoped bindings. Like the
+    // walker — which runs them while elaborating, before any main-phase
+    // code — these emit first, in file order: they are elaboration-time
+    // code, static initializers beside `main`, not file-ordered steps.
+    std::vector<ExprPtr> usingBodySteps;
     // An explicit `main`, lowered where it is written and emitted once every
     // bare expression is known: the walker runs those before and after its
     // body in source order, and BEAM used to drop them.
@@ -969,46 +992,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     if (i) srcMod += ".";
                                     srcMod += (*ub)->module.parts[i];
                                 }
-                                if ((*ub)->alias) L.moduleAliases[*(*ub)->alias] = srcMod;
-                                // What the module names its records by: a
-                                // bare `Event` it imports is that module's,
-                                // even when another module declares one too.
-                                L.usingModules.insert(srcMod);
-                                for (const auto& [key, _] : L.moduleFunctions) {
-                                    const auto prefix = srcMod + ".";
-                                    if (key.rfind(prefix, 0) != 0) continue;
-                                    const auto rest = key.substr(prefix.size());
-                                    const auto dot = rest.find('.');
-                                    if (dot == std::string::npos) continue;
-                                    const auto nested = rest.substr(0, dot);
-                                    if (!(*ub)->onlyNames.empty() &&
-                                        std::find((*ub)->onlyNames.begin(), (*ub)->onlyNames.end(), nested) == (*ub)->onlyNames.end())
-                                        continue;
-                                    if (std::find((*ub)->exceptNames.begin(), (*ub)->exceptNames.end(), nested) != (*ub)->exceptNames.end())
-                                        continue;
-                                    L.moduleAliases[nested] = srcMod + "." + nested;
+                                if ((*ub)->body.empty()) {
+                                    L.applyUsingCore(srcMod, (*ub)->alias,
+                                                     (*ub)->onlyNames,
+                                                     (*ub)->exceptNames);
+                                    continue;
                                 }
-                                auto importName = [&](const std::string& name) {
-                                    auto key = srcMod + "." + name;
-                                    if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
-                                        L.moduleImports[name] = it->second;
-                                };
-                                if (!(*ub)->onlyNames.empty()) {
-                                    for (const auto& name : (*ub)->onlyNames) importName(name);
-                                } else if ((*ub)->body.empty() && !(*ub)->alias) {
-                                    for (const auto& [key, val] : L.moduleFunctions)
-                                        if (key.rfind(srcMod + ".", 0) == 0) {
-                                            auto bare = key.substr(srcMod.size() + 1);
-                                            if (bare.find('.') == std::string::npos
-                                                && std::find((*ub)->exceptNames.begin(),
-                                                             (*ub)->exceptNames.end(), bare)
-                                                    == (*ub)->exceptNames.end())
-                                                L.moduleImports[bare] = val;
-                                        }
-                                }
-                                if (!(*ub)->alias || !(*ub)->onlyNames.empty())
-                                    L.importExternalModule(srcMod, (*ub)->onlyNames,
-                                                           (*ub)->exceptNames);
+                                // `using M do ... end`: scoped bindings, and
+                                // the body runs — first, in file order,
+                                // like the walker's elaboration phase. BEAM
+                                // used to drop it entirely.
+                                auto saved = L.snapshotUsingBindings();
+                                L.applyUsingCore(srcMod, (*ub)->alias,
+                                                 (*ub)->onlyNames,
+                                                 (*ub)->exceptNames);
+                                auto savedSubst = L.subst;
+                                L.subst.clear();
+                                for (const auto& e : (*ub)->body)
+                                    usingBodySteps.push_back(L.lower(e));
+                                L.subst = std::move(savedSubst);
+                                L.restoreUsingBindings(std::move(saved));
                                 continue;
                             } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
@@ -1085,31 +1088,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (i) srcMod += ".";
                     srcMod += node->module.parts[i];
                 }
-                L.usingModules.insert(srcMod);
-                if (node->alias) L.moduleAliases[*node->alias] = srcMod;
-                // M's own last segment, immediate children, and siblings —
-                // see registerModuleAliases. Explicit aliases still win:
-                // it only fills a name in when nothing has claimed it yet.
-                L.registerModuleAliases(srcMod, node->onlyNames, node->exceptNames);
-                if (!node->onlyNames.empty()) {
-                    for (const auto& name : node->onlyNames) {
-                        auto key = srcMod + "." + name;
-                        if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
-                            L.moduleImports[name] = it->second;
-                    }
-                } else if (!node->alias) {
-                    for (const auto& [key, val] : L.moduleFunctions)
-                        if (key.rfind(srcMod + ".", 0) == 0) {
-                            auto bare = key.substr(srcMod.size() + 1);
-                            if (bare.find('.') == std::string::npos
-                                && std::find(node->exceptNames.begin(),
-                                             node->exceptNames.end(), bare)
-                                    == node->exceptNames.end())
-                                L.moduleImports[bare] = val;
-                        }
+                if (node->body.empty()) {
+                    L.applyUsingCore(srcMod, node->alias, node->onlyNames,
+                                     node->exceptNames);
+                    return;
                 }
-                if (!node->alias || !node->onlyNames.empty())
-                    L.importExternalModule(srcMod, node->onlyNames, node->exceptNames);
+                // `using M do ... end`: scoped bindings, and the body
+                // runs — first, in file order, like the walker's
+                // elaboration phase. BEAM used to drop it entirely.
+                auto saved = L.snapshotUsingBindings();
+                L.applyUsingCore(srcMod, node->alias, node->onlyNames,
+                                 node->exceptNames);
+                auto savedSubst = L.subst;
+                L.subst.clear();
+                for (const auto& e : node->body)
+                    usingBodySteps.push_back(L.lower(e));
+                L.subst = std::move(savedSubst);
+                L.restoreUsingBindings(std::move(saved));
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
                                  + typeid(T).name());
@@ -1120,6 +1115,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     if (explicitMain) {
         L.subst.clear();
         std::vector<ExprPtr> steps;
+        for (auto& u : usingBodySteps) steps.push_back(std::move(u));
         for (size_t i = 0; i < explicitMain->bareBefore; ++i)
             steps.push_back(L.lower(*bareExprs[i]));
         steps.push_back(std::move(explicitMain->body));
@@ -1138,21 +1134,29 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     }
 
     // Synthetic main/0 from bare top-level expressions, if no explicit main.
-    if (!bareExprs.empty() && !mod.hasMain) {
+    if ((!bareExprs.empty() || !usingBodySteps.empty()) && !mod.hasMain) {
         L.subst.clear();
         FunDef def; def.name = "main"; def.arity = 0;
         FunClause fc;
         // Emit each expr as a statement; last is the value.
+        // Using-body steps first (already lowered), then bare exprs —
+        // with no using bodies this lowers in exactly the old order.
+        const size_t usingCount = usingBodySteps.size();
+        const size_t total = usingCount + bareExprs.size();
+        std::function<ExprPtr(size_t)> at = [&](size_t i) -> ExprPtr {
+            if (i < usingCount) return std::move(usingBodySteps[i]);
+            return L.lower(*bareExprs[i - usingCount]);
+        };
         std::function<ExprPtr(size_t)> chain = [&](size_t i) -> ExprPtr {
-            if (i + 1 == bareExprs.size()) return L.lower(*bareExprs[i]);
-            auto val = L.lower(*bareExprs[i]);
+            if (i + 1 == total) return at(i);
+            auto val = at(i);
             auto rest = chain(i + 1);
             auto let = std::make_unique<Expr>();
             let->node = Let{L.fresh("S"), std::move(val), std::move(rest)};
             return let;
         };
         fc.body = L.withTestSummary(L.withDisplayInfo(
-            bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0), mod.name));
+            total == 0 ? lit(LitKind::Atom, "ok") : chain(0), mod.name));
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
         mod.hasMain = true; mod.mainArity = 0;
@@ -1780,7 +1784,9 @@ auto lowerProgramTiered(
     const std::vector<ExternalRecordLayout>* externalRecords,
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls,
-    bool preferExternalReceivers) -> Module {
+    bool preferExternalReceivers,
+    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
+        resolvedTraits) -> Module {
     // The prelude still lowers as one merged module, so the output is
     // lowerProgram's by construction and the two paths cannot drift apart.
     // The bounds only validate the tier partition for now; they become
@@ -1792,7 +1798,8 @@ auto lowerProgramTiered(
     if (tierBounds[4] != prog.items.size())
         throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
     return lowerProgram(prog, fileStem, sourcePath, externals, externalRecords,
-                        resolvedCalls, preferExternalReceivers);
+                        resolvedCalls, preferExternalReceivers, nullptr,
+                        nullptr, nullptr, resolvedTraits);
 }
 
 namespace {
@@ -1933,7 +1940,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   bool preferExternalReceivers,
                   const std::vector<ExternalVariantTag>* externalVariants,
                   const StaticTypeOfCalls* staticTypeOfCalls,
-                  const ExpressionTypes* expressionTypes)
+                  const ExpressionTypes* expressionTypes,
+                  const std::unordered_map<const ast::MakeDef*,
+                      std::vector<std::string>>* resolvedTraits)
     -> std::vector<Module> {
     g_keepDeclaringModulesApart = true;
     struct Restore {
@@ -1942,7 +1951,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
                              externalRecords, resolvedCalls,
                              preferExternalReceivers, externalVariants,
-                             staticTypeOfCalls, expressionTypes);
+                             staticTypeOfCalls, expressionTypes,
+                             resolvedTraits);
 
     struct Definition {
         std::string path;

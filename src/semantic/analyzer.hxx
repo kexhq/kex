@@ -87,6 +87,11 @@ public:
     }
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto resolvedTraits() const
+        -> const std::unordered_map<const ast::MakeDef*,
+                                    std::vector<std::string>>& {
+        return m_checker.resolvedTraits();
+    }
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();

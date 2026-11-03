@@ -1769,22 +1769,22 @@ auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
 auto Lowering::placeMethodArguments(const ast::MethodCall& n, const MakeMethod& method,
                           std::vector<Binding>& binds) -> std::vector<ExprPtr> {
     const auto& clause = method.def->clauses[0];
+    const auto pnames = clauseNames(&clause, {});
+    std::vector<std::string> labels;
+    for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
+    const auto placed =
+        placeArguments(pnames, labels, n.args.size() + bool(n.block));
     std::vector<ExprPtr> slots(clause.params.size());
-    for (const auto& [label, value] : n.namedArgs)
-        for (size_t i = 0; i < slots.size(); i++)
-            if (clause.params[i].name && *clause.params[i].name == label) {
-                slots[i] = atomize(value, binds);
-                break;
-            }
+    for (size_t i = 0; i < n.namedArgs.size(); ++i)
+        if (placed.labelSlots[i] != PlacedArguments::npos)
+            slots[placed.labelSlots[i]] =
+                atomize(n.namedArgs[i].second, binds);
     std::vector<ExprPtr> positional;
     for (const auto& arg : n.args) positional.push_back(atomize(arg, binds));
     if (n.block) positional.push_back(atomize(*n.block, binds));
-    size_t next = 0;
-    for (auto& value : positional) {
-        while (next < slots.size() && slots[next]) next++;
-        if (next >= slots.size()) break;
-        slots[next++] = std::move(value);
-    }
+    for (size_t k = 0; k < positional.size(); ++k)
+        if (placed.positionalSlots[k] != PlacedArguments::npos)
+            slots[placed.positionalSlots[k]] = std::move(positional[k]);
     fillDefaultSlots(method.modulePath.empty()
                          ? n.method : method.modulePath + "." + n.method,
                      slots, binds, &clause);

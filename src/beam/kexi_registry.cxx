@@ -885,6 +885,14 @@ auto KexiRegistry::buildSemanticInterfaces() const
     // `metadata.adts` only holds types that have constructors. The type
     // interface lists every declared type, so aliases such as
     // `type List<X> = [X]` are picked up here rather than being invisible.
+    // Generic aliases are recorded too (their parameters bind in declared
+    // order to the negative slots `substituteInterfaceGenerics` fills, as in
+    // `TypeChecker::typeDefToType`); without them the compile path never
+    // learns `List`/`Map` while the Run path (sources parsed) does, so a
+    // static `List.first(x)` failed with "Unknown module `List`" on BEAM
+    // only (risk #1). The signature expander below must not splice these:
+    // a bare name carries no arguments to substitute.
+    std::unordered_set<std::string> genericAliasNames;
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
             for (const auto& te : module.chunk.typeInterface.types) {
@@ -901,15 +909,20 @@ auto KexiRegistry::buildSemanticInterfaces() const
                         interfaces.distinctTypes[name] = {
                             te.genericParams, semanticType(te.backingType, vars)};
                     } else if (!te.isDistinct && te.backingType &&
-                               te.constructors.empty() &&
-                               te.genericParams.empty()) {
+                               te.constructors.empty()) {
                         TypeVarMap vars;
+                        for (size_t i = 0; i < te.genericParams.size(); ++i)
+                            vars.try_emplace(te.genericParams[i],
+                                             -static_cast<int>(i + 1));
                         auto body = semanticType(te.backingType, vars);
                         // Artifacts written before alias bodies were recorded
                         // store an Unknown placeholder; that is not an alias.
                         if (body && !std::holds_alternative<semantic::UnknownType>(
-                                        body->kind))
+                                        body->kind)) {
                             interfaces.typeAliases.try_emplace(name, body);
+                            if (!te.genericParams.empty())
+                                genericAliasNames.insert(name);
+                        }
                     }
                 }
             }
@@ -958,7 +971,8 @@ auto KexiRegistry::buildSemanticInterfaces() const
         return std::visit([&](const auto& kind) -> semantic::TypePtr {
             using K = std::decay_t<decltype(kind)>;
             if constexpr (std::is_same_v<K, semantic::NamedType>) {
-                if (kind.typeArgs.empty())
+                if (kind.typeArgs.empty() &&
+                    !genericAliasNames.count(kind.name))
                     if (auto alias = interfaces.typeAliases.find(kind.name);
                         alias != interfaces.typeAliases.end())
                         return expand(alias->second, depth + 1);

@@ -38,19 +38,23 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
                                 return unknownNamedArgument(origin->second, label);
                     const auto& pnames = oit->second;
                     std::vector<Binding> binds;
+                    std::vector<std::string> labels;
+                    for (const auto& [label, _] : n.namedArgs)
+                        labels.push_back(label);
+                    const auto placed = placeArguments(
+                        pnames, labels, n.args.size() + bool(n.block));
                     std::vector<ExprPtr> slots(pnames.size());
-                    for (const auto& [an, av] : n.namedArgs)
-                        for (size_t i = 0; i < pnames.size(); i++)
-                            if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                    for (size_t i = 0; i < n.namedArgs.size(); ++i)
+                        if (placed.labelSlots[i] != PlacedArguments::npos)
+                            slots[placed.labelSlots[i]] =
+                                atomize(n.namedArgs[i].second, binds);
                     std::vector<ExprPtr> positional;
                     for (const auto& a : n.args) positional.push_back(atomize(a, binds));
                     if (n.block) positional.push_back(atomize(*n.block, binds));
-                    size_t next = 0;
-                    for (auto& p : positional) {
-                        while (next < slots.size() && slots[next]) next++;
-                        if (next >= slots.size()) break;
-                        slots[next] = std::move(p);
-                    }
+                    for (size_t k = 0; k < positional.size(); ++k)
+                        if (placed.positionalSlots[k] != PlacedArguments::npos)
+                            slots[placed.positionalSlots[k]] =
+                                std::move(positional[k]);
                     for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                     auto ex = std::make_unique<Expr>();
                     ex->node = CallIndirect{var(currentName(n.name)),
@@ -93,19 +97,23 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
                         auto ait = externalModules->nameToAtom.find(modName);
                         if (ait != externalModules->nameToAtom.end()) {
                             std::vector<Binding> binds;
+                            std::vector<std::string> labels;
+                            for (const auto& [label, _] : n.namedArgs)
+                                labels.push_back(label);
+                            const auto placed = placeArguments(
+                                pnames, labels, n.args.size() + bool(n.block));
                             std::vector<ExprPtr> slots(pnames.size());
-                            for (const auto& [an, av] : n.namedArgs)
-                                for (size_t i = 0; i < pnames.size(); i++)
-                                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                            for (size_t i = 0; i < n.namedArgs.size(); ++i)
+                                if (placed.labelSlots[i] != PlacedArguments::npos)
+                                    slots[placed.labelSlots[i]] =
+                                        atomize(n.namedArgs[i].second, binds);
                             std::vector<ExprPtr> positional;
                             for (const auto& a : n.args) positional.push_back(atomize(a, binds));
                             if (n.block) positional.push_back(atomize(*n.block, binds));
-                            size_t next = 0;
-                            for (auto& p : positional) {
-                                while (next < slots.size() && slots[next]) next++;
-                                if (next >= slots.size()) break;
-                                slots[next] = std::move(p);
-                            }
+                            for (size_t k = 0; k < positional.size(); ++k)
+                                if (placed.positionalSlots[k] != PlacedArguments::npos)
+                                    slots[placed.positionalSlots[k]] =
+                                        std::move(positional[k]);
                             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                             int ar = static_cast<int>(slots.size());
                             return wrapLets(binds,
@@ -126,19 +134,21 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
             it->first, n.namedArgs, n.args.size() + bool(n.block));
         const auto pnames = clauseNames(selected, it->second);
         std::vector<Binding> binds;
+        std::vector<std::string> labels;
+        for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
+        const auto placed = placeArguments(pnames, labels,
+                                           n.args.size() + bool(n.block));
         std::vector<ExprPtr> slots(pnames.size());
-        for (const auto& [an, av] : n.namedArgs)
-            for (size_t i = 0; i < pnames.size(); i++)
-                if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+        for (size_t i = 0; i < n.namedArgs.size(); ++i)
+            if (placed.labelSlots[i] != PlacedArguments::npos)
+                slots[placed.labelSlots[i]] =
+                    atomize(n.namedArgs[i].second, binds);
         std::vector<ExprPtr> positional;
         for (const auto& a : n.args) positional.push_back(atomize(a, binds));
         if (n.block) positional.push_back(atomize(*n.block, binds));
-        size_t next = 0;
-        for (auto& p : positional) {
-            while (next < slots.size() && slots[next]) next++;
-            if (next >= slots.size()) break;
-            slots[next] = std::move(p);
-        }
+        for (size_t k = 0; k < positional.size(); ++k)
+            if (placed.positionalSlots[k] != PlacedArguments::npos)
+                slots[placed.positionalSlots[k]] = std::move(positional[k]);
         fillDefaultSlots(it->first, slots, binds, selected);
         auto ex = std::make_unique<Expr>();
         ex->node = localCall(emittedName, std::move(slots));

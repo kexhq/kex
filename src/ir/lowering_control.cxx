@@ -1,5 +1,6 @@
 // Control flow methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
 
@@ -769,10 +770,7 @@ auto Lowering::importExternalModule(const std::string& srcMod,
         if (qualKey.rfind(prefix, 0) != 0) continue;
         const auto bare = qualKey.substr(prefix.size());
         if (bare.find('.') != std::string::npos) continue;
-        if (!only.empty() &&
-            std::find(only.begin(), only.end(), bare) == only.end())
-            continue;
-        if (std::find(except.begin(), except.end(), bare) != except.end())
+        if (!kex::semantic::resolve_core::usingSelectsName(bare, only, except))
             continue;
         if (moduleImports.count(bare)) continue;
         externalImports[bare] = qualKey;
@@ -846,8 +844,26 @@ auto Lowering::applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved
         if (i) srcMod += ".";
         srcMod += n.module.parts[i];
     }
+    applyUsingCore(srcMod, n.alias, n.onlyNames, n.exceptNames);
+    return saved;
+}
+
+auto Lowering::snapshotUsingBindings() const -> UsingBindingsSaved {
+    return {moduleImports, moduleAliases, usingModules, externalImports};
+}
+
+// The bindings half of a `using Module[, as: Alias][, only:/except: ...]`,
+// shared by the expression form (applyUsingBindings, scoped by its caller),
+// the top-level form, and the module-body form (both persistent when bare,
+// scoped around a `do ... end` body). One core so the three contexts cannot
+// drift apart again (Phase 2 step 2).
+auto Lowering::applyUsingCore(const std::string& srcMod,
+                              const std::optional<std::string>& alias,
+                              const std::vector<std::string>& onlyNames,
+                              const std::vector<std::string>& exceptNames)
+    -> void {
     usingModules.insert(srcMod);
-    if (n.alias) moduleAliases[*n.alias] = srcMod;
+    if (alias) moduleAliases[*alias] = srcMod;
     // Import immediate nested modules — and M's own last segment and
     // sibling modules — under their leaf name too. The semantic resolver
     // already makes `URL.parse` available after `using URI`; BEAM
@@ -855,27 +871,26 @@ auto Lowering::applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved
     // (`URI.URL`) just as the tree walker does. Explicit aliases still
     // win: registerModuleAliases only fills a name in when nothing has
     // claimed it yet.
-    registerModuleAliases(srcMod, n.onlyNames, n.exceptNames);
-    if (!n.onlyNames.empty()) {
-        for (const auto& name : n.onlyNames) {
+    registerModuleAliases(srcMod, onlyNames, exceptNames);
+    if (!onlyNames.empty()) {
+        for (const auto& name : onlyNames) {
             auto key = srcMod + "." + name;
             if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
                 moduleImports[name] = it->second;
         }
-    } else if (!n.alias) {
+    } else if (!alias) {
         // `as:` alone imports nothing; the alias above is all it binds.
         for (const auto& [key, val] : moduleFunctions)
             if (key.rfind(srcMod + ".", 0) == 0) {
                 auto bare = key.substr(srcMod.size() + 1);
                 if (bare.find('.') == std::string::npos &&
-                    std::find(n.exceptNames.begin(), n.exceptNames.end(), bare) ==
-                        n.exceptNames.end())
+                    kex::semantic::resolve_core::usingSelectsName(
+                        bare, onlyNames, exceptNames))
                     moduleImports[bare] = val;
             }
     }
-    if (!n.alias || !n.onlyNames.empty())
-        importExternalModule(srcMod, n.onlyNames, n.exceptNames);
-    return saved;
+    if (kex::semantic::resolve_core::usingImportsNames(alias, onlyNames))
+        importExternalModule(srcMod, onlyNames, exceptNames);
 }
 
 auto Lowering::restoreUsingBindings(UsingBindingsSaved saved) -> void {

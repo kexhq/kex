@@ -61,4 +61,33 @@ auto encodeEtf(const TermPtr& term) -> std::vector<uint8_t>;
 auto decodeEtf(const std::vector<uint8_t>& bytes) -> TermPtr;
 auto decodeEtf(const uint8_t* data, size_t len) -> TermPtr;
 
+// Forward-only SAX reader over ETF bytes: parses straight into the
+// caller's structs with no intermediate tree. The interface cache
+// (3c) reads through this; the tree codec above stays for encode and
+// the KexI path. Any malformed input throws EtfError, exactly the
+// exception the tree walk's callers already translate to "corrupt".
+class SaxReader {
+public:
+    SaxReader(const uint8_t* data, size_t len);
+    ~SaxReader();
+    // Struct openers. Tuples carry their arity; lists their count
+    // (NIL reads as an empty list with no tail to close).
+    auto beginTuple() -> size_t;
+    auto beginList() -> size_t;
+    auto endList() -> void;
+    // Scalars. readInt accepts the integer tags plus a big that fits
+    // int64 (mirroring the tree decoder); anything else throws.
+    auto readAtom() -> std::string;
+    auto readInt() -> int64_t;
+    auto readBinary() -> std::string;
+    // Tag peeks (never consume; false past the end).
+    auto nextIsTuple() const -> bool;
+    auto nextIsAtom() const -> bool;
+    auto atEnd() const -> bool;
+
+private:
+    struct Cursor;
+    std::unique_ptr<Cursor> m_cursor;
+};
+
 } // namespace kex::beam

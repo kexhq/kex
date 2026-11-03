@@ -1334,7 +1334,7 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
     auto modules = kex::ir::lowerModules(
         program, stem, path, &layouts, &externals, &analyzer.resolvedCalls(),
         /*preferExternalReceivers=*/false, &variants, &analyzer.staticTypeOfCalls(),
-        &analyzer.typeMap());
+        &analyzer.typeMap(), &analyzer.resolvedTraits());
     if (!dir.empty()) std::filesystem::create_directories(dir);
     // The unit's own module registers its records' layouts as it loads, but
     // only the entry's `main` used to run, and a call goes to a companion
@@ -5160,7 +5160,7 @@ int main(int argc, char *argv[]) {
               // which lowered the bare function name to an unbound Core
               // Erlang variable and failed to compile.
               &replAnalyzer.staticTypeOfCalls(),
-              &replAnalyzer.typeMap());
+              &replAnalyzer.typeMap(), &replAnalyzer.resolvedTraits());
           std::vector<kex::ir::EmitResult> results;
           for (auto& irModule : irModules) {
             kex::ir::insertUpgradePoints(irModule);
@@ -6810,6 +6810,9 @@ int main(int argc, char *argv[]) {
                                                    : nullptr,
                                                compileAnalysis
                                                    ? &compileAnalysis->typeMap()
+                                                   : nullptr,
+                                               compileAnalysis
+                                                   ? &compileAnalysis->resolvedTraits()
                                                    : nullptr);
         for (auto &irMod : irModules) {
           kex::ir::insertUpgradePoints(irMod);

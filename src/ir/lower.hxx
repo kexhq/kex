@@ -131,7 +131,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   bool preferExternalReceivers = false,
                   const std::vector<ExternalVariantTag>* externalVariants = nullptr,
                   const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr)
+                  const ExpressionTypes* expressionTypes = nullptr,
+                  const std::unordered_map<const ast::MakeDef*,
+                      std::vector<std::string>>* resolvedTraits = nullptr)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -146,7 +148,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   bool preferExternalReceivers = false,
                   const std::vector<ExternalVariantTag>* externalVariants = nullptr,
                   const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr)
+                  const ExpressionTypes* expressionTypes = nullptr,
+                  const std::unordered_map<const ast::MakeDef*,
+                      std::vector<std::string>>* resolvedTraits = nullptr)
     -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the
@@ -162,6 +166,8 @@ auto lowerProgramTiered(
     const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-    bool preferExternalReceivers = false) -> Module;
+    bool preferExternalReceivers = false,
+    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
+        resolvedTraits = nullptr) -> Module;
 
 } // namespace kex::ir

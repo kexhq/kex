@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/function_groups.hxx"
+#include "file_io.hxx"
 #include "mangle.hxx"
 #include "../beam/interface_cache.hxx"
 #include "../beam/kexi_registry.hxx"
@@ -33,13 +34,10 @@ inline auto preludeSourceHash(const std::vector<std::string>& files)
         const auto name = std::filesystem::path(file).filename().string();
         bytes.insert(bytes.end(), name.begin(), name.end());
         bytes.push_back(0);
-        std::ifstream input(file, std::ios::binary);
-        if (!input)
+        const auto contents = readFileBytes(file);
+        if (!contents)
             throw std::runtime_error("cannot read standard-library source: " + file);
-        std::vector<uint8_t> contents{
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>()};
-        bytes.insert(bytes.end(), contents.begin(), contents.end());
+        bytes.insert(bytes.end(), contents->begin(), contents->end());
         bytes.push_back(0);
     }
     return kex::beam::computeContentHash(bytes);
@@ -815,6 +813,43 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (!std::holds_alternative<kex::semantic::NamedType>(resolved->kind) ||
                     std::get<kex::semantic::NamedType>(resolved->kind).name != td.name)
                     typeAliases[td.name] = resolved;
+                return;
+            }
+            // Mirror TypeChecker::registerTypeAliases' final rule: a typedef
+            // that is not an ADT — not every variant constructor-shaped — is
+            // an alias even when its right-hand side is structural (`type
+            // List<X> = [X]`) or a union of types. Without this the compile
+            // path (interfaces only) never learns `List`/`Map` while the Run
+            // path (sources parsed) does, so a `List<Integer>` annotation
+            // went nominal and a static `List.first(x)` failed with
+            // "Unknown module `List`" on BEAM only (risk #1). Type parameters
+            // bind in declared order to the negative TypeVar slots
+            // `substituteInterfaceGenerics` fills, exactly as `typeDefToType`.
+            if (td.variants && !td.variants->empty()) {
+                const auto ctors = kex::typeConstructors(td);
+                if (ctors && !ctors->empty()) return; // ADT, not an alias
+                std::unordered_map<std::string, kex::semantic::TypePtr> aliasVars;
+                for (size_t i = 0; i < td.typeParams.size(); ++i)
+                    aliasVars[td.typeParams[i]] =
+                        kex::semantic::Type::typeVar(
+                            -static_cast<int>(i + 1));
+                std::vector<kex::semantic::TypePtr> parts;
+                for (const auto& v : *td.variants)
+                    if (v) parts.push_back(resolveSourceType(*v, aliasVars, &typeAliases));
+                if (parts.empty()) {
+                    typeAliases[td.name] = kex::semantic::Type::unknown();
+                    return;
+                }
+                kex::semantic::TypePtr resolved = parts.size() == 1
+                    ? parts[0]
+                    : std::make_shared<kex::semantic::Type>(
+                          kex::semantic::Type{kex::semantic::UnionType{
+                              std::move(parts)}});
+                if (!std::holds_alternative<kex::semantic::NamedType>(
+                        resolved->kind) ||
+                    std::get<kex::semantic::NamedType>(resolved->kind).name !=
+                        td.name)
+                    typeAliases[td.name] = resolved;
             }
         };
 
@@ -1183,6 +1218,12 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (*fn) ifaces.receiverFunctions.try_emplace((*fn)->name);
             } else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
                 if (*ann) addReceiverSig("", annotationToSignature(**ann, nullptr));
+            } else if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
+                // Top-level aliases are interface entries too: only typedefs
+                // inside `module` blocks reached collectTypeAlias, so the
+                // compile path never learned `type List<X> = [X]` (risk #1).
+                // ADTs need no call here — collectArities above owns them.
+                if (*td) collectTypeAlias(**td);
             }
         }
     }
@@ -1415,18 +1456,19 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
             if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
         };
         if (cachePath) {
-            std::ifstream input(*cachePath, std::ios::binary);
-            if (!input) {
+            const auto bytes = readFileBytes(cachePath->string());
+            if (!bytes) {
                 noteMiss("absent");
             } else {
-                std::vector<uint8_t> bytes(
-                    (std::istreambuf_iterator<char>(input)),
-                    std::istreambuf_iterator<char>());
+                // Split the key computation (stdlib listing + full
+                // content hash above, plus this file read) from the
+                // deserialize below, so 3c measures which dominates.
+                phase("cache key + read");
                 kex::beam::CacheMissReason reason =
                     kex::beam::CacheMissReason::corrupt;
                 if (auto loaded = kex::beam::deserializeImportedInterfaces(
-                        bytes, &reason)) {
-                    phase("prelude interface cache");
+                        *bytes, &reason)) {
+                    phase("cache deserialize");
                     return std::move(*loaded);
                 }
                 noteMiss(kex::beam::cacheMissReasonName(reason));

@@ -24,6 +24,9 @@
 # backend answered, including stderr and replay metadata). Any unsuccessful
 # execution is a finding, including matching crashes, rejections and timeouts.
 # A generator bug must be investigated rather than silently reducing coverage.
+# Before the generated cases, a fixed list of targeted regression programs
+# (targetedCases: shapes a past divergence took) runs under both backends
+# and is reported on its own line; either line failing fails the run.
 #
 # Run the fuzzer itself on the walker: it stays on the interpreter, far from
 # the lowering bugs it hunts. One case at a time, so the log reads in order.
@@ -730,6 +733,45 @@ let exitStatus(fails: Integer) -> Integer do
   if fails == 0 then 0 else 1 end
 end
 
+# Targeted regression programs: shapes a past divergence took, run before
+# the generated cases. Correct-by-construction like generated programs —
+# each must succeed with identical stdout on both backends — so a finding
+# here is a regression, saved as <out>/fail_target_<index>.kex/.txt.
+let targetedCases() -> [String] do
+  # Static calls on a structural type alias root: `List.first(x)` worked
+  # on the walker (namespace dispatch) but BEAM rejected it, first in the
+  # check ("Unknown module `List`") and then in lowering ("Undefined
+  # method: first for List"), because the compile path never learned
+  # top-level or structural aliases (risk #1). The second pins
+  # top-level `using M do ... end` bodies, which BEAM dropped while
+  # the walker ran them (Phase 2 step 2).
+  return [
+    "main do\nIO.printLine(List.first([4, 5, 6]))\nIO.printLine(Map.get({\"a\": 1}, \"a\", 0))\nend\n",
+    "module M do\nlet answer() = 42\nend\nusing M do\nIO.printLine(answer())\nend\nIO.printLine(\"after\")\n"
+  ]
+end
+
+foul runTargeted(kex: String, outDir: String, index: Integer, source: String,
+  budgetMs: Integer, version: String) do
+  let file = "${outDir}/target_${index}.kex"
+  writeRequired(file, source)
+  let walker = Process.run(kex, ["--run-walker", "--no-colors", file], budgetMs)
+  let beam = Process.run(kex, ["--run", "--no-colors", file], budgetMs)
+  let passed = match walker do
+    Ok(w) => match beam do
+      Ok(b) => w.exitCode == 0 && b.exitCode == 0 && w.stdout == b.stdout
+      Error(_) => false
+    end
+    Error(_) => false
+  end
+  if passed then return true end
+  let replay = "${outDir}/fail_target_${index}.kex"
+  let details = "target=${index}\ntimeoutMs=${budgetMs}\ncompiler=${kex}\n${version}\nwalker args: [--run-walker, --no-colors, ${replay}]\nbeam args: [--run, --no-colors, ${replay}]\n\nwalker:\n${describeOutcome(walker)}\n\nbeam:\n${describeOutcome(beam)}\n"
+  writeRequired(replay, source)
+  writeRequired("${outDir}/fail_target_${index}.txt", details)
+  return false
+end
+
 foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs: Integer) do
   if !FS.Directory.exists?(outDir)
     if !FS.Directory.create(outDir)
@@ -749,6 +791,16 @@ foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs:
     return 2
   end
   IO.printLine("fuzzing from seed ${seed}")
+  let targets = targetedCases()
+  var targetFails = 0
+  var t = 0
+  while t < targets.length do
+    if !runTargeted(kex, outDir, t, targets.at(t).or(""), budgetMs, version)
+      targetFails = targetFails + 1
+      IO.printLine("target ${t}: FAIL")
+    end
+    t = t + 1
+  end
   var fails = 0
   var i = 0
   while i < total do
@@ -759,7 +811,8 @@ foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs:
     i = i + 1
   end
   IO.printLine("${total} cases: ${total - fails} pass, ${fails} FAIL")
-  return exitStatus(fails)
+  IO.printLine("targeted ${targets.length} cases: ${targets.length - targetFails} pass, ${targetFails} FAIL")
+  return exitStatus(fails + targetFails)
 end
 
 main(args) do
