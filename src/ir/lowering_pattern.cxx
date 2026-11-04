@@ -31,13 +31,15 @@ auto Lowering::anyClauseIrrefutable(const std::vector<MatchClause>& clauses)
     return false;
 }
 
-auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr {
+auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses,
+                            ExprPtr noMatch, bool failOnFalseOnly) -> ExprPtr {
     size_t gi = 0;
     while (gi < clauses.size() && !clauses[gi].guard) ++gi;
     if (gi == clauses.size()) {
         // Single-subject matches get the walker's "no matching clause"
         // failure appended; without it erlc cannot even compile an
-        // inexhaustive `case` (see noClauseMatched).
+        // inexhaustive `case` (see noClauseMatched). Rescue passes its own
+        // rethrow instead (see expandRescueGuards).
         if (subjects.size() == 1 && !anyClauseIrrefutable(clauses)) {
             // The clause's own variable pattern binds the unmatched value,
             // so the subject expression is neither re-evaluated nor
@@ -48,7 +50,8 @@ auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClau
             bound->name = fresh("Nomatch");
             const auto boundName = bound->name;
             fallback.patterns.push_back(std::move(bound));
-            fallback.body = noClauseMatched(var(boundName));
+            fallback.body = noMatch ? std::move(noMatch)
+                                    : noClauseMatched(var(boundName));
             clauses.push_back(std::move(fallback));
         }
         auto e = std::make_unique<Expr>();
@@ -80,9 +83,11 @@ auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClau
         std::make_move_iterator(clauses.end()));
     ExprPtr contBody;
     if (rest.empty()) {
-        contBody = noClauseMatched(var(subjNames[0]));
+        contBody = noMatch ? std::move(noMatch)
+                           : noClauseMatched(var(subjNames[0]));
     } else {
-        contBody = expandGuards(subjExprs(), std::move(rest));
+        contBody = expandGuards(subjExprs(), std::move(rest),
+                                std::move(noMatch), failOnFalseOnly);
     }
     std::string contName = "__gcont" + std::to_string(counter++);
     auto callCont = [&] {
@@ -103,16 +108,19 @@ auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClau
             irrefutable = false;
     g.patterns = std::move(clauses[gi].patterns);
     // `true -> body; _ -> cont` — a non-boolean guard fails the clause.
+    // Rescue inverts it (`false -> cont; _ -> body`): the walker's rescue
+    // guards skip only on literal `false` (see expandRescueGuards).
     Match gm;
     gm.subjects.push_back(std::move(*clauses[gi].guard));
     MatchClause gt;
     auto tp = std::make_unique<Pattern>();
-    tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool; tp->litBool = true;
+    tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool;
+    tp->litBool = !failOnFalseOnly;
     gt.patterns.push_back(std::move(tp));
-    gt.body = std::move(clauses[gi].body);
+    gt.body = failOnFalseOnly ? callCont() : std::move(clauses[gi].body);
     MatchClause gf;
     gf.patterns.push_back(wildPat());
-    gf.body = callCont();
+    gf.body = failOnFalseOnly ? std::move(clauses[gi].body) : callCont();
     gm.clauses.push_back(std::move(gt));
     gm.clauses.push_back(std::move(gf));
     auto ge = std::make_unique<Expr>();
@@ -135,6 +143,28 @@ auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClau
     for (auto it = binds.rbegin(); it != binds.rend(); ++it)
         e = makeLet(it->first, std::move(it->second), std::move(e));
     return e;
+}
+
+auto Lowering::expandRescueGuards(std::vector<MatchClause> clauses)
+    -> std::vector<MatchClause> {
+    bool anyGuard = false;
+    for (const auto& c : clauses)
+        if (c.guard) { anyGuard = true; break; }
+    if (!anyGuard) return clauses;
+    const auto errName = fresh("Rescued");
+    auto rethrow = std::make_unique<Expr>();
+    rethrow->node = TryThrow{var(errName)};
+    std::vector<ExprPtr> subjects;
+    subjects.push_back(var(errName));
+    MatchClause outer;
+    auto bound = std::make_unique<Pattern>();
+    bound->kind = PatKind::Var; bound->name = errName;
+    outer.patterns.push_back(std::move(bound));
+    outer.body = expandGuards(std::move(subjects), std::move(clauses),
+                              std::move(rethrow), true);
+    std::vector<MatchClause> out;
+    out.push_back(std::move(outer));
+    return out;
 }
 
 // Record-destructure `{ f, g: alias, h: { nested } }` → a flat list of

@@ -578,17 +578,26 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             c.body = lowerLoopBodyFrom(rescue.catchAllBody, 0, loopFn, mutVars, onEnd);
             tc.clauses.push_back(std::move(c));
         } else {
+            std::vector<MatchClause> rclauses;
             for (const auto& clause : rescue.clauses) {
                 MatchClause mc;
                 if (!clause.patterns.empty())
                     mc.patterns.push_back(lowerPattern(clause.patterns[0]));
                 else
                     mc.patterns.push_back(wildPat());
+                mc.guard = withTypeGuards(
+                    clause.guard ? lower(*clause.guard) : nullptr);
                 mc.body = clause.body
                     ? lowerLoopArmU(clause.body, loopFn, mutVars, [&]{ return cont(); })
                     : cont();
-                tc.clauses.push_back(std::move(mc));
+                // Each arm is an independent scope: without the reset the
+                // next arm's continuation references this arm's loop-var
+                // rebindings (`unbound variable` from erlc). Mirrors the
+                // per-arm reset in lowerBodyFrom's trying path.
+                subst = snapBeforeTry;
+                rclauses.push_back(std::move(mc));
             }
+            tc.clauses = expandRescueGuards(std::move(rclauses));
         }
         auto ex = std::make_unique<Expr>();
         ex->node = std::move(tc);

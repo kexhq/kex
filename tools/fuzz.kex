@@ -747,11 +747,14 @@ let targetedCases() -> [String] do
   # the walker ran them (Phase 2 step 2). The third pins a `when` guard
   # on a typed pattern over a mistyped value: BEAM evaluated the guard
   # comparison before the type test and raised `Cannot compare ...`
-  # where the walker falls through (risk #8).
+  # where the walker falls through (risk #8). The fourth pins `when`
+  # guards on rescue arms, which BEAM dropped (taking the first
+  # pattern-matching arm) while the walker honors them (risk #9).
   return [
     "main do\nIO.printLine(List.first([4, 5, 6]))\nIO.printLine(Map.get({\"a\": 1}, \"a\", 0))\nend\n",
     "module M do\nlet answer() = 42\nend\nusing M do\nIO.printLine(answer())\nend\nIO.printLine(\"after\")\n",
-    "let check(v: Any, n) = match v do\n  i : Integer when i > n => \"big\"\n  _ => \"other\"\nend\nmain do\nIO.printLine(check([1, 2], 10))\nIO.printLine(check(42, 10))\nend\n"
+    "let check(v: Any, n) = match v do\n  i : Integer when i > n => \"big\"\n  _ => \"other\"\nend\nmain do\nIO.printLine(check([1, 2], 10))\nIO.printLine(check(42, 10))\nend\n",
+    "main do\nlet v = trying do\nError(\"boom\").try\nrescue\ne when false => \"guarded\"\n_ => \"fallback\"\nend\nIO.printLine(v)\nend\n"
   ]
 end
 

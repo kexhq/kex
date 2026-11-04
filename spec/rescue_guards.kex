@@ -1,0 +1,94 @@
+# `when` guards and type tests on rescue arms. The walker honors them
+# (pattern, then guard, then body) and rethrows when nothing matches;
+# BEAM used to drop them and take the first pattern-matching arm.
+type AppError = NotFound(String) | Timeout(Int)
+
+let guardedSkip = trying do
+  Error("boom").try
+rescue
+  e when false => "guarded"
+  _ => "fallback"
+end
+
+let guardedRun = trying do
+  Error("boom").try
+rescue
+  e when true => "guarded"
+  _ => "fallback"
+end
+
+let mistypedSkip = trying do
+  Error("boom").try
+rescue
+  e : Integer => "int"
+  _ => "fallback"
+end
+
+# A non-boolean guard runs the body, like the walker: rescue guards
+# skip only on literal `false`, unlike match's truthiness.
+let noneRuns = trying do
+  Error("boom").try
+rescue
+  e when None => "none-ran"
+  _ => "fallback"
+end
+
+let rethrown = trying do
+  trying do
+    Error("deep").try
+  rescue
+    e when false => "inner"
+  end
+rescue
+  _ => "rethrown"
+end
+
+let ctorAfterGuard = trying do
+  Error(Timeout(5)).try
+rescue
+  e when false => "guarded"
+  Timeout(ms) => "timeout ${ms}"
+end
+
+let rethrownPastCtor = trying do
+  trying do
+    Error("zzz").try
+  rescue
+    e when false => "guarded"
+    Timeout(ms) => "timeout ${ms}"
+  end
+rescue
+  _ => "rethrown"
+end
+
+let fnGuarded() -> String do
+  Error("boom").try
+rescue
+  e when false => "guarded"
+  _ => "fallback"
+end
+
+foul loopGuarded() do
+  var i = 0
+  while i < 1 do
+    trying do
+      Error("boom").try
+    rescue
+      e when false => IO.printLine("guarded")
+      _ => IO.printLine("fallback")
+    end
+    i = i + 1
+  end
+end
+
+main do
+  IO.printLine(guardedSkip)
+  IO.printLine(guardedRun)
+  IO.printLine(mistypedSkip)
+  IO.printLine(noneRuns)
+  IO.printLine(rethrown)
+  IO.printLine(ctorAfterGuard)
+  IO.printLine(rethrownPastCtor)
+  IO.printLine(fnGuarded())
+  loopGuarded()
+end

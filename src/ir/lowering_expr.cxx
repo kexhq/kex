@@ -1078,7 +1078,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
         } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
             TryCatch tc;
             tc.body = lowerBody(n.body);
-            tc.clauses = lowerRescueClauses(n.rescue);
+            tc.clauses = expandRescueGuards(lowerRescueClauses(n.rescue));
             auto ex = std::make_unique<Expr>();
             ex->node = std::move(tc);
             return ex;

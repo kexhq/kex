@@ -623,7 +623,16 @@ struct Lowering {
     static auto anyClauseIrrefutable(const std::vector<MatchClause>& clauses)
         -> bool;
 
-    auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr;
+    auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses,
+                      ExprPtr noMatch = nullptr, bool failOnFalseOnly = false) -> ExprPtr;
+
+    // Rescue arms with `when` guards or type tests cannot stay native:
+    // the emitter drops TryCatch clause guards, so wrap the arms in one
+    // catch-all whose body is the guard expansion with a rethrow failure.
+    // Guardless arms pass through untouched. Matches the walker, whose
+    // rescue guards skip only on literal `false` (unlike match).
+    auto expandRescueGuards(std::vector<MatchClause> clauses)
+        -> std::vector<MatchClause>;
 
     auto fieldAccess(const std::string& fname, ExprPtr base) -> ExprPtr;
     auto fieldAccessIn(const std::string& typeName, const std::string& fname,

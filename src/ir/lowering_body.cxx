@@ -353,6 +353,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                         subst = beforeTry;
                         tc.clauses.push_back(std::move(c));
                     } else {
+                        std::vector<MatchClause> rclauses;
                         for (const auto& clause : rescue.clauses) {
                             MatchClause mc;
                             mc.patterns.push_back(
@@ -365,8 +366,9 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                                 ? lowerLoopArmU(clause.body, "", mutVars, yieldState)
                                 : yieldState();
                             subst = beforeTry;
-                            tc.clauses.push_back(std::move(mc));
+                            rclauses.push_back(std::move(mc));
                         }
+                        tc.clauses = expandRescueGuards(std::move(rclauses));
                     }
                     caseE = std::make_unique<Expr>();
                     caseE->node = std::move(tc);
@@ -503,7 +505,7 @@ auto Lowering::wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
                       bool blockValue ) -> ExprPtr {
     TryCatch tc;
     tc.body = std::move(body);
-    tc.clauses = lowerRescueClauses(rescue, blockValue);
+    tc.clauses = expandRescueGuards(lowerRescueClauses(rescue, blockValue));
     auto ex = std::make_unique<Expr>();
     ex->node = std::move(tc);
     return ex;
