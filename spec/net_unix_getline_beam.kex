@@ -1,0 +1,36 @@
+# kex: run-beam
+#
+# Unix line reading: FileHandle-style getLine over a stream socket.
+
+using Net.Socket
+
+main do
+  let path = "/tmp/kex-unix-getline-spec.sock"
+  FS.File.delete(path)
+  let listener = Unix.bind(path).try
+  let server = Task.start do
+    let peer = listener.accept.try
+    assert(peer.getLine.try == Just("hello"))
+    assert(peer.getLine.try == Just(" spaced "))
+    assert(peer.getLine.try == Just("raw"))
+    match peer.getLine do
+      Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
+      Ok(_) => assert(false, "invalid UTF-8 must not decode")
+    end
+    peer.sendAll("back\n".to(Binary).try).try
+    assert(peer.getLine.try == None)
+    peer.close
+  end
+  let client = Unix.connectTo(path).try
+  client.sendAll("hello\n".to(Binary).try).try
+  client.sendAll(" sp".to(Binary).try).try
+  client.sendAll("aced \n".to(Binary).try).try
+  client.sendAll("raw\r\n".to(Binary).try).try
+  client.sendAll(Binary.fromBytes([255, 10])).try
+  assert(client.getLine.try == Just("back"))
+  client.close
+  server.await
+  listener.close
+  FS.File.delete(path)
+  IO.printLine("ok")
+end

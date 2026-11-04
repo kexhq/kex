@@ -889,7 +889,19 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 if (fields.count(name)) return true;
             }
         for (const auto& [traitName, trait] : m_traits.all()) {
-            (void)traitName;
+            // An imported capability synthesizes its interface as a trait
+            // (registerCapabilityTraits), so its member names would otherwise
+            // vouch for ANY receiver in ANY module: `running.localAddress`
+            // checked clean because an unimported `Net.Socket.TCP` declares
+            // `localAddress`, defeating `except:` (kexhq/kex#570). Only a
+            // capability in reach may suppress the diagnostic. Ordinary traits
+            // keep the historical reach-insensitive behavior, and a capability
+            // declared by the program itself (short name, never dotted) is
+            // trivially in reach.
+            if (traitName.find('.') != std::string::npos &&
+                m_capabilities.count(traitName) > 0 &&
+                !moduleInReach(traitName, name))
+                continue;
             for (const auto& required : trait.requiredMethods)
                 if (required.name == name) return true;
             for (const auto& defaulted : trait.defaultMethods)

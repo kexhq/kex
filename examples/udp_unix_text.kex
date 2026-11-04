@@ -1,0 +1,30 @@
+using Net.Socket
+
+main do
+  # UDP has no connection, so each datagram carries its own destination.
+  let socket = UDP.bindTo("127.0.0.1:0").try
+  let port = socket.localAddress.try.port.string
+  let here = UDP.Endpoint.parse("127.0.0.1:${port}").try
+  let sent = UDP.sendTo(socket, here, "ping".to(Binary).try).try
+  let datagram = UDP.receiveFrom(socket, 64).try
+  IO.printLine("udp sent=${sent} received=${datagram.data.to(String).or("")}")
+  socket.close
+
+  # Unix sockets pair the same way over a filesystem path.
+  let sockPath = "/tmp/kex-udp-unix-text-example.sock"
+  FS.File.delete(sockPath)
+  let heard = Unix.bind(sockPath) do |listener|
+    let server = Task.start do
+      let peer = listener.accept.try
+      let line = peer.getLine.try.or("")
+      peer.close
+      line
+    end
+    Unix.connectTo(sockPath) do |conn|
+      conn.printLine("hi over unix")
+    end
+    server.await
+  end
+  IO.printLine("unix heard: ${heard.or("")}")
+  FS.File.delete(sockPath)
+end

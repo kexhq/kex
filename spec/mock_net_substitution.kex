@@ -1,0 +1,56 @@
+using Net.Socket
+using Net, except: [TCP, UDP, Unix, TLS]
+
+main do
+  with Net.Socket.TCP = Mock.TCP {} do
+    assert(TCP.Endpoint.parse("127.0.0.1:9").try.host == "127.0.0.1")
+    match TCP.connectTo("127.0.0.1:9") do
+      Error(e) => do
+        assert(e.kind == MockEmpty)
+        assert(e.message == "TCP refused to connect")
+      end
+      Ok(_) => assert(false, "mock must refuse")
+    end
+    match TCP.connectTo("127.0.0.1:9") { |conn| assert(false, "must not run") } do
+      Error(e) => assert(e.kind == MockEmpty)
+      Ok(_) => assert(false, "mock must refuse")
+    end
+  end
+  let injected = NetError { kind: MockEmpty, operation: DNS, message: "injected" }
+  with Net.Socket.TCP = Mock.TCP { failure: Just(injected) } do
+    match TCP.connectTo("127.0.0.1:9") do
+      Error(e) => assert(e.message == "injected")
+      Ok(_) => assert(false, "mock must refuse")
+    end
+  end
+
+  with Net.Socket.UDP = Mock.UDP {} do
+    assert(UDP.Endpoint.parse("127.0.0.1:9").try.host == "127.0.0.1")
+    match UDP.bindTo("127.0.0.1:0") do
+      Error(e) => assert(e.message == "UDP refused to bind")
+      Ok(_) => assert(false, "mock must refuse")
+    end
+  end
+
+  with Net.Socket.Unix = Mock.Unix {} do
+    match Unix.connectTo("/tmp/x.sock") do
+      Error(e) => assert(e.message == "Unix refused to connect")
+      Ok(_) => assert(false, "mock must refuse")
+    end
+    match Unix.bind("/tmp/x.sock") { |l| assert(false, "must not run") } do
+      Error(e) => assert(e.message == "Unix refused to listen")
+      Ok(_) => assert(false, "mock must refuse")
+    end
+  end
+
+  let endpoint = TCP.Endpoint.parse("127.0.0.1:9").try
+  let config = TLS.ClientConfig { serverName: "example.test" }
+  with Net.Socket.TLS = Mock.TLS {} do
+    match TLS.connect(endpoint, config) do
+      Error(e) => assert(e.message == "TLS refused to connect")
+      Ok(_) => assert(false, "mock must refuse")
+    end
+  end
+
+  IO.printLine("ok")
+end

@@ -1,0 +1,69 @@
+# kex: run-beam
+#
+# Text writes on sockets: the Writable five as free functions.
+# (True `implement: Writable` waits on the cross-unit dict bug;
+# see docs/issue-cross-unit-trait-dict.md.)
+
+using Net.Socket
+
+foul report(out: Writable, lines: [String]) -> Void do
+  lines.each { |line| out.printLine(line) }
+end
+
+main do
+  let path = "/tmp/kex-writable-spec.txt"
+  FS.File.delete(path)
+  let handle = FS.File.open(path, Write).try
+  report(handle, ["a", "b"])
+  handle.close
+  assert(FS.File.read(path).or("") == "a\nb\n")
+  FS.File.delete(path)
+
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  let server = Task.start do
+    let peer = listener.accept.try
+    assert(peer.receiveExactly(6).try.to(String).or("") == "l1\nl2\n")
+    assert(peer.receiveExactly(5).try.to(String).or("") == "p1p2\n")
+    assert(peer.receiveExactly(5).try.to(String).or("") == "w1w2\n")
+    assert(peer.receiveExactly(3).try.to(String).or("") == "raw")
+    peer.close
+  end
+  let client = TCP.connectTo("127.0.0.1:${port}").try
+  client.printLine("l1")
+  client.printLine("l2")
+  client.print("p1")
+  client.printLine("p2")
+  client.write("w1")
+  client.writeLine("w2")
+  client.writeBytes("raw".to(Binary).try)
+  client.close
+  server.await
+  listener.close
+
+  let sockPath = "/tmp/kex-writable-spec.sock"
+  FS.File.delete(sockPath)
+  let unixListener = Unix.bind(sockPath).try
+  let unixServer = Task.start do
+    let peer = unixListener.accept.try
+    assert(peer.receiveExactly(6).try.to(String).or("") == "l1\nl2\n")
+    assert(peer.receiveExactly(5).try.to(String).or("") == "p1p2\n")
+    assert(peer.receiveExactly(5).try.to(String).or("") == "w1w2\n")
+    assert(peer.receiveExactly(3).try.to(String).or("") == "raw")
+    peer.close
+  end
+  let unixClient = Unix.connectTo(sockPath).try
+  unixClient.printLine("l1")
+  unixClient.printLine("l2")
+  unixClient.print("p1")
+  unixClient.printLine("p2")
+  unixClient.write("w1")
+  unixClient.writeLine("w2")
+  unixClient.writeBytes("raw".to(Binary).try)
+  unixClient.close
+  unixServer.await
+  unixListener.close
+  FS.File.delete(sockPath)
+
+  IO.printLine("ok")
+end

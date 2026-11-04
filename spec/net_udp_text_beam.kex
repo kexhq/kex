@@ -1,0 +1,28 @@
+# kex: run-beam
+#
+# Text-oriented UDP helpers: string addresses.
+
+using Net.Socket
+
+main do
+  let ep = UDP.Endpoint.parse("127.0.0.1:8080").try
+  assert(ep.host == "127.0.0.1")
+  assert(ep.port.string == "8080")
+  let v6 = UDP.Endpoint.parse("::1:8080").try
+  assert(v6.host == "::1")
+  assert(v6.port.string == "8080")
+  match UDP.Endpoint.parse("noport") do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "address without a port must fail")
+  end
+  assert(UDP.Endpoint.parse("127.0.0.1:99999").error?, "out-of-range port must fail")
+
+  let socket = UDP.bindTo("127.0.0.1:0").try
+  let address = socket.localAddress.try
+  socket.sendTo(address, "hello".to(Binary).try).try
+  let packet = socket.receiveFrom(1024).try
+  assert(packet.data.to(String).or("") == "hello")
+  assert(packet.source.port.string == address.port.string)
+  socket.close
+  IO.printLine("ok")
+end

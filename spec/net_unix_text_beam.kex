@@ -1,0 +1,31 @@
+# kex: run-beam
+#
+# Text-oriented Unix helpers: string paths.
+
+using Net.Socket
+
+main do
+  match Unix.Address.path("relative.sock") do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "relative path must fail")
+  end
+
+  let path = "/tmp/kex-unix-text-spec.sock"
+  FS.File.delete(path)
+  let listener = Unix.bind(path).try
+  let server = Task.start do
+    let peer = listener.accept.try
+    let chunk = peer.receiveChunk(1024).try
+    assert(chunk.to(String).or("") == "hello")
+    peer.sendAll("back".to(Binary).try).try
+    peer.close
+  end
+  let client = Unix.connectTo(path).try
+  client.sendAll("hello".to(Binary).try).try
+  assert(client.receiveChunk(1024).try.to(String).or("") == "back")
+  client.close
+  server.await
+  listener.close
+  FS.File.delete(path)
+  IO.printLine("ok")
+end

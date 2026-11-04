@@ -1,0 +1,22 @@
+using Net.Socket
+using Net, except: [TCP, UDP, Unix, TLS]
+
+main do
+  # A bare mock refuses everything with a canned MockEmpty error.
+  # Other capabilities are unaffected: only TCP is replaced in here.
+  with Net.Socket.TCP = Mock.TCP {} do
+    match TCP.connectTo("127.0.0.1:9") do
+      Error(error) => IO.printLine("tcp refused: ${error.message}")
+      Ok(_) => IO.printLine("tcp unexpectedly connected")
+    end
+  end
+
+  # An injected failure comes back untouched, so tests can script errors.
+  let injected = NetError { kind: MockEmpty, operation: DNS, message: "boom" }
+  with Net.Socket.TCP = Mock.TCP { failure: Just(injected) } do
+    match TCP.connectTo("127.0.0.1:9") do
+      Error(error) => IO.printLine("tcp injected: ${error.message}")
+      Ok(_) => IO.printLine("tcp unexpectedly connected")
+    end
+  end
+end

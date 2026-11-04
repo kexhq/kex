@@ -1,0 +1,65 @@
+# kex: run-beam
+#
+# Autoclose blocks: the block's value comes back, the handle is closed,
+# and a failure to open never runs the block.
+
+using Net.Socket
+
+main do
+  let listener = TCP.bind("127.0.0.1:0").try
+  let port = listener.localAddress.try.port.string
+  let server = Task.start do
+    let peer = listener.accept.try
+    assert(peer.getLine.try == Just("hi"))
+    assert(peer.getLine.try == None)
+    peer.close
+  end
+  let result = TCP.connectTo("127.0.0.1:${port}") do |conn|
+    conn.printLine("hi")
+    42
+  end
+  assert(result.or(0) == 42)
+  server.await
+  listener.close
+
+  match TCP.connectTo("noport") { |conn| assert(false, "must not run") } do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "bad address must fail")
+  end
+
+  let bound = TCP.bind("127.0.0.1:0") do |listener|
+    listener.localAddress.try.port.string
+  end
+  assert(bound.or("") != "")
+  match TCP.bind("noport") { |listener| assert(false, "must not run") } do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "bad address must fail")
+  end
+
+  let udpPort = UDP.bindTo("127.0.0.1:0") do |socket|
+    socket.localAddress.try.port.string
+  end
+  assert(udpPort.or("") != "")
+  match UDP.bindTo("noport") { |socket| assert(false, "must not run") } do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "bad address must fail")
+  end
+
+  let sockPath = "/tmp/kex-block-forms-spec.sock"
+  FS.File.delete(sockPath)
+  let unixDone = Unix.bind(sockPath) do |listener|
+    let inner = Unix.connectTo(sockPath) do |conn|
+      conn.printLine("hi")
+      "done"
+    end
+    inner.or("")
+  end
+  assert(unixDone.or("") == "done")
+  match Unix.connectTo("relative.sock") { |conn| assert(false, "must not run") } do
+    Error(error) => assert(error.kind == Parse)
+    Ok(_) => assert(false, "bad path must fail")
+  end
+  FS.File.delete(sockPath)
+
+  IO.printLine("ok")
+end
