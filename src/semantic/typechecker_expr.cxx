@@ -588,11 +588,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::WithExpr>) {
-            std::string capability;
-            for (size_t i = 0; i < node.capability.parts.size(); ++i) {
-                if (i) capability += ".";
-                capability += node.capability.parts[i];
-            }
+            std::string capability = node.capability.dotted();
             // Only a declared capability may be replaced. Without this, any
             // module is substitutable and the keyword means nothing, and a
             // typo binds nothing while the body still runs against the real
@@ -620,10 +616,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;
-            for (size_t i = 0; i < node.module.parts.size(); ++i) {
-                if (i) selection.module += ".";
-                selection.module += node.module.parts[i];
-            }
+            selection.module += node.module.dotted();
             selection.onlyNames = node.onlyNames;
             selection.exceptNames = node.exceptNames;
             selection.alias = node.alias;
@@ -2679,39 +2672,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             auto [it, inserted] = instantiatedVars.emplace(part.id, nullptr);
                             if (inserted) it->second = freshTypeVar();
                             return it->second;
-                        } else if constexpr (std::is_same_v<Part, ListType>) {
-                            return Type::list(instantiate(part.element));
-                        } else if constexpr (std::is_same_v<Part, MapType>) {
-                            return Type::map(instantiate(part.key), instantiate(part.value));
-                        } else if constexpr (std::is_same_v<Part, FuncType>) {
-                            std::vector<TypePtr> params;
-                            for (const auto& param : part.params)
-                                params.push_back(instantiate(param));
-                            return Type::func(std::move(params), instantiate(part.result));
-                        } else if constexpr (std::is_same_v<Part, TupleType>) {
-                            std::vector<TypePtr> elements;
-                            for (const auto& element : part.elements)
-                                elements.push_back(instantiate(element));
-                            return Type::tuple(std::move(elements));
-                        } else if constexpr (std::is_same_v<Part, OptionalType>) {
-                            return Type::optional(instantiate(part.inner));
-                        } else if constexpr (std::is_same_v<Part, IntersectionType>) {
-                            std::vector<TypePtr> members;
-                            for (const auto& member : part.members)
-                                members.push_back(instantiate(member));
-                            return Type::intersection(std::move(members));
-                        } else if constexpr (std::is_same_v<Part, RecordType>) {
-                            std::vector<std::pair<std::string, TypePtr>> fields;
-                            for (const auto& [name, fieldType] : part.fields)
-                                fields.emplace_back(name, instantiate(fieldType));
-                            return Type::record(std::move(fields));
-                        } else if constexpr (std::is_same_v<Part, NamedType>) {
-                            std::vector<TypePtr> args;
-                            for (const auto& arg : part.typeArgs)
-                                args.push_back(instantiate(arg));
-                            return Type::named(part.name, std::move(args));
                         } else {
-                            return type;
+                            return mapTypeChildren(type, instantiate);
                         }
                     }, type->kind);
                 };
@@ -3812,25 +3774,11 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     int nextNeg = -1;
     std::function<void(const TypePtr&)> collectVars = [&](const TypePtr& t) {
         if (!t) return;
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, TypeVar>) {
-                if (!varRemap.count(node.id)) { varRemap[node.id] = nextNeg--; }
-            } else if constexpr (std::is_same_v<T, ListType>) {
-                collectVars(node.element);
-            } else if constexpr (std::is_same_v<T, MapType>) {
-                collectVars(node.key); collectVars(node.value);
-            } else if constexpr (std::is_same_v<T, FuncType>) {
-                for (const auto& p : node.params) collectVars(p);
-                collectVars(node.result);
-            } else if constexpr (std::is_same_v<T, TupleType>) {
-                for (const auto& e : node.elements) collectVars(e);
-            } else if constexpr (std::is_same_v<T, OptionalType>) {
-                collectVars(node.inner);
-            } else if constexpr (std::is_same_v<T, NamedType>) {
-                for (const auto& a : node.typeArgs) collectVars(a);
-            }
-        }, t->kind);
+        if (const auto* var = std::get_if<TypeVar>(&t->kind)) {
+            if (!varRemap.count(var->id)) varRemap[var->id] = nextNeg--;
+            return;
+        }
+        forEachTypeChild(t, collectVars);
     };
     for (const auto& p : sig.params) collectVars(p);
     collectVars(sig.result);
@@ -3842,37 +3790,8 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
             if constexpr (std::is_same_v<T, TypeVar>) {
                 auto it = varRemap.find(node.id);
                 return it != varRemap.end() ? Type::typeVar(it->second) : t;
-            } else if constexpr (std::is_same_v<T, ListType>) {
-                return Type::list(remap(node.element));
-            } else if constexpr (std::is_same_v<T, MapType>) {
-                return Type::map(remap(node.key), remap(node.value));
-            } else if constexpr (std::is_same_v<T, FuncType>) {
-                std::vector<TypePtr> ps;
-                for (const auto& p : node.params) ps.push_back(remap(p));
-                return std::make_shared<Type>(Type{FuncType{
-                    std::move(ps), remap(node.result), node.block}});
-            } else if constexpr (std::is_same_v<T, TupleType>) {
-                std::vector<TypePtr> es;
-                for (const auto& e : node.elements) es.push_back(remap(e));
-                return std::make_shared<Type>(Type{TupleType{std::move(es)}});
-            } else if constexpr (std::is_same_v<T, OptionalType>) {
-                return Type::optional(remap(node.inner));
-            } else if constexpr (std::is_same_v<T, IntersectionType>) {
-                std::vector<TypePtr> members;
-                for (const auto& member : node.members)
-                    members.push_back(remap(member));
-                return Type::intersection(std::move(members));
-            } else if constexpr (std::is_same_v<T, RecordType>) {
-                std::vector<std::pair<std::string, TypePtr>> fields;
-                for (const auto& [name, fieldType] : node.fields)
-                    fields.emplace_back(name, remap(fieldType));
-                return Type::record(std::move(fields));
-            } else if constexpr (std::is_same_v<T, NamedType>) {
-                std::vector<TypePtr> args;
-                for (const auto& a : node.typeArgs) args.push_back(remap(a));
-                return Type::named(node.name, std::move(args));
             } else {
-                return t;
+                return mapTypeChildren(t, remap);
             }
         }, t->kind);
     };
@@ -4956,7 +4875,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (std::holds_alternative<ConstrainedType>(sig.params[0]->kind))
                     anyConstrainedFirstParam = true;
                 for (const auto& param : sig.params)
-                    if (mentionsUnknownType(param)) {
+                    if (mentionsUnknownParam(param)) {
                         anyUnknownParamCandidate = true;
                         break;
                     }
@@ -5595,39 +5514,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // into (e.g. `let f(s) = s.split(",")` constrains `s` to String).
         // Only apply when the param is concrete — skip generic params that
         // themselves contain TypeVars (e.g. `first : [A] -> A?`).
-        std::function<bool(const TypePtr&)> typeContainsVar =
-            [&](const TypePtr& t) {
-            if (std::holds_alternative<TypeVar>(t->kind)) return true;
-            if (auto* lt = std::get_if<ListType>(&t->kind))
-                return typeContainsVar(lt->element);
-            if (auto* ot = std::get_if<OptionalType>(&t->kind))
-                return typeContainsVar(ot->inner);
-            if (auto* map = std::get_if<MapType>(&t->kind))
-                return typeContainsVar(map->key) ||
-                       typeContainsVar(map->value);
-            if (auto* tuple = std::get_if<TupleType>(&t->kind))
-                return std::any_of(
-                    tuple->elements.begin(), tuple->elements.end(),
-                    typeContainsVar);
-            if (auto* fn = std::get_if<FuncType>(&t->kind))
-                return std::any_of(fn->params.begin(), fn->params.end(),
-                                   typeContainsVar) ||
-                       typeContainsVar(fn->result);
-            if (auto* named = std::get_if<NamedType>(&t->kind))
-                return std::any_of(named->typeArgs.begin(),
-                                   named->typeArgs.end(), typeContainsVar);
-            if (auto* intersection =
-                    std::get_if<IntersectionType>(&t->kind))
-                return std::any_of(intersection->members.begin(),
-                                   intersection->members.end(),
-                                   typeContainsVar);
-            if (auto* record = std::get_if<RecordType>(&t->kind))
-                return std::any_of(
-                    record->fields.begin(), record->fields.end(),
-                    [&](const auto& field) {
-                        return typeContainsVar(field.second);
-                    });
-            return false;
+        const auto typeContainsVar = [](const TypePtr& t) {
+            return anyType(t, [](const TypePtr& node) {
+                return std::holds_alternative<TypeVar>(node->kind);
+            });
         };
         for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++) {
             // The receiver of an ambiguous call is exactly the argument this
@@ -5751,52 +5641,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     auto found = genericSubst.find(var->id);
                     return found == genericSubst.end() ? type : found->second;
                 }
-                if (auto* list = std::get_if<ListType>(&type->kind))
-                    return Type::list(applyGenerics(list->element));
-                if (auto* optional = std::get_if<OptionalType>(&type->kind))
-                    return Type::optional(applyGenerics(optional->inner));
-                if (auto* map = std::get_if<MapType>(&type->kind))
-                    return Type::map(applyGenerics(map->key),
-                                     applyGenerics(map->value));
-                if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
-                    std::vector<TypePtr> elements;
-                    for (const auto& element : tuple->elements)
-                        elements.push_back(applyGenerics(element));
-                    return Type::tuple(std::move(elements));
-                }
-                if (auto* named = std::get_if<NamedType>(&type->kind)) {
-                    if (named->typeArgs.empty()) return type;
-                    std::vector<TypePtr> args;
-                    for (const auto& arg : named->typeArgs)
-                        args.push_back(applyGenerics(arg));
-                    return Type::named(named->name, std::move(args));
-                }
-                // A function-typed parameter is where a BLOCK is passed, and
-                // without this its variables were the only ones left standing:
-                // `nums.map { |x| x * 2 }` reported the selected overload as
-                // `[Integer] -> (A -> B) -> [Integer]`, substituting the
-                // receiver and result but not the block it was actually given.
-                if (auto* function = std::get_if<FuncType>(&type->kind)) {
-                    std::vector<TypePtr> params;
-                    for (const auto& param : function->params)
-                        params.push_back(applyGenerics(param));
-                    return Type::func(std::move(params),
-                                      applyGenerics(function->result));
-                }
-                if (auto* intersection =
-                        std::get_if<IntersectionType>(&type->kind)) {
-                    std::vector<TypePtr> members;
-                    for (const auto& member : intersection->members)
-                        members.push_back(applyGenerics(member));
-                    return Type::intersection(std::move(members));
-                }
-                if (auto* record = std::get_if<RecordType>(&type->kind)) {
-                    std::vector<std::pair<std::string, TypePtr>> fields;
-                    for (const auto& [name, fieldType] : record->fields)
-                        fields.emplace_back(name, applyGenerics(fieldType));
-                    return Type::record(std::move(fields));
-                }
-                return type;
+                // Every nested type, function types included: a function-typed
+                // parameter is where a BLOCK is passed, and skipping it left
+                // its variables the only ones standing — `nums.map { |x| x * 2 }`
+                // reported the selected overload as `[Integer] -> (A -> B) ->
+                // [Integer]`, substituting the receiver and result but not the
+                // block it was actually given.
+                return mapTypeChildren(type, applyGenerics);
             };
         auto selectedResult =
             normalizeIntersection(applyGenerics(matched.result));
@@ -5934,7 +5785,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         std::all_of(arityMatches.begin(), arityMatches.end(),
                     [](const Signature* sig) {
                         return std::any_of(sig->params.begin(), sig->params.end(),
-                                           mentionsUnknownType);
+                                           mentionsUnknownParam);
                     });
     if (unreliableCandidates) return arityMatches[0]->result;
 
@@ -5987,7 +5838,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                                       argTypes.size() > sig.params.size();
         if (arityCannotMatch &&
             std::any_of(sig.params.begin(), sig.params.end(),
-                        mentionsUnknownType))
+                        mentionsUnknownParam))
             continue;
         auto rendered = displaySignature(name, sig);
         if (!shown.insert(rendered).second) continue;

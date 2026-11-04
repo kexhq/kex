@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include "../common/string_utils.hxx"
 #include <cctype>
 #include <memory>
 #include <optional>
@@ -22,6 +23,9 @@ using TypeExprPtr = std::unique_ptr<TypeExpr>;
 
 struct TypeName {
     std::vector<std::string> parts; // e.g. ["Html", "Element"]
+
+    // The name as written: `Html.Element`.
+    auto dotted() const -> std::string { return kex::join(parts, "."); }
 };
 
 struct GenericType {

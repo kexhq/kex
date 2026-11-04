@@ -205,21 +205,9 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
                 if constexpr (std::is_same_v<Ptr, FunctionDef>) {
                     out->body.push_back(clone(*node));
                 } else if constexpr (std::is_same_v<Ptr, TypeAnnotation>) {
-                    auto copy = std::make_unique<TypeAnnotation>();
-                    copy->name = node->name;
-                    copy->type = clone(node->type);
-                    copy->implicitThis = node->implicitThis;
-                    copy->implicitFrom = node->implicitFrom;
-                    copy->isFoul = node->isFoul;
-                    out->body.push_back(std::move(copy));
+                    out->body.push_back(clone(*node));
                 } else if constexpr (std::is_same_v<Ptr, VisibilityBlock>) {
-                    auto copy = std::make_unique<VisibilityBlock>();
-                    copy->isPublic = node->isPublic;
-                    for (const auto& inner : node->items)
-                        if (const auto* fn =
-                                std::get_if<std::unique_ptr<FunctionDef>>(&inner))
-                            if (*fn) copy->items.push_back(clone(**fn));
-                    out->body.push_back(std::move(copy));
+                    if (auto copy = clone(*node)) out->body.push_back(std::move(copy));
                 } else if constexpr (std::is_same_v<Ptr, Expr>) {
                     // A driver loop in a generated make's body. Expansion
                     // replaces it with the methods it declared, but a clone
@@ -404,6 +392,117 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
             }
         },
         expr->kind);
+    return out;
+}
+
+auto clone(const TypeAnnotation& annotation) -> std::unique_ptr<TypeAnnotation> {
+    auto out = std::make_unique<TypeAnnotation>();
+    out->location = annotation.location;
+    out->name = annotation.name;
+    out->type = clone(annotation.type);
+    out->implicitThis = annotation.implicitThis;
+    out->implicitFrom = annotation.implicitFrom;
+    out->isFoul = annotation.isFoul;
+    return out;
+}
+
+auto clone(const UsingBlock& block) -> std::unique_ptr<UsingBlock> {
+    auto out = std::make_unique<UsingBlock>();
+    out->location = block.location;
+    out->module = block.module;
+    out->alias = block.alias;
+    out->onlyNames = block.onlyNames;
+    out->exceptNames = block.exceptNames;
+    for (const auto& expr : block.body) out->body.push_back(clone(expr));
+    return out;
+}
+
+namespace {
+
+// Copies of the items a block nests; a CompiledBlock (unexpanded
+// compile-time code) has no copy, and makes the whole clone fail.
+template <typename Items>
+auto cloneItems(const Items& items, Items& out) -> bool {
+    for (const auto& item : items) {
+        bool ok = true;
+        std::visit(
+            [&](const auto& node) {
+                using Ptr = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Ptr, ExprPtr>) {
+                    out.push_back(clone(node));
+                } else {
+                    using Node = typename Ptr::element_type;
+                    if (!node) {
+                        out.push_back(Ptr{});
+                    } else if constexpr (std::is_same_v<Node, CompiledBlock>) {
+                        ok = false;
+                    } else if constexpr (std::is_same_v<Node, VisibilityBlock> ||
+                                         std::is_same_v<Node, ModuleDef>) {
+                        auto copy = clone(*node);
+                        if (!copy) ok = false;
+                        else out.push_back(std::move(copy));
+                    } else {
+                        out.push_back(clone(*node));
+                    }
+                }
+            },
+            item);
+        if (!ok) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+auto clone(const VisibilityBlock& block) -> std::unique_ptr<VisibilityBlock> {
+    auto out = std::make_unique<VisibilityBlock>();
+    out->location = block.location;
+    out->isPublic = block.isPublic;
+    if (!cloneItems(block.items, out->items)) return nullptr;
+    return out;
+}
+
+auto clone(const TraitDef& trait) -> std::unique_ptr<TraitDef> {
+    auto out = std::make_unique<TraitDef>();
+    out->location = trait.location;
+    out->name = trait.name;
+    out->typeParams = trait.typeParams;
+    cloneItems(trait.body, out->body);
+    return out;
+}
+
+auto clone(const ExportDecl& decl) -> std::unique_ptr<ExportDecl> {
+    return std::make_unique<ExportDecl>(ExportDecl{
+        decl.location, decl.module, decl.alias, decl.onlyNames, decl.exceptNames});
+}
+
+auto clone(const MainBlock& main) -> std::unique_ptr<MainBlock> {
+    auto out = std::make_unique<MainBlock>();
+    out->location = main.location;
+    for (const auto& param : main.params) out->params.push_back(clone(param));
+    for (const auto& expr : main.body) out->body.push_back(clone(expr));
+    out->synthetic = main.synthetic;
+    out->isExplicitMain = main.isExplicitMain;
+    if (main.rescue) out->rescue = clone(*main.rescue);
+    return out;
+}
+
+auto clone(const Pragma& pragma) -> std::unique_ptr<Pragma> {
+    return std::make_unique<Pragma>(Pragma{pragma.location, pragma.requirements});
+}
+
+auto clone(const ModuleDef& module) -> std::unique_ptr<ModuleDef> {
+    auto out = std::make_unique<ModuleDef>();
+    out->location = module.location;
+    out->name = module.name;
+    out->isCapability = module.isCapability;
+    if (!cloneItems(module.body, out->body)) return nullptr;
+    return out;
+}
+
+auto clone(const Program& program) -> std::optional<Program> {
+    Program out;
+    if (!cloneItems(program.items, out.items)) return std::nullopt;
     return out;
 }
 

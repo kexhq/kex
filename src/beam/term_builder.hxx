@@ -41,7 +41,7 @@ struct TermBuilder {
     auto floating(double value) const -> Value { return Term::floating(value); }
     auto atom(std::string value) const -> Value { return Term::atom(std::move(value)); }
     auto boolean(bool value) const -> Value {
-        return Term::atom(value ? "true" : "false");
+        return Term::boolean(value);
     }
     auto none() const -> Value { return Term::atom("None"); }
     auto just(Value value) const -> Value {

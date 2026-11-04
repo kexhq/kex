@@ -1,8 +1,10 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -169,6 +171,37 @@ struct Type {
 
 auto typeToString(const TypePtr& type) -> std::string;
 
+// Structural traversal: the one place that knows which alternatives nest other
+// types. Spell out only the kinds a walk treats specially; hand the rest here.
+//
+// Each type directly nested in `type`, in order (a child may be null).
+auto forEachTypeChild(const TypePtr& type,
+                      const std::function<void(const TypePtr&)>& visit) -> void;
+// `type` rebuilt with each directly nested type replaced by `map(child)`. A
+// leaf, or a type none of whose children changed, comes back as the same
+// object.
+auto mapTypeChildren(const TypePtr& type,
+                     const std::function<TypePtr(const TypePtr&)>& map)
+    -> TypePtr;
+// What a missing (null) type counts as, for walks that must decide.
+enum class NullType { Known, Unknown };
+// Whether `predicate` holds for `type` or any type nested in it, pre-order;
+// stops at the first hit. A null type is a hit only for NullType::Unknown.
+auto anyType(const TypePtr& type,
+             const std::function<bool(const TypePtr&)>& predicate,
+             NullType nullType = NullType::Known) -> bool;
+
+// Does a type contain an Unknown anywhere? On a signature PARAMETER this
+// marks a contract the checker never learned — the shape-only entries the
+// source-derived interface path records for un-annotated `make` methods,
+// where compiled artifacts would supply real types. Type variables are not
+// this: `[A]` is a known, genuinely generic contract.
+auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool;
+// The same for a signature parameter, where a missing type is a known one.
+inline auto mentionsUnknownParam(const TypePtr& type) -> bool {
+    return mentionsUnknown(type, NullType::Known);
+}
+
 // A type flattened to name + arguments, the shape `Type.of` hands back to Kex
 // code. Backend-neutral on purpose: the interpreter builds a record from it
 // and the BEAM lowering emits a literal, without either depending on the
@@ -202,6 +235,20 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
 // declaration behind them; everything else must be declared.
 auto isPrimitiveTypeName(const std::string& name) -> bool;
 
+// The type a built-in type NAME denotes, or null when the name is not one: the
+// one table every name-to-type lookup reads — the checker's globals, the
+// source-derived interfaces and the KexI reader. `Int` is `Integer`
+// (arbitrary precision); the fixed widths are spelled `Int8` … `UInt64` and
+// `Float32`/`Float64`. Copies of this list used to disagree: the KexI reader
+// read `Int` as Int64 while the checker read it as Integer.
+auto builtinType(std::string_view name) -> TypePtr;
+// Every name builtinType knows, in table order.
+auto builtinTypeNames() -> std::vector<std::string_view>;
+// The same, plus the names a SIGNATURE may use that are not concrete types:
+// the numeric traits `Number` and `Float` (constrained) and `Void` (unit).
+// Exactly the names compiled metadata writes as primitives.
+auto signatureBuiltinType(std::string_view name) -> TypePtr;
+
 // Whether two named-type identities denote the same type. Record and ADT
 // identity is module-qualified (`Tey.Manifest.Dependency`), so two qualified
 // names must match in full — that is what keeps same-named records in sibling
@@ -220,6 +267,10 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 //   - diagnostics, where a mismatch against a determined receiver is provable
 //     and one against a gradual receiver is not.
 auto isFullyConcrete(const TypePtr& type) -> bool;
+// The negation: a type variable, an unknown, a trait constraint or a missing
+// type somewhere inside. Checks that would otherwise report a mismatch use
+// this to stay quiet rather than invent an error from incomplete information.
+auto containsOpenType(const TypePtr& type) -> bool;
 
 class TypeEnv {
 public:

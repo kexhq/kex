@@ -1,0 +1,6 @@
+duplicate-helpers 28
+literal-compares 617
+type-recursions 59
+expr-walkers 24
+long-functions 19
+big-files 10

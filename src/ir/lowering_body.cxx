@@ -14,7 +14,6 @@ auto Lowering::lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr {
 auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) -> ExprPtr {
     const auto& e = body[i];
     bool isLast = (i + 1 == body.size());
-    auto prevLoc = currentLoc;
     currentLoc = &e->location;
 
     // let PATTERN = value
@@ -144,7 +143,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     + std::to_string(currentLoc->column) + ": ";
                 err->node = Call{"erlang", "error", 1,
                     one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
-                return std::move(err);
+                return err;
             }
             auto val = lowerMutatingAsValue(*mc);
             std::string ssa = fresh(id->name);
@@ -516,55 +515,18 @@ auto Lowering::wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
 // lambdas are separate scopes, so their `.try`s don't count here.
 auto Lowering::irHasEscapingTryThrow(const ExprPtr& e) -> bool {
     if (!e) return false;
-    return std::visit([](const auto& n) -> bool {
-        using T = std::decay_t<decltype(n)>;
-        auto rec = [](const ExprPtr& c) { return irHasEscapingTryThrow(c); };
-        if constexpr (std::is_same_v<T, TryThrow>) return true;
-        else if constexpr (std::is_same_v<T, TryCatch>) {
-            // n.body's throws are caught here; only clause (rescue) bodies
-            // can still escape.
-            for (auto& c : n.clauses) if (rec(c.body)) return true;
-            return false;
-        }
-        else if constexpr (std::is_same_v<T, Lambda>) return false;
-        else if constexpr (std::is_same_v<T, Let>) return rec(n.value) || rec(n.body);
-        else if constexpr (std::is_same_v<T, Seq>) {
-            for (auto& x : n.exprs) if (rec(x)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, Match>) {
-            for (auto& s : n.subjects) if (rec(s)) return true;
-            for (auto& c : n.clauses) {
-                if (c.guard && rec(*c.guard)) return true;
-                if (rec(c.body)) return true;
-            }
-            return false;
-        }
-        else if constexpr (std::is_same_v<T, Intrinsic>) {
-            for (auto& a : n.args) if (rec(a)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, Call>) {
-            for (auto& a : n.args) if (rec(a)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, CallIndirect>) {
-            if (rec(n.callee)) return true;
-            for (auto& a : n.args) if (rec(a)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, Construct>) {
-            for (auto& a : n.args) if (rec(a)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, MakeTuple>) {
-            for (auto& a : n.elements) if (rec(a)) return true; return false;
-        }
-        else if constexpr (std::is_same_v<T, MakeList>) {
-            for (auto& a : n.elements) if (rec(a)) return true;
-            return n.rest && rec(*n.rest);
-        }
-        else if constexpr (std::is_same_v<T, FieldGet>) return rec(n.record);
-        else if constexpr (std::is_same_v<T, Return>) return rec(n.value);
-        else if constexpr (std::is_same_v<T, LetRec>)
-            return rec(n.funBody) || rec(n.contBody);
+    if (std::holds_alternative<TryThrow>(e->node)) return true;
+    if (std::holds_alternative<Lambda>(e->node)) return false;
+    if (const auto* tc = std::get_if<TryCatch>(&e->node)) {
+        // The body's throws are caught here; only clause (rescue) bodies
+        // can still escape.
+        for (const auto& c : tc->clauses)
+            if (irHasEscapingTryThrow(c.body)) return true;
         return false;
-    }, e->node);
+    }
+    return anyChild(*e, [](const ExprPtr& child) {
+        return irHasEscapingTryThrow(child);
+    });
 }
 
 // Wrap a rescue-less function body so an escaped `.try` failure becomes

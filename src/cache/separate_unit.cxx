@@ -1,33 +1,15 @@
 #include "separate_unit.hxx"
+#include "cache.hxx"
 #include "../beam/kexi.hxx"
+#include "../common/digest.hxx"
+#include "../common/file_io.hxx"
 #include <algorithm>
-#include <atomic>
 #include <fstream>
-#include <iterator>
 #include <limits>
-#include <random>
 
 namespace kex::cache {
 
 namespace {
-
-auto stagingSuffix() -> std::string {
-    static const auto process = [] {
-        std::random_device device;
-        return (static_cast<unsigned long long>(device()) << 32) ^ device();
-    }();
-    static std::atomic<unsigned long long> counter{0};
-    return ".tmp." + std::to_string(process) + "." +
-           std::to_string(counter.fetch_add(1));
-}
-
-auto readFile(const std::filesystem::path& path) -> std::optional<std::string> {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) return std::nullopt;
-    std::string bytes((std::istreambuf_iterator<char>(input)), {});
-    if (!input.eof() && input.fail()) return std::nullopt;
-    return bytes;
-}
 
 auto writeFile(const std::filesystem::path& path, const std::string& bytes)
     -> bool {
@@ -55,16 +37,7 @@ auto SeparateUnitCache::pathFor(const std::string& key) const
 }
 
 auto SeparateUnitCache::digest(const std::string& bytes) -> std::string {
-    static constexpr char digits[] = "0123456789abcdef";
-    const auto hash = beam::computeSha256(
-        std::vector<uint8_t>(bytes.begin(), bytes.end()));
-    std::string result;
-    result.reserve(hash.size() * 2);
-    for (const auto byte : hash) {
-        result += digits[byte >> 4];
-        result += digits[byte & 15];
-    }
-    return result;
+    return sha256Hex(bytes);
 }
 
 auto SeparateUnitCache::keyFor(
@@ -103,7 +76,7 @@ auto SeparateUnitCache::load(const std::string& key) const
         std::string atom, expected;
         if (!std::getline(manifest, atom) || !std::getline(manifest, expected))
             return std::nullopt;
-        const auto bytes = readFile(dir / (std::to_string(i) + ".kexi"));
+        const auto bytes = readFileText(dir / (std::to_string(i) + ".kexi"));
         if (!bytes || digest(*bytes) != expected) return std::nullopt;
         try {
             cached.interface.modules.push_back({atom, "", beam::deserializeKexi(
@@ -124,7 +97,7 @@ auto SeparateUnitCache::load(const std::string& key) const
             return std::nullopt;
         manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         if (!std::getline(manifest, expected)) return std::nullopt;
-        auto source = readFile(dir / (std::to_string(i) + ".core"));
+        auto source = readFileText(dir / (std::to_string(i) + ".core"));
         if (!source || digest(*source) != expected) return std::nullopt;
         cached.modules.push_back({std::move(*source), std::move(name), arity});
     }

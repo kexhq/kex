@@ -4,6 +4,7 @@
 #include "lower_internal.hxx"
 #include "../ast/function_groups.hxx"
 #include "../common/mangle.hxx"
+#include "../common/well_known.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
@@ -351,12 +352,6 @@ struct Lowering {
 
     auto noClauseMatched(ExprPtr subject) -> ExprPtr;
 
-    auto capabilityDispatch(
-        const std::string& capability, const std::string& method,
-        const std::vector<ast::ExprPtr>& sourceArgs,
-        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
-        -> ExprPtr;
-
     auto capabilityDispatchLowered(
         const std::string& capability, const std::string& method,
         std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
@@ -579,7 +574,6 @@ struct Lowering {
     auto one(ExprPtr a) -> std::vector<ExprPtr>;
     auto two(ExprPtr a, ExprPtr b) -> std::vector<ExprPtr>;
     auto three(ExprPtr a, ExprPtr b, ExprPtr c) -> std::vector<ExprPtr>;
-    auto callE_indirect(ExprPtr callee, std::vector<ExprPtr> args) -> ExprPtr;
     auto atomize_ir(ExprPtr e, std::vector<Binding>& binds) -> ExprPtr;
     mutable std::unordered_set<std::string> foulBackendTargets;
     // Module+function+arity combinations positively known to be PURE, which
@@ -756,8 +750,6 @@ struct Lowering {
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
                             const std::string& implicitThisName = "",
                             const std::string& nameOverride = "") -> FunDef;
-    auto lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName = "")
-        -> FunDef;
 
     // ---- Records ----------------------------------------------------------
     void addFieldAccessor(const std::string& field, const std::string& record,

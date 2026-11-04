@@ -4,6 +4,7 @@
 #include "../ast/function_groups.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
+#include "../common/well_known.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/named_arguments.hxx"
@@ -22,20 +23,35 @@ namespace kex::ir {
 
 using namespace kex::ir::detail;
 
+namespace {
+
+// Whether the prelude also answers `name` as a receiver method, seen from a
+// module other than the prelude itself. Such a name keeps the guarded
+// receiver dispatcher, whose last clause falls back to `kex_prelude:name`.
+auto preludeAnswers(const Lowering& L, const std::string& module,
+                    const std::string& name) -> bool {
+    if (!L.externalModules || module == names::kPreludeModule) return false;
+    auto providers = L.externalModules->receiverFunctions.find(name);
+    if (providers == L.externalModules->receiverFunctions.end()) return false;
+    return std::any_of(providers->second.begin(), providers->second.end(),
+                       [](const ExternalModules::ReceiverFunction& fn) {
+                           return fn.moduleAtom == names::kPreludeModule;
+                       });
+}
+
+} // namespace
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath,
-                  const ExternalModules* externals,
-                  const std::vector<ExternalRecordLayout>* externalRecords,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls,
-                  bool preferExternalReceivers,
-                  const std::vector<ExternalVariantTag>* externalVariants,
-                  const StaticTypeOfCalls* staticTypeOfCalls,
-                  const ExpressionTypes* expressionTypes,
-                  const std::unordered_map<const ast::MakeDef*,
-                      std::vector<std::string>>* resolvedTraits)
-    -> Module {
+                  const LowerContext& context) -> Module {
+    const auto& sourcePath = context.sourcePath;
+    const auto* externals = context.externals;
+    const auto* externalRecords = context.externalRecords;
+    const auto* resolvedCalls = context.resolvedCalls;
+    const bool preferExternalReceivers = context.preferExternalReceivers;
+    const auto* externalVariants = context.externalVariants;
+    const auto* staticTypeOfCalls = context.staticTypeOfCalls;
+    const auto* expressionTypes = context.expressionTypes;
+    const auto* resolvedTraits = context.resolvedTraits;
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
@@ -232,9 +248,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 const auto* type =
                     std::get_if<ast::TypeName>(&(*param.type)->kind);
                 if (!type || type->parts.empty()) continue;
-                std::string written;
-                for (const auto& part : type->parts)
-                    written += (written.empty() ? "" : ".") + part;
+                std::string written = kex::join(type->parts, ".");
                 if (auto trait = L.traitIdentityOf(written, ""); !trait.empty())
                     L.fnTraitParams[fd.name].push_back({i, std::move(trait)});
             }
@@ -586,11 +600,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {
                 if (*ed) {
-                    std::string srcMod;
-                    for (size_t i = 0; i < (*ed)->module.parts.size(); i++) {
-                        if (i) srcMod += ".";
-                        srcMod += (*ed)->module.parts[i];
-                    }
+                    std::string srcMod = (*ed)->module.dotted();
                     auto alias = (*ed)->alias.value_or((*ed)->module.parts.back());
                     auto nsPath = path + "." + alias;
                     // Records aren't re-namespaced the way functions are
@@ -703,22 +713,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // dispatcher built below, which already falls back to `kex_prelude:name`
     // for any receiver that is not one of the local owners.
     auto preludeAlsoOwns = [&](const std::string& name) {
-        if (!L.externalModules || mod.name == "kex_prelude") return false;
-        auto providers = L.externalModules->receiverFunctions.find(name);
-        if (providers == L.externalModules->receiverFunctions.end())
-            return false;
-        return std::any_of(providers->second.begin(), providers->second.end(),
-                           [](const ExternalModules::ReceiverFunction& fn) {
-                               return fn.moduleAtom == "kex_prelude";
-                           });
+        return preludeAnswers(L, mod.name, name);
     };
-    if (getenv("KEX_DBG")) { for (const auto& kv : L.externalModules->exportToBeamFn) if (kv.first.find("showValue") != std::string::npos || kv.first.find("empty?") != std::string::npos) fprintf(stderr, "[dbg] key=%s -> %s\n", kv.first.c_str(), kv.second.c_str()); }
     for (const auto& [name, owners] : L.methodOwners)
         if (owners.size() > 1 || L.fieldAccessors.count(name) ||
             (owners.size() == 1 && preludeAlsoOwns(name) &&
              !L.knownTypes.count(owners.front())))
             L.collidingMethods.insert(name);  // order-free: a set membership
-    if (mod.name != "kex_prelude")
+    if (mod.name != names::kPreludeModule)
         for (const auto& [name, owners] : L.methodOwners)
             if (L.fnParamNames.count(name)) {
                 L.freeFunctionSymbols[name] = name + "$free";
@@ -987,11 +989,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         for (const auto& bi : m.body) {
                             if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
                                 if (!*ub) continue;
-                                std::string srcMod;
-                                for (size_t i = 0; i < (*ub)->module.parts.size(); i++) {
-                                    if (i) srcMod += ".";
-                                    srcMod += (*ub)->module.parts[i];
-                                }
+                                std::string srcMod = (*ub)->module.dotted();
                                 if ((*ub)->body.empty()) {
                                     L.applyUsingCore(srcMod, (*ub)->alias,
                                                      (*ub)->onlyNames,
@@ -1083,11 +1081,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 if (!node) return;
-                std::string srcMod;
-                for (size_t i = 0; i < node->module.parts.size(); i++) {
-                    if (i) srcMod += ".";
-                    srcMod += node->module.parts[i];
-                }
+                std::string srcMod = node->module.dotted();
                 if (node->body.empty()) {
                     L.applyUsingCore(srcMod, node->alias, node->onlyNames,
                                      node->exceptNames);
@@ -1235,7 +1229,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // Inside the prelude with no generic conversion at this arity there
             // is nowhere further to go: `kex_prelude:to` is this dispatcher's
             // own caller, and forwarding there looped forever.
-            if (name == "to" && (hasGeneric || mod.name != "kex_prelude")) {
+            if (name == "to" && (hasGeneric || mod.name != names::kPreludeModule)) {
                 FunClause fallback;
                 std::vector<ExprPtr> args;
                 for (int i = 0; i < arity; ++i) {
@@ -1251,7 +1245,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                       std::move(args), false};
                     fallback.body = std::move(body);
                 } else {
-                    fallback.body = L.callE("kex_prelude", "to", arity,
+                    fallback.body = L.callE(names::kPreludeModule, "to", arity,
                                           std::move(args));
                 }
                 def.clauses.push_back(std::move(fallback));
@@ -1298,8 +1292,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     fallbackModule = prelude->second;
             }
             if (fallbackModule.empty() && name == "to" &&
-                mod.name != "kex_prelude")
-                fallbackModule = "kex_prelude";
+                mod.name != names::kPreludeModule)
+                fallbackModule = names::kPreludeModule;
         }
         mod.functions.push_back(L.makeArgumentDispatcher(
             name, arity, overloads, fallbackModule));
@@ -1372,17 +1366,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // a make-block method's implicit `this` is an unguarded catch-all,
             // so the merged function swallows every receiver — Strings
             // included — with no way left to reach `kex_prelude:name`.
-            const bool preludeOwnsName = [&] {
-                if (!L.externalModules || mod.name == "kex_prelude") return false;
-                auto providers = L.externalModules->receiverFunctions.find(name);
-                if (providers == L.externalModules->receiverFunctions.end())
-                    return false;
-                return std::any_of(
-                    providers->second.begin(), providers->second.end(),
-                    [](const ExternalModules::ReceiverFunction& fn) {
-                        return fn.moduleAtom == "kex_prelude";
-                    });
-            }();
+            const bool preludeOwnsName = preludeAnswers(L, mod.name, name);
             // Merging is only wrong when one of the clauses is an UNGUARDED
             // CATCH-ALL. A method written with an implicit `this` and no
             // pattern (`make Box do let showValue = "box"`) lowers to
@@ -1457,7 +1441,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     auto provider = std::find_if(
                         providers.begin(), providers.end(),
                         [&](const ExternalModules::ReceiverFunction& fn) {
-                            return fn.moduleAtom == "kex_prelude" &&
+                            return fn.moduleAtom == names::kPreludeModule &&
                                    fn.beamArity == arity &&
                                    fn.beamFunction == name;
                         });
@@ -1473,7 +1457,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             args.push_back(
                                 var("_preludeArg" + std::to_string(a)));
                         }
-                        fallback.body = L.callE("kex_prelude", name, arity,
+                        fallback.body = L.callE(names::kPreludeModule, name, arity,
                                                 std::move(args));
                         merged.clauses.push_back(std::move(fallback));
                     }
@@ -1593,8 +1577,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         }
                     }
                     if (genericFallback.empty() && name == "to" &&
-                        mod.name != "kex_prelude") {
-                        genericFallbackModule = "kex_prelude";
+                        mod.name != names::kPreludeModule) {
+                        genericFallbackModule = names::kPreludeModule;
                         genericFallback = name;
                     }
                     // `to` was special-cased by name because the lookup above
@@ -1604,7 +1588,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // the same escape, keyed off the receiver-function table
                     // that does know about them.
                     if (genericFallback.empty() && preludeOwnsName) {
-                        genericFallbackModule = "kex_prelude";
+                        genericFallbackModule = names::kPreludeModule;
                         genericFallback = name;
                     }
                 }
@@ -1775,18 +1759,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     return mod;
 }
 
-auto lowerProgramTiered(
-    const ast::Program& prog,
-    const std::array<size_t, 5>& tierBounds,
-    const std::string& fileStem,
-    const std::string& sourcePath,
-    const ExternalModules* externals,
-    const std::vector<ExternalRecordLayout>* externalRecords,
-    const std::unordered_map<const ast::MethodCall*,
-        semantic::ResolvedCallTarget>* resolvedCalls,
-    bool preferExternalReceivers,
-    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
-        resolvedTraits) -> Module {
+auto lowerProgramTiered(const ast::Program& prog,
+                        const std::array<size_t, 5>& tierBounds,
+                        const std::string& fileStem,
+                        const LowerContext& context) -> Module {
     // The prelude still lowers as one merged module, so the output is
     // lowerProgram's by construction and the two paths cannot drift apart.
     // The bounds only validate the tier partition for now; they become
@@ -1797,9 +1773,14 @@ auto lowerProgramTiered(
             throw LowerError("IR lower: non-monotonic prelude tier bounds");
     if (tierBounds[4] != prog.items.size())
         throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
-    return lowerProgram(prog, fileStem, sourcePath, externals, externalRecords,
-                        resolvedCalls, preferExternalReceivers, nullptr,
-                        nullptr, nullptr, resolvedTraits);
+    LowerContext tiered;
+    tiered.sourcePath = context.sourcePath;
+    tiered.externals = context.externals;
+    tiered.externalRecords = context.externalRecords;
+    tiered.resolvedCalls = context.resolvedCalls;
+    tiered.preferExternalReceivers = context.preferExternalReceivers;
+    tiered.resolvedTraits = context.resolvedTraits;
+    return lowerProgram(prog, fileStem, tiered);
 }
 
 namespace {
@@ -1842,117 +1823,58 @@ auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
                         const std::set<std::pair<std::string, int>>* local = nullptr)
     -> void {
     if (!expr) return;
-    std::visit([&](auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        auto visit = [&](ExprPtr& child) {
-            rewriteModuleCalls(child, targets, defined, fallback, local);
-        };
-        if constexpr (std::is_same_v<T, Call>) {
-            if (node.module.empty() && local &&
-                local->count({node.name, node.arity})) {
-                // Defined right here: stays a local call.
-            } else if (node.module.empty()) {
-                if (auto it = targets.find(node.name); it != targets.end()) {
-                    auto built = defined.find(it->second.module);
-                    if (built == defined.end() ||
-                        built->second.count({it->second.sourceName, node.arity})) {
-                        node.module = it->second.module;
-                        node.name = it->second.sourceName;
-                    } else if (auto external =
-                                   fallback.find({node.name, node.arity});
-                               external != fallback.end()) {
-                        node.module = external->second.module;
-                        node.name = external->second.sourceName;
-                    }
-                }
-            } else if (auto built = defined.find(node.module);
-                       built != defined.end() &&
-                       !built->second.count({node.name, node.arity})) {
-                // Already addressed to a module built HERE that turns out not
-                // to define it. A trait dictionary aims at the concrete
-                // type's owner module — right for a type that implements the
-                // method, wrong when the implementation is the trait default:
-                // `Kex.Units.SI:showValue/1` against a module with no
-                // `showValue` at all, i.e. `undef` for any program that says
-                // `using Units.SI`.
-                if (auto external = fallback.find({node.name, node.arity});
-                    external != fallback.end()) {
+    if (auto* call = std::get_if<Call>(&expr->node)) {
+        auto& node = *call;
+        if (node.module.empty() && local &&
+            local->count({node.name, node.arity})) {
+            // Defined right here: stays a local call.
+        } else if (node.module.empty()) {
+            if (auto it = targets.find(node.name); it != targets.end()) {
+                auto built = defined.find(it->second.module);
+                if (built == defined.end() ||
+                    built->second.count({it->second.sourceName, node.arity})) {
+                    node.module = it->second.module;
+                    node.name = it->second.sourceName;
+                } else if (auto external =
+                               fallback.find({node.name, node.arity});
+                           external != fallback.end()) {
                     node.module = external->second.module;
                     node.name = external->second.sourceName;
                 }
             }
-            for (auto& arg : node.args) visit(arg);
-        } else if constexpr (std::is_same_v<T, Intrinsic>) {
-            for (auto& arg : node.args) visit(arg);
-        } else if constexpr (std::is_same_v<T, CallIndirect>) {
-            visit(node.callee); for (auto& arg : node.args) visit(arg);
-        } else if constexpr (std::is_same_v<T, Let>) {
-            visit(node.value); visit(node.body);
-        } else if constexpr (std::is_same_v<T, Seq>) {
-            for (auto& item : node.exprs) visit(item);
-        } else if constexpr (std::is_same_v<T, Match>) {
-            for (auto& subject : node.subjects) visit(subject);
-            for (auto& clause : node.clauses) {
-                if (clause.guard) visit(*clause.guard);
-                visit(clause.body);
+        } else if (auto built = defined.find(node.module);
+                   built != defined.end() &&
+                   !built->second.count({node.name, node.arity})) {
+            // Already addressed to a module built HERE that turns out not
+            // to define it. A trait dictionary aims at the concrete
+            // type's owner module — right for a type that implements the
+            // method, wrong when the implementation is the trait default:
+            // `Kex.Units.SI:showValue/1` against a module with no
+            // `showValue` at all, i.e. `undef` for any program that says
+            // `using Units.SI`.
+            if (auto external = fallback.find({node.name, node.arity});
+                external != fallback.end()) {
+                node.module = external->second.module;
+                node.name = external->second.sourceName;
             }
-        } else if constexpr (std::is_same_v<T, Construct>) {
-            for (auto& arg : node.args) visit(arg);
-        } else if constexpr (std::is_same_v<T, MakeTuple>) {
-            for (auto& item : node.elements) visit(item);
-        } else if constexpr (std::is_same_v<T, MakeList>) {
-            for (auto& item : node.elements) visit(item);
-            if (node.rest) visit(*node.rest);
-        } else if constexpr (std::is_same_v<T, FieldGet>) {
-            visit(node.record);
-        } else if constexpr (std::is_same_v<T, Lambda>) {
-            visit(node.body);
-        } else if constexpr (std::is_same_v<T, Return>) {
-            visit(node.value);
-        } else if constexpr (std::is_same_v<T, LetRec>) {
-            visit(node.funBody); visit(node.contBody);
-        } else if constexpr (std::is_same_v<T, TryThrow>) {
-            visit(node.error);
-        } else if constexpr (std::is_same_v<T, TryCatch>) {
-            visit(node.body);
-            for (auto& clause : node.clauses) {
-                if (clause.guard) visit(*clause.guard);
-                visit(clause.body);
-            }
-        } else if constexpr (std::is_same_v<T, Receive>) {
-            for (auto& clause : node.clauses) {
-                visit(clause.body);
-            }
-            if (node.timeout) visit(*node.timeout);
-            if (node.afterBody) visit(*node.afterBody);
         }
-    }, expr->node);
+    }
+    forEachChild(*expr, [&](ExprPtr& child) {
+        rewriteModuleCalls(child, targets, defined, fallback, local);
+    });
 }
 
 } // namespace
 
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath,
-                  const std::vector<ExternalRecordLayout>* externalRecords,
-                  const ExternalModules* externals,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls,
-                  bool preferExternalReceivers,
-                  const std::vector<ExternalVariantTag>* externalVariants,
-                  const StaticTypeOfCalls* staticTypeOfCalls,
-                  const ExpressionTypes* expressionTypes,
-                  const std::unordered_map<const ast::MakeDef*,
-                      std::vector<std::string>>* resolvedTraits)
-    -> std::vector<Module> {
+                  const LowerContext& context) -> std::vector<Module> {
+    const auto* externals = context.externals;
+    const auto* externalRecords = context.externalRecords;
     g_keepDeclaringModulesApart = true;
     struct Restore {
         ~Restore() { g_keepDeclaringModulesApart = false; }
     } restore;
-    auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
-                             externalRecords, resolvedCalls,
-                             preferExternalReceivers, externalVariants,
-                             staticTypeOfCalls, expressionTypes,
-                             resolvedTraits);
+    auto flat = lowerProgram(prog, fileStem, context);
 
     struct Definition {
         std::string path;

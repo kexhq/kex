@@ -119,9 +119,4 @@ inline auto structuredTypeOfDeclared(const ast::TypeExpr& type,
     return expandDeclaredAliases(structuredTypeOfDeclared(type), aliases);
 }
 
-// Whether a declared type admits `None`: written `T?` or `Optional<T>`.
-inline auto isOptionalDeclared(const ast::TypeExpr& type) -> bool {
-    return structuredTypeOfDeclared(type).name == "Option";
-}
-
 } // namespace kex::semantic

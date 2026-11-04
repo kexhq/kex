@@ -163,8 +163,9 @@ auto Parser::rejectReservedBindingName() -> void {
       name == TokenType::Spawn || name == TokenType::After ||
       name == TokenType::Next)
     return;
-  const auto after = m_pos + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
-                                                 : TokenType::Eof;
+  const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size()
+                         ? m_tokens[m_pos + 2].type
+                         : TokenType::Eof;
   if (after != TokenType::Equals && after != TokenType::LParen)
     return;
   advance(); // let
@@ -397,11 +398,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
     expect(TokenType::Module, "Expected 'module'");
   }
   auto moduleName = parseTypeName();
-  for (size_t i = 0; i < moduleName.parts.size(); ++i) {
-    if (i)
-      mod->name += ".";
-    mod->name += moduleName.parts[i];
-  }
+  mod->name += moduleName.dotted();
   if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
     mod->name = parentModule + "." + mod->name;
   // A file-level `module Name` without `do` is desugared into the same

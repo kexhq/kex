@@ -1,4 +1,5 @@
 #include "upgrade.hxx"
+#include "walk.hxx"
 
 #include <algorithm>
 #include <functional>
@@ -9,59 +10,6 @@
 namespace kex::ir {
 
 namespace {
-
-// Calls `f` on every direct child expression of `e`, without interpreting
-// scopes. The walkers below decide for themselves which children to enter.
-template <typename F>
-auto forEachChild(Expr& e, F&& f) -> void {
-    std::visit([&](auto& n) {
-        using T = std::decay_t<decltype(n)>;
-        if constexpr (std::is_same_v<T, Intrinsic> || std::is_same_v<T, Call> ||
-                      std::is_same_v<T, Construct>) {
-            for (auto& a : n.args) f(a);
-        } else if constexpr (std::is_same_v<T, CallIndirect>) {
-            f(n.callee);
-            for (auto& a : n.args) f(a);
-        } else if constexpr (std::is_same_v<T, Let>) {
-            f(n.value);
-            f(n.body);
-        } else if constexpr (std::is_same_v<T, Seq>) {
-            for (auto& x : n.exprs) f(x);
-        } else if constexpr (std::is_same_v<T, Match>) {
-            for (auto& s : n.subjects) f(s);
-            for (auto& c : n.clauses) {
-                if (c.guard) f(*c.guard);
-                f(c.body);
-            }
-        } else if constexpr (std::is_same_v<T, MakeTuple>) {
-            for (auto& x : n.elements) f(x);
-        } else if constexpr (std::is_same_v<T, MakeList>) {
-            for (auto& x : n.elements) f(x);
-            if (n.rest) f(*n.rest);
-        } else if constexpr (std::is_same_v<T, FieldGet>) {
-            f(n.record);
-        } else if constexpr (std::is_same_v<T, Lambda>) {
-            f(n.body);
-        } else if constexpr (std::is_same_v<T, Return>) {
-            f(n.value);
-        } else if constexpr (std::is_same_v<T, TryThrow>) {
-            f(n.error);
-        } else if constexpr (std::is_same_v<T, TryCatch>) {
-            f(n.body);
-            for (auto& c : n.clauses) {
-                if (c.guard) f(*c.guard);
-                f(c.body);
-            }
-        } else if constexpr (std::is_same_v<T, LetRec>) {
-            f(n.funBody);
-            f(n.contBody);
-        } else if constexpr (std::is_same_v<T, Receive>) {
-            for (auto& c : n.clauses) f(c.body);
-            if (n.timeout) f(*n.timeout);
-            if (n.afterBody) f(*n.afterBody);
-        }
-    }, e.node);
-}
 
 // Does this body receive — in its own process-level control flow, not inside
 // a lambda (a lambda runs wherever it is called, and is judged on its own)?

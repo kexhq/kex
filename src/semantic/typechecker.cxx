@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
 #include "typechecker.hxx"
 #include "analyzer.hxx"
@@ -62,10 +63,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_importedModulePaths.clear();
     auto selectionFor = [this](const ast::UsingBlock& block) {
         ImportSelection selection;
-        for (size_t i = 0; i < block.module.parts.size(); ++i) {
-            if (i) selection.module += ".";
-            selection.module += block.module.parts[i];
-        }
+        selection.module += block.module.dotted();
         selection.onlyNames = block.onlyNames;
         selection.exceptNames = block.exceptNames;
         selection.alias = block.alias;
@@ -266,29 +264,14 @@ auto TypeChecker::check(const ast::Program& program,
     // (done before registerDeclaredSignatures so annotation TypeExprs can resolve these names)
     // Int is a user-facing alias for Integer (arbitrary precision).
     // Fixed-width integers are available as Int32, Int64, etc.
-    m_globals.set("Int", Type::integer());
-    m_globals.set("Integer", Type::integer());
-    m_globals.set("Char", Type::charT());
-    m_globals.set("String", Type::string());
-    m_globals.set("Bool", Type::boolean());
-    // Without this, the annotation `Atom` resolved to an unregistered
-    // NamedType("Atom") while an atom literal infers PrimitiveType{Atom} —
-    // same printed name, different kind, so they never matched. The symptom
-    // was the self-contradictory "expects Atom | Integer, but got Atom".
-    m_globals.set("Atom", Type::atom());
-    m_globals.set("Byte", Type::byte());
-    m_globals.set("Int8", Type::int8());
-    m_globals.set("Int16", Type::int16());
-    m_globals.set("Int32", Type::int32());
-    m_globals.set("Int64", Type::int64());
-    m_globals.set("UInt8", Type::uint8());
-    m_globals.set("UInt16", Type::uint16());
-    m_globals.set("UInt32", Type::uint32());
-    m_globals.set("UInt64", Type::uint64());
-    m_globals.set("Float32", Type::float32());
-    m_globals.set("Float64", Type::float64());
-    // Note: no "Float" entry — it's not a concrete Type, only a trait
-    // name (TraitRegistry, phase 3), satisfied by Float32 and Float64.
+    // `Atom` among them: without it the annotation resolved to an
+    // unregistered NamedType("Atom") while an atom literal infers
+    // PrimitiveType{Atom} — same printed name, different kind, so they never
+    // matched ("expects Atom | Integer, but got Atom").
+    // No "Float" entry — it's not a concrete Type, only a trait name
+    // (TraitRegistry, phase 3), satisfied by Float32 and Float64.
+    for (const auto name : builtinTypeNames())
+        m_globals.set(std::string(name), builtinType(name));
 
     m_globals.set("ENV", Type::map(Type::string(), Type::string()));
 
@@ -379,74 +362,16 @@ auto TypeChecker::check(const ast::Program& program,
         // functions are outside this compilation unit and need no ordering.
         std::function<void(const ast::Expr&, std::set<std::string>&)> collectCalls =
             [&](const ast::Expr& e, std::set<std::string>& out) {
-            std::visit([&](const auto& n) {
-                using T = std::decay_t<decltype(n)>;
-                if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                    if (userFns.count(n.name)) out.insert(n.name);
-                    for (const auto& a : n.args) if (a) collectCalls(*a, out);
-                    if (n.block) collectCalls(**n.block, out);
-                } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                    for (const auto& value : n.values)
-                        if (value) collectCalls(*value, out);
-                } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                    if (userFns.count(n.tag)) out.insert(n.tag);
-                    for (const auto& value : n.values)
-                        if (value) collectCalls(*value, out);
-                } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                    if (userFns.count(n.method)) out.insert(n.method);
-                    if (n.receiver) collectCalls(*n.receiver, out);
-                    for (const auto& a : n.args) if (a) collectCalls(*a, out);
-                    if (n.block) collectCalls(**n.block, out);
-                } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                    if (n.left) collectCalls(*n.left, out);
-                    if (n.right) collectCalls(*n.right, out);
-                } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-                    if (n.operand) collectCalls(*n.operand, out);
-                } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                    if (n.condition) collectCalls(*n.condition, out);
-                    for (const auto& ex : n.thenBody) if (ex) collectCalls(*ex, out);
-                    for (const auto& [c, b] : n.elifs) {
-                        if (c) collectCalls(*c, out);
-                        for (const auto& ex : b) if (ex) collectCalls(*ex, out);
-                    }
-                    if (n.elseBody)
-                        for (const auto& ex : *n.elseBody) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                    if (n.subject) collectCalls(*n.subject, out);
-                    for (const auto& cl : n.clauses) {
-                        if (cl.guard && *cl.guard) collectCalls(**cl.guard, out);
-                        if (cl.body) collectCalls(*cl.body, out);
-                    }
-                } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                    if (n.value) collectCalls(*n.value, out);
-                } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                    if (n.value) collectCalls(*n.value, out);
-                } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
-                    if (n.value) collectCalls(*n.value, out);
-                } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-                    if (n.condition) collectCalls(*n.condition, out);
-                    if (n.thenExpr) collectCalls(*n.thenExpr, out);
-                    if (n.elseExpr) collectCalls(*n.elseExpr, out);
-                } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                    if (n.expr) collectCalls(*n.expr, out);
-                    if (n.condition) collectCalls(*n.condition, out);
-                } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-                    if (n.value) collectCalls(*n.value, out);
-                } else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
-                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                    if (n.condition) collectCalls(*n.condition, out);
-                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
-                } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
-                    if (n.inner) collectCalls(*n.inner, out);
-                }
-            }, e.kind);
+            if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
+                if (userFns.count(call->name)) out.insert(call->name);
+            } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&e.kind)) {
+                if (userFns.count(tagged->tag)) out.insert(tagged->tag);
+            } else if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
+                if (userFns.count(method->method)) out.insert(method->method);
+            }
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                collectCalls(*child, out);
+            });
         };
 
         std::unordered_map<std::string, std::set<std::string>> deps;
@@ -904,9 +829,9 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
                 m_importedInterfaces->recordArities, "." + name);
             // Ambiguous answers the bare name at once, as it always has; no
             // match goes on to the aliases below.
-            if (match.kind == resolve_core::SuffixMatchKind::unique)
+            if (match.kind == resolve_core::SuffixMatchKind::Unique)
                 cached->second = match.name;
-            else if (match.kind == resolve_core::SuffixMatchKind::ambiguous)
+            else if (match.kind == resolve_core::SuffixMatchKind::Ambiguous)
                 cached->second = name;
         }
         if (cached->second) return *cached->second;
@@ -1411,45 +1336,7 @@ auto TypeChecker::distinctBacking(const TypePtr& type) const -> TypePtr {
                     return value->second;
                 return part;
             }
-            if (const auto* n = std::get_if<NamedType>(&part->kind)) {
-                std::vector<TypePtr> args;
-                for (const auto& arg : n->typeArgs)
-                    args.push_back(substitute(arg));
-                return Type::named(n->name, std::move(args));
-            }
-            if (const auto* list = std::get_if<ListType>(&part->kind))
-                return Type::list(substitute(list->element));
-            if (const auto* map = std::get_if<MapType>(&part->kind))
-                return Type::map(substitute(map->key), substitute(map->value));
-            if (const auto* optional = std::get_if<OptionalType>(&part->kind))
-                return Type::optional(substitute(optional->inner));
-            if (const auto* tuple = std::get_if<TupleType>(&part->kind)) {
-                std::vector<TypePtr> elements;
-                for (const auto& element : tuple->elements)
-                    elements.push_back(substitute(element));
-                return Type::tuple(std::move(elements));
-            }
-            if (const auto* fn = std::get_if<FuncType>(&part->kind)) {
-                std::vector<TypePtr> params;
-                for (const auto& param : fn->params)
-                    params.push_back(substitute(param));
-                return Type::func(std::move(params), substitute(fn->result),
-                                  fn->block);
-            }
-            if (const auto* intersection =
-                    std::get_if<IntersectionType>(&part->kind)) {
-                std::vector<TypePtr> members;
-                for (const auto& member : intersection->members)
-                    members.push_back(substitute(member));
-                return Type::intersection(std::move(members));
-            }
-            if (const auto* record = std::get_if<RecordType>(&part->kind)) {
-                std::vector<std::pair<std::string, TypePtr>> fields;
-                for (const auto& [name, fieldType] : record->fields)
-                    fields.emplace_back(name, substitute(fieldType));
-                return Type::record(std::move(fields));
-            }
-            return part;
+            return mapTypeChildren(part, substitute);
         };
     auto backing = substitute(found->second.backingType);
     return distinctBacking(backing);
@@ -1582,10 +1469,9 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
                               const std::string& modulePath) {
         if (def.implements.empty() || !def.target) return;
         std::string typeName;
-        if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind))
-            if (tn->parts.size() == 1) typeName = tn->parts[0];
-        if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
-            if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
+        if (const auto name = writtenMakeTarget(def.target, StructuralTarget::Excluded);
+            name && name->parts.size() == 1)
+            typeName = name->parts[0];
         if (typeName.empty()) return;
         static const std::vector<ImportSelection> kNoImports;
         const auto imports = m_makeImports.find(&def);
@@ -2372,11 +2258,7 @@ auto TypeChecker::registerExportsInModule(const ast::ModuleDef& mod,
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
                 if (!node) return;
-                std::string target;
-                for (size_t i = 0; i < node->module.parts.size(); ++i) {
-                    if (i) target += ".";
-                    target += node->module.parts[i];
-                }
+                std::string target = node->module.dotted();
                 const auto alias =
                     node->alias.value_or(node->module.parts.back());
                 m_moduleReexports[path + "." + alias] = target;
@@ -2746,11 +2628,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
         else if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
             const std::string& last = node.parts.back();
-            std::string qualified;
-            for (std::size_t i = 0; i < node.parts.size(); ++i) {
-                if (i) qualified += ".";
-                qualified += node.parts[i];
-            }
+            std::string qualified = node.dotted();
             // `This` inside a make block refers to the implementing type.
             if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && m_currentMakeType)
                 return m_currentMakeType;
@@ -2817,9 +2695,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // its own `Request` resolved to that local record by its last
             // segment alone (kexhq/kex#476).
             if (node.name.parts.size() > 1) {
-                std::string qualified;
-                for (const auto& part : node.name.parts)
-                    qualified += (qualified.empty() ? "" : ".") + part;
+                std::string qualified = node.name.dotted();
                 if (auto nominal = qualifiedNominalType(qualified))
                     return Type::named(*nominal, std::move(args));
             }
@@ -2838,9 +2714,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 !m_recordFields.count(resolveRecordName(name)))
                 return substituteInterfaceGenerics(alias->second, args);
             if (node.name.parts.size() > 1) {
-                std::string qualified;
-                for (const auto& part : node.name.parts)
-                    qualified += (qualified.empty() ? "" : ".") + part;
+                std::string qualified = node.name.dotted();
                 if (m_adtVariants.count(qualified))
                     return Type::named(qualified, std::move(args));
             }
@@ -3432,10 +3306,7 @@ auto TypeChecker::checkRecordDef(const ast::RecordDef& def) -> void {
 
 auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
     ImportSelection selection;
-    for (size_t i = 0; i < block.module.parts.size(); ++i) {
-        if (i) selection.module += ".";
-        selection.module += block.module.parts[i];
-    }
+    selection.module += block.module.dotted();
     selection.onlyNames = block.onlyNames;
     selection.exceptNames = block.exceptNames;
     selection.alias = block.alias;
@@ -4184,12 +4055,9 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
 
     // Extract the type name from the make target.
     std::string typeName;
-    if (def.target) {
-        if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind))
-            if (tn->parts.size() == 1) typeName = tn->parts[0];
-        if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
-            if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
-    }
+    if (const auto name = writtenMakeTarget(def.target, StructuralTarget::Excluded);
+        name && name->parts.size() == 1)
+        typeName = name->parts[0];
 
     // Collect method names and their foul status from this make block.
     std::unordered_map<std::string, bool> provided; // name -> isFoul

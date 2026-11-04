@@ -5,6 +5,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace test {
@@ -79,9 +81,28 @@ auto toString(const T& val) -> std::string {
     }
 }
 
+// Two integers are equal when their VALUES are: a `size_t` count against a
+// literal `1` compares as numbers, not through a signed/unsigned conversion.
+// Character types and `bool` keep `==` (std::cmp_equal rejects them).
+template <typename T>
+constexpr bool kComparesByValue =
+    std::is_integral_v<T> && !std::is_same_v<T, bool> &&
+    !std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
+    !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
+    !std::is_same_v<T, char32_t>;
+
+inline auto valuesEqual(const auto& actual, const auto& expected) -> bool {
+    using A = std::decay_t<decltype(actual)>;
+    using E = std::decay_t<decltype(expected)>;
+    if constexpr (kComparesByValue<A> && kComparesByValue<E>)
+        return std::cmp_equal(actual, expected);
+    else
+        return actual == expected;
+}
+
 inline auto assertEqual(const auto& actual, const auto& expected,
                         const std::string& msg = "") -> void {
-    if (actual != expected) {
+    if (!valuesEqual(actual, expected)) {
         std::string message = "Expected: " + toString(expected) + ", got: " + toString(actual);
         if (!msg.empty()) message += " (" + msg + ")";
         throw AssertionError(message);

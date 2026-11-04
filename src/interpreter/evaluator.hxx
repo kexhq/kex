@@ -74,6 +74,26 @@ public:
         : std::runtime_error("compile-time evaluation timed out") {}
 };
 
+// Code run by `Evaluator.run` went past one of its EvaluatorOptions: a step
+// or depth limit, or a built-in its `allow` list leaves out. Not a
+// RuntimeError, so the evaluated code cannot `rescue` its way past a limit;
+// it ends the whole evaluation, which `Evaluator.run` reports as an Error.
+class SandboxViolation : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+// What `Evaluator.run` lets the code it evaluates do (EvaluatorOptions).
+struct SandboxLimits {
+    int64_t maxSteps = 1'000'000; // expressions evaluated, in total
+    int64_t maxDepth = 256;       // nested function calls
+    // Built-in categories that reach outside the program (FS, Net, IO,
+    // Process, ...) the code may call; pure ones are always available. `Net`
+    // also allows `NetHTTP`, `NetDNS` and the other `Net*`; case is ignored,
+    // so `ENV` names `Env`.
+    std::vector<std::string> allow;
+};
+
 class Evaluator {
     // Scheduler needs direct access to eval/evalBody/matchPattern/
     // pushEnv/popEnv/m_env to run process bodies and implement
@@ -152,6 +172,10 @@ public:
         return m_typeModules;
     }
 
+    // Puts this evaluator under `limits` from now on. Called once its prelude
+    // is loaded, so only the code it is then asked to run is limited.
+    auto setSandbox(SandboxLimits limits) -> void;
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
@@ -216,7 +240,6 @@ public:
     // run the user explicitly opted into with --allow-mocks. Defaults to
     // denied.
     auto setMocksAllowed(bool allowed) -> void;
-    auto mocksAllowed() const -> bool { return m_mocksAllowed; }
 
     // Every mock's state, captured so a test can be given it back at the end
     // of its `it` block. Mock state is global and lives until cleared, which
@@ -655,6 +678,12 @@ private:
     bool m_replMode = false;
     bool m_preludeLoaded = false;
     std::optional<std::chrono::steady_clock::time_point> m_deadline;
+    // `Evaluator.run`'s limits, with the steps taken and the calls currently
+    // open against them.
+    std::optional<SandboxLimits> m_sandbox;
+    int64_t m_sandboxSteps = 0;
+    int64_t m_sandboxDepth = 0;
+    auto sandboxAllows(const std::string& category) const -> bool;
     // Declarations recorded by `let %name(...)` during compile-time
     // evaluation; drained by src/compiled/expand.cxx.
     std::vector<GeneratedDeclaration> m_generatedDeclarations;

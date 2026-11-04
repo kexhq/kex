@@ -218,7 +218,9 @@ add_library(kex_lib
     src/beam/interface_cache.cxx
     src/beam/collect_metadata.cxx
     src/beam/kexi_registry.cxx
+    src/cache/cache.cxx
     src/cache/separate_unit.cxx
+    src/common/digest.cxx
     src/common/process.cxx
     src/common/diagnostics.cxx
 )
@@ -931,3 +933,25 @@ target_include_directories(cluster_beam_test PRIVATE tests)
 target_compile_definitions(cluster_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(cluster_beam_test kex)
 add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Warnings for every target this file builds — the compiler, its library, the
+# wasm REPL and every test — so an unused variable or a pessimizing move shows
+# up in the build that introduced it. Applied per target, not through
+# add_compile_options, so vendored code (third_party/lsp-framework, added with
+# add_subdirectory) keeps its own flags. -Wmissing-field-initializers stays off:
+# aggregates here are initialized partially on purpose (`{kind, name}`, the
+# rest defaulted). KEX_WERROR turns every warning into an error.
+option(KEX_WERROR "Treat compiler warnings as errors" OFF)
+if(NOT MSVC)
+    set(KEX_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers)
+    if(KEX_WERROR)
+        list(APPEND KEX_WARNING_FLAGS -Werror)
+    endif()
+    get_property(kex_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target IN LISTS kex_targets)
+        get_target_property(kind ${target} TYPE)
+        if(kind MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|OBJECT_LIBRARY)$")
+            target_compile_options(${target} PRIVATE ${KEX_WARNING_FLAGS})
+        endif()
+    endforeach()
+endif()

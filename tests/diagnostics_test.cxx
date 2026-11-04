@@ -38,10 +38,10 @@ int main() {
         });
     });
 
-    describe("diagnostics::typeNameToString", []() {
+    describe("ast::TypeName::dotted", []() {
         it("joins parts with a dot", []() {
             kex::ast::TypeName tn{{"Foo", "Bar"}};
-            assertEqual(typeNameToString(tn), std::string("Foo.Bar"));
+            assertEqual(tn.dotted(), std::string("Foo.Bar"));
         });
     });
 

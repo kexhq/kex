@@ -78,10 +78,38 @@ auto Evaluator::watchOutside(const std::string& name, NativeFunc fn) -> NativeFu
     static const std::unordered_set<std::string> reads{"AST::parseFile", "Digest::fileSha"};
     const auto category = kex::mangle::headOf(name);
     if (!fn || (pure.contains(category) && !reads.contains(name))) return fn;
-    return [this, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
+    return [this, name, category, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
+        if (m_sandbox && !sandboxAllows(category))
+            throw SandboxViolation("Evaluator sandbox: " + sourceName(name) +
+                                   " is not allowed (add :" + category +
+                                   " to EvaluatorOptions.allow)");
         m_touchedOutside = true;
         return fn(std::move(args));
     };
+}
+
+auto Evaluator::setSandbox(SandboxLimits limits) -> void {
+    m_sandbox = std::move(limits);
+    m_sandboxSteps = 0;
+    m_sandboxDepth = 0;
+}
+
+auto Evaluator::sandboxAllows(const std::string& category) const -> bool {
+    const auto lower = [](std::string_view text) {
+        std::string result(text);
+        for (auto& c : result) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return result;
+    };
+    const auto wanted = lower(category);
+    for (const auto& allowed : m_sandbox->allow) {
+        const auto name = lower(allowed);
+        // `Net` covers `NetHTTP`: a prefix ending where the next word starts.
+        if (wanted == name ||
+            (wanted.starts_with(name) && category.size() > allowed.size() &&
+             std::isupper(static_cast<unsigned char>(category[allowed.size()]))))
+            return true;
+    }
+    return false;
 }
 
 auto Evaluator::defineModule(const std::string& name) -> void {
@@ -330,11 +358,7 @@ auto Evaluator::resolvePendingExports() -> void {
         auto pendingExports = std::move(m_pendingExports);
         m_pendingExports.clear();
         for (const auto& pending : pendingExports) {
-            std::string targetName;
-            for (size_t i = 0; i < pending.decl->module.parts.size(); ++i) {
-                if (i) targetName += ".";
-                targetName += pending.decl->module.parts[i];
-            }
+            std::string targetName = pending.decl->module.dotted();
             if (targetName == pending.owner)
                 throw RuntimeError("module cannot export itself", pending.decl->location);
 
@@ -747,11 +771,7 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
 
 auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
                                const std::string& moduleScope) -> void {
-    std::string moduleName;
-    for (size_t i = 0; i < block.module.parts.size(); ++i) {
-        if (i) moduleName += ".";
-        moduleName += block.module.parts[i];
-    }
+    std::string moduleName = block.module.dotted();
     auto imported = m_moduleRegistry.find(moduleName);
     if (imported == m_moduleRegistry.end()) {
         moduleName = ensureModuleLoaded(moduleName, block.location, moduleScope);
@@ -1393,12 +1413,6 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
 
     store->defs.push_back(&def);
 
-    // Check if already defined — merge
-    if (existing) {
-        if (auto* fv = std::get_if<FunctionValue>(&existing->data)) {
-            // Unwrap and rebuild — for simplicity, use a global registry
-        }
-    }
 
     // Register under mangled name if in a type scope
     std::string regName = def.name;
@@ -1606,9 +1620,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     const auto* type = std::get_if<ast::TypeName>(
                         &(*param.type)->kind);
                     if (!type || type->parts.empty()) continue;
-                    std::string written;
-                    for (const auto& part : type->parts)
-                        written += (written.empty() ? "" : ".") + part;
+                    std::string written = kex::join(type->parts, ".");
                     auto trait = m_traitMethods.find(
                         traitIdentityOf(written, m_currentModule));
                     if (trait == m_traitMethods.end()) continue;
@@ -2120,6 +2132,9 @@ auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
 
 auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
     checkDeadline();
+    if (m_sandbox && ++m_sandboxSteps > m_sandbox->maxSteps) [[unlikely]]
+        throw SandboxViolation("Evaluator sandbox: step limit reached (maxSteps: " +
+                               std::to_string(m_sandbox->maxSteps) + ")");
     // Inside an `it` body, remember where the last `assert` was written, so a
     // failure can be reported at a line an editor can decorate (kexhq/kex#199).
     // Costs one comparison outside tests, where m_inTestCase is false.
@@ -3716,11 +3731,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return m_scheduler->blockingReceive(node);
         }
         else if constexpr (std::is_same_v<T, ast::WithExpr>) {
-            std::string capabilityName;
-            for (size_t i = 0; i < node.capability.parts.size(); ++i) {
-                if (i) capabilityName += ".";
-                capabilityName += node.capability.parts[i];
-            }
+            std::string capabilityName = node.capability.dotted();
             auto replacement = node.value ? eval(*node.value) : Value::none();
             m_capabilityBindings.emplace_back(canonicalCapability(capabilityName),
                                               replacement);
@@ -3737,11 +3748,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return result;
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
-            std::string moduleName;
-            for (size_t i = 0; i < node.module.parts.size(); ++i) {
-                if (i) moduleName += ".";
-                moduleName += node.module.parts[i];
-            }
+            std::string moduleName = node.module.dotted();
             auto it = m_moduleRegistry.find(moduleName);
             if (it == m_moduleRegistry.end()) {
                 moduleName = ensureModuleLoaded(moduleName, expr.location);
@@ -3918,8 +3925,6 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
     auto* rs = std::get_if<StringValue>(&right->data);
     auto* lc = std::get_if<CharValue>(&left->data);
     auto* rc = std::get_if<CharValue>(&right->data);
-    auto* lb = std::get_if<BoolValue>(&left->data);
-    auto* rb = std::get_if<BoolValue>(&right->data);
 
     // Lossy (outside double's 53-bit exact-integer range) conversion of an
     // Integer-like value for mixed Integer/Float arithmetic — same
@@ -4181,6 +4186,14 @@ auto Evaluator::makeCurriedCall(std::string fnName, int arity, bool isOp,
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
     checkDeadline();
+    // Every call is one level deeper until it returns or throws.
+    struct DepthGuard {
+        int64_t* depth;
+        ~DepthGuard() { if (depth) --*depth; }
+    } depthGuard{m_sandbox ? &m_sandboxDepth : nullptr};
+    if (m_sandbox && ++m_sandboxDepth > m_sandbox->maxDepth) [[unlikely]]
+        throw SandboxViolation("Evaluator sandbox: call depth limit reached (maxDepth: " +
+                               std::to_string(m_sandbox->maxDepth) + ")");
     // BEAM-style reduction-counted auto-yield: placed at function-call
     // boundaries, the same kind of safe point BEAM itself uses, so a compute-bound process that never calls
     // `receive` still gives other processes a turn periodically.
@@ -5415,7 +5428,7 @@ auto Evaluator::registerBuiltins() -> void {
                 return Value::none();
             }
             if (targetName == "Float") {
-                if (auto* f = std::get_if<FloatValue>(&val->data))
+                if (std::holds_alternative<FloatValue>(val->data))
                     return Value::just(val);
                 if (auto i = asInteger(val))
                     return Value::just(Value::floating(i->get_d()));
@@ -5490,7 +5503,6 @@ auto Evaluator::registerBuiltins() -> void {
         defineIntrinsic("Fun::applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];
-            auto& item = *args[1];
             // Don't splat here — pass the item as-is. The lambda wrapper
             // (line ~1094) auto-spreads a tuple into its params when the
             // param count matches, mirroring BEAM's arity-check in
@@ -5558,7 +5570,7 @@ auto Evaluator::popEnv() -> void {
 }
 
 auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
-                           SourceLocation loc) -> ValuePtr {
+                           SourceLocation /*loc*/) -> ValuePtr {
     if (rescue.isInlineReturn) {
         throw ReturnException(eval(*rescue.inlineReturnExpr));
     }

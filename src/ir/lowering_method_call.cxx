@@ -167,9 +167,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                             &n.args.front()->kind)) {
                         std::vector<std::string> path;
                         if (named->receiver && modulePath(*named->receiver, path)) {
-                            std::string source;
-                            for (const auto& part : path)
-                                source += (source.empty() ? "" : ".") + part;
+                            std::string source = kex::join(path, ".");
                             if (auto module = externalModules->nameToAtom.find(source);
                                 module != externalModules->nameToAtom.end())
                                 binds.push_back({fresh("TypeLoaded"),
@@ -407,7 +405,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // (`Data.Set`, which claims `Foldable`): that provider, chosen by
         // the receiver functions below.
         if (resolved != resolvedCalls->end() &&
-            resolved->second.backendModule == "kex_prelude" && externalModules &&
+            resolved->second.backendModule == names::kPreludeModule && externalModules &&
             expressionTypes && n.receiver)
             if (auto type = expressionTypes->find(n.receiver.get());
                 type != expressionTypes->end() && type->second)
@@ -434,7 +432,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // join/2 must remain available to the receiver dispatch below.
         if (resolved != resolvedCalls->end() && externalModules &&
             expressionTypes && n.receiver &&
-            resolved->second.backendModule != "kex_prelude")
+            resolved->second.backendModule != names::kPreludeModule)
             if (auto type = expressionTypes->find(n.receiver.get());
                 type != expressionTypes->end() && type->second) {
                 const auto& kind = type->second->kind;
@@ -452,7 +450,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                             std::any_of(providers->second.begin(),
                                         providers->second.end(),
                                         [&](const auto& provider) {
-                                            return provider.moduleAtom == "kex_prelude" &&
+                                            return provider.moduleAtom == names::kPreludeModule &&
                                                    provider.beamArity == arity;
                                         });
                     }
@@ -629,12 +627,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 definedFnArities.count(n.method + "/" +
                                        std::to_string(args.size()));
             if (localBeatsTraitDefault) {
-                // Do not compute args.size() in the same call expression
-                // that moves args. Function-argument evaluation order is
-                // unspecified: GCC/x86_64 moved the vector first and then
-                // observed size zero, emitting apply showValue/0(...) and
-                // apply to/0(...) with one or two actual arguments.
-                const int localArity = static_cast<int>(args.size());
                 return wrapLets(
                     binds,
                     localCallExpr(n.method, std::move(args)));
@@ -1037,7 +1029,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                                 slots[placed.positionalSlots[k]] =
                                     std::move(positional[k]);
                         fillDefaultSlots(qualKey, slots, binds, selected);
-                        int ar = static_cast<int>(slots.size());
                         return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                     }
                     std::vector<ExprPtr> args;
@@ -1049,7 +1040,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         args.resize(defaults->second.size());
                         fillDefaultSlots(qualKey, args, binds);
                     }
-                    int ar = static_cast<int>(args.size());
                     // `Module.name` may be a zero-param VALUE binding
                     // rather than a real function — `let render =
                     // Template.html(...)` in `module M do ... end`,
@@ -1256,7 +1246,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         slots[placed.positionalSlots[k]] =
                             std::move(positional[k]);
                 fillDefaultSlots(qualKey, slots, binds, selected);
-                int ar = static_cast<int>(slots.size());
                 return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
             }
             std::vector<ExprPtr> args;
@@ -1268,7 +1257,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 args.resize(defaults->second.size());
                 fillDefaultSlots(qualKey, args, binds);
             }
-            int ar = static_cast<int>(args.size());
             return wrapLets(binds, localCallExpr(it->second, std::move(args)));
         }
         // A type imported from another unit can name one of its `make`
@@ -1416,7 +1404,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             if (implicitThisMethods.count(callName))
                 callArgs.push_back(lit(LitKind::Atom, canonicalRecordName(uid->name)));
             for (auto& a : args) callArgs.push_back(std::move(a));
-            int ar = static_cast<int>(callArgs.size());
             auto ex = std::make_unique<Expr>();
             ex->node = localCall(callName, std::move(callArgs));
             return wrapLets(binds, std::move(ex));
@@ -1585,7 +1572,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     };
     auto& m = n.method;
     auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
-    auto arg0 = [&]() { return lower(n.args[0]); };
 
     // A module's free function over one of the module's OWN types is that
     // type's receiver function (kexhq/kex#230). It used to be reached by
@@ -2035,14 +2021,14 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 // to bypass the prelude's runtime method dispatch. That
                 // made a list reached through a match arm call
                 // FS.Path.join/2 instead of List.join/2.
-                if (modules.size() > 1 && !modules.count("kex_prelude") &&
+                if (modules.size() > 1 && !modules.count(names::kPreludeModule) &&
                     providerModule.empty() && resolvedCalls)
                     if (auto resolved = resolvedCalls->find(&n);
                         resolved != resolvedCalls->end() &&
                         modules.count(resolved->second.backendModule) &&
                         // The prelude's is its generic fallback, which a
                         // provider for the receiver's own type comes before.
-                        resolved->second.backendModule != "kex_prelude")
+                        resolved->second.backendModule != names::kPreludeModule)
                         providerModule = resolved->second.backendModule;
                 // Still undecided between units' providers for their own
                 // types and the prelude's: each of them for a value of its
@@ -2051,11 +2037,11 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 // decides (`"${text}"` beside Net.HTTP's own `showValue`).
                 const bool typedBesidePrelude =
                     modules.size() > 1 && providerModule.empty() &&
-                    modules.count("kex_prelude") &&
+                    modules.count(names::kPreludeModule) &&
                     std::all_of(found->second.begin(), found->second.end(),
                                 [&](const auto& candidate) {
                                     return candidate.beamArity != actualArity ||
-                                           candidate.moduleAtom == "kex_prelude" ||
+                                           candidate.moduleAtom == names::kPreludeModule ||
                                            !candidate.receiverType.empty();
                                 });
                 if (typedBesidePrelude && modules.size() == 2) {
@@ -2064,7 +2050,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     // below guards it and falls back to the prelude.
                     const auto other = *std::find_if(
                         modules.begin(), modules.end(),
-                        [](const std::string& module) { return module != "kex_prelude"; });
+                        [](const std::string& module) { return module != names::kPreludeModule; });
                     const bool guardable = std::all_of(
                         found->second.begin(), found->second.end(),
                         [&](const auto& candidate) {
@@ -2076,7 +2062,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     // A type alias such as FilePath has no safe runtime
                     // guard here. For an erased receiver, the prelude's
                     // dispatcher handles List.join/2 and Range.join/2.
-                    providerModule = guardable ? other : "kex_prelude";
+                    providerModule = guardable ? other : names::kPreludeModule;
                 } else if (typedBesidePrelude && n.namedArgs.empty()) {
                     // Several: one guard each, so only a type a guard can
                     // test without matching every value (a known record,
@@ -2085,13 +2071,13 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     std::vector<const ExternalModules::ReceiverFunction*> guarded;
                     for (const auto& candidate : found->second)
                         if (candidate.beamArity == actualArity &&
-                            candidate.moduleAtom != "kex_prelude")
+                            candidate.moduleAtom != names::kPreludeModule)
                             guarded.push_back(&candidate);
                     if (std::all_of(guarded.begin(), guarded.end(), [&](const auto* provider) {
                             return records.count(canonicalRecordName(provider->receiverType)) ||
                                    primGuardBifs().count(provider->receiverType);
                         })) {
-                        providerModule = "kex_prelude";
+                        providerModule = names::kPreludeModule;
                         runtimeProviders = std::move(guarded);
                     }
                 }
