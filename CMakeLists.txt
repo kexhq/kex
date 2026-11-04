@@ -143,6 +143,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 endif()
 
 add_library(kex_lib
+    src/hir/call_targets.cxx
     src/ir/lower.cxx
     src/ir/lowering_body.cxx
     src/ir/lowering_calls.cxx
