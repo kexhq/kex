@@ -1,0 +1,25 @@
+# A `when` guard on a typed pattern must not run before the type test
+# rejects the clause. The walker type-tests first; BEAM used to emit the
+# guard comparison ahead of the test, which is harmless for total BIF
+# comparisons but fatal once the comparison takes the checked
+# `kex_intrinsic_number` path (unknown operand kinds), where a mistyped
+# value raises `Cannot compare ...` instead of falling through.
+let check(v: Any, n) = match v do
+  i : Integer when i > n => "big ${i}"
+  i : Integer => "int ${i}"
+  _ : [Integer] => "list"
+  _ => "other"
+end
+
+let checked(v: Any, n: Integer) = match v do
+  i : Integer when i > n => "big ${i}"
+  _ => "other"
+end
+
+main do
+  IO.printLine(check([1, 2], 10))
+  IO.printLine(check(42, 10))
+  IO.printLine(check(3, 10))
+  IO.printLine(checked([1, 2], 10))
+  IO.printLine(checked(42, 10))
+end
