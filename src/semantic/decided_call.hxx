@@ -1,0 +1,38 @@
+#pragma once
+// What the type checker decided a call-shaped expression is, when that is
+// neither a call with a selected signature nor an imported method (those
+// have tables of their own). Stage 2 of the pass restructure records every
+// such decision, so no later pass resolves the call again (src/hir/); kept
+// apart from typechecker.hxx so lowering can read it without the checker.
+#include <string>
+
+namespace kex::semantic {
+
+enum class CallKind {
+    Constructor,
+    FieldRead,
+    ModuleReference,
+    // A method a trait-typed receiver has through that trait.
+    TraitMethod,
+    // A function value bound in scope (`f(x)`, a block parameter).
+    ValueCall,
+    // A method whose receiver's type is not known: found on the value
+    // when the call runs.
+    Dispatch,
+    // `x.to(T)` / `x.as(T)`: a conversion to the named type.
+    Conversion,
+    // A record or sum type named as a namespace (`TCP.Endpoint`).
+    TypeReference,
+    // A runtime primitive the checker handles itself (`pid.send(msg)`).
+    Builtin,
+};
+
+struct DecidedCall {
+    CallKind kind;
+    // The ADT a constructor builds, the record whose field is read, the
+    // module referenced, the trait dispatched through, the binding called,
+    // or the conversion's target type.
+    std::string owner;
+};
+
+} // namespace kex::semantic

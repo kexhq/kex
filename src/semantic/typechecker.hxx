@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "decided_call.hxx"
 #include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "traits.hxx"
@@ -97,6 +98,16 @@ public:
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_selectedCallSignatures;
+    }
+    // What a call-shaped expression turned out to be, when that is neither a
+    // call with a selected signature nor an imported method (the two tables
+    // above). Stage 2 of the pass restructure records every such decision
+    // here, so no later pass has to resolve the call again (src/hir/).
+    using CallKind = semantic::CallKind;
+    using DecidedCall = semantic::DecidedCall;
+    auto decidedCalls() const
+        -> const std::unordered_map<const ast::Expr*, DecidedCall>& {
+        return m_decidedCalls;
     }
     // `Type.of(x)` call sites whose argument the checker typed concretely.
     // Both backends materialize the recorded shape instead of asking the
@@ -470,6 +481,7 @@ private:
     std::unordered_map<const ast::MakeDef*, std::vector<std::string>>
         m_resolvedTraits;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
+    std::unordered_map<const ast::Expr*, DecidedCall> m_decidedCalls;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;
     // Source module identities declared by the current compilation unit.

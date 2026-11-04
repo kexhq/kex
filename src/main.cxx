@@ -14,6 +14,7 @@
 #include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
+#include "hir/call_targets.hxx"
 #include "ir/emit_core.hxx"
 #include "ir/upgrade.hxx"
 #include "ir/lower.hxx"
@@ -884,6 +885,7 @@ auto withCheckerAnswers(kex::ir::LowerContext context,
     context.staticTypeOfCalls = &analysis->staticTypeOfCalls();
     context.expressionTypes = &analysis->typeMap();
     context.resolvedTraits = &analysis->resolvedTraits();
+    context.decidedCalls = &analysis->decidedCalls();
   }
   return context;
 }
@@ -3528,6 +3530,9 @@ auto printUsage(const char *progName) -> void {
       << "                    tree-walk REPL\n"
       << "  -E, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
       << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
+      << "      --dump-hir    With -C: list each call site and what the\n"
+         "                    checker decided about it\n"
+      << "      --verify-hir  With -C: fail when a call site is undecided\n"
       << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
       << "      --collapse-report\n"
@@ -3643,6 +3648,8 @@ enum Value {
   Colors,
   Credits,
   Progress,
+  DumpHir,
+  VerifyHir,
 };
 } // namespace Option
 
@@ -5441,6 +5448,10 @@ struct Options {
   bool dumpTypes = false;
   bool jsonOutput = false;
   bool summaryMode = false;
+  // `--dump-hir` / `--verify-hir`: list every call site with what the
+  // checker decided about it / fail when any is undecided (src/hir/).
+  bool dumpHir = false;
+  bool verifyHir = false;
   std::string completePrefix;
   std::string outputDir = ".";
   std::string astFilename;
@@ -5475,6 +5486,8 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       {"json", no_argument, nullptr, 'j'},
       {"summary", no_argument, nullptr, 's'},
       {"types", no_argument, nullptr, 't'},
+      {"dump-hir", no_argument, nullptr, Option::DumpHir},
+      {"verify-hir", no_argument, nullptr, Option::VerifyHir},
       {"emit-core", no_argument, nullptr, 'E'},
       {"eval", required_argument, nullptr, 'e'},
       {"emit-ast", no_argument, nullptr, Option::EmitAst},
@@ -5601,6 +5614,14 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       { options.exitNow = 0; return options; }
     case Option::EmitAst:
       options.mode = Mode::EmitAst;
+      break;
+    case Option::DumpHir:
+      options.dumpHir = true;
+      options.mode = Mode::Check;
+      break;
+    case Option::VerifyHir:
+      options.verifyHir = true;
+      options.mode = Mode::Check;
       break;
     case Option::EmitSyntax:
       options.mode = Mode::EmitSyntax;
@@ -6778,6 +6799,27 @@ auto checkEntry(const Options &options, const std::string &filepath,
   // Normal colored output
   for (const auto &d : allDiags)
     printSemanticDiagnostic(d);
+
+  if (options.dumpHir || options.verifyHir) {
+    const auto sites = kex::hir::collectCallSites(program, analyzer);
+    std::map<kex::hir::TargetKind, std::size_t> counts;
+    for (const auto &site : sites) {
+      counts[site.kind]++;
+      if (options.dumpHir)
+        std::cout << site.expr->location.file << ":"
+                  << site.expr->location.line << ":"
+                  << site.expr->location.column << "  "
+                  << kex::hir::targetKindName(site.kind) << "  "
+                  << site.callee << "\n";
+    }
+    std::cerr << "call sites: " << sites.size() << " (";
+    for (const auto kind : kex::hir::kTargetKinds)
+      std::cerr << (kind == kex::hir::kTargetKinds[0] ? "" : ", ")
+                << kex::hir::targetKindName(kind) << " " << counts[kind];
+    std::cerr << ")\n";
+    if (options.verifyHir && counts[kex::hir::TargetKind::Undecided] > 0)
+      allOk = false;
+  }
 
   if (dumpTypes) {
     // Collect and sort by source location so output is readable

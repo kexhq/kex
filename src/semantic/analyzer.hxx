@@ -96,6 +96,10 @@ public:
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
     }
+    auto decidedCalls() const -> const std::unordered_map<
+        const ast::Expr*, TypeChecker::DecidedCall>& {
+        return m_checker.decidedCalls();
+    }
     auto patternBindings() const
         -> const std::vector<TypeChecker::PatternBinding>& {
         return m_checker.patternBindings();

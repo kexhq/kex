@@ -1217,6 +1217,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
             if ((node.name == "send" || node.name == "sendFrom") &&
                 argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
+                m_decidedCalls[&expr] = {CallKind::Builtin, "Process.send"};
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
@@ -1239,8 +1240,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return msgType;
             }
             if (auto constructed =
-                    constructorResultType(node.name, argTypes))
+                    constructorResultType(node.name, argTypes)) {
+                const auto* adt =
+                    std::get_if<NamedType>(&resolve(constructed)->kind);
+                m_decidedCalls[&expr] = {CallKind::Constructor,
+                                         adt ? adt->name : node.name};
                 return constructed;
+            }
             return checkCall(node.name, argTypes, expr.location,
                              false, nullptr, &expr);
         }
@@ -1289,6 +1295,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 error(expr.location,
                                       "cannot access private name `" +
                                           node.method + "` from " + *path);
+                            m_decidedCalls[&expr] = {
+                                CallKind::Constructor,
+                                constructor->second.typeName.empty()
+                                    ? node.method
+                                    : constructor->second.typeName};
                             // A constructor reached through its full module path
                             // retains its defining ADT even when the current file
                             // did not import that ADT's bare name. This matters
@@ -1412,6 +1423,40 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // `*importedPath` (kexhq/kex#229).
             if (importedPath)
                 importedPath = resolveModulePath(*importedPath, node.method);
+            // Each segment of that path, as written, that names a module this
+            // unit knows: a local one, an imported one, or one the compiled
+            // interfaces describe. Anything else there is a constant or a
+            // field (`Credentials.SHORTEST`, `Kex.VERSION.number`).
+            const auto namesModule = [&](const std::string& path) {
+                return m_localModules.contains(path) ||
+                       m_importedModulePaths.contains(path) ||
+                       (m_importedInterfaces &&
+                        (m_importedInterfaces->modules.contains(path) ||
+                         m_importedInterfaces->modules.contains("Kex." + path)));
+            };
+            // A record or sum type used as a namespace (`TCP.Endpoint.loopback`).
+            const auto namesType = [&](const std::string& path) {
+                const auto canonical = resolveRecordName(path);
+                return m_recordFields.contains(canonical) ||
+                       m_adtVariants.contains(path) ||
+                       (m_importedInterfaces &&
+                        (m_importedInterfaces->recordFieldNames.contains(path) ||
+                         m_importedInterfaces->recordFieldNames.contains(canonical)));
+            };
+            if (writtenPath) {
+                auto path = *writtenPath;
+                for (const ast::Expr* segment = node.receiver.get(); segment;) {
+                    const auto* call = std::get_if<ast::MethodCall>(&segment->kind);
+                    if (!call) break;
+                    if (namesModule(path))
+                        m_decidedCalls[segment] = {CallKind::ModuleReference, path};
+                    else if (namesType(path))
+                        m_decidedCalls[segment] = {CallKind::TypeReference, path};
+                    const auto dot = path.rfind('.');
+                    path.resize(dot == std::string::npos ? 0 : dot);
+                    segment = call->receiver.get();
+                }
+            }
             // Keep the syntactic qualified module path even when it is not in
             // the prebuilt interface registry. Source modules are discovered
             // from these references before their interfaces exist (for
@@ -1612,6 +1657,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           "`.as` needs a type name as its target");
                     return Type::unknown();
                 }
+                m_decidedCalls[&expr] = {CallKind::Conversion,
+                                         typeToString(target)};
                 // `"hello".as(Atom)` is the atom `:hello`, made at compile time —
                 // so only from text the compiler can see. Atoms are never freed;
                 // run-time text goes through `Atom.from` (makes one) or
@@ -1677,6 +1724,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (target && !targetIsString(target)) {
                     for (const auto& argument : node.args) inferExpr(*argument);
                     if (node.receiver) inferExpr(*node.receiver);
+                    m_decidedCalls[&expr] = {CallKind::Conversion,
+                                             typeToString(target)};
                     return Type::optional(target);
                 }
             }
@@ -1855,6 +1904,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // argTypes[0] = pid type, argTypes[1] = msg type.
             if ((node.method == "send" || node.method == "sendFrom") &&
                 argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
+                m_decidedCalls[&expr] = {CallKind::Builtin, "Process.send"};
                 auto pidType = resolve(argTypes[0]);
                 auto msgType = resolve(argTypes[1]);
                 if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
@@ -2002,8 +2052,20 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
             }
-            return checkCall(callName, argTypes, expr.location,
-                             /*isMethodCall=*/true, &node, &expr);
+            auto result = checkCall(callName, argTypes, expr.location,
+                                    /*isMethodCall=*/true, &node, &expr);
+            // Nothing chose a target and the receiver's type is not known:
+            // the method is looked up on the value when the call runs.
+            if (!isNamespaceCall && !argTypes.empty() &&
+                !m_decidedCalls.contains(&expr) &&
+                !m_selectedCallSignatures.contains(&expr) &&
+                !m_resolvedCalls.contains(&node)) {
+                const auto receiver = resolve(argTypes.front());
+                if (std::holds_alternative<UnknownType>(receiver->kind) ||
+                    std::holds_alternative<TypeVar>(receiver->kind))
+                    m_decidedCalls[&expr] = {CallKind::Dispatch, node.method};
+            }
+            return result;
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             if (node.anyElements) {
@@ -3896,16 +3958,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                  !m_recordFields.count(named->name) &&
                  !m_adtVariants.count(named->name))
             receiverTrait = named->name;
+        // A method the receiver's trait requires or defaults: dispatched on
+        // the value at run time, through that trait.
+        const auto viaTrait = [&](const std::string& trait) {
+            if (callExpr)
+                m_decidedCalls[callExpr] = {CallKind::TraitMethod, trait};
+        };
         if (!receiverTrait.empty())
             if (const TraitDef* trait = m_traits.get(receiverTrait)) {
                 for (const auto& required : trait->requiredMethods)
                     if (required.name == name &&
-                        argTypes.size() == required.params.size() + 1)
+                        argTypes.size() == required.params.size() + 1) {
+                        viaTrait(receiverTrait);
                         return required.result;
+                    }
                 if (std::find(trait->defaultMethods.begin(),
                               trait->defaultMethods.end(), name) !=
-                    trait->defaultMethods.end())
+                    trait->defaultMethods.end()) {
+                    viaTrait(receiverTrait);
                     return Type::unknown();
+                }
             }
         if (auto* intersection =
                 std::get_if<IntersectionType>(&receiver->kind)) {
@@ -3920,8 +3992,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (const TraitDef* trait = m_traits.get(traitName))
                     for (const auto& required : trait->requiredMethods)
                         if (required.name == name &&
-                            argTypes.size() == required.params.size() + 1)
+                            argTypes.size() == required.params.size() + 1) {
+                            viaTrait(traitName);
                             return required.result;
+                        }
             }
         }
     }
@@ -3933,6 +4007,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         auto resolvedLocal = local ? resolve(local) : nullptr;
         if (resolvedLocal)
             if (auto* function = std::get_if<FuncType>(&resolvedLocal->kind)) {
+                // A function value bound in scope, called.
+                if (callExpr)
+                    m_decidedCalls[callExpr] = {CallKind::ValueCall, name};
                 // A call through a local bound by a bare `~name` capture
                 // (`let f = ~greet`) carries only positional param TYPES in
                 // `function` — no names. `argTypes` here is positional args
@@ -4138,6 +4215,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     // Same substitution the main field-access path does: a
                     // `Box<Integer>` reads `.items` as `[Integer]`, not as
                     // the declaration's bare parameter slot.
+                    if (callExpr)
+                        m_decidedCalls[callExpr] = {
+                            CallKind::FieldRead, resolveRecordName(named->name)};
                     return substituteInterfaceGenerics(field->second,
                                                        named->typeArgs);
                 }
@@ -4150,8 +4230,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 auto record =
                     m_importedInterfaces->recordFieldNames.find(named->name);
                 if (record != m_importedInterfaces->recordFieldNames.end() &&
-                    record->second.count(name))
+                    record->second.count(name)) {
+                    if (callExpr)
+                        m_decidedCalls[callExpr] = {CallKind::FieldRead,
+                                                    named->name};
                     return Type::unknown();
+                }
             }
         } else if (auto* var = std::get_if<TypeVar>(&receiver->kind);
                    var && var->id >= 0 && var->id >= m_clauseVarMark &&
@@ -4474,6 +4558,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     bool useLocalMethods = hasLocalMethods &&
         (!m_inMakeBlock || hasReceiverRefinementConflict ||
          hasConcreteReceiver);
+    // Permissive means "not decided here", not "the import": with this
+    // unit's own methods held back, a same-named import was the only
+    // candidate left, won, and bound the receiver to ITS type — `c.advance`
+    // inside `make Cursor` became the prelude's `Parsing.Input.advance`, a
+    // false "returns Parsing.Input" error, and a BEAM call that died on the
+    // Cursor the walker handled. The value decides when the call runs.
+    if (hasLocalMethods && !useLocalMethods && !importedSigs.empty()) {
+        if (callExpr) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+        return Type::unknown();
+    }
     // Local methods come FIRST. When a user type defines a method the prelude
     // also provides and both signatures match, the user's is the more specific
     // one. Ordering imported first let a GENERIC prelude signature win on type
@@ -4553,6 +4647,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             applied += std::max<size_t>(fn->params.size(), 1);
                             fieldType = fn->result;
                         }
+                        if (callExpr)
+                            m_decidedCalls[callExpr] = {
+                                CallKind::FieldRead,
+                                resolveRecordName(named->name)};
                         return fieldType;
                     }
                 }
@@ -5237,6 +5335,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                              [&](const Signature* left, const Signature* right) {
                                  return rank(left) < rank(right);
                              });
+            // Two candidates for DIFFERENT concrete receiver types (a
+            // local `Cursor.advance` beside the prelude's
+            // `Parsing.Input.advance`), and nothing says which this value
+            // is: no choice here is a decision. Picking the first bound the
+            // receiver to it — a false "returns Parsing.Input" error, and an
+            // import lowering then called on a Cursor. The value decides.
+            std::set<std::string> receiverHeads;
+            for (const auto* candidate : fullMatches)
+                if (rank(candidate) == 2)
+                    receiverHeads.insert(
+                        typeToString(headShapeOf(resolve(candidate->params[0]))));
+            if (receiverHeads.size() > 1) {
+                if (callExpr)
+                    m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+                return Type::unknown();
+            }
         }
     }
 
