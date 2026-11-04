@@ -412,14 +412,42 @@ auto Lowering::topLevelPatternBinding(const ast::LetExpr& le, const std::string&
 // it where a clause is built, even when it has no `when`: leaving a test
 // behind would silently make the alternative match everything.
 auto Lowering::withTypeGuards(ExprPtr existing) -> std::optional<ExprPtr> {
+    ExprPtr tests;
     for (auto& test : pendingTypeGuards)
-        existing = existing
-            ? callE("erlang", "and", 2,
-                    two(std::move(existing), std::move(test)))
-            : std::move(test);
+        tests = tests ? callE("erlang", "and", 2,
+                              two(std::move(tests), std::move(test)))
+                      : std::move(test);
     pendingTypeGuards.clear();
-    if (!existing) return std::nullopt;
-    return std::optional<ExprPtr>{std::move(existing)};
+    if (!tests) {
+        if (!existing) return std::nullopt;
+        return std::optional<ExprPtr>{std::move(existing)};
+    }
+    if (!existing) return std::optional<ExprPtr>{std::move(tests)};
+    // Type tests first, SHORT-CIRCUITED: the `when` guard may hold a
+    // partial operation (a checked `kex_intrinsic_number` comparison raises
+    // on mistyped values), so the old `and(guard, tests)` — strict, guard
+    // first — was fatal where the walker, which type-tests first and skips
+    // the guard, falls through (risk #8). The tests themselves are total
+    // BIFs (`typeGuard`'s one partial shape short-circuits internally), so
+    // conjoining them is safe; only the guard needs the nested case.
+    // Safe in every consumer: match paths move the guard out of native
+    // position via `expandGuards`, rescue drops it at emission, and
+    // receive rejects type patterns outright.
+    Match m;
+    m.subjects.push_back(std::move(tests));
+    MatchClause pass;
+    auto tp = std::make_unique<Pattern>();
+    tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool; tp->litBool = true;
+    pass.patterns.push_back(std::move(tp));
+    pass.body = std::move(existing);
+    MatchClause fail;
+    fail.patterns.push_back(wildPat());
+    fail.body = litBool(false);
+    m.clauses.push_back(std::move(pass));
+    m.clauses.push_back(std::move(fail));
+    auto e = std::make_unique<Expr>();
+    e->node = std::move(m);
+    return std::optional<ExprPtr>{std::move(e)};
 }
 
 auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
