@@ -1570,31 +1570,42 @@ auto Lowering::makeMethodFor(const ast::MethodCall& n, std::string owner,
 // function (kexhq/kex#448, kexhq/kex#476). Returns nullptr for anything
 // else, including a call the checker bound to a make function.
 auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
-    if (!expressionTypes || !n.receiver || n.mutating || n.parenthesized ||
+    if (!n.receiver || n.mutating || n.parenthesized ||
         !n.args.empty() || !n.namedArgs.empty() || n.block)
         return nullptr;
     if (resolvedCalls && resolvedCalls->count(&n)) return nullptr;
     if (std::holds_alternative<ast::UpperIdentifier>(n.receiver->kind))
         return nullptr;
-    auto typed = expressionTypes->find(n.receiver.get());
-    if (typed == expressionTypes->end() || !typed->second) return nullptr;
-    const auto* named =
-        std::get_if<semantic::NamedType>(&typed->second->kind);
-    if (!named) return nullptr;
+    // The record read: as the checker decided it, which holds even where
+    // the receiver's recorded type is a variable solved later; otherwise
+    // from that recorded type.
+    std::string recordName;
+    if (const auto decided = decidedFieldReads.find(&n);
+        decided != decidedFieldReads.end()) {
+        recordName = decided->second;
+    } else {
+        if (!expressionTypes) return nullptr;
+        auto typed = expressionTypes->find(n.receiver.get());
+        if (typed == expressionTypes->end() || !typed->second) return nullptr;
+        const auto* named =
+            std::get_if<semantic::NamedType>(&typed->second->kind);
+        if (!named) return nullptr;
+        recordName = named->name;
+    }
     // A bare name the prelude also declares says too little: a local
     // `ParseError` and the prelude's are both `ParseError` to the checker,
     // and they keep their field at different positions. The accessor
     // tells them apart by tuple size.
-    if (externalRecordNames.count(named->name)) return nullptr;
-    auto record = records.find(named->name);
+    if (externalRecordNames.count(recordName)) return nullptr;
+    auto record = records.find(recordName);
     if (record == records.end()) return nullptr;
     const auto& fields = record->second.fields;
     const auto found = std::find(fields.begin(), fields.end(), n.method);
     if (found == fields.end()) return nullptr;
-    const auto dot = named->name.rfind('.');
+    const auto dot = recordName.rfind('.');
     const auto bare = dot == std::string::npos
-        ? named->name : named->name.substr(dot + 1);
-    if (ownsMethod(named->name, n.method) || ownsMethod(bare, n.method))
+        ? recordName : recordName.substr(dot + 1);
+    if (ownsMethod(recordName, n.method) || ownsMethod(bare, n.method))
         return nullptr;
     std::vector<Binding> binds;
     auto receiver = atomize(n.receiver, binds);

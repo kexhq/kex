@@ -164,6 +164,7 @@ add_custom_command(
     VERBATIM)
 
 add_library(kex_lib
+    src/hir/call_targets.cxx
     src/ir/lower.cxx
     src/ir/lowering_body.cxx
     src/ir/lowering_calls.cxx

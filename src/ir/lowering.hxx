@@ -326,6 +326,8 @@ struct Lowering {
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
+    // Field reads the checker decided, by call: the record each one reads.
+    std::unordered_map<const ast::MethodCall*, std::string> decidedFieldReads;
     // `implement:` identities per make block, in written order, resolved by
     // semantic analysis. Absent without analysis (`--no-check`), in which
     // case `inheritedDefaults` resolves from its pre-pass usings as before.

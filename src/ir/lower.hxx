@@ -7,6 +7,7 @@
 // than silently generating invalid Core Erlang.
 #include "ir.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/decided_call.hxx"
 #include "../semantic/imported_interfaces.hxx"
 #include <stdexcept>
 #include <string>
@@ -144,6 +145,10 @@ struct LowerContext {
     const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
     const ExpressionTypes* expressionTypes = nullptr;
     const ResolvedTraits* resolvedTraits = nullptr;
+    // What the checker decided the remaining call sites are (field reads,
+    // constructors, ...), so lowering need not work it out again.
+    const std::unordered_map<const ast::Expr*, semantic::DecidedCall>*
+        decidedCalls = nullptr;
 };
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
