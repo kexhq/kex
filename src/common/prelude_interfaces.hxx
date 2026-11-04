@@ -4,6 +4,9 @@
 #include "file_io.hxx"
 #include "mangle.hxx"
 #include "../beam/interface_cache.hxx"
+#include "../cache/cache.hxx"
+#include "digest.hxx"
+#include "timings.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
@@ -95,31 +98,13 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
         if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
             const auto& name = node.parts.back();
-            if (name == "Integer" || name == "Int") return Type::integer();
-            if (name == "String") return Type::string();
-            if (name == "Bool") return Type::boolean();
-            if (name == "Char") return Type::charT();
-            // Without these, an interface signature spelled `Atom` (or a
-            // sized numeric) came back as NamedType while the typechecker's
-            // own path builds a PrimitiveType/SizedIntType for the same name.
-            // Same printed name, different kind: typesEqual said no, so a
-            // signature was not equal to itself and overload dedupe reported
-            // `m.get(1, "")` ambiguous against its own `Atom | Integer`.
-            if (name == "Atom") return Type::atom();
-            if (name == "Byte") return Type::byte();
-            if (name == "Int8") return Type::int8();
-            if (name == "Int16") return Type::int16();
-            if (name == "Int32") return Type::int32();
-            if (name == "Int64") return Type::int64();
-            if (name == "UInt8") return Type::uint8();
-            if (name == "UInt16") return Type::uint16();
-            if (name == "UInt32") return Type::uint32();
-            if (name == "UInt64") return Type::uint64();
-            if (name == "Float32") return Type::float32();
-            if (name == "Float64") return Type::float64();
-            if (name == "Float") return Type::constrained("Float", "Float");
-            if (name == "Number") return Type::constrained("Number", "Number");
-            if (name == "Void") return Type::unit();
+            // The checker's own table: a signature spelled `Atom` (or a sized
+            // numeric) that came back as NamedType while the typechecker
+            // built a PrimitiveType/SizedIntType for the same name was not
+            // equal to itself, and overload dedupe reported `m.get(1, "")`
+            // ambiguous against its own `Atom | Integer`.
+            if (auto builtin = kex::semantic::signatureBuiltinType(name))
+                return builtin;
             if (name == "Any") return Type::unknown();
             if (name.size() == 1 && std::isupper(static_cast<unsigned char>(name[0]))) {
                 auto it = vars.find(name);
@@ -633,36 +618,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
 
     for (auto& program : programs) {
 
-        auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
-            if (!make.target) return "";
-            if (const auto* tn = std::get_if<ast::TypeName>(&make.target->kind))
-                return tn->parts.empty() ? "" : tn->parts.back();
-            if (const auto* gt = std::get_if<ast::GenericType>(&make.target->kind))
-                return gt->name.parts.empty() ? "" : gt->name.parts.back();
-            if (const auto* lt = std::get_if<ast::ListType>(&make.target->kind))
-                return "List";
-            if (const auto* mt = std::get_if<ast::MapType>(&make.target->kind))
-                return "Map";
-            return "";
+        auto makeTargetName = [](const ast::MakeDef& make) {
+            return makeTargetLeaf(make.target);
         };
 
-        auto makeTargetSpelling = [](const ast::MakeDef& make) -> std::string {
-            auto join = [](const std::vector<std::string>& parts) {
-                std::string out;
-                for (size_t i = 0; i < parts.size(); ++i) {
-                    if (i) out += ".";
-                    out += parts[i];
-                }
-                return out;
-            };
-            if (!make.target) return "";
-            if (const auto* tn = std::get_if<ast::TypeName>(&make.target->kind))
-                return join(tn->parts);
-            if (const auto* gt = std::get_if<ast::GenericType>(&make.target->kind))
-                return join(gt->name.parts);
-            if (std::get_if<ast::ListType>(&make.target->kind)) return "List";
-            if (std::get_if<ast::MapType>(&make.target->kind)) return "Map";
-            return "";
+        auto makeTargetSpelling = [](const ast::MakeDef& make) {
+            const auto name = writtenMakeTarget(make.target);
+            return name ? name->dotted() : std::string{};
         };
 
         auto collectMakeAnnotations = [&](const ast::MakeDef& make,
@@ -1396,30 +1358,6 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
     return base;
 }
 
-inline auto hashHex(const kex::beam::Hash128& hash) -> std::string {
-    static const char* digits = "0123456789abcdef";
-    std::string out;
-    out.reserve(hash.size() * 2);
-    for (const auto b : hash) {
-        out += digits[b >> 4];
-        out += digits[b & 0xf];
-    }
-    return out;
-}
-
-inline auto preludeInterfaceCachePath(const std::string& key)
-    -> std::optional<std::filesystem::path> {
-    const char* xdg = std::getenv("XDG_CACHE_HOME");
-    std::filesystem::path base;
-    if (xdg && *xdg)
-        base = std::filesystem::path{xdg};
-    else if (const char* home = std::getenv("HOME"); home && *home)
-        base = std::filesystem::path{home} / ".cache";
-    else
-        return std::nullopt;
-    return base / "kex" / "prelude-interface" / (key + ".bin");
-}
-
 // Build the ImportedInterfaces snapshot from the prebuilt prelude beam in
 // `runtimeDir`. Cached per process; safe to call from any thread after
 // first construction. Falls back to source-based extraction when no
@@ -1428,33 +1366,24 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
     static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
         // KEX_TIMINGS=1 splits this one-time load (kexhq/kex#323).
-        const bool timed = [] {
-            const char* value = std::getenv("KEX_TIMINGS");
-            return value && *value && std::string(value) != "0";
-        }();
-        auto phaseStart = std::chrono::steady_clock::now();
-        auto phase = [&](const char* name) {
-            if (!timed) return;
-            const auto now = std::chrono::steady_clock::now();
-            std::fprintf(stderr, "    %-26s %8.1f ms\n", name,
-                         std::chrono::duration<double, std::milli>(now - phaseStart).count());
-            phaseStart = now;
-        };
+        const bool timed = kex::timings::enabled();
+        kex::timings::PhaseTimer loadTimer(4, false);
+        auto phase = [&](const char* name) { loadTimer.mark(name); };
 
         // The snapshot is a pure function of the stdlib sources AND the
-        // compiler that derives it, so it is cached on disk keyed by both:
-        // the sources' content hash plus the compiler version and binary
-        // stamp. A same-version rebuild must never serve the previous
-        // build's interfaces (risk #2, the #372 class).
+        // compiler that derives it, so it is cached keyed by the toolchain
+        // fingerprint, which covers both: every stdlib source (prelude and
+        // opt-in, subdirectories included) and the compiler binary. A
+        // same-version rebuild never serves the previous build's interfaces
+        // (risk #2, the #372 class), and an edited opt-in module never
+        // serves its old signature.
         std::optional<std::filesystem::path> cachePath;
         if (!runtimeDir.empty()) {
-            const auto artifact = standardLibraryArtifactSourceFiles();
-            if (!artifact.empty()) {
-                const auto key = kex::beam::interfaceCacheKey(
-                    hashHex(preludeSourceHash(artifact)),
-                    kex::compilerBinaryStamp());
-                cachePath = preludeInterfaceCachePath(key);
-            }
+            if (const auto dir = kex::cache::directory("prelude-interface"))
+                cachePath = *dir / (kex::sha256Hex(
+                                        "kex-prelude-interface-v1\n" +
+                                        kex::cache::toolchainFingerprint()) +
+                                    ".bin");
         }
         const auto noteMiss = [&](const char* why) {
             if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
@@ -1464,12 +1393,12 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
             if (!bytes) {
                 noteMiss("absent");
             } else {
-                // Split the key computation (stdlib listing + full
-                // content hash above, plus this file read) from the
-                // deserialize below, so 3c measures which dominates.
+                // The key (stats of the stdlib files, see
+                // toolchainFingerprint) plus this read, apart from the
+                // deserialize below.
                 phase("cache key + read");
                 kex::beam::CacheMissReason reason =
-                    kex::beam::CacheMissReason::corrupt;
+                    kex::beam::CacheMissReason::Corrupt;
                 if (auto loaded = kex::beam::deserializeImportedInterfaces(
                         *bytes, &reason)) {
                     phase("cache deserialize");
@@ -1493,7 +1422,10 @@ inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
 
         if (cachePath) {
             auto bytes = kex::beam::serializeImportedInterfaces(merged);
-            if (kex::beam::writeInterfaceCacheFile(*cachePath, bytes))
+            if (kex::cache::atomicWrite(
+                    *cachePath,
+                    std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                                     bytes.size())))
                 kex::beam::pruneInterfaceCacheDirectory(
                     cachePath->parent_path(), *cachePath);
         }

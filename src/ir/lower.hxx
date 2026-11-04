@@ -122,52 +122,49 @@ struct ExternalRecordLayout {
     std::string declaringModule;
 };
 
+using ResolvedCalls =
+    std::unordered_map<const ast::MethodCall*, semantic::ResolvedCallTarget>;
+using ResolvedTraits =
+    std::unordered_map<const ast::MakeDef*, std::vector<std::string>>;
+
+// Everything lowering is told besides the program itself. One struct, with
+// named fields, rather than a run of positional pointers: the entry points
+// used to take the same nine in two different orders.
+struct LowerContext {
+    // The file being lowered, for locations in runtime errors.
+    std::string sourcePath;
+    // What other modules (the prelude, dependencies compiled apart) declare.
+    const ExternalModules* externals = nullptr;
+    const std::vector<ExternalRecordLayout>* externalRecords = nullptr;
+    const std::vector<ExternalVariantTag>* externalVariants = nullptr;
+    bool preferExternalReceivers = false;
+    // The type checker's answers, keyed by AST node (Analyzer accessors of
+    // the same names). Null when the program was not checked.
+    const ResolvedCalls* resolvedCalls = nullptr;
+    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
+    const ExpressionTypes* expressionTypes = nullptr;
+    const ResolvedTraits* resolvedTraits = nullptr;
+};
+
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath = "",
-                  const ExternalModules* externals = nullptr,
-                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr,
-                  const std::unordered_map<const ast::MakeDef*,
-                      std::vector<std::string>>* resolvedTraits = nullptr)
-    -> Module;
+                  const LowerContext& context = {}) -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
 // result is the file-local Kex.Global module; every explicit Kex module is a
 // separate `Kex.<Name>` module.
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath = "",
-                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-                  const ExternalModules* externals = nullptr,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr,
-                  const std::unordered_map<const ast::MakeDef*,
-                      std::vector<std::string>>* resolvedTraits = nullptr)
-    -> std::vector<Module>;
+                  const LowerContext& context = {}) -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the
 // pre-pass (records, types, method owners); items are logically partitioned
 // into tiers by tierBounds. Currently produces one merged module; future
 // versions will produce separate modules per tier.
-auto lowerProgramTiered(
-    const ast::Program& prog,
-    const std::array<size_t, 5>& tierBounds,
-    const std::string& fileStem,
-    const std::string& sourcePath = "",
-    const ExternalModules* externals = nullptr,
-    const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-    const std::unordered_map<const ast::MethodCall*,
-        semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-    bool preferExternalReceivers = false,
-    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
-        resolvedTraits = nullptr) -> Module;
+// The prelude's tiers: lowered as one module, with only `externals`,
+// `externalRecords`, `resolvedCalls`, `preferExternalReceivers` and
+// `resolvedTraits` taken from `context`.
+auto lowerProgramTiered(const ast::Program& prog,
+                        const std::array<size_t, 5>& tierBounds,
+                        const std::string& fileStem,
+                        const LowerContext& context = {}) -> Module;
 
 } // namespace kex::ir

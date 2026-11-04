@@ -68,4 +68,25 @@ struct BeamVm {
 };
 #endif
 
+// One request of the REPL driver protocol (runtime/src/kex_repl_driver.erl):
+// sends `<verb> <id> [<payload>]` and collects what the driver printed before
+// its `KEX_REPL_DONE <id> <status>` line. Ids come from one counter, so no
+// two requests of a process share one.
+struct VmReply {
+  std::string status;
+  std::string output;
+  auto ok() const -> bool { return status == "ok"; }
+};
+
+inline auto vmRequest(BeamVm &vm, const std::string &verb,
+                      const std::string &payload = "") -> VmReply {
+  static unsigned long long nextId = 0;
+  const auto id = std::to_string(++nextId);
+  vm.writeLine(payload.empty() ? verb + " " + id
+                               : verb + " " + id + " " + payload);
+  VmReply reply;
+  reply.output = vm.readUntilSentinel("KEX_REPL_DONE " + id + " ", reply.status);
+  return reply;
+}
+
 } // namespace kex::process

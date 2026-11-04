@@ -6,6 +6,7 @@
 
 #include "ir.hxx"
 #include "lower.hxx"
+#include "walk.hxx"
 #include "../ast/function_groups.hxx"
 
 #include <algorithm>
@@ -123,63 +124,10 @@ inline auto localOverloadKey(const std::string& method,
 // Does `expr` reference the SSA name `name` anywhere? Names are freshened at
 // binding time, so a plain syntactic scan is exact — nothing shadows.
 inline auto mentionsVar(const Expr& expr, const std::string& name) -> bool {
-    return std::visit([&](const auto& node) -> bool {
-        using T = std::decay_t<decltype(node)>;
-        auto visit = [&](const ExprPtr& child) {
-            return child && mentionsVar(*child, name);
-        };
-        auto anyOf = [&](const std::vector<ExprPtr>& items) {
-            for (const auto& item : items) if (visit(item)) return true;
-            return false;
-        };
-        auto anyClause = [&](const std::vector<MatchClause>& clauses) {
-            for (const auto& clause : clauses) {
-                if (clause.guard && visit(*clause.guard)) return true;
-                if (visit(clause.body)) return true;
-            }
-            return false;
-        };
-        if constexpr (std::is_same_v<T, Var>) {
-            return node.name == name;
-        } else if constexpr (std::is_same_v<T, Intrinsic>) {
-            return anyOf(node.args);
-        } else if constexpr (std::is_same_v<T, Call>) {
-            return anyOf(node.args);
-        } else if constexpr (std::is_same_v<T, CallIndirect>) {
-            return visit(node.callee) || anyOf(node.args);
-        } else if constexpr (std::is_same_v<T, Let>) {
-            return visit(node.value) || visit(node.body);
-        } else if constexpr (std::is_same_v<T, Seq>) {
-            return anyOf(node.exprs);
-        } else if constexpr (std::is_same_v<T, Match>) {
-            return anyOf(node.subjects) || anyClause(node.clauses);
-        } else if constexpr (std::is_same_v<T, Construct>) {
-            return anyOf(node.args);
-        } else if constexpr (std::is_same_v<T, MakeTuple>) {
-            return anyOf(node.elements);
-        } else if constexpr (std::is_same_v<T, MakeList>) {
-            return anyOf(node.elements) || (node.rest && visit(*node.rest));
-        } else if constexpr (std::is_same_v<T, FieldGet>) {
-            return visit(node.record);
-        } else if constexpr (std::is_same_v<T, Lambda>) {
-            return visit(node.body);
-        } else if constexpr (std::is_same_v<T, Return>) {
-            return visit(node.value);
-        } else if constexpr (std::is_same_v<T, TryThrow>) {
-            return visit(node.error);
-        } else if constexpr (std::is_same_v<T, TryCatch>) {
-            return visit(node.body) || anyClause(node.clauses);
-        } else if constexpr (std::is_same_v<T, LetRec>) {
-            return visit(node.funBody) || visit(node.contBody);
-        } else if constexpr (std::is_same_v<T, Receive>) {
-            for (const auto& clause : node.clauses)
-                if (visit(clause.body)) return true;
-            return (node.timeout && visit(*node.timeout)) ||
-                   (node.afterBody && visit(*node.afterBody));
-        } else {
-            return false;
-        }
-    }, expr.node);
+    if (const auto* var = std::get_if<Var>(&expr.node)) return var->name == name;
+    return anyChild(expr, [&](const ExprPtr& child) {
+        return mentionsVar(*child, name);
+    });
 }
 
 // A pending `let name = value in ...` binding, accumulated while lowering a

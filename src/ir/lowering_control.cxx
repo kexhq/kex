@@ -452,7 +452,7 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
                 auto ex = std::make_unique<Expr>();
                 ex->node = Call{"erlang", "error", 1,
                     one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
-                return std::move(ex);
+                return ex;
             }
             auto val = lowerMutatingAsValue(*mc);
             std::string nv = fresh(id->name); subst[id->name] = nv;
@@ -848,11 +848,7 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
 auto Lowering::applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved {
     UsingBindingsSaved saved{moduleImports, moduleAliases, usingModules,
                              externalImports};
-    std::string srcMod;
-    for (size_t i = 0; i < n.module.parts.size(); i++) {
-        if (i) srcMod += ".";
-        srcMod += n.module.parts[i];
-    }
+    std::string srcMod = n.module.dotted();
     applyUsingCore(srcMod, n.alias, n.onlyNames, n.exceptNames);
     return saved;
 }

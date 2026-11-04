@@ -109,7 +109,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return args[0];
     });
 
-    reg("map", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("map", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         // A stream reaching the generic `map` stays lazy — same implementation
         // the Stream domain registers, so the two cannot drift apart.
@@ -132,7 +132,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
-    reg("filter", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("filter", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -155,7 +155,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
-    reg("reject", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("reject", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
@@ -172,7 +172,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // foldLeft). It uses an accumulator-first reducer, exposed under the
     // primitive name so the prelude's reduce is a thin intrinsic wrapper on
     // both backends.
-    reg("foldLeft", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("foldLeft", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::none();
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[2]->data);
@@ -203,7 +203,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list({});
     });
 
-    reg("each", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("each", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::none();
@@ -277,7 +277,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // count(Map) -> Integer           — entry count
     // count(Range) -> Integer         — range size
     // count([X], X->Bool) -> Integer  — filtered count
-    reg("count", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("count", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto* str = std::get_if<StringValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(cachedCodepoints(*str).size()));
@@ -298,7 +298,7 @@ auto Evaluator::registerListBuiltins() -> void {
 
     // Kex.Intrinsic.List.length — the low-level length intrinsic backing
     // the prelude's `count` wrapper. Works on lists, strings, and maps.
-    reg("length", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("length", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto* list = std::get_if<ListValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(list->elements.size()));
@@ -424,7 +424,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::none();
     });
 
-    reg("any?", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("any?", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -435,7 +435,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::boolean(false);
     });
 
-    reg("all?", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("all?", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(true);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -532,7 +532,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return "Equal";
     };
 
-    reg("sort", [this, getElements, compareVia, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("sort", [getElements, compareVia, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         // String-preserving: an operation on a String answers with a String,
         // as its declared signature says. A String and a [Char] are different
@@ -564,7 +564,7 @@ auto Evaluator::registerListBuiltins() -> void {
                         : Value::list(std::move(elems));
     });
 
-    reg("min", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("min", [getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();
@@ -587,7 +587,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::just(result);
     });
 
-    reg("max", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("max", [getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();

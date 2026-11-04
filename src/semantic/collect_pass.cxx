@@ -1,5 +1,5 @@
 #include "collect_pass.hxx"
-#include "../ast/type_text.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/type_def_utils.hxx"
 #include <variant>
 #include <cctype>
@@ -15,9 +15,21 @@ static auto declaredAt(const SourceLocation& location, std::string_view path)
     if (location.line > 0) return location;
     return SourceLocation{path, 0, 0};
 }
+namespace {
 
-using ast::typeExprText;
-using ast::variantText;
+auto variantText(const ast::TypeExpr& variant) -> std::string {
+    if (const auto* generic = std::get_if<ast::GenericType>(&variant.kind)) {
+        std::string result = generic->name.dotted() + "(";
+        for (size_t i = 0; i < generic->args.size(); ++i) {
+            if (i) result += ", ";
+            result += generic->args[i] ? diagnostics::typeExprToString(*generic->args[i]) : "?";
+        }
+        return result + ")";
+    }
+    return diagnostics::typeExprToString(variant);
+}
+
+} // namespace
 
 auto CollectPass::run(SemanticDB& db, const std::string& file) -> void {
     m_state = db.fileState(file);
@@ -224,7 +236,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
             if (!variant) continue;
             info.detail += i == 0 ? "\n  " : "\n| ";
             info.detail += kex::isTransparentTypeAlias(def)
-                ? typeExprText(*variant) : variantText(*variant);
+                ? diagnostics::typeExprToString(*variant) : variantText(*variant);
         }
     }
     m_state->symbols.push_back(std::move(info));
@@ -263,7 +275,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     ctor.type = Type::unknown();
                     ctor.detail = ctor.name + " : ";
                     for (const auto& arg : gt->args)
-                        ctor.detail += (arg ? typeExprText(*arg) : "?") + " -> ";
+                        ctor.detail += (arg ? diagnostics::typeExprToString(*arg) : "?") + " -> ";
                     ctor.detail += def.name;
                     if (!def.typeParams.empty()) {
                         ctor.detail += "<";
@@ -299,7 +311,7 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
     info.detail += " do";
     for (const auto& field : def.fields)
         info.detail += "\n  " + field.name + " : " +
-                       (field.type ? typeExprText(*field.type) : "?");
+                       (field.type ? diagnostics::typeExprToString(*field.type) : "?");
     info.detail += "\nend";
     m_state->symbols.push_back(std::move(info));
 
@@ -318,18 +330,8 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
 }
 
 static auto makeTargetName(const ast::TypeExprPtr& te) -> std::string {
-    if (!te) return "";
-    return std::visit([](const auto& k) -> std::string {
-        using T = std::decay_t<decltype(k)>;
-        if constexpr (std::is_same_v<T, ast::TypeName>)
-            return k.parts.empty() ? "" : k.parts[0];
-        if constexpr (std::is_same_v<T, ast::GenericType>)
-            return k.name.parts.empty() ? "" : k.name.parts[0];
-        // List literal syntax [X] → "List", map {K:V} would need MapType
-        if constexpr (std::is_same_v<T, ast::ListType>)
-            return "List";
-        return "";
-    }, te->kind);
+    const auto name = writtenMakeTarget(te);
+    return name ? name->parts.front() : std::string{};
 }
 
 auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module) -> void {

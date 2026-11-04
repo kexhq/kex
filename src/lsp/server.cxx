@@ -10,6 +10,8 @@
 #include "../semantic/completion_at.hxx"
 #include "../semantic/db.hxx"
 #include "../semantic/types.hxx"
+#include "../common/type_def_utils.hxx"
+#include "../module/discovery.hxx"
 #include "../module/resolver.hxx"
 #include "../validation/tag_validator.hxx"
 #include "ket_template.hxx"
@@ -118,38 +120,6 @@ void appendRoot(std::vector<std::string>& roots, std::string root) {
         roots.push_back(std::move(root));
 }
 
-// Every project-local module a program reaches by name: the `using` targets,
-// at file scope and inside nested modules alike. `Analyzer::referencedModules`
-// covers the qualified-only references; this covers the imports.
-auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
-    std::vector<std::string> names;
-    auto add = [&](const ast::TypeName& name) {
-        std::string joined;
-        for (size_t i = 0; i < name.parts.size(); ++i) {
-            if (i) joined += ".";
-            joined += name.parts[i];
-        }
-        if (!module::Resolver::isForeignNamespace(joined))
-            names.push_back(std::move(joined));
-    };
-    auto scanBody = [&](auto& self, const std::vector<ast::ModuleItem>& body)
-        -> void {
-        for (const auto& item : body) {
-            if (auto* import = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
-                if (*import) add((*import)->module);
-            if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*nested) self(self, (*nested)->body);
-        }
-    };
-    for (const auto& item : program.items) {
-        if (auto* import = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
-            if (*import) add((*import)->module);
-        if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-            if (*nested) scanBody(scanBody, (*nested)->body);
-    }
-    return names;
-}
-
 // A document's sibling modules, parsed and kept alive. AST locations hold a
 // `string_view` into the path, so these strings must outlive the merged items
 // — which is the whole reason this is a type and not a function-local.
@@ -190,7 +160,7 @@ auto mergeProjectModules(ast::Program& program,
     std::vector<ast::Program*> pending;
 
     auto discover = [&](const ast::Program& from) {
-        auto names = usingModuleNames(from);
+        auto names = module::collectUsingModules(from);
         semantic::Analyzer references(interfaces);
         (void)references.analyze(from);
         auto referenced = references.referencedModules();
@@ -262,7 +232,7 @@ auto mergeProjectModules(ast::Program& program,
 // package, then the standard library. Own-first is deliberate — a package
 // that shadows a dependency's module name means its own
 // (tey/src/tey/commands.kex, `sourceRoots`).
-auto moduleRootsFor(const std::string& filepath,
+auto documentSearchPath(const std::string& filepath,
                     const std::vector<std::string>& configured)
     -> std::vector<std::string> {
     namespace fs = std::filesystem;
@@ -828,8 +798,8 @@ auto sourceLocalDefinition(const std::string& source, const std::string& path,
             const bool simpleBinding = declarationKeyword == "let" ||
                                        declarationKeyword == "var";
             const bool destructuredBinding =
-                (declaration != std::string_view::npos && declaration < relative ||
-                 mutation != std::string_view::npos && mutation < relative) &&
+                ((declaration != std::string_view::npos && declaration < relative) ||
+                 (mutation != std::string_view::npos && mutation < relative)) &&
                 equals != std::string_view::npos;
             const bool clauseBinding = arrow != std::string_view::npos;
             const bool blockParameter =
@@ -1463,19 +1433,8 @@ auto qualifiedSourceDocumentation(const std::string& source,
                                         node->type->location);
             }, item);
     };
-    auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
-        if (!make.target) return {};
-        if (const auto* name = std::get_if<ast::TypeName>(&make.target->kind))
-            return name->parts.empty() ? std::string{} : name->parts.back();
-        if (const auto* generic =
-                std::get_if<ast::GenericType>(&make.target->kind))
-            return generic->name.parts.empty() ? std::string{}
-                                                : generic->name.parts.back();
-        if (std::holds_alternative<ast::ListType>(make.target->kind))
-            return "List";
-        if (std::holds_alternative<ast::MapType>(make.target->kind))
-            return "Map";
-        return {};
+    auto makeTargetName = [](const ast::MakeDef& make) {
+        return makeTargetLeaf(make.target);
     };
     auto collectMake = [&](const ast::MakeDef& make,
                            const std::string& owner) {
@@ -2231,7 +2190,7 @@ private:
     // go-to-definition and diagnostics alike.
     auto documentModuleRoots(const std::string& path) const
         -> std::vector<std::string> {
-        return moduleRootsFor(path, m_configuredSourceRoots);
+        return documentSearchPath(path, m_configuredSourceRoots);
     }
 
     // The same roots minus the standard library's. A stdlib module already
@@ -2243,16 +2202,7 @@ private:
     // modules, which have no interface to consult.
     auto projectModuleRoots(const std::string& path) const
         -> std::vector<std::string> {
-        auto roots = documentModuleRoots(path);
-        const auto stdlib = standardLibraryModuleRoots();
-        roots.erase(std::remove_if(roots.begin(), roots.end(),
-                                   [&](const std::string& root) {
-                                       return std::find(stdlib.begin(),
-                                                        stdlib.end(),
-                                                        root) != stdlib.end();
-                                   }),
-                    roots.end());
-        return roots;
+        return withoutStandardLibraryRoots(documentModuleRoots(path));
     }
 
     void verifyInitialized() const {
@@ -3041,10 +2991,10 @@ private:
                      returnStart > currentLine) &&
                     text.rfind("serving ", brace) != std::string::npos;
                 const bool servingTransition = emptyServingReturn ||
-                    written.compare(first, 3, "new") == 0 &&
-                    (first + 3 == written.size() ||
-                     std::isspace(static_cast<unsigned char>(written[first + 3])) ||
-                     written[first + 3] == ',');
+                    (written.compare(first, 3, "new") == 0 &&
+                     (first + 3 == written.size() ||
+                      std::isspace(static_cast<unsigned char>(written[first + 3])) ||
+                      written[first + 3] == ','));
                 if (servingTransition) {
                     ::lsp::Array<::lsp::CompletionItem> fields;
                     if (written.find("new") == std::string::npos)
@@ -4123,8 +4073,7 @@ private:
         } else {
             local = m_db.findSymbol(method, document.path);
         }
-        if (local && !local->params.empty() ||
-            local && local->isServingSlot) {
+        if (local && (!local->params.empty() || local->isServingSlot)) {
             std::vector<std::string> names;
             std::vector<semantic::TypePtr> types;
             for (const auto& [name, type] : local->params) {

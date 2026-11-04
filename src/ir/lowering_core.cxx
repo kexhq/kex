@@ -148,7 +148,7 @@ auto Lowering::canonicalRecordName(const std::string& name) const -> std::string
             const auto match = kex::semantic::resolve_core::matchSuffix(
                 records, "." + name);
             if (match.kind ==
-                kex::semantic::resolve_core::SuffixMatchKind::unique)
+                kex::semantic::resolve_core::SuffixMatchKind::Unique)
                 return match.name;
         }
         // A leading PORTION of the qualifier is a KNOWN ALIAS: either a
@@ -189,7 +189,7 @@ auto Lowering::canonicalRecordName(const std::string& name) const -> std::string
             return imported + "." + name;
     const auto match =
         kex::semantic::resolve_core::matchSuffix(records, "." + name);
-    if (match.kind == kex::semantic::resolve_core::SuffixMatchKind::unique)
+    if (match.kind == kex::semantic::resolve_core::SuffixMatchKind::Unique)
         return match.name;
     return name;
 }
@@ -276,24 +276,6 @@ auto Lowering::noClauseMatched(ExprPtr subject) -> ExprPtr {
     return callE("erlang", "error", 1,
                  one(callE("erlang", "iolist_to_binary", 1,
                            one(std::move(list)))));
-}
-
-// One capability-substitution dispatch, shared by every path that can
-// reach a capability. Enumerating sites is how prelude capabilities
-// stayed broken — a missed one compiles and silently calls the real
-// implementation, which is the failure this feature exists to remove
-// (kexhq/kex#143). Callers supply only how to build their own direct
-// call for the miss case.
-auto Lowering::capabilityDispatch(
-    const std::string& capability, const std::string& method,
-    const std::vector<ast::ExprPtr>& sourceArgs,
-    const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
-    -> ExprPtr {
-    std::vector<Binding> binds;
-    std::vector<ExprPtr> lowered;
-    for (const auto& a : sourceArgs) lowered.push_back(atomize(a, binds));
-    return capabilityDispatchLowered(capability, method, std::move(lowered),
-                                     binds, directCall);
 }
 
 // The same dispatch where the arguments are already lowered — the

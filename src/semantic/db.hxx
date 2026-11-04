@@ -90,11 +90,6 @@ public:
     auto shadowedModulePaths(const std::string& moduleName) const
         -> const std::vector<std::string>&;
 
-    // Returns true if `name` appears as a file-level symbol in any indexed
-    // file. This is an index query, not a name-resolution rule: top-level Kex
-    // definitions remain file-local.
-    auto isGloballyKnown(const std::string& name) const -> bool;
-
     // Finds the SymbolInfo for `name`, preferring symbols from `preferFile`.
     // Returns null if not found in any indexed file.
     auto findSymbol(const std::string& name,

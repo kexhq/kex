@@ -51,7 +51,8 @@ auto writeTempSource(const std::string& source) -> std::string {
 // MISS (new key) mints another.
 auto interfaceCacheEntryCount(const std::string& cacheDir) -> size_t {
     std::error_code ec;
-    const auto dir = fs::path(cacheDir) / "kex" / "prelude-interface";
+    // runKex sets KEX_CACHE=cacheDir, the root every cache lives under.
+    const auto dir = fs::path(cacheDir) / "prelude-interface";
     if (!fs::exists(dir, ec)) return 0;
     size_t count = 0;
     for (const auto& entry : fs::directory_iterator(dir, ec)) {

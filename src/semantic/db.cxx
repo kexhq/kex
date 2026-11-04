@@ -282,15 +282,6 @@ auto SemanticDB::shadowedModulePaths(const std::string& moduleName) const
     return found == m_shadowedModulePaths.end() ? s_emptyPaths : found->second;
 }
 
-auto SemanticDB::isGloballyKnown(const std::string& name) const -> bool {
-    for (const auto& [path, state] : m_files) {
-        for (const auto& sym : state.symbols) {
-            if (sym.name == name) return true;
-        }
-    }
-    return false;
-}
-
 auto SemanticDB::findSymbol(const std::string& name,
                              const std::string& preferFile) -> SymbolInfo* {
     // Search preferred file first

@@ -1,6 +1,7 @@
 #include "tey_roots.hxx"
 
-#include "../beam/kexi.hxx"
+#include "../common/digest.hxx"
+#include "../common/file_io.hxx"
 
 #include <lsp/json/json.h>
 
@@ -8,9 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <map>
-#include <sstream>
 #include <unordered_map>
 
 namespace kex::lsp {
@@ -31,23 +30,6 @@ auto cacheRoot() -> std::string {
     if (const auto home = environmentValue("HOME"); !home.empty())
         return home + "/.cache/tey";
     return ".tey-cache";
-}
-
-auto sha256Hex(std::string_view text) -> std::string {
-    const auto digest = beam::computeSha256(
-        std::vector<uint8_t>(text.begin(), text.end()));
-    std::ostringstream out;
-    out << std::hex << std::setfill('0');
-    for (const auto byte : digest) out << std::setw(2) << static_cast<int>(byte);
-    return out.str();
-}
-
-auto readFile(const fs::path& path) -> std::string {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return {};
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
 }
 
 // The directory of the nearest enclosing `package.kex`, walking up from
@@ -76,7 +58,7 @@ auto stringField(const ::lsp::json::Object& object, std::string_view key)
 // A package directory's manifest declares a workspace (`workspace do`) —
 // Tey.Workspace.workspaceAt, read the way the editor can afford to: textually.
 auto declaresWorkspace(const fs::path& directory) -> bool {
-    const auto manifest = readFile(directory / "package.kex");
+    const auto manifest = readFileText(directory / "package.kex").value_or("");
     size_t lineStart = 0;
     while (lineStart < manifest.size()) {
         auto lineEnd = manifest.find('\n', lineStart);
@@ -122,7 +104,7 @@ auto canonicalRoot(const fs::path& path) -> std::string {
 // developer's own overrides, which win over the lockfile (Tey.Local).
 auto localOverrides(const fs::path& workspaceRoot) -> std::map<std::string, fs::path> {
     std::map<std::string, fs::path> overrides;
-    const auto text = readFile(workspaceRoot / "package.local.kex");
+    const auto text = readFileText(workspaceRoot / "package.local.kex").value_or("");
     size_t at = 0;
     while ((at = text.find("local(", at)) != std::string::npos) {
         at += 6;
@@ -293,7 +275,7 @@ auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
         cached->second.size == size && cached->second.localModified == localModified)
         return cached->second.roots;
 
-    auto derived = rootsFromLock(readFile(lockPath), workspaceRoot);
+    auto derived = rootsFromLock(readFileText(lockPath).value_or(""), workspaceRoot);
     // An incomplete answer is not remembered: the next request re-stats the
     // cache and picks up a `tey install` that fetched without touching the
     // lockfile.

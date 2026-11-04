@@ -17,7 +17,6 @@ struct Diagnostic;
 namespace kex::diagnostics {
 
 // Render a type as its source spelling: `List<Integer>`, `(A, B) -> C`, etc.
-auto typeNameToString(const kex::ast::TypeName &tn) -> std::string;
 auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string;
 
 // JSON string escaping (hand-rolled — no external dep).

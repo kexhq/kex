@@ -245,7 +245,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // OS union (system.kex). Both backends answer with the same atom for the
     // same machine, and anything unmodelled is `:unknown` rather than a name
     // the union does not cover.
-    defineIntrinsic("System::os", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("System::os", [](std::vector<ValuePtr>) -> ValuePtr {
 #if defined(_WIN32)
         return Value::atom("windows");
 #elif defined(__EMSCRIPTEN__)
@@ -267,7 +267,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // System.bitWidth() — the machine's pointer width in bits. The BEAM
     // answers from its word size; here it IS the pointer size.
-    defineIntrinsic("System::bitWidth", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("System::bitWidth", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::integer(static_cast<int64_t>(sizeof(void*) * 8));
     });
 
