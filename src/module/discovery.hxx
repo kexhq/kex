@@ -30,7 +30,9 @@ auto skippedByModuleWalk(const std::string &directory) -> bool;
 // modules leaves them to the prelude.
 auto standardModuleRoots() -> std::unordered_set<std::string>;
 
-// Every module a `using` names across a program, in source order.
+// Every module a `using` names across a program, at file scope and inside
+// nested modules, in source order. Foreign namespaces (`BEAM.`) are left out:
+// they have no Kex source.
 auto collectUsingModules(const kex::ast::Program &program)
     -> std::vector<std::string>;
 

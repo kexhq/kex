@@ -158,49 +158,47 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
 
     std::string source(sourceIn ? sourceIn : "");
 
-    if (kex::isReplExit(source)) {
+    using Command = kex::ReplCommandKind;
+    const auto command = kex::parseReplCommand(source);
+    if (command.kind == Command::Exit) {
         session->lastResult = "";
         return;
     }
-    if (!source.empty() && source[0] == '/') {
-        if (source == "/help" || source == "/h") {
-            std::ostringstream os;
-            kex::printReplHelp(os);
-            session->lastResult = os.str();
-            return;
-        }
-        if (source == "/clear") {
-            // xterm.js renders the same ANSI clear sequence as a real terminal.
-            session->lastResult = kex::replClearScreenSequence();
-            return;
-        }
-        if (source == "/reset") {
-            // Evaluator owns a Scheduler that keeps a reference back to its
-            // Evaluator. Move-assignment from a temporary would leave that
-            // reference pointing at the destroyed temporary, so rebuild the
-            // evaluator in place instead.
-            session->evaluator.~Evaluator();
-            new (&session->evaluator) kex::interpreter::Evaluator();
-            session->evaluator.setReplMode(true);
-            session->evaluator.setMocksAllowed(true);
-            session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
-            session->replAccumSource.clear();
-            session->replBindings.clear();
-            g_programs.clear();
-            session->lastResult = "  (bindings cleared)\n";
-            return;
-        }
-        if (source.substr(0, 5) == "/set " || source == "/set" ||
-            source.substr(0, 7) == "/unset " || source == "/with" ||
-            source.substr(0, 6) == "/with " ||
-            source.substr(0, 9) == "/without ") {
-            session->lastResult = "  not yet implemented in the web REPL\n";
-            return;
-        }
-        if (source.substr(0, 6) == "/load " || source == "/reload") {
-            session->lastResult = "  not available in the web REPL (no filesystem)\n";
-            return;
-        }
+    if (command.kind == Command::Help) {
+        std::ostringstream os;
+        kex::printReplHelp(os);
+        session->lastResult = os.str();
+        return;
+    }
+    if (command.kind == Command::Clear) {
+        // xterm.js renders the same ANSI clear sequence as a real terminal.
+        session->lastResult = kex::replClearScreenSequence();
+        return;
+    }
+    if (command.kind == Command::Reset) {
+        // Evaluator owns a Scheduler that keeps a reference back to its
+        // Evaluator. Move-assignment from a temporary would leave that
+        // reference pointing at the destroyed temporary, so rebuild the
+        // evaluator in place instead.
+        session->evaluator.~Evaluator();
+        new (&session->evaluator) kex::interpreter::Evaluator();
+        session->evaluator.setReplMode(true);
+        session->evaluator.setMocksAllowed(true);
+        session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
+        session->replAccumSource.clear();
+        session->replBindings.clear();
+        g_programs.clear();
+        session->lastResult = "  (bindings cleared)\n";
+        return;
+    }
+    if (command.kind == Command::Set || command.kind == Command::Unset ||
+        command.kind == Command::With || command.kind == Command::Without) {
+        session->lastResult = "  not yet implemented in the web REPL\n";
+        return;
+    }
+    if (command.kind == Command::Load || command.kind == Command::Reload) {
+        session->lastResult = "  not available in the web REPL (no filesystem)\n";
+        return;
     }
 
     bool isDef = looksLikeTopLevelDef(source);

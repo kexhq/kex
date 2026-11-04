@@ -71,9 +71,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
         if (!param.type || !*param.type) return "";
         const auto* name = std::get_if<ast::TypeName>(&(*param.type)->kind);
         if (!name || name->parts.empty()) return "";
-        std::string written;
-        for (const auto& part : name->parts)
-            written += (written.empty() ? "" : ".") + part;
+        std::string written = kex::join(name->parts, ".");
         return traitIdentityOf(written);
     };
     int dictionaryArity = 0;
@@ -332,11 +330,6 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
     currentModulePath = std::move(savedModulePath);
     currentFunctionSymbol = std::move(savedFunctionSymbol);
     return def;
-}
-
-auto Lowering::lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName )
-    -> FunDef {
-    return lowerFunctionGroup({&fn}, implicitThisName);
 }
 
 } // namespace kex::ir

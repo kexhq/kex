@@ -2,6 +2,8 @@
 
 #include "ast.hxx"
 
+#include <optional>
+
 // Deep copy for AST subtrees.
 //
 // The AST is built from unique_ptr, so it is move-only by construction — which
@@ -31,5 +33,17 @@ auto clone(const RecordDef& record) -> std::unique_ptr<RecordDef>;
 // instantiates one template into N independent blocks, each with its own bodies
 // for hygiene substitution to rewrite.
 auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef>;
+auto clone(const TypeAnnotation& annotation) -> std::unique_ptr<TypeAnnotation>;
+auto clone(const UsingBlock& block) -> std::unique_ptr<UsingBlock>;
+auto clone(const TraitDef& trait) -> std::unique_ptr<TraitDef>;
+auto clone(const ExportDecl& decl) -> std::unique_ptr<ExportDecl>;
+auto clone(const MainBlock& main) -> std::unique_ptr<MainBlock>;
+auto clone(const Pragma& pragma) -> std::unique_ptr<Pragma>;
+// Null when the block (or a module inside it) still holds a CompiledBlock:
+// unexpanded compile-time code has no copy.
+auto clone(const VisibilityBlock& block) -> std::unique_ptr<VisibilityBlock>;
+auto clone(const ModuleDef& module) -> std::unique_ptr<ModuleDef>;
+// A whole program, or nullopt if any CompiledBlock remains in it.
+auto clone(const Program& program) -> std::optional<Program>;
 
 } // namespace kex::ast

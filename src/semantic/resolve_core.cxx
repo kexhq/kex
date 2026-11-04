@@ -223,54 +223,6 @@ auto typesAlphaEqual(const TypePtr& a, const TypePtr& b,
         a->kind);
 }
 
-// Clause (0b): a gradual (partially unknown) receiver may carry a
-// value of another type — static dispatch would lie where the
-// dispatcher adapts.
-auto mentionsUnknown(const TypePtr& type) -> bool {
-    if (!type) return true;
-    return std::visit(
-        [](const auto& node) -> bool {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, UnknownType>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, NamedType>) {
-                for (const auto& arg : node.typeArgs)
-                    if (mentionsUnknown(arg)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, FuncType>) {
-                for (const auto& param : node.params)
-                    if (mentionsUnknown(param)) return true;
-                return mentionsUnknown(node.result);
-            } else if constexpr (std::is_same_v<T, TupleType>) {
-                for (const auto& element : node.elements)
-                    if (mentionsUnknown(element)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, ListType>) {
-                return mentionsUnknown(node.element);
-            } else if constexpr (std::is_same_v<T, MapType>) {
-                return mentionsUnknown(node.key) ||
-                       mentionsUnknown(node.value);
-            } else if constexpr (std::is_same_v<T, OptionalType>) {
-                return mentionsUnknown(node.inner);
-            } else if constexpr (std::is_same_v<T, UnionType>) {
-                for (const auto& member : node.members)
-                    if (mentionsUnknown(member)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, IntersectionType>) {
-                for (const auto& member : node.members)
-                    if (mentionsUnknown(member)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, RecordType>) {
-                for (const auto& [_, field] : node.fields)
-                    if (mentionsUnknown(field)) return true;
-                return false;
-            } else {
-                return false;
-            }
-        },
-        type->kind);
-}
-
 } // namespace
 
 auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
@@ -385,7 +337,10 @@ auto importDispatchSpelling(
     // dynamic (0b).
     const TypePtr expanded =
         expandAlias ? expandAlias(receiverType) : receiverType;
-    if (mentionsUnknown(expanded)) return std::nullopt;
+    // Clause (0b): a gradual (partially unknown) receiver may carry a value of
+    // another type — static dispatch would lie where the dispatcher adapts.
+    // A missing type is as unknown as `?`.
+    if (mentionsUnknown(expanded, NullType::Unknown)) return std::nullopt;
 
     const auto& module = winner.backendModule;
     const auto arity = winner.backendArity;

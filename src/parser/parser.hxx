@@ -181,7 +181,6 @@ private:
     auto parseRecordPatternFields() -> std::vector<ast::FieldPattern>;
 
     // Helpers
-    auto parseBlock() -> std::optional<ast::ExprPtr>;
     // Splits an interpolating literal body into its literal segments and the
     // expressions between them. `dollarBraceEscape` selects the escape
     // convention: backtick bodies spell a literal `${` as `$${`, while a

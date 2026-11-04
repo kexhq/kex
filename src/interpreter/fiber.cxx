@@ -63,7 +63,7 @@ auto g_yieldSlot() -> ctx::fiber*& {
 }
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
-    : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
     Impl* implPtr = m_impl.get();
     m_impl->intoFiber = ctx::fiber(
         std::allocator_arg, ctx::fixedsize_stack(stackSize),
@@ -80,7 +80,7 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
             g_yieldSlot() = &callerSlot;
             trampolineBody();
             implPtr->selfSlot = nullptr;
-            return std::move(callerSlot);
+            return callerSlot;
         });
 }
 

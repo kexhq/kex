@@ -90,9 +90,9 @@ auto resolveInScopes(const std::string& currentModule,
 // ending in the suffix wins; zero matches or several settle nothing —
 // the caller decides what each means (fall through, answer the bare
 // name, report ambiguity).
-enum class SuffixMatchKind { none, unique, ambiguous };
+enum class SuffixMatchKind { None, Unique, Ambiguous };
 struct SuffixMatch {
-    SuffixMatchKind kind = SuffixMatchKind::none;
+    SuffixMatchKind kind = SuffixMatchKind::None;
     std::string name;
 };
 template <typename Map>
@@ -104,12 +104,12 @@ auto matchSuffix(const Map& candidates, const std::string& suffix)
             candidate.compare(candidate.size() - suffix.size(),
                               suffix.size(), suffix) != 0)
             continue;
-        if (match.kind == SuffixMatchKind::unique) {
-            match.kind = SuffixMatchKind::ambiguous;
+        if (match.kind == SuffixMatchKind::Unique) {
+            match.kind = SuffixMatchKind::Ambiguous;
             match.name.clear();
             break;
         }
-        match.kind = SuffixMatchKind::unique;
+        match.kind = SuffixMatchKind::Unique;
         match.name = candidate;
     }
     return match;

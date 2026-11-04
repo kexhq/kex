@@ -1,6 +1,8 @@
 #include "test.hxx"
 #include "../src/beam/etf.hxx"
 #include "../src/beam/interface_cache.hxx"
+#include "../src/cache/cache.hxx"
+#include "../src/common/file_io.hxx"
 #include "../src/common/prelude_loader.hxx"
 #include "../src/semantic/imported_interfaces.hxx"
 #include "../src/semantic/traits.hxx"
@@ -370,10 +372,11 @@ auto withRootElem(size_t index, kex::beam::TermPtr replacement,
     return kex::beam::encodeEtf(kex::beam::Term::tuple(std::move(elems)));
 }
 
-auto readFileBytes(const fs::path& path) -> std::vector<uint8_t> {
-    std::ifstream input(path, std::ios::binary);
-    return std::vector<uint8_t>((std::istreambuf_iterator<char>(input)),
-                                std::istreambuf_iterator<char>());
+// The interface cache is written through the shared atomic writer.
+auto writeCache(const fs::path& path, const std::vector<uint8_t>& bytes) -> bool {
+    return kex::cache::atomicWrite(
+        path, std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                               bytes.size()));
 }
 
 } // namespace
@@ -520,10 +523,10 @@ int main() {
             const auto skewed =
                 withRootElem(2, kex::beam::Term::integer(9999), bytes);
             kex::beam::CacheMissReason reason =
-                kex::beam::CacheMissReason::corrupt;
+                kex::beam::CacheMissReason::Corrupt;
             assertFalse(kex::beam::deserializeImportedInterfaces(skewed, &reason)
                             .has_value());
-            assertTrue(reason == kex::beam::CacheMissReason::badVersion);
+            assertTrue(reason == kex::beam::CacheMissReason::BadVersion);
             assertEqual(std::string(kex::beam::cacheMissReasonName(reason)),
                         std::string("bad-version"));
         });
@@ -534,10 +537,10 @@ int main() {
             const auto foreign =
                 withRootElem(1, kex::beam::Term::integer(0x1234), bytes);
             kex::beam::CacheMissReason reason =
-                kex::beam::CacheMissReason::badVersion;
+                kex::beam::CacheMissReason::BadVersion;
             assertFalse(kex::beam::deserializeImportedInterfaces(foreign, &reason)
                             .has_value());
-            assertTrue(reason == kex::beam::CacheMissReason::badMagic);
+            assertTrue(reason == kex::beam::CacheMissReason::BadMagic);
         });
 
         it("reports corrupt for garbage, empty, and truncated input", []() {
@@ -545,52 +548,59 @@ int main() {
                  {std::vector<uint8_t>{},
                   std::vector<uint8_t>{0xde, 0xad, 0xbe, 0xef, 0x00}}) {
                 kex::beam::CacheMissReason reason =
-                    kex::beam::CacheMissReason::badVersion;
+                    kex::beam::CacheMissReason::BadVersion;
                 assertFalse(
                     kex::beam::deserializeImportedInterfaces(bad, &reason)
                         .has_value());
-                assertTrue(reason == kex::beam::CacheMissReason::corrupt);
+                assertTrue(reason == kex::beam::CacheMissReason::Corrupt);
             }
             auto bytes = kex::beam::serializeImportedInterfaces(
                 buildAgreementFixture());
             bytes.resize(bytes.size() > 10 ? bytes.size() - 10 : 0);
             kex::beam::CacheMissReason reason =
-                kex::beam::CacheMissReason::badVersion;
+                kex::beam::CacheMissReason::BadVersion;
             assertFalse(kex::beam::deserializeImportedInterfaces(bytes, &reason)
                             .has_value());
-            assertTrue(reason == kex::beam::CacheMissReason::corrupt);
+            assertTrue(reason == kex::beam::CacheMissReason::Corrupt);
         });
     });
 
-    describe("interface cache key", []() {
-        it("is deterministic and reacts to both halves", []() {
-            const auto a =
-                kex::beam::interfaceCacheKey("abc123", "111|222");
-            assertEqual(a, kex::beam::interfaceCacheKey("abc123", "111|222"));
-            assertTrue(a != kex::beam::interfaceCacheKey("abc123", "111|333"),
-                       "a changed compiler stamp must mint a new key");
-            assertTrue(a != kex::beam::interfaceCacheKey("def456", "111|222"),
-                       "a changed source hash must mint a new key");
+    describe("toolchain fingerprint (the interface cache key)", []() {
+        it("is stable and names this binary", []() {
+            const auto& first = kex::cache::toolchainFingerprint();
+            assertEqual(first, kex::cache::toolchainFingerprint());
+            assertTrue(first.find("self:") != std::string::npos,
+                       "a rebuilt compiler must mint a new key");
         });
 
-        it("degrades to sources+version when the stamp is unknown", []() {
-            const auto key = kex::beam::interfaceCacheKey("abc123", "");
-            assertTrue(key.rfind("abc123-", 0) == 0);
-            assertTrue(key.find('/') == std::string::npos);
-            assertTrue(key.find('|') == std::string::npos);
+        it("covers opt-in stdlib modules in subdirectories", []() {
+            // Editing src/stdlib/net/http.kex once kept serving the old
+            // interface: the key hashed only the top-level artifact sources.
+            const auto& fingerprint = kex::cache::toolchainFingerprint();
+            bool nested = false;
+            for (const auto& file : kex::standardLibrarySourceFiles())
+                if (fs::path(file).parent_path().filename() != "stdlib") {
+                    nested = true;
+                    assertTrue(fingerprint.find(file + "|") != std::string::npos,
+                               "missing from the fingerprint: " + file);
+                }
+            assertTrue(nested, "expected opt-in modules under subdirectories");
         });
+    });
 
-        it("stays a filename-safe stamp segment", []() {
-            const auto key = kex::beam::interfaceCacheKey(
-                "abc123", "/path/with/slashes|999|1234567890");
-            assertTrue(key.find('/') == std::string::npos);
-            assertTrue(key.find('|') == std::string::npos);
-        });
-
-        it("observes a stable non-empty stamp for this binary", []() {
-            const auto first = kex::compilerBinaryStamp();
-            assertTrue(!first.empty());
-            assertEqual(first, kex::compilerBinaryStamp());
+    describe("cache location", []() {
+        it("honours KEX_CACHE, and KEX_CACHE=off turns caching off", []() {
+            const char* saved = std::getenv("KEX_CACHE");
+            const std::string restore = saved ? saved : "";
+            setenv("KEX_CACHE", "/tmp/kex-cache-probe", 1);
+            assertTrue(kex::cache::directory("prelude-interface") ==
+                       fs::path("/tmp/kex-cache-probe/prelude-interface"));
+            for (const char* off : {"off", "0", ""}) {
+                setenv("KEX_CACHE", off, 1);
+                assertFalse(kex::cache::base().has_value());
+            }
+            if (saved) setenv("KEX_CACHE", restore.c_str(), 1);
+            else unsetenv("KEX_CACHE");
         });
     });
 
@@ -652,19 +662,19 @@ int main() {
             const auto bytesB = kex::beam::serializeImportedInterfaces(b);
             const auto path = fs::path(dir) / "race.bin";
 
-            assertTrue(kex::beam::writeInterfaceCacheFile(path, bytesA));
+            assertTrue(writeCache(path, bytesA));
             std::vector<std::thread> threads;
             for (int t = 0; t < 8; t++)
                 threads.emplace_back([&, t]() {
                     for (int i = 0; i < 25; i++)
-                        kex::beam::writeInterfaceCacheFile(
+                        writeCache(
                             path, (t + i) % 2 ? bytesA : bytesB);
                 });
             for (auto& th : threads) th.join();
 
             // Atomic rename means the survivor is exactly one payload —
             // never a mix of the two.
-            const auto survived = readFileBytes(path);
+            const auto survived = kex::readFileBytes(path).value_or(std::vector<uint8_t>{});
             assertTrue(survived == bytesA || survived == bytesB,
                        "torn cache file under concurrent writers");
             assertTrue(kex::beam::deserializeImportedInterfaces(survived)

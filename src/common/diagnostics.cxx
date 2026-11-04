@@ -13,29 +13,18 @@
 
 namespace kex::diagnostics {
 
-auto typeNameToString(const kex::ast::TypeName &tn) -> std::string {
-  std::string r;
-  for (size_t i = 0; i < tn.parts.size(); i++) {
-    if (i)
-      r += ".";
-    r += tn.parts[i];
-  }
-  return r;
-}
-
 auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
   return std::visit(
       [](const auto &node) -> std::string {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
-          return typeNameToString(node);
+          return node.dotted();
         } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
-          std::string r = typeNameToString(node.name) + "<";
+          std::string r = node.name.dotted() + "<";
           for (size_t i = 0; i < node.args.size(); i++) {
             if (i)
               r += ", ";
-            if (node.args[i])
-              r += typeExprToString(*node.args[i]);
+            r += node.args[i] ? typeExprToString(*node.args[i]) : "?";
           }
           return r + ">";
         } else if constexpr (std::is_same_v<T, kex::ast::FunctionType>) {
@@ -47,8 +36,7 @@ auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
           for (size_t i = 0; i < node.elements.size(); i++) {
             if (i)
               r += ", ";
-            if (node.elements[i])
-              r += typeExprToString(*node.elements[i]);
+            r += node.elements[i] ? typeExprToString(*node.elements[i]) : "?";
           }
           return r + ")";
         } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {

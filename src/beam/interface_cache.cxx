@@ -3,16 +3,15 @@
 #include "etf.hxx"
 #include "kexi.hxx"
 
+#include "../common/timings.hxx"
 #include "../semantic/imported_interfaces.hxx"
 #include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -50,21 +49,6 @@ constexpr size_t kFn = 14;
 constexpr size_t kTrait = 4;
 constexpr size_t kAdt = 8;
 constexpr size_t kDistinct = 3;
-constexpr size_t kPrimitive = 3;
-constexpr size_t kSizedInt = 3;
-constexpr size_t kSizedFloat = 2;
-constexpr size_t kNamed = 3;
-constexpr size_t kFunc = 4;
-constexpr size_t kTuple = 2;
-constexpr size_t kList = 2;
-constexpr size_t kMap = 3;
-constexpr size_t kOptional = 2;
-constexpr size_t kUnion = 2;
-constexpr size_t kIntersection = 2;
-constexpr size_t kRecord = 2;
-constexpr size_t kTypeVar = 2;
-constexpr size_t kVoid = 2;
-constexpr size_t kConstrained = 4;
 } // namespace schema
 
 auto checkedTuple(std::vector<TermPtr> elems, size_t expected, const char* what)
@@ -91,16 +75,75 @@ auto listOf(const std::vector<TypePtr>& types) -> TermPtr {
     return Term::list(std::move(elems));
 }
 
-auto primitiveKindAtom(PrimitiveType::Kind k) -> const char* {
-    switch (k) {
-    case PrimitiveType::Integer: return "Integer";
-    case PrimitiveType::Char:    return "Char";
-    case PrimitiveType::String:  return "String";
-    case PrimitiveType::Bool:    return "Bool";
-    case PrimitiveType::Atom:    return "Atom";
-    case PrimitiveType::Unit:    return "Unit";
-    }
+// Every Type alternative's wire tag and tuple size, in one table the encoder
+// and the decoder both read: a tag spelled differently on the two sides, or a
+// size changed on one, cannot happen. `unknown` and `null` travel as bare
+// atoms (see typeToTerm) and have no row.
+enum class TypeTag {
+    Primitive, SizedInt, SizedFloat, Named, Func, Tuple, List, Map, Optional,
+    Union, Intersection, Record, TypeVar, Void, Constrained,
+};
+
+struct TypeShape {
+    TypeTag tag;
+    std::string_view atom;
+    size_t arity;  // tuple size, the tag included
+};
+
+constexpr TypeShape kTypeShapes[] = {
+    {TypeTag::Primitive, "primitive", 3},
+    {TypeTag::SizedInt, "sized_int", 3},
+    {TypeTag::SizedFloat, "sized_float", 2},
+    {TypeTag::Named, "named", 3},
+    {TypeTag::Func, "func", 4},
+    {TypeTag::Tuple, "tuple", 2},
+    {TypeTag::List, "list", 2},
+    {TypeTag::Map, "map", 3},
+    {TypeTag::Optional, "optional", 2},
+    {TypeTag::Union, "union", 2},
+    {TypeTag::Intersection, "intersection", 2},
+    {TypeTag::Record, "record", 2},
+    {TypeTag::TypeVar, "typevar", 2},
+    {TypeTag::Void, "void", 2},
+    {TypeTag::Constrained, "constrained", 4},
+};
+
+auto shapeOf(TypeTag tag) -> const TypeShape& {
+    for (const auto& shape : kTypeShapes)
+        if (shape.tag == tag) return shape;
+    throw EtfError("encode: type tag without a shape");
+}
+
+auto shapeOf(std::string_view atom) -> const TypeShape& {
+    for (const auto& shape : kTypeShapes)
+        if (shape.atom == atom) return shape;
+    throw EtfError("type: unknown tag " + std::string(atom));
+}
+
+// `{Tag, Fields...}`, its size checked against the table.
+auto typeTuple(TypeTag tag, std::vector<TermPtr> fields) -> TermPtr {
+    const auto& shape = shapeOf(tag);
+    fields.insert(fields.begin(), Term::atom(std::string(shape.atom)));
+    return checkedTuple(std::move(fields), shape.arity, shape.atom.data());
+}
+
+// The primitive kinds by wire name, for both directions.
+constexpr std::pair<PrimitiveType::Kind, std::string_view> kPrimitiveKinds[] = {
+    {PrimitiveType::Integer, "Integer"}, {PrimitiveType::Char, "Char"},
+    {PrimitiveType::String, "String"},   {PrimitiveType::Bool, "Bool"},
+    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Unit, "Unit"},
+};
+
+auto primitiveKindAtom(PrimitiveType::Kind kind) -> std::string {
+    for (const auto& [k, name] : kPrimitiveKinds)
+        if (k == kind) return std::string(name);
     return "Unit";
+}
+
+auto primitiveKindOf(std::string_view name) -> PrimitiveType::Kind {
+    for (const auto& [kind, n] : kPrimitiveKinds)
+        if (n == name) return kind;
+    throw EtfError("primitive: bad kind");
 }
 
 auto typeToTerm(const TypePtr& t) -> TermPtr {
@@ -111,56 +154,51 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
     return std::visit([&](const auto& node) -> TermPtr {
         using K = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<K, PrimitiveType>) {
-            return Term::tuple({Term::atom("primitive"),
-                                Term::atom(primitiveKindAtom(node.kind)),
-                                Term::binary(node.atomName)});
+            return typeTuple(TypeTag::Primitive,
+                             {Term::atom(primitiveKindAtom(node.kind)),
+                              Term::binary(node.atomName)});
         } else if constexpr (std::is_same_v<K, SizedIntType>) {
-            return Term::tuple({Term::atom("sized_int"),
-                                Term::integer(node.bits),
-                                Term::atom(node.isSigned ? "true" : "false")});
+            return typeTuple(TypeTag::SizedInt, {Term::integer(node.bits),
+                                                 Term::boolean(node.isSigned)});
         } else if constexpr (std::is_same_v<K, SizedFloatType>) {
-            return Term::tuple({Term::atom("sized_float"),
-                                Term::integer(node.bits)});
+            return typeTuple(TypeTag::SizedFloat, {Term::integer(node.bits)});
         } else if constexpr (std::is_same_v<K, NamedType>) {
-            return Term::tuple({Term::atom("named"), Term::binary(node.name),
-                                listOf(node.typeArgs)});
+            return typeTuple(TypeTag::Named,
+                             {Term::binary(node.name), listOf(node.typeArgs)});
         } else if constexpr (std::is_same_v<K, FuncType>) {
-            return Term::tuple({Term::atom("func"), listOf(node.params),
-                                typeToTerm(node.result),
-                                Term::atom(node.block ? "true" : "false")});
+            return typeTuple(TypeTag::Func,
+                             {listOf(node.params), typeToTerm(node.result),
+                              Term::boolean(node.block)});
         } else if constexpr (std::is_same_v<K, TupleType>) {
-            return Term::tuple({Term::atom("tuple"), listOf(node.elements)});
+            return typeTuple(TypeTag::Tuple, {listOf(node.elements)});
         } else if constexpr (std::is_same_v<K, ListType>) {
-            return Term::tuple({Term::atom("list"), typeToTerm(node.element)});
+            return typeTuple(TypeTag::List, {typeToTerm(node.element)});
         } else if constexpr (std::is_same_v<K, MapType>) {
-            return Term::tuple({Term::atom("map"), typeToTerm(node.key),
-                                typeToTerm(node.value)});
+            return typeTuple(TypeTag::Map,
+                             {typeToTerm(node.key), typeToTerm(node.value)});
         } else if constexpr (std::is_same_v<K, OptionalType>) {
-            return Term::tuple({Term::atom("optional"),
-                                typeToTerm(node.inner)});
+            return typeTuple(TypeTag::Optional, {typeToTerm(node.inner)});
         } else if constexpr (std::is_same_v<K, UnionType>) {
-            return Term::tuple({Term::atom("union"), listOf(node.members)});
+            return typeTuple(TypeTag::Union, {listOf(node.members)});
         } else if constexpr (std::is_same_v<K, IntersectionType>) {
-            return Term::tuple({Term::atom("intersection"),
-                                listOf(node.members)});
+            return typeTuple(TypeTag::Intersection, {listOf(node.members)});
         } else if constexpr (std::is_same_v<K, RecordType>) {
             std::vector<TermPtr> fields;
             for (const auto& [name, fieldType] : node.fields)
                 fields.push_back(Term::tuple({Term::binary(name),
                                               typeToTerm(fieldType)}));
-            return Term::tuple({Term::atom("record"),
-                                Term::list(std::move(fields))});
+            return typeTuple(TypeTag::Record, {Term::list(std::move(fields))});
         } else if constexpr (std::is_same_v<K, TypeVar>) {
-            return Term::tuple({Term::atom("typevar"), Term::integer(node.id)});
+            return typeTuple(TypeTag::TypeVar, {Term::integer(node.id)});
         } else if constexpr (std::is_same_v<K, UnknownType>) {
             return Term::atom("unknown");
         } else if constexpr (std::is_same_v<K, VoidType>) {
-            return Term::tuple({Term::atom("void"), Term::binary(node.reason)});
+            return typeTuple(TypeTag::Void, {Term::binary(node.reason)});
         } else if constexpr (std::is_same_v<K, ConstrainedType>) {
-            return Term::tuple({Term::atom("constrained"),
-                                Term::binary(node.varName),
-                                Term::binary(node.traitName),
-                                Term::integer(node.genericId)});
+            return typeTuple(TypeTag::Constrained,
+                             {Term::binary(node.varName),
+                              Term::binary(node.traitName),
+                              Term::integer(node.genericId)});
         }
         return Term::atom("unknown");
     }, t->kind);
@@ -180,7 +218,9 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
     }
     const auto arity = sax.beginTuple();
     if (arity == 0) throw EtfError("type: empty tuple");
-    const auto tag = sax.readAtom();
+    const auto& shape = shapeOf(sax.readAtom());
+    if (arity != shape.arity)
+        throw EtfError(std::string(shape.atom) + ": arity");
     auto readTypes = [&](std::vector<TypePtr>& out) {
         const auto count = sax.beginList();
         out.reserve(count);
@@ -188,79 +228,55 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
             out.push_back(typeFromSax(sax));
         sax.endList();
     };
-    if (tag == "primitive") {
-        if (arity != schema::kPrimitive) throw EtfError("primitive: arity");
-        PrimitiveType::Kind kind;
-        const auto name = sax.readAtom();
-        if (name == "Integer") kind = PrimitiveType::Integer;
-        else if (name == "Char") kind = PrimitiveType::Char;
-        else if (name == "String") kind = PrimitiveType::String;
-        else if (name == "Bool") kind = PrimitiveType::Bool;
-        else if (name == "Atom") kind = PrimitiveType::Atom;
-        else if (name == "Unit") kind = PrimitiveType::Unit;
-        else throw EtfError("primitive: bad kind");
-        return std::make_shared<Type>(Type{PrimitiveType{
-            kind, sax.readBinary()}});
+    auto make = [](auto kind) { return std::make_shared<Type>(Type{std::move(kind)}); };
+    switch (shape.tag) {
+    case TypeTag::Primitive: {
+        const auto kind = primitiveKindOf(sax.readAtom());
+        return make(PrimitiveType{kind, sax.readBinary()});
     }
-    if (tag == "sized_int") {
-        if (arity != schema::kSizedInt) throw EtfError("sized_int: arity");
-        return std::make_shared<Type>(Type{SizedIntType{
-            static_cast<int>(sax.readInt()), sax.readAtom() == "true"}});
+    case TypeTag::SizedInt: {
+        const auto bits = static_cast<int>(sax.readInt());
+        return make(SizedIntType{bits, sax.readBool()});
     }
-    if (tag == "sized_float") {
-        if (arity != schema::kSizedFloat) throw EtfError("sized_float: arity");
-        return std::make_shared<Type>(Type{SizedFloatType{
-            static_cast<int>(sax.readInt())}});
-    }
-    if (tag == "named") {
-        if (arity != schema::kNamed) throw EtfError("named: arity");
+    case TypeTag::SizedFloat:
+        return make(SizedFloatType{static_cast<int>(sax.readInt())});
+    case TypeTag::Named: {
         NamedType named{sax.readBinary(), {}};
         readTypes(named.typeArgs);
-        return std::make_shared<Type>(Type{std::move(named)});
+        return make(std::move(named));
     }
-    if (tag == "func") {
-        if (arity != schema::kFunc) throw EtfError("func: arity");
+    case TypeTag::Func: {
         FuncType fn;
         readTypes(fn.params);
         fn.result = typeFromSax(sax);
-        fn.block = sax.readAtom() == "true";
-        return std::make_shared<Type>(Type{std::move(fn)});
+        fn.block = sax.readBool();
+        return make(std::move(fn));
     }
-    if (tag == "tuple") {
-        if (arity != schema::kTuple) throw EtfError("tuple: arity");
+    case TypeTag::Tuple: {
         TupleType tuple;
         readTypes(tuple.elements);
-        return std::make_shared<Type>(Type{std::move(tuple)});
+        return make(std::move(tuple));
     }
-    if (tag == "list") {
-        if (arity != schema::kList) throw EtfError("list: arity");
-        return std::make_shared<Type>(Type{ListType{typeFromSax(sax)}});
-    }
-    if (tag == "map") {
-        if (arity != schema::kMap) throw EtfError("map: arity");
+    case TypeTag::List:
+        return make(ListType{typeFromSax(sax)});
+    case TypeTag::Map: {
         auto key = typeFromSax(sax);
         auto value = typeFromSax(sax);
-        return std::make_shared<Type>(
-            Type{MapType{std::move(key), std::move(value)}});
+        return make(MapType{std::move(key), std::move(value)});
     }
-    if (tag == "optional") {
-        if (arity != schema::kOptional) throw EtfError("optional: arity");
-        return std::make_shared<Type>(Type{OptionalType{typeFromSax(sax)}});
-    }
-    if (tag == "union") {
-        if (arity != schema::kUnion) throw EtfError("union: arity");
+    case TypeTag::Optional:
+        return make(OptionalType{typeFromSax(sax)});
+    case TypeTag::Union: {
         UnionType unionType;
         readTypes(unionType.members);
-        return std::make_shared<Type>(Type{std::move(unionType)});
+        return make(std::move(unionType));
     }
-    if (tag == "intersection") {
-        if (arity != schema::kIntersection) throw EtfError("intersection: arity");
+    case TypeTag::Intersection: {
         IntersectionType intersection;
         readTypes(intersection.members);
-        return std::make_shared<Type>(Type{std::move(intersection)});
+        return make(std::move(intersection));
     }
-    if (tag == "record") {
-        if (arity != schema::kRecord) throw EtfError("record: arity");
+    case TypeTag::Record: {
         RecordType record;
         const auto count = sax.beginList();
         record.fields.reserve(count);
@@ -271,26 +287,20 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
             record.fields.emplace_back(std::move(name), std::move(fieldType));
         }
         sax.endList();
-        return std::make_shared<Type>(Type{std::move(record)});
+        return make(std::move(record));
     }
-    if (tag == "typevar") {
-        if (arity != schema::kTypeVar) throw EtfError("typevar: arity");
-        return std::make_shared<Type>(Type{TypeVar{
-            static_cast<int>(sax.readInt())}});
-    }
-    if (tag == "void") {
-        if (arity != schema::kVoid) throw EtfError("void: arity");
-        return std::make_shared<Type>(Type{VoidType{sax.readBinary()}});
-    }
-    if (tag == "constrained") {
-        if (arity != schema::kConstrained) throw EtfError("constrained: arity");
+    case TypeTag::TypeVar:
+        return make(TypeVar{static_cast<int>(sax.readInt())});
+    case TypeTag::Void:
+        return make(VoidType{sax.readBinary()});
+    case TypeTag::Constrained: {
         auto varName = sax.readBinary();
         auto traitName = sax.readBinary();
-        return std::make_shared<Type>(Type{ConstrainedType{
-            std::move(varName), std::move(traitName),
-            static_cast<int>(sax.readInt())}});
+        return make(ConstrainedType{std::move(varName), std::move(traitName),
+                                    static_cast<int>(sax.readInt())});
     }
-    throw EtfError("type: unknown tag " + tag);
+    }
+    throw EtfError("type: unknown tag " + std::string(shape.atom));
 }
 
 // ---- Signature <-> Term ----------------------------------------------------
@@ -306,7 +316,7 @@ auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
     for (const auto& n : sig.paramNames) names.push_back(Term::binary(n));
     return checkedTuple({Term::atom("signature"), Term::binary(sig.name),
                          Term::list(std::move(params)), typeToTerm(sig.result),
-                         Term::atom(sig.isFoul ? "true" : "false"), required,
+                         Term::boolean(sig.isFoul), required,
                          Term::list(std::move(names)), Term::binary(sig.makeModule),
                          Term::binary(sig.declaringModule)},
                         schema::kSignature, "signature");
@@ -324,7 +334,7 @@ auto signatureFromSax(SaxReader& sax) -> kex::semantic::Signature {
         sig.params.push_back(typeFromSax(sax));
     sax.endList();
     sig.result = typeFromSax(sax);
-    sig.isFoul = sax.readAtom() == "true";
+    sig.isFoul = sax.readBool();
     if (sax.nextIsTuple()) {
         sax.beginTuple();
         sax.readAtom();
@@ -357,10 +367,10 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
                          Term::list(std::move(defaults)),
                          signatureToTerm(fn.signature),
                          Term::binary(fn.sourceModule),
-                         Term::atom(fn.isReceiverMethod ? "true" : "false"),
-                         Term::atom(fn.visibleByReceiver ? "true" : "false"),
-                         Term::atom(fn.isConstructor ? "true" : "false"),
-                         Term::atom(fn.remoteSlot ? "true" : "false"),
+                         Term::boolean(fn.isReceiverMethod),
+                         Term::boolean(fn.visibleByReceiver),
+                         Term::boolean(fn.isConstructor),
+                         Term::boolean(fn.remoteSlot),
                          Term::binary(fn.constructorOwner)},
                         schema::kFn, "fn");
 }
@@ -386,10 +396,10 @@ auto functionFromSax(SaxReader& sax) -> kex::semantic::ImportedFunction {
     sax.endList();
     fn.signature = signatureFromSax(sax);
     fn.sourceModule = sax.readBinary();
-    fn.isReceiverMethod = sax.readAtom() == "true";
-    fn.visibleByReceiver = sax.readAtom() == "true";
-    fn.isConstructor = sax.readAtom() == "true";
-    fn.remoteSlot = sax.readAtom() == "true";
+    fn.isReceiverMethod = sax.readBool();
+    fn.visibleByReceiver = sax.readBool();
+    fn.isConstructor = sax.readBool();
+    fn.remoteSlot = sax.readBool();
     fn.constructorOwner = sax.readBinary();
     return fn;
 }
@@ -553,9 +563,9 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
             {Term::binary(name),
              checkedTuple({Term::binary(module.sourceModule),
                            Term::binary(module.backendModule),
-                           Term::atom(module.automaticImport ? "true" : "false"),
-                           Term::atom(module.isCapability ? "true" : "false"),
-                           Term::atom(module.compiledApart ? "true" : "false"),
+                           Term::boolean(module.automaticImport),
+                           Term::boolean(module.isCapability),
+                           Term::boolean(module.compiledApart),
                            Term::list(std::move(exports))},
                           schema::kModuleBody, "module body")},
             schema::kModulePair, "module pair"));
@@ -638,7 +648,7 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
 auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
                                    CacheMissReason* reason)
     -> std::optional<kex::semantic::ImportedInterfaces> {
-    const bool timed = std::getenv("KEX_TIMINGS") != nullptr;
+    const bool timed = kex::timings::enabled();
     const auto note = [&](CacheMissReason r) {
         if (reason) *reason = r;
     };
@@ -647,19 +657,19 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
         SaxReader sax(bytes.data(), bytes.size());
         const auto arity = sax.beginTuple();
         if (arity != schema::kIfaces) {
-            note(CacheMissReason::corrupt);
+            note(CacheMissReason::Corrupt);
             return std::nullopt;
         }
         if (sax.readAtom() != "ifaces") {
-            note(CacheMissReason::corrupt);
+            note(CacheMissReason::Corrupt);
             return std::nullopt;
         }
         if (sax.readInt() != kMagic) {
-            note(CacheMissReason::badMagic);
+            note(CacheMissReason::BadMagic);
             return std::nullopt;
         }
         if (sax.readInt() != kVersion) {
-            note(CacheMissReason::badVersion);
+            note(CacheMissReason::BadVersion);
             return std::nullopt;
         }
 
@@ -678,9 +688,9 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
             kex::semantic::ImportedModuleInterface module;
             module.sourceModule = sax.readBinary();
             module.backendModule = sax.readBinary();
-            module.automaticImport = sax.readAtom() == "true";
-            module.isCapability = sax.readAtom() == "true";
-            module.compiledApart = sax.readAtom() == "true";
+            module.automaticImport = sax.readBool();
+            module.isCapability = sax.readBool();
+            module.compiledApart = sax.readBool();
             const auto exportCount = sax.beginList();
             module.exports.reserve(exportCount);
             for (size_t j = 0; j < exportCount; ++j) {
@@ -812,57 +822,18 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
         }
         return ifaces;
     } catch (const std::exception&) {
-        note(CacheMissReason::corrupt);
+        note(CacheMissReason::Corrupt);
         return std::nullopt;
     }
 }
 
 auto cacheMissReasonName(CacheMissReason reason) -> const char* {
     switch (reason) {
-    case CacheMissReason::badMagic:   return "bad-magic";
-    case CacheMissReason::badVersion: return "bad-version";
-    case CacheMissReason::corrupt:    return "corrupt";
+    case CacheMissReason::BadMagic:   return "bad-magic";
+    case CacheMissReason::BadVersion: return "bad-version";
+    case CacheMissReason::Corrupt:    return "corrupt";
     }
     return "corrupt";
-}
-
-auto interfaceCacheKey(const std::string& sourceHashHex,
-                       const std::string& compilerStamp) -> std::string {
-    std::string key = sourceHashHex + "-" + std::to_string(KEX_VERSION_MAJOR) +
-                      "." + std::to_string(KEX_VERSION_MINOR) + "." +
-                      std::to_string(KEX_VERSION_PATCH);
-    if (compilerStamp.empty()) return key;
-    const std::vector<uint8_t> bytes(compilerStamp.begin(), compilerStamp.end());
-    const auto digest = computeSha256(bytes);
-    static const char* digits = "0123456789abcdef";
-    std::string shortHash;
-    for (size_t i = 0; i < 8; i++) {
-        shortHash += digits[digest[i] >> 4];
-        shortHash += digits[digest[i] & 0xf];
-    }
-    return key + "-" + shortHash;
-}
-
-auto writeInterfaceCacheFile(const std::filesystem::path& path,
-                             const std::vector<uint8_t>& bytes) -> bool {
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    // A unique staging file renamed into place, so concurrent builders
-    // never see (or clobber) a half-written cache.
-    static std::atomic<unsigned long long> counter{0};
-    auto staging = path;
-    staging += ".tmp." + std::to_string(counter.fetch_add(1));
-    std::ofstream output(staging, std::ios::binary | std::ios::trunc);
-    if (!output) return false;
-    output.write(reinterpret_cast<const char*>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-    output.close();
-    if (!output) {
-        std::filesystem::remove(staging, ec);
-        return false;
-    }
-    std::filesystem::rename(staging, path, ec);
-    return !ec;
 }
 
 auto pruneInterfaceCacheDirectory(const std::filesystem::path& dir,

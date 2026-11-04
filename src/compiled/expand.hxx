@@ -97,6 +97,12 @@ struct ExpandOptions {
 // because both are AST rewrites that must run before semantic analysis sees
 // the program.
 //
+// The roots expansion actually searches: `roots`, then every standard-library
+// root not already among them. Two option sets with the same effective roots
+// expand a program the same way.
+auto effectiveModuleRoots(const std::vector<std::string>& roots)
+    -> std::vector<std::string>;
+
 // Returns false and appends to `diagnostics` if expansion failed; the program
 // is left in an unspecified state in that case and must not be compiled.
 // Diagnostics are anchored at the USER's source location, not inside whatever

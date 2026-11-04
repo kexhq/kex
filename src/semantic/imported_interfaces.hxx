@@ -220,44 +220,22 @@ inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
         }
         return "";
     };
-    // Types are shared between signatures, so every rewrite is of a copy.
-    std::function<void(TypePtr&, const std::string&)> qualify =
-        [&](TypePtr& type, const std::string& scope) {
-            if (!type) return;
-            auto copy = std::make_shared<Type>(*type);
-            bool changed = false;
-            std::visit([&](auto& kind) {
-                using K = std::decay_t<decltype(kind)>;
-                auto visit = [&](TypePtr& inner) {
-                    const auto before = inner;
-                    qualify(inner, scope);
-                    changed = changed || inner != before;
-                };
-                if constexpr (std::is_same_v<K, NamedType>) {
-                    if (kind.name.find('.') == std::string::npos)
-                        if (auto owned = adtIn(scope, kind.name); !owned.empty()) {
-                            kind.name = owned;
-                            changed = true;
-                        }
-                    for (auto& arg : kind.typeArgs) visit(arg);
-                } else if constexpr (std::is_same_v<K, ListType>) {
-                    visit(kind.element);
-                } else if constexpr (std::is_same_v<K, OptionalType>) {
-                    visit(kind.inner);
-                } else if constexpr (std::is_same_v<K, MapType>) {
-                    visit(kind.key);
-                    visit(kind.value);
-                } else if constexpr (std::is_same_v<K, TupleType>) {
-                    for (auto& element : kind.elements) visit(element);
-                } else if constexpr (std::is_same_v<K, FuncType>) {
-                    for (auto& param : kind.params) visit(param);
-                    visit(kind.result);
-                } else if constexpr (std::is_same_v<K, UnionType>) {
-                    for (auto& member : kind.members) visit(member);
-                }
-            }, copy->kind);
-            if (changed) type = copy;
+    // Rebuilt, never edited in place: types are shared between signatures.
+    std::function<TypePtr(const TypePtr&, const std::string&)> qualified =
+        [&](const TypePtr& type, const std::string& scope) -> TypePtr {
+            if (!type) return type;
+            auto rebuilt = mapTypeChildren(type, [&](const TypePtr& child) {
+                return qualified(child, scope);
+            });
+            if (const auto* named = std::get_if<NamedType>(&rebuilt->kind);
+                named && named->name.find('.') == std::string::npos)
+                if (auto owned = adtIn(scope, named->name); !owned.empty())
+                    return Type::named(owned, named->typeArgs);
+            return rebuilt;
         };
+    auto qualify = [&](TypePtr& type, const std::string& scope) {
+        type = qualified(type, scope);
+    };
     auto qualifySignature = [&](ImportedFunction& function) {
         if (function.sourceModule.empty()) return;
         for (auto& param : function.signature.params)

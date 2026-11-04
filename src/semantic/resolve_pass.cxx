@@ -242,11 +242,7 @@ auto ResolvePass::resolveExportDecl(const ast::ExportDecl& decl) -> void {
         return;
     }
 
-    std::string target;
-    for (size_t i = 0; i < decl.module.parts.size(); ++i) {
-        if (i) target += ".";
-        target += decl.module.parts[i];
-    }
+    std::string target = decl.module.dotted();
 
     if (target == m_currentModule) {
         error(decl.location, "module cannot export itself");
@@ -299,11 +295,7 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
     const bool importsNames =
         resolve_core::usingImportsNames(alias, onlyNames);
 
-    std::string requested;
-    for (size_t i = 0; i < module.parts.size(); ++i) {
-        if (i) requested += ".";
-        requested += module.parts[i];
-    }
+    std::string requested = module.dotted();
     const std::string resolved = resolve_core::resolveSourceModulePath(
         m_db, m_currentModule, requested);
 

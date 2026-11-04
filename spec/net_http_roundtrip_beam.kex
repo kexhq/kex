@@ -28,7 +28,7 @@ foul headPong(
     Headers.from([("X-Route", "head")]).try)
 end
 
-let drainHeaders(connection: TCP.TCPConnection) -> Void do
+foul drainHeaders(connection: TCP.TCPConnection) -> Void do
   let line = connection.receiveLine(8192).try.to(String).try
   if line != "\r\n"
     drainHeaders(connection)

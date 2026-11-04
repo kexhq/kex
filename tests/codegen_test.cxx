@@ -72,7 +72,7 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
 // The production path with hot-reload upgrade points inserted, as main.cxx
@@ -84,7 +84,7 @@ auto emitUpgradable(const std::string& source, const std::string& stem = "test")
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    auto module = kex::ir::lowerProgram(program, stem, "", &ext);
+    auto module = kex::ir::lowerProgram(program, stem, {.externals = &ext});
     kex::ir::insertUpgradePoints(module);
     return kex::ir::emitCore(module).source;
 }
@@ -96,7 +96,7 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternal(const std::string& source,
@@ -106,7 +106,7 @@ auto emitWithExternal(const std::string& source,
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", &external)).source;
+        kex::ir::lowerProgram(program, stem, {.externals = &external})).source;
 }
 
 auto emitWithResolvedCalls(
@@ -119,7 +119,7 @@ auto emitWithResolvedCalls(
     kex::semantic::Analyzer analyzer(&interfaces);
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
     return kex::ir::emitCore(kex::ir::lowerProgram(
-        program, stem, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
+        program, stem, {.resolvedCalls = &analyzer.resolvedCalls()})).source;
 }
 
 #ifdef KEX_RUNTIME_BEAM_DIR
@@ -138,8 +138,11 @@ auto emitProduction(const std::string& source,
     auto external =
         kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
     return kex::ir::emitCore(kex::ir::lowerProgram(
-        program, stem, "", &external, nullptr, &analyzer.resolvedCalls(),
-        false, nullptr, &analyzer.staticTypeOfCalls(), &analyzer.typeMap())).source;
+        program, stem,
+        {.externals = &external,
+         .resolvedCalls = &analyzer.resolvedCalls(),
+         .staticTypeOfCalls = &analyzer.staticTypeOfCalls(),
+         .expressionTypes = &analyzer.typeMap()})).source;
 }
 #endif
 
@@ -155,7 +158,7 @@ auto emitWithPrelude(const std::string& source,
             ext.receiverFunctions[name].push_back(
                 {"kex_prelude", name, arity});
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", &ext)).source;
+        kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternalRecords(
@@ -166,7 +169,7 @@ auto emitWithExternalRecords(
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", nullptr, &records)).source;
+        kex::ir::lowerProgram(program, stem, {.externalRecords = &records})).source;
 }
 
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
@@ -499,7 +502,7 @@ int main() {
                        "expansion should succeed");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+                           kex::ir::lowerProgram(program, "collapse", {.externals = &ext}))
                            .source;
 
             // `a` is gone: the whole chain is the number it always was.
@@ -509,7 +512,7 @@ int main() {
             // of each builder call remains. An assertion of "no calls at all"
             // would pass just as well if collapse became over-eager and reached
             // through a name it has no business evaluating.
-            assertEqual(countOccurrences(out, "apply 'add'"), 1,
+            assertEqual(countOccurrences(out, "apply 'add'"), size_t{1},
                         "only the runtime chain should still call add");
             assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
                         "only the runtime chain should still call scaled");
@@ -556,7 +559,7 @@ int main() {
             assertEqual(collapsed, 1, "only the bound map should collapse");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+                           kex::ir::lowerProgram(program, "collapse", {.externals = &ext}))
                            .source;
             assertEqual(countOccurrences(out, "apply 'Rows.columns'"), 1,
                         "only the parameter's call should still run the builder");
@@ -603,7 +606,7 @@ int main() {
                        "expansion should succeed");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "strings", "", &ext))
+                           kex::ir::lowerProgram(program, "strings", {.externals = &ext}))
                            .source;
 
             assertEqual(countOccurrences(out, "apply 'add'"), 0,
@@ -639,7 +642,7 @@ int main() {
                        "expansion should succeed");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "concat", "", &ext))
+                           kex::ir::lowerProgram(program, "concat", {.externals = &ext}))
                            .source;
 
             // "0 24px" as a single binary literal — the `+` is gone, and with
@@ -704,7 +707,7 @@ int main() {
                        "expansion should succeed");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "carried", "", &ext))
+                           kex::ir::lowerProgram(program, "carried", {.externals = &ext}))
                            .source;
 
             // `carried` is the literal record with Seed still a REFERENCE —
@@ -787,7 +790,7 @@ int main() {
             unsetenv("KEX_CODEGEN_BUILD_TAG");
             auto ext = stdlibExternal();
             auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "envtag", "", &ext))
+                           kex::ir::lowerProgram(program, "envtag", {.externals = &ext}))
                            .source;
 
             // "baked" as a binary literal, and no ENV call left to make it.
@@ -1142,7 +1145,7 @@ int main() {
             external.exportArity["Web.Response.text"] = 1;
 
             auto modules = kex::ir::lowerModules(
-                program, "external_split", "", nullptr, &external);
+                program, "external_split", {.externals = &external});
             auto globalCore = kex::ir::emitCore(modules[0]).source;
 
             assertTrue(contains(

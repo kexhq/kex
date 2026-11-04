@@ -110,9 +110,7 @@ auto collectScopeUsings(const Items& items,
     for (const auto& item : items) {
         if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item);
             block && *block && (*block)->body.empty()) {
-            std::string module;
-            for (const auto& part : (*block)->module.parts)
-                module += (module.empty() ? "" : ".") + part;
+            std::string module = (*block)->module.dotted();
             out[modulePath].insert(std::move(module));
         } else if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
                    nested && *nested) {
@@ -221,6 +219,40 @@ inline auto collectDeclaredRecordNames(const Items& items,
     }
 }
 
+// Whether a `make` block's structural target (`make [T]`, `make {K: V}`)
+// counts as the named `List` / `Map` for a caller.
+enum class StructuralTarget { Excluded, Named };
+
+// The name a `make` block's target is written with: the parts of `Box` for
+// `make Box` and `make Box<T>`, and with StructuralTarget::Named, `List` for
+// `make [T]` and `Map` for `make {K: V}`. nullopt for any other target. Each
+// caller then takes what it needs — the dotted spelling, the last segment —
+// instead of re-deriving the name from the target's kinds.
+inline auto writtenMakeTarget(const ast::TypeExprPtr& target,
+                              StructuralTarget structural = StructuralTarget::Named)
+    -> std::optional<ast::TypeName> {
+    if (!target) return std::nullopt;
+    if (const auto* name = std::get_if<ast::TypeName>(&target->kind))
+        return name->parts.empty() ? std::nullopt : std::optional(*name);
+    if (const auto* generic = std::get_if<ast::GenericType>(&target->kind))
+        return generic->name.parts.empty() ? std::nullopt
+                                           : std::optional(generic->name);
+    if (structural == StructuralTarget::Named) {
+        if (std::holds_alternative<ast::ListType>(target->kind))
+            return ast::TypeName{{"List"}};
+        if (std::holds_alternative<ast::MapType>(target->kind))
+            return ast::TypeName{{"Map"}};
+    }
+    return std::nullopt;
+}
+
+// The last segment of that name ("" when there is none): the type a make
+// block extends, as the receiver tables key it.
+inline auto makeTargetLeaf(const ast::TypeExprPtr& target) -> std::string {
+    const auto name = writtenMakeTarget(target);
+    return name ? name->parts.back() : std::string{};
+}
+
 inline auto makeTargetNames(const ast::TypeExprPtr& target,
                             const std::string& module = "",
                             const std::set<std::string>& records = {})
@@ -240,20 +272,12 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
             return;
         }
         if (const auto* tn = std::get_if<ast::TypeName>(&t->kind)) {
-            std::string name;
-            for (const auto& part : tn->parts) {
-                if (!name.empty()) name += ".";
-                name += part;
-            }
+            std::string name = kex::join(tn->parts, ".");
             add(std::move(name));
             return;
         }
         if (const auto* gt = std::get_if<ast::GenericType>(&t->kind)) {
-            std::string name;
-            for (const auto& part : gt->name.parts) {
-                if (!name.empty()) name += ".";
-                name += part;
-            }
+            std::string name = gt->name.dotted();
             add(std::move(name));
             return;
         }

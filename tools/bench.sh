@@ -36,8 +36,8 @@
 # Exits 0 unless a REQUESTED scenario produced zero successful runs — a
 # broken harness or a broken kex, not a perf result. All caches are
 # redirected into a scratch dir via XDG_CACHE_HOME: the real ~/.cache/kex
-# is never touched (and KEX_CACHE cannot be used for this — the prelude
-# interface cache reads XDG_CACHE_HOME/HOME directly and ignores it).
+# is never touched (KEX_CACHE must stay unset: it would win over
+# XDG_CACHE_HOME, see kex::cache::base).
 # Every timed kex run must exit 0 AND print its scenario's expected
 # marker; a fast failure is a failure, not a data point.
 #
@@ -47,6 +47,9 @@
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
+# shellcheck source=tools/bench_lib.sh
+source "$ROOT/tools/bench_lib.sh"
+unset KEX_CACHE  # caches go under XDG_CACHE_HOME, set per scenario below
 KEX="${KEX:-$ROOT/build/kex}"
 RUNS="${BENCH_RUNS:-10}"
 FIB_N="${BENCH_FIB_N:-35}"
@@ -79,14 +82,7 @@ mkdir -p "$WORK/src"
 timed_run() { # <cache-dir> <kex-args...>
   local cache="$1"
   shift
-  local out rc
-  out="$({ TIMEFORMAT=%3R; time XDG_CACHE_HOME="$cache" "$KEX" "$@" \
-           >"$WORK/run.out" 2>/dev/null; } 2>&1)"
-  rc=$?
-  case "$out.$rc" in
-    *.*.0) printf '%s\n' "$out" ;;
-    *)     echo "failed" ;;
-  esac
+  time_command "$WORK/run.out" env XDG_CACHE_HOME="$cache" "$KEX" "$@"
 }
 
 # ── Sources ─────────────────────────────────────────────────────────────────
@@ -125,37 +121,7 @@ prime() { # <cache-dir> <source>
 }
 
 # ── Scenarios ───────────────────────────────────────────────────────────────
-declare -a RESULTS=()
 
-# Nearest-rank median + quartiles over the collected values.
-summarize() { # <name> <ok> <runs> <values...>
-  local name="$1" ok="$2" runs="$3"
-  shift 3
-  if [ "$ok" -eq 0 ]; then
-    RESULTS+=("$(printf '%-18s %8s %8s %8s %8s' "$name" \
-      'FAILED' '-' '-' '-')")
-    FAILED=1
-    return
-  fi
-  local sorted line
-  sorted="$(printf '%s\n' "$@" | sort -n)"
-  S=()
-  while IFS= read -r line; do S+=("$line"); done <<<"$sorted"
-  local n=${#S[@]}
-  local mid=$(( (n - 1) / 2 )) q1=$(( (n - 1) / 4 )) q3=$(( 3 * (n - 1) / 4 ))
-  local median
-  if [ $((n % 2)) -eq 0 ]; then
-    median="$(awk -v a="${S[$mid]}" -v b="${S[$((mid + 1))]}" \
-      'BEGIN { printf "%.3f", (a + b) / 2 }')"
-  else
-    median="${S[$mid]}"
-  fi
-  local iqr
-  iqr="$(awk -v a="${S[$q1]}" -v b="${S[$q3]}" \
-    'BEGIN { printf "%.3f", b - a }')"
-  RESULTS+=("$(printf '%-18s %8s %8s %8s %8s  %d/%d ok' "$name" \
-    "$median" "$iqr" "${S[0]}" "${S[$((n - 1))]}" "$ok" "$runs")")
-}
 
 run_scenario() { # <name> <cache-dir> <mode> <source> <marker>
   local name="$1" cache="$2" mode="$3" src="$4" marker="$5"
@@ -222,7 +188,6 @@ run_clean_build() {
 WARM="$WORK/xdg-warm"
 COLD="$WORK/xdg-cold"
 DEV="$WORK/xdg-dev"
-FAILED=0
 
 if [ $# -eq 0 ]; then
   set -- compile-warm compile-cold-kex compile-dev-loop fib loop
@@ -245,29 +210,14 @@ for scenario in "$@"; do
 done
 
 # ── Report ──────────────────────────────────────────────────────────────────
-commit="$(git -C "$ROOT" rev-parse --short HEAD)"
-git -C "$ROOT" --quiet diff --cached --quiet 2>/dev/null || \
-  { [ -n "$(git -C "$ROOT" status --porcelain)" ] && commit="$commit+dirty"; }
-machine="$(uname -srm 2>/dev/null || uname -sm)"
-buildtype="$(grep '^CMAKE_BUILD_TYPE:STRING=' "$BUILD_DIR/CMakeCache.txt" \
-  2>/dev/null | cut -d= -f2-)"
-if [ -z "$buildtype" ]; then
-  cxxflags="$(grep '^CMAKE_CXX_FLAGS:STRING=' "$BUILD_DIR/CMakeCache.txt" \
-    2>/dev/null | cut -d= -f2-)"
-  if [ -n "$cxxflags" ]; then
-    buildtype="default [$cxxflags]"
-  else
-    buildtype="default (no -O flag)"
-  fi
-fi
+commit="$(commit_of "$ROOT")"
+machine="$(machine_of)"
+buildtype="$(build_type_of "$BUILD_DIR")"
 echo "kex bench — $commit — $RUNS runs/scenario — seconds (bash time %3R)"
 echo "binary: $KEX  fib N=$FIB_N  loop N=$LOOP_N"
 echo "machine: $machine  build: $buildtype"
 echo ""
-printf '%-18s %8s %8s %8s %8s\n' scenario median IQR min max
-for row in "${RESULTS[@]}"; do
-  echo "$row" | sed 's/  [0-9]*\/[0-9]* ok$//'
-done
+print_results
 echo ""
 echo "KEX_TIMINGS phases, one warm compile (trivial.kex):"
 if [ "${REBUILT:-0}" -eq 1 ]; then

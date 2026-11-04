@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench test-bench
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench test-bench bench-slick dup-audit
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -77,6 +77,11 @@ help:
 	@echo "                    BENCH_RUNS / BENCH_FIB_N / BENCH_LOOP_N / KEX."
 	@echo "  make test-bench   Smoke-test the bench harness itself (1 run,"
 	@echo "                    small scenarios; checks it runs and reports)."
+	@echo "  make bench-slick  Benchmark on ../slick, a real app (cold/no-op/"
+	@echo "                    incremental/dev-loop tey build, its specs). Compare"
+	@echo "                    compilers with BENCH_KEX=\"main=/path/kex branch=build/kex\"."
+	@echo "  make dup-audit    Count duplicate helpers, literal compares, hand-written"
+	@echo "                    Type/Expr recursions; fails if any rises over baseline."
 	@echo ""
 
 # Configure quietly, but NEVER quietly: piping cmake into `tail` discarded its
@@ -168,6 +173,16 @@ bench: build
 # one run of the two cheapest scenarios, fib shrunk to stay quick.
 test-bench: build
 	@BENCH_RUNS=1 BENCH_FIB_N=25 tools/bench.sh compile-warm fib
+
+# Slick (a real application with dependencies) through tey: the numbers perf
+# claims are judged on. See tools/bench-slick.sh for scenarios and knobs.
+bench-slick: build
+	@tools/bench-slick.sh $(BENCH_SLICK_SCENARIOS)
+
+# Duplication / magic-constant audit (tools/dup-audit.sh). Fails when a count
+# rises above tools/dup-audit.baseline; `tools/dup-audit.sh --record` lowers it.
+dup-audit:
+	@tools/dup-audit.sh --check
 
 SHELL := /bin/bash
 

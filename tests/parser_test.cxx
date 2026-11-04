@@ -1054,16 +1054,6 @@ int main() {
     });
 
     describe("Parser — Receive clause body", []() {
-        // Helpers to extract a ReceiveExpr from a foul function's body.
-        auto getFoulReceive = [](const std::string& src) -> const ast::ReceiveExpr& {
-            Lexer lexer(src);
-            auto tokens = lexer.tokenizeAll();
-            Parser parser(std::move(tokens));
-            auto prog = parser.parseProgram();
-            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
-            auto& body = fn->clauses[0].body;
-            return std::get<ast::ReceiveExpr>(body[0]->kind);
-        };
 
         it("parses sender binding", []() {
             auto prog = parse(
@@ -1699,7 +1689,7 @@ int main() {
             assertTrue(std::count(shape->begin(), shape->end(), '(') >= 3, *shape);
         });
 
-        it("reprints every .kex file in examples/, spec/ and src/stdlib/", [buildWith]() {
+        it("reprints every .kex file in examples/, spec/ and src/stdlib/", []() {
             namespace fs = std::filesystem;
             const auto root = fs::path(KEX_SOURCE_DIR);
             size_t files = 0;
@@ -1731,7 +1721,9 @@ int main() {
             }
             for (const auto& failure : failures)
                 std::cerr << "    not reprinted: " << failure << "\n";
-            assertTrue(parsed > 300);
+            assertTrue(parsed > 300, std::to_string(parsed) + " of " +
+                                         std::to_string(files) +
+                                         " files parsed");
             assertEqual(failures.size(), size_t{0});
         });
     });

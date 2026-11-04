@@ -556,7 +556,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
 
     // Private receiver primitives. The public methods are defined by
     // process.kex and call these category-qualified identities.
-    defineIntrinsic("Process::send", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::send", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -578,14 +578,14 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the receiver's spawner) to the receiver pid. Passive bookkeeping
     // only — see Scheduler::link's doc comment for why this deliberately
     // doesn't carry BEAM's signal-propagation semantics.
-    defineIntrinsic("Process::link", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::link", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
         p->scheduler->link(p->pid);
         return Value::unit();
     });
-    defineIntrinsic("Process::unlink", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::unlink", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -596,7 +596,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // pid.alive?() — true until that process's fiber has finished (whether
     // by a normal return or an uncaught exception caught by its own
     // fiber's outer handler — see Scheduler::spawn/runToCompletion).
-    defineIntrinsic("Process::alive?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::alive?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::boolean(false);
@@ -624,7 +624,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // shape (TaskError isn't a distinct type here, just whatever reason
     // atom/value ends up in Error(...) — no separate error ADT to keep
     // this from growing beyond what the interpreter needs).
-    NativeFunc await = [this](std::vector<ValuePtr> args) -> ValuePtr {
+    NativeFunc await = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("not a task"));
         auto* t = std::get_if<TaskValue>(&args[0]->data);
         if (!t) return Value::error(Value::string("not a task"));
@@ -663,7 +663,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // both dispatch to the same surface syntax, camelCase like every other
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
-    defineDual("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Task::awaitAll", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* lst = std::get_if<ListValue>(&args[0]->data);
         if (!lst) return Value::list({});

@@ -32,6 +32,8 @@ struct Term {
     std::variant<Atom, Int, BigInt, Float, Bin, Tuple, List, Map, Nil> value;
 
     static auto atom(std::string name) -> TermPtr;
+    // `true` / `false`, the atoms Erlang spells booleans with.
+    static auto boolean(bool value) -> TermPtr;
     static auto integer(int64_t v) -> TermPtr;
     static auto integer(mpz_class v) -> TermPtr;
     static auto floating(double v) -> TermPtr;
@@ -52,7 +54,6 @@ struct Term {
     auto asBinaryStr() const -> std::string;
     auto asTuple() const -> const std::vector<TermPtr>&;
     auto asList() const -> const std::vector<TermPtr>&;
-    auto asMap() const -> const std::vector<std::pair<TermPtr, TermPtr>>&;
 
     auto mapGet(const std::string& key) const -> TermPtr;
 };
@@ -78,6 +79,8 @@ public:
     // Scalars. readInt accepts the integer tags plus a big that fits
     // int64 (mirroring the tree decoder); anything else throws.
     auto readAtom() -> std::string;
+    // An atom that must be `true` or `false`; anything else is `false`.
+    auto readBool() -> bool;
     auto readInt() -> int64_t;
     auto readBinary() -> std::string;
     // Tag peeks (never consume; false past the end).

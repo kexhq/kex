@@ -2,6 +2,8 @@
 
 #include <cctype>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace kex {
 
@@ -30,6 +32,20 @@ inline auto snakeCased(const std::string &part) -> std::string {
           std::islower(static_cast<unsigned char>(part[i + 1]))));
     if (boundary && !result.empty() && result.back() != '_') result += '_';
     result += static_cast<char>(std::tolower(c));
+  }
+  return result;
+}
+
+// `parts` joined by `separator`: `join({"Html", "Element"}, ".")` is
+// `Html.Element`. Only the first `count` parts when it is given.
+inline auto join(const std::vector<std::string> &parts,
+                 std::string_view separator,
+                 std::size_t count = std::string::npos) -> std::string {
+  std::string result;
+  const auto end = count < parts.size() ? count : parts.size();
+  for (std::size_t i = 0; i < end; ++i) {
+    if (i) result += separator;
+    result += parts[i];
   }
   return result;
 }

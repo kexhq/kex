@@ -35,29 +35,17 @@ auto exportedTraitName(const std::string& written, const std::string& modulePath
 }
 
 auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
-    return std::visit([&te](const auto& node) -> KexiTypePtr {
+    return std::visit([](const auto& node) -> KexiTypePtr {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
-            std::string name;
-            for (size_t i = 0; i < node.parts.size(); i++) {
-                if (i) name += ".";
-                name += node.parts[i];
-            }
-            if (name == "Integer" || name == "Bool" || name == "Char" ||
-                name == "String" || name == "Void" || name == "Atom" ||
-                name == "Float" || name == "Number" || name == "Byte" ||
-                name == "Int8" || name == "Int16" || name == "Int32" ||
-                name == "Int64" || name == "UInt8" || name == "UInt16" ||
-                name == "UInt32" || name == "UInt64" ||
-                name == "Float32" || name == "Float64")
+            std::string name = node.dotted();
+            // Primitive exactly when the reader's table knows the name, so
+            // what is written here is what kexi_registry reads back.
+            if (kex::semantic::signatureBuiltinType(name))
                 return kexiPrimitive(name);
             return kexiNamed(name);
         } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
-            std::string name;
-            for (size_t i = 0; i < node.name.parts.size(); i++) {
-                if (i) name += ".";
-                name += node.name.parts[i];
-            }
+            std::string name = node.name.dotted();
             std::vector<KexiTypePtr> args;
             for (const auto& a : node.args) args.push_back(convertTypeExprImpl(*a));
             return kexiNamed(name, std::move(args));

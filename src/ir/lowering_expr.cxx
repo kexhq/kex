@@ -1027,11 +1027,6 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 p->name = name;
                 return p;
             };
-            auto mkConstruct = [&](const std::string& tag, std::vector<ExprPtr> args) {
-                auto e = std::make_unique<Expr>();
-                e->node = Construct{tag, std::move(args)};
-                return e;
-            };
 
             // Ok(v) -> v
             MatchClause okClause;
@@ -1095,11 +1090,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             return lowerLoopCore(n.body, &n.condition, true,
                                  []() -> ExprPtr { return nullptr; });
         } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
-            std::string capability;
-            for (size_t i = 0; i < n.capability.parts.size(); ++i) {
-                if (i) capability += ".";
-                capability += n.capability.parts[i];
-            }
+            std::string capability = n.capability.dotted();
             // A replacement is a value put into the context, not state:
             // the body is lowered against the extended map, so there is
             // nothing to restore and an escaping error cannot leak it.

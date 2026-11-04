@@ -117,12 +117,4 @@ inline auto rewriteCompletions(std::vector<std::string> raw,
     return out;
 }
 
-// Convenience: strip a prefix (rewriteTo = "").
-inline auto stripCompletionPrefix(std::vector<std::string> raw,
-                                  const std::string& prefix)
-    -> std::vector<std::string>
-{
-    return rewriteCompletions(std::move(raw), prefix, "");
-}
-
 } // namespace kex

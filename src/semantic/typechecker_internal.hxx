@@ -88,40 +88,6 @@ inline auto extractConstructorName(const ast::TypeExprPtr& variant)
     return std::nullopt;
 }
 
-// Does a type contain an Unknown anywhere? On a signature PARAMETER this
-// marks a contract the checker never learned — the shape-only entries the
-// source-derived interface path records for un-annotated `make` methods,
-// where compiled artifacts would supply real types. Type variables are not
-// this: `[A]` is a known, genuinely generic contract.
-inline auto mentionsUnknownType(const TypePtr& type) -> bool {
-    if (!type) return false;
-    if (std::holds_alternative<UnknownType>(type->kind)) return true;
-    if (auto* named = std::get_if<NamedType>(&type->kind)) {
-        for (const auto& arg : named->typeArgs)
-            if (mentionsUnknownType(arg)) return true;
-        return false;
-    }
-    if (auto* list = std::get_if<ListType>(&type->kind))
-        return mentionsUnknownType(list->element);
-    if (auto* optional = std::get_if<OptionalType>(&type->kind))
-        return mentionsUnknownType(optional->inner);
-    if (auto* map = std::get_if<MapType>(&type->kind))
-        return mentionsUnknownType(map->key) || mentionsUnknownType(map->value);
-    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
-        for (const auto& element : tuple->elements)
-            if (mentionsUnknownType(element)) return true;
-    }
-    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
-        for (const auto& member : intersection->members)
-            if (mentionsUnknownType(member)) return true;
-    }
-    if (auto* record = std::get_if<RecordType>(&type->kind)) {
-        for (const auto& [_, fieldType] : record->fields)
-            if (mentionsUnknownType(fieldType)) return true;
-    }
-    return false;
-}
-
 inline auto headShapeOf(const TypePtr& type) -> TypePtr {
     if (!type) return type;
     if (auto* named = std::get_if<NamedType>(&type->kind))
@@ -140,47 +106,9 @@ inline auto substituteInterfaceGenerics(const TypePtr& type,
         }
         return type;
     }
-    if (auto* named = std::get_if<NamedType>(&type->kind)) {
-        std::vector<TypePtr> nested;
-        for (const auto& arg : named->typeArgs)
-            nested.push_back(substituteInterfaceGenerics(arg, args));
-        return Type::named(named->name, std::move(nested));
-    }
-    if (auto* list = std::get_if<ListType>(&type->kind))
-        return Type::list(substituteInterfaceGenerics(list->element, args));
-    if (auto* optional = std::get_if<OptionalType>(&type->kind))
-        return Type::optional(
-            substituteInterfaceGenerics(optional->inner, args));
-    if (auto* map = std::get_if<MapType>(&type->kind))
-        return Type::map(substituteInterfaceGenerics(map->key, args),
-                         substituteInterfaceGenerics(map->value, args));
-    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
-        std::vector<TypePtr> elements;
-        for (const auto& element : tuple->elements)
-            elements.push_back(substituteInterfaceGenerics(element, args));
-        return Type::tuple(std::move(elements));
-    }
-    if (auto* fn = std::get_if<FuncType>(&type->kind)) {
-        std::vector<TypePtr> params;
-        for (const auto& param : fn->params)
-            params.push_back(substituteInterfaceGenerics(param, args));
-        return Type::func(std::move(params),
-                          substituteInterfaceGenerics(fn->result, args));
-    }
-    if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
-        std::vector<TypePtr> members;
-        for (const auto& member : intersection->members)
-            members.push_back(substituteInterfaceGenerics(member, args));
-        return Type::intersection(std::move(members));
-    }
-    if (auto* record = std::get_if<RecordType>(&type->kind)) {
-        std::vector<std::pair<std::string, TypePtr>> fields;
-        for (const auto& [name, fieldType] : record->fields)
-            fields.emplace_back(
-                name, substituteInterfaceGenerics(fieldType, args));
-        return Type::record(std::move(fields));
-    }
-    return type;
+    return mapTypeChildren(type, [&](const TypePtr& child) {
+        return substituteInterfaceGenerics(child, args);
+    });
 }
 
 // How many type parameters a record has, read back off its registered field
@@ -200,31 +128,7 @@ inline auto recordTypeParamCount(
                 count = std::max(count, static_cast<size_t>(-var->id));
             return;
         }
-        if (auto* named = std::get_if<NamedType>(&type->kind)) {
-            for (const auto& arg : named->typeArgs) scan(arg);
-            return;
-        }
-        if (auto* list = std::get_if<ListType>(&type->kind)) return scan(list->element);
-        if (auto* optional = std::get_if<OptionalType>(&type->kind))
-            return scan(optional->inner);
-        if (auto* map = std::get_if<MapType>(&type->kind)) {
-            scan(map->key);
-            return scan(map->value);
-        }
-        if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
-            for (const auto& element : tuple->elements) scan(element);
-            return;
-        }
-        if (auto* fn = std::get_if<FuncType>(&type->kind)) {
-            for (const auto& param : fn->params) scan(param);
-            return scan(fn->result);
-        }
-        if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
-            for (const auto& member : intersection->members) scan(member);
-            return;
-        }
-        if (auto* record = std::get_if<RecordType>(&type->kind))
-            for (const auto& [_, fieldType] : record->fields) scan(fieldType);
+        forEachTypeChild(type, scan);
     };
     for (const auto& [_, fieldType] : fields) scan(fieldType);
     return count;
@@ -288,48 +192,6 @@ inline auto bindRecordTypeParams(const TypePtr& declared, const TypePtr& actual,
         bindRecordTypeParams(fn->result, other->result, slots);
         return;
     }
-}
-
-// Whether a type has any component the checker has not pinned down — a type
-// variable, an unknown, or a trait constraint. Checks that would otherwise
-// report a mismatch use this to stay quiet rather than invent an error from
-// incomplete information.
-inline auto containsOpenType(const TypePtr& type) -> bool {
-    if (!type) return true;
-    return std::visit(
-        [](const auto& node) -> bool {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, TypeVar> ||
-                          std::is_same_v<T, UnknownType> ||
-                          std::is_same_v<T, ConstrainedType>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, NamedType>) {
-                for (const auto& arg : node.typeArgs)
-                    if (containsOpenType(arg)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, FuncType>) {
-                for (const auto& param : node.params)
-                    if (containsOpenType(param)) return true;
-                return containsOpenType(node.result);
-            } else if constexpr (std::is_same_v<T, TupleType>) {
-                for (const auto& element : node.elements)
-                    if (containsOpenType(element)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, ListType>) {
-                return containsOpenType(node.element);
-            } else if constexpr (std::is_same_v<T, MapType>) {
-                return containsOpenType(node.key) || containsOpenType(node.value);
-            } else if constexpr (std::is_same_v<T, OptionalType>) {
-                return containsOpenType(node.inner);
-            } else if constexpr (std::is_same_v<T, UnionType>) {
-                for (const auto& member : node.members)
-                    if (containsOpenType(member)) return true;
-                return false;
-            } else {
-                return false;
-            }
-        },
-        type->kind);
 }
 
 // The primitive numbers, as a constraint: `N: Number` is what `n - 1` leaves

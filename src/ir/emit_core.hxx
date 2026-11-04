@@ -5,6 +5,7 @@
 // variable threading. The result drives the downstream erlc/erl path.
 #include "ir.hxx"
 #include <string>
+#include <vector>
 
 namespace kex::ir {
 
@@ -15,5 +16,9 @@ struct EmitResult {
 };
 
 auto emitCore(const Module& mod) -> EmitResult;
+
+// Readies each lowered module for hot code loading (insertUpgradePoints) and
+// emits its Core Erlang, in order.
+auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult>;
 
 } // namespace kex::ir

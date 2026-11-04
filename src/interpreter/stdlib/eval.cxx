@@ -29,19 +29,33 @@ static auto getAllowList(const RecordValue& rec) -> std::vector<std::string> {
     return result;
 }
 
-// Sandboxed eval: creates a fresh Evaluator, filters modules, runs code
+// The limits an `Evaluator.run` call asked for: its EvaluatorOptions when it
+// passed one, the record's defaults otherwise.
+static auto limitsFrom(const std::vector<ValuePtr>& args) -> SandboxLimits {
+    SandboxLimits limits;
+    limits.allow = defaultEvalAllowList();
+    if (args.size() > 1)
+        if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {
+            limits.maxSteps = getIntField(*rec, "maxSteps", limits.maxSteps);
+            limits.maxDepth = getIntField(*rec, "maxDepth", limits.maxDepth);
+            limits.allow = getAllowList(*rec);
+        }
+    return limits;
+}
+
+// Sandboxed eval: a fresh Evaluator, put under `limits` once its prelude is
+// loaded, runs `source` — a whole program, or with `exprOnly` one expression.
 static auto sandboxedEval(const std::string& source, bool exprOnly,
-                           int64_t maxSteps, int64_t /*maxDepth*/,
-                           const std::vector<std::string>& /*allow*/) -> ValuePtr {
+                          SandboxLimits limits) -> ValuePtr {
     try {
-        auto filenamePtr = std::make_shared<std::string>("<eval>");
+        const std::string filename = "<eval>";
         std::string toParse = exprOnly ? ("main do\n" + source + "\nend") : source;
-        Lexer lexer(toParse, *filenamePtr);
-        auto tokens = lexer.tokenizeAll();
-        Parser parser(tokens, *filenamePtr);
+        Lexer lexer(toParse, filename);
+        Parser parser(lexer.tokenizeAll(), filename);
         auto program = parser.parseProgram();
 
         Evaluator eval;
+        eval.setSandbox(std::move(limits));
         auto result = eval.execute(program);
         return Value::ok(result ? result : Value::none());
     } catch (const std::exception& e) {
@@ -49,50 +63,21 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
     }
 }
 
+// `Evaluator.run(source[, opts])`, or with `exprOnly` `runExpression`.
+static auto evaluatorEntry(const std::string& function, bool exprOnly) -> NativeFunc {
+    return [function, exprOnly](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* source = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        if (!source)
+            return Value::error(Value::string(function + " requires a source string"));
+        return sandboxedEval(source->value, exprOnly, limitsFrom(args));
+    };
+}
+
 auto Evaluator::registerEvalBuiltins() -> void {
     defineModule("Evaluator");
-
-    // Evaluator.run(source) or Evaluator.run(source, opts)
-    defineIntrinsic("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("Evaluator.run requires a source string"));
-        auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(Value::string("Evaluator.run requires a source string"));
-
-        int64_t maxSteps = 1000000;
-        int64_t maxDepth = 256;
-        std::vector<std::string> allow = defaultEvalAllowList();
-
-        if (args.size() > 1) {
-            if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {
-                maxSteps = getIntField(*rec, "maxSteps", maxSteps);
-                maxDepth = getIntField(*rec, "maxDepth", maxDepth);
-                allow = getAllowList(*rec);
-            }
-        }
-
-        return sandboxedEval(srcVal->value, false, maxSteps, maxDepth, allow);
-    });
-
-    // Evaluator.runExpression(source) or Evaluator.runExpression(source, opts)
-    defineIntrinsic("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
-        auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
-
-        int64_t maxSteps = 1000000;
-        int64_t maxDepth = 256;
-        std::vector<std::string> allow = defaultEvalAllowList();
-
-        if (args.size() > 1) {
-            if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {
-                maxSteps = getIntField(*rec, "maxSteps", maxSteps);
-                maxDepth = getIntField(*rec, "maxDepth", maxDepth);
-                allow = getAllowList(*rec);
-            }
-        }
-
-        return sandboxedEval(srcVal->value, true, maxSteps, maxDepth, allow);
-    });
+    defineIntrinsic("Evaluator::run", evaluatorEntry("Evaluator.run", false));
+    defineIntrinsic("Evaluator::runExpression",
+                    evaluatorEntry("Evaluator.runExpression", true));
 }
 
 } // namespace kex::interpreter

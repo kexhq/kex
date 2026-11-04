@@ -45,22 +45,6 @@ inline auto executableDirectory() -> std::filesystem::path {
     return path.empty() ? path : path.parent_path();
 }
 
-// "size|mtime" stamp of the running compiler binary ("" when the executable
-// path is unknown, e.g. wasm): the #372 run-cache pattern. Any rebuild moves
-// the stamp, so same-version compiler rebuilds never share cache entries.
-inline auto compilerBinaryStamp() -> std::string {
-    const auto exe = executablePath();
-    if (exe.empty()) return "";
-    std::error_code ec;
-    const auto size = std::filesystem::file_size(exe, ec);
-    if (ec) return "";
-    const auto modified =
-        std::filesystem::last_write_time(exe, ec).time_since_epoch().count();
-    if (ec) return "";
-    return std::to_string(static_cast<unsigned long long>(size)) + "|" +
-           std::to_string(static_cast<long long>(modified));
-}
-
 // All standard-library sources share one root. `prelude.kex` is the manifest
 // that selects the automatically visible subset; every other module remains
 // opt-in through `using`.
@@ -105,6 +89,20 @@ inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
             result.push_back(root.string());
         return result;
     }();
+    return roots;
+}
+
+// `roots` without the standard library's: the project's own module roots.
+// A stdlib module is consulted through its compiled interface; merging its
+// SOURCE as well adds a second, unannotated candidate for every method it
+// defines (spec/typestate_survives_standin.kex). Merging is for the
+// project's modules, which have no interface yet.
+inline auto withoutStandardLibraryRoots(std::vector<std::string> roots)
+    -> std::vector<std::string> {
+    const auto stdlib = standardLibraryModuleRoots();
+    std::erase_if(roots, [&](const std::string& root) {
+        return std::find(stdlib.begin(), stdlib.end(), root) != stdlib.end();
+    });
     return roots;
 }
 
@@ -266,14 +264,6 @@ inline auto standardLibraryArtifactSourceFiles()
         return result;
     }();
     return files;
-}
-
-inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
-    const auto candidate = std::filesystem::path(filePath).lexically_normal();
-    const auto files = preludeSourceFiles();
-    return std::any_of(files.begin(), files.end(), [&](const auto& source) {
-        return std::filesystem::path(source).lexically_normal() == candidate;
-    });
 }
 
 // Indexes the prelude selected by an explicit stdlib root into `db`.

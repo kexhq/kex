@@ -204,16 +204,16 @@ int main() {
             const std::unordered_map<std::string, int> one{
                 {"Data.Set", 1}, {"Other", 2}};
             const auto unique = matchSuffix(one, ".Set");
-            assertTrue(unique.kind == SuffixMatchKind::unique);
+            assertTrue(unique.kind == SuffixMatchKind::Unique);
             assertEqual(unique.name, std::string("Data.Set"));
             const std::unordered_map<std::string, int> none{
                 {"Set", 1}, {"Other", 2}};
             assertTrue(matchSuffix(none, ".Set").kind ==
-                       SuffixMatchKind::none);
+                       SuffixMatchKind::None);
             const std::unordered_map<std::string, int> two{
                 {"Data.Set", 1}, {"Units.Set", 2}};
             const auto ambiguous = matchSuffix(two, ".Set");
-            assertTrue(ambiguous.kind == SuffixMatchKind::ambiguous);
+            assertTrue(ambiguous.kind == SuffixMatchKind::Ambiguous);
             assertTrue(ambiguous.name.empty());
         });
     });

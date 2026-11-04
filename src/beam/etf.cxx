@@ -10,6 +10,9 @@ auto Term::atom(std::string name) -> TermPtr {
     t->value = Atom{std::move(name)};
     return t;
 }
+auto Term::boolean(bool value) -> TermPtr {
+    return atom(value ? "true" : "false");
+}
 auto Term::integer(int64_t v) -> TermPtr {
     auto t = std::make_shared<Term>();
     t->value = Int{v};
@@ -91,13 +94,6 @@ auto Term::asList() const -> const std::vector<TermPtr>& {
         return empty;
     }
     return std::get<List>(value).elements;
-}
-auto Term::asMap() const -> const std::vector<std::pair<TermPtr, TermPtr>>& {
-    if (std::holds_alternative<Nil>(value)) {
-        static const std::vector<std::pair<TermPtr, TermPtr>> empty;
-        return empty;
-    }
-    return std::get<Map>(value).pairs;
 }
 
 auto Term::mapGet(const std::string& key) const -> TermPtr {
@@ -448,6 +444,10 @@ auto SaxReader::endList() -> void {
     // corruption either way.
     if (m_cursor->dec.read8() != NIL_EXT)
         throw EtfError("ETF SAX: improper list tail");
+}
+
+auto SaxReader::readBool() -> bool {
+    return readAtom() == "true";
 }
 
 auto SaxReader::readAtom() -> std::string {

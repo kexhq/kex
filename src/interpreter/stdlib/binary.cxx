@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/digest.hxx"
 
 #include <algorithm>
 #include <array>
@@ -128,13 +129,8 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         return Value::binary(std::move(bytes));
     });
     defineIntrinsic("Binary::hex", [](std::vector<ValuePtr> args) -> ValuePtr {
-        static constexpr char digits[] = "0123456789abcdef";
-        std::string out;
         const auto* value = args.empty() ? nullptr : binaryArg(args[0]);
-        if (value) for (uint8_t byte : value->bytes) {
-            out += digits[byte >> 4]; out += digits[byte & 15];
-        }
-        return Value::string(std::move(out));
+        return Value::string(value ? hexEncode(value->bytes) : std::string{});
     });
     defineIntrinsic("Binary::fromHex", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();

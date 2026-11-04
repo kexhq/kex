@@ -4,6 +4,7 @@
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
 #include "../beam/kexi.hxx"
+#include "../common/digest.hxx"
 #include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
@@ -30,6 +31,16 @@
 #include <utility>
 
 namespace kex::compiled {
+
+auto effectiveModuleRoots(const std::vector<std::string>& roots)
+    -> std::vector<std::string> {
+    auto effective = roots;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(effective.begin(), effective.end(), root) == effective.end())
+            effective.push_back(std::move(root));
+    return effective;
+}
+
 
 namespace {
 // The template-scan cache settings of an expansion that has none of its own.
@@ -657,7 +668,6 @@ auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
     for (auto& item : items) {
         std::visit(
             [&](auto& node) {
-                using T = std::decay_t<decltype(node)>;
                 using Ptr = std::decay_t<decltype(*node)>;
                 if (!node) return;
                 if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
@@ -1266,21 +1276,9 @@ struct ScannedTemplate {
     std::vector<ExplicitParam> explicitParams;
 };
 
-// A digest written as hex, for a file name.
-template <typename Digest>
-auto hexDigest(const Digest& digest) -> std::string {
-    static const char* hex = "0123456789abcdef";
-    std::string text;
-    for (const auto byte : digest) {
-        text += hex[byte >> 4];
-        text += hex[byte & 0xF];
-    }
-    return text;
-}
-
 auto scanCacheKey(const std::string& source, const std::string& toolchainKey) -> std::string {
     const std::string material = "kex-template-scan-v1\n" + toolchainKey + "\n" + source;
-    return hexDigest(beam::computeSha256(std::vector<uint8_t>(material.begin(), material.end())));
+    return sha256Hex(material);
 }
 
 auto scanCachePath(const std::filesystem::path& root, const std::string& key) -> std::filesystem::path {
@@ -2456,10 +2454,7 @@ struct ChainCollapser {
 auto useModuleRoots(interpreter::Evaluator& evaluator,
                     const ExpandOptions& options) -> void {
     if (options.moduleRoots.empty()) return;
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     evaluator.setModuleRoots(std::move(roots));
 }
 
@@ -2552,16 +2547,11 @@ auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
 auto addImportedCompiledNames(const ast::Program& program,
                               const ExpandOptions& options,
                               CompiledNames& into) -> void {
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     auto add = [&](const ast::UsingBlock& use, const std::string& scope) {
-        std::string name;
-        for (const auto& part : use.module.parts)
-            name += (name.empty() ? "" : ".") + part;
+        std::string name = use.module.dotted();
         const auto resolved = resolver.resolve(name, scope);
         if (!resolved) return;
         const auto& theirs = compiledNamesInFile(resolved->path);
@@ -3367,8 +3357,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             material += key;
             entry = storedRoundPath(
                 store->root,
-                hexDigest(beam::computeSha256(
-                    std::vector<uint8_t>(material.begin(), material.end()))));
+                sha256Hex(material));
         }
         if (auto kept = store ? readStoredRound(entry) : std::nullopt;
             kept && kept->outcomes.size() == collapser.candidates.size()) {
@@ -3495,8 +3484,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             own.insert(options.sourcePath);
             own.erase(std::string{});
             for (auto& path : canonicalFiles(own)) remembered.dependencies.insert(std::move(path));
-            auto roots = options.moduleRoots;
-            for (auto& root : kex::standardLibraryModuleRoots()) roots.push_back(std::move(root));
+            const auto roots = effectiveModuleRoots(options.moduleRoots);
             for (auto& path : shadowsOf(remembered.dependencies, roots))
                 remembered.dependencies.insert(std::move(path));
             // Kept for later builds only when nothing the sandbox ran so far
@@ -3641,10 +3629,7 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
 // that declares no constants, costs a lookup and a parse, once.
 auto importConstants(ast::Program& program, const ExpandOptions& options,
                      std::vector<semantic::Diagnostic>& diagnostics) -> bool {
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     // Fully qualified owners are the same everywhere. Aliases are lexical:
@@ -3658,9 +3643,7 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
             if (const auto* use =
                     std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
                 if (!*use) continue;
-                std::string name;
-                for (const auto& part : (*use)->module.parts)
-                    name += (name.empty() ? "" : ".") + part;
+                std::string name = (*use)->module.dotted();
                 if ((*use)->alias) aliases[scope][*(*use)->alias] = name;
             } else if (const auto* mod =
                            std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {

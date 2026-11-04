@@ -892,13 +892,6 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
     }, v->data);
 }
 
-auto builtinTypeNames() -> const std::unordered_set<std::string>& {
-    static const std::unordered_set<std::string> names = {
-        "Integer", "Float", "Char", "Bool", "Number", "String",
-        "List", "Map", "Range", "Optional", "Result"};
-    return names;
-}
-
 auto defaultEvalAllowList() -> const std::vector<std::string>& {
     static const std::vector<std::string> allow = {
         "Math", "List", "String", "Integer", "Map", "Stream"};

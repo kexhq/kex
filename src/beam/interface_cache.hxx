@@ -23,7 +23,7 @@ namespace kex::beam {
 // Why a cache load missed, for KEX_TIMINGS reporting. `absent` (no file at
 // all) is reported by the caller, which is the only side that can observe
 // it; deserialize reports the three below.
-enum class CacheMissReason { badMagic, badVersion, corrupt };
+enum class CacheMissReason { BadMagic, BadVersion, Corrupt };
 
 auto cacheMissReasonName(CacheMissReason reason) -> const char*;
 
@@ -33,17 +33,6 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
 auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
                                    CacheMissReason* reason = nullptr)
     -> std::optional<kex::semantic::ImportedInterfaces>;
-
-// Cache-file key: stdlib source hash + compiler version + compiler-binary
-// stamp. The stamp (kex::compilerBinaryStamp, "" when unknown) is what keeps
-// same-version compiler rebuilds from serving each other's interfaces.
-auto interfaceCacheKey(const std::string& sourceHashHex,
-                       const std::string& compilerStamp) -> std::string;
-
-// Atomic write (unique staging file + rename into place), so concurrent
-// builders never see — or clobber — a half-written cache.
-auto writeInterfaceCacheFile(const std::filesystem::path& path,
-                             const std::vector<uint8_t>& bytes) -> bool;
 
 // Drop all but the newest `keepNewest` *.bin entries in `dir`, never `keep`
 // itself. Best-effort: every failure is silently ignored, the cache stays

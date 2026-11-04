@@ -246,7 +246,7 @@ struct LambdaValue {
     std::vector<std::string> params;
     // body is stored by reference to AST — evaluated at call time
     const void* body = nullptr; // points to vector<ExprPtr>
-    struct Environment* closure = nullptr;
+    class Environment* closure = nullptr;
 };
 
 struct Value {
@@ -334,8 +334,6 @@ auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string>
 // runtime type (e.g. both "Int" and "Integer" match IntValue/BigIntValue).
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool;
 
-// The set of builtin type names that cannot have prelude methods overridden.
-auto builtinTypeNames() -> const std::unordered_set<std::string>&;
 
 // Default module allowlist for sandboxed Evaluator.run / .runExpression.
 auto defaultEvalAllowList() -> const std::vector<std::string>&;

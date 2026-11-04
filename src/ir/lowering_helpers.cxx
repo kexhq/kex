@@ -34,12 +34,6 @@ auto Lowering::three(ExprPtr a, ExprPtr b, ExprPtr c) -> std::vector<ExprPtr> {
     return v;
 }
 
-auto Lowering::callE_indirect(ExprPtr callee, std::vector<ExprPtr> args) -> ExprPtr {
-    auto e = std::make_unique<Expr>();
-    e->node = CallIndirect{std::move(callee), std::move(args), false};
-    return e;
-}
-
 // Atomize an already-lowered IR expr: bind to a fresh Let if it isn't a
 // Var/Lit, recording the binding.
 auto Lowering::atomize_ir(ExprPtr e, std::vector<Binding>& binds) -> ExprPtr {
@@ -150,7 +144,7 @@ auto Lowering::withTestSummary(ExprPtr body) -> ExprPtr {
 auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
     -> ExprPtr {
     bool anyVariant = !variantArity.empty();
-    if (records.empty() && !anyVariant && distinctTypes.empty()) return std::move(body);
+    if (records.empty() && !anyVariant && distinctTypes.empty()) return body;
     auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
     auto mapFrom = [&](std::vector<ExprPtr> pairs) {
         auto lst = std::make_unique<Expr>();

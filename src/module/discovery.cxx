@@ -44,11 +44,7 @@ auto standardModuleRoots() -> std::unordered_set<std::string> {
 auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
   std::vector<std::string> result;
   auto addFrom = [&](const kex::ast::TypeName &tn) {
-    std::string name;
-    for (size_t i = 0; i < tn.parts.size(); i++) {
-      if (i) name += ".";
-      name += tn.parts[i];
-    }
+    std::string name = tn.dotted();
     if (!Resolver::isForeignNamespace(name))
       result.push_back(std::move(name));
   };
