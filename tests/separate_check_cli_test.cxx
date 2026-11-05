@@ -1,6 +1,7 @@
-// The separate check (KEX_SEPARATE=1) checks each unit of a program against
-// the interfaces of the units below it, and must agree with the check of the
-// whole program. Each module here is shaped like one whose interface once
+// The separate check (the default build; `--check` with KEX_SEPARATE=1) checks
+// each unit of a program against the interfaces of the units below it, and
+// must agree with the check of the whole program. Each module here is shaped
+// like one whose interface once
 // left something out: constructors called through their module, defaulted
 // parameters, named block arguments, structural type aliases, `serving`
 // slots and `within:` on them, a module in two parts, a capability nested in a module, a constant,
@@ -329,12 +330,13 @@ end
         return read(output);
     }
 
-    // The program built as one and as units lowered apart, each compiled and
+    // The program built as one (KEX_SEPARATE=0) and as units lowered apart (the
+    // default build, its Core kept with KEX_SEPARATE_CORE), each compiled and
     // run: what each printed, merged first.
     auto run() -> std::tuple<std::string, std::string, std::string> {
         const auto roots = " --source-root " + (root / "app").string() +
             " --source-root " + (root / "lib").string() + " ";
-        const auto build = "KEX_SEPARATE=1 KEX_SEPARATE_CORE=" + (root / "separate").string() +
+        const auto build = std::string("KEX_SEPARATE=0") +
             " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
             " --no-colors -E -o " + (root / "merged").string() + roots +
             (root / "app" / "main.kex").string() + " > " + (root / "build.out").string() +
@@ -361,14 +363,15 @@ end
         // What went wrong is in the build's own output when it emitted nothing.
         if (merged.find("open error") != std::string::npos)
             merged += read(root / "build.out");
-        auto separate = runAs("separate");
         std::filesystem::create_directories(root / "actual");
-        const auto actualBuild = "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 KEX_CACHE=" +
-            (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
+        std::filesystem::create_directories(root / "separate");
+        const auto actualBuild = "KEX_SEPARATE_CORE=" + (root / "separate").string() +
+            " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
             " --no-colors -E -o " + (root / "actual").string() + roots +
             (root / "app" / "main.kex").string() + " > " +
             (root / "actual-build.out").string() + " 2>&1";
         (void)std::system(actualBuild.c_str());
+        auto separate = runAs("separate");
         auto actual = runAs("actual");
         if (actual.find("open error") != std::string::npos)
             actual += read(root / "actual-build.out");
