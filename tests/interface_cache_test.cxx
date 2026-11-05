@@ -153,7 +153,7 @@ auto traitDefsEqual(const TraitDef& a, const TraitDef& b) -> bool {
     for (size_t i = 0; i < a.requiredMethods.size(); i++)
         if (!signaturesEqual(a.requiredMethods[i], b.requiredMethods[i]))
             return false;
-    return a.defaultMethods == b.defaultMethods;
+    return a.defaultMethods == b.defaultMethods && a.defaultBodies == b.defaultBodies;
 }
 
 auto adtsEqual(const ImportedADT& a, const ImportedADT& b) -> bool {
@@ -361,6 +361,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
     method.result = Type::named("Ordering");
     trait.requiredMethods = {method};
     trait.defaultMethods = {"equals"};
+    trait.defaultBodies = {"equals"};
     ifaces.traits.push_back(trait);
 
     return ifaces;

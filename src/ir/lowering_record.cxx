@@ -555,6 +555,15 @@ auto Lowering::fieldAccessorDelegate(const std::string& field, bool& blocked) co
     if (!externalModules) return nullptr;
     auto ext = externalModules->receiverFunctions.find(field);
     if (ext == externalModules->receiverFunctions.end()) return nullptr;
+    // The fallback takes any receiver no field arm matched, so it is a
+    // dispatcher: a generic provider, else one whose function is the plain
+    // name. A per-type implementation answers only its type: `Units.SI`'s
+    // `kind/SIPrefix` beside the prelude's `kind` died `function_clause` on a
+    // `UnitDefinition`.
+    for (const auto& candidate : ext->second)
+        if (candidate.beamArity == 1 && candidate.receiverType.empty()) return &candidate;
+    for (const auto& candidate : ext->second)
+        if (candidate.beamArity == 1 && candidate.beamFunction == field) return &candidate;
     for (const auto& candidate : ext->second)
         if (candidate.beamArity == 1) return &candidate;
     // Every import of this name takes more than a receiver, so there is

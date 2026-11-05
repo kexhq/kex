@@ -5899,8 +5899,11 @@ auto TypeChecker::ownTypeAnswers(const std::vector<TypePtr>& argTypes,
     const auto owner = ownTypeIdentity(named->name);
     const auto home = typeHomeModule(owner);
     if (!home) return std::nullopt;
+    // What its own module emits for it: a trait's required method or a default
+    // from the trait's body. A function over a trait it claims
+    // (`inspected(value: Inspectable)`) is the trait home's, not the type's.
     const auto inherits =
-        m_traits.declaresMethod(m_traits.implementorKey(argTypes.front()), method);
+        m_traits.implementsInHome(m_traits.implementorKey(argTypes.front()), method);
     if (!home->empty())
         return inherits ? std::optional<OwnAnswer>({owner, *home, {}}) : std::nullopt;
     std::size_t declared = 0;

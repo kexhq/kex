@@ -1532,7 +1532,10 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
                 // signature of their own, but the NAME matters —
                 // every implementing type inherits it.
                 else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
-                    if (bi) td.defaultMethods.push_back(bi->name);
+                    if (bi) {
+                        td.defaultMethods.push_back(bi->name);
+                        td.defaultBodies.push_back(bi->name);
+                    }
                 }
             }, bodyItem);
         }

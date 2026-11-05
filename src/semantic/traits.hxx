@@ -51,6 +51,10 @@ struct TraitDef {
     // without this list `bot.shout` (an inherited default) is indistinguishable
     // from a call to a method that does not exist.
     std::vector<std::string> defaultMethods;
+    // The defaults the trait's BODY defines, a subset of `defaultMethods`:
+    // emitted with each implementor (KexiTraitDef::defaultBodies). The rest
+    // are functions over the trait, implemented once where they are declared.
+    std::vector<std::string> defaultBodies;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -91,6 +95,9 @@ public:
     // Does any trait `type` implements declare `method` — as a requirement or
     // as a default body? An inherited default has no per-type signature, so
     // this is the only way to know the call is legitimate.
+    // Whether `type`'s own module implements `method`: a method a trait it
+    // claims requires, or a default from that trait's body.
+    auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
     auto declaresMethod(const std::string& type, const std::string& method) const
         -> bool;
 

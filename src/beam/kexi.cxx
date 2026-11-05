@@ -463,7 +463,10 @@ auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
         else
             methods.push_back(Term::binary(m.name));
     }
-    return Term::tuple({Term::binary(td.name), Term::list(std::move(methods))});
+    std::vector<TermPtr> bodies;
+    for (const auto& name : td.defaultBodies) bodies.push_back(Term::binary(name));
+    return Term::tuple({Term::binary(td.name), Term::list(std::move(methods)),
+                        Term::list(std::move(bodies))});
 }
 
 auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
@@ -477,6 +480,8 @@ auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
             td.requiredMethods.push_back({m->asBinaryStr(), false});
         }
     }
+    if (t.size() > 2)
+        for (const auto& name : t[2]->asList()) td.defaultBodies.push_back(name->asBinaryStr());
     return td;
 }
 

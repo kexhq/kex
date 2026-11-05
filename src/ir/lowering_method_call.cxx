@@ -1775,6 +1775,11 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             // Units' providers decided between at run time, by their
             // receiver types, before the match below (the prelude's).
             std::vector<const ExternalModules::ReceiverFunction*> runtimeProviders;
+            // Several units' generic dispatchers beside the prelude's, for a
+            // receiver whose type is known only at run time: the value's
+            // registered owner picks one, and the prelude's takes the rest, as
+            // a merged program's one dispatcher would.
+            std::vector<const ExternalModules::ReceiverFunction*> ownerDispatchers;
             // Providers in more than one module: the one the checker
             // chose, or else the one for the receiver's static type
             // (`status.showValue` is Net.HTTP.Status's, not the
@@ -1866,6 +1871,29 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         providerModule = names::kPreludeModule;
                         runtimeProviders = std::move(guarded);
                     }
+                }
+            }
+            if (providerModule.empty() && n.namedArgs.empty()) {
+                // The prelude's typed entries are its one dispatcher's arms; the
+                // units' must be dispatchers too, or a guard decides (runtimeProviders).
+                std::set<std::string> modules;
+                bool unitsGeneric = true, preludeGeneric = false;
+                for (const auto& candidate : providers) {
+                    if (candidate.beamArity != actualArity) continue;
+                    modules.insert(candidate.moduleAtom);
+                    if (candidate.moduleAtom == names::kPreludeModule)
+                        preludeGeneric = preludeGeneric || candidate.receiverType.empty();
+                    else
+                        unitsGeneric = unitsGeneric && candidate.receiverType.empty();
+                }
+                if (unitsGeneric && preludeGeneric && modules.size() > 1) {
+                    providerModule = names::kPreludeModule;
+                    std::set<std::string> taken;
+                    for (const auto& candidate : providers)
+                        if (candidate.beamArity == actualArity &&
+                            candidate.moduleAtom != names::kPreludeModule &&
+                            taken.insert(candidate.moduleAtom).second)
+                            ownerDispatchers.push_back(&candidate);
                 }
             }
             for (const auto& candidate : providers) {
@@ -2003,6 +2031,36 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                             std::move(dispatch));
                     }
                     return ret(std::move(dispatch));
+                }
+                if (!ownerDispatchers.empty()) {
+                    const auto callWith = [&](const std::string &module,
+                                              const std::string &fn) {
+                        std::vector<ExprPtr> copies;
+                        for (const auto& arg : pargs) copies.push_back(clone(arg));
+                        return callE(module, fn, actualArity, std::move(copies));
+                    };
+                    Match byOwner;
+                    byOwner.subjects.push_back(
+                        callE("kex_io", "method_owner", 1, one(clone(pargs.front()))));
+                    for (const auto* provider : ownerDispatchers) {
+                        MatchClause arm;
+                        auto owner = std::make_unique<Pattern>();
+                        owner->kind = PatKind::Lit;
+                        owner->litKind = LitKind::Atom;
+                        owner->litText = provider->moduleAtom;
+                        arm.patterns.push_back(std::move(owner));
+                        arm.body = callWith(provider->moduleAtom, provider->beamFunction);
+                        byOwner.clauses.push_back(std::move(arm));
+                    }
+                    MatchClause rest;
+                    auto wild = std::make_unique<Pattern>();
+                    wild->kind = PatKind::Wild;
+                    rest.patterns.push_back(std::move(wild));
+                    rest.body = callWith(match->moduleAtom, function);
+                    byOwner.clauses.push_back(std::move(rest));
+                    auto chosen = std::make_unique<Expr>();
+                    chosen->node = std::move(byOwner);
+                    return ret(std::move(chosen));
                 }
                 if (auto dual = dualProviderDispatch(
                         n, m, match->receiverType, match->moduleAtom,

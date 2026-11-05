@@ -63,16 +63,26 @@ erl -noshell -eval "{ok, {_, [{exports, Ex}]}} = beam_lib:chunks(\"$beam\", [exp
     exit 1
 }
 
+# A module's exports as "name arity" lines: the prelude's from its beam, any
+# other module's (one of the build's own units compiled apart, such as
+# Kex.Net.HTTP) from the first line of the Core the build emitted for it.
+exports_of() { # <module>
+    if [ "$1" = "kex_prelude" ]; then cat "$tmp/exports.txt"; return 0; fi
+    [ -f "$core/$1.core" ] || return 1
+    head -1 "$core/$1.core" | grep -o "'[^']*'/[0-9]*" |
+        sed "s/^'\\(.*\\)'\\/\\([0-9]*\\)\$/\\1 \\2/"
+}
+
 miss=0; foreign=0
 sort -u "$audit" | while read -r module fn arity; do
-    if [ "$module" != "kex_prelude" ]; then
-        echo "  FOREIGN firing: $module $fn/$arity" >&2
+    if ! exports_of "$module" > "$tmp/module-exports.txt"; then
+        echo "  FOREIGN firing (no such module emitted): $module $fn/$arity" >&2
         continue
     fi
-    if ! grep -qxF "$fn $arity" "$tmp/exports.txt"; then
-        echo "  MISSING export: kex_prelude $fn/$arity" >&2
-        echo "   kex_prelude exports for that name:" >&2
-        grep "^${fn%%/*} " "$tmp/exports.txt" | sed 's/^/    /' >&2 || true
+    if ! grep -qxF "$fn $arity" "$tmp/module-exports.txt"; then
+        echo "  MISSING export: $module $fn/$arity" >&2
+        echo "   $module exports for that name:" >&2
+        grep "^${fn%%/*} " "$tmp/module-exports.txt" | sed 's/^/    /' >&2 || true
     fi
 done > "$tmp/report.txt" 2>&1
 miss=$(grep -c "MISSING export" "$tmp/report.txt" || true)

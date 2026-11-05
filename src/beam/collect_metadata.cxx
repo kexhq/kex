@@ -723,6 +723,11 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
             ann && *ann)
             traitMetadata.requiredMethods.push_back(
                 {(*ann)->name, (*ann)->isFoul});
+    for (const auto& item : trait.body)
+        if (auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item); fd && *fd &&
+            std::find(traitMetadata.defaultBodies.begin(), traitMetadata.defaultBodies.end(),
+                      (*fd)->name) == traitMetadata.defaultBodies.end())
+            traitMetadata.defaultBodies.push_back((*fd)->name);
     meta.traitDefs.push_back(std::move(traitMetadata));
 
     auto receiverType = kexiConstrained("T", identity);

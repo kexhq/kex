@@ -199,6 +199,10 @@ struct KexiTraitRequiredMethod {
 struct KexiTraitDef {
     std::string name;
     std::vector<KexiTraitRequiredMethod> requiredMethods;
+    // The methods the trait's body defines: spliced into every implementor,
+    // so an implementor's own module emits them. A function over the trait
+    // declared elsewhere (`inspected(value: Inspectable)`) is not one.
+    std::vector<std::string> defaultBodies;
 };
 
 struct KexiStructuralMetadata {
