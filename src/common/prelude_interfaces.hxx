@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
 #include "file_io.hxx"
 #include "mangle.hxx"
@@ -298,8 +299,12 @@ inline auto collectImplementedTraitNames(const Item& item,
 // assembled program claims a trait it does not itself declare, search the
 // prelude's own source files for that trait's declaration and merge just the
 // trait node in — the same node a prelude-tier type would already have found
-// in its own file.
-inline auto backfillExternalTraitDefaults(ast::Program& program) -> void {
+// in its own file. A unit compiled apart claims traits of the units below it
+// too (`implement: Shop.Rules.Pricing`): those are cloned from `below`, found
+// by the qualified name the claim wrote, since their programs keep them.
+inline auto backfillExternalTraitDefaults(ast::Program& program,
+                                          const std::vector<const ast::Program*>& below = {})
+    -> void {
     std::unordered_set<std::string> implemented, declared;
     for (const auto& item : program.items) {
         collectImplementedTraitNames(item, implemented);
@@ -310,6 +315,32 @@ inline auto backfillExternalTraitDefaults(ast::Program& program) -> void {
         if (!declared.count(name)) missing.push_back(name);
     if (missing.empty()) return;
     std::sort(missing.begin(), missing.end());
+
+    std::function<void(const ast::ModuleDef&, const std::string&)> fromModule =
+        [&](const ast::ModuleDef& module, const std::string& parent) {
+            const auto path = ast::nestedModulePath(parent, module.name);
+            for (const auto& item : module.body) {
+                if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*nested) fromModule(**nested, path);
+                    continue;
+                }
+                const auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+                if (!trait || !*trait) continue;
+                const auto found =
+                    std::find(missing.begin(), missing.end(), path + "." + (*trait)->name);
+                if (found == missing.end()) continue;
+                auto copy = ast::clone(**trait);
+                copy->name = *found;
+                program.items.push_back(std::move(copy));
+                missing.erase(found);
+            }
+        };
+    for (const auto* unit : below)
+        for (const auto& item : unit->items)
+            if (const auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                module && *module)
+                fromModule(**module, "");
+    if (missing.empty()) return;
 
     for (const auto& filePath : preludeSourceFiles()) {
         if (missing.empty()) break;

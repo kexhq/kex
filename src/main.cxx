@@ -142,6 +142,12 @@ static auto replInputIsDeclaration(const std::string &input) -> bool {
 }
 
 auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string>;
+auto configureFullCheck(kex::semantic::Analyzer &analyzer, std::vector<std::string> files,
+                        const std::string &entryPath) -> void;
+auto taggedLiteralDiagnostics(const kex::ast::Program &program,
+                              const kex::semantic::Analyzer &analyzer,
+                              const std::string &entryPath)
+    -> std::vector<kex::semantic::Diagnostic>;
 
 // The modules under the REPL's source roots, by the name each file declares:
 // what a dotted name typed at the prompt can lead to. Read once a session —
@@ -1221,7 +1227,15 @@ std::string g_separateEntryPath;
 // Every unit's modules, set when each unit was lowered apart and a separate
 // build was asked for.
 std::optional<std::vector<kex::ir::EmitResult>> g_separateModules;
-std::vector<std::string> g_separateDiagnostics;
+// The files the entry unit's names are reported for, as the merged check
+// reports them: the entry and a spec's base.
+std::vector<std::string> g_separateNameCheckFiles;
+// A separate build's diagnostics, every level, reported as the merged check
+// reports its own.
+std::vector<kex::semantic::Diagnostic> g_separateDiagnostics;
+// Every module a separate build emitted, described by its own unit: what
+// `kex -c` attaches as its KexI, so the merged program is never analysed.
+std::map<std::string, kex::beam::KexiChunk> g_separateChunks;
 
 // Phase 3: a checked unit lowered on its own, with its own analysis, against
 // the prelude and the KexI of the units below it (`registry`, which holds only
@@ -1549,6 +1563,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                           const kex::semantic::ImportedInterfaces *interfaces) -> void {
   g_separateModules.reset();
   g_separateDiagnostics.clear();
+  g_separateChunks.clear();
   std::map<std::string, LoadedDep *> byPath;
   for (auto &dep : deps) byPath[*dep.path] = &dep;
   std::size_t errors = 0;
@@ -1562,13 +1577,25 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     std::set<std::string> files;
     std::vector<std::string> names;
     kex::beam::LoadedUnit unit;
+    // SeparateUnitCache::interfaceDigest of `unit`, once.
+    std::string digest;
   };
   std::vector<Described> describedUnits;
   std::optional<kex::cache::SeparateUnitCache> unitCache;
   if (auto root = kex::cache::base(); root && separateBuildRequested())
     unitCache.emplace(*root);
+  // KEX_TIMINGS: where a separate build's time goes, summed over its units.
+  std::map<std::string, double> unitPhaseMs;
+  auto phaseStart = std::chrono::steady_clock::now();
+  const auto chargeTo = [&](const char *phase) {
+    const auto now = std::chrono::steady_clock::now();
+    unitPhaseMs[phase] +=
+        std::chrono::duration<double, std::milli>(now - phaseStart).count();
+    phaseStart = now;
+  };
   for (const auto &unit : units) {
     const bool isEntry = unit.size() == 1 && unit.front().empty();
+    chargeTo("other");
     // A unit is checked and lowered against the units its files reach, and
     // no others: one it does not use (`Harmat` from `Parsing`) offers it
     // nothing, not even an operator on an `Unknown` value.
@@ -1581,6 +1608,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         for (const auto &next : used->second)
           if (reached.insert(next).second) pending.push_back(next);
     }
+    chargeTo("reach");
     kex::beam::KexiRegistry registry;
     kex::module::PackageMetadata build;
     build.id = "kex.build";
@@ -1617,13 +1645,14 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         }
         sources.push_back({path, source});
       }
-      std::vector<const kex::beam::LoadedUnit*> dependencies;
+      std::vector<std::string> dependencies;
       for (const auto &below : describedUnits) {
         if (std::none_of(below.files.begin(), below.files.end(),
                          [&](const std::string &file) { return reached.contains(file); }))
           continue;
-        dependencies.push_back(&below.unit);
+        dependencies.push_back(below.digest);
       }
+      chargeTo("registry");
       if (safe) {
         const auto runtime = prebuiltRuntimeBeamDir();
         cacheKey = unitCache->keyFor(
@@ -1639,13 +1668,18 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
               std::ofstream(std::string(coreDir) + "/" + module.moduleName + ".core")
                   << module.source;
           }
-          for (auto &module : cached->modules)
-            separateModules.push_back(std::move(module));
+          for (std::size_t i = 0; i < cached->modules.size(); ++i) {
+            if (i < cached->attachChunks.size())
+              g_separateChunks[cached->modules[i].moduleName] = cached->attachChunks[i];
+            separateModules.push_back(std::move(cached->modules[i]));
+          }
           std::vector<std::string> names;
           for (const auto &module : cached->interface.modules)
             names.push_back(module.chunk.metadata.sourceModule);
           describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()),
                                     std::move(names), std::move(cached->interface)});
+          describedUnits.back().digest =
+              kex::cache::SeparateUnitCache::interfaceDigest(describedUnits.back().unit);
           if (kex::timings::enabled())
             std::fprintf(stderr, "  unit cache hit: %s\n", unit.front().c_str());
           continue;
@@ -1670,6 +1704,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         items.clear();
       }
     }
+    chargeTo("cache key and load");
     auto below = registry.buildSemanticInterfaces();
     for (auto &[_, module] : below.modules) module.compiledApart = true;
     // A `make` function travels with its receiver unless it was declared for a
@@ -1726,20 +1761,30 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     // the checker decides calls to them (`clock.inspected`). Taken out again
     // once lowered, since the unit's items go back to their files below.
     const auto ownItems = program.items.size();
-    kex::backfillExternalTraitDefaults(program);
+    std::vector<const kex::ast::Program *> reachedPrograms;
+    for (const auto &file : reached)
+      if (const auto found = byPath.find(file); found != byPath.end() && found->second->program)
+        reachedPrograms.push_back(found->second->program.get());
+    kex::backfillExternalTraitDefaults(program, reachedPrograms);
+    // The full check, as the merged program gets it; names are reported for
+    // the entry unit, as the merged check reports them for the entry alone.
+    chargeTo("interfaces");
     kex::semantic::Analyzer analyzer(&available);
-    (void)analyzer.analyze(program);
-    for (const auto &diagnostic : analyzer.diagnostics()) {
-      if (diagnostic.level != kex::semantic::Diagnostic::Level::Error) continue;
-      errors++;
+    configureFullCheck(analyzer, isEntry ? g_separateNameCheckFiles : std::vector<std::string>{},
+                       g_separateEntryPath);
+    const bool clean = analyzer.analyze(program);
+    auto unitDiagnostics = analyzer.diagnostics();
+    if (clean)
+      for (auto &diagnostic : taggedLiteralDiagnostics(program, analyzer, g_separateEntryPath))
+        unitDiagnostics.push_back(std::move(diagnostic));
+    for (const auto &diagnostic : unitDiagnostics) {
       if (separateBuildRequested()) {
-        g_separateDiagnostics.push_back(
-            std::string(diagnostic.location.file) + ":" +
-            std::to_string(diagnostic.location.line) + ":" +
-            std::to_string(diagnostic.location.column) + ": error: " +
-            diagnostic.message);
+        g_separateDiagnostics.push_back(diagnostic);
+        if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) errors++;
         continue;
       }
+      if (diagnostic.level != kex::semantic::Diagnostic::Level::Error) continue;
+      errors++;
       std::fprintf(stderr, "separate: %s:%d:%d: error: %s\n",
                    std::string(diagnostic.location.file).c_str(),
                    diagnostic.location.line, diagnostic.location.column,
@@ -1748,10 +1793,11 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     // Phase 3: the unit lowered on its own, against the prelude and the KexI
     // of the units below it, as the REPL lowers code against a loaded unit.
     const bool unitChecked =
-        std::none_of(analyzer.diagnostics().begin(), analyzer.diagnostics().end(),
+        std::none_of(unitDiagnostics.begin(), unitDiagnostics.end(),
                      [](const auto &diagnostic) {
                        return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
                      });
+    chargeTo("check");
     const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
     const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
     bool unitLowered = false;
@@ -1772,6 +1818,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         }
       }
     }
+    chargeTo("lower");
     program.items.erase(program.items.begin() + static_cast<std::ptrdiff_t>(ownItems),
                         program.items.end());
     if (!isEntry) {
@@ -1860,7 +1907,33 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         described.entryBeamAtom = described.modules.front().beamAtom;
         describedUnits.push_back({std::set<std::string>(unit.begin(), unit.end()), names,
                                   std::move(described)});
+        describedUnits.back().digest =
+            kex::cache::SeparateUnitCache::interfaceDigest(describedUnits.back().unit);
       }
+    }
+    // Each module the unit emitted, described by the unit: its own interface
+    // where it described one (`Kex.Bags`), otherwise collected here with the
+    // unit's analysis (its file-level module, the entry's modules).
+    std::vector<kex::beam::KexiChunk> attachChunks;
+    for (auto i = emittedBefore; unitLowered && i < separateModules.size(); ++i) {
+      const auto &module = separateModules[i];
+      const kex::beam::KexiChunk *described = nullptr;
+      if (describedUnits.size() > describedBefore)
+        for (const auto &own : describedUnits.back().unit.modules)
+          if (own.beamAtom == module.moduleName) described = &own.chunk;
+      if (described) {
+        attachChunks.push_back(*described);
+      } else {
+        kex::beam::CollectOptions options;
+        options.moduleAtom = module.moduleName;
+        options.analysis = &analyzer;
+        if (module.moduleName.rfind("Kex.", 0) == 0)
+          options.moduleName = module.moduleName.substr(4);
+        auto chunk = kex::beam::collectMetadata(program, options);
+        kex::beam::recordImplementations(chunk, routedIn(module.routedImplementations));
+        attachChunks.push_back(std::move(chunk));
+      }
+      g_separateChunks[module.moduleName] = attachChunks.back();
     }
     if (cacheKey && unitChecked && unitLowered &&
         describedUnits.size() > describedBefore) {
@@ -1869,6 +1942,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       cached.modules.assign(separateModules.begin() +
                                 static_cast<std::ptrdiff_t>(emittedBefore),
                             separateModules.end());
+      cached.attachChunks = std::move(attachChunks);
       unitCache->store(*cacheKey, cached);
     }
     if (isEntry) {
@@ -1881,6 +1955,10 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     }
   }
   // A separate build runs the program, whose output this would be part of.
+  chargeTo("describe and store");
+  if (kex::timings::enabled())
+    for (const auto &[phase, ms] : unitPhaseMs)
+      std::fprintf(stderr, "    separate %-20s %9.1f ms\n", phase.c_str(), ms);
   if (!separateBuildRequested())
     std::fprintf(stderr, "separate: %zu units checked, %zu errors\n", units.size(), errors);
   if (separateBuildRequested() && allLowered) g_separateModules = std::move(separateModules);
@@ -2769,6 +2847,28 @@ auto preludeDisplayRegistration() -> std::string {
 // `errorCount`, when given, receives the number of error-level diagnostics
 // reported — the abort message quotes it so a long compile shows progress as
 // the count comes down, rather than just repeating "fix type errors".
+// The full check's setup, for the merged program and for each unit checked
+// apart alike: names are reported for `files` (the entry and a spec's base),
+// and an exported module the program does not merge is looked for where the
+// build finds modules.
+auto configureFullCheck(kex::semantic::Analyzer &analyzer, std::vector<std::string> files,
+                        const std::string &entryPath) -> void {
+  analyzer.setModuleLocator(
+      [resolver = kex::module::Resolver(moduleRootsFor(entryPath))](
+          const std::string &module, const std::string &current) {
+        return resolver.resolve(module, current).has_value();
+      });
+  analyzer.setNameCheckFiles(std::move(files));
+}
+
+// What the full check adds after a clean analysis: tagged literals.
+auto taggedLiteralDiagnostics(const kex::ast::Program &program,
+                              const kex::semantic::Analyzer &analyzer,
+                              const std::string &entryPath)
+    -> std::vector<kex::semantic::Diagnostic> {
+  return kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(entryPath));
+}
+
 auto runSemanticCheck(const kex::ast::Program &program,
                       const std::string &filepath,
                       kex::semantic::Analyzer *retainedAnalyzer = nullptr,
@@ -2788,14 +2888,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   if (!extraDeclFile.empty()) files.push_back(extraDeclFile);
   kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
-  // An exported module the program does not merge is looked for where the
-  // build finds modules.
-  analyzer.setModuleLocator(
-      [resolver = kex::module::Resolver(moduleRootsFor(filepath))](
-          const std::string &module, const std::string &current) {
-        return resolver.resolve(module, current).has_value();
-      });
-  analyzer.setNameCheckFiles(std::move(files));
+  configureFullCheck(analyzer, std::move(files), filepath);
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics()) {
     countError(diag);
@@ -2806,7 +2899,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   bool validationOk = true;
   if (ok) {
     for (const auto &diag :
-         kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
+         taggedLiteralDiagnostics(program, analyzer, filepath)) {
       if (diag.level == kex::semantic::Diagnostic::Level::Error)
         validationOk = false;
       countError(diag);
@@ -5773,10 +5866,14 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
 // Companions go first, so the entry's chunk is written once, already naming
 // every companion's interface hash — the entry used to be written, then read
 // back with every companion and written again to fill those hashes in.
+// A module with a chunk in `prepared` (a separate build's, described by its own
+// unit) uses it, stamped with this layout; the rest are collected from
+// `program` with `analysis`.
 auto attachInterfaces(const kex::ast::Program &program,
                       const std::vector<kex::ir::EmitResult> &modules,
                       const std::string &outputDir, const std::string &stem,
-                      bool noCheck, const kex::semantic::Analyzer *analysis)
+                      bool noCheck, const kex::semantic::Analyzer *analysis,
+                      const std::map<std::string, kex::beam::KexiChunk> *prepared = nullptr)
     -> void {
   std::map<std::string, kex::beam::Hash128> companionHashes;
   auto attach = [&](size_t index) {
@@ -5796,9 +5893,20 @@ auto attachInterfaces(const kex::ast::Program &program,
         if (module.moduleName.rfind("Kex.", 0) == 0)
           options.moduleName = module.moduleName.substr(4);
       }
-      auto chunk = kex::beam::collectMetadata(program, options);
-      kex::beam::recordImplementations(chunk,
-                                       routedIn(module.routedImplementations));
+      const kex::beam::KexiChunk *ready = nullptr;
+      if (prepared)
+        if (const auto found = prepared->find(module.moduleName); found != prepared->end())
+          ready = &found->second;
+      auto chunk = ready ? *ready : kex::beam::collectMetadata(program, options);
+      if (ready) {
+        chunk.metadata.unitId = options.unitId;
+        chunk.metadata.moduleAtom = options.moduleAtom;
+        chunk.metadata.role = options.role;
+        chunk.metadata.entryBackPointer = options.entryBackPointer;
+        chunk.metadata.companions.clear();
+      } else {
+        kex::beam::recordImplementations(chunk, routedIn(module.routedImplementations));
+      }
       chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
       chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
       if (index == 0)
@@ -6353,6 +6461,8 @@ auto passDependencies(CompileUnit &unit) -> PassOutcome {
   // the build's own dependencies too.
   UnitGraph separateUnits;
   g_separateEntryPath = unit.filepath;
+  g_separateNameCheckFiles = {unit.filepath};
+  if (!unit.beamSpecBaseFile.empty()) g_separateNameCheckFiles.push_back(unit.beamSpecBaseFile);
   unit.beamDeps = resolveBeamDeps(
       unit.program, moduleRootsFor(unit.filepath), &preludeSemanticInterfaces(),
       qualifiedModules, separateCheckRequested() ? &separateUnits : nullptr);
@@ -6428,6 +6538,24 @@ auto passCheck(CompileUnit &unit) -> PassOutcome {
   // Gating: a type error stops the build. Otherwise (`--no-check`,
   // `--emit-core`) the analysis still runs for the answers lowering reads.
   const bool gating = unit.mode() == Mode::Compile && !unit.options.skipCheck;
+  // A separate build that checked every unit decides the build itself: its
+  // errors stop it, and when every unit lowered no merged analysis runs at
+  // all; `kex -c` attaches the interfaces the units described.
+  if (gating && separateBuildRequested()) {
+    const auto errors = std::count_if(
+        g_separateDiagnostics.begin(), g_separateDiagnostics.end(), [](const auto &diagnostic) {
+          return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
+        });
+    if (errors > 0 || g_separateModules) {
+      for (const auto &diagnostic : g_separateDiagnostics) printSemanticDiagnostic(diagnostic);
+      if (errors > 0) {
+        reportAborted(unit, static_cast<int>(errors));
+        return 1;
+      }
+      unit.compileAnalysis.reset();
+      return kContinue;
+    }
+  }
   int typeErrors = 0;
   const bool ok = gating
       ? runSemanticCheck(unit.program, unit.filepath, unit.compileAnalysis.get(),
@@ -6443,12 +6571,6 @@ auto passCheck(CompileUnit &unit) -> PassOutcome {
     for (const auto &diag : unit.preCheck.diagnostics)
       printSemanticDiagnostic(diag);
     reportAborted(unit, unit.preCheck.typeErrors);
-    return 1;
-  }
-  if (!g_separateDiagnostics.empty()) {
-    for (const auto &diagnostic : g_separateDiagnostics)
-      std::cerr << diagnostic << '\n';
-    reportAborted(unit, static_cast<int>(g_separateDiagnostics.size()));
     return 1;
   }
   return kContinue;
@@ -6544,7 +6666,8 @@ auto passAttachInterfaces(CompileUnit &unit) -> PassOutcome {
   if (!unit.compileRun() && !unit.corePaths.empty())
     attachInterfaces(unit.program, unit.moduleResults, unit.options.outputDir,
                      unit.stem, unit.options.skipCheck,
-                     unit.compileAnalysis.get());
+                     unit.compileAnalysis.get(),
+                     g_separateChunks.empty() ? nullptr : &g_separateChunks);
   return kContinue;
 }
 
