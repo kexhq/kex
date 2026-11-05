@@ -129,6 +129,34 @@ All of these are part of the refactor; none is optional. In order:
 9. **Stage 2b:** the intrinsic registry and `Type<T>` signatures.
 10. **Stage 6: measure** against the Stage 0 baseline; `src/` below `main`.
 
+### Step 1 progress (2026-11-05)
+
+- **The separate check decides the build.** Each unit gets the full check
+  (`configureFullCheck`: names, module rules, tagged literals); its
+  diagnostics are kept whole and printed as the merged check prints them. A
+  separate build that stood skips the merged analysis, for runs and for
+  `kex -c`, which attaches each module's KexI as its own unit described it
+  (unit cache v2 stores those chunks).
+- **A trait of a unit below** gives its defaults to a type claiming it
+  (`backfillExternalTraitDefaults` with the reached units' programs).
+- **Cache keys are linear.** Each unit's interface digest is computed once
+  (`SeparateUnitCache::interfaceDigest`); keys were re-serialising every
+  unit below, about 6 s on slick.
+- **Measured** (slick, median of 3 interleaved runs; `edit` changes a file's
+  content, `incremental` only touches it):
+
+  | scenario | main | merged | separate |
+  |---|---|---|---|
+  | no-op | 10.78 | 9.70 | 8.08 |
+  | touch | 11.99 | 10.43 | 8.72 |
+  | edit | 12.00 | 10.35 | 8.99 |
+
+- **Left for step 1:** flip the default; units whose sources read outside
+  files (`compiled do`, embeds, `Template`) are never cached, because the key
+  does not cover those reads. Recording the reads in the key is the next
+  speed-up. `separate_check_cli_test` and `run_cache_cli_test` pin today's
+  opt-in flags and change with the flip.
+
 ## Stage 0: benchmark on slick — done
 
 - `tools/bench-slick.sh`, `tools/bench_lib.sh`, `make bench-slick`
@@ -681,9 +709,8 @@ module-locator fix (Stage 5) resolves it.
 - `make test-all` (not bare `ctest` — it misses the spec suite),
   `make spec-beam`, `make fuzz` (400 + targeted), `make test-devirt`,
   `make dup-audit` (no metric may rise).
-- Until separate compilation is the default, `make spec-beam` again under
-  `KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1`, with no divergence from the merged
-  run.
+- Until the merged build is deleted (order step 2), `make spec-beam` again
+  under `KEX_SEPARATE=0`, with no divergence from the default (separate) run.
 - `make bench-slick` for performance claims; slick must build and its
   `tey test` pass.
 - `make test-wasm` in CI for changes to the driver or the stdlib loader.

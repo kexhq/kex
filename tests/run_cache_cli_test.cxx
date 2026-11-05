@@ -25,10 +25,13 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Separate compilation is the default build; KEX_SEPARATE=0 is the merged one.
+enum class Build { Separate, Merged };
+
 auto runKex(const std::string& cacheDir, const std::string& sourcePath,
-            bool separate = false,
+            Build build = Build::Separate,
             const std::string& binary = KEX_BINARY_PATH) -> std::string {
-    std::string cmd = (separate ? "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 " : "") +
+    std::string cmd = (build == Build::Merged ? "KEX_SEPARATE=0 " : "") +
                        std::string("KEX_CACHE=") + cacheDir + " " + binary +
                        " --run --no-colors " + sourcePath + " 2>&1";
     std::string result;
@@ -115,12 +118,12 @@ int main() {
             std::string cacheDir = mkdtemp(cacheTmp);
             auto path = writeTempSource("main do\n  IO.printLine(\"modes\")\nend\n");
 
-            assertEqual(runKex(cacheDir, path), std::string("modes\n"));
+            assertEqual(runKex(cacheDir, path, Build::Merged), std::string("modes\n"));
             const auto mergedEntries = runCacheEntryCount(cacheDir);
-            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
+            assertEqual(runKex(cacheDir, path, Build::Separate), std::string("modes\n"));
             assertTrue(runCacheEntryCount(cacheDir) > mergedEntries,
                        "a separate build reused the merged build's run-cache entry");
-            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
+            assertEqual(runKex(cacheDir, path, Build::Separate), std::string("modes\n"));
 
             std::remove(path.c_str());
             fs::remove_all(cacheDir);
@@ -137,14 +140,14 @@ int main() {
                 "end\n");
             const auto binary = copyBinaryForBackdate();
 
-            auto first = runKex(cacheDir, path, false, binary);
+            auto first = runKex(cacheDir, path, Build::Separate, binary);
             assertEqual(first, std::string("cached\n"));
             auto afterFirst = runCacheEntryCount(cacheDir);
             assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
 
             backdateFile(binary);
 
-            auto second = runKex(cacheDir, path, false, binary);
+            auto second = runKex(cacheDir, path, Build::Separate, binary);
             assertEqual(second, std::string("cached\n"));
             auto afterSecond = runCacheEntryCount(cacheDir);
             assertTrue(afterSecond > afterFirst,

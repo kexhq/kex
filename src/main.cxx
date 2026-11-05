@@ -1199,7 +1199,23 @@ auto unitsOf(const std::map<std::string, std::set<std::string>> &uses)
 // way a compiled unit's are. The merged check still decides the build; this
 // one prints what it found, `separate:` before each line, so the two can be
 // compared until they agree.
+// Separate compilation is the default build: every build and run (the compile
+// pipeline, which sets g_building) checks and lowers each unit apart, unless
+// KEX_SEPARATE=0 asks for the merged build. `--check` runs the separate check
+// only when KEX_SEPARATE=1 asks for it, beside the merged one, to compare.
+bool g_building = false;
+
+auto separateCompilationOff() -> bool {
+  const char *value = std::getenv("KEX_SEPARATE");
+  return value && std::string(value) == "0";
+}
+
+auto separateBuildRequested() -> bool {
+  return g_building && !separateCompilationOff();
+}
+
 auto separateCheckRequested() -> bool {
+  if (separateBuildRequested()) return true;
   const char *value = std::getenv("KEX_SEPARATE");
   return value && *value && std::string(value) != "0";
 }
@@ -1210,14 +1226,6 @@ auto routedIn(const std::set<std::pair<std::string, int>> &routed)
   return [&routed](const std::string &function, int arity) {
     return routed.count({function, arity}) > 0;
   };
-}
-
-// KEX_SEPARATE_BUILD=1 with KEX_SEPARATE=1, phase 3: the build's modules are
-// its units' own, each lowered apart, whenever every unit checked and lowered;
-// otherwise the merged build's, as without it.
-auto separateBuildRequested() -> bool {
-  const char *value = std::getenv("KEX_SEPARATE_BUILD");
-  return separateCheckRequested() && value && *value && std::string(value) != "0";
 }
 
 // The entry file being built, which names the entry unit's file-local module
@@ -6399,6 +6407,9 @@ using kex::driver::kContinue;
 using kex::driver::PassOutcome;
 
 auto passPreludeInterfaces(CompileUnit &unit) -> PassOutcome {
+  // This process builds: its units are checked and lowered apart
+  // (separateBuildRequested).
+  g_building = true;
   // Loaded once per process and used by every pass below; timed on its own
   // so it does not hide inside whichever pass touches it first.
   buildProgress.step("Resolving", kex::color::cyan, shownPath(unit.filepath));
