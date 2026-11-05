@@ -11,6 +11,15 @@ describe("Range — items") do
   end
 end
 
+describe("Range — list") do
+  it("list is the non-optional spelling of items") do
+    assert((1..5).list == [1, 2, 3, 4, 5])
+    assert((1..5).list == (1..5).items)
+    assert(('a'..'c').list == ['a', 'b', 'c'])
+    assert((4..1).list == [])
+  end
+end
+
 describe("Range — Enumerable via reduce") do
   it("map works on ranges") do
     assert((1..4).map { |x| x * 2 } == [2, 4, 6, 8])

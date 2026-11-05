@@ -134,6 +134,10 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 if (auto it = aliases->find(name); it != aliases->end())
                     return it->second;
             }
+            // Bare `List` is the erased form of `[X]`; applied `List<T>` is
+            // normalized below. Without this an interface spelling bare
+            // `List` read back nominal and matched no `[A]` receiver.
+            if (name == "List") return Type::list(Type::unknown());
             return Type::named(name);
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {

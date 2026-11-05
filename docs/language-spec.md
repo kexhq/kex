@@ -2013,6 +2013,7 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 | `sum`, `product` | Aggregate |
 | `contains?(x)` | Membership (inclusive) |
 | `items` | Materialize as a list |
+| `list` | Alias for `items` |
 
 Implementing Enumerable provides its default functions (`map`, `filter`,
 `each`, etc.).

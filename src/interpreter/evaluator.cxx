@@ -5481,10 +5481,16 @@ auto Evaluator::registerBuiltins() -> void {
             }
             if (targetName == "List") {
                 if (auto* range = std::get_if<RangeValue>(&val->data)) {
+                    // Same materialization as Range.items (and the BEAM, which
+                    // delegates there): chars stay chars, a reversed range is
+                    // empty, and a float range is not enumerable.
+                    if (range->lower || range->upper)
+                        throw std::runtime_error("This range cannot be enumerated");
                     std::vector<ValuePtr> elems;
-                    int64_t step = range->start <= range->end ? 1 : -1;
-                    for (int64_t i = range->start; step > 0 ? i <= range->end : i >= range->end; i += step)
-                        elems.push_back(Value::integer(i));
+                    for (int64_t i = range->start; i <= range->end; i++)
+                        elems.push_back(range->isChar
+                            ? Value::character(static_cast<char32_t>(i))
+                            : Value::integer(i));
                     return Value::just(Value::list(std::move(elems)));
                 }
                 if (std::holds_alternative<ListValue>(val->data))

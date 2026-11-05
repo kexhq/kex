@@ -96,6 +96,8 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
                              semanticType(type->typeArgs[1], vars));
         if (type->name == "List" && type->typeArgs.size() == 1)
             return Type::list(semanticType(type->typeArgs[0], vars));
+        if (type->name == "List" && type->typeArgs.empty())
+            return Type::list(Type::unknown());
         // `Block<R>`, or `Block<A, R>` for a block handed an `A`: the result
         // is the last argument, as it is written.
         if (type->name == "Block" && !type->typeArgs.empty()) {

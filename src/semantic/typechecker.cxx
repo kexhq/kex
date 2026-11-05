@@ -3115,6 +3115,12 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // User type alias (e.g. `type Level = :debug | :info | ...`)
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
+            // Bare `List` is the erased form of `[X]`, the way `type
+            // List<X> = [X]` declares it. Left nominal, a `to(List)` result
+            // matched no `[A]` receiver and every list method on it reported
+            // whatever unrelated overload sorted first (`zip` blamed Range).
+            if (last == "List" && node.parts.size() == 1)
+                return Type::list(Type::unknown());
             if (node.parts.size() > 1) {
                 const bool isNominal = m_recordFields.count(qualified) ||
                     m_adtVariants.count(qualified) ||
@@ -3145,6 +3151,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 return Type::optional(args[0]);
             if (name == "Map" && args.size() == 2)
                 return Type::map(args[0], args[1]);
+            // `List<T>` is `[T]`, matching what the prelude-interface and
+            // KexI readers already build for the same spelling.
+            if (name == "List" && args.size() == 1)
+                return Type::list(args[0]);
             if (auto distinct = resolveDistinctName(name);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct, std::move(args));

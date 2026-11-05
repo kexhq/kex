@@ -1,0 +1,24 @@
+# Range → List conversions agree, and List-typed values work in list methods.
+# `.list` is the non-optional spelling of `.items`; `.to(List)` answers
+# Optional and unwraps to a real list, so `zip` accepts it. Bare `List` and
+# `List<T>` spell the same type as `[T]`.
+
+main do
+  IO.printLine((1..5).list)
+  IO.printLine((1..5).list == (1..5).items)
+  IO.printLine(('a'..'c').list)
+
+  let abc = ('A'..'Z').to(List).try
+  let oneten = (1..10).to(List).try
+  IO.printLine(abc.count)
+  IO.printLine(abc.take(3))
+  IO.printLine(abc.zip(oneten).take(3))
+
+  let nums = (1..3).to(List<Integer>).try
+  IO.printLine(nums.map { |n| n * 2 })
+
+  let xs: List = (1..3).items
+  IO.printLine(xs.reverse)
+  let ys: List<Integer> = [1, 2, 3]
+  IO.printLine(ys.sum)
+end
