@@ -25,6 +25,9 @@ enum class CallKind {
     TypeReference,
     // A runtime primitive the checker handles itself (`pid.send(msg)`).
     Builtin,
+    // A binary operator a type overloads (`a + b` on a `make` block's `+`):
+    // owner is the left operand's type, as the checker printed it.
+    Operator,
 };
 
 struct DecidedCall {

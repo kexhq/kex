@@ -56,11 +56,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
-    if (context.decidedCalls)
-        for (const auto& [expr, decided] : *context.decidedCalls)
-            if (decided.kind == semantic::CallKind::FieldRead)
+    if (context.decidedCalls) {
+        for (const auto& [expr, decided] : *context.decidedCalls) {
+            if (decided.kind == semantic::CallKind::FieldRead) {
                 if (const auto* call = std::get_if<ast::MethodCall>(&expr->kind))
                     L.decidedFieldReads.emplace(call, decided.owner);
+            } else if (decided.kind == semantic::CallKind::Operator) {
+                if (const auto* op = std::get_if<ast::BinaryOp>(&expr->kind))
+                    L.decidedOperators.emplace(op, decided.owner);
+            }
+        }
+    }
     L.resolvedTraits = resolvedTraits;
     L.preferExternalReceivers = preferExternalReceivers;
     L.staticTypeOfCalls = staticTypeOfCalls;

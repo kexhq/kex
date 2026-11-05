@@ -89,8 +89,10 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
             localOverloadKey(first.name, typeName, sourceArity)))
         def.name = mangleReceiverSignature(
             first.name, methodDispatchTypes(first, typeName));
-    else if ((collidingMethods.count(first.name) ||
-              !traitIdentityOf(typeName, currentModulePath, true).empty()) &&
+    else if (auto colliding =
+                 collidingImplementationName(first.name, typeName, sourceArity))
+        def.name = *colliding;
+    else if (!traitIdentityOf(typeName, currentModulePath, true).empty() &&
              !typeName.empty())
         def.name = mangleReceiverImplementation(first.name, typeName);
     // A lone local `to(String)` still participates in the language-wide
@@ -1078,6 +1080,42 @@ auto Lowering::appendFieldClauses(const std::string& name, int arity, Match& m) 
                         two(litInt(slot.position), var("_a0")));
         m.clauses.push_back(std::move(mc));
     }
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::collidingImplementationName(const std::string& method,
+                                           const std::string& owner,
+                                           size_t sourceArity) const
+    -> std::optional<std::string> {
+    if (owner.empty() || !collidingMethods.count(method) ||
+        argumentOverloadedMethods.count(
+            localOverloadKey(method, owner, sourceArity)))
+        return std::nullopt;
+    return mangleReceiverImplementation(method, owner);
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::takesPlainParameters(const std::string& method,
+                                    const std::string& owner) const -> bool {
+    auto found = makeMethods.find(method);
+    if (found == makeMethods.end()) return false;
+    const auto canonical = canonicalRecordName(owner);
+    bool any = false;
+    for (const auto& candidate : found->second) {
+        if (!candidate.def || canonicalRecordName(candidate.owner) != canonical)
+            continue;
+        any = true;
+        for (const auto& clause : candidate.def->clauses)
+            for (const auto& param : clause.params)
+                if (param.pattern || !param.name) return false;
+    }
+    return any;
 }
 
 } // namespace kex::ir

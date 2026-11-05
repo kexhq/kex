@@ -16,6 +16,9 @@
 #                       (wants ast::forEachChild, unless it is a real pass)
 #   long-functions      functions over 400 lines
 #   big-files           source files over 2000 lines
+#   lowering-rederives  places lowering reads the checker's raw type map
+#                       (`expressionTypes->find`) to decide something itself
+#                       instead of reading sema's decision (pass plan, Stage 3)
 #
 #   tools/dup-audit.sh            report counts, then the details
 #   tools/dup-audit.sh --check    also fail when a count exceeds the recorded
@@ -100,9 +103,10 @@ grep '^expr ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/expr-walkers
 grep '^long ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/long-functions"
 # shellcheck disable=SC2086
 wc -l $FILES | awk '$2 != "total" && $1 > 2000 { print $1, $2 }' | sort -rn >"$WORK/big-files"
+grep -n "expressionTypes->find(" src/ir/*.cxx >"$WORK/lowering-rederives" || true
 
 # ── report ──────────────────────────────────────────────────────────────────
-METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files"
+METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files lowering-rederives"
 count_of() { # <metric>
   if [ "$1" = literal-compares ]; then
     awk '{ s += $1 } END { print s + 0 }' "$WORK/$1"
