@@ -135,7 +135,8 @@ auto functionsEqual(const ImportedFunction& a, const ImportedFunction& b)
            a.isConstructor == b.isConstructor &&
            a.remoteSlot == b.remoteSlot &&
            a.constructorOwner == b.constructorOwner &&
-           a.implementation == b.implementation;
+           a.implementation == b.implementation &&
+           a.foreignTarget == b.foreignTarget;
 }
 
 auto fnVecEqual(const std::vector<ImportedFunction>& a,
@@ -306,6 +307,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
     fn.remoteSlot = true;
     fn.constructorOwner = "";
     fn.implementation = "parse/String";
+    fn.foreignTarget = true;
 
     ImportedFunction ctor = fn;
     ctor.sourceName = "Some";

@@ -1751,9 +1751,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 std::string module;
                 for (const auto& [name, atom] : externalModules->nameToAtom)
                     if (atom == candidate.moduleAtom) module = name;
-                if (!candidate.compiledApart || module.empty() || moduleInScope(module) ||
-                    candidate.receiverType.empty() ||
-                    candidate.receiverType.starts_with(module + ".")) {
+                if (!candidate.foreignTarget || module.empty() || moduleInScope(module)) {
                     providers.push_back(candidate);
                     continue;
                 }
