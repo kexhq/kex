@@ -374,7 +374,10 @@ inline auto importedTraitFromSource(const ast::TraitDef& trait)
     result.name = trait.name;
     for (const auto& member : trait.body) {
         if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member)) {
-            if (*fn) result.defaultMethods.push_back((*fn)->name);
+            if (*fn) {
+                result.defaultMethods.push_back((*fn)->name);
+                result.defaultBodies.push_back((*fn)->name);
+            }
         } else if (const auto* ann =
                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member)) {
             if (*ann) {

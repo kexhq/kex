@@ -206,6 +206,7 @@ auto importedTrait(const KexiTraitDef& trait,
     -> kex::semantic::TraitDef {
     kex::semantic::TraitDef result;
     result.name = trait.name;
+    result.defaultBodies = trait.defaultBodies;
     for (const auto& required : trait.requiredMethods) {
         auto method = std::find_if(
             interface.methods.begin(), interface.methods.end(),

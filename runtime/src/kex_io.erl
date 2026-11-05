@@ -5,7 +5,7 @@
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0, value_type_name/1, call_field_or_fail/4,
-           register_method_owners/1, dispatch_method/3]).
+           register_method_owners/1, dispatch_method/3, method_owner/1]).
 
 %% register_method_owners/1 — each compiled unit reports which BEAM module
 %% owns the methods of the record tags it defines. Capability substitution
@@ -17,6 +17,14 @@ register_method_owners(Owners) when is_map(Owners) ->
                         maps:merge(persistent_term:get(kex_method_owners, #{}),
                                    Owners)),
     ok.
+
+%% method_owner/1 — the module a unit registered as owning the methods of
+%% this value's record tag, or `undefined`. A call whose receiver type is only
+%% known at run time picks, by it, between dispatchers of several units.
+method_owner(Receiver) when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
+    maps:get(element(1, Receiver), persistent_term:get(kex_method_owners, #{}), undefined);
+method_owner(_) ->
+    undefined.
 
 %% dispatch_method/3 — apply a method to a value whose implementing module is
 %% only known at runtime. The failure message matches the one every other
