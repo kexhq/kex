@@ -328,6 +328,14 @@ struct Lowering {
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
     // Field reads the checker decided, by call: the record each one reads.
     std::unordered_map<const ast::MethodCall*, std::string> decidedFieldReads;
+    // Operators a type overloads, as the checker decided them: the left
+    // operand's type, whose `make` block owns the operator.
+    std::unordered_map<const ast::BinaryOp*, std::string> decidedOperators;
+    // The type whose overload `n` applies, as the checker decided it; "" for a
+    // built-in operator. Lowering used to read it off the left operand's
+    // recorded type; with that disabled, spec-beam, fuzz and the examples
+    // were unchanged.
+    auto operatorOwner(const ast::BinaryOp& n) const -> std::string;
     // `implement:` identities per make block, in written order, resolved by
     // semantic analysis. Absent without analysis (`--no-check`), in which
     // case `inheritedDefaults` resolves from its pre-pass usings as before.
@@ -533,6 +541,20 @@ struct Lowering {
     auto receiverIsForeignTo(const ast::MethodCall& n) const -> bool;
 
     auto receiverOwner(const ast::MethodCall& n) const -> std::string;
+    static auto ownerNameOf(const std::string& printed) -> std::string;
+    // The name `owner`'s implementation of `method` is emitted under when
+    // several types define it (`count/List`), or nullopt when it keeps the
+    // bare name or an argument-overloaded one. Definitions and direct calls
+    // both name it through this, so the two cannot disagree.
+    auto collidingImplementationName(const std::string& method,
+                                     const std::string& owner,
+                                     size_t sourceArity) const
+        -> std::optional<std::string>;
+    // Whether every clause of `method` binds its parameters by plain name —
+    // none matches on an argument (`to(String)`), so calling its
+    // implementation directly means the same as going through the dispatcher.
+    auto takesPlainParameters(const std::string& method,
+                              const std::string& owner) const -> bool;
 
     auto placeMethodArguments(const ast::MethodCall& n, const MakeMethod& method,
                               std::vector<Binding>& binds) -> std::vector<ExprPtr>;

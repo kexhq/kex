@@ -18,6 +18,7 @@ auto targetKindName(TargetKind kind) -> std::string_view {
     case TargetKind::Conversion: return "conversion";
     case TargetKind::TypeReference: return "type";
     case TargetKind::Builtin: return "builtin";
+    case TargetKind::Operator: return "operator";
     case TargetKind::Undecided: return "undecided";
     }
     return "undecided";
@@ -45,19 +46,20 @@ auto classify(const ast::Expr& expr, const semantic::Analyzer& analysis)
         case Kind::Conversion: return TargetKind::Conversion;
         case Kind::TypeReference: return TargetKind::TypeReference;
         case Kind::Builtin: return TargetKind::Builtin;
+        case Kind::Operator: return TargetKind::Operator;
         }
     }
     return TargetKind::Undecided;
 }
 
-auto collect(const ast::Expr& expr, const semantic::Analyzer& analysis,
+auto collectCallSitesIn(const ast::Expr& expr, const semantic::Analyzer& analysis,
              std::vector<CallSite>& sites) -> void {
     if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind))
         sites.push_back({&expr, call->method, classify(expr, analysis)});
     else if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind))
         sites.push_back({&expr, call->name, classify(expr, analysis)});
     ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
-        collect(*child, analysis, sites);
+        collectCallSitesIn(*child, analysis, sites);
     });
 }
 
@@ -68,7 +70,7 @@ auto collectCallSites(const ast::Program& program,
     -> std::vector<CallSite> {
     std::vector<CallSite> sites;
     ast::forEachBodyExpr(program, [&](const ast::Expr& expr) {
-        collect(expr, analysis, sites);
+        collectCallSitesIn(expr, analysis, sites);
     });
     return sites;
 }

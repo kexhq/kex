@@ -1,5 +1,5 @@
 #include "emit_core.hxx"
-#include "upgrade.hxx"
+#include "pass_manager.hxx"
 #include "walk.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -705,12 +705,14 @@ auto emitCore(const Module& mod) -> EmitResult {
 namespace kex::ir {
 
 auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult> {
+    auto passes = standardPasses();
     std::vector<EmitResult> emitted;
     emitted.reserve(modules.size());
     for (auto& module : modules) {
-        insertUpgradePoints(module);
+        passes.run(module);
         emitted.push_back(emitCore(module));
     }
+    passes.report();
     return emitted;
 }
 
