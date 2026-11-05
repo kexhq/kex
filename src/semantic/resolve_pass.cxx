@@ -1,11 +1,39 @@
 #include "resolve_pass.hxx"
 #include "analyzer.hxx"
 #include "../common/mangle.hxx"
+#include "collect_pass.hxx"
+#include "module_rules.hxx"
 #include <algorithm>
 #include <cctype>
 #include <variant>
 
 namespace kex::semantic {
+
+namespace {
+
+// The modules of the files SemanticDB indexes, as the `using` and `export`
+// rules (module_rules.hxx) ask about them.
+class IndexedModules final : public ModuleSymbols {
+public:
+    explicit IndexedModules(SemanticDB& db) : m_db(db) {}
+    auto hasModule(const std::string& module) const -> bool override {
+        return m_db.hasModule(module);
+    }
+    auto member(const std::string& module, const std::string& name) const
+        -> const SymbolInfo* override {
+        return m_db.symbolInModule(module, name);
+    }
+    auto publicMembers(const std::string& module) const
+        -> std::vector<const SymbolInfo*> override {
+        const auto exports = m_db.exportsFor(module);
+        return {exports.begin(), exports.end()};
+    }
+
+private:
+    SemanticDB& m_db;
+};
+
+} // namespace
 
 static auto editDistance(const std::string& a, const std::string& b) -> int {
     const int m = static_cast<int>(a.size());
@@ -146,21 +174,65 @@ auto ResolvePass::checkNamedArguments(
 }
 
 auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
+    auto* state = db.fileState(file);
+    if (!state) return;
     m_db = &db;
-    m_state = db.fileState(file);
-    if (!m_state) return;
+    m_checksModuleRules = true;
+    m_ownedModules = std::make_unique<IndexedModules>(db);
+    m_modules = m_ownedModules.get();
+    m_symbols = &state->symbols;
+    m_path = state->path;
+    m_diagnostics = &state->diagnostics;
+    m_completionScopes = &state->completionScopes;
+    resolveItems(state->ast);
+}
 
+auto ResolvePass::run(const ast::Program& program, const std::string& path,
+                      const ModuleSymbols& modules,
+                      const std::vector<SymbolInfo>& symbols)
+    -> std::vector<Diagnostic> {
+    std::vector<Diagnostic> diagnostics;
+    m_db = nullptr;
+    // The checker reports the `using` and `export` rules of a checked program.
+    m_checksModuleRules = false;
+    m_modules = &modules;
+    m_symbols = &symbols;
+    m_path = path;
+    m_diagnostics = &diagnostics;
+    m_completionScopes = nullptr;
+    resolveItems(program);
+    m_diagnostics = nullptr;
+    return diagnostics;
+}
+
+auto resolveProgramNames(const ast::Program& program,
+                         const std::vector<std::string>& files,
+                         const ImportedInterfaces* imports)
+    -> std::vector<Diagnostic> {
+    const ProgramModules modules(
+        collectSymbols(program, files.empty() ? std::string{} : files.front()));
+    auto diagnostics = ResolvePass(imports).run(
+        program, files.empty() ? std::string{} : files.front(), modules,
+        modules.symbols());
+    std::erase_if(diagnostics, [&](const Diagnostic& diagnostic) {
+        return std::find(files.begin(), files.end(), diagnostic.location.file) ==
+               files.end();
+    });
+    return diagnostics;
+}
+
+auto ResolvePass::resolveItems(const ast::Program& program) -> void {
     // Labels first, over the whole unit: a call may precede the definition it
     // names, and companion declarations (a `.spec.kex` base, a manifest's
     // vocabulary) are already merged into this AST by now.
     m_declaredLabels.clear();
-    collectLabelsIn(m_state->ast.items, m_declaredLabels);
+    collectLabelsIn(program.items, m_declaredLabels);
 
     // Persistent module scope: synthetic top-level let bindings land here so
     // they remain visible to all subsequent top-level items in the same file.
     pushScope();
 
-    for (const auto& item : m_state->ast.items) {
+    for (const auto& item : program.items) {
         std::visit([this](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, ast::FunctionDef>) {
@@ -237,47 +309,15 @@ auto ResolvePass::resolveUsingBlock(const ast::UsingBlock& block) -> void {
 }
 
 auto ResolvePass::resolveExportDecl(const ast::ExportDecl& decl) -> void {
-    if (!decl.onlyNames.empty() && !decl.exceptNames.empty()) {
-        error(decl.location, "`only:` and `except:` are mutually exclusive in export");
-        return;
-    }
-
+    // `only:` beside `except:` is the parser's to refuse.
+    if (!m_checksModuleRules) return;
     std::string target = decl.module.dotted();
-
-    if (target == m_currentModule) {
-        error(decl.location, "module cannot export itself");
-        return;
-    }
-
-    if (m_db && !m_db->hasModule(target)) {
+    if (m_db && target != m_currentModule && !m_modules->hasModule(target))
         if (auto discovered = m_db->ensureModule(target, m_currentModule))
             target = *discovered;
-    }
-    if (!m_db || !m_db->hasModule(target)) {
-        error(decl.location, "exported module not found: " + target);
-        return;
-    }
-
-    for (const auto& name : decl.onlyNames) {
-        if (auto* sym = m_db->symbolInModule(target, name)) {
-            if (!sym->isExported)
-                error(decl.location, "cannot export private name `" + name + "` from " + target);
-        } else {
-            error(decl.location, "module " + target + " has no name `" + name + "`");
-        }
-    }
-    for (const auto& name : decl.exceptNames) {
-        if (auto* sym = m_db->symbolInModule(target, name)) {
-            if (!sym->isExported)
-                error(decl.location, "cannot reference private name `" + name + "` in except list");
-        } else {
-            error(decl.location, "module " + target + " has no name `" + name + "`");
-        }
-    }
-
-    auto exports = m_db->exportsFor(target);
-    if (exports.empty() && decl.onlyNames.empty())
-        error(decl.location, "module " + target + " has no public names to export");
+    checkExport(*m_modules, m_currentModule, target, decl.onlyNames,
+                decl.exceptNames,
+                [&](const std::string& message) { error(decl.location, message); });
 }
 
 auto ResolvePass::resolveUsing(const ast::TypeName& module,
@@ -285,31 +325,30 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
                                const std::vector<std::string>& onlyNames,
                                const std::vector<std::string>& exceptNames,
                                SourceLocation loc) -> void {
-    if (!onlyNames.empty() && !exceptNames.empty()) {
-        error(loc, "`only:` and `except:` are mutually exclusive");
-        return;
-    }
-
+    const auto report = [&](const std::string& message) {
+        if (m_checksModuleRules) error(loc, message);
+    };
     // `as:` binds the module to a name and imports nothing (docs/modules.md);
     // an `only:` list beside it still asks for those names by hand.
     const bool importsNames =
         resolve_core::usingImportsNames(alias, onlyNames);
 
     std::string requested = module.dotted();
-    const std::string resolved = resolve_core::resolveSourceModulePath(
-        m_db, m_currentModule, requested);
+    const std::string resolved = m_db
+        ? resolve_core::resolveSourceModulePath(m_db, m_currentModule, requested)
+        : resolve_core::resolveModulePathIn(
+              m_currentModule, requested,
+              [&](const std::string& name) { return m_modules->hasModule(name); });
 
     // Packaged and prelude-derived interfaces may be available without a
     // corresponding source module in the resolver roots. `using` still has
     // to introduce their exported names for this pass, just as it does for a
     // source-backed module.
-    if ((!m_db || !m_db->hasModule(resolved)) && m_imports) {
+    if (!m_modules->hasModule(resolved) && m_imports) {
         auto imported = m_imports->modules.find(requested);
         if (imported != m_imports->modules.end()) {
             const auto& exports = imported->second.exports;
-            for (const auto& name : onlyNames)
-                if (!exports.count(name))
-                    error(loc, "module " + requested + " has no name `" + name + "`");
+            checkUsing(*m_imports, imported->second, requested, onlyNames, report);
 
             const bool explicitImport = !onlyNames.empty();
             for (const auto& [name, overloads] : exports) {
@@ -342,33 +381,24 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
             return;
         }
     }
-    if (!m_db || !m_db->hasModule(resolved)) {
+    if (!m_modules->hasModule(resolved)) {
         warning(loc, "module not found in source roots: " + requested);
         return;
     }
 
-    for (const auto& path : m_db->shadowedModulePaths(resolved))
-        warning(loc, "shadowed module definition for " + resolved + ": " + path);
+    if (m_db)
+        for (const auto& path : m_db->shadowedModulePaths(resolved))
+            warning(loc, "shadowed module definition for " + resolved + ": " + path);
 
     // A module that is already being loaded has completed collection, so its
     // signatures are safe for type references and lazy function calls. Kex
     // currently has no eager module value initializers; when those arrive,
     // their value dependency graph (not this import graph) must detect cycles.
 
-    for (const auto& name : onlyNames) {
-        if (auto* symbol = m_db->symbolInModule(resolved, name)) {
-            if (!symbol->isExported)
-                error(loc, "cannot import private name `" + name + "` from " + resolved);
-        } else {
-            error(loc, "module " + resolved + " has no name `" + name + "`");
-        }
-    }
-    for (const auto& name : exceptNames)
-        if (auto* symbol = m_db->symbolInModule(resolved, name); symbol && !symbol->isExported)
-            error(loc, "cannot reference private name `" + name + "` from " + resolved);
+    checkUsing(*m_modules, resolved, onlyNames, exceptNames, report);
 
     const bool explicitImport = !onlyNames.empty();
-    for (auto* symbol : m_db->exportsFor(resolved)) {
+    for (const auto* symbol : m_modules->publicMembers(resolved)) {
         if (!importsNames) break;
         if (!resolve_core::usingSelectsName(symbol->name, onlyNames, exceptNames))
             continue;
@@ -391,7 +421,9 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         }
         if (!merged.proceed) continue;
         defineLocal(symbol->name);
-        symbol->references.push_back(loc);
+        if (m_db)
+            if (auto* indexed = m_db->symbolInModule(resolved, symbol->name))
+                indexed->references.push_back(loc);
     }
     if (alias) defineLocal(*alias);
 }
@@ -508,8 +540,8 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                     // A module declares it, but not where this call can see:
                     // name that module rather than guess at a spelling.
                     std::string owners;
-                    if (m_state)
-                        for (const auto& sym : m_state->symbols)
+                    if (m_symbols)
+                        for (const auto& sym : *m_symbols)
                             if (sym.name == node.name &&
                                 sym.kind == SymbolKind::Function &&
                                 !sym.module.empty())
@@ -779,7 +811,7 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
 }
 
 auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void {
-    if (!m_db || !m_state) return;
+    if (!m_db) return;
     // Check if this name was brought in by a `using` import — if so, record
     // the reference on the original module symbol for go-to-definition.
     for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
@@ -793,7 +825,7 @@ auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void
     // (local vars live in m_scopes and have no SymbolInfo entry).
     for (const auto& scope : m_scopes)
         if (scope.count(name)) return;
-    if (auto* sym = m_db->findSymbol(name, m_state->path))
+    if (auto* sym = m_db->findSymbol(name, m_path))
         sym->references.push_back(loc);
 }
 
@@ -822,8 +854,8 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
     // module body IS lexically nested in its file, so it sees file-level
     // declarations — and a nested module sees its enclosing module's. What
     // stays invisible is a sibling module's members, which need qualifying.
-    if (m_state) {
-        for (const auto& sym : m_state->symbols) {
+    if (m_symbols) {
+        for (const auto& sym : *m_symbols) {
             if (sym.name == name && enclosesCurrentModule(sym.module))
                 return true;
         }
@@ -882,8 +914,8 @@ auto ResolvePass::suggest(const std::string& name) const -> std::string {
 
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it)
         for (const auto& s : *it) check(s);
-    if (m_state)
-        for (const auto& sym : m_state->symbols) check(sym.name);
+    if (m_symbols)
+        for (const auto& sym : *m_symbols) check(sym.name);
 
     return best;
 }
@@ -906,23 +938,23 @@ auto ResolvePass::defineLocal(const std::string& name) -> void {
 }
 
 auto ResolvePass::recordCompletionScope(SourceLocation location) -> void {
-    if (!m_state) return;
+    if (!m_completionScopes) return;
     std::unordered_set<std::string> unique;
     for (const auto& scope : m_scopes)
         unique.insert(scope.begin(), scope.end());
     std::vector<std::string> names(unique.begin(), unique.end());
     std::sort(names.begin(), names.end());
-    m_state->completionScopes.push_back({location, std::move(names)});
+    m_completionScopes->push_back({location, std::move(names)});
 }
 
 auto ResolvePass::error(SourceLocation loc, const std::string& msg) -> void {
-    if (!m_state) return;
-    m_state->diagnostics.push_back(Diagnostic{Diagnostic::Level::Error, loc, msg});
+    if (!m_diagnostics) return;
+    m_diagnostics->push_back(Diagnostic{Diagnostic::Level::Error, loc, msg});
 }
 
 auto ResolvePass::warning(SourceLocation loc, const std::string& msg) -> void {
-    if (!m_state) return;
-    m_state->diagnostics.push_back(Diagnostic{Diagnostic::Level::Warning, loc, msg});
+    if (!m_diagnostics) return;
+    m_diagnostics->push_back(Diagnostic{Diagnostic::Level::Warning, loc, msg});
 }
 
 } // namespace kex::semantic

@@ -14,7 +14,8 @@
 #include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
-#include "hir/call_targets.hxx"
+#include "hir/hir.hxx"
+#include "hir/repl_input.hxx"
 #include "ir/emit_core.hxx"
 #include "ir/pass_manager.hxx"
 #include "driver/pipeline.hxx"
@@ -876,17 +877,18 @@ auto specBaseCandidates(const std::string &filepath)
   return candidates;
 }
 
-// `context` with the type checker's answers from `analysis` filled in —
-// everything lowering reads off a checked program. Unchanged without one.
+// `context` with the checked program `hir` filled in — what each call is and
+// what type each expression has, everything lowering reads off a checked
+// program. Unchanged without one.
 auto withCheckerAnswers(kex::ir::LowerContext context,
-                        const kex::semantic::Analyzer *analysis)
-    -> kex::ir::LowerContext {
-  if (analysis) {
-    context.resolvedCalls = &analysis->resolvedCalls();
-    context.staticTypeOfCalls = &analysis->staticTypeOfCalls();
-    context.expressionTypes = &analysis->typeMap();
-    context.resolvedTraits = &analysis->resolvedTraits();
-    context.decidedCalls = &analysis->decidedCalls();
+                        const kex::hir::Program *hir) -> kex::ir::LowerContext {
+  if (hir) {
+    const auto &analysis = hir->analysis();
+    context.hir = hir;
+    context.resolvedCalls = &analysis.resolvedCalls();
+    context.staticTypeOfCalls = &analysis.staticTypeOfCalls();
+    context.expressionTypes = &analysis.typeMap();
+    context.resolvedTraits = &analysis.resolvedTraits();
   }
   return context;
 }
@@ -1199,6 +1201,14 @@ auto separateCheckRequested() -> bool {
   return value && *value && std::string(value) != "0";
 }
 
+// An emitted module's routed implementations, as recordImplementations asks.
+auto routedIn(const std::set<std::pair<std::string, int>> &routed)
+    -> std::function<bool(const std::string &, int)> {
+  return [&routed](const std::string &function, int arity) {
+    return routed.count({function, arity}) > 0;
+  };
+}
+
 // KEX_SEPARATE_BUILD=1 with KEX_SEPARATE=1, phase 3: the build's modules are
 // its units' own, each lowered apart, whenever every unit checked and lowered;
 // otherwise the merged build's, as without it.
@@ -1338,13 +1348,14 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
     stem += "_" + kex::sha256Hex(path).substr(0, 16);
   }
   try {
+    const kex::hir::Program hir(program, analyzer);
     auto modules = kex::ir::lowerModules(
         program, stem,
         withCheckerAnswers({.sourcePath = path,
                             .externals = &externals,
                             .externalRecords = &layouts,
                             .externalVariants = &variants},
-                           &analyzer));
+                           &hir));
     if (!dir.empty()) std::filesystem::create_directories(dir);
     // The unit's own module registers its records' layouts as it loads, but
     // only the entry's `main` used to run, and a call goes to a companion
@@ -1737,6 +1748,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
     bool unitLowered = false;
     std::map<std::string, std::string> unitCoreExports;
+    std::map<std::string, std::set<std::pair<std::string, int>>> unitRoutes;
     if (lowerApart && !unitChecked) allLowered = false;
     if (lowerApart && unitChecked) {
       // A prelude trait the unit claims gives it its default bodies, from
@@ -1754,6 +1766,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         for (auto &module : *lowered) {
           unitCoreExports[module.moduleName] =
               module.source.substr(0, module.source.find('\n'));
+          unitRoutes[module.moduleName] = module.routedImplementations;
           separateModules.push_back(std::move(module));
         }
       }
@@ -1827,24 +1840,17 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         // must call the receiver-specific implementation when one was
         // emitted (`empty?/ThingId`, not `empty?/1` on a String).
         if (auto core = unitCoreExports.find(options.moduleAtom);
-            core != unitCoreExports.end())
-          for (auto &method : chunk.typeInterface.methods) {
-            if (method.moduleFunction || method.typeOnly || !method.receiverType ||
-                method.receiverType->kind != kex::beam::KexiType::Named)
-              continue;
-            const auto &receiver = method.receiverType->name;
-            const auto slash = receiver.rfind('.');
-            const auto shortReceiver = receiver.substr(
-                slash == std::string::npos ? 0 : slash + 1);
-            for (const auto &owner : {receiver, shortReceiver}) {
-              const auto target = method.name + "/" + owner;
-              const auto exported = "'" + target + "'/" +
-                  std::to_string(method.beamArity);
-              if (core->second.find(exported) == std::string::npos) continue;
-              method.beamFunction = target;
-              break;
-            }
-          }
+            core != unitCoreExports.end()) {
+          kex::beam::recordImplementations(
+              chunk, routedIn(unitRoutes[options.moduleAtom]));
+          const auto emitted = kex::beam::coreExports(core->second);
+          for (auto &method : chunk.typeInterface.methods)
+            if (method.receiverType &&
+                method.receiverType->kind == kex::beam::KexiType::Named)
+              if (auto own = kex::beam::emittedImplementationOf(method, emitted);
+                  !own.empty())
+                method.beamFunction = std::move(own);
+        }
         described.modules.push_back({options.moduleAtom, "", std::move(chunk)});
       }
       if (!described.modules.empty()) {
@@ -2470,8 +2476,9 @@ auto compilePreludeCore(const std::string &dir,
 
     // The prelude lowers against its own names, receivers preferred, with
     // what its own check decided — as every other program does.
+    const kex::hir::Program hir(merged, analyzer);
     const auto selfContext = withCheckerAnswers(
-        {.externals = &selfExt, .preferExternalReceivers = true}, &analyzer);
+        {.externals = &selfExt, .preferExternalReceivers = true}, &hir);
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgramTiered(merged, tierBounds,
                                                   "prelude", selfContext));
@@ -2517,6 +2524,8 @@ auto compilePreludeCore(const std::string &dir,
             ? built.emitted.moduleName.substr(4) : built.emitted.moduleName;
         built.interface = kex::beam::collectMetadata(merged, options);
       }
+      kex::beam::recordImplementations(
+          built.interface, routedIn(built.emitted.routedImplementations));
       builtModules->push_back(std::move(built));
     }
     passes.report();
@@ -2777,32 +2786,21 @@ auto runSemanticCheck(const kex::ast::Program &program,
   // KEX_TIMINGS=1 splits the type check into its passes (kexhq/kex#323).
   kex::timings::PhaseTimer passTimer(4, false);
   auto phase = [&](const char *name) { passTimer.mark(name); };
-  // Pass 1+2: SemanticDB undefined-name detection
-  kex::semantic::SemanticDB runDb;
-  runDb.setImportedInterfaces(&preludeSemanticInterfaces());
-  runDb.setModuleRoots(moduleRootsFor(filepath));
-  loadPrelude(runDb);
-  phase("load prelude into db");
-  // A `<name>.spec.kex`'s declarations come from its base `<name>.kex`, which
-  // the Analyzer sees (they are merged into `program`) but the DB would not:
-  // it re-reads `filepath` from disk. Pass the base as a companion so its
-  // types and constructors are not reported as undefined names.
-  std::vector<std::string> companions;
-  if (!extraDeclFile.empty()) companions.push_back(extraDeclFile);
-  runDb.updateFile(filepath, readFile(filepath), companions);
-  bool dbOk = true;
-  for (const auto &diag : runDb.diagnosticsFor(filepath)) {
-    if (diag.level == kex::semantic::Diagnostic::Level::Error)
-      dbOk = false;
-    countError(diag);
-    printSemanticDiagnostic(diag);
-  }
-
-  phase("semantic db (entry file)");
-
-  // Pass 3+: existing Analyzer (purity, type checking)
+  // One sema: names (the resolver SemanticDB indexes files with, over the
+  // checked program, its dependencies and a spec's base merged in; reported
+  // for the entry file and the base), module rules, purity and types.
+  std::vector<std::string> files{filepath};
+  if (!extraDeclFile.empty()) files.push_back(extraDeclFile);
   kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
+  // An exported module the program does not merge is looked for where the
+  // build finds modules.
+  analyzer.setModuleLocator(
+      [resolver = kex::module::Resolver(moduleRootsFor(filepath))](
+          const std::string &module, const std::string &current) {
+        return resolver.resolve(module, current).has_value();
+      });
+  analyzer.setNameCheckFiles(std::move(files));
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics()) {
     countError(diag);
@@ -2811,7 +2809,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   phase("analyzer (whole program)");
 
   bool validationOk = true;
-  if (ok && dbOk) {
+  if (ok) {
     for (const auto &diag :
          kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
       if (diag.level == kex::semantic::Diagnostic::Level::Error)
@@ -2823,7 +2821,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   }
 
   if (errorCount) *errorCount = errors;
-  return ok && dbOk && validationOk;
+  return ok && validationOk;
 }
 
 auto printAst(const kex::ast::Program &program) -> void {
@@ -4429,13 +4427,14 @@ auto BeamReplSession::evaluate(
   // `Type.of(someFunction)` fell back to the runtime, which lowered
   // the bare function name to an unbound Core Erlang variable and
   // failed to compile.
+  const kex::hir::Program hir(program, replAnalyzer);
   auto irModules = kex::ir::lowerModules(
       program, "kex_repl_session_" + std::to_string(++m_sessionVersion),
       withCheckerAnswers(
           {.externals = extMods.nameToAtom.empty() ? nullptr : &extMods,
            .externalRecords = &replRecordLayouts,
            .externalVariants = &replVariantTags},
-          &replAnalyzer));
+          &hir));
   auto results = kex::ir::emitModules(irModules);
   const auto& result = results.front();
 
@@ -4826,6 +4825,38 @@ private:
   std::vector<ReplSessionWith> m_sessionWiths;
   // Keep parsed programs alive so function closures can reference AST nodes
   std::vector<kex::ast::Program *> m_replPrograms;
+  // Every input's checked program, kept for the session: a later input
+  // calls an earlier one's definitions, and the evaluator reads them all.
+  std::vector<kex::hir::CheckedInput> m_checkedInputs;
+
+  // The program an input is checked in: the session's definitions, then a
+  // `main` replaying `bindingSource` (the earlier bindings).
+  auto sessionProgram(const std::string &bindingSource)
+      -> std::unique_ptr<kex::ast::Program> {
+    kex::Lexer lexer(m_replAccumSource + "main do\n" + bindingSource + "end\n",
+                     "<repl>");
+    kex::Parser parser(lexer.tokenizeAll(), "<repl>");
+    auto session = std::make_unique<kex::ast::Program>(parser.parseProgram());
+    expandReplProgram(*session);
+    return session;
+  }
+  // What the session reads from disk, merged in before the check.
+  auto prepareSession(kex::ast::Program &semantic) -> void {
+    prependDeclarationsOf(semantic, m_replLoadedDepFiles);
+    // A module the session names (`using Clocks`, `Clocks.stamp()`) is
+    // checked from its source, as the BEAM REPL does. Without it the checker
+    // knew the module's functions only from what the runtime had loaded, and
+    // none of its capabilities: `with Clocks.Ticker = ...` was rejected as
+    // "not a capability".
+    resolveBeamDeps(semantic, m_walkerProjectRoots, &preludeSemanticInterfaces(),
+                    sourceModulesNamedBy(semantic));
+  }
+  // Keeps `checked` for the session and has the evaluator read it.
+  auto keepChecked(kex::hir::CheckedInput checked) -> void {
+    if (!checked.program) return;
+    m_evaluator->addProgram(checked.program.get());
+    m_checkedInputs.push_back(std::move(checked));
+  }
   std::vector<LoadedDep> m_replLoadedDeps;
   // Their files, which the input check parses in as declarations: a file
   // with a `module Wire` header cannot be glued onto the session source.
@@ -4852,8 +4883,9 @@ private:
       std::cerr << "  Available: types, ast, tokens\n";
     }
   }
-  auto execProgram(kex::ast::Program *program) -> kex::interpreter::ValuePtr {
-    expandReplProgram(*program);
+  auto execProgram(kex::ast::Program *program, bool expanded = false)
+      -> kex::interpreter::ValuePtr {
+    if (!expanded) expandReplProgram(*program);
     if (m_showAst)
       printAst(*program);
     return m_evaluator->execute(*program);
@@ -4908,33 +4940,24 @@ auto WalkerReplSession::load(const std::string &filePath) -> ReplStep {
     throwOnParseErrors(parser);
     auto deps = resolveBeamDeps(*prog, m_walkerProjectRoots,
                                 &preludeSemanticInterfaces());
-    // Checked with the session before anything runs: a file that does
-    // not check is refused, rather than kept in the session source that
-    // every later input is checked against, each failing with its error.
+    // Checked with the session before anything runs, as the definitions
+    // that run (hir::checkReplInput): a file that does not check is refused,
+    // rather than kept in the session source that every later input is
+    // checked against, each failing with its error.
+    expandReplProgram(*prog);
     {
-      kex::Lexer checkLexer(m_replAccumSource + "main do\nend\n", "<repl>");
-      kex::Parser checkParser(checkLexer.tokenizeAll(), "<repl>");
-      auto checkProgram = checkParser.parseProgram();
-      expandReplProgram(checkProgram);
-      auto files = m_replLoadedDepFiles;
-      for (const auto &dep : deps)
-        if (dep.path && std::find(files.begin(), files.end(), *dep.path) ==
-                            files.end())
-          files.push_back(*dep.path);
-      files.push_back(filePath);
-      prependDeclarationsOf(checkProgram, files);
-      kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
-      if (!checkAnalyzer.analyze(checkProgram)) {
-        std::string message = "semantic analysis failed";
-        for (const auto &diagnostic : checkAnalyzer.diagnostics())
-          if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-            message = diagnostic.message;
-            break;
-          }
+      std::string bindingSource;
+      for (const auto &[_, binding] : m_replBindings) bindingSource += binding + "\n";
+      auto checked = kex::hir::checkReplInput(
+          sessionProgram(bindingSource), *prog, {},
+          [this](kex::ast::Program &semantic) { prepareSession(semantic); },
+          &preludeSemanticInterfaces());
+      if (!checked.program) {
         std::cerr << "  /load: " << filePath << " was not loaded: "
-                  << message << "\n";
+                  << checked.error.value_or("semantic analysis failed") << "\n";
         return ReplStep::Next;
       }
+      keepChecked(std::move(checked));
     }
     m_replPrograms.push_back(prog.release());
     m_evaluator->execute(*m_replPrograms.back());
@@ -4975,7 +4998,21 @@ auto WalkerReplSession::evaluate(
     auto *program = new kex::ast::Program(parser.parseProgram());
     throwOnParseErrors(parser);
     m_replPrograms.push_back(program);
-    execProgram(program);
+    // Checked as the definitions that run, so a later call into them reads
+    // the checker's decisions. Definitions were never refused here, so one
+    // the check rejects still runs, on the values alone.
+    expandReplProgram(*program);
+    try {
+      std::string bindingSource;
+      for (const auto &[_, binding] : m_replBindings) bindingSource += binding + "\n";
+      keepChecked(kex::hir::checkReplInput(
+          sessionProgram(bindingSource), *program, {},
+          [this](kex::ast::Program &semantic) { prepareSession(semantic); },
+          &preludeSemanticInterfaces()));
+    } catch (...) {
+      // A session history that does not re-parse: run on the values.
+    }
+    execProgram(program, true);
     // Accumulate and re-index so all prior definitions stay
     // visible for tab completion, not just the latest one.
     m_replAccumSource += source + "\n";
@@ -5047,6 +5084,23 @@ auto WalkerReplSession::evaluate(
     // semantic history cannot break evaluation — this error must
     // surface instead.
     throwIfPartialPatternRebind(boundNames, m_replBindings);
+    // The input is checked as the very statements that run: they are lent
+    // to the checked program (the session's definitions and bindings) and
+    // returned, so the checked program the evaluator reads (`hir`) answers
+    // for the nodes it evaluates, as for a file.
+    expandReplProgram(*program);
+    kex::ast::MainBlock *inputMain = nullptr;
+    for (auto &item : program->items)
+      if (auto *main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
+          main && *main)
+        inputMain = main->get();
+    // Its last statement (inside any `with` wrappers), found before the
+    // statements are lent: the node, not its slot, is what is typed.
+    const kex::ast::Expr *inputLast =
+        inputMain && !inputMain->body.empty() ? replLastStatement(*inputMain)
+                                              : nullptr;
+    // The input checked as the statements that run (hir::checkReplInput).
+    std::optional<kex::hir::CheckedInput> checked;
     try {
       std::string bindingSource;
       for (const auto &[name, binding] : m_replBindings)
@@ -5054,61 +5108,43 @@ auto WalkerReplSession::evaluate(
             std::find(boundNames.begin(), boundNames.end(), name) ==
                 boundNames.end())
           bindingSource += binding + "\n";
-      // A `/with` value is checked against its capability before it is
-      // kept; its type is not shown, so the check can go last.
-      const auto withCheck =
-          pendingWith ? "with " + pendingWith->capability + " = " +
-                            pendingWith->binding + " do\n0\nend\n"
-                      : std::string();
-      auto semanticSource = m_replAccumSource + "main do\n" +
-                            bindingSource + withOpen + source + "\n" +
-                            withCheck + withClose + "end\n";
-      kex::Lexer semanticLexer(semanticSource, "<repl>");
-      kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
-      auto semanticProgram = semanticParser.parseProgram();
-      expandReplProgram(semanticProgram);
-      prependDeclarationsOf(semanticProgram, m_replLoadedDepFiles);
-      // A module the session names (`using Clocks`, `Clocks.stamp()`)
-      // is checked from its source, as the BEAM REPL does. Without it
-      // the checker knew the module's functions only from what the
-      // runtime had loaded, and none of its capabilities: `with
-      // Clocks.Ticker = ...` was rejected as "not a capability".
-      resolveBeamDeps(semanticProgram, m_walkerProjectRoots,
-                      &preludeSemanticInterfaces(),
-                      sourceModulesNamedBy(semanticProgram));
-      kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
-      if (replAnalyzer.analyze(semanticProgram)) {
-        for (auto item = semanticProgram.items.rbegin();
-             item != semanticProgram.items.rend(); ++item) {
-          auto *main = std::get_if<
-              std::unique_ptr<kex::ast::MainBlock>>(&*item);
-          if (!main || !*main || (*main)->body.empty())
-            continue;
-          const auto *last = replLastStatement(**main);
-          const kex::ast::Expr *typedExpr = last;
-          if (const auto *binding =
-                  std::get_if<kex::ast::LetExpr>(&last->kind);
-              binding && binding->value)
-            typedExpr = binding->value.get();
-          else if (const auto *mutableBinding =
-                       std::get_if<kex::ast::VarExpr>(&last->kind);
-                   mutableBinding && mutableBinding->value)
-            typedExpr = mutableBinding->value.get();
-          else if (const auto *assigned =
-                       std::get_if<kex::ast::AssignExpr>(&last->kind);
-                   assigned && assigned->value)
-            typedExpr = assigned->value.get();
-          semanticType = displayTypeOf(replAnalyzer, typedExpr);
-          break;
-        }
-      } else {
-        for (const auto &diagnostic : replAnalyzer.diagnostics()) {
-          if (diagnostic.level !=
-              kex::semantic::Diagnostic::Level::Error)
-            continue;
-          semanticError = diagnostic.message;
-          break;
-        }
+      auto session = sessionProgram(bindingSource);
+      // A `/with` value is checked against its capability after the input;
+      // its type is not shown.
+      std::vector<kex::ast::ExprPtr> after;
+      if (pendingWith) {
+        kex::Lexer withLexer("main do\nwith " + pendingWith->capability +
+                                 " = " + pendingWith->binding +
+                                 " do\n0\nend\nend\n",
+                             "<repl>");
+        kex::Parser withParser(withLexer.tokenizeAll(), "<repl>");
+        auto withProgram = withParser.parseProgram();
+        for (auto &item : withProgram.items)
+          if (auto *main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
+              main && *main)
+            for (auto &statement : (*main)->body)
+              after.push_back(std::move(statement));
+      }
+      checked = kex::hir::checkReplInput(
+          std::move(session), *program, std::move(after),
+          [this](kex::ast::Program &semantic) { prepareSession(semantic); },
+          &preludeSemanticInterfaces());
+      semanticError = checked->error;
+      // The input's last statement, lent with the rest: the same node.
+      if (const auto *last = inputLast; last && checked->program) {
+        const kex::ast::Expr *typedExpr = last;
+        if (const auto *binding = std::get_if<kex::ast::LetExpr>(&last->kind);
+            binding && binding->value)
+          typedExpr = binding->value.get();
+        else if (const auto *mutableBinding =
+                     std::get_if<kex::ast::VarExpr>(&last->kind);
+                 mutableBinding && mutableBinding->value)
+          typedExpr = mutableBinding->value.get();
+        else if (const auto *assigned =
+                     std::get_if<kex::ast::AssignExpr>(&last->kind);
+                 assigned && assigned->value)
+          typedExpr = assigned->value.get();
+        semanticType = displayTypeOf(*checked->analysis, typedExpr);
       }
     } catch (...) {
       // Evaluation still works if an incomplete semantic history (for
@@ -5118,7 +5154,8 @@ auto WalkerReplSession::evaluate(
     if (semanticError)
       throw std::runtime_error(*semanticError);
 
-    auto result = execProgram(program);
+    if (checked) keepChecked(std::move(*checked));
+    auto result = execProgram(program, true);
     if (pendingWith) {
       std::erase_if(m_sessionWiths, [&](const auto &with) {
         return with.capability == pendingWith->capability;
@@ -5784,6 +5821,8 @@ auto attachInterfaces(const kex::ast::Program &program,
           options.moduleName = module.moduleName.substr(4);
       }
       auto chunk = kex::beam::collectMetadata(program, options);
+      kex::beam::recordImplementations(chunk,
+                                       routedIn(module.routedImplementations));
       chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
       chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
       if (index == 0)
@@ -6465,13 +6504,15 @@ auto passLower(CompileUnit &unit) -> PassOutcome {
   }
   try {
     auto preludeVariantTags = loadPreludeVariantTags();
+    std::optional<kex::hir::Program> hir;
+    if (unit.compileAnalysis) hir.emplace(unit.program, *unit.compileAnalysis);
     auto irModules = kex::ir::lowerModules(
         unit.program, unit.stem,
         withCheckerAnswers({.sourcePath = unit.filepath,
                             .externals = &preludeExternalModules(),
                             .externalRecords = &preludeRecordLayouts,
                             .externalVariants = &preludeVariantTags},
-                           unit.compileAnalysis.get()));
+                           hir ? &*hir : nullptr));
     unit.moduleResults = kex::ir::emitModules(irModules);
   } catch (const kex::ir::LowerError &e) {
     std::cerr << "error: " << e.what() << "\n";
@@ -6777,7 +6818,8 @@ auto checkEntry(const Options &options, const std::string &filepath,
     printSemanticDiagnostic(d);
 
   if (options.dumpHir || options.verifyHir) {
-    const auto sites = kex::hir::collectCallSites(program, analyzer);
+    const kex::hir::Program hir(program, analyzer);
+    const auto &sites = hir.callSites();
     std::map<kex::hir::TargetKind, std::size_t> counts;
     for (const auto &site : sites) {
       counts[site.kind]++;
@@ -6786,15 +6828,19 @@ auto checkEntry(const Options &options, const std::string &filepath,
                   << site.expr->location.line << ":"
                   << site.expr->location.column << "  "
                   << kex::hir::targetKindName(site.kind) << "  "
-                  << site.callee << "\n";
+                  << site.callee
+                  << (site.target.empty() ? "" : "  -> " + site.target) << "\n";
     }
     std::cerr << "call sites: " << sites.size() << " (";
     for (const auto kind : kex::hir::kTargetKinds)
       std::cerr << (kind == kex::hir::kTargetKinds[0] ? "" : ", ")
                 << kex::hir::targetKindName(kind) << " " << counts[kind];
     std::cerr << ")\n";
-    if (options.verifyHir && counts[kex::hir::TargetKind::Undecided] > 0)
-      allOk = false;
+    if (options.verifyHir) {
+      const auto problems = kex::hir::verify(hir);
+      for (const auto &problem : problems) std::cerr << problem << "\n";
+      if (!problems.empty()) allOk = false;
+    }
   }
 
   if (dumpTypes) {
@@ -6874,14 +6920,14 @@ auto runOnWalker(const Options &options, const std::string &filepath,
 
   if (!expandParsedProgram(program, false)) return 1;
 
-  // Retained so the evaluator can use what the checker learned — today the
-  // `Type.of(x)` sites it typed concretely. Declared out here so it outlives
-  // the evaluator that borrows from it.
+  // As the BEAM build does: a type error stops the run, and under
+  // `--no-check` the analysis still runs, silently, for the decisions the
+  // evaluator reads (the same ones lowering reads).
   kex::semantic::Analyzer runAnalyzer(&preludeSemanticInterfaces());
-  bool runAnalyzed = false;
-  if (!skipCheck) {
+  if (skipCheck) {
+    runAnalyzer.analyze(program);
+  } else {
     int typeErrors = 0;
-    runAnalyzed = true;
     if (!runSemanticCheck(program, filepath, &runAnalyzer, specBaseFile,
                           &typeErrors)) {
       std::cerr
@@ -6902,11 +6948,10 @@ auto runOnWalker(const Options &options, const std::string &filepath,
   evaluator.setMocksAllowed(allowMocks || isSpecEntry(filepath));
   evaluator.setTestReportMode(testReportMode);
   evaluator.setTestFilters(testFilters);
-  if (runAnalyzed) {
-    evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
-    evaluator.setExpressionTypes(&runAnalyzer.typeMap());
-    evaluator.setCallSignatures(&runAnalyzer.selectedCallSignatures());
-  }
+  // The checked program, read by the evaluator as lowering reads it.
+  // Declared out here so it outlives the evaluator that borrows from it.
+  const kex::hir::Program hir(program, runAnalyzer);
+  evaluator.setProgram(&hir);
 
   // The Kex-written stdlib is loaded by the Evaluator's constructor
   // (loadPrelude), so no explicit load is needed here.

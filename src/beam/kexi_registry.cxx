@@ -179,6 +179,7 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
+    result.implementation = receiver.implementation;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
     result.sourceModule = sourceModule;

@@ -56,17 +56,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
-    if (context.decidedCalls) {
-        for (const auto& [expr, decided] : *context.decidedCalls) {
-            if (decided.kind == semantic::CallKind::FieldRead) {
-                if (const auto* call = std::get_if<ast::MethodCall>(&expr->kind))
-                    L.decidedFieldReads.emplace(call, decided.owner);
-            } else if (decided.kind == semantic::CallKind::Operator) {
-                if (const auto* op = std::get_if<ast::BinaryOp>(&expr->kind))
-                    L.decidedOperators.emplace(op, decided.owner);
-            }
-        }
-    }
+    L.hir = context.hir;
     L.resolvedTraits = resolvedTraits;
     L.preferExternalReceivers = preferExternalReceivers;
     L.staticTypeOfCalls = staticTypeOfCalls;
@@ -1409,10 +1399,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (allAdt) {
                 FunDef merged; merged.name = name; merged.arity = arity;
                 merged.isCollisionDispatcher = true;
+                // Each owner's `name/Owner` forwards into the merged function,
+                // so a direct call lands where the dispatch would: all routed.
+                std::vector<std::string> routes;
                 for (size_t i = 0; i < mod.functions.size(); ) {
                     auto& f = mod.functions[i];
                     std::string prefix = receiverImplementationPrefix(name);
                     if (f.name.rfind(prefix, 0) == 0 && f.arity == arity) {
+                        routes.push_back(f.name);
                         for (auto& c : f.clauses)
                             merged.clauses.push_back(std::move(c));
                         // The clauses now live in the merged function, but the
@@ -1473,6 +1467,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         merged.clauses.push_back(std::move(fallback));
                     }
                 }
+                if (!merged.clauses.empty())
+                    merged.clauses.front().routes = std::move(routes);
                 mod.functions.push_back(std::move(merged));
             } else {
                 // A universal top-level function may share a name/arity with

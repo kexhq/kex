@@ -13,6 +13,7 @@
 // For that the program also has a capability beside a module of its name,
 // whose default and replacement and helper each run, a slot called with
 // `within:` on another unit's server, a `make` block outside its module,
+// a trait default a type of another unit inherits,
 // a function of another unit called by UFCS, an operator one unit
 // overloads for two of its types, called on each from another unit, and a
 // method only one type of another unit owns, called on it from this one.
@@ -219,6 +220,19 @@ make Crate, implement: Showable do
   let showValue -> String = "crate of ${@count}"
 end
 )KEX");
+        write("lib/bags.kex", R"KEX(module Bags
+
+record Bag do
+  items : [Integer]
+end
+
+make Bag, implement: Foldable do
+  let reduce(acc: A, f: A -> Integer -> A) -> A = @items.reduce(acc, f)
+end
+
+bag : [Integer] -> Bag
+let bag(items) = Bag { items: items }
+)KEX");
         write("lib/fields.kex", R"KEX(module Fields
 
 record IntField do
@@ -407,6 +421,7 @@ using Notes
 using Marks
 using Boxes, only: [Box]
 using Crates, only: [Crate]
+using Bags
 using Ids, only: [UserId]
 using Fields, only: [IntField, TextField]
 using Tokens, only: [Token]
@@ -468,6 +483,7 @@ main do
   IO.printLine(presented(Box { label: "b" }))
   IO.printLine(Box.named("named").label)
   IO.printLine(presented(Crate { count: 3 }))
+  IO.printLine("bag ${Bags.bag([1, 2, 3]).any? { |x| x > 2 }}")
   IO.printLine(presented(7))
   IO.printLine(owner("u1"))
   IO.printLine(IntField { label: "n" } == 1)
@@ -538,6 +554,8 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
                        "the merged build did not run: " + merged);
             assertEqual(separate, merged);
             assertEqual(actual, merged);
+            assertTrue(merged.find("\nbag true\n") != std::string::npos,
+                       "a trait default another unit's type inherits did not run: " + merged);
             assertTrue(merged.find("\n?\n?\n") != std::string::npos,
                        "list.join called a path join: " + merged);
             assertTrue(merged.find("\npage x\ntrue\n") != std::string::npos,

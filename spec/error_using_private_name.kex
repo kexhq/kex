@@ -1,0 +1,15 @@
+# `using M, only: [name]` naming a private member of M is refused by the
+# checker (formerly only by the SemanticDB pass the run also made).
+module Vault do
+  let open() = "open"
+
+  private do
+    let secret() = "secret"
+  end
+end
+
+using Vault, only: [open, secret]
+
+main do
+  IO.printLine(open())
+end

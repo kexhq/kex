@@ -1,0 +1,9 @@
+# A module cannot export itself.
+module Front do
+  export Front
+  let hello() = "hello"
+end
+
+main do
+  IO.printLine(Front.hello())
+end

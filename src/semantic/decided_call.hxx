@@ -28,6 +28,12 @@ enum class CallKind {
     // A binary operator a type overloads (`a + b` on a `make` block's `+`):
     // owner is the left operand's type, as the checker printed it.
     Operator,
+    // A method the receiver's own type answers — its `make` block's, or a
+    // trait default it inherits: owner is the type.
+    OwnMethod,
+    // A function of the receiver type's home module, called by UFCS
+    // (`conn.close` is `TCP.close(conn)`): owner is its qualified name.
+    ModuleFunction,
 };
 
 struct DecidedCall {

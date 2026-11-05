@@ -1596,6 +1596,7 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
                     for (size_t i = 0; i < node->typeParams.size(); ++i)
                         vars[node->typeParams[i]] =
                             Type::typeVar(-static_cast<int>(i + 1));
+                    m_programDistinctTypes.insert(node->name);
                     m_distinctTypes[node->name] = {
                         node->typeParams,
                         resolveTypeExpr(*node->variants->front(), vars)};
@@ -1678,6 +1679,8 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
                     ImportedDistinctType info{
                         node->typeParams,
                         resolveTypeExpr(*node->variants->front(), vars)};
+                    m_programDistinctTypes.insert(node->name);
+                    m_programDistinctTypes.insert(m_currentModulePath + "." + node->name);
                     m_distinctTypes[node->name] = info;
                     m_distinctTypes[m_currentModulePath + "." + node->name] =
                         std::move(info);
@@ -1818,9 +1821,7 @@ auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> voi
 
 auto TypeChecker::registerDeclaredSignaturesInModule(
     const ast::ModuleDef& mod, const std::string& parentPath) -> void {
-    const auto modulePath =
-        parentPath.empty() || mod.name.starts_with(parentPath + ".")
-            ? mod.name : parentPath + "." + mod.name;
+    const auto modulePath = ast::nestedModulePath(parentPath, mod.name);
     const auto previousModule = m_currentModulePath;
     m_currentModulePath = modulePath;
     auto importsFor = [&](const std::string& name)
@@ -2220,9 +2221,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
 auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,
                                                 const std::string& parentPath)
     -> void {
-    const auto path = parentPath.empty() ||
-            mod.name.starts_with(parentPath + ".")
-        ? mod.name : parentPath + "." + mod.name;
+    const auto path = ast::nestedModulePath(parentPath, mod.name);
     for (const auto& item : mod.body) {
         std::visit([this, &path](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -2250,9 +2249,7 @@ auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
 
 auto TypeChecker::registerExportsInModule(const ast::ModuleDef& mod,
                                           const std::string& parentPath) -> void {
-    const auto path = parentPath.empty() ||
-            mod.name.starts_with(parentPath + ".")
-        ? mod.name : parentPath + "." + mod.name;
+    const auto path = ast::nestedModulePath(parentPath, mod.name);
     for (const auto& item : mod.body) {
         std::visit([this, &path](const auto& node) {
             using T = std::decay_t<decltype(node)>;

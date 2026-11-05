@@ -392,14 +392,11 @@ auto Lowering::localTypeModule(const std::string& type) const
 auto Lowering::makeTraitDictionary(const std::string& trait,
                          const ast::Expr& value) -> ExprPtr {
     std::string concreteType;
-    if (expressionTypes) {
-        if (auto found = expressionTypes->find(&value);
-            found != expressionTypes->end() && found->second &&
-            !std::holds_alternative<semantic::TypeVar>(found->second->kind) &&
-            !std::holds_alternative<semantic::UnknownType>(found->second->kind) &&
-            !std::holds_alternative<semantic::ConstrainedType>(found->second->kind))
-            concreteType = semantic::typeToString(found->second);
-    }
+    if (const auto type = staticTypeOf(&value);
+        type && !std::holds_alternative<semantic::TypeVar>(type->kind) &&
+        !std::holds_alternative<semantic::UnknownType>(type->kind) &&
+        !std::holds_alternative<semantic::ConstrainedType>(type->kind))
+        concreteType = semantic::typeToString(type);
     // A value known only by a trait (`x: Addable`, or what a trait's
     // default answers) has no concrete type to pick an implementation by.
     if (traitMethods.count(concreteType)) concreteType.clear();

@@ -16,35 +16,18 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         return callE("erlang", "error", 1, one(
             lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
     }
-    // A distinct type's own method, by the receiver's static type. Its
-    // value is erased, so the dispatcher's guard never recognizes it and
-    // `"${x + y}"` on a Tuplex printed the bare pair through the
-    // prelude's `showValue` (the operator itself has the same path in
-    // BinaryOp lowering).
-    if (expressionTypes && n.receiver && n.namedArgs.empty() && !n.block &&
-        collidingMethods.count(n.method))
-        if (auto found = expressionTypes->find(n.receiver.get());
-            found != expressionTypes->end() && found->second) {
-            const auto type = semantic::typeToString(found->second);
-            const auto bare = type.substr(type.rfind('.') + 1);
-            const auto owners = methodOwners.find(n.method);
-            if ((distinctTypes.count(type) || distinctTypes.count(bare)) &&
-                owners != methodOwners.end())
-                for (const auto& owner : {type, bare}) {
-                    if (std::find(owners->second.begin(), owners->second.end(),
-                                  owner) == owners->second.end())
-                        continue;
-                    std::vector<ExprPtr> args;
-                    args.push_back(lower(n.receiver));
-                    for (const auto& arg : n.args) args.push_back(lower(arg));
-                    const auto arity = static_cast<int>(args.size());
-                    auto call = std::make_unique<Expr>();
-                    call->node = Call{std::string{},
-                                      mangleReceiverImplementation(n.method, owner),
-                                      arity, std::move(args), false};
-                    return call;
-                }
-        }
+    // The receiver type's own implementation, where the run-time dispatch
+    // cannot find it (ownImplementationOf): a distinct type's value is erased.
+    if (const auto own = ownImplementationOf(n);
+        own.reason == OwnImplementation::Reason::DistinctType) {
+        std::vector<ExprPtr> args;
+        args.push_back(lower(n.receiver));
+        for (const auto& arg : n.args) args.push_back(lower(arg));
+        const auto arity = static_cast<int>(args.size());
+        auto call = std::make_unique<Expr>();
+        call->node = Call{std::string{}, own.symbol, arity, std::move(args), false};
+        return call;
+    }
     // BEAM interop: a direct call into any BEAM module, named verbatim.
     // `BEAM.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
     // `BEAM.Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
@@ -207,10 +190,10 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             // entry module there sent every call to a module that defines
             // no slots (rodolfo docs/kex-issues.md #2).
             std::string servingModule = outputModule;
-            if (expressionTypes) {
-                auto found = expressionTypes->find(n.args[0].get());
-                if (found != expressionTypes->end() && found->second) {
-                    auto stateType = semantic::typeToString(found->second);
+            // The state's type, as the checker decided the call.
+            if (const auto* target = hir ? &hir->targetOf(n) : nullptr;
+                target && target->kind == hir::TargetKind::Builtin) {
+                    auto stateType = target->owner;
                     if (auto angle = stateType.find('<');
                         angle != std::string::npos)
                         stateType.resize(angle);
@@ -244,7 +227,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                                 slotAtoms.push_back(lit(LitKind::Atom, slot));
                         }
                     }
-                }
             }
             auto allowedSlots = std::make_unique<Expr>();
             allowedSlots->node = MakeList{std::move(slotAtoms), std::nullopt};
@@ -277,83 +259,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             localTypeShadows = id->name == "this";
         if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
             localTypeShadows = true;
-        // A receiver whose STATIC TYPE is a locally-declared type must
-        // reach that type's own `make` block, exactly as `this` does.
-        // Only a literal `this` was recognized above, so binding it to a
-        // local first — `let p = this; p.advance` — fell through to the
-        // prelude-resolved target and emitted
-        // `call 'kex_prelude':'advance'(P)`, whose clauses cannot match a
-        // user record: `function_clause` at runtime, with nothing wrong at
-        // the source level. `examples/json_parser.kex` is built entirely
-        // out of this shape (`var p = this` threaded through a loop) and
-        // could not run on BEAM at all.
-        if (!localTypeShadows && expressionTypes) {
-            if (auto found = expressionTypes->find(n.receiver.get());
-                found != expressionTypes->end() && found->second) {
-                std::string receiverType =
-                    semantic::typeToString(found->second);
-                // Type arguments are erased at runtime and absent from
-                // `methodOwners`/`knownTypes`, which are keyed by the bare
-                // record name (see `typeGuard`'s identical stripping) — an
-                // unresolved generic receiver such as a trait default's
-                // `this` (typed `Stack<T11>` before its type parameter is
-                // solved) never matched the bare `"Stack"` entry, so the
-                // shadow check silently lost every inherited default
-                // method for a LOCAL generic record to the checker's
-                // resolved (prelude) target instead (kexhq/kex#235).
-                if (auto angle = receiverType.find('<');
-                    angle != std::string::npos)
-                    receiverType.resize(angle);
-                if (auto owner = variantOwner.find(receiverType);
-                    owner != variantOwner.end())
-                    receiverType = owner->second;
-                receiverType = canonicalRecordName(receiverType);
-                // The checker names a type declared in a module by its
-                // qualified path (`Net.HTTP.Router`), while `methodOwners`
-                // records the bare name its `make` block wrote. Only an
-                // Unknown receiver reached here unharmed: once
-                // `Router.build` was typed, `.get` fell through to the
-                // prelude's `get` and failed at run time with "Undefined
-                // method: get for Net.HTTP.Router" (kexhq/kex#408).
-                const auto dot = receiverType.rfind('.');
-                const std::string bareReceiver = dot == std::string::npos
-                    ? receiverType : receiverType.substr(dot + 1);
-                // Require the local `make` block to actually define this
-                // method FOR THIS TYPE — `localMethods` alone would let an
-                // unrelated local method of the same name capture calls on
-                // a prelude-owned receiver.
-                const auto owners = methodOwners.find(n.method);
-                // An ARGUMENT-OVERLOADED method is not emitted under its
-                // plain name — each signature gets a mangled function and
-                // call sites reach them through a dispatcher. Only a
-                // receiver whose make type is currently being lowered can
-                // pick the right mangled name, so taking the local
-                // shortcut here emitted `apply 'render'/2`, which no
-                // module defines: erlc rejected the whole file with
-                // "undefined function render/2" (spec/
-                // argument_type_dispatch.kex). Leave those to the normal
-                // resolution path.
-                // Under either spelling of the receiver's type: with only
-                // the qualified one, a module's overload set
-                // (`Srv.Server`'s two `listen`s) took the shortcut to a
-                // plain `listen/4` no module defines.
-                const bool overloadedByArgument =
-                    argumentOverloadedMethods.count(localOverloadKey(
-                        n.method, receiverType, n.args.size() + 1)) > 0 ||
-                    argumentOverloadedMethods.count(localOverloadKey(
-                        n.method, bareReceiver, n.args.size() + 1)) > 0;
-                localTypeShadows =
-                    !overloadedByArgument &&
-                    knownTypes.count(receiverType) &&
-                    owners != methodOwners.end() &&
-                    std::any_of(owners->second.begin(), owners->second.end(),
-                                [&](const std::string& owner) {
-                                    // The local method path places labels
-                                    // against the selected declaration too.
-                                    return canonicalRecordName(owner) == receiverType;
-                                });
-            }
-        }
         auto resolved = resolvedCalls->find(&n);
         const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty() &&
@@ -393,68 +298,8 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // Semantic analysis has already applied lexical `using` policy
         // and argument-type specificity. Once it names an imported
         // target, source-import priority must not override that choice.
-        // (A prelude-self-compilation exception used to live here:
-        // `preferExternalReceivers && ...`. It was dead — every
-        // analyzed call site passes `false`, and the two sites that
-        // pass `true` pass null analysis, which skips this whole
-        // block. Removed in the Phase 2 trust audit; the two live
-        // accumulations below stay.)
-        bool stalePreludeTarget = false;
-        // The prelude's generic function (a trait default, `any?`) where
-        // a unit compiled apart provides it for the receiver's own type
-        // (`Data.Set`, which claims `Foldable`): that provider, chosen by
-        // the receiver functions below.
-        if (resolved != resolvedCalls->end() &&
-            resolved->second.backendModule == names::kPreludeModule && externalModules &&
-            expressionTypes && n.receiver)
-            if (auto type = expressionTypes->find(n.receiver.get());
-                type != expressionTypes->end() && type->second)
-                if (auto providers = externalModules->receiverFunctions.find(n.method);
-                    providers != externalModules->receiverFunctions.end()) {
-                    // By its last segment, without type arguments:
-                    // `Set<Integer>` under `using Data.Set` is a `Data.Set`.
-                    const auto bare = [](std::string name) {
-                        name.resize(std::min(name.size(), name.find('<')));
-                        return name.substr(name.rfind('.') + 1);
-                    };
-                    const auto receiver = bare(semantic::typeToString(type->second));
-                    stalePreludeTarget = stalePreludeTarget ||
-                        std::any_of(providers->second.begin(), providers->second.end(),
-                                    [&](const auto& provider) {
-                                        return provider.compiledApart &&
-                                               !provider.receiverType.empty() &&
-                                               bare(provider.receiverType) == receiver;
-                                    });
-                }
-        // A checker candidate for an erased receiver does not determine
-        // its runtime method. With `value: Any`, FS.Path.join/2 can be a
-        // candidate while the actual value is a List; the prelude's
-        // join/2 must remain available to the receiver dispatch below.
-        if (resolved != resolvedCalls->end() && externalModules &&
-            expressionTypes && n.receiver &&
-            resolved->second.backendModule != names::kPreludeModule)
-            if (auto type = expressionTypes->find(n.receiver.get());
-                type != expressionTypes->end() && type->second) {
-                const auto& kind = type->second->kind;
-                const auto unknown =
-                    std::holds_alternative<semantic::UnknownType>(kind) ||
-                    std::holds_alternative<semantic::TypeVar>(kind) ||
-                    (std::holds_alternative<semantic::NamedType>(kind) &&
-                     std::get<semantic::NamedType>(kind).name == "Any");
-                if (unknown)
-                    if (auto providers = externalModules->receiverFunctions.find(n.method);
-                        providers != externalModules->receiverFunctions.end()) {
-                        const auto arity = static_cast<int>(n.args.size() +
-                            n.namedArgs.size() + 1 + (n.block ? 1 : 0));
-                        stalePreludeTarget = stalePreludeTarget ||
-                            std::any_of(providers->second.begin(),
-                                        providers->second.end(),
-                                        [&](const auto& provider) {
-                                            return provider.moduleAtom == names::kPreludeModule &&
-                                                   provider.beamArity == arity;
-                                        });
-                    }
-            }
+        // A type's own method, inherited trait defaults included, is the
+        // checker's decision too (ownerOfCall): it records no target then.
         // A bare `x.field` whose name is also an imported receiver method
         // (`name` is Weekday's and Type's) must go through THIS module's
         // accessor, which matches the record tags and delegates to the
@@ -519,7 +364,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             }
         }
         if (resolved != resolvedCalls->end() && !localTypeShadows &&
-            !stalePreludeTarget && !localFieldAccessor &&
+            !localFieldAccessor &&
             !modulePathOwnsCall) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
@@ -1612,63 +1457,16 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     auto& m = n.method;
     auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
 
-    // A module's free function over one of the module's OWN types is that
-    // type's receiver function (kexhq/kex#230). It used to be reached by
-    // its bare name, which only one module can own: beside a
-    // `make Client do let close` elsewhere in the program, `conn.close`
-    // for a `TCP.Conn` went to whichever `close` registered first — the
-    // Client's dispatcher, whose fallback is the prelude's `close`
-    // (`:ok`). With the receiver's static type known, call the function
-    // by its qualified symbol instead, unless the type's own `make`
-    // block answers the name.
-    if (expressionTypes && n.receiver && n.namedArgs.empty() && !n.block)
-        if (auto found = expressionTypes->find(n.receiver.get());
-            found != expressionTypes->end() && found->second)
-            if (const auto* named =
-                    std::get_if<semantic::NamedType>(&found->second->kind)) {
-                const auto type = canonicalRecordName(named->name);
-                const auto dot = type.rfind('.');
-                const auto owners = methodOwners.find(m);
-                const bool makeAnswers =
-                    owners != methodOwners.end() &&
-                    std::any_of(owners->second.begin(), owners->second.end(),
-                                [&](const std::string& owner) {
-                                    return canonicalRecordName(owner) == type;
-                                });
-                if (dot != std::string::npos && !makeAnswers) {
-                    const auto qualified = type.substr(0, dot) + "." + m;
-                    const auto symbol = moduleFunctions.find(qualified);
-                    const auto clauses = fnNamedClauses.find(qualified);
-                    const auto bareType = type.substr(dot + 1);
-                    const bool overOwnType =
-                        symbol != moduleFunctions.end() &&
-                        clauses != fnNamedClauses.end() &&
-                        std::any_of(
-                            clauses->second.begin(), clauses->second.end(),
-                            [&](const ast::FunctionClause* clause) {
-                                if (clause->params.size() != n.args.size() + 1)
-                                    return false;
-                                const auto& receiver = clause->params.front();
-                                if (!receiver.type || !*receiver.type)
-                                    return false;
-                                auto written = renderDispatchType(**receiver.type);
-                                if (auto angle = written.find('<');
-                                    angle != std::string::npos)
-                                    written.resize(angle);
-                                const auto wdot = written.rfind('.');
-                                return (wdot == std::string::npos
-                                            ? written
-                                            : written.substr(wdot + 1)) == bareType;
-                            });
-                    if (overOwnType) {
-                        std::vector<ExprPtr> args;
-                        args.push_back(rv());
-                        for (const auto& a : n.args)
-                            args.push_back(atomize_ir(lower(a), rb));
-                        return ret(localCallExpr(symbol->second, std::move(args)));
-                    }
-                }
-            }
+    // The receiver type's own implementation (ownImplementationOf): a
+    // module's free function over the module's own type (kexhq/kex#230).
+    if (const auto own = ownImplementationOf(n);
+        own.reason == OwnImplementation::Reason::ModuleFunction) {
+        std::vector<ExprPtr> args;
+        args.push_back(rv());
+        for (const auto& a : n.args)
+            args.push_back(atomize_ir(lower(a), rb));
+        return ret(localCallExpr(own.symbol, std::move(args)));
+    }
 
     // A public function brought into scope by `using Module` also
     // participates in UFCS: `100.meter` is `meter(100)`, and
@@ -1907,22 +1705,8 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // is Regex's, not the prelude's String one).
         const bool chosen = [&] {
             if (!resolvedCalls) return false;
-            // An `Any` receiver leaves the runtime method open: the
-            // checker's free-function candidate cannot override a
-            // receiver provider such as List.join/2.
-            if (expressionTypes && n.receiver)
-                if (auto type = expressionTypes->find(n.receiver.get());
-                    type != expressionTypes->end() && type->second) {
-                    if (std::holds_alternative<semantic::UnknownType>(
-                            type->second->kind) ||
-                        std::holds_alternative<semantic::TypeVar>(
-                            type->second->kind))
-                        return false;
-                    if (auto named = std::get_if<semantic::NamedType>(
-                            &type->second->kind);
-                        named && named->name == "Any")
-                        return false;
-                }
+            // The checker records no such choice for an erased receiver
+            // (`Any`): that call is a run-time dispatch.
             const auto resolved = resolvedCalls->find(&n);
             return resolved != resolvedCalls->end() &&
                    resolved->second.backendModule ==
@@ -2027,35 +1811,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 for (const auto& candidate : found->second)
                     if (candidate.beamArity == actualArity)
                         modules.insert(candidate.moduleAtom);
-                // A concrete receiver type settles an overloaded name
-                // before a free function reached by UFCS. In particular,
-                // `[String].join` belongs to the prelude's List method,
-                // even when FS.Path.join/2 is also in the build.
-                if (modules.size() > 1 && expressionTypes &&
-                    n.receiver)
-                    if (auto type = expressionTypes->find(n.receiver.get());
-                        type != expressionTypes->end() && type->second) {
-                        // Its last segment, without type arguments
-                        // (`Data.Set<Integer>` is `Set`).
-                        const auto bare = [](std::string name) {
-                            name.resize(std::min(name.size(), name.find('<')));
-                            return name.substr(name.rfind('.') + 1);
-                        };
-                        auto receiver = bare(semantic::typeToString(type->second));
-                        if (std::holds_alternative<semantic::ListType>(type->second->kind))
-                            receiver = "List";
-                        else if (std::holds_alternative<semantic::MapType>(type->second->kind))
-                            receiver = "Map";
-                        else if (std::holds_alternative<semantic::TupleType>(type->second->kind))
-                            receiver = "Tuple";
-                        std::set<std::string> typed;
-                        for (const auto& candidate : found->second)
-                            if (candidate.beamArity == actualArity &&
-                                !candidate.receiverType.empty() &&
-                                bare(candidate.receiverType) == receiver)
-                                typed.insert(candidate.moduleAtom);
-                        if (typed.size() == 1) providerModule = *typed.begin();
-                    }
                 // A semantic winner for an `Any` receiver is not enough
                 // to bypass the prelude's runtime method dispatch. That
                 // made a list reached through a match arm call
@@ -2169,11 +1924,9 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     // carries no receiver type, so fall back to the
                     // receiver's static type.
                     std::string owner = match->receiverType;
-                    if (owner.empty() && expressionTypes && n.receiver)
-                        if (auto found =
-                                expressionTypes->find(n.receiver.get());
-                            found != expressionTypes->end() && found->second)
-                            owner = semantic::typeToString(found->second);
+                    if (owner.empty())
+                        if (const auto type = staticTypeOf(n.receiver.get()))
+                            owner = semantic::typeToString(type);
                     const auto qualified =
                         kex::mangle::qualify(owner, m);
                     // The selected clause does not declare the labels it

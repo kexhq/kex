@@ -1214,6 +1214,40 @@ auto findAndCollectModule(const kex::ast::Program& program,
 
 } // namespace
 
+auto emittedImplementationOf(
+    const KexiMethod& method,
+    const std::function<bool(const std::string& function, int arity)>& emitted)
+    -> std::string {
+    if (method.moduleFunction || method.typeOnly) return {};
+    // The head the emitter names it by: the `make` target as written.
+    const auto receiver = makeTargetName(method.receiverType);
+    if (receiver.empty()) return {};
+    const auto shortReceiver = receiver.substr(receiver.rfind('.') + 1);
+    for (const auto& owner : {receiver, shortReceiver})
+        if (emitted(method.name + "/" + owner, method.beamArity))
+            return method.name + "/" + owner;
+    return {};
+}
+
+auto recordImplementations(
+    KexiChunk& chunk,
+    const std::function<bool(const std::string& function, int arity)>& routed)
+    -> void {
+    for (auto& method : chunk.typeInterface.methods)
+        method.implementation = emittedImplementationOf(method, routed);
+}
+
+auto coreExports(const std::string& coreSource)
+    -> std::function<bool(const std::string& function, int arity)> {
+    // The whole module: a function it names as `'f'/N` is one it defines, or
+    // erlc would refuse the module. (Its export list alone cannot be cut out
+    // reliably: an operator such as `'[]'` holds a bracket.)
+    return [&coreSource](const std::string& function, int arity) {
+        return coreSource.find("'" + function + "'/" + std::to_string(arity)) !=
+               std::string::npos;
+    };
+}
+
 auto collectMetadata(const kex::ast::Program& program,
                      const CollectOptions& opts) -> KexiChunk {
     KexiChunk chunk;

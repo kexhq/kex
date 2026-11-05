@@ -325,6 +325,7 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     std::vector<TermPtr> defaults;
     for (const auto& source : m.defaultSources) defaults.push_back(Term::binary(source));
     fields.push_back(Term::list(std::move(defaults)));
+    fields.push_back(Term::binary(m.implementation));
     return Term::tuple(std::move(fields));
 }
 
@@ -348,6 +349,7 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     if (t.size() > 12)
         for (const auto& source : t[12]->asList())
             m.defaultSources.push_back(source->asBinaryStr());
+    if (t.size() > 13) m.implementation = t[13]->asBinaryStr();
     return m;
 }
 

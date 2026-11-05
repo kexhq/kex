@@ -12,10 +12,6 @@
 #include <string_view>
 #include <vector>
 
-namespace kex::semantic {
-class Analyzer;
-}
-
 namespace kex::hir {
 
 enum class TargetKind {
@@ -45,6 +41,11 @@ enum class TargetKind {
     // A binary operator a type overloads (`a + b` on a `make` block's `+`):
     // owner is the left operand's type, as the checker printed it.
     Operator,
+    // A method the receiver's own type answers (owner: the type).
+    OwnMethod,
+    // A function of the receiver type's home module, by UFCS (owner: its
+    // qualified name).
+    ModuleFunction,
     // Nothing recorded: lowering and the walker resolve it themselves.
     Undecided,
 };
@@ -55,6 +56,10 @@ struct CallSite {
     const ast::Expr* expr = nullptr;
     std::string callee;
     TargetKind kind = TargetKind::Undecided;
+    // What the target is: `module:function/arity` for an imported one,
+    // `(local)` before it when the module is this unit, or the decided
+    // owner (the record of a field read, the trait, ...). Empty if none.
+    std::string target;
 };
 
 inline constexpr TargetKind kTargetKinds[] = {
@@ -62,13 +67,8 @@ inline constexpr TargetKind kTargetKinds[] = {
     TargetKind::FieldRead, TargetKind::ModuleReference, TargetKind::TraitMethod,
     TargetKind::ValueCall, TargetKind::Dispatch,
     TargetKind::Conversion, TargetKind::TypeReference,
-    TargetKind::Builtin, TargetKind::Operator, TargetKind::Undecided,
+    TargetKind::Builtin, TargetKind::Operator, TargetKind::OwnMethod,
+    TargetKind::ModuleFunction, TargetKind::Undecided,
 };
-
-// Every function and method call in `program`'s function bodies and main
-// blocks, in source order, with what `analysis` decided about it.
-auto collectCallSites(const ast::Program& program,
-                      const semantic::Analyzer& analysis)
-    -> std::vector<CallSite>;
 
 } // namespace kex::hir

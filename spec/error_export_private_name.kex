@@ -1,0 +1,16 @@
+# Re-exporting a private member of another module is refused.
+module Vault do
+  let open() = "open"
+
+  private do
+    let secret() = "secret"
+  end
+end
+
+module Front do
+  export Vault, only: [secret]
+end
+
+main do
+  IO.printLine("unreached")
+end

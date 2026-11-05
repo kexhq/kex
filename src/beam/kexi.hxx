@@ -115,6 +115,11 @@ struct KexiMethod {
     bool moduleFunction = false;
     // As KexiExport::defaultSources, the receiver left out.
     std::vector<std::string> defaultSources;
+    // The per-type implementation the emitter wrote for this receiver
+    // (`showValue/Box` at `beamArity`), when it wrote one: read from the
+    // emitted module (recordImplementations), never re-derived. "" when the
+    // method is reached only through its dispatcher.
+    std::string implementation;
 };
 
 struct KexiTypeInterface {

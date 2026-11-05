@@ -32,7 +32,7 @@ struct CompileTimeIntrinsic {
     TypePtr (TypeChecker::*check)(const ast::Expr& expr,
                                   const ast::MethodCall& call) = nullptr;
     // Once the arguments are typed: records the answer the call folds to.
-    void (TypeChecker::*fold)(const ast::MethodCall& call,
+    void (TypeChecker::*fold)(const ast::Expr& expr, const ast::MethodCall& call,
                               const std::vector<TypePtr>& argTypes) = nullptr;
 };
 

@@ -1549,8 +1549,7 @@ auto Lowering::makeMethodFor(const ast::MethodCall& n, std::string owner,
             entry = &method;
     }
     if (entry) return entry;
-    return strict || owner.empty() || declaredByOwner ||
-               receiverIsForeignTo(n)
+    return strict || owner.empty() || declaredByOwner
         ? nullptr : makeMethodFor(n, "", false);
 }
 
@@ -1570,9 +1569,10 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     // The record read, as the checker decided it. Lowering used to work it
     // out again from the receiver's recorded type; every read that found
     // came from a field read the checker had already decided.
-    const auto decided = decidedFieldReads.find(&n);
-    if (decided == decidedFieldReads.end()) return nullptr;
-    const auto& recordName = decided->second;
+    if (!hir) return nullptr;
+    const auto& target = hir->targetOf(n);
+    if (target.kind != hir::TargetKind::FieldRead) return nullptr;
+    const auto& recordName = target.owner;
     // A bare name the prelude also declares says too little: a local
     // `ParseError` and the prelude's are both `ParseError` to the checker,
     // and they keep their field at different positions. The accessor
@@ -1688,47 +1688,12 @@ auto Lowering::trailingMakeDefaults(const ast::MethodCall& n) const
         }
         return trailing;
     }
-    if (receiverIsForeignTo(n)) return trailing;
+
     if (auto found = methodDefaults.find(n.method);
         found != methodDefaults.end())
         for (size_t i = n.args.size(); i < found->second.size(); ++i)
             if (found->second[i]) trailing.push_back(found->second[i]);
     return trailing;
-}
-
-// Whether the checker pinned the receiver to a type no `make` block of
-// this unit gives the function to. Such a call belongs to that type's own
-// provider: borrowing an unrelated block's parameter list (and its
-// defaults) sent `uri.string` out as `string/3` (kexhq/kex#475).
-auto Lowering::receiverIsForeignTo(const ast::MethodCall& n) const -> bool {
-    if (!expressionTypes || !n.receiver) return false;
-    auto found = expressionTypes->find(n.receiver.get());
-    if (found == expressionTypes->end() || !found->second) return false;
-    const auto& kind = found->second->kind;
-    std::string name;
-    if (const auto* named = std::get_if<semantic::NamedType>(&kind)) {
-        const auto dot = named->name.rfind('.');
-        const auto bare = dot == std::string::npos
-            ? named->name : named->name.substr(dot + 1);
-        if (!knownTypes.count(named->name) && !knownTypes.count(bare) &&
-            !typeVariantTags.count(named->name) &&
-            !typeVariantTags.count(bare))
-            return false;
-        name = canonicalRecordName(named->name);
-    } else if (std::holds_alternative<semantic::PrimitiveType>(kind) ||
-               std::holds_alternative<semantic::SizedIntType>(kind) ||
-               std::holds_alternative<semantic::SizedFloatType>(kind)) {
-        name = semantic::typeToString(found->second);
-    } else {
-        return false;
-    }
-    if (auto methods = makeMethods.find(n.method);
-        methods != makeMethods.end())
-        for (const auto& method : methods->second) {
-            if (canonicalRecordName(method.owner) == name)
-                return false;
-        }
-    return true;
 }
 
 // The receiver type the checker settled on for this call, "" when it did
@@ -1751,10 +1716,10 @@ auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
             resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty())
             return ownerNameOf(resolved->second.localDispatchTypes.front());
-    if (expressionTypes && n.receiver)
-        if (auto found = expressionTypes->find(n.receiver.get());
-            found != expressionTypes->end() && found->second)
-            return semantic::typeToString(found->second);
+    // A call the checker left to this unit's own `make` blocks
+    // (ownerOfCall's ReceiverType): the receiver's type is the owner.
+    if (const auto type = staticTypeOf(n.receiver.get()))
+        return semantic::typeToString(type);
     return "";
 }
 
@@ -1791,8 +1756,47 @@ auto Lowering::placeMethodArguments(const ast::MethodCall& n, const MakeMethod& 
 namespace kex::ir {
 
 auto Lowering::operatorOwner(const ast::BinaryOp& n) const -> std::string {
-    const auto decided = decidedOperators.find(&n);
-    return decided == decidedOperators.end() ? std::string{} : decided->second;
+    if (!hir) return {};
+    const auto& target = hir->targetOf(n);
+    return target.kind == hir::TargetKind::Operator ? target.owner : std::string{};
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+// The receiver type's own implementation of `n.method`, as the checker
+// decided it (OwnMethod, ModuleFunction), where the run-time dispatch cannot
+// reach it. A distinct type's value is its erased backing value, so a guard
+// never recognizes it (`"${x + y}"` on a Tuplex printed the bare pair); a
+// module's free function over the module's OWN type shares a bare name
+// another module may own (kexhq/kex#230: `conn.close` for a `TCP.Conn` went
+// to a Client's `close`). Lowering only names what the checker chose.
+auto Lowering::ownImplementationOf(const ast::MethodCall& n) const
+    -> OwnImplementation {
+    if (!hir || !n.receiver || !n.namedArgs.empty() || n.block) return {};
+    const auto& target = hir->targetOf(n);
+    if (target.kind == hir::TargetKind::ModuleFunction) {
+        const auto symbol = moduleFunctions.find(target.owner);
+        if (symbol == moduleFunctions.end()) return {};
+        return {OwnImplementation::Reason::ModuleFunction, symbol->second};
+    }
+    if (target.kind != hir::TargetKind::OwnMethod) return {};
+    // Only an erased distinct value needs its implementation by name, and
+    // only a name several types implement is emitted per type.
+    const auto& m = n.method;
+    const auto& type = target.owner;
+    const auto bare = type.substr(type.rfind('.') + 1);
+    const auto owners = methodOwners.find(m);
+    if (!collidingMethods.count(m) || owners == methodOwners.end() ||
+        !(distinctTypes.count(type) || distinctTypes.count(bare)))
+        return {};
+    for (const auto& owner : {type, bare})
+        if (std::find(owners->second.begin(), owners->second.end(), owner) !=
+            owners->second.end())
+            return {OwnImplementation::Reason::DistinctType,
+                    mangleReceiverImplementation(m, owner)};
+    return {};
 }
 
 } // namespace kex::ir

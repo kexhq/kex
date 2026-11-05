@@ -744,10 +744,8 @@ auto Lowering::isIntegerOperand(const ast::ExprPtr& e) const -> bool {
         if (auto declared = declaredParamTypes.find(id->name);
             declared != declaredParamTypes.end())
             return declared->second == "Integer";
-    if (!expressionTypes) return false;
-    auto found = expressionTypes->find(e.get());
-    if (found == expressionTypes->end() || !found->second) return false;
-    return semantic::typeToString(found->second) == "Integer";
+    const auto type = staticTypeOf(e.get());
+    return type && semantic::typeToString(type) == "Integer";
 }
 
 // Which of the walker's three comparable families this expression is
@@ -761,10 +759,9 @@ auto Lowering::comparableKind(const ast::ExprPtr& e) const -> std::string {
         return "num";
     if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "str";
     if (std::holds_alternative<ast::CharLiteral>(e->kind)) return "char";
-    if (!expressionTypes) return {};
-    auto found = expressionTypes->find(e.get());
-    if (found == expressionTypes->end() || !found->second) return {};
-    const auto name = semantic::typeToString(found->second);
+    const auto type = staticTypeOf(e.get());
+    if (!type) return {};
+    const auto name = semantic::typeToString(type);
     if (name == "Integer" || name == "Float" || name == "Number")
         return "num";
     if (name == "String") return "str";
@@ -787,10 +784,9 @@ auto Lowering::exactEqualityType(const ast::ExprPtr& e) const -> std::string {
             (declared->second == "Integer" || declared->second == "String" ||
              declared->second == "Char"))
             return declared->second;
-    if (!expressionTypes) return {};
-    auto found = expressionTypes->find(e.get());
-    if (found == expressionTypes->end() || !found->second) return {};
-    const auto name = semantic::typeToString(found->second);
+    const auto type = staticTypeOf(e.get());
+    if (!type) return {};
+    const auto name = semantic::typeToString(type);
     if (name == "Integer" || name == "String" || name == "Char")
         return name;
     return {};
@@ -847,6 +843,18 @@ auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
     moduleImports = std::move(savedImports);
     moduleAliases = std::move(savedAliases);
     return result;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+// The static type the checker gave `expr`: the HIR's per-expression type.
+// What lowering may read of the checker's types — a TYPE for code
+// generation (which comparison, which dictionary). A DECISION about a call
+// (its target, its owner) comes from the decision tables instead.
+auto Lowering::staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
+    return hir && expr ? hir->typeOf(*expr) : nullptr;
 }
 
 } // namespace kex::ir

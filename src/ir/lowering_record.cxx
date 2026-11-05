@@ -180,13 +180,8 @@ auto Lowering::gatedModuleTaking(const ast::MethodCall& n) const -> std::string 
                     if (!param.name || *param.name != named.first) continue;
                     if (!param.type || !*param.type) return true;
                     const auto wanted = baseName(renderDispatchType(**param.type));
-                    if (auto typed = expressionTypes
-                            ? expressionTypes->find(named.second.get())
-                            : decltype(expressionTypes->find(nullptr)){};
-                        expressionTypes && typed != expressionTypes->end() &&
-                        typed->second) {
-                        const auto written =
-                            semantic::typeToString(typed->second);
+                    if (const auto typed = staticTypeOf(named.second.get())) {
+                        const auto written = semantic::typeToString(typed);
                         if (written != "Unknown")
                             return baseName(written) == wanted;
                     }
@@ -283,13 +278,10 @@ auto Lowering::dualProviderDispatch(const ast::MethodCall& n,
     // renders those as ordinary names ("unknown", "T4") that would
     // otherwise read as a type mismatch.
     std::string staticReceiver;
-    if (expressionTypes && n.receiver) {
-        auto found = expressionTypes->find(n.receiver.get());
-        if (found != expressionTypes->end() && found->second &&
-            !std::holds_alternative<semantic::UnknownType>(found->second->kind) &&
-            !std::holds_alternative<semantic::TypeVar>(found->second->kind))
-            staticReceiver = semantic::typeToString(found->second);
-    }
+    if (const auto type = staticTypeOf(n.receiver.get());
+        type && !std::holds_alternative<semantic::UnknownType>(type->kind) &&
+        !std::holds_alternative<semantic::TypeVar>(type->kind))
+        staticReceiver = semantic::typeToString(type);
     if (canonicalRecordName(staticReceiver) == canonicalReceiver)
         return nullptr;
     // The other provider: the dispatcher of whichever module also answers
@@ -417,16 +409,14 @@ auto Lowering::importedFreeFunctionDispatch(const ast::MethodCall& n,
                                   int arity,
                                   std::vector<ExprPtr>& args) -> ExprPtr {
     if (!externalModules || args.empty()) return nullptr;
-    if (!expressionTypes || !n.receiver) return nullptr;
+    if (!n.receiver) return nullptr;
     // The receiver's NOMINAL identity, or "" when the checker has nothing
     // concrete for it. Only the type's name matters here — a provider is
     // keyed by the record, not by its type arguments — so this reads the
     // NamedType rather than rendering the whole type.
     std::string staticReceiver;
-    if (auto found = expressionTypes->find(n.receiver.get());
-        found != expressionTypes->end() && found->second)
-        if (auto* named =
-                std::get_if<semantic::NamedType>(&found->second->kind))
+    if (const auto type = staticTypeOf(n.receiver.get()))
+        if (auto* named = std::get_if<semantic::NamedType>(&type->kind))
             if (named->name != "Any")
                 staticReceiver = canonicalRecordName(named->name);
     // Only receiver shapes whose guards can safely be tested here.

@@ -41,6 +41,26 @@ auto collectMetadata(const kex::ast::Program& program,
 // signature written `deps : [Dependency]` names the module's own
 // `Dependency` or the one a `using` brought in, but read on its own, by
 // another unit, a bare name says neither (docs/plan_separate_compilation.md).
+// `method`'s per-type implementation among `emitted`: `name/Head` (the head
+// its `make` target is written as, qualified or as its module wrote it) at
+// the method's arity, or "".
+auto emittedImplementationOf(
+    const KexiMethod& method,
+    const std::function<bool(const std::string& function, int arity)>& emitted)
+    -> std::string;
+// Records each receiver method's implementation a value of its type reaches
+// through the dispatcher (`routed`: the emitted module's
+// routedImplementations). One source of truth, the emitted module, for every
+// consumer that devirtualizes.
+auto recordImplementations(
+    KexiChunk& chunk,
+    const std::function<bool(const std::string& function, int arity)>& routed)
+    -> void;
+// The functions a Core Erlang module defines, as `emitted` above asks; it
+// reads `coreSource`, which must outlive it.
+auto coreExports(const std::string& coreSource)
+    -> std::function<bool(const std::string& function, int arity)>;
+
 auto qualifyTypeNames(KexiChunk& chunk,
                       const std::function<std::string(const std::string&)>& qualify)
     -> void;

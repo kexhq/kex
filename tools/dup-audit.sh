@@ -19,6 +19,8 @@
 #   lowering-rederives  places lowering reads the checker's raw type map
 #                       (`expressionTypes->find`) to decide something itself
 #                       instead of reading sema's decision (pass plan, Stage 3)
+#   walker-rederives    places the walker reads an expression's static type
+#                       (`staticTypeOf`) to decide something itself (Stage 4)
 #
 #   tools/dup-audit.sh            report counts, then the details
 #   tools/dup-audit.sh --check    also fail when a count exceeds the recorded
@@ -104,9 +106,10 @@ grep '^long ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/long-functio
 # shellcheck disable=SC2086
 wc -l $FILES | awk '$2 != "total" && $1 > 2000 { print $1, $2 }' | sort -rn >"$WORK/big-files"
 grep -n "expressionTypes->find(" src/ir/*.cxx >"$WORK/lowering-rederives" || true
+grep -n "staticTypeOf(" src/interpreter/*.cxx >"$WORK/walker-rederives" || true
 
 # ── report ──────────────────────────────────────────────────────────────────
-METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files lowering-rederives"
+METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files lowering-rederives walker-rederives"
 count_of() { # <metric>
   if [ "$1" = literal-compares ]; then
     awk '{ s += $1 } END { print s + 0 }' "$WORK/$1"

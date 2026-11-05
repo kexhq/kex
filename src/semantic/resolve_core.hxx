@@ -37,6 +37,13 @@ using ImportScope = std::unordered_map<std::string, ImportOrigin>;
 auto resolveSourceModulePath(SemanticDB* db,
                              const std::string& currentModule,
                              const std::string& requested) -> std::string;
+// The scope rule under it: `requested` as written when `exists` says so,
+// else relative to the innermost enclosing module that has it, else
+// unchanged.
+auto resolveModulePathIn(const std::string& currentModule,
+                         const std::string& requested,
+                         const std::function<bool(const std::string&)>& exists)
+    -> std::string;
 
 // Merge one imported name into the scope stack per the `using` rules,
 // creating the current scope when the stack is empty. A same-module
@@ -150,14 +157,6 @@ struct TargetHead {
 // constrained).
 auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead>;
 
-// Signature identity up to type-variable renaming: same length,
-// same constructors in the same positions, vars equal when their
-// first-occurrence order matches. Atom literal spellings are
-// display-only (mirroring `typesEqual`); block-ness counts (the
-// emitter renders `Block<…>` distinctly).
-auto signaturesAlphaEqual(const std::vector<TypePtr>& a,
-                         const std::vector<TypePtr>& b) -> bool;
-
 // Transparent-alias expansion callback: the caller's scope tables own
 // aliases (`TypeChecker::expandTypeAliases`), resolve_core stays pure.
 using AliasExpander = std::function<TypePtr(const TypePtr&)>;
@@ -170,29 +169,18 @@ using AliasExpander = std::function<TypePtr(const TypePtr&)>;
 auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
                         const ImportedInterfaces& ifaces) -> bool;
 
-// Derive the mangled `name/Head` spelling for an imported receiver
-// call, or nullopt to keep the dispatcher. `candidates` must be the
-// RAW same-name table (`receiverFunctions[name]`): visibility
-// filtering and offer-dedup hide overloads the emitter counted.
-// `winner` is the resolved candidate, `receiverType` the resolved
-// static receiver. Clauses: (0) pure make-block winner with a
-// receiver (foul calls take their context through a registry keyed
-// on the bare name); (1) provable head; (1b) nominal-head membership
-// in the interface's record/ADT/distinct tables (excludes aliases,
-// opaques, undeclared targets); (5) the (module, source-arity,
-// head) bucket is single-signature (else only `name/Head,args…`
-// exists), foul-equality included; (12) the winner's head is the
-// ONLY covering head at (module, arity) (trait peers excluded —
-// the dispatcher tries them last); `''` peers and covering
-// module-function peers veto (both merge ahead of the receiver
-// dispatcher); (13b) the defining module has ≥2 distinct heads at
-// this name (else the definition kept the BARE name and no
-// `name/Head` exists); (DS) Range/Pid winners shadowed by List/Task
-// keep dispatcher behavior. (10) (no trait dictionary for the
-// receiver) is checked by lowering, which owns the computed
-// dictionaries.
+// The mangled `name/Head` for an imported receiver call, or nullopt to keep
+// the dispatcher. `winner` is the resolved candidate, `receiverType` the
+// resolved static receiver. Clauses: (0) a pure make-block winner with a
+// receiver (foul calls take their context through a registry keyed on the
+// bare name); (1) a provable head; (1b) a nominal head is a declared
+// record/ADT/distinct type (aliases and opaques keep the dispatcher); (0b) no
+// gradual receiver; the receiver is of that head; and a value of that type
+// reaches `name/Head` through the dispatcher, as the winner's module
+// recorded when it emitted it (`implementation`: the routes lowering laid
+// out). (10), no trait dictionary for the receiver, is checked by lowering,
+// which owns the computed dictionaries.
 auto importDispatchSpelling(
-    const std::vector<ImportedFunction>& candidates,
     const ImportedFunction& winner, const TypePtr& receiverType,
     const ImportedInterfaces& ifaces, AliasExpander expandAlias)
     -> std::optional<std::string>;

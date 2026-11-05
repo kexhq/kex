@@ -10,7 +10,9 @@
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
 #include "semantic/completion_at.hxx"
+#include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
+#include "hir/repl_input.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
 #include "lexer/lexer.hxx"
@@ -211,6 +213,30 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         Parser parser(std::move(tokens));
         g_programs.push_back(std::make_unique<ast::Program>(parser.parseProgram()));
         ast::Program* program = g_programs.back().get();
+
+        // An expression is checked as the statements that run, against the
+        // session's definitions and bindings (hir::checkReplInput), and runs
+        // on the checker's decisions as main.cxx's REPL does. This REPL has
+        // never refused an input the checker rejects, so one that fails the
+        // check still runs, on the values alone.
+        std::optional<hir::CheckedInput> checked;
+        if (!isDef) try {
+            Lexer sessionLexer(session->replAccumSource + "main do\n" +
+                                   session->replBindings + "end\n",
+                               "<repl>");
+            Parser sessionParser(sessionLexer.tokenizeAll(), "<repl>");
+            checked = hir::checkReplInput(
+                std::make_unique<ast::Program>(sessionParser.parseProgram()),
+                *program, {}, nullptr, &preludeSemanticInterfaces(""));
+        } catch (...) {
+            checked.reset();  // a session history that does not re-parse
+        }
+        session->evaluator.setProgram(
+            checked && checked->program ? checked->program.get() : nullptr);
+        struct Unset {
+            interpreter::Evaluator& evaluator;
+            ~Unset() { evaluator.setProgram(nullptr); }
+        } unset{session->evaluator};
 
         size_t outputBefore = session->evaluator.output().size();
         auto value = session->evaluator.execute(*program);

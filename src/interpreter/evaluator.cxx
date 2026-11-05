@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../semantic/analyzer.hxx"
 #include "../common/utf8.hxx"
 #include "../common/mangle.hxx"
 #include "../compiled/expand.hxx"
@@ -2407,21 +2408,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             auto left = node.left ? eval(*node.left) : Value::none();
             auto right = node.right ? eval(*node.right) : Value::none();
-            // A distinct type's own operator, chosen by the static type as a
-            // method call on it is (below): the value is the bare backing
-            // pair, so runtime dispatch found nothing and said "Cannot add
-            // Tuple and Tuple".
-            if (m_expressionTypes && node.left)
-                if (auto found = m_expressionTypes->find(node.left.get());
-                    found != m_expressionTypes->end() && found->second)
-                    if (const auto* named = std::get_if<semantic::NamedType>(
-                            &found->second->kind);
-                        named && m_erasedReceiverTypes.contains(named->name)) {
-                        const auto candidate = kex::mangle::qualify(named->name, std::string(tokenTypeName(node.op)));
-                        if (m_functionValues.count(candidate) || m_env->get(candidate))
-                            return callFunction(candidate, {left, right}, {},
-                                                expr.location);
-                    }
+            // A distinct type's own operator, as the checker decided it
+            // (an Operator target): the value is the bare backing pair, so
+            // runtime dispatch found nothing and said "Cannot add Tuple and
+            // Tuple".
+            if (const auto& target = m_programs.targetOf(node);
+                target.kind == hir::TargetKind::Operator &&
+                m_erasedReceiverTypes.contains(target.owner)) {
+                const auto candidate = ownMethodName(
+                    target.owner, std::string(tokenTypeName(node.op)));
+                if (!candidate.empty())
+                    return callFunction(candidate, {left, right}, {},
+                                        expr.location);
+            }
             return evalBinaryOp(node.op, left, right, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
@@ -2465,17 +2464,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // has to win over the runtime fallback — and it must sit ahead of
             // every dispatch path below, since a namespace call returns from
             // one of those.
-            if (m_staticTypeOfCalls) {
-                auto recorded = m_staticTypeOfCalls->find(&node);
-                if (recorded != m_staticTypeOfCalls->end()) {
-                    // A value argument still runs (it may have effects); one
-                    // that NAMES a function does not — `Date.parse` on its own
-                    // is a call missing its argument.
-                    if (recorded->second.evaluateArgument)
-                        for (const auto& arg : node.args)
-                            if (arg) eval(*arg);
-                    return structuredTypeValue(recorded->second.type);
-                }
+            if (const auto* recorded = m_programs.typeOfAnswer(node)) {
+                // A value argument still runs (it may have effects); one
+                // that NAMES a function does not — `Date.parse` on its own
+                // is a call missing its argument.
+                if (recorded->evaluateArgument)
+                    for (const auto& arg : node.args)
+                        if (arg) eval(*arg);
+                return structuredTypeValue(recorded->type);
             }
 
             // Distinct conversions are representation-erased: checking has
@@ -2702,19 +2698,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (node.method == "alive?") return Value::boolean(server->scheduler->isAlive(server->pid));
                 std::vector<ValuePtr> slotArgs;
                 for (const auto& arg : node.args) slotArgs.push_back(arg ? eval(*arg) : Value::none());
-                std::optional<bool> isCastByType;
-                if (m_expressionTypes)
-                    if (auto found = m_expressionTypes->find(&expr);
-                        found != m_expressionTypes->end() && found->second) {
-                        const auto& kind = found->second->kind;
-                        if (!std::holds_alternative<semantic::UnknownType>(kind) &&
-                            !std::holds_alternative<semantic::TypeVar>(kind)) {
-                            const auto type = semantic::typeToString(found->second);
-                            isCastByType = type == "Void" || type == "Unit";
-                        }
-                    }
-                const bool isCast = isCastByType ? *isCastByType
-                                                 : m_castSlots.count(node.method) > 0;
+                // A cast when the checker said so (the slot's target, as
+                // lowering reads it); by the slot's declaration otherwise.
+                const auto* target = &m_programs.targetOf(node);
+                const bool isCast = target && target->kind == hir::TargetKind::Imported
+                    ? target->servingCast
+                    : m_castSlots.count(node.method) > 0;
                 if (isCast) {
                     server->scheduler->castServer(server->pid, node.method,
                                                   std::move(slotArgs));
@@ -2904,29 +2893,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     std::move(namedArgs), expr.location);
             auto specificMethod = resolveMethodName(receiver, node.method, &args);
             // Distinct and opaque values have the backing value's runtime name,
-            // but their receiver methods were selected using the static
-            // nominal type. Prefer that method when semantic analysis kept a
-            // concrete named receiver type for this exact expression.
-            if (m_expressionTypes) {
-                if (auto found = m_expressionTypes->find(node.receiver.get());
-                    found != m_expressionTypes->end() && found->second) {
-                    if (const auto* named = std::get_if<semantic::NamedType>(
-                            &found->second->kind)) {
-                        const auto candidate = kex::mangle::qualify(named->name, node.method);
-                        const auto runtimeType = dispatchTypeName(receiver);
-                        const auto runtimeDot = runtimeType.rfind('.');
-                        const bool resolvedShortRecordMethod =
-                            runtimeDot != std::string::npos &&
-                            specificMethod == runtimeType.substr(runtimeDot + 1) +
-                                std::string(kex::mangle::kSeparator) + node.method;
-                        if ((m_erasedReceiverTypes.contains(named->name) ||
-                             named->name == runtimeType) &&
-                            !resolvedShortRecordMethod &&
-                            (m_functionValues.count(candidate) ||
-                             m_env->get(candidate)))
-                            specificMethod = candidate;
-                    }
-                }
+            // but the checker chose their receiver methods by the nominal type
+            // (receiverTypeOf): prefer that type's own method.
+            if (const auto owner = m_programs.receiverTypeOf(expr); !owner.empty()) {
+                const auto candidate = ownMethodName(owner, node.method);
+                const auto runtimeType = dispatchTypeName(receiver);
+                const auto runtimeDot = runtimeType.rfind('.');
+                const bool resolvedShortRecordMethod =
+                    runtimeDot != std::string::npos &&
+                    specificMethod == runtimeType.substr(runtimeDot + 1) +
+                        std::string(kex::mangle::kSeparator) + node.method;
+                if ((m_erasedReceiverTypes.contains(owner) ||
+                     owner == runtimeType) &&
+                    !resolvedShortRecordMethod && !candidate.empty())
+                    specificMethod = candidate;
             }
 
             auto mangledName = std::move(specificMethod);
@@ -4090,20 +4070,18 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
 auto Evaluator::showErasedArgument(const ast::Expr& call, size_t index,
                                    const ast::Expr* argument, ValuePtr value)
     -> ValuePtr {
-    if (!m_callSignatures || !m_expressionTypes || !argument) return value;
-    const auto signature = m_callSignatures->find(&call);
-    if (signature == m_callSignatures->end() ||
-        index >= signature->second.params.size())
-        return value;
-    const auto& param = signature->second.params[index];
+    if (!argument) return value;
+    const auto* signature = m_programs.selectedSignatureOf(call);
+    if (!signature || index >= signature->params.size()) return value;
+    const auto& param = signature->params[index];
     const auto* paramName = std::get_if<semantic::NamedType>(&param->kind);
     const auto* paramBound = std::get_if<semantic::ConstrainedType>(&param->kind);
     if (!(paramName && paramName->name == "Showable") &&
         !(paramBound && paramBound->traitName == "Showable"))
         return value;
-    const auto found = m_expressionTypes->find(argument);
-    if (found == m_expressionTypes->end() || !found->second) return value;
-    const auto* named = std::get_if<semantic::NamedType>(&found->second->kind);
+    const auto argumentType = staticTypeOf(argument);
+    if (!argumentType) return value;
+    const auto* named = std::get_if<semantic::NamedType>(&argumentType->kind);
     if (!named || !m_erasedReceiverTypes.contains(named->name)) return value;
     const auto method = named->name + "::showValue";
     if (!m_functionValues.count(method) && !m_env->get(method)) return value;
@@ -4743,6 +4721,15 @@ auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
 // lexical block form, both recorded in m_usingModules — or a call from inside
 // the module itself. Before this, a `make` inside a module was the one module
 // member visible everywhere with no import at all.
+auto Evaluator::ownMethodName(const std::string& type,
+                              const std::string& method) const -> std::string {
+    for (const auto& spelling : {type, type.substr(type.rfind('.') + 1)}) {
+        auto name = kex::mangle::qualify(spelling, method);
+        if (m_functionValues.count(name) || m_env->get(name)) return name;
+    }
+    return {};
+}
+
 auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
     auto owner = m_makeMethodModule.find(qualified);
     if (owner == m_makeMethodModule.end()) return true;

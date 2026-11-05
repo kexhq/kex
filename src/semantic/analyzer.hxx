@@ -3,6 +3,7 @@
 #include "../ast/ast.hxx"
 #include "symbol.hxx"
 #include "typechecker.hxx"
+#include <functional>
 #include <optional>
 #include <map>
 #include <set>
@@ -33,6 +34,19 @@ public:
     explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
         : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
 
+    // The files whose names the analysis checks (undefined names, labels:
+    // resolveProgramNames), its first phase. A build sets its entry file (and
+    // a spec's base); without any, names are not checked.
+    auto setNameCheckFiles(std::vector<std::string> files) -> void {
+        m_nameCheckFiles = std::move(files);
+    }
+    // Where the build finds a module outside the program and its interfaces
+    // (its source roots), for the rule that an exported module must exist.
+    auto setModuleLocator(
+        std::function<bool(const std::string& module, const std::string& current)> locate)
+        -> void {
+        m_moduleLocator = std::move(locate);
+    }
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 
@@ -188,6 +202,8 @@ private:
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
+    std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
+    std::vector<std::string> m_nameCheckFiles;
     bool m_inFoulContext = false;
     bool m_inMakeBlock = false;
 

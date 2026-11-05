@@ -431,6 +431,80 @@ auto Lowering::primGuardBifs() -> const std::unordered_map<std::string, const ch
     return m;
 }
 
+auto Lowering::guardTag(const std::string& canonical) const -> std::string {
+    auto tagged = canonical;
+    if (!records.count(tagged) && tagged.find('.') == std::string::npos) {
+        std::string own;
+        for (auto scope = currentModulePath; !scope.empty();) {
+            if (declaredTypeIdentities.count(scope + "." + tagged)) {
+                own = scope;
+                break;
+            }
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+        if (!own.empty())
+            tagged = own + "." + tagged;
+        else if (auto declaring = localTypeModules.find(tagged);
+            declaring != localTypeModules.end())
+            tagged = declaring->second + "." + tagged;
+        else if (auto declared = moduleDeclaredTypes.find(tagged);
+                 declared != moduleDeclaredTypes.end())
+            tagged = declared->second + "." + tagged;
+    }
+    return tagged;
+}
+
+auto Lowering::runtimeShapes(const std::string& owner)
+    -> std::optional<std::set<std::string>> {
+    // As primGuardBifs tells them apart, wider guards spelled as the shapes
+    // they admit.
+    static const std::unordered_map<std::string, std::set<std::string>> primitive = {
+        {"Integer", {"integer"}}, {"Float", {"float"}},
+        {"Number", {"integer", "float"}}, {"String", {"binary"}},
+        {"Bool", {"bool"}}, {"Map", {"map"}}, {"List", {"list"}},
+        {"Tuple", {"tuple"}}, {"Pid", {"pid"}}, {"Task", {"pid"}},
+        {"Reference", {"reference"}}, {"Char", {"tuple:Char"}},
+        {"Atom", {"bool", "atom"}},
+    };
+    if (auto found = primitive.find(owner); found != primitive.end())
+        return found->second;
+    // A sum type: its payload variants are tagged tuples, its nullary ones
+    // bare atoms.
+    if (auto tags = typeVariantTags.find(owner);
+        tags != typeVariantTags.end() && !tags->second.empty()) {
+        std::set<std::string> shapes;
+        for (const auto& tag : tags->second)
+            shapes.insert((nullaryVariantTags.count(tag) ? "atom:" : "tuple:") + tag);
+        return shapes;
+    }
+    // A distinct value is its erased backing value: no tag says it is one.
+    const auto bare = owner.substr(owner.rfind('.') + 1);
+    if (distinctTypes.count(owner) || distinctTypes.count(bare)) return std::nullopt;
+    // Anything else typeGuard tests as a tuple tagged with its identity: a
+    // record by its canonical name, an opaque type by guardTag's.
+    const bool savedMakeOwner = resolvingMakeOwner;
+    resolvingMakeOwner = true;
+    const auto canonical = canonicalRecordName(owner);
+    resolvingMakeOwner = savedMakeOwner;
+    if (owner.find_first_of("[{(<-") != std::string::npos) return std::nullopt;
+    return std::set<std::string>{"tuple:" + guardTag(canonical)};
+}
+
+auto Lowering::shapesMeet(const std::optional<std::set<std::string>>& a,
+                          const std::optional<std::set<std::string>>& b) -> bool {
+    if (!a || !b) return true;
+    const auto meet = [](const std::string& x, const std::string& y) {
+        return x == y || (x == "tuple" && y.rfind("tuple:", 0) == 0) ||
+               (x == "atom" && y.rfind("atom:", 0) == 0);
+    };
+    for (const auto& x : *a)
+        for (const auto& y : *b)
+            if (meet(x, y) || meet(y, x)) return true;
+    return false;
+}
+
 // `is_record(V, Tag, Size)` for one field slot. Unlike `typeGuard`, which
 // reads the ONE layout `records` holds per name, this uses the slot's own
 // size — the only thing that separates two records sharing a tag.
@@ -566,27 +640,7 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
     // intrinsic builds. Guarding on the written `Client` matched
     // nothing, so `client.get(url)` fell through its make block's
     // dispatcher to "Undefined method: get for Tuple".
-    auto tagged = ty;
-    if (!records.count(tagged) && tagged.find('.') == std::string::npos) {
-        std::string own;
-        for (auto scope = currentModulePath; !scope.empty();) {
-            if (declaredTypeIdentities.count(scope + "." + tagged)) {
-                own = scope;
-                break;
-            }
-            const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
-            scope.resize(dot);
-        }
-        if (!own.empty())
-            tagged = own + "." + tagged;
-        else if (auto declaring = localTypeModules.find(tagged);
-            declaring != localTypeModules.end())
-            tagged = declaring->second + "." + tagged;
-        else if (auto declared = moduleDeclaredTypes.find(tagged);
-                 declared != moduleDeclaredTypes.end())
-            tagged = declared->second + "." + tagged;
-    }
+    const auto tagged = guardTag(ty);
     // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
     // fixed arity, so is_record/3 above does not apply and the tag has to
     // be read with element/2.
@@ -1038,6 +1092,35 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
         fallback.body = callE("kex_io", "call_field_or_fail", 4,
                               std::move(rescueArgs));
         m.clauses.push_back(std::move(fallback));
+    }
+    // Where a value of each owner's type lands: its own implementation when
+    // no arm before its own can take it, in the order the arms were just
+    // laid out — the String-to-List coercion first, then the owners, the
+    // record field reads, and Tuple last. A trait's arm takes anything.
+    {
+        std::vector<std::pair<std::string, std::optional<std::set<std::string>>>> arms;
+        if (hasList && !hasString)
+            arms.push_back({{}, std::set<std::string>{"binary"}});
+        for (const auto& ty : sortedOwners)
+            arms.push_back({ty, std::find(traitFallbacks.begin(), traitFallbacks.end(),
+                                          ty) != traitFallbacks.end()
+                                    ? std::nullopt
+                                    : runtimeShapes(ty)});
+        if (callArity == 1)
+            if (auto fields = fieldAccessors.find(name); fields != fieldAccessors.end())
+                for (const auto& slot : fields->second)
+                    arms.push_back({{}, std::set<std::string>{"tuple:" + slot.record}});
+        if (hasTupleOwner) arms.push_back({"Tuple", runtimeShapes("Tuple")});
+        for (std::size_t i = 0; i < arms.size(); ++i) {
+            const auto& [owner, shapes] = arms[i];
+            if (owner.empty() || !shapes) continue;
+            bool reached = true;
+            for (std::size_t j = 0; j < i && reached; ++j)
+                if (arms[j].first != owner && shapesMeet(arms[j].second, shapes))
+                    reached = false;
+            if (reached)
+                fc.routes.push_back(mangleReceiverImplementation(name, owner));
+        }
     }
     auto body = std::make_unique<Expr>();
     body->node = std::move(m);

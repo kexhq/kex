@@ -15,6 +15,10 @@
 #include <unordered_set>
 #include <vector>
 
+namespace kex::hir {
+class Program;
+}
+
 namespace kex::ir {
 
 struct LowerError : std::runtime_error {
@@ -145,10 +149,9 @@ struct LowerContext {
     const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
     const ExpressionTypes* expressionTypes = nullptr;
     const ResolvedTraits* resolvedTraits = nullptr;
-    // What the checker decided the remaining call sites are (field reads,
-    // constructors, ...), so lowering need not work it out again.
-    const std::unordered_map<const ast::Expr*, semantic::DecidedCall>*
-        decidedCalls = nullptr;
+    // The checked program: what each call is and what type each expression
+    // has (src/hir/). Lowering reads decisions from here.
+    const hir::Program* hir = nullptr;
 };
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,

@@ -41,6 +41,22 @@ int main() {
             kex_repl_destroy(session);
         });
 
+        // An input runs on the checker's decisions, as in main.cxx's REPL: a
+        // `Process.Shared` is an erased String at run time, and without them
+        // `site.put` went to String ("Undefined method: put for String").
+        it("runs an input on the checker's decisions", []() {
+            auto* session = kex_repl_create();
+            eval(session, "let site : Process.Shared<String> = "
+                          "Process.Shared.named(\"wasm.site\")");
+            const auto put = eval(session, "site.put(\"hi\")");
+            const auto got = eval(session, "site.get");
+            kex_repl_destroy(session);
+            assertTrue(put.find("Undefined method") == std::string::npos, put);
+            assertTrue(got.find("\"hi\"") != std::string::npos &&
+                           got.find("Optional<String>") != std::string::npos,
+                       got);
+        });
+
         it("restores standard-library module roots after reset", []() {
             auto* session = kex_repl_create();
             eval(session, "/reset");

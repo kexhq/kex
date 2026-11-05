@@ -15,6 +15,7 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
     static const CompileTimeIntrinsic intrinsics[] = {
         {"Type::returnedBy", 1, &TypeChecker::checkTypeReturnedBy, nullptr},
         {"Type::of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
+        {"Process::spawn", 1, nullptr, &TypeChecker::foldProcessSpawn},
     };
     for (const auto& intrinsic : intrinsics)
         if (intrinsic.name == name && intrinsic.arity == arity) return &intrinsic;
@@ -121,8 +122,9 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
 // Result, an empty list's element type — and both backends prefer this
 // recording over asking the value. A nullary constructor is widened to its
 // ADT (`Red` is a `Colour`).
-auto TypeChecker::foldTypeOf(const ast::MethodCall& call,
+auto TypeChecker::foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
                              const std::vector<TypePtr>& argTypes) -> void {
+    (void)expr;
     const auto& node = call;
     // Widen constructor names to their ADT, through containers:
     // `[Red, Blue(2)]` is a `[Colour]`, not a `[Red]`. Type
@@ -154,6 +156,25 @@ auto TypeChecker::foldTypeOf(const ast::MethodCall& call,
     };
     if (auto structured = structuredTypeOf(widen(argTypes[0])))
         m_staticTypeOfCalls[&node] = {std::move(*structured), true};
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// `Process.spawn(state)`: the server's slots live with the `serving` block
+// of the state's type, so lowering needs that type to start it. Recorded as
+// the call's decision; lowering used to read it back off the argument.
+auto TypeChecker::foldProcessSpawn(const ast::Expr& expr,
+                                   const ast::MethodCall& call,
+                                   const std::vector<TypePtr>& argTypes) -> void {
+    (void)call;
+    if (argTypes.size() != 1) return;
+    const auto state = resolve(argTypes.front());
+    if (std::holds_alternative<UnknownType>(state->kind) ||
+        std::holds_alternative<TypeVar>(state->kind))
+        return;
+    m_decidedCalls[&expr] = {CallKind::Builtin, typeToString(state)};
 }
 
 } // namespace kex::semantic

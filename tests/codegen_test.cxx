@@ -215,6 +215,49 @@ auto contains(const std::string& haystack, const std::string& needle) -> bool {
 // ---------------------------------------------------------------------------
 
 int main() {
+    describe("IR Core Erlang emitter — dispatcher routes", []() {
+        // The per-type implementations a value of that type reaches through
+        // its dispatcher: what devirtualization reads (KexiMethod::
+        // implementation), recorded as the dispatcher lays its arms out.
+        const auto routesOf = [](const std::string& source) {
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto ext = stdlibExternal();
+            return kex::ir::emitCore(
+                       kex::ir::lowerProgram(program, "test", {.externals = &ext}))
+                .routedImplementations;
+        };
+        it("routes owners whose guards cannot take each other's values", [&]() {
+            const auto routes = routesOf(
+                "record Box do\n  n : Integer\nend\n"
+                "record Bag do\n  n : Integer\nend\n"
+                "make Box do\n  let size -> Integer = @n\nend\n"
+                "make Bag do\n  let size -> Integer = @n + 1\nend\n"
+                "main do\n  IO.printLine(Box { n: 1 }.size)\nend\n");
+            assertTrue(routes.count({"size/Box", 1}) > 0);
+            assertTrue(routes.count({"size/Bag", 1}) > 0);
+        });
+        it("does not route a type an earlier, wider guard takes", [&]() {
+            const auto routes = routesOf(
+                "make Integer do\n  let kind -> String = \"int\"\nend\n"
+                "make Number do\n  let kind -> String = \"num\"\nend\n"
+                "main do\n  IO.printLine(1.kind)\nend\n");
+            // Number sinks below Integer, so an Integer reaches its own;
+            // a Number may be an Integer and is caught first.
+            assertTrue(routes.count({"kind/Integer", 1}) > 0);
+            assertTrue(routes.count({"kind/Number", 1}) == 0);
+        });
+        it("does not route a shadowed owner", [&]() {
+            const auto routes = routesOf(
+                "make Task do\n  let ping -> String = \"task\"\nend\n"
+                "make Pid do\n  let ping -> String = \"pid\"\nend\n"
+                "main do\n  IO.printLine(\"x\")\nend\n");
+            // Both are pids at run time; the dispatcher keeps Task's arm.
+            assertTrue(routes.count({"ping/Pid", 1}) == 0);
+        });
+    });
+
     describe("IR Core Erlang emitter — module structure", []() {
         it("emits module header with correct name", []() {
             auto out = emit("main do\n  42\nend\n", "hello");

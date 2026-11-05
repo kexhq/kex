@@ -20,6 +20,9 @@ inline constexpr std::string_view kFileLevelPreludeModule = "Prelude";
 struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
+    // A receiver method's per-type implementation as its module emitted it
+    // (KexiMethod::implementation), or "".
+    std::string implementation;
     std::string backendModule;
     int backendArity = 0;
     // Source parameter names excluding the receiver for receiver functions.
