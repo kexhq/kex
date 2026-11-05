@@ -7,6 +7,9 @@
 // The format is versioned and self-describing; deserialize returns nullopt on
 // any malformed input, so a caller can always fall back to re-derivation.
 
+#include "etf.hxx"
+#include "../semantic/traits.hxx"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +36,13 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
 auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
                                    CacheMissReason* reason = nullptr)
     -> std::optional<kex::semantic::ImportedInterfaces>;
+
+// The checker's types and signatures as this cache writes them, for another
+// cache (hir/persist) to read and write them the same way.
+auto encodeSemanticType(const kex::semantic::TypePtr& type) -> TermPtr;
+auto decodeSemanticType(SaxReader& sax) -> kex::semantic::TypePtr;
+auto encodeSignature(const kex::semantic::Signature& signature) -> TermPtr;
+auto decodeSignature(SaxReader& sax) -> kex::semantic::Signature;
 
 // Drop all but the newest `keepNewest` *.bin entries in `dir`, never `keep`
 // itself. Best-effort: every failure is silently ignored, the cache stays

@@ -1672,13 +1672,23 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     }
     auto below = registry.buildSemanticInterfaces();
     for (auto &[_, module] : below.modules) module.compiledApart = true;
+    // A `make` function travels with its receiver when its module declares
+    // that type: one for a type declared elsewhere (`Units.SI`'s `to` on
+    // `Measure`) stays behind a `using` of its module, as in a merged program.
+    const auto travelsWithReceiver = [](const kex::semantic::ImportedFunction &function) {
+      if (!function.isReceiverMethod || function.signature.params.empty()) return false;
+      const auto *named =
+          std::get_if<kex::semantic::NamedType>(&function.signature.params.front()->kind);
+      return !named || function.sourceModule.empty() ||
+             named->name.starts_with(function.sourceModule + ".");
+    };
     for (auto &[_, functions] : below.receiverFunctions)
       for (auto &function : functions)
-        if (function.isReceiverMethod) function.visibleByReceiver = true;
+        if (travelsWithReceiver(function)) function.visibleByReceiver = true;
     for (auto &[_, module] : below.modules)
       for (auto &[__, functions] : module.exports)
         for (auto &function : functions)
-          if (function.isReceiverMethod) function.visibleByReceiver = true;
+          if (travelsWithReceiver(function)) function.visibleByReceiver = true;
     // A module this build compiles is described by its own interface, not by
     // the one the prelude derives from the standard library's source for an
     // opt-in module: that one names where the module's functions would be
@@ -1716,6 +1726,12 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     const auto available =
         interfaces ? kex::mergeSemanticInterfaces(std::move(prelude), std::move(below))
                    : std::move(below);
+    // A prelude trait the unit claims gives it its default bodies, from the
+    // trait's source, before the check, as the merged build backfills them:
+    // the checker decides calls to them (`clock.inspected`). Taken out again
+    // once lowered, since the unit's items go back to their files below.
+    const auto ownItems = program.items.size();
+    kex::backfillExternalTraitDefaults(program);
     kex::semantic::Analyzer analyzer(&available);
     (void)analyzer.analyze(program);
     for (const auto &diagnostic : analyzer.diagnostics()) {
@@ -1748,15 +1764,8 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     std::map<std::string, std::set<std::pair<std::string, int>>> unitRoutes;
     if (lowerApart && !unitChecked) allLowered = false;
     if (lowerApart && unitChecked) {
-      // A prelude trait the unit claims gives it its default bodies, from
-      // the trait's source, as the merged build backfills them; taken out
-      // again, since the unit's items go back to their files below.
-      const auto ownItems = program.items.size();
-      kex::backfillExternalTraitDefaults(program);
       auto lowered = lowerUnitSeparately(program, isEntry ? g_separateEntryPath : unit.front(),
                                          analyzer, registry, coreDir ? coreDir : "");
-      program.items.erase(program.items.begin() + static_cast<std::ptrdiff_t>(ownItems),
-                          program.items.end());
       if (!lowered) allLowered = false;
       else {
         unitLowered = true;
@@ -1768,6 +1777,8 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         }
       }
     }
+    program.items.erase(program.items.begin() + static_cast<std::ptrdiff_t>(ownItems),
+                        program.items.end());
     if (!isEntry) {
       // What the unit's modules would say of themselves once compiled.
       kex::beam::LoadedUnit described;
@@ -2413,15 +2424,7 @@ auto compilePreludeCore(const std::string &dir,
   auto tierGroups = kex::groupPreludeSourcesByTier(files);
   const auto stdlibRoot =
       std::filesystem::path(files.front()).parent_path();
-  auto optInFiles = kex::standardLibrarySourceFiles();
-  optInFiles.erase(
-      std::remove_if(
-          optInFiles.begin(), optInFiles.end(),
-          [&](const auto &file) {
-            return std::filesystem::path(file).parent_path() !=
-                   stdlibRoot;
-          }),
-      optInFiles.end());
+  auto optInFiles = kex::optInStdlibSources(stdlibRoot);
   files.insert(files.end(), optInFiles.begin(), optInFiles.end());
   // Track item index boundaries per tier: tierBounds[t] = index of first
   // item belonging to tier t.  tierBounds[4] = total item count.

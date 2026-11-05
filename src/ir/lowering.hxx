@@ -371,6 +371,14 @@ struct Lowering {
         -> ExprPtr;
 
     auto isCapabilityModule(const std::string& name) const -> bool;
+    // The modules a written path can name, the literal one first: then through
+    // a `using` alias, relative to the enclosing modules (innermost first), and
+    // under every `using`-opened module.
+    auto modulePathCandidates(const std::vector<std::string>& path) const
+        -> std::vector<std::string>;
+    // The capability module a written path names (`TCP` under `using
+    // Net.Socket` is `Net.Socket.TCP`), "" when it names none.
+    auto capabilityModuleNamed(const std::vector<std::string>& path) const -> std::string;
 
     auto capabilityInterfaceHas(const std::string& capability,
                                 const std::string& method) const -> bool;

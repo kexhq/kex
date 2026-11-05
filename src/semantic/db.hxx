@@ -85,8 +85,6 @@ public:
                         const std::string& name) -> SymbolInfo*;
     auto receiverSymbol(const std::string& receiver,
                         const std::string& name) const -> const SymbolInfo*;
-    auto isModuleLoading(const std::string& moduleName,
-                         const std::string& fromFile = "") const -> bool;
     auto shadowedModulePaths(const std::string& moduleName) const
         -> const std::vector<std::string>&;
 
@@ -111,7 +109,6 @@ public:
 
     // Access to raw file state for passes
     auto fileState(const std::string& path) -> FileState*;
-    auto fileState(const std::string& path) const -> const FileState*;
 
 private:
     auto rebuildModuleExports(const std::string& path) -> void;
