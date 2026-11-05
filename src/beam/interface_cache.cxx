@@ -29,7 +29,7 @@ using namespace kex::semantic;
 constexpr int kMagic = 0x4b584946;      // "KXIF"
 // Bump with ANY shape change below: old files must read as bad-version,
 // never misparse.
-constexpr int kVersion = 3;
+constexpr int kVersion = 4;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through
@@ -46,7 +46,7 @@ constexpr size_t kModulePair = 2;
 constexpr size_t kModuleBody = 6;
 constexpr size_t kSignature = 9;
 constexpr size_t kFn = 16;
-constexpr size_t kTrait = 4;
+constexpr size_t kTrait = 5;
 constexpr size_t kAdt = 8;
 constexpr size_t kDistinct = 3;
 } // namespace schema
@@ -417,9 +417,12 @@ auto traitToTerm(const kex::semantic::TraitDef& trait) -> TermPtr {
     std::vector<TermPtr> defaults;
     for (const auto& name : trait.defaultMethods)
         defaults.push_back(Term::binary(name));
+    std::vector<TermPtr> bodies;
+    for (const auto& name : trait.defaultBodies) bodies.push_back(Term::binary(name));
     return checkedTuple({Term::atom("trait"), Term::binary(trait.name),
                          Term::list(std::move(required)),
-                         Term::list(std::move(defaults))},
+                         Term::list(std::move(defaults)),
+                         Term::list(std::move(bodies))},
                         schema::kTrait, "trait");
 }
 
@@ -438,6 +441,10 @@ auto traitFromSax(SaxReader& sax) -> kex::semantic::TraitDef {
     trait.defaultMethods.reserve(defaultCount);
     for (size_t i = 0; i < defaultCount; ++i)
         trait.defaultMethods.push_back(sax.readBinary());
+    sax.endList();
+    const auto bodyCount = sax.beginList();
+    for (size_t i = 0; i < bodyCount; ++i)
+        trait.defaultBodies.push_back(sax.readBinary());
     sax.endList();
     return trait;
 }

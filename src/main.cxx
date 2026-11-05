@@ -1305,11 +1305,18 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
   // Where each type's `make` functions are, for the runtime's dispatch on a
   // value: its declaring module may have none, and another unit may.
   std::map<std::string, std::string> methodOwners;
+  // A `make` over a union (`make TypeRef | PatternRef`) owns each member.
   for (const auto *module : registry.allLoadedModules())
-    for (const auto &method : module->chunk.typeInterface.methods)
-      if (!method.moduleFunction && !method.typeOnly && method.receiverType &&
-          method.receiverType->kind == kex::beam::KexiType::Named)
-        methodOwners.try_emplace(method.receiverType->name, module->beamAtom);
+    for (const auto &method : module->chunk.typeInterface.methods) {
+      if (method.moduleFunction || method.typeOnly || !method.receiverType) continue;
+      const auto &receiver = *method.receiverType;
+      if (receiver.kind == kex::beam::KexiType::Named)
+        methodOwners.try_emplace(receiver.name, module->beamAtom);
+      else if (receiver.kind == kex::beam::KexiType::Union)
+        for (const auto &member : receiver.typeArgs)
+          if (member && member->kind == kex::beam::KexiType::Named)
+            methodOwners.try_emplace(member->name, module->beamAtom);
+    }
   const auto ownerOf = [&](const std::string &type) {
     const auto found = methodOwners.find(type);
     return found == methodOwners.end() ? std::string{} : found->second;
