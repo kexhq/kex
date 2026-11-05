@@ -1,0 +1,2 @@
+spec/error_using_missing_name.kex:6:1: error: module Vault has no name `missing`
+Aborted: 1 type error — fix before running (use --no-check to skip).

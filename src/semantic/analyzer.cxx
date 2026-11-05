@@ -1,5 +1,7 @@
 #include "analyzer.hxx"
 #include "../ast/walk.hxx"
+#include "module_rules.hxx"
+#include "resolve_pass.hxx"
 #include "receiver_conflicts.hxx"
 #include "resolve_core.hxx"
 
@@ -109,6 +111,12 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
 }
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
+    // Names first: an undefined name is reported as such, not as the type
+    // errors it causes.
+    if (!m_nameCheckFiles.empty())
+        for (auto& diagnostic :
+             resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces))
+            m_diagnostics.push_back(std::move(diagnostic));
     // Phase 0: two definitions of one method for one receiver type. Reported
     // before anything else so the message is not buried under the type errors
     // an ambiguous method tends to cause downstream.
@@ -117,6 +125,11 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Same-named opaque/variant types still use short dispatch identities.
     for (auto& conflict : findSameNamedTypeMethodCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
+    // Which names one module may take from another (`using`, `export`).
+    for (auto& violation : findModuleRuleViolations(
+             program, m_importedInterfaces,
+             m_moduleLocator ? &m_moduleLocator : nullptr))
+        m_diagnostics.push_back(std::move(violation));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked
     // against a module declared anywhere in the unit, including below it.

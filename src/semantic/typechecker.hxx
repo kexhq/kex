@@ -360,8 +360,53 @@ private:
         -> TypePtr;
     auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call)
         -> TypePtr;
-    auto foldTypeOf(const ast::MethodCall& call,
+    // Who owns a method call once the overload rules chose its winner — the
+    // one place a call's target is decided, so no later pass re-decides it:
+    //   ReceiverType — the receiver's own type answers the method itself,
+    //     and the winner is not its own module: its `make` method, or a
+    //     trait default it inherits (inheriting a default makes it the
+    //     type's method). The type is this program's or a unit's compiled
+    //     apart, whose module holds what it inherits;
+    //   Value — the receiver is erased (unknown, a type variable, `Any`) and
+    //     another module answers the method too: the candidates disagree, so
+    //     the value decides at run time (a sole provider still owns it);
+    //   Winner — otherwise the winner's module owns it.
+    enum class CallOwner { Winner, ReceiverType, Value };
+    // What the receiver's own type answers a method with: its `make` block
+    // (or an inherited trait default), or its home module's function over it.
+    struct OwnAnswer {
+        // The receiver's type, as the checker names it.
+        std::string type;
+        // "" for this program's types; a unit's compiled apart: its module.
+        std::string home;
+        // The home module's function (`Shop.Socket.TCP.close`), or "" when
+        // the type's `make` block answers.
+        std::string moduleFunction;
+        auto decision() const -> DecidedCall {
+            return moduleFunction.empty()
+                ? DecidedCall{CallKind::OwnMethod, type}
+                : DecidedCall{CallKind::ModuleFunction, moduleFunction};
+        }
+    };
+    struct OwnerDecision {
+        CallOwner owner = CallOwner::Winner;
+        // With ReceiverType: what the type answers with.
+        OwnAnswer own;
+    };
+    // `competing`: another module answers the method at the winner's arity.
+    auto ownerOfCall(const std::vector<TypePtr>& argTypes,
+                     const std::string& method,
+                     const std::string& winnerModule, bool competing)
+        -> OwnerDecision;
+    auto ownTypeAnswers(const std::vector<TypePtr>& argTypes,
+                        const std::string& method) -> std::optional<OwnAnswer>;
+    auto typeHomeModule(const std::string& type) const
+        -> std::optional<std::string>;
+    auto ownTypeIdentity(const std::string& name) const -> std::string;
+    auto foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
                     const std::vector<TypePtr>& argTypes) -> void;
+    auto foldProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call,
+                          const std::vector<TypePtr>& argTypes) -> void;
     // Backing store for the pointer namedFunctionSignature returns when the
     // match came from imported interfaces.
     std::vector<Signature> m_importedSignatureCache;
@@ -594,6 +639,8 @@ private:
     // The records the checked program itself declares, as opposed to the
     // imported ones seeded into m_recordFields from interfaces.
     std::unordered_set<std::string> m_programRecords;
+    // This program's distinct types, by name and by qualified name.
+    std::unordered_set<std::string> m_programDistinctTypes;
     // Type variables standing for unannotated FUNCTION PARAMETERS. The
     // field-read rule of kexhq/kex#242 infers a record for these and nothing
     // else: a variable bound by a pattern over an imported constructor

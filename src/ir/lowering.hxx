@@ -2,6 +2,7 @@
 
 #include "lower.hxx"
 #include "lower_internal.hxx"
+#include "../hir/hir.hxx"
 #include "../ast/function_groups.hxx"
 #include "../common/mangle.hxx"
 #include "../common/well_known.hxx"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -326,16 +328,16 @@ struct Lowering {
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
-    // Field reads the checker decided, by call: the record each one reads.
-    std::unordered_map<const ast::MethodCall*, std::string> decidedFieldReads;
-    // Operators a type overloads, as the checker decided them: the left
-    // operand's type, whose `make` block owns the operator.
-    std::unordered_map<const ast::BinaryOp*, std::string> decidedOperators;
+    // The checked program (src/hir/): what each call is, decided once by
+    // semantic analysis. Null when lowering an unchecked program.
+    const hir::Program* hir = nullptr;
     // The type whose overload `n` applies, as the checker decided it; "" for a
     // built-in operator. Lowering used to read it off the left operand's
     // recorded type; with that disabled, spec-beam, fuzz and the examples
     // were unchanged.
     auto operatorOwner(const ast::BinaryOp& n) const -> std::string;
+    // The checker's static type for `expr` (null when it has none).
+    auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr;
     // `implement:` identities per make block, in written order, resolved by
     // semantic analysis. Absent without analysis (`--no-check`), in which
     // case `inheritedDefaults` resolves from its pre-pass usings as before.
@@ -538,9 +540,17 @@ struct Lowering {
     auto trailingMakeDefaults(const ast::MethodCall& n) const
         -> std::vector<const ast::ExprPtr*>;
 
-    auto receiverIsForeignTo(const ast::MethodCall& n) const -> bool;
 
     auto receiverOwner(const ast::MethodCall& n) const -> std::string;
+    // The receiver type's own implementation of a call, where the run-time
+    // dispatch cannot reach it (see the definition): which reason applied,
+    // and the symbol to call.
+    struct OwnImplementation {
+        enum class Reason { None, DistinctType, ModuleFunction };
+        Reason reason = Reason::None;
+        std::string symbol;
+    };
+    auto ownImplementationOf(const ast::MethodCall& n) const -> OwnImplementation;
     static auto ownerNameOf(const std::string& printed) -> std::string;
     // The name `owner`'s implementation of `method` is emitted under when
     // several types define it (`count/List`), or nullopt when it keeps the
@@ -833,6 +843,17 @@ struct Lowering {
     auto coerceListReceiver(FunDef def) -> FunDef;
 
     static auto primGuardBifs() -> const std::unordered_map<std::string, const char*>&;
+    // The runtime shapes a value of `owner` can have, as `typeGuard` tells
+    // them apart (`integer`, `binary`, `tuple:Point`, `atom:None`, ...), or
+    // nothing when they are not known. Two owners whose shapes meet cannot
+    // both be routed by guard order alone.
+    auto runtimeShapes(const std::string& owner)
+        -> std::optional<std::set<std::string>>;
+    // The tag typeGuard tests a non-record tagged type by: an opaque type
+    // declared in a module carries its qualified name.
+    auto guardTag(const std::string& canonical) const -> std::string;
+    static auto shapesMeet(const std::optional<std::set<std::string>>& a,
+                           const std::optional<std::set<std::string>>& b) -> bool;
 
     auto recordGuard(const FieldSlot& slot, ExprPtr v) -> ExprPtr;
 

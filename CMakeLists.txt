@@ -144,6 +144,8 @@ endif()
 
 add_library(kex_lib
     src/hir/call_targets.cxx
+    src/hir/hir.cxx
+    src/hir/repl_input.cxx
     src/ir/lower.cxx
     src/ir/lowering_body.cxx
     src/ir/lowering_calls.cxx
@@ -177,6 +179,7 @@ add_library(kex_lib
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/semantic/module_rules.cxx
     src/semantic/resolve_core.cxx
     src/ast/clone.cxx
     src/ast/function_groups.cxx

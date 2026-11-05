@@ -909,9 +909,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         std::function<void(const ast::ModuleDef&, const std::string&)>
             collectAnnotatedNames =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
-            const auto moduleName = parent.empty() ||
-                    mod.name.starts_with(parent + ".")
-                ? mod.name : parent + "." + mod.name;
+            const auto moduleName = ast::nestedModulePath(parent, mod.name);
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) moduleAnnotated.insert(kex::mangle::qualify(moduleName, (*ann)->name));
@@ -922,9 +920,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         std::function<void(const ast::ModuleDef&, const std::string&)>
             collectModule =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
-            const auto moduleName = parent.empty() ||
-                    mod.name.starts_with(parent + ".")
-                ? mod.name : parent + "." + mod.name;
+            const auto moduleName = ast::nestedModulePath(parent, mod.name);
             collectAnnotatedNames(mod, parent);
             ifaces.modules[moduleName].sourceModule = moduleName;
             ifaces.modules[moduleName].backendModule =

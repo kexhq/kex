@@ -1,0 +1,2 @@
+spec/error_export_missing_module.kex:3:3: error: exported module not found: Nowhere
+Aborted: 1 type error — fix before running (use --no-check to skip).

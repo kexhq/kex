@@ -3,6 +3,8 @@
 #include "../ast/ast.hxx"
 #include "db.hxx"
 #include "imported_interfaces.hxx"
+#include "module_rules.hxx"
+#include <memory>
 #include "resolve_core.hxx"
 #include <optional>
 #include <string>
@@ -19,7 +21,14 @@ namespace kex::semantic {
 class ResolvePass {
 public:
     explicit ResolvePass(const ImportedInterfaces* imports = nullptr);
+    // A file SemanticDB indexes: its diagnostics, completion scopes and
+    // symbol references land in its FileState.
     auto run(SemanticDB& db, const std::string& file) -> void;
+    // A checked program, every dependency merged in (a build): its modules
+    // are its own (`modules`), the prelude's come from the interfaces.
+    auto run(const ast::Program& program, const std::string& path,
+             const ModuleSymbols& modules, const std::vector<SymbolInfo>& symbols)
+        -> std::vector<Diagnostic>;
 
 private:
     auto resolveModule(const ast::ModuleDef& module) -> void;
@@ -69,8 +78,21 @@ private:
     auto error(SourceLocation loc, const std::string& msg) -> void;
     auto warning(SourceLocation loc, const std::string& msg) -> void;
 
+    auto resolveItems(const ast::Program& program) -> void;
+
+    // SemanticDB, when the pass indexes one of its files: module discovery,
+    // shadowed-definition warnings and symbol references are its alone.
     SemanticDB* m_db = nullptr;
-    FileState* m_state = nullptr;
+    std::unique_ptr<ModuleSymbols> m_ownedModules;
+    // Whether this pass reports the `using` and `export` rules
+    // (module_rules.hxx): an indexed file's yes, a checked program's no, as
+    // its checker does.
+    bool m_checksModuleRules = true;
+    const ModuleSymbols* m_modules = nullptr;
+    const std::vector<SymbolInfo>* m_symbols = nullptr;
+    std::string m_path;
+    std::vector<Diagnostic>* m_diagnostics = nullptr;
+    std::vector<FileState::ScopeSnapshot>* m_completionScopes = nullptr;
     const ImportedInterfaces* m_imports;
 
     std::vector<std::unordered_set<std::string>> m_scopes;
@@ -81,5 +103,14 @@ private:
     std::unordered_map<std::string, std::unordered_set<std::string>>
         m_declaredLabels;
 };
+
+// The build's name check: `program`, its dependencies merged in, resolved
+// against its own modules (collectSymbols) and `imports` for the prelude's.
+// What SemanticDB reports for the entry file, without indexing the prelude:
+// only diagnostics in `files` (the entry file, a spec's base) are kept.
+auto resolveProgramNames(const ast::Program& program,
+                         const std::vector<std::string>& files,
+                         const ImportedInterfaces* imports)
+    -> std::vector<Diagnostic>;
 
 } // namespace kex::semantic

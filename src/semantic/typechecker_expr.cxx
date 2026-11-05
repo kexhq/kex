@@ -8,6 +8,7 @@
 #include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
+#include "../common/well_known.hxx"
 #include <cctype>
 #include <functional>
 #include <set>
@@ -1767,7 +1768,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 passBlockByLabel(node, skippedTo);
             }
             if (intrinsic && intrinsic->fold)
-                (this->*intrinsic->fold)(node, argTypes);
+                (this->*intrinsic->fold)(expr, node, argTypes);
 
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
             // argTypes[0] = pid type, argTypes[1] = msg type.
@@ -5423,10 +5424,6 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
                 if (isReceiver && !matched.params.empty() &&
                     !argTypes.empty() && m_importedInterfaces) {
-                    const auto raw =
-                        m_importedInterfaces->receiverFunctions.find(name);
-                    if (raw !=
-                        m_importedInterfaces->receiverFunctions.end()) {
                         // The CALL-SITE receiver (`argTypes[0]`), not the
                         // winner's: matching the winner against itself
                         // covers tautologically, which miscompiled
@@ -5434,7 +5431,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         // to `to/Atom`.
                         auto spelling =
                             resolve_core::importDispatchSpelling(
-                                raw->second, *resolved,
+                                *resolved,
                                 resolve(argTypes[0]),
                                 *m_importedInterfaces,
                                 [this](const TypePtr& type) {
@@ -5443,9 +5440,30 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         if (spelling)
                             target.importDispatchSpelling =
                                 std::move(*spelling);
-                    }
                 }
-                m_resolvedCalls[methodCall] = std::move(target);
+                // Who owns the call (ownerOfCall): lowering used to decide
+                // this again by reading the receiver's type back.
+                const bool competing = std::any_of(
+                    importedFunctions.begin(), importedFunctions.end(),
+                    [&](const ImportedFunction* candidate) {
+                        return candidate->backendModule != target.backendModule &&
+                               candidate->backendArity == target.backendArity;
+                    });
+                const auto owner =
+                    ownerOfCall(argTypes, name, target.backendModule, competing);
+                switch (owner.owner) {
+                case CallOwner::Winner:
+                    m_resolvedCalls[methodCall] = std::move(target);
+                    break;
+                case CallOwner::ReceiverType:
+                    // The receiver's own type answers; lowering reaches it.
+                    if (callExpr) m_decidedCalls[callExpr] = owner.own.decision();
+                    break;
+                case CallOwner::Value:
+                    if (callExpr)
+                        m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+                    break;
+                }
             } else if (winnerIsMakeMethod) {
                 // `private do ... end` inside a `make` block means "only
                 // callable within that make" (docs/modules.md). Enforced here
@@ -5648,6 +5666,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 param = applyGenerics(resolve(param));
             selected.result = selectedResult;
             m_selectedCallSignatures[callExpr] = std::move(selected);
+            // A call no imported target took (none, or a `make` method of
+            // this program): the receiver's own type may answer it
+            // (ownTypeAnswers). ownerOfCall decided the imported ones.
+            const auto resolved = methodCall ? m_resolvedCalls.find(methodCall)
+                                             : m_resolvedCalls.end();
+            if (methodCall && !argTypes.empty() &&
+                (resolved == m_resolvedCalls.end() ||
+                 resolved->second.backendModule.empty()) &&
+                !m_decidedCalls.contains(callExpr))
+                if (const auto own = ownTypeAnswers(argTypes, name))
+                    m_decidedCalls[callExpr] = own->decision();
         }
         return selectedResult;
     }
@@ -5832,6 +5861,113 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
     error(loc, message);
     return arityMatches[0]->result;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::ownerOfCall(const std::vector<TypePtr>& argTypes,
+                              const std::string& method,
+                              const std::string& winnerModule, bool competing)
+    -> OwnerDecision {
+    if (argTypes.empty()) return {};
+    const auto receiver = resolve(argTypes.front());
+    const auto* named = std::get_if<NamedType>(&receiver->kind);
+    const bool erased = std::holds_alternative<UnknownType>(receiver->kind) ||
+                        std::holds_alternative<TypeVar>(receiver->kind) ||
+                        (named && named->name == "Any");
+    if (erased)
+        return {winnerModule != names::kPreludeModule && competing
+                    ? CallOwner::Value : CallOwner::Winner};
+    if (auto own = ownTypeAnswers(argTypes, method); own && own->home != winnerModule)
+        return {CallOwner::ReceiverType, std::move(*own)};
+    return {};
+}
+
+// The backend module of the receiver's own type when that type answers
+// What the receiver's own type answers `method` with, at one signature: its
+// `make` block's (declared there, or a trait default it inherits) — not
+// overloaded by argument type, which lowering dispatches — or else a function
+// of its home module over it. A type of this program, or of a unit compiled
+// apart (from its own module, inherited defaults only); nothing for any other.
+auto TypeChecker::ownTypeAnswers(const std::vector<TypePtr>& argTypes,
+                                 const std::string& method)
+    -> std::optional<OwnAnswer> {
+    const auto* named = std::get_if<NamedType>(&resolve(argTypes.front())->kind);
+    if (!named) return std::nullopt;
+    const auto owner = ownTypeIdentity(named->name);
+    const auto home = typeHomeModule(owner);
+    if (!home) return std::nullopt;
+    const auto inherits =
+        m_traits.declaresMethod(m_traits.implementorKey(argTypes.front()), method);
+    if (!home->empty())
+        return inherits ? std::optional<OwnAnswer>({owner, *home, {}}) : std::nullopt;
+    std::size_t declared = 0;
+    if (auto local = m_methodSignatures.find(method);
+        local != m_methodSignatures.end())
+        for (const auto& signature : local->second) {
+            if (signature.params.empty()) continue;
+            const auto* receiver =
+                std::get_if<NamedType>(&resolve(signature.params.front())->kind);
+            if (receiver && ownTypeIdentity(receiver->name) == owner &&
+                signature.params.size() == argTypes.size())
+                ++declared;
+        }
+    if (declared > 1) return std::nullopt;  // overloaded by argument: dispatched
+    if (declared == 1 || inherits) return OwnAnswer{owner, {}, {}};
+    // A function of the type's own module whose receiver is the type:
+    // `TCP.close(connection: Conn)` for a `TCP.Conn`.
+    const auto dot = owner.rfind('.');
+    if (dot == std::string::npos) return std::nullopt;
+    const auto functions =
+        m_userSignatures.find(kex::mangle::qualify(owner.substr(0, dot), method));
+    if (functions == m_userSignatures.end()) return std::nullopt;
+    const bool overOwnType = std::any_of(
+        functions->second.begin(), functions->second.end(),
+        [&](const Signature& signature) {
+            if (signature.params.size() != argTypes.size()) return false;
+            const auto* receiver =
+                std::get_if<NamedType>(&resolve(signature.params.front())->kind);
+            return receiver && ownTypeIdentity(receiver->name) == owner;
+        });
+    if (!overOwnType) return std::nullopt;
+    return OwnAnswer{owner, {}, owner.substr(0, dot) + "." + method};
+}
+
+// One name for a type however it is written: a record's or ADT's identity
+// (resolveRecordName), and for a distinct type registered under both its
+// spellings (`ThingId` and `ThingIds.ThingId`) the qualified one, when
+// exactly one of this program's declarations has it.
+auto TypeChecker::ownTypeIdentity(const std::string& name) const -> std::string {
+    const auto identity = resolveRecordName(name);
+    if (identity != name || identity.find('.') != std::string::npos ||
+        m_programRecords.contains(identity))
+        return identity;
+    std::string qualified;
+    for (const auto& distinct : m_programDistinctTypes)
+        if (distinct.ends_with("." + name)) {
+            if (!qualified.empty()) return name;  // two modules: as written
+            qualified = distinct;
+        }
+    return qualified.empty() ? name : qualified;
+}
+
+// Where `type` is declared: "" for this program, the backend module of the
+// unit compiled apart that declares it (`Bags.Bag` is `Bags`'s), or nothing
+// for the prelude's and everything else.
+auto TypeChecker::typeHomeModule(const std::string& type) const
+    -> std::optional<std::string> {
+    if (m_programRecords.contains(type) || m_programDistinctTypes.contains(type))
+        return std::string{};
+    if (!m_importedInterfaces) return std::nullopt;
+    const ImportedModuleInterface* home = nullptr;
+    for (const auto& [name, module] : m_importedInterfaces->modules)
+        if (module.compiledApart && type.starts_with(name + ".") &&
+            (!home || name.size() > home->sourceModule.size()))
+            home = &module;
+    if (!home) return std::nullopt;
+    return home->backendModule;
 }
 
 } // namespace kex::semantic

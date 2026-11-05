@@ -672,6 +672,34 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        // An input is checked as the statements that run, so the walker reads
+        // the checker's decisions for them as it does for a file: a
+        // `Process.Shared` is an erased String at run time, and without them
+        // `site.put` went to String ("Undefined method: put for String").
+        // A definition is checked as it is defined; its body runs on those
+        // decisions when a later input calls it.
+        it("runs a definition's body on the checker's decisions", []() {
+            auto out = runRepl(
+                "foul stash(text: String) -> String do\n"
+                "  let site : Process.Shared<String> = Process.Shared.named(\"repl.def\")\n"
+                "  site.put(text)\n"
+                "  site.get.or(\"\")\n"
+                "end\n"
+                "stash(\"kept\")\n");
+            assertTrue(out.find("=> \"kept\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
+        it("runs an input on the checker's decisions", []() {
+            auto out = runRepl(
+                "let site : Process.Shared<String> = Process.Shared.named(\"repl.site\")\n"
+                "site.put(\"hi\")\n"
+                "site.get\n");
+            assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos,
+                       out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
         it("persists var bindings, reassignment, and ! mutation", []() {
             const std::string input =
                 "var s = \"hello\"\n"
@@ -925,6 +953,30 @@ int main() {
     });
 
     describe("REPL CLI — loaded definitions", []() {
+        // A loaded file is checked as the definitions that run, so a call into
+        // it reads the checker's decisions: `site.put` on a `Process.Shared`
+        // (an erased String at run time) went to String.
+        it("runs a loaded definition on the checker's decisions", []() {
+            char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "foul stash(text: String) -> String do\n"
+                     "  let site : Process.Shared<String> = "
+                     "Process.Shared.named(\"repl.load\")\n"
+                     "  site.put(text)\n"
+                     "  site.get.or(\"\")\n"
+                     "end\n";
+            }
+            close(fd);
+            auto out = runRepl(std::string("/load ") + sourcePath +
+                               "\nstash(\"loaded\")\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
         it("keeps a loaded module's AST alive for later bindings", []() {
             char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
             int fd = mkstemps(sourcePath, 4);

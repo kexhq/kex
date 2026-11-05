@@ -32,14 +32,25 @@ auto variantText(const ast::TypeExpr& variant) -> std::string {
 } // namespace
 
 auto CollectPass::run(SemanticDB& db, const std::string& file) -> void {
-    m_state = db.fileState(file);
-    if (!m_state) return;
-    m_state->symbols.clear();
-    m_currentModule = "";
+    auto* state = db.fileState(file);
+    if (!state) return;
+    state->symbols = collectSymbols(state->ast, state->path);
+}
 
-    for (const auto& item : m_state->ast.items) {
-        collectTopLevel(item);
-    }
+auto CollectPass::collect(const ast::Program& program, const std::string& path)
+    -> std::vector<SymbolInfo> {
+    std::vector<SymbolInfo> symbols;
+    m_symbols = &symbols;
+    m_path = path;
+    m_currentModule = "";
+    for (const auto& item : program.items) collectTopLevel(item);
+    m_symbols = nullptr;
+    return symbols;
+}
+
+auto collectSymbols(const ast::Program& program, const std::string& path)
+    -> std::vector<SymbolInfo> {
+    return CollectPass{}.collect(program, path);
 }
 
 auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
@@ -62,18 +73,18 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
             info.definition = ptr->location;
             info.module = "";
             info.type = Type::unknown();
-            m_state->symbols.push_back(std::move(info));
+            m_symbols->push_back(std::move(info));
         } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
             // Standalone type signature declaration (e.g. in prelude files):
             // `describe : (String, Block<Void>) -> Void`
             SymbolInfo info;
             info.name = ptr->name;
             info.kind = SymbolKind::Function;
-            info.definition = declaredAt(ptr->location, m_state->path);
+            info.definition = declaredAt(ptr->location, m_path);
             info.module = "";
             info.isFoul = ptr->isFoul;
             info.type = Type::unknown();
-            m_state->symbols.push_back(std::move(info));
+            m_symbols->push_back(std::move(info));
         }
         // UsingBlock, MainBlock, Pragma, CompiledBlock: skip
     }, item);
@@ -81,13 +92,7 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
 
 auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     const std::string parentModule = m_currentModule;
-    const bool nameIsQualified =
-        !parentModule.empty() &&
-        mod.name.rfind(parentModule + ".", 0) == 0;
-    const std::string qualifiedModule =
-        parentModule.empty() || nameIsQualified
-            ? mod.name
-            : parentModule + "." + mod.name;
+    const std::string qualifiedModule = ast::nestedModulePath(parentModule, mod.name);
 
     // Register the module itself
     SymbolInfo moduleInfo;
@@ -101,7 +106,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     moduleInfo.definition = mod.location;
     moduleInfo.module = parentModule;
     moduleInfo.type = Type::unknown();
-    m_state->symbols.push_back(std::move(moduleInfo));
+    m_symbols->push_back(std::move(moduleInfo));
 
     std::string savedModule = m_currentModule;
     m_currentModule = qualifiedModule;
@@ -109,7 +114,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     auto collectAnnotation = [&](const ast::TypeAnnotation& ann) {
         // If a FunctionDef with the same name already exists in this module,
         // don't create a duplicate — the def wins.
-        for (const auto& sym : m_state->symbols) {
+        for (const auto& sym : *m_symbols) {
             if (sym.name == ann.name && sym.module == m_currentModule
                     && sym.kind == SymbolKind::Function)
                 return;
@@ -117,11 +122,11 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
         SymbolInfo info;
         info.name = ann.name;
         info.kind = SymbolKind::Function;
-        info.definition = declaredAt(ann.location, m_state->path);
+        info.definition = declaredAt(ann.location, m_path);
         info.module = m_currentModule;
         info.isFoul = ann.isFoul;
         info.type = Type::unknown();
-        m_state->symbols.push_back(std::move(info));
+        m_symbols->push_back(std::move(info));
     };
 
     for (const auto& item : mod.body) {
@@ -146,10 +151,10 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
                 info.definition = ptr->location;
                 info.module = m_currentModule;
                 info.type = Type::unknown();
-                m_state->symbols.push_back(std::move(info));
+                m_symbols->push_back(std::move(info));
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
                 for (const auto& vitem : ptr->items) {
-                    const auto firstNewSymbol = m_state->symbols.size();
+                    const auto firstNewSymbol = m_symbols->size();
                     std::visit([&](const auto& vptr) {
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
@@ -164,8 +169,8 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
                             collectMake(*vptr, m_currentModule);
                         }
                     }, vitem);
-                    for (size_t i = firstNewSymbol; i < m_state->symbols.size(); ++i)
-                        m_state->symbols[i].isExported = ptr->isPublic;
+                    for (size_t i = firstNewSymbol; i < m_symbols->size(); ++i)
+                        (*m_symbols)[i].isExported = ptr->isPublic;
                 }
             }
             // UsingBlock, CompiledBlock: skip
@@ -185,7 +190,7 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
     // "already in symbols" merge below is still needed for those.
     const auto clauseCount = static_cast<int>(
         def.clauses.empty() ? 1 : def.clauses.size());
-    for (auto& sym : m_state->symbols) {
+    for (auto& sym : *m_symbols) {
         if (sym.name == def.name && sym.module == module && sym.kind == SymbolKind::Function) {
             sym.clauseCount += clauseCount;
             return;
@@ -209,7 +214,7 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
         }
     }
 
-    m_state->symbols.push_back(std::move(info));
+    m_symbols->push_back(std::move(info));
 }
 
 auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module) -> void {
@@ -239,7 +244,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                 ? diagnostics::typeExprToString(*variant) : variantText(*variant);
         }
     }
-    m_state->symbols.push_back(std::move(info));
+    m_symbols->push_back(std::move(info));
 
     // Variant constructors are also top-level names
     if (def.variants && !def.isDistinct) {
@@ -263,7 +268,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                         }
                         ctor.detail += ">";
                     }
-                    m_state->symbols.push_back(std::move(ctor));
+                    m_symbols->push_back(std::move(ctor));
                 }
             } else if (const auto* gt = std::get_if<ast::GenericType>(&variant->kind)) {
                 if (!gt->name.parts.empty()) {
@@ -285,7 +290,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                         }
                         ctor.detail += ">";
                     }
-                    m_state->symbols.push_back(std::move(ctor));
+                    m_symbols->push_back(std::move(ctor));
                 }
             }
         }
@@ -313,7 +318,7 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
         info.detail += "\n  " + field.name + " : " +
                        (field.type ? diagnostics::typeExprToString(*field.type) : "?");
     info.detail += "\nend";
-    m_state->symbols.push_back(std::move(info));
+    m_symbols->push_back(std::move(info));
 
     // Fields are accessible as instance members (record.fieldName)
     for (const auto& field : def.fields) {
@@ -321,11 +326,11 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
         fi.name = field.name;
         fi.kind = SymbolKind::Function; // treated as accessor for completion
         // A field has no location of its own; its record is the next best.
-        fi.definition = declaredAt(def.location, m_state->path);
+        fi.definition = declaredAt(def.location, m_path);
         fi.module = module;
         fi.makeTarget = def.name;
         fi.type = Type::unknown();
-        m_state->symbols.push_back(std::move(fi));
+        m_symbols->push_back(std::move(fi));
     }
 }
 
@@ -339,7 +344,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
 
     auto tagTarget = [&](const std::string& funcName, bool isServingSlot) {
         if (target.empty()) return;
-        for (auto& sym : m_state->symbols) {
+        for (auto& sym : *m_symbols) {
             if (sym.name == funcName && sym.module == module && sym.makeTarget.empty()) {
                 sym.makeTarget = target;
                 sym.isServingSlot = isServingSlot;
@@ -349,19 +354,19 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
 
     // Index a TypeAnnotation from a make block as an instance method of `target`.
     auto collectMakeAnnotation = [&](const ast::TypeAnnotation& ann) {
-        for (const auto& sym : m_state->symbols) {
+        for (const auto& sym : *m_symbols) {
             if (sym.name == ann.name && sym.makeTarget == target) return; // dedup
         }
         SymbolInfo info;
         info.name = ann.name;
         info.kind = SymbolKind::Function;
-        info.definition = declaredAt(ann.location, m_state->path);
+        info.definition = declaredAt(ann.location, m_path);
         info.module = module;
         info.isFoul = ann.isFoul;
         info.makeTarget = target;
         info.isServingSlot = def.isServing;
         info.type = Type::unknown();
-        m_state->symbols.push_back(std::move(info));
+        m_symbols->push_back(std::move(info));
     };
 
     for (const auto& item : def.body) {
@@ -374,7 +379,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                 collectMakeAnnotation(*ptr);
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
                 for (const auto& vitem : ptr->items) {
-                    const auto firstNewSymbol = m_state->symbols.size();
+                    const auto firstNewSymbol = m_symbols->size();
                     std::visit([&](const auto& vptr) {
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
@@ -392,8 +397,8 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                     // and any other module could call it
                     // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
                     for (size_t i = firstNewSymbol;
-                         i < m_state->symbols.size(); ++i)
-                        m_state->symbols[i].isExported = ptr->isPublic;
+                         i < m_symbols->size(); ++i)
+                        (*m_symbols)[i].isExported = ptr->isPublic;
                 }
             }
         }, item);

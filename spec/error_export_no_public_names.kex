@@ -1,0 +1,14 @@
+# Re-exporting a module that has no public names exports nothing; refused.
+module Vault do
+  private do
+    let secret() = "secret"
+  end
+end
+
+module Front do
+  export Vault
+end
+
+main do
+  IO.printLine("unreached")
+end
