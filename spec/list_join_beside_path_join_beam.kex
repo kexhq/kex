@@ -1,0 +1,19 @@
+# kex: run-beam
+# `[String].join` is the prelude's List method even with FS.Path.join/2 in the
+# build — through a typed receiver, an annotated parameter and a match arm.
+# The checker's decision settles it; lowering used to choose the provider
+# again from the receiver's type.
+
+using FS
+
+let joined(parts: [String]) -> String = parts.join(",")
+
+main do
+  IO.printLine(["a", "b"].join(","))
+  IO.printLine(joined(["c", "d"]))
+  match Just(["e", "f"]) do
+    Just(items) => IO.printLine(items.join("-"))
+    None => IO.printLine("none")
+  end
+  IO.printLine(FS.Path.join("dir", "file"))
+end

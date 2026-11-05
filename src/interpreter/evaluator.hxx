@@ -5,6 +5,7 @@
 #include "scheduler.hxx"
 #include "value.hxx"
 #include "../semantic/traits.hxx"
+#include "../hir/hir.hxx"
 #include "../semantic/types.hxx"
 #include <chrono>
 #include <deque>
@@ -477,34 +478,30 @@ public:
         m_testFilters = std::move(filters);
     }
 
-    // `Type.of(x)` sites the checker typed concretely (see
-    // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
-    // — the table is simply absent and every `Type.of` asks the value.
-    auto setStaticTypeOfCalls(
-        const std::unordered_map<const ast::MethodCall*,
-                                 semantic::StaticTypeAnswer>* calls) -> void {
-        m_staticTypeOfCalls = calls;
+    // The checked program (src/hir/) the evaluator runs: each expression's
+    // static type, the `Type.of` answers and the signature chosen for each
+    // call — the same object lowering reads, so the two backends share what
+    // semantic analysis decided. Without one every answer comes from the
+    // value. `setProgram` replaces the programs read; `addProgram` adds one,
+    // read first: a REPL session keeps every input's, since a later input
+    // calls an earlier one's definitions.
+    auto setProgram(const hir::Program* program) -> void {
+        m_programs.clear();
+        m_programs.push(program);
     }
-    auto setExpressionTypes(
-        const std::unordered_map<const ast::Expr*, semantic::TypePtr>* types)
-        -> void {
-        m_expressionTypes = types;
-    }
-    // The signature the checker chose for each call. Optional, like the
-    // tables above.
-    auto setCallSignatures(
-        const std::unordered_map<const ast::Expr*, semantic::Signature>* calls)
-        -> void {
-        m_callSignatures = calls;
-    }
+    auto addProgram(const hir::Program* program) -> void { m_programs.push(program); }
 
 private:
-    const std::unordered_map<const ast::MethodCall*,
-                             semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
-        m_expressionTypes = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::Signature>*
-        m_callSignatures = nullptr;
+    hir::ProgramSet m_programs;
+    // The checker's static type for `expr`, or null.
+    auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
+        return expr ? m_programs.typeOf(*expr) : nullptr;
+    }
+    // The function `type`'s own `method` is bound to, or "": the checker
+    // names a module's type qualified (`Accounts.AccountId`), a `make` block
+    // inside the module binds it as written there (`AccountId::successor`).
+    auto ownMethodName(const std::string& type, const std::string& method) const
+        -> std::string;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here

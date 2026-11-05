@@ -208,6 +208,11 @@ struct FunClause {
     std::vector<PatternPtr> params;
     std::optional<ExprPtr> guard;
     ExprPtr body;
+    // On a receiver dispatcher's clause: the per-type implementations
+    // (`count/List`) a value of that type reaches through it, as the
+    // dispatcher put its arms in order. They hold while nothing is merged
+    // in ahead of this clause (emitCore checks).
+    std::vector<std::string> routes;
 };
 struct FunDef {
     std::string name;

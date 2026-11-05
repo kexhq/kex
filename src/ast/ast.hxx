@@ -803,6 +803,15 @@ struct ModuleDef {
     bool isCapability = false;
 };
 
+// The qualified path of a module written as `name` inside `parent` ("" at the
+// top): `module Inner` in `Outer` is `Outer.Inner`, and a name already
+// written under its parent (`module Outer.Inner`) stays as written.
+inline auto nestedModulePath(const std::string& parent, const std::string& name)
+    -> std::string {
+    return parent.empty() || name.starts_with(parent + ".") ? name
+                                                            : parent + "." + name;
+}
+
 using TopLevelItem = std::variant<
     std::unique_ptr<ModuleDef>,
     std::unique_ptr<TypeDef>,

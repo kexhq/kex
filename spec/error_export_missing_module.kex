@@ -1,0 +1,8 @@
+# `export` naming a module that does not exist is refused.
+module Front do
+  export Nowhere
+end
+
+main do
+  IO.printLine("unreached")
+end

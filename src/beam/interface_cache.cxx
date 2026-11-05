@@ -29,7 +29,7 @@ using namespace kex::semantic;
 constexpr int kMagic = 0x4b584946;      // "KXIF"
 // Bump with ANY shape change below: old files must read as bad-version,
 // never misparse.
-constexpr int kVersion = 1;
+constexpr int kVersion = 2;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through
@@ -45,7 +45,7 @@ constexpr size_t kIfaces = 14;
 constexpr size_t kModulePair = 2;
 constexpr size_t kModuleBody = 6;
 constexpr size_t kSignature = 9;
-constexpr size_t kFn = 14;
+constexpr size_t kFn = 15;
 constexpr size_t kTrait = 4;
 constexpr size_t kAdt = 8;
 constexpr size_t kDistinct = 3;
@@ -371,7 +371,8 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
                          Term::boolean(fn.visibleByReceiver),
                          Term::boolean(fn.isConstructor),
                          Term::boolean(fn.remoteSlot),
-                         Term::binary(fn.constructorOwner)},
+                         Term::binary(fn.constructorOwner),
+                         Term::binary(fn.implementation)},
                         schema::kFn, "fn");
 }
 
@@ -401,6 +402,7 @@ auto functionFromSax(SaxReader& sax) -> kex::semantic::ImportedFunction {
     fn.isConstructor = sax.readBool();
     fn.remoteSlot = sax.readBool();
     fn.constructorOwner = sax.readBinary();
+    fn.implementation = sax.readBinary();
     return fn;
 }
 

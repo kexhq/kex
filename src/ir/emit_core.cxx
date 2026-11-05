@@ -697,6 +697,12 @@ auto emitCore(const Module& mod) -> EmitResult {
     r.source = out.str();
     r.moduleName = mod.name;
     r.mainArity = mod.mainArity;
+    // A dispatcher's routes hold only as its function's first clause: one
+    // merged in ahead (a bare definition of the same name) answers first.
+    for (const auto& fn : mod.functions)
+        if (!fn.clauses.empty())
+            for (const auto& route : fn.clauses.front().routes)
+                r.routedImplementations.insert({route, fn.arity});
     return r;
 }
 

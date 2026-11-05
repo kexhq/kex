@@ -1,0 +1,13 @@
+# `export` of a module the program never merges: it is in a source root
+# (spec/lib/tariff.kex) and nothing `using`s it, so neither the program nor an
+# interface describes it. The checker asks the build where modules are found
+# before calling it missing; slick's harmat package (`export Harmat.Query`)
+# failed to build without that.
+module Front do
+  export Tariff
+  let hello() = "hello"
+end
+
+main do
+  IO.printLine(Front.hello())
+end
