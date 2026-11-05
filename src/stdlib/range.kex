@@ -83,6 +83,18 @@ make Range, implement: Enumerable, Foldable do
   items :> [A]
   let items = Kex.Intrinsic.Range.items(this)
 
+  # Returns the range's elements as a list. The same as +items+, under the
+  # name that reads as a conversion — and unlike +to(List)+ it answers the
+  # list directly rather than wrapped in an +Optional+.
+  #
+  # @return [[A]] the elements, in ascending order
+  #
+  # @example
+  #   (1..3).list      # => [1, 2, 3]
+  #   ('a'..'c').list  # => ['a', 'b', 'c']
+  list :> [A]
+  let list = this.items
+
   # Returns the first element, or +None+ for an empty range.
   #
   # @return [A?] the first element, or +None+
