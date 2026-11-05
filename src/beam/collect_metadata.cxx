@@ -1277,26 +1277,28 @@ auto collectMetadata(const kex::ast::Program& program,
     // has to travel with it or a stdlib capability cannot be replaced by any
     // importer (kexhq/kex#143).
     if (!opts.moduleName.empty()) {
-        std::function<bool(const ast::ModuleDef&)> visit =
-            [&](const ast::ModuleDef& mod) -> bool {
-            if (mod.name == opts.moduleName) {
+        std::function<bool(const ast::ModuleDef&, const std::string&)> visit =
+            [&](const ast::ModuleDef& mod, const std::string& parent) -> bool {
+            const auto path = ast::nestedModulePath(parent, mod.name);
+            if (path == opts.moduleName) {
                 chunk.metadata.isCapability = mod.isCapability;
                 return true;
             }
             for (const auto& item : mod.body)
                 if (const auto* nested =
                         std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*nested && visit(**nested)) return true;
+                    if (*nested && visit(**nested, path)) return true;
             return false;
         };
         for (const auto& item : program.items)
             if (const auto* mod =
                     std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod && visit(**mod)) break;
+                if (*mod && visit(**mod, "")) break;
         // Every part declared `capability` names its members.
-        std::function<void(const ast::ModuleDef&)> members =
-            [&](const ast::ModuleDef& mod) {
-            if (mod.name == opts.moduleName && mod.isCapability)
+        std::function<void(const ast::ModuleDef&, const std::string&)> members =
+            [&](const ast::ModuleDef& mod, const std::string& parent) {
+            const auto path = ast::nestedModulePath(parent, mod.name);
+            if (path == opts.moduleName && mod.isCapability)
                 for (const auto& item : mod.body)
                     if (const auto* function =
                             std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
@@ -1309,13 +1311,13 @@ auto collectMetadata(const kex::ast::Program& program,
             for (const auto& item : mod.body)
                 if (const auto* nested =
                         std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*nested) members(**nested);
+                    if (*nested) members(**nested, path);
         };
         if (opts.unitCompiledApart)
             for (const auto& item : program.items)
                 if (const auto* mod =
                         std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*mod) members(**mod);
+                    if (*mod) members(**mod, "");
     }
 
     if (!opts.noCheck) {

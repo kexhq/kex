@@ -645,4 +645,46 @@ auto Lowering::makeAccessors(const std::unordered_set<std::string>& definedFns,
     return out;
 }
 
+
+auto Lowering::modulePathCandidates(const std::vector<std::string>& path) const
+    -> std::vector<std::string> {
+    std::string explicitPath;
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        if (i) explicitPath += ".";
+        explicitPath += path[i];
+    }
+    // The literal path always wins over an alias expansion — see
+    // registerModuleAliases. `Data.Set.from(…)` must stay `Data.Set.from`,
+    // not become `Units.Data.Set.from`, in a file that also `using`s
+    // `Units.Data` (kexhq/kex#229, kexhq/kex#233).
+    std::vector<std::string> candidates{explicitPath};
+    if (path.empty()) return candidates;
+    if (auto alias = moduleAliases.find(path.front()); alias != moduleAliases.end()) {
+        auto aliased = alias->second;
+        for (std::size_t i = 1; i < path.size(); ++i) aliased += "." + path[i];
+        candidates.push_back(std::move(aliased));
+    }
+    if (!currentModulePath.empty() && path.size() == 1)
+        candidates.push_back(currentModulePath + "." + explicitPath);
+    // Every enclosing module, innermost first, and the modules a `using`
+    // opened: `Headers.empty` inside `Net.HTTP.HTTP` is
+    // `Net.HTTP.Headers.empty` (kexhq/kex#476).
+    for (auto scope = currentModulePath; !scope.empty();) {
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+        candidates.push_back(scope + "." + explicitPath);
+    }
+    for (const auto& imported : usingModules)
+        candidates.push_back(imported + "." + explicitPath);
+    return candidates;
+}
+
+auto Lowering::capabilityModuleNamed(const std::vector<std::string>& path) const
+    -> std::string {
+    for (const auto& candidate : modulePathCandidates(path))
+        if (isCapabilityModule(candidate)) return candidate;
+    return {};
+}
+
 } // namespace kex::ir

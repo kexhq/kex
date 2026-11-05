@@ -86,7 +86,6 @@ public:
     // Tag peeks (never consume; false past the end).
     auto nextIsTuple() const -> bool;
     auto nextIsAtom() const -> bool;
-    auto atEnd() const -> bool;
 
 private:
     struct Cursor;

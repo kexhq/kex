@@ -35,10 +35,6 @@ auto Scope::parent() const -> Scope* {
     return m_parent;
 }
 
-auto Scope::isFoul() const -> bool {
-    return m_isFoul;
-}
-
 SymbolTable::SymbolTable() : m_current(nullptr) {
     pushScope();
 }

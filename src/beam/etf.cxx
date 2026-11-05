@@ -518,8 +518,4 @@ auto SaxReader::nextIsAtom() const -> bool {
            tag == ATOM_UTF8_EXT || tag == SMALL_ATOM_UTF8_EXT;
 }
 
-auto SaxReader::atEnd() const -> bool {
-    return m_cursor->dec.pos >= m_cursor->dec.len;
-}
-
 } // namespace kex::beam

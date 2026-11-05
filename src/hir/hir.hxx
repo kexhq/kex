@@ -7,7 +7,10 @@
 // copying it, so building it is one pass over the checker's tables.
 #include "call_targets.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
+
+#include <memory>
 
 #include <string>
 #include <unordered_map>
@@ -35,11 +38,25 @@ struct Target {
     bool servingCast = false;
 };
 
+// The checker's answers a Program reads besides its call targets: borrowed
+// from an analysis, or owned by a Program loaded from a cache (persist.hxx).
+struct Answers {
+    std::unordered_map<const ast::Expr*, semantic::TypePtr> types;
+    std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer> typeOfAnswers;
+    std::unordered_map<const ast::Expr*, semantic::Signature> selected;
+};
+
 class Program {
 public:
     Program(const ast::Program& ast, const semantic::Analyzer& analysis);
+    // A program whose answers were loaded (persist.hxx), not analysed here:
+    // `targets` keyed by expression, `answers` owned.
+    Program(const ast::Program& ast,
+            const std::unordered_map<const ast::Expr*, Target>& targets,
+            std::unique_ptr<Answers> answers);
 
     auto ast() const -> const ast::Program& { return *m_ast; }
+    // The analysis it was built from; a loaded program has none.
     auto analysis() const -> const semantic::Analyzer& { return *m_analysis; }
 
     // What `call` is; a Target of kind Undecided when nothing decided it.
@@ -48,7 +65,8 @@ public:
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
     // The nominal type a method call was decided on, without type arguments:
     // an OwnMethod's owner, else the receiver of the signature the checker
-    // selected (`Process.Shared` for `site.get`); "" when neither names one.
+    // selected (`Process.Shared` for `site.get`) when the call's receiver is
+    // of that type; "" otherwise.
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
     // The static type the checker gave `expr`, or null.
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
@@ -62,8 +80,15 @@ public:
     auto callSites() const -> const std::vector<CallSite>& { return m_sites; }
 
 private:
+    auto collectSites() -> void;
+
     const ast::Program* m_ast;
-    const semantic::Analyzer* m_analysis;
+    const semantic::Analyzer* m_analysis = nullptr;
+    // Borrowed from the analysis, or `m_owned`'s.
+    const decltype(Answers::types)* m_types = nullptr;
+    const decltype(Answers::typeOfAnswers)* m_typeOfAnswers = nullptr;
+    const decltype(Answers::selected)* m_selected = nullptr;
+    std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;
     // Keyed by the call node (the Expr, and the MethodCall / BinaryOp inside
     // it), so a pass holding either finds the same target.
@@ -80,8 +105,9 @@ public:
         if (program) m_programs.push_back(program);
     }
     auto empty() const -> bool { return m_programs.empty(); }
+    // Read after every pushed one: the prelude's, which outlives them all.
+    auto setBase(const Program* program) -> void { m_base = program; }
 
-    auto targetOf(const ast::Expr& call) const -> const Target&;
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
@@ -92,6 +118,7 @@ public:
 
 private:
     std::vector<const Program*> m_programs;
+    const Program* m_base = nullptr;
 };
 
 // What is not yet decided: one line per undecided call site (`--verify-hir`).

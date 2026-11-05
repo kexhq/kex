@@ -163,10 +163,6 @@ auto Analyzer::diagnostics() const -> const std::vector<Diagnostic>& {
     return m_diagnostics;
 }
 
-auto Analyzer::typeOf(const ast::Expr* expr) const -> TypePtr {
-    return m_checker.typeOf(expr);
-}
-
 auto Analyzer::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
     return m_checker.displayTypeOf(expr);
 }
@@ -1313,10 +1309,6 @@ auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) 
 
 auto Analyzer::error(SourceLocation loc, const std::string& msg) -> void {
     m_diagnostics.push_back({Diagnostic::Level::Error, loc, msg});
-}
-
-auto Analyzer::warning(SourceLocation loc, const std::string& msg) -> void {
-    m_diagnostics.push_back({Diagnostic::Level::Warning, loc, msg});
 }
 
 } // namespace kex::semantic

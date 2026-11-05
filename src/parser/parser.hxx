@@ -151,7 +151,6 @@ private:
     auto parsePostfix() -> ast::ExprPtr;
     auto parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr;
     auto parsePrimary() -> ast::ExprPtr;
-    auto parseBody() -> std::vector<ast::ExprPtr>;
 
     // Specific expressions
     auto parseIfExpr() -> ast::ExprPtr;

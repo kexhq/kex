@@ -4,6 +4,12 @@
 #include "../common/mangle.hxx"
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
+#include "../common/prelude_tiers.hxx"
+#include "../common/digest.hxx"
+#include "../common/file_io.hxx"
+#include "../cache/cache.hxx"
+#include "../hir/persist.hxx"
+#include "../common/timings.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/signature_params.hxx"
@@ -13,6 +19,7 @@
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -689,15 +696,105 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
     m_env->define(bindingName, std::move(value));
 }
 
+namespace {
+
+// The walker's prelude, and what one check of the whole stdlib decided about
+// it. The program is the prelude's declarations in file order, as the walker
+// runs them. The check reads them in BEAM's order instead (the prelude by
+// tier, then the opt-in modules beside it, checkedPreludeSources), lent into
+// a program of its own and given back, so its HIR answers for the nodes the
+// walker runs. A check that finds an error answers nothing.
+struct CheckedPrelude {
+    const ast::Program* program = nullptr;
+    const hir::Program* checked = nullptr;
+};
+
+auto heldLocation(const ast::TopLevelItem& item) -> std::string_view {
+    return std::visit(
+        [](const auto& node) -> std::string_view {
+            return node ? node->location.file : std::string_view{};
+        },
+        item);
+}
+
+auto checkPrelude(ast::Program& prelude, const std::vector<std::string>& files)
+    -> const hir::Program* {
+    std::vector<std::string> ordered;
+    try {
+        ordered = kex::orderPreludeSourcesByTier(files);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+    if (ordered.empty()) return nullptr;
+    // Kept for the process: the HIR points into it.
+    auto* checking = new ast::Program();
+    std::vector<std::pair<std::size_t, std::size_t>> lent;  // prelude slot, checking slot
+    for (const auto& file : ordered)
+        for (std::size_t i = 0; i < prelude.items.size(); ++i)
+            if (heldLocation(prelude.items[i]) == file) {
+                lent.emplace_back(i, checking->items.size());
+                checking->items.push_back(std::move(prelude.items[i]));
+            }
+    for (const auto& file : kex::optInStdlibSources(
+             std::filesystem::path(ordered.front()).parent_path())) {
+        std::ifstream in(file);
+        std::string src((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+        Lexer lex(std::move(src), file);
+        Parser parser(lex.tokenizeAll(), file);
+        auto parsed = parser.parseProgram();
+        for (auto& item : parsed.items)
+            if (ast::isMergedDeclaration(item))
+                checking->items.push_back(std::move(item));
+    }
+    const auto started = std::chrono::steady_clock::now();
+    auto* analysis = new semantic::Analyzer();
+    const bool clean = analysis->analyze(*checking);
+    if (kex::timings::enabled())
+        std::fprintf(stderr, "    prelude check (walker)  %.1f ms, %s\n",
+                     std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - started).count(),
+                     clean ? "clean" : "errors: running on the values");
+    const hir::Program* checked =
+        clean ? new hir::Program(*checking, *analysis) : nullptr;
+    for (const auto& [slot, at] : lent)
+        prelude.items[slot] = std::move(checking->items[at]);
+    return checked;
+}
+
+// The prelude's checked program from the cache, when this toolchain saved
+// one; otherwise checked here, and saved for the next process.
+auto cachedPreludeCheck(ast::Program& prelude, const std::vector<std::string>& files)
+    -> const hir::Program* {
+    const auto order = hir::nodeOrder(prelude);
+    std::optional<std::filesystem::path> path;
+    if (const auto dir = kex::cache::directory("walker-prelude"))
+        path = *dir / (kex::sha256Hex("kex-walker-prelude-v1\n" +
+                                      kex::cache::toolchainFingerprint()) + ".bin");
+    if (path)
+        if (const auto bytes = readFileBytes(*path))
+            if (auto loaded = hir::load(prelude, order, *bytes)) return loaded.release();
+    const auto* checked = checkPrelude(prelude, files);
+    if (checked && path) {
+        const auto bytes = hir::save(*checked, order);
+        kex::cache::atomicWrite(
+            *path, std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                                    bytes.size()));
+    }
+    return checked;
+}
+
+} // namespace
+
 auto Evaluator::loadPrelude() -> void {
     if (m_preludeLoaded) return;
     // Parse the prelude once and cache the merged declarations. The AST must
     // outlive every Evaluator (m_functionDefs keeps raw pointers into it), so
     // it is a function-local static — shared across all instances.
-    static const ast::Program* preludeProgram = []() -> const ast::Program* {
+    static const CheckedPrelude prelude = []() -> CheckedPrelude {
         auto* prog = new ast::Program();
         auto files = kex::preludeSourceFiles();
-        if (files.empty()) return prog; // no prelude available — run without
+        if (files.empty()) return {prog, nullptr}; // no prelude available — run without
         for (const auto& f : files) {
             std::ifstream in(f);
             std::string src((std::istreambuf_iterator<char>(in)),
@@ -709,9 +806,12 @@ auto Evaluator::loadPrelude() -> void {
                 if (ast::isMergedDeclaration(item))
                     prog->items.push_back(std::move(item));
         }
-        return prog;
+        return {prog, cachedPreludeCheck(*prog, files)};
     }();
-    for (const auto& item : preludeProgram->items) execTopLevel(item);
+    // Read after the program's own: prelude functions run on what the
+    // checker decided about them, as BEAM's prelude is lowered with it.
+    m_programs.setBase(prelude.checked);
+    for (const auto& item : prelude.program->items) execTopLevel(item);
     m_preludeLoaded = true;
 }
 

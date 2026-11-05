@@ -276,7 +276,6 @@ class TypeEnv {
 public:
     auto set(const std::string& name, TypePtr type) -> void;
     auto get(const std::string& name) const -> TypePtr;
-    auto has(const std::string& name) const -> bool;
 
 private:
     std::unordered_map<std::string, TypePtr> m_types;

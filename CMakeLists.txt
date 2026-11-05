@@ -167,6 +167,7 @@ add_library(kex_lib
     src/hir/call_targets.cxx
     src/hir/hir.cxx
     src/hir/repl_input.cxx
+    src/hir/persist.cxx
     src/ir/lower.cxx
     src/ir/lowering_body.cxx
     src/ir/lowering_calls.cxx
