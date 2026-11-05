@@ -11,6 +11,8 @@
 #                (package sources stay: no network inside a timing)
 #   noop         `tey build` again with nothing changed
 #   incremental  touch $BENCH_SLICK_TOUCH, then `tey build`
+#   edit         change $BENCH_SLICK_TOUCH's content (a comment line), then
+#                `tey build`: what an edit costs once caches key on content
 #   devloop      wipe only the prelude-interface cache, then `tey build`
 #                (what every compiler or prelude change costs)
 #   specs        `tey test spec/*.spec.kex` after a warm build (the
@@ -114,6 +116,7 @@ run_scenario() { # <scenario> <runs>
       case "$scenario" in
         cold)        wipe_builds "$label" ;;
         incremental) touch "$WORK/$label/slick/$TOUCH" ;;
+        edit)        printf '# bench edit %s\n' "$i" >>"$WORK/$label/slick/$TOUCH" ;;
         devloop)     rm -rf "$WORK/$label/cache/kex/prelude-interface" ;;
       esac
       if [ "$scenario" = specs ]; then
@@ -154,7 +157,7 @@ fi
 for scenario in "$@"; do
   case "$scenario" in
     cold)                              run_scenario cold "$COLD_RUNS" ;;
-    noop | incremental | devloop | specs) run_scenario "$scenario" "$RUNS" ;;
+    noop | incremental | edit | devloop | specs) run_scenario "$scenario" "$RUNS" ;;
     *) die "unknown scenario '$scenario'" ;;
   esac
 done
