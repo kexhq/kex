@@ -334,21 +334,12 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // claims it first the call goes straight to the real
         // implementation and `with` silently does nothing — the fail-open
         // this feature exists to prevent (kexhq/kex#143).
-        bool capabilityOwnsCall = false;
         std::string capabilityTarget;
         if (n.receiver) {
             std::vector<std::string> segments;
-            if (modulePath(*n.receiver, segments) && !segments.empty()) {
-                std::string joined;
-                for (size_t i = 0; i < segments.size(); ++i) {
-                    if (i) joined += ".";
-                    joined += segments[i];
-                }
-                capabilityOwnsCall =
-                    isCapabilityModule(joined) &&
-                    capabilityInterfaceHas(joined, n.method);
-                if (capabilityOwnsCall) capabilityTarget = joined;
-            }
+            if (modulePath(*n.receiver, segments) && !segments.empty())
+                if (const auto named = capabilityModuleNamed(segments);
+                    !named.empty() && capabilityInterfaceHas(named, n.method)) capabilityTarget = named;
         }
         bool modulePathOwnsCall = false;
         if (n.receiver) {
@@ -435,7 +426,10 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 for (const auto& arg : n.args)
                     args.push_back(atomize(arg, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
-                else
+                // A local make method's defaults, for a local target only: an
+                // imported one fills its own (`uri.string` beside a local
+                // `string(prefix = ...)`, kexhq/kex#475).
+                else if (resolved->second.backendModule.empty())
                     for (const auto* value : trailingMakeDefaults(n))
                         args.push_back(atomize(*value, binds));
             }
@@ -747,55 +741,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     {
         std::vector<std::string> path;
         if (!path.empty() || modulePath(*n.receiver, path)) {
-            auto pathToString = [&](const std::vector<std::string>& p) {
-                std::string out;
-                for (size_t i = 0; i < p.size(); i++) {
-                    if (i) out += ".";
-                    out += p[i];
-                }
-                return out;
-            };
-            std::vector<std::string> candidates;
-            auto explicitPath = pathToString(path);
-            // The literal path always wins over an alias expansion — see
-            // registerModuleAliases. Try it FIRST (the loop below returns
-            // on the first candidate that resolves), and only fall back
-            // to the aliased form after: `Data.Set.from(…)` must stay
-            // `Data.Set.from`, not become `Units.Data.Set.from`, in a
-            // file that also `using`s `Units.Data` (kexhq/kex#229,
-            // kexhq/kex#233) — without this order, a literal two-segment
-            // path whose first segment happens to also be some OTHER
-            // import's aliased bare name got silently rewritten.
-            candidates.push_back(explicitPath);
-            if (!path.empty()) {
-                if (auto alias = moduleAliases.find(path.front());
-                    alias != moduleAliases.end()) {
-                    auto aliased = alias->second;
-                    for (size_t i = 1; i < path.size(); ++i)
-                        aliased += "." + path[i];
-                    candidates.push_back(std::move(aliased));
-                }
-            }
-            if (!currentModulePath.empty() && path.size() == 1) {
-                std::string relative = currentModulePath;
-                relative += "." + pathToString(path);
-                candidates.push_back(std::move(relative));
-            }
-            // ...then every enclosing module, innermost first, and the
-            // modules a `using` opened: `Headers.empty` inside
-            // `Net.HTTP.HTTP` is `Net.HTTP.Headers.empty`. Left out, the
-            // name fell through to whatever else in the program answered
-            // to its last segment (kexhq/kex#476).
-            if (!path.empty()) {
-                for (auto scope = currentModulePath; !scope.empty();) {
-                    const auto dot = scope.rfind('.');
-                    if (dot == std::string::npos) break;
-                    scope.resize(dot);
-                    candidates.push_back(scope + "." + explicitPath);
-                }
-                for (const auto& imported : usingModules)
-                    candidates.push_back(imported + "." + explicitPath);
-            }
+            const auto candidates = modulePathCandidates(path);
             std::unordered_set<std::string> tried;
             for (const auto& candidate : candidates) {
                 if (candidate.empty() || !tried.insert(candidate).second) continue;
@@ -1794,6 +1740,33 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             || preferExternalReceivers)) {
         auto found = externalModules->receiverFunctions.find(m);
         if (found != externalModules->receiverFunctions.end()) {
+            // A unit's `make` for a type declared outside its module is in
+            // scope only through `using` that module, as one of this unit's
+            // own is (`gatedOut` above). A named argument of a type that
+            // module declares means its method was wanted: `power.to(String,
+            // in: Units.SI.Kilo(Units.SI.Watt))` without `using Units.SI`.
+            std::vector<ExternalModules::ReceiverFunction> providers;
+            std::string gatedModule;
+            for (const auto& candidate : found->second) {
+                std::string module;
+                for (const auto& [name, atom] : externalModules->nameToAtom)
+                    if (atom == candidate.moduleAtom) module = name;
+                if (!candidate.compiledApart || module.empty() || moduleInScope(module) ||
+                    candidate.receiverType.empty() ||
+                    candidate.receiverType.starts_with(module + ".")) {
+                    providers.push_back(candidate);
+                    continue;
+                }
+                for (const auto& [_, value] : n.namedArgs)
+                    if (const auto type = staticTypeOf(value.get());
+                        type && semantic::typeToString(type).starts_with(module + "."))
+                        gatedModule = module;
+            }
+            if (!gatedModule.empty())
+                return ret(undefinedMethod(
+                    n.method, rv(),
+                    " — `" + gatedModule + "` defines a matching `" + n.method +
+                        "`; add `using " + gatedModule + "`"));
             int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                               (n.block ? 1 : 0);
             const ExternalModules::ReceiverFunction* match = nullptr;
@@ -1808,7 +1781,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             std::string providerModule;
             {
                 std::set<std::string> modules;
-                for (const auto& candidate : found->second)
+                for (const auto& candidate : providers)
                     if (candidate.beamArity == actualArity)
                         modules.insert(candidate.moduleAtom);
                 // A semantic winner for an `Any` receiver is not enough
@@ -1824,6 +1797,24 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         // provider for the receiver's own type comes before.
                         resolved->second.backendModule != names::kPreludeModule)
                         providerModule = resolved->second.backendModule;
+                // The receiver's static type picks the providers declared
+                // for it (`raw.close` on a TCPConnection, beside the
+                // prelude's FileHandle one), when they are one module's.
+                if (modules.size() > 1 && providerModule.empty())
+                    if (const auto type = staticTypeOf(n.receiver.get())) {
+                        const auto written = semantic::typeToString(type);
+                        const auto last = [](const std::string& name) {
+                            const auto dot = name.rfind('.');
+                            return dot == std::string::npos ? name : name.substr(dot + 1);
+                        };
+                        std::set<std::string> owners;
+                        for (const auto& candidate : providers)
+                            if (candidate.beamArity == actualArity &&
+                                !candidate.receiverType.empty() &&
+                                last(candidate.receiverType) == last(written))
+                                owners.insert(candidate.moduleAtom);
+                        if (owners.size() == 1) providerModule = *owners.begin();
+                    }
                 // Still undecided between units' providers for their own
                 // types and the prelude's: each of them for a value of its
                 // type, the prelude's dispatcher for every other, decided
@@ -1832,7 +1823,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 const bool typedBesidePrelude =
                     modules.size() > 1 && providerModule.empty() &&
                     modules.count(names::kPreludeModule) &&
-                    std::all_of(found->second.begin(), found->second.end(),
+                    std::all_of(providers.begin(), providers.end(),
                                 [&](const auto& candidate) {
                                     return candidate.beamArity != actualArity ||
                                            candidate.moduleAtom == names::kPreludeModule ||
@@ -1846,7 +1837,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         modules.begin(), modules.end(),
                         [](const std::string& module) { return module != names::kPreludeModule; });
                     const bool guardable = std::all_of(
-                        found->second.begin(), found->second.end(),
+                        providers.begin(), providers.end(),
                         [&](const auto& candidate) {
                             if (candidate.beamArity != actualArity ||
                                 candidate.moduleAtom != other) return true;
@@ -1863,7 +1854,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     // a primitive) — and positional arguments, which mean
                     // the same slots to every provider.
                     std::vector<const ExternalModules::ReceiverFunction*> guarded;
-                    for (const auto& candidate : found->second)
+                    for (const auto& candidate : providers)
                         if (candidate.beamArity == actualArity &&
                             candidate.moduleAtom != names::kPreludeModule)
                             guarded.push_back(&candidate);
@@ -1876,7 +1867,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     }
                 }
             }
-            for (const auto& candidate : found->second) {
+            for (const auto& candidate : providers) {
                 if (candidate.beamArity != actualArity) continue;
                 if (!providerModule.empty() && candidate.moduleAtom != providerModule)
                     continue;
@@ -1897,7 +1888,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             // was `to(String, decimals:)`, which has no `in:` for the
             // prelude's `to(String, in: TimeUnit)`.
             if (match && sameModuleOverloads && !n.namedArgs.empty())
-                for (const auto& candidate : found->second) {
+                for (const auto& candidate : providers) {
                     if (candidate.beamArity != actualArity ||
                         candidate.moduleAtom != match->moduleAtom)
                         continue;

@@ -548,6 +548,19 @@ auto distinctFromSax(SaxReader& sax) -> kex::semantic::ImportedDistinctType {
 
 } // namespace
 
+auto encodeSemanticType(const kex::semantic::TypePtr& type) -> TermPtr {
+    return typeToTerm(type);
+}
+auto decodeSemanticType(SaxReader& sax) -> kex::semantic::TypePtr {
+    return typeFromSax(sax);
+}
+auto encodeSignature(const kex::semantic::Signature& signature) -> TermPtr {
+    return signatureToTerm(signature);
+}
+auto decodeSignature(SaxReader& sax) -> kex::semantic::Signature {
+    return signatureFromSax(sax);
+}
+
 auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces)
     -> std::vector<uint8_t> {
     using kex::semantic::ImportedModuleInterface;

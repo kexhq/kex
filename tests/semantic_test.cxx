@@ -2,6 +2,7 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
+#include "../src/hir/persist.hxx"
 #include "../src/semantic/db.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
@@ -89,6 +90,72 @@ auto noErrorsWithInterfaces(
 }
 
 int main() {
+    describe("hir::persist — a checked program across processes", []() {
+        // Saved by node position and read back onto a fresh parse of the
+        // same source: every node answers as it did where it was checked.
+        it("round-trips targets, types and selected signatures", []() {
+            const std::string source =
+                "record Box do\n  n : Integer\nend\n"
+                "make Box do\n  let twice -> Integer = @n * 2\nend\n"
+                "let sum(xs: [Integer]) -> Integer = xs.reduce(0) { |a, b| a + b }\n"
+                "main do\n"
+                "  let b = Box { n: 3 }\n"
+                "  IO.printLine(b.twice)\n"
+                "  IO.printLine(sum([1, 2]))\n"
+                "  IO.printLine(Type.of(b).name)\n"
+                "end\n";
+            const auto parse = [&] {
+                Lexer lexer(source);
+                Parser parser(lexer.tokenizeAll());
+                return parser.parseProgram();
+            };
+            auto first = parse();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(first));
+            const hir::Program checked(first, analyzer);
+            const auto bytes = hir::save(checked, hir::nodeOrder(first));
+
+            auto second = parse();
+            const auto order = hir::nodeOrder(second);
+            const auto loaded = hir::load(second, order, bytes);
+            assertTrue(loaded != nullptr);
+            const auto firstOrder = hir::nodeOrder(first);
+            assertEqual(firstOrder.size(), order.size());
+            std::size_t decided = 0;
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                const auto& was = checked.targetOf(*firstOrder[i]);
+                const auto& is = loaded->targetOf(*order[i]);
+                assertTrue(was.kind == is.kind && was.module == is.module &&
+                           was.function == is.function && was.arity == is.arity &&
+                           was.owner == is.owner);
+                if (was.kind != hir::TargetKind::Undecided) decided++;
+                const auto wasType = checked.typeOf(*firstOrder[i]);
+                const auto isType = loaded->typeOf(*order[i]);
+                assertTrue((!wasType && !isType) ||
+                           (wasType && isType &&
+                            semantic::typeToString(wasType) ==
+                                semantic::typeToString(isType)));
+                assertTrue((checked.selectedSignatureOf(*firstOrder[i]) != nullptr) ==
+                           (loaded->selectedSignatureOf(*order[i]) != nullptr));
+            }
+            assertTrue(decided > 0);
+        });
+        it("refuses bytes saved for another program", []() {
+            const auto parse = [](const std::string& source) {
+                Lexer lexer(source);
+                Parser parser(lexer.tokenizeAll());
+                return parser.parseProgram();
+            };
+            auto one = parse("main do\n  IO.printLine(1)\nend\n");
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            analyzer.analyze(one);
+            const hir::Program checked(one, analyzer);
+            const auto bytes = hir::save(checked, hir::nodeOrder(one));
+            auto other = parse("main do\n  IO.printLine(1 + 2)\nend\n");
+            assertTrue(hir::load(other, hir::nodeOrder(other), bytes) == nullptr);
+        });
+    });
+
     describe("SemanticDB — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
             semantic::SemanticDB db;

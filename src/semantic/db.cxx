@@ -257,25 +257,6 @@ auto SemanticDB::receiverSymbol(const std::string& receiver,
     return best;
 }
 
-auto SemanticDB::isModuleLoading(const std::string& moduleName,
-                                 const std::string& fromFile) const -> bool {
-    if (m_loadingModules.count(moduleName)) return true;
-    for (const auto& path : m_resolvingFiles) {
-        if (path == fromFile) continue;
-        auto it = m_files.find(path);
-        if (it == m_files.end()) continue;
-        for (const auto& sym : it->second.symbols)
-            if (sym.kind == SymbolKind::Module) {
-                const auto qualified =
-                    sym.module.empty()
-                        ? sym.name
-                        : sym.module + "." + sym.name;
-                if (qualified == moduleName) return true;
-            }
-    }
-    return false;
-}
-
 auto SemanticDB::shadowedModulePaths(const std::string& moduleName) const
     -> const std::vector<std::string>& {
     const auto found = m_shadowedModulePaths.find(moduleName);
@@ -498,11 +479,6 @@ auto SemanticDB::completionsAt(const std::string& file, uint32_t line,
 }
 
 auto SemanticDB::fileState(const std::string& path) -> FileState* {
-    auto it = m_files.find(path);
-    return it != m_files.end() ? &it->second : nullptr;
-}
-
-auto SemanticDB::fileState(const std::string& path) const -> const FileState* {
     auto it = m_files.find(path);
     return it != m_files.end() ? &it->second : nullptr;
 }

@@ -490,6 +490,32 @@ What is left of Stage 5:
   set no files (unit tests, REPL checks) are unchanged. `ResolvePass` (names,
   labels) and the type checker are still two walks inside it; merging their
   scope tracking is what is left of "one resolver".
+- **Stage 2 began: node identities and a persisted HIR (later the same day).**
+  - **Its own answers.** `hir::Program` reads `Answers` (types, `Type.of`
+    answers, selected signatures) borrowed from an analysis or owned by a
+    loaded program.
+  - **Node identity.** `hir/persist` gives a node an identity: its position
+    in `nodeOrder`, a fixed pre-order walk. That is stable within one
+    toolchain fingerprint, the same sources and compiler. `save` and `load`
+    write and read every node's answers by position, reusing the interface
+    cache's type and signature codecs, now exposed. A program with another
+    node count is refused.
+  - **The walker's prelude is now checked.** It is analysed as BEAM analyses
+    it: tier order and the opt-in modules, `optInStdlibSources` shared with
+    `compilePreludeCore`. Its items are lent to the analysis and given back.
+    The checked program is the evaluator's base program (`ProgramSet::
+    setBase`), read after the program's own, and it is used only when the
+    check is clean.
+  - **Cached per toolchain** (`walker-prelude`, about 350 KB). A cold check
+    costs about 150 ms, then every run loads it. A warm walker run of a
+    small spec takes 0.12 s.
+  - **One fix the walker corpus found.** `receiverTypeOf` answered from a
+    signature the checker selected for a receiver of another type (a generic
+    `"${x}"` choosing Binary's `showValue` for a String). It now answers only
+    when the receiver is of that type (compared by last segment, the same way
+    `receiverCoversHead` compares heads).
+  - **Tests.** `semantic_test` "hir::persist" round-trips a program and
+    refuses another program's bytes.
 - **The walker prelude on a HIR is blocked on Stage 2.** Checking the walker's
   prelude takes about 60 ms per process (measured), and alone it does not check
   cleanly. A cross-process cache needs decisions keyed by stable node
@@ -512,6 +538,15 @@ final measurement waits for the old paths to go.
 **Decided (2026-11-05, by the user):** `src/` must end up below `main`'s
 89,708 lines (a hard goal, not only a reported delta), and Stage 2's node
 identities come next.
+
+**Decided (2026-11-05, by the user): separate compilation is the default.** The
+unit-by-unit check and build (today behind `KEX_SEPARATE` and
+`KEX_SEPARATE_BUILD`: each unit checked and lowered against the interfaces of
+the units below it, unchanged units reused from a cache) becomes the normal
+build. The merged build is what retires. The point is incremental builds: an
+edit recompiles only its unit and the units whose imported interfaces changed,
+where the merged build re-checks and re-lowers the whole program. The
+measure of done is slick's incremental scenario.
 
 **Measured (2026-11-05), against `main` (66a5838, the Stage 0 baseline build).**
 Slick, median seconds of 3 interleaved runs, `tey` built from this tree

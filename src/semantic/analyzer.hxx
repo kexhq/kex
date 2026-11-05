@@ -50,8 +50,6 @@ public:
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 
-    // Query the inferred type of an expression node after analyze() has run.
-    auto typeOf(const ast::Expr* expr) const -> TypePtr;
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
@@ -196,7 +194,6 @@ private:
 
     // Helpers
     auto error(SourceLocation loc, const std::string& msg) -> void;
-    auto warning(SourceLocation loc, const std::string& msg) -> void;
 
     SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;

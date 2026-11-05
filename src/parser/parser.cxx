@@ -4576,25 +4576,6 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
   return complete(std::move(block));
 }
 
-auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    try {
-      body.push_back(parseSpreadableExpr());
-    } catch (const ParseError &e) {
-      // Insert an ErrorNode so the AST body stays complete, then sync
-      // to the next statement boundary before continuing.
-      auto errExpr = std::make_unique<ast::Expr>();
-      errExpr->location = e.location;
-      errExpr->kind = ast::ErrorNode{e.message};
-      body.push_back(std::move(errExpr));
-      syncToStatement();
-    }
-    skipNewlines();
-  }
-  return body;
-}
-
 // Looks ahead (without consuming) for a `do` token on the current logical
 // line, at bracket depth 0 — i.e. not inside a nested ( ), [ ], or { }. Used
 // to decide whether `name arg1, arg2` should be parsed as bare positional

@@ -50,7 +50,6 @@ public:
     auto lookup(const std::string& name) const -> const Symbol*;
     auto lookupLocal(const std::string& name) const -> const Symbol*;
     auto parent() const -> Scope*;
-    auto isFoul() const -> bool;
 
 private:
     std::unordered_map<std::string, Symbol> m_symbols;

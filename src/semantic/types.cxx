@@ -631,10 +631,6 @@ auto TypeEnv::get(const std::string& name) const -> TypePtr {
     return nullptr;
 }
 
-auto TypeEnv::has(const std::string& name) const -> bool {
-    return m_types.count(name) > 0;
-}
-
 // ── Structural traversal ─────────────────────────────────────────────────────
 //
 // The one place that knows which Type alternatives nest other types. A walk or

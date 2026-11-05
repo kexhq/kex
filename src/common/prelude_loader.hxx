@@ -249,6 +249,18 @@ inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
     return files;
 }
 
+// The opt-in stdlib modules beside the prelude sources in `root`: what one
+// checked stdlib program holds after the tier-ordered prelude. BEAM's prelude
+// build and the walker's prelude check both read it.
+inline auto optInStdlibSources(const std::filesystem::path& root)
+    -> std::vector<std::string> {
+    auto files = standardLibrarySourceFiles();
+    std::erase_if(files, [&](const auto& file) {
+        return std::filesystem::path(file).parent_path() != root;
+    });
+    return files;
+}
+
 // Sources compiled into the installed stdlib artifact: the manifest-selected
 // prelude plus opt-in modules stored directly at the stdlib root. Nested
 // library modules remain independently loadable source dependencies.
