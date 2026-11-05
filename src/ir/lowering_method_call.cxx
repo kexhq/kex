@@ -1751,7 +1751,10 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 std::string module;
                 for (const auto& [name, atom] : externalModules->nameToAtom)
                     if (atom == candidate.moduleAtom) module = name;
-                if (!candidate.foreignTarget || module.empty() || moduleInScope(module)) {
+                // The prelude's own modules are imported automatically; only a unit of
+                // this build is held behind its `using`, as the checker holds it.
+                if (!candidate.compiledApart || !candidate.foreignTarget || module.empty() ||
+                    moduleInScope(module)) {
                     providers.push_back(candidate);
                     continue;
                 }

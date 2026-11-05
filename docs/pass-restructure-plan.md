@@ -4,7 +4,7 @@ The plan for the `refactor/kex-bloat` branch: a smaller, DRY compiler with one
 semantic analysis whose decisions every backend follows, built as real passes.
 This file is the plan of record and its status; update it as stages land.
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-05.
 
 ## Why
 
@@ -29,27 +29,43 @@ re-derives them, and the three disagree.
 
 - **Middle end:** a typed HIR. Sema decides everything; lowering only translates.
 - **Walker:** runs on the same HIR, so walker and BEAM share every decision.
-- **Delivery:** strangler. The new path is built beside the old one, every
-  stage gated green; then the default flips and the old path is deleted.
-- **Receiver devirtualization:** redone as a small IR pass over names the
-  emitter records, replacing the 510-line proof predicate.
+- **Delivery: in place, gated.** The plan first said a strangler behind
+  `KEX_PIPELINE=hir`; no such flag was ever built. Each decision moves into
+  sema and its re-derivation is deleted in the same change, with every gate
+  green. The two build paths (merged and separate) are the one place where an
+  old path still stands beside the new one.
+- **Separate compilation is the default build** (2026-11-05, by the user). Each
+  unit is checked and lowered against the interfaces of the units below it;
+  unchanged units come from the unit cache. The merged build retires. The
+  point is incremental builds; the measure is slick's incremental scenario.
+- **Receiver devirtualization** follows what the emitter records: each
+  receiver method's per-type implementation and the dispatcher routes
+  (`KexiMethod::implementation`). The old 510-line proof predicate is down to
+  a few clauses over that record; the rest goes with Stage 3.
+- **Visibility is decided at the declaration.** Whether a `make` targets a type
+  its module declares is recorded in its interface (`KexiMethod::
+  foreignTarget`); consumers read it, never re-derive it from names.
+- **`src/` ends below `main`'s 89,708 lines** (2026-11-05, by the user): a hard
+  goal, not only a reported delta.
 - **Pseudo-functions** (2026-11-04): one intrinsic registry plus `Type<T>`
   signatures instead of `name == "..."` branches per subsystem (Stage 2b).
-  **Deferred** until the HIR work is done.
+  **Deferred** until the HIR work is done (order step 9).
 - **Breaking changes are fine** pre-stability (e.g. `--no-check` still runs
   resolution).
 
 ## Target architecture
 
 ```
-driver/  Command + Options (parsed once) → Session → PassManager
+driver   Command + Options → Session → pipeline of named, timed passes
+units    unit graph; each unit checked and lowered against the KexI of the
+         units below it; unit cache keyed by sources + those interfaces
 front    Lex → Parse → AST → compiled-expand (AST→AST)
-sema     Collect → Resolve → TypeCheck → Select → HIR   (+ hir::verify)
-         └─ also feeds LSP / SemanticDB (one resolver, not three)
+sema     names → TypeCheck → Select → HIR   (+ hir::verify)
+         └─ the LSP reads the same symbols (SemanticDB is deleted)
 mid      HIR ──► Walker (evaluates HIR)
          HIR ──► Lower (mechanical HIR→IR, no name resolution)
 ir       IR passes: guard expansion, rescue guards, loop lifting,
-         op devirt, receiver devirt — each a named, timed pass
+         op devirt, verify — each a named, timed pass
 back     Core Erlang emit → erlc; KexI / interface-cache emission
 ```
 
@@ -64,13 +80,54 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | Stage | What | Status |
 |---|---|---|
 | 0 | Benchmark on slick | Done |
-| 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done, with gaps listed below |
-| 2 | One sema decides every call; HIR beside the old path | **In progress** |
+| 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
+| 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; no HIR node types yet |
 | 2b | Intrinsic registry + `Type<T>` signatures | Started, then **deferred** |
-| 3 | Lowering only translates; IR passes; receiver devirt pass | **In progress** |
-| 4 | Walker on the HIR | **Started**: the walker reads `hir::Program` |
-| 5 | LSP / SemanticDB on the same sema | Not started |
-| 6 | Delete old paths, measure, `docs/architecture.md` | Not started |
+| 3 | Lowering only translates; IR passes | **In progress**: lowering re-derives no call (metric 0); still walks the AST |
+| 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; still evaluates the AST |
+| 5 | LSP / SemanticDB on the same sema | **In progress**: the checked run has no SemanticDB; the LSP still reads it |
+| 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below |
+| — | Separate compilation as the default | **In progress**: spec-beam 586/586 under it; not yet the default |
+
+## Order of work (decided 2026-11-05)
+
+All of these are part of the refactor; none is optional. In order:
+
+1. **Separate compilation is the default build.** Today a separate build also
+   runs the merged analysis (`passCheck` analyses the whole merged program
+   after `checkUnitsSeparately`), so it does more work, not less. The separate
+   check must decide the build alone. Then: slick builds and `tey test`
+   passes under it, and the incremental scenario is measured against `main`.
+   The unit cache already skips check and lowering for a unit whose sources
+   and imported interfaces are unchanged.
+2. **Delete the merged build path**, with the lowerer's same-unit scoping
+   rules (`moduleScopedMethods`, `gatedOut`, `gatedModuleTaking`). One build
+   path is left for the HIR to serve. Step 3's error spec
+   (`error_measure_to_without_unit_module`) must keep passing through it.
+3. **The `using` gate is a checker decision.** A call that only a hidden
+   `make` of an out-of-scope module takes gets a target saying so; lowering
+   emits it and the walker raises it. No backend guesses the module from type
+   names. Visibility already comes from the declaration
+   (`KexiMethod::foreignTarget`).
+4. **Stage 2 proper.** `--verify-hir` clean on `spec/`, `examples/`, the
+   stdlib and slick; HIR node types (every call its target, arguments placed,
+   defaults filled; every expression its type); one resolver (`ResolvePass`
+   and the checker's scope tracking merged).
+   Stdlib declarations written for the older compiler are corrected where the
+   check finds them imprecise, rather than worked around: `type Range` becomes
+   `Range<T>`, so `items` returns `[T]` and `get` returns `T?`.
+5. **Stage 3: lowering from HIR nodes**, a switch on the target kind; the IR
+   rewrites (guard and rescue expansion, loop lifting, operator devirt) move
+   to `src/ir/passes/`; the devirtualization predicate's remaining clauses
+   become a read of the target; the old `lower*.cxx` cascade and the side
+   tables are deleted.
+6. **Stage 4: the walker evaluates HIR nodes**, compile-time evaluation
+   (`compiled do`) included; its own resolution and its run-time copies of
+   the visibility rules go.
+7. **Stage 5: the LSP reads the checker's symbols; SemanticDB is deleted.**
+8. **Stage 1 leftovers:** one `TypeExpr` printer (three exist).
+9. **Stage 2b:** the intrinsic registry and `Type<T>` signatures.
+10. **Stage 6: measure** against the Stage 0 baseline; `src/` below `main`.
 
 ## Stage 0: benchmark on slick — done
 
@@ -117,10 +174,9 @@ Done:
 - **Sandbox fix**: `Evaluator.run` now enforces `maxSteps`, `maxDepth` and
   `allow` (it enforced none). `EvaluatorOptions.modules` is still unimplemented.
 
-Not done (deliberately skipped or still open):
-- `src/driver/` directory with one file per command — commands are functions
-  in `main.cxx` instead.
-- `PassManager` / `Pass` interface — only `PhaseTimer` exists.
+Not done here, and where it went:
+- `src/driver/` and a pass pipeline: done later, in Stage 3 (`src/driver/
+  pipeline.hxx`, `ir::PassManager`). Commands stay functions in `main.cxx`.
 - `Session::analyze` replacing the ~16 one-line `Analyzer` constructions —
   skipped; the single sema of Stage 2 removes them instead.
 - One `TypeExpr` printer (three exist).
@@ -169,16 +225,38 @@ target; `hir::verify` (`--verify-hir`) lists calls without one. Still to do:
 HIR *nodes* of their own (today it indexes the AST), and the walker and the
 LSP reading it.
 
-Next:
-1. Fix the Stage 3 blocker (below) — the checker's decisions must be right for
-   the merged prelude too.
-2. Close the remaining undecided kinds until `--verify-hir` is clean on
-   `spec/`, `examples/`, the stdlib and slick.
-3. Introduce the HIR node types themselves (`src/hir/hir.hxx`) carrying type +
-   target per node, built from the checker's tables, behind `KEX_PIPELINE=hir`.
-4. One resolver (`sema/resolve`) built from `ResolvePass`, the checker's
-   `resolveModulePath`/`resolveRecordName`/`resolveTypeExpr`, and the
-   lowerer's `canonicalRecordName`/`registerModuleAliases`/`using` chain.
+What is next for Stage 2 is order step 4: `--verify-hir` clean on the corpus,
+the HIR node types, and one resolver (`ResolvePass`, the checker's
+`resolveModulePath`/`resolveRecordName`/`resolveTypeExpr`, and the lowerer's
+`canonicalRecordName`/`registerModuleAliases`/`using` chain). The coverage
+figures above predate the owner decisions; re-measure before relying on them.
+
+**Node identities and a persisted HIR (2026-11-05, later).**
+- **Its own answers.** `hir::Program` reads `Answers` (types, `Type.of`
+  answers, selected signatures) borrowed from an analysis or owned by a
+  loaded program.
+- **Node identity.** `hir/persist` gives a node an identity: its position
+  in `nodeOrder`, a fixed pre-order walk. That is stable within one
+  toolchain fingerprint, the same sources and compiler. `save` and `load`
+  write and read every node's answers by position, reusing the interface
+  cache's type and signature codecs, now exposed. A program with another
+  node count is refused.
+- **The walker's prelude is now checked.** It is analysed as BEAM analyses
+  it: tier order and the opt-in modules, `optInStdlibSources` shared with
+  `compilePreludeCore`. Its items are lent to the analysis and given back.
+  The checked program is the evaluator's base program (`ProgramSet::
+  setBase`), read after the program's own, and it is used only when the
+  check is clean.
+- **Cached per toolchain** (`walker-prelude`, about 350 KB). A cold check
+  costs about 150 ms, then every run loads it. A warm walker run of a
+  small spec takes 0.12 s.
+- **One fix the walker corpus found.** `receiverTypeOf` answered from a
+  signature the checker selected for a receiver of another type (a generic
+  `"${x}"` choosing Binary's `showValue` for a String). It now answers only
+  when the receiver is of that type (compared by last segment, the same way
+  `receiverCoversHead` compares heads).
+- **Tests.** `semantic_test` "hir::persist" round-trips a program and
+  refuses another program's bytes.
 
 ## Stage 2b: declarative pseudo-functions — deferred
 
@@ -206,7 +284,8 @@ Method, per decision lowering still makes for itself: have the checker record
 it, prove lowering's own derivation dead over `spec/` + `examples/` (trace the
 fallback in the scratch tree), then delete it and gate. Tracked by the
 `dup-audit` metric `lowering-rederives` (lowering reading the raw type map,
-`expressionTypes->find`): 23 → **22**, may only fall.
+`expressionTypes->find`): 23 at the start, **0** since 2026-11-05 (below);
+it may not rise.
 
 Done:
 - The prelude lowers with the checker's answers (was the blocker).
@@ -277,7 +356,7 @@ overrides are deleted as this rule covers them; a new shape extends the rule,
 not the lowering. Type reads for code generation go through
 `Lowering::staticTypeOf` (the HIR's per-expression type) and are not counted.
 
-Worklist — measured by disabling lowering's type map entirely
+Worklist (historical: measured before the metric reached 0) — measured by disabling lowering's type map entirely
 (`L.expressionTypes = nullptr`): 29 of 573 BEAM specs then differ, in these
 clusters (the specs pin each one):
 - `serving` slot calls (`serving_*`, `net_websocket_*`, `net_http_*`):
@@ -300,10 +379,74 @@ Originally planned:
   (`upgrade.cxx`), operator devirtualization.
 - Receiver devirtualization as an IR pass over emitter-recorded `name/Head`
   in KexI; delete `importDispatchSpelling` and its predicate (~510 lines plus
-  ~500 lines of tests). `make test-devirt` stays as the check.
-- Flip the default once spec-beam, fuzz and slick are green under
-  `KEX_PIPELINE=hir`; then delete `lower.cxx`, `lowering_*.cxx`,
-  `lowering.hxx` and the side tables.
+  ~500 lines of tests). `make test-devirt` stays as the check. What happened
+  instead is below ("Devirtualization"): the emitter records the routes and
+  the predicate shrank to a few clauses over them.
+- Delete `lower.cxx`, `lowering_*.cxx`, `lowering.hxx` and the side tables
+  once lowering from HIR nodes covers the corpus (no flag: see Decisions).
+
+**Devirtualization: what the replacement needs (2026-11-05).** KexI records
+each receiver method's source name (`collect_metadata.cxx`, `beamFunction =
+fd.name`), worked out from the AST. The emitter's mangling (`name/Head`, only
+for names in `Lowering::collidingMethods`) is decided during lowering and
+written nowhere, so the predicate re-derives it. Clauses (5) and (13b), about
+70 lines, only establish that `name/Head` exists.
+
+The replacement, in three steps:
+1. One rule for which receiver methods get per-type implementations, used by
+   lowering and by the KexI writer alike, which records the emitted name.
+2. Clauses (5) and (13b) become a read of the recorded name.
+3. The routing clauses (12, DS, the `''` peers) become a per-dispatcher
+   arm order the emitter records, and the predicate is deleted.
+
+`KEX_DEVIRT_AUDIT` lists every devirtualized call site, so old and new can be
+diffed over the corpus at each step.
+
+**Steps 1 and 2 done (later the same day).**
+- **Step 1.** `KexiMethod::implementation` records the per-type function the
+  emitter wrote, read from the emitted Core (`recordImplementations` with
+  `coreExports`). The head is the `make` target as written
+  (`makeTargetName`). The prelude build, the module build and the separate
+  build all record it. The separate build's own text scan is now this helper,
+  and it still rewrites `beamFunction` for named receivers only. The field
+  reaches `ImportedFunction` through `importedReceiverFunction`; the
+  interface cache moved to version 2 with the field.
+- **Step 2.** Clauses (5) and (13b) are one check:
+  `winner.implementation == name/Head`. Their helpers, `signaturesAlphaEqual`
+  and `typesAlphaEqual`, are deleted with their tests (−263 lines). The
+  corpus audit is identical before and after: 3,396 firings, 92 distinct
+  spellings.
+- **(1b) stays, and it is routing, not existence.** Dropping it adds 12
+  `Binary` devirtualizations (an alias or opaque head).
+
+**Step 3 done.** Lowering records, on each receiver dispatcher's clause
+(`FunClause::routes`), which per-type implementations a value of that type
+reaches.
+- **Arms in their real order.** `makeDispatcher` lays its arms out the way it
+  emits them: the String-to-List coercion, the sorted owners (shadowed ones
+  already dropped), the record field reads, then `Tuple`. An owner is routed
+  when no earlier arm's guard can take one of its values.
+- **One overlap rule.** That test is `runtimeShapes`/`shapesMeet`, which sits
+  next to `typeGuard`. `typeGuard` and `runtimeShapes` share `guardTag`.
+- **Merged ADT dispatchers** route every owner, since each `name/Owner`
+  forwards into the merged function.
+- **Recording.** `emitCore` keeps a clause's routes only while it is its
+  function's first clause, so nothing merged in ahead can answer first. The
+  result goes into `EmitResult::routedImplementations`, which every build
+  path records as `KexiMethod::implementation`.
+- **What the predicate keeps.** It is down to (0), (0b), (1), (1b), "the
+  receiver is of that head", and the recorded route. Clauses (12) and (DS),
+  the `''` and module-function vetoes, the union bucketing and the
+  `candidates` parameter are deleted (−403 lines with their tests). Three
+  codegen tests pin the routes (a routed record owner, Number below Integer,
+  shadowed Pid).
+- **What the audit showed.** With the old routing clauses still in place
+  next to the recorded routes, it was identical. So every call site they
+  devirtualized is one the emitter routes. Without them, 14 more spellings
+  fire (3,684 firings): `showValue/Result`, `map/Result`, `to/Measure`,
+  `truthy?/Integer`, and others. The old clauses refused these from the
+  overloads alone, conservatively. The recorded route says a value of that
+  type does reach that implementation.
 
 ## Blockers
 
@@ -371,7 +514,7 @@ type is registered under both its spellings, so `ThingId` and
 `distinct_own_method_through_using_beam`).
 
 
-`Evaluator::eval(const hir::Expr&)`; delete the walker's own resolution
+**Original plan:** `Evaluator::eval(const hir::Expr&)` (order step 6); delete the walker's own resolution
 (`traitIdentityOf`, `unknownNamedArgument`, `makeMethodInScope`, the "mirrors
 the lowerer" sites). The differential fuzzer keeps comparing walker and BEAM.
 
@@ -398,26 +541,17 @@ A definition the check rejects still runs, as definitions always did.
 still refuses a file that does not check. `repl_cli_test` "runs a loaded
 definition on the checker's decisions" pins it.
 
-What remains is the prelude. Its functions run in the walker without the
-checker's decisions, in an ordinary run and in compile-time evaluation
-(`compiled do`, which mostly runs prelude code), because every HIR covers a
-user program only. On BEAM the prelude is lowered with checker answers. The
-shape of the fix is a prelude HIR pushed as the evaluator's oldest program.
-It needs the prelude's analysis cached across processes, though: analysing
-it per walker process would add a few hundred milliseconds to every run and
-every expansion (the slick dev-loop figure, which re-derives the prelude,
-puts it near 0.3 s with lowering included).
+**The prelude: resolved later the same day.** The walker's prelude is checked
+once and cached per toolchain (`walker-prelude`, via `hir::persist`); it is
+the evaluator's base program. See Stage 2's node identities.
 
 Found on the way, and present before this change: in the walker REPL a
 `distinct type` input is refused as if it were inside `compiled do`, and
 `this.as(Integer)` in a distinct type's `make` block fails every later input.
 
-Next for Stage 4: the walker REPL checks a program it synthesizes (the
-session's definitions and bindings plus the input), not the AST it runs, so
-a HIR keyed by node cannot reach it. The REPL has to check and run the same
-AST. Compile-time evaluation (`compiled do`) has the same gap. Until both
-are fixed, the walker's run-time lookup (`resolveMethodName`) stays as their
-fallback.
+What is open for Stage 4: compile-time evaluation (`compiled do`) still runs
+without a HIR, so the walker's run-time lookup (`resolveMethodName`) stays as
+its fallback; then the walker evaluates HIR nodes (order step 6).
 
 
 ## Stage 5: LSP and SemanticDB on the same sema
@@ -490,43 +624,14 @@ What is left of Stage 5:
   set no files (unit tests, REPL checks) are unchanged. `ResolvePass` (names,
   labels) and the type checker are still two walks inside it; merging their
   scope tracking is what is left of "one resolver".
-- **Stage 2 began: node identities and a persisted HIR (later the same day).**
-  - **Its own answers.** `hir::Program` reads `Answers` (types, `Type.of`
-    answers, selected signatures) borrowed from an analysis or owned by a
-    loaded program.
-  - **Node identity.** `hir/persist` gives a node an identity: its position
-    in `nodeOrder`, a fixed pre-order walk. That is stable within one
-    toolchain fingerprint, the same sources and compiler. `save` and `load`
-    write and read every node's answers by position, reusing the interface
-    cache's type and signature codecs, now exposed. A program with another
-    node count is refused.
-  - **The walker's prelude is now checked.** It is analysed as BEAM analyses
-    it: tier order and the opt-in modules, `optInStdlibSources` shared with
-    `compilePreludeCore`. Its items are lent to the analysis and given back.
-    The checked program is the evaluator's base program (`ProgramSet::
-    setBase`), read after the program's own, and it is used only when the
-    check is clean.
-  - **Cached per toolchain** (`walker-prelude`, about 350 KB). A cold check
-    costs about 150 ms, then every run loads it. A warm walker run of a
-    small spec takes 0.12 s.
-  - **One fix the walker corpus found.** `receiverTypeOf` answered from a
-    signature the checker selected for a receiver of another type (a generic
-    `"${x}"` choosing Binary's `showValue` for a String). It now answers only
-    when the receiver is of that type (compared by last segment, the same way
-    `receiverCoversHead` compares heads).
-  - **Tests.** `semantic_test` "hir::persist" round-trips a program and
-    refuses another program's bytes.
-- **The walker prelude on a HIR is blocked on Stage 2.** Checking the walker's
-  prelude takes about 60 ms per process (measured), and alone it does not check
-  cleanly. A cross-process cache needs decisions keyed by stable node
-  identities rather than addresses, which is Stage 2's own HIR.
 - **The walker's run-time copies of the visibility rules** (`evaluator.cxx`,
   for the REPL and unchecked runs).
 - **The LSP** still reads SemanticDB's symbols, not the checker's.
 
 ## Stage 6: delete and measure
 
-Remove the old paths and `KEX_PIPELINE`; write `docs/architecture.md`. Final
+Remove the old paths (the merged build, the old lowering, SemanticDB); keep
+`docs/architecture.md` current. Final
 report against the Stage 0 baseline: `src/` line delta, clean and incremental
 C++ build time, dup-audit counts, largest function, link time.
 
@@ -535,18 +640,9 @@ are now: the driver pipeline, one sema (names, then the Analyzer), the checked
 program, and both backends on it. It lists what is not on the HIR yet. The
 final measurement waits for the old paths to go.
 
-**Decided (2026-11-05, by the user):** `src/` must end up below `main`'s
-89,708 lines (a hard goal, not only a reported delta), and Stage 2's node
-identities come next.
-
-**Decided (2026-11-05, by the user): separate compilation is the default.** The
-unit-by-unit check and build (today behind `KEX_SEPARATE` and
-`KEX_SEPARATE_BUILD`: each unit checked and lowered against the interfaces of
-the units below it, unchanged units reused from a cache) becomes the normal
-build. The merged build is what retires. The point is incremental builds: an
-edit recompiles only its unit and the units whose imported interfaces changed,
-where the merged build re-checks and re-lowers the whole program. The
-measure of done is slick's incremental scenario.
+The user's decisions of 2026-11-05 (`src/` below `main`, separate compilation
+as the default) are under Decisions; node identities, which came next, are
+done (Stage 2).
 
 **Measured (2026-11-05), against `main` (66a5838, the Stage 0 baseline build).**
 Slick, median seconds of 3 interleaved runs, `tey` built from this tree
@@ -575,72 +671,9 @@ Static measures, branch against `main`:
   compares 479 / 562, type recursions 43 / 51, expression walkers 18 / 24,
   long functions 17 / 19, lowering re-derivations 0 / 22.
 
-**Devirtualization: what the replacement needs (2026-11-05).** KexI records
-each receiver method's source name (`collect_metadata.cxx`, `beamFunction =
-fd.name`), worked out from the AST. The emitter's mangling (`name/Head`, only
-for names in `Lowering::collidingMethods`) is decided during lowering and
-written nowhere, so the predicate re-derives it. Clauses (5) and (13b), about
-70 lines, only establish that `name/Head` exists.
-
-The replacement, in three steps:
-1. One rule for which receiver methods get per-type implementations, used by
-   lowering and by the KexI writer alike, which records the emitted name.
-2. Clauses (5) and (13b) become a read of the recorded name.
-3. The routing clauses (12, DS, the `''` peers) become a per-dispatcher
-   arm order the emitter records, and the predicate is deleted.
-
-`KEX_DEVIRT_AUDIT` lists every devirtualized call site, so old and new can be
-diffed over the corpus at each step.
-
-**Steps 1 and 2 done (later the same day).**
-- **Step 1.** `KexiMethod::implementation` records the per-type function the
-  emitter wrote, read from the emitted Core (`recordImplementations` with
-  `coreExports`). The head is the `make` target as written
-  (`makeTargetName`). The prelude build, the module build and the separate
-  build all record it. The separate build's own text scan is now this helper,
-  and it still rewrites `beamFunction` for named receivers only. The field
-  reaches `ImportedFunction` through `importedReceiverFunction`; the
-  interface cache moved to version 2 with the field.
-- **Step 2.** Clauses (5) and (13b) are one check:
-  `winner.implementation == name/Head`. Their helpers, `signaturesAlphaEqual`
-  and `typesAlphaEqual`, are deleted with their tests (−263 lines). The
-  corpus audit is identical before and after: 3,396 firings, 92 distinct
-  spellings.
-- **(1b) stays, and it is routing, not existence.** Dropping it adds 12
-  `Binary` devirtualizations (an alias or opaque head).
-
-**Step 3 done.** Lowering records, on each receiver dispatcher's clause
-(`FunClause::routes`), which per-type implementations a value of that type
-reaches.
-- **Arms in their real order.** `makeDispatcher` lays its arms out the way it
-  emits them: the String-to-List coercion, the sorted owners (shadowed ones
-  already dropped), the record field reads, then `Tuple`. An owner is routed
-  when no earlier arm's guard can take one of its values.
-- **One overlap rule.** That test is `runtimeShapes`/`shapesMeet`, which sits
-  next to `typeGuard`. `typeGuard` and `runtimeShapes` share `guardTag`.
-- **Merged ADT dispatchers** route every owner, since each `name/Owner`
-  forwards into the merged function.
-- **Recording.** `emitCore` keeps a clause's routes only while it is its
-  function's first clause, so nothing merged in ahead can answer first. The
-  result goes into `EmitResult::routedImplementations`, which every build
-  path records as `KexiMethod::implementation`.
-- **What the predicate keeps.** It is down to (0), (0b), (1), (1b), "the
-  receiver is of that head", and the recorded route. Clauses (12) and (DS),
-  the `''` and module-function vetoes, the union bucketing and the
-  `candidates` parameter are deleted (−403 lines with their tests). Three
-  codegen tests pin the routes (a routed record owner, Number below Integer,
-  shadowed Pid).
-- **What the audit showed.** With the old routing clauses still in place
-  next to the recorded routes, it was identical. So every call site they
-  devirtualized is one the emitter routes. Without them, 14 more spellings
-  fire (3,684 firings): `showValue/Result`, `map/Result`, `to/Measure`,
-  `truthy?/Integer`, and others. The old clauses refused these from the
-  overloads alone, conservatively. The recorded route says a value of that
-  type does reach that implementation.
-
 The benchmark also found a regression before it shipped. Slick's `harmat`
 failed with "exported module not found: Harmat.Query", and the checker's
-module-locator fix above resolves it.
+module-locator fix (Stage 5) resolves it.
 
 ## Gates (every change)
 
@@ -648,6 +681,9 @@ module-locator fix above resolves it.
 - `make test-all` (not bare `ctest` — it misses the spec suite),
   `make spec-beam`, `make fuzz` (400 + targeted), `make test-devirt`,
   `make dup-audit` (no metric may rise).
+- Until separate compilation is the default, `make spec-beam` again under
+  `KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1`, with no divergence from the merged
+  run.
 - `make bench-slick` for performance claims; slick must build and its
   `tey test` pass.
 - `make test-wasm` in CI for changes to the driver or the stdlib loader.
