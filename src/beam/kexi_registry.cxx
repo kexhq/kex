@@ -178,6 +178,7 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
     result.implementation = receiver.implementation;
+    result.foreignTarget = receiver.foreignTarget;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
     result.sourceModule = sourceModule;
@@ -649,7 +650,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                                        receiverFn.beamArity,
                                        receiverFn.paramNames,
                                        receiverType,
-                                       receiverFn.isFoul});
+                                       receiverFn.isFoul, false,
+                                       receiverFn.foreignTarget});
                 }
             }
         }

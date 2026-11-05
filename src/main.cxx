@@ -1672,15 +1672,10 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     }
     auto below = registry.buildSemanticInterfaces();
     for (auto &[_, module] : below.modules) module.compiledApart = true;
-    // A `make` function travels with its receiver when its module declares
-    // that type: one for a type declared elsewhere (`Units.SI`'s `to` on
-    // `Measure`) stays behind a `using` of its module, as in a merged program.
+    // A `make` function travels with its receiver unless it was declared for a
+    // type its module does not declare (KexiMethod::foreignTarget).
     const auto travelsWithReceiver = [](const kex::semantic::ImportedFunction &function) {
-      if (!function.isReceiverMethod || function.signature.params.empty()) return false;
-      const auto *named =
-          std::get_if<kex::semantic::NamedType>(&function.signature.params.front()->kind);
-      return !named || function.sourceModule.empty() ||
-             named->name.starts_with(function.sourceModule + ".");
+      return function.isReceiverMethod && !function.foreignTarget;
     };
     for (auto &[_, functions] : below.receiverFunctions)
       for (auto &function : functions)

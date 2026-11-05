@@ -120,6 +120,10 @@ struct KexiMethod {
     // emitted module (recordImplementations), never re-derived. "" when the
     // method is reached only through its dispatcher.
     std::string implementation;
+    // Declared by a `make` for a type its module does not declare (`Units.SI`'s
+    // `to` on `Measure`): reached only where that module is `using`-imported.
+    // A `make` for one of the module's own types travels with its values.
+    bool foreignTarget = false;
 };
 
 struct KexiTypeInterface {

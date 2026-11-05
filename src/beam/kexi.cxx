@@ -326,6 +326,7 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     for (const auto& source : m.defaultSources) defaults.push_back(Term::binary(source));
     fields.push_back(Term::list(std::move(defaults)));
     fields.push_back(Term::binary(m.implementation));
+    fields.push_back(Term::boolean(m.foreignTarget));
     return Term::tuple(std::move(fields));
 }
 
@@ -350,6 +351,7 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
         for (const auto& source : t[12]->asList())
             m.defaultSources.push_back(source->asBinaryStr());
     if (t.size() > 13) m.implementation = t[13]->asBinaryStr();
+    if (t.size() > 14) m.foreignTarget = t[14]->isAtom("true");
     return m;
 }
 
