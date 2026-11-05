@@ -53,6 +53,9 @@ struct ExternalModules {
         // unit calling it (KEX_SEPARATE): for its own types it comes before
         // the prelude's generic function and its structural `==`.
         bool compiledApart = false;
+        // As KexiMethod::foreignTarget: reached only where its module is
+        // `using`-imported.
+        bool foreignTarget = false;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;

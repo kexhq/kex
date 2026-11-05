@@ -623,6 +623,13 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
         if (owned)
             receiverType->name = modulePath + "." + receiverType->name;
     }
+    // A `make` inside a module for a type declared elsewhere: its methods stay
+    // behind a `using` of the module (KexiMethod::foreignTarget).
+    const bool foreignTarget =
+        !modulePath.empty() && !owned &&
+        !(receiverType && receiverType->kind == KexiType::Named &&
+          receiverType->name.starts_with(modulePath + "."));
+    const auto firstMethod = iface.methods.size();
     for (const auto& trait : md.implements) {
         if (typeName.empty()) continue;
         const auto traitName = exportedTraitName(trait, modulePath);
@@ -698,6 +705,8 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
         if (!seenImpls.count(name))
             for (const auto& sigType : sigs)
                 iface.methods.push_back(methodFromSig(name, receiverType, sigType));
+    for (auto i = firstMethod; i < iface.methods.size(); ++i)
+        iface.methods[i].foreignTarget = foreignTarget;
 }
 
 void collectFromTraitDef(const kex::ast::TraitDef& trait,

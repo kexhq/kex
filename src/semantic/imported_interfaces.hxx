@@ -47,6 +47,9 @@ struct ImportedFunction {
     // build, as it is in a program checked whole. The standard library's
     // stay behind their `using` (docs/plan_separate_compilation.md).
     bool visibleByReceiver = false;
+    // As KexiMethod::foreignTarget: a `make` for a type its module does not
+    // declare, so never visible by its receiver alone.
+    bool foreignTarget = false;
     // ADT constructors are represented as ordinary module exports so
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.
