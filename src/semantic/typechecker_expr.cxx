@@ -3,6 +3,7 @@
 #include "resolve_core.hxx"
 #include "typechecker.hxx"
 #include "typechecker_internal.hxx"
+#include "../ast/walk.hxx"
 #include "analyzer.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
@@ -1015,9 +1016,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     };
                     auto owned = declaredFor(operatorName);
                     ownsOperator = !owned.empty();
-                    if (std::any_of(owned.begin(), owned.end(), applies))
+                    if (std::any_of(owned.begin(), owned.end(), applies)) {
+                        m_decidedCalls[&expr] = {
+                            CallKind::Operator, typeToString(resolve(leftType))};
                         return checkCall(operatorName, {leftType, rightType},
                                          expr.location, /*isMethodCall=*/true);
+                    }
                     // `!=` with no overload of its own negates an overloaded
                     // `==`, which is only possible when that `==` answers a
                     // Bool (kexhq/kex#486).
@@ -1389,28 +1393,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto isNamespaceReceiver = [](const ast::Expr& receiver) {
                 return std::holds_alternative<ast::UpperIdentifier>(receiver.kind);
             };
-            std::function<std::optional<std::string>(const ast::Expr&)>
-                importedModulePath;
-            importedModulePath = [&](const ast::Expr& receiver)
-                -> std::optional<std::string> {
-                if (auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
-                    return root->name;
-                auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
-                if (!segment || !segment->receiver || !segment->args.empty() ||
-                    !segment->namedArgs.empty() || segment->block)
-                    return std::nullopt;
-                // Module segments are capitalized; a lowercase one is a call.
-                // Without this, `App.Helper.hint.upcase` (and every
-                // `"${App.Helper.hint}"`, which desugars to the same shape)
-                // recorded `App.Helper.hint` as the module to load, the
-                // resolver found no such file, and `App.Helper` itself was
-                // never discovered: "Unknown module `App.Helper.hint`".
-                if (segment->method.empty() ||
-                    !std::isupper(static_cast<unsigned char>(segment->method.front())))
-                    return std::nullopt;
-                auto parent = importedModulePath(*segment->receiver);
-                return parent ? std::optional<std::string>{*parent + "." + segment->method}
-                              : std::nullopt;
+            const auto importedModulePath = [](const ast::Expr& receiver) {
+                return ast::writtenModulePath(receiver);
             };
             auto importedPath = node.receiver
                 ? importedModulePath(*node.receiver) : std::nullopt;
@@ -1600,47 +1584,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 callName = kex::mangle::qualify(std::get<ast::UpperIdentifier>(node.receiver->kind).name, node.method);
             }
-            // `Type.of(Hello)` where `Hello` NAMES a type answers with that
-            // type. A bare type name is already a value elsewhere (`x.to(String)`),
-            // and it is not a runtime value at all — the walker died on
-            // "Undefined identifier: Hello" while BEAM lowered it to an atom
-            // and reported `Atom`.
-            if (callName == "Type::of" && node.args.size() == 1 && node.args[0]) {
-                if (auto referenced = typeNameReference(*node.args[0])) {
-                    if (auto structured = structuredTypeOf(referenced)) {
-                        m_staticTypeOfCalls[&node] =
-                            {std::move(*structured), /*evaluateArgument=*/false};
-                        return Type::named("Type");
-                    }
-                }
-                // An imported nullary constructor is also represented by a
-                // companion function. `Type.of(Kinds.Red)` asks for the
-                // constructor VALUE's ADT, not that function's signature.
-                const auto* constructor =
-                    std::get_if<ast::MethodCall>(&node.args[0]->kind);
-                const bool constructorValue = constructor && !constructor->method.empty() &&
-                    std::isupper(static_cast<unsigned char>(constructor->method.front()));
-                if (auto signature = constructorValue
-                                         ? nullptr
-                                         : namedFunctionSignature(*node.args[0])) {
-                    StructuredType function;
-                    function.name = "Function";
-                    function.pure = !signature->isFoul;
-                    bool complete = true;
-                    for (const auto& param : signature->params) {
-                        auto structured = structuredTypeOf(param);
-                        if (!structured) { complete = false; break; }
-                        function.args.push_back(std::move(*structured));
-                    }
-                    if (complete)
-                        if (auto result = structuredTypeOf(signature->result)) {
-                            function.args.push_back(std::move(*result));
-                            m_staticTypeOfCalls[&node] =
-                                {std::move(function), /*evaluateArgument=*/false};
-                            return Type::named("Type");
-                        }
-                }
-            }
             // `value.as(Target)` is a total, compile-time checked conversion.
             // Distinct types erase to their backing representation, so a
             // compatible retag changes only the static type. String is the
@@ -1729,53 +1672,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return Type::optional(target);
                 }
             }
-            // `Type.returnedBy(f)`: resolved entirely here — a function value
-            // carries no signature at runtime. The argument must NAME a
-            // function; an overloaded name has no single answer.
-            if (callName == "Type::returnedBy" && node.args.size() == 1 &&
-                node.args[0]) {
-                const auto* identifier =
-                    std::get_if<ast::Identifier>(&node.args[0]->kind);
-                std::string functionName;
-                if (identifier) {
-                    functionName = identifier->name;
-                } else if (const auto* qualified =
-                               std::get_if<ast::MethodCall>(&node.args[0]->kind);
-                           qualified && qualified->args.empty() &&
-                           qualified->receiver) {
-                    if (auto path = importedModulePath(*qualified->receiver))
-                        functionName = kex::mangle::qualify(*path, qualified->method);
-                }
-                std::vector<Signature> candidates;
-                if (!functionName.empty()) {
-                    if (auto user = m_userSignatures.find(functionName);
-                        user != m_userSignatures.end())
-                        candidates = user->second;
-                    if (candidates.empty())
-                        candidates = importedCandidateSignatures(functionName);
-                }
-                if (candidates.empty()) {
-                    error(expr.location,
-                          "`Type.returnedBy` needs the NAME of a function; "
-                          "a lambda or a function value carries no signature");
-                } else if (candidates.size() > 1) {
-                    std::string message =
-                        "`Type.returnedBy` cannot choose between the overloads of `" +
-                        sourceName(functionName) + "`";
-                    for (const auto& candidate : candidates)
-                        message += "\n\n" + displaySignature(functionName, candidate);
-                    error(expr.location, message);
-                } else if (auto structured =
-                               structuredTypeOf(candidates.front().result)) {
-                    m_staticTypeOfCalls[&node] =
-                        {std::move(*structured), /*evaluateArgument=*/false};
-                } else {
-                    error(expr.location,
-                          "`Type.returnedBy` cannot answer for `" + sourceName(functionName) +
-                          "`: its return type is not concrete");
-                }
-                return Type::named("Type");
-            }
+            // A compile-time intrinsic (intrinsics.hxx): its entry types the
+            // call when the arguments are no ordinary values, and folds it
+            // once they are typed. The one place a callee name is consulted.
+            const auto* intrinsic =
+                findCompileTimeIntrinsic(callName, node.args.size());
+            if (intrinsic && intrinsic->check)
+                if (auto checked = (this->*intrinsic->check)(expr, node))
+                    return checked;
 
             std::vector<TypePtr> argTypes;
             if (!isNamespaceCall)
@@ -1862,43 +1766,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes.push_back(inferBlock(**node.block, hints));
                 passBlockByLabel(node, skippedTo);
             }
-            // `Type.of(x)`: record what the CHECKER knows about the argument.
-            // A checked expression knows things the value cannot carry — the
-            // unused half of a Result, an empty list's element type — and both
-            // backends prefer this recording over asking the value. A nullary
-            // constructor is widened to its ADT (`Red` is a `Colour`).
-            if (callName == "Type::of" && argTypes.size() == 1) {
-                // Widen constructor names to their ADT, through containers:
-                // `[Red, Blue(2)]` is a `[Colour]`, not a `[Red]`. Type
-                // ARGUMENTS are left alone — a phantom typestate parameter is
-                // spelled with constructors too, and widening those erases the
-                // distinction they exist to make.
-                std::function<TypePtr(const TypePtr&)> widen =
-                    [&](const TypePtr& type) -> TypePtr {
-                    auto resolved = resolve(type);
-                    if (auto* named = std::get_if<NamedType>(&resolved->kind)) {
-                        if (const auto* owner = constructorOwner(*named);
-                            owner && *owner != named->name)
-                            return Type::named(*owner);
-                        return resolved;
-                    }
-                    if (auto* list = std::get_if<ListType>(&resolved->kind))
-                        return Type::list(widen(list->element));
-                    if (auto* optional = std::get_if<OptionalType>(&resolved->kind))
-                        return Type::optional(widen(optional->inner));
-                    if (auto* map = std::get_if<MapType>(&resolved->kind))
-                        return Type::map(widen(map->key), widen(map->value));
-                    if (auto* tuple = std::get_if<TupleType>(&resolved->kind)) {
-                        std::vector<TypePtr> elements;
-                        for (const auto& element : tuple->elements)
-                            elements.push_back(widen(element));
-                        return Type::tuple(std::move(elements));
-                    }
-                    return resolved;
-                };
-                if (auto structured = structuredTypeOf(widen(argTypes[0])))
-                    m_staticTypeOfCalls[&node] = {std::move(*structured), true};
-            }
+            if (intrinsic && intrinsic->fold)
+                (this->*intrinsic->fold)(node, argTypes);
 
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
             // argTypes[0] = pid type, argTypes[1] = msg type.
@@ -4270,6 +4139,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
             if (!matchedRecord.empty()) {
                 unifyVar(var->id, Type::named(matchedRecord));
+                if (callExpr)
+                    m_decidedCalls[callExpr] = {CallKind::FieldRead,
+                                                matchedRecord};
                 return matchedFieldType;
             }
             // Several records may supply the field. That uncertainty does

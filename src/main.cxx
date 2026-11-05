@@ -15,7 +15,8 @@
 #include "interpreter/evaluator.hxx"
 #include "hir/call_targets.hxx"
 #include "ir/emit_core.hxx"
-#include "ir/upgrade.hxx"
+#include "ir/pass_manager.hxx"
+#include "driver/pipeline.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
 #include "compiled/expand.hxx"
@@ -2464,9 +2465,10 @@ auto compilePreludeCore(const std::string &dir,
         selfExt.receiverFunctions[name].push_back(
             {kex::names::kPreludeModule, name, arity});
 
-    // The prelude lowers against its own names, receivers preferred.
-    const kex::ir::LowerContext selfContext{.externals = &selfExt,
-                                            .preferExternalReceivers = true};
+    // The prelude lowers against its own names, receivers preferred, with
+    // what its own check decided — as every other program does.
+    const auto selfContext = withCheckerAnswers(
+        {.externals = &selfExt, .preferExternalReceivers = true}, &analyzer);
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgramTiered(merged, tierBounds,
                                                   "prelude", selfContext));
@@ -2474,10 +2476,11 @@ auto compilePreludeCore(const std::string &dir,
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 
+    auto passes = kex::ir::standardPasses();
     builtModules->clear();
     for (size_t i = 0; i < modules.size(); i++) {
       PreludeBuildModule built;
-      kex::ir::insertUpgradePoints(modules[i]);
+      passes.run(modules[i]);
       built.emitted = kex::ir::emitCore(modules[i]);
       std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
       if (!out) return false;
@@ -2513,6 +2516,7 @@ auto compilePreludeCore(const std::string &dir,
       }
       builtModules->push_back(std::move(built));
     }
+    passes.report();
     const auto automaticInterfaces =
         kex::sourcePreludeSemanticInterfaces();
     for (size_t i = 1; i < builtModules->size(); i++) {
@@ -3518,6 +3522,7 @@ auto printUsage(const char *progName) -> void {
       << "      --dump-hir    With -C: list each call site and what the\n"
          "                    checker decided about it\n"
       << "      --verify-hir  With -C: fail when a call site is undecided\n"
+      << "      --print-passes List the compile pipeline and IR passes\n"
       << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
       << "      --collapse-report\n"
@@ -3634,6 +3639,7 @@ enum Value {
   Progress,
   DumpHir,
   VerifyHir,
+  PrintPasses,
 };
 } // namespace Option
 
@@ -5436,6 +5442,8 @@ struct Options {
   // checker decided about it / fail when any is undecided (src/hir/).
   bool dumpHir = false;
   bool verifyHir = false;
+  // `--print-passes`: list the compile pipeline and the IR passes, then exit.
+  bool printPasses = false;
   std::string completePrefix;
   std::string outputDir = ".";
   std::string astFilename;
@@ -5472,6 +5480,7 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       {"types", no_argument, nullptr, 't'},
       {"dump-hir", no_argument, nullptr, Option::DumpHir},
       {"verify-hir", no_argument, nullptr, Option::VerifyHir},
+      {"print-passes", no_argument, nullptr, Option::PrintPasses},
       {"emit-core", no_argument, nullptr, 'E'},
       {"eval", required_argument, nullptr, 'e'},
       {"emit-ast", no_argument, nullptr, Option::EmitAst},
@@ -5603,6 +5612,9 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
     case Option::VerifyHir:
       options.verifyHir = true;
       options.mode = Mode::Check;
+      break;
+    case Option::PrintPasses:
+      options.printPasses = true;
       break;
     case Option::EmitSyntax:
       options.mode = Mode::EmitSyntax;
@@ -6198,403 +6210,367 @@ using ExpandProgram = std::function<bool(kex::ast::Program &, bool)>;
 // merge the spec base and dependencies, check, lower, emit Core Erlang,
 // compile it to `.beam` with the KexI chunks attached, and — for `-c --run`
 // — run the result. Returns the process exit status.
-auto compileToBeam(Options &options, const std::string &filepath,
-                   kex::ast::Program &program,
-                   const std::vector<std::string> &scriptArgs,
-                   const std::string &entryRawSourceForCache,
-                   const std::string &buildFlags,
-                   const ExpandProgram &expandParsedProgram) -> int {
-  auto &mode = options.mode;
-  auto &skipCheck = options.skipCheck;
-  auto &outputDir = options.outputDir;
-  auto &outputDirExplicit = options.outputDirExplicit;
-  auto &compileRun = options.compileRun;
-  auto &skipPrelude = options.skipPrelude;
-  std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
-  std::vector<LoadedDep> beamDeps;
-  // The `<name>.spec.kex` base actually merged in below, kept so the gating
-  // semantic check can pass it to SemanticDB as a companion — see its use at
-  // the `runSemanticCheck` call.
-  std::string beamSpecBaseFile;
-  std::string beamSpecBaseRawSource;
-  // Populated either by a run-cache hit or by the normal pipeline below
-  // (kexhq/kex#323) — needed by the `compileRun` invocation further down
-  // either way.
-  kex::ir::EmitResult result;
-  std::vector<kex::ir::EmitResult> moduleResults;
-  std::vector<std::string> corePaths;
-  kex::timings::PhaseTimer timings;
-  // Loaded once per process and used by every phase below; timed on its
-  // own so it does not hide inside whichever phase touches it first.
-  buildProgress.step("Resolving", kex::color::cyan, shownPath(filepath));
-  (void)preludeSemanticInterfaces();
-  timings.mark("prelude interfaces");
+// One `kex -c` / `--emit-core` build of an entry file: what its passes
+// (compilePipeline) read and leave for the next one.
+struct CompileUnit {
+  Options &options;
+  const std::string &filepath;
+  kex::ast::Program &program;
+  const std::vector<std::string> &scriptArgs;
+  const std::string &entryRawSourceForCache;
+  const std::string &buildFlags;
+  const ExpandProgram &expandParsedProgram;
 
-  // A run of this same entry with the same flags, every file it was
-  // built from still as it was (runManifestCurrent): its modules run as
-  // they are, with no pre-check, no dependencies loaded and nothing
-  // compiled.
-  // Only decided here: its modules are copied in after the runtime's
-  // (run cache lookup below), since a module of the program's own — an
-  // opt-in stdlib one compiled from source — replaces the prebuilt one
-  // of the same name.
-  std::string tempDir;
+  // A `-c --run` whose inputs a recorded build already covers: everything
+  // from `expand` to `store-caches` is skipped and its output reused.
   std::optional<std::string> manifestKey;
   bool manifestHit = false;
-  if (mode == Mode::Compile && compileRun) {
-    manifestKey = runManifestKey(buildFlags, filepath);
-    if (manifestKey && runManifestCurrent(*manifestKey)) {
-      manifestHit = true;
-      buildProgress.step("Cached", kex::color::gray,
-                         "build of " + shownPath(filepath));
-    }
-  }
-
-  // Independent gating pre-check. `mode == Mode::Check` gates against
-  // PROJECT source plus the compiled stdlib INTERFACE, never an opt-in
-  // stdlib module's real SOURCE (see that path's own comment on its
-  // `resolveBeamDeps` call): merging the source ahead of the check can
-  // add a second, unannotated overload candidate for a function the
-  // interface alone resolves correctly, silencing a real mismatch
-  // (kexhq/kex#378 — a zero-arg block satisfied a one-arg parameter
-  // with no diagnostic under `--run`, the moment an unrelated opt-in
-  // stdlib module was anywhere in the build). `--run`/`--compile` below
-  // still merge that source into the real `program`, because lowering
-  // needs the actual bodies to emit — reordering or filtering that
-  // merge instead of duplicating the check regressed kexhq/kex#377's
-  // regression test, since IR lowering's overload-adjacency heuristics
-  // are sensitive to exactly where each dependency's declarations land
-  // in `program.items`.
-  //
-  // MOVES `program.items` into `checkProgram` rather than re-parsing
-  // the entry file from disk: `program` already passed the ONE shared
-  // `compiled do`/`Kex.embed`/`Template.text` expansion pass above, and
-  // that pass runs the REAL, potentially expensive sandboxed evaluator
-  // (kexhq/kex#379 — a template of ordinary size can legitimately need
-  // several seconds there). Re-parsing and re-expanding a second, fully
-  // independent copy paid that cost TWICE for no reason. `expand()` is
-  // not re-run here at all: a merged-in dependency's own `compiled do`
-  // block is a rare shape this narrower check can afford to miss, since
-  // the real, unchanged gating check below still sees it correctly.
-  // Deferred rather than printed/aborted on immediately: when the entry
-  // also has an ordinary undefined-identifier mistake, the REAL gating
-  // check below finds that too (its own Analyzer pass, same as this
-  // one) AND additionally runs SemanticDB, which reports it with its
-  // own wording alongside the Analyzer's — two diagnostics for one
-  // mistake, both expected in the output (spec/error_undefined_variable
-  // — this pre-check aborting first, before the real check ever ran,
-  // silently dropped SemanticDB's line and undercounted the error).
-  // Surfacing this pre-check's own finding is only needed for the #378
-  // shape: the real check passes it by mistake, so nothing else would
-  // ever report it.
   PreCheck preCheck;
-  if (mode == Mode::Compile && !skipCheck && !manifestHit &&
-      !separateBuildRequested())
-    preCheck = preCheckWithDependencies(program, filepath);
-  timings.mark("gating pre-check");
+  // The temporary output directory of a run without `-o`, removed after.
+  std::string tempDir;
+  std::string stem;
+  // The `<name>.spec.kex` base merged in, for the check and the run cache.
+  std::string beamSpecBaseFile;
+  std::string beamSpecBaseRawSource;
+  std::vector<LoadedDep> beamDeps;
+  std::optional<std::string> runCacheKeyValue;
+  bool haveCachedResult = false;
+  std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
+  std::vector<kex::ir::EmitResult> moduleResults;
+  std::vector<std::string> corePaths;
 
+  auto mode() const -> Mode { return options.mode; }
+  auto compileRun() const -> bool { return options.compileRun; }
+  // Ends a failed build, taking its temporary output directory with it.
+  auto abandon() const -> int {
+    if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
+    return 1;
+  }
+  // The passes a cached build does not run again.
+  auto rebuilding() const -> bool { return !haveCachedResult; }
+};
+
+using kex::driver::kContinue;
+using kex::driver::PassOutcome;
+
+auto passPreludeInterfaces(CompileUnit &unit) -> PassOutcome {
+  // Loaded once per process and used by every pass below; timed on its own
+  // so it does not hide inside whichever pass touches it first.
+  buildProgress.step("Resolving", kex::color::cyan, shownPath(unit.filepath));
+  (void)preludeSemanticInterfaces();
+  return kContinue;
+}
+
+auto passRunManifest(CompileUnit &unit) -> PassOutcome {
+  if (unit.mode() != Mode::Compile || !unit.compileRun()) return kContinue;
+  unit.manifestKey = runManifestKey(unit.buildFlags, unit.filepath);
+  if (unit.manifestKey && runManifestCurrent(*unit.manifestKey)) {
+    unit.manifestHit = true;
+    buildProgress.step("Cached", kex::color::gray,
+                       "build of " + shownPath(unit.filepath));
+  }
+  return kContinue;
+}
+
+auto passPreCheck(CompileUnit &unit) -> PassOutcome {
+  if (unit.mode() == Mode::Compile && !unit.options.skipCheck &&
+      !unit.manifestHit && !separateBuildRequested())
+    unit.preCheck = preCheckWithDependencies(unit.program, unit.filepath);
+  return kContinue;
+}
+
+auto passOutputDirectory(CompileUnit &unit) -> PassOutcome {
   // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
   // after.
-  if (compileRun && !outputDirExplicit && tempDir.empty()) {
+  if (unit.compileRun() && !unit.options.outputDirExplicit &&
+      unit.tempDir.empty()) {
     char tmpl[] = "/tmp/kex_XXXXXX";
     char *td = mkdtemp(tmpl);
     if (!td) {
       std::cerr << "error: mkdtemp failed\n";
       return 1;
     }
-    tempDir = td;
-    outputDir = tempDir;
+    unit.tempDir = td;
+    unit.options.outputDir = unit.tempDir;
   }
-  // Ends a failed build, taking its temporary output directory with it.
-  const auto abandon = [&]() -> int {
-    if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
-    return 1;
-  };
+  unit.stem = std::filesystem::path(unit.filepath).stem().string();
+  return kContinue;
+}
 
-  // Derive module stem from filename (e.g. "hello" from "hello.kex")
-  const std::string stem = std::filesystem::path(filepath).stem().string();
+auto passSpecBase(CompileUnit &unit) -> PassOutcome {
+  // `<name>.spec.kex` auto-loads `<name>.kex`'s declarations (see
+  // specBaseCandidates): prepended so the one Core Erlang module emitted
+  // from this program defines them.
+  if (!unit.manifestHit)
+    unit.beamSpecBaseFile = mergeSpecBase(unit.program, unit.filepath,
+                                          &unit.beamSpecBaseRawSource);
+  return kContinue;
+}
 
-  // `<name>.spec.kex` auto-loads `<name>.kex`'s declarations —
-  // see specBaseCandidates's own doc comment. `mode == Mode::Run`
-  // (the tree-walker) already does this via a separate
-  // Evaluator::execute call below; the BEAM codegen path emits
-  // everything as ONE Core Erlang module from a single Program,
-  // so the equivalent here is prepending the base file's
-  // declarations (everything but its own `main` block) directly
-  // into `program.items` before emitting — a real, reproduced
-  // gap otherwise: spec/json_parser.spec.kex's `Parser.parse`
-  // (declared in examples/json_parser.kex) compiled to a bare
-  // `undef` under BEAM, since nothing here ever loaded that
-  // file's declarations at all.
-  if (!manifestHit)
-    beamSpecBaseFile = mergeSpecBase(program, filepath, &beamSpecBaseRawSource);
+auto passDependencies(CompileUnit &unit) -> PassOutcome {
+  // Every module a `using` or a qualified reference reaches, merged in so
+  // lowering sees every definition.
+  if (unit.manifestHit) return kContinue;
+  auto qualifiedModules = sourceModulesNamedBy(unit.program);
+  // The separate check (and, with KEX_SEPARATE_CORE, its lowering) runs on
+  // the build's own dependencies too.
+  UnitGraph separateUnits;
+  g_separateEntryPath = unit.filepath;
+  unit.beamDeps = resolveBeamDeps(
+      unit.program, moduleRootsFor(unit.filepath), &preludeSemanticInterfaces(),
+      qualifiedModules, separateCheckRequested() ? &separateUnits : nullptr);
+  return kContinue;
+}
 
-  timings.mark("spec base");
+auto passRuntimeBeams(CompileUnit &unit) -> PassOutcome {
+  // Before the run-cache lookup: a cache hit restores its saved `.beam`
+  // files over these, so a stale prebuilt copy of a module the program
+  // merges from source cannot win (kexhq/kex#27).
+  if (unit.mode() == Mode::Compile &&
+      !copyRuntimeBeams(unit.options.outputDir, !unit.options.skipPrelude))
+    return unit.abandon();
+  return kContinue;
+}
 
-  // Cross-file dependency resolution: walk `using` statements,
-  // and metadata-resolved qualified module references, parse their source
-  // files, and merge them into the program so IR lowering sees every
-  // definition without making qualified members lexically imported.
-  if (!manifestHit) {
-    auto qualifiedModules = sourceModulesNamedBy(program);
-    // The separate check (and, with KEX_SEPARATE_CORE, its lowering)
-    // runs on the build's own dependencies too.
-    UnitGraph separateUnits;
-    g_separateEntryPath = filepath;
-    beamDeps = resolveBeamDeps(
-        program, moduleRootsFor(filepath),
-        &preludeSemanticInterfaces(),
-        qualifiedModules,
-        separateCheckRequested() ? &separateUnits : nullptr);
-  }
-
-  timings.mark("load dependencies");
-
-  // Needed either way (a run-cache hit still has to load and execute the
-  // cached .beam files) and independent of the closure below, so it runs
-  // once here rather than once per branch. `emit-core` returns before
-  // ever reaching a point that needs these, same as before this cache
-  // existed.
-  //
-  // Deliberately BEFORE the run-cache lookup below: the prebuilt runtime
-  // dir carries its own compiled copies of ordinary stdlib `.kex`
-  // modules (Kex.URI, Kex.URI.Query, ...), and a program that merges
-  // one of those modules' SOURCE in as a dependency (resolveBeamDeps)
-  // produces a same-named module of its own. In the no-cache path that
-  // is harmless — erlc writes that module's fresh `.beam` to outputDir
-  // strictly after this copy, so the fresh one wins. A run-cache hit
-  // has no later erlc step; it restores its saved `.beam` files
-  // straight into outputDir once, so that restore has to come AFTER
-  // this unconditional overwrite, or the toolchain's own possibly-stale
-  // prebuilt copy silently wins instead (kexhq/kex#27's `env.query`
-  // shape, reintroduced by the run-result cache's copy order).
-  if (mode == Mode::Compile && !copyRuntimeBeams(outputDir, !skipPrelude))
-    return abandon();
-
-  timings.mark("copy runtime beams");
-
-  // Run-result cache (kexhq/kex#323): only for `kex --run`'s
-  // throwaway compile-then-execute, never for a persistent `--compile`
-  // artifact or `--emit-core`'s text output — see the cache's own doc
-  // comment above `runCacheRoot` for why compileRun is the safe scope
-  // and what makes a hit here provably correct rather than merely fast.
-  std::vector<kex::ir::EmitResult> moduleResultsFromCache;
-  bool haveCachedResult = false;
-  std::optional<std::string> runCacheKeyValue;
-  if (manifestHit) {
-    auto hit = tryLoadRunCacheFrom(runManifestDir(*manifestKey), outputDir);
+auto passRunCache(CompileUnit &unit) -> PassOutcome {
+  std::vector<kex::ir::EmitResult> cached;
+  if (unit.manifestHit) {
+    auto hit = tryLoadRunCacheFrom(runManifestDir(*unit.manifestKey),
+                                   unit.options.outputDir);
     if (!hit) {
-      // Gone since it was found current: another build replacing it.
-      // Nothing was checked or loaded, so the run cannot go on from here.
-      std::cerr << "error: the cached build of " << filepath
+      std::cerr << "error: the cached build of " << unit.filepath
                 << " changed while starting; run it again\n";
-      return abandon();
+      return unit.abandon();
     }
-    moduleResultsFromCache = std::move(*hit);
-    haveCachedResult = true;
-  } else if (mode == Mode::Compile && compileRun) {
-    runCacheKeyValue = runCacheKeyFor(
-        filepath, skipCheck, entryRawSourceForCache, beamSpecBaseFile,
-        beamSpecBaseRawSource, beamDeps);
-    if (runCacheKeyValue)
-      if (auto hit = tryLoadRunCache(*runCacheKeyValue, outputDir)) {
-        moduleResultsFromCache = std::move(*hit);
-        haveCachedResult = true;
+    cached = std::move(*hit);
+    unit.haveCachedResult = true;
+  } else if (unit.mode() == Mode::Compile && unit.compileRun()) {
+    unit.runCacheKeyValue = runCacheKeyFor(
+        unit.filepath, unit.options.skipCheck, unit.entryRawSourceForCache,
+        unit.beamSpecBaseFile, unit.beamSpecBaseRawSource, unit.beamDeps);
+    if (unit.runCacheKeyValue)
+      if (auto hit = tryLoadRunCache(*unit.runCacheKeyValue,
+                                     unit.options.outputDir)) {
+        cached = std::move(*hit);
+        unit.haveCachedResult = true;
       }
   }
-  timings.mark("run cache lookup");
+  if (unit.haveCachedResult) unit.moduleResults = std::move(cached);
+  return kContinue;
+}
 
-  if (haveCachedResult) {
-    moduleResults = std::move(moduleResultsFromCache);
-    result = moduleResults.front();
-  } else {
+auto passExpand(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
+  // Trait defaults a merged dependency inherits from a trait declared in
+  // the prelude's source (kexhq/kex#235); see backfillExternalTraitDefaults.
+  kex::backfillExternalTraitDefaults(unit.program);
+  // Dependency modules arrive after the entry's own expansion, so their
+  // `compiled` blocks are expanded here, once the program is assembled.
+  if (!unit.expandParsedProgram(unit.program, false)) return 1;
+  return kContinue;
+}
 
-  // An opt-in module merged in above may claim a prelude trait
-  // (`implement: Enumerable`) purely through inherited defaults, with no
-  // local override — lowering needs that trait's default-method bodies,
-  // which live in the prelude's own source, not in anything just merged
-  // in (kexhq/kex#235). See backfillExternalTraitDefaults's doc comment.
-  kex::backfillExternalTraitDefaults(program);
+// "Aborted: N type errors — fix before running/compiling".
+auto reportAborted(const CompileUnit &unit, int errors) -> void {
+  std::cerr << kex::color::apply(kex::color::bold)
+            << kex::color::apply(kex::color::magenta)
+            << "Aborted:" << kex::color::apply(kex::color::reset) << " "
+            << errorCountPhrase(errors, "type") << " — fix before "
+            << (unit.compileRun() ? "running" : "compiling")
+            << " (use --no-check to skip).\n";
+}
 
-  // Base files and dependency modules are parsed after the initial source
-  // expansion. Expand the fully assembled compilation unit as well; the
-  // pass is idempotent because an expanded block is removed.
-  if (!expandParsedProgram(program, false)) return 1;
-
-  timings.mark("expand compiled blocks");
+auto passCheck(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
   buildProgress.step("Checking", kex::color::blue,
-                     moduleCount(beamDeps.size() + 1));
-
-  // Type-check the same dependency-expanded program that lowering will
-  // compile.  In particular, `using Units.SI` must make its ordinary
-  // functions visible before names such as `times` are resolved.
-  if (mode == Mode::Compile || mode == Mode::EmitCore) {
-    compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
-        &preludeSemanticInterfaces());
-    // `--no-check` suppresses diagnostics and lets invalid programs
-    // continue, but overload resolution still has to run: lowering needs
-    // the exact selected target even when errors are non-gating.
-    const bool gatingAnalysis = mode == Mode::Compile && !skipCheck;
-    int typeErrors = 0;
-    // `beamSpecBaseFile` matters here for the same reason it does on the
-    // walker path: the Analyzer sees the base file's declarations because
-    // they were merged into `program`, but SemanticDB re-reads `filepath`
-    // from disk and would report every constructor defined in the base as
-    // an undefined name. Passing "" made `-c`/`-R` reject
-    // spec/json_parser.spec.kex with 21 phantom errors while `--emit-core`
-    // — which skips the gating check — compiled it fine.
-    const bool analysisOk = gatingAnalysis
-        ? runSemanticCheck(program, filepath, compileAnalysis.get(),
-                           beamSpecBaseFile, &typeErrors)
-        : compileAnalysis->analyze(program);
-    if (gatingAnalysis && !analysisOk) {
-      std::cerr << kex::color::apply(kex::color::bold)
-                << kex::color::apply(kex::color::magenta)
-                << "Aborted:" << kex::color::apply(kex::color::reset) << " "
-                << errorCountPhrase(typeErrors, "type") << " — fix before "
-                << (compileRun ? "running" : "compiling")
-                << " (use --no-check to skip).\n";
-      return 1;
-    }
-    // This check just passed the SAME program the earlier, narrower
-    // pre-check already rejected — exactly the #378 shape the pre-check
-    // exists for (an opt-in stdlib module's merged-in SOURCE adding an
-    // unannotated overload candidate that quietly resolves what the
-    // compiled interface alone would flag). Its diagnostics were held
-    // back until now specifically so they are shown ONLY when they add
-    // information this check did not already provide.
-    if (gatingAnalysis && preCheck.failed) {
-      for (const auto &diag : preCheck.diagnostics)
-        printSemanticDiagnostic(diag);
-      std::cerr << kex::color::apply(kex::color::bold)
-                << kex::color::apply(kex::color::magenta)
-                << "Aborted:" << kex::color::apply(kex::color::reset) << " "
-                << errorCountPhrase(preCheck.typeErrors, "type")
-                << " — fix before " << (compileRun ? "running" : "compiling")
-                << " (use --no-check to skip).\n";
-      return 1;
-    }
-    if (gatingAnalysis && !g_separateDiagnostics.empty()) {
-      for (const auto &diagnostic : g_separateDiagnostics)
-        std::cerr << diagnostic << '\n';
-      std::cerr << kex::color::apply(kex::color::bold)
-                << kex::color::apply(kex::color::magenta)
-                << "Aborted:" << kex::color::apply(kex::color::reset)
-                << " " << errorCountPhrase(
-                       static_cast<int>(g_separateDiagnostics.size()), "type")
-                << " — fix before " << (compileRun ? "running" : "compiling")
-                << " (use --no-check to skip).\n";
-      return 1;
-    }
+                     moduleCount(unit.beamDeps.size() + 1));
+  if (unit.mode() != Mode::Compile && unit.mode() != Mode::EmitCore)
+    return kContinue;
+  unit.compileAnalysis =
+      std::make_unique<kex::semantic::Analyzer>(&preludeSemanticInterfaces());
+  // Gating: a type error stops the build. Otherwise (`--no-check`,
+  // `--emit-core`) the analysis still runs for the answers lowering reads.
+  const bool gating = unit.mode() == Mode::Compile && !unit.options.skipCheck;
+  int typeErrors = 0;
+  const bool ok = gating
+      ? runSemanticCheck(unit.program, unit.filepath, unit.compileAnalysis.get(),
+                         unit.beamSpecBaseFile, &typeErrors)
+      : unit.compileAnalysis->analyze(unit.program);
+  if (!gating) return kContinue;
+  if (!ok) {
+    reportAborted(unit, typeErrors);
+    return 1;
   }
+  // The pre-check's verdict, deferred to here (see preCheckWithDependencies).
+  if (unit.preCheck.failed) {
+    for (const auto &diag : unit.preCheck.diagnostics)
+      printSemanticDiagnostic(diag);
+    reportAborted(unit, unit.preCheck.typeErrors);
+    return 1;
+  }
+  if (!g_separateDiagnostics.empty()) {
+    for (const auto &diagnostic : g_separateDiagnostics)
+      std::cerr << diagnostic << '\n';
+    reportAborted(unit, static_cast<int>(g_separateDiagnostics.size()));
+    return 1;
+  }
+  return kContinue;
+}
 
-  timings.mark("type check");
+auto passLower(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
   buildProgress.step("Lowering", kex::color::yellow,
-                     moduleCount(beamDeps.size() + 1));
-
-  // An explicit `main do ... end` is not required: IR lowering
-  // synthesizes one from trailing bare top-level expressions, matching
-  // the tree-walker's implicit top-level execution behavior.
-  // Prelude record layouts come from the embedded compiled interface, not
-  // from reparsing stdlib source or injecting declarations into the user AST.
+                     moduleCount(unit.beamDeps.size() + 1));
+  // Modules a separate build already lowered, the entry's own first.
   if (g_separateModules) {
-    moduleResults = std::move(*g_separateModules);
+    unit.moduleResults = std::move(*g_separateModules);
     g_separateModules.reset();
-    std::stable_partition(moduleResults.begin(), moduleResults.end(),
+    std::stable_partition(unit.moduleResults.begin(), unit.moduleResults.end(),
                           [&](const auto &module) {
-                            return module.moduleName == "kex_" + stem;
+                            return module.moduleName == "kex_" + unit.stem;
                           });
-    result = moduleResults.front();
-  } else {
-    std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
-    try {
-      preludeRecordLayouts = loadPreludeRecordLayouts();
-    } catch (const std::exception &e) {
-      std::cerr << "error: invalid prebuilt standard library: " << e.what()
-                << "\n";
-      return abandon();
-    }
-    try {
+    return kContinue;
+  }
+  // Prelude record layouts come from the embedded compiled interface, not
+  // from reparsing stdlib source. `emitModules` runs the IR passes.
+  std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
+  try {
+    preludeRecordLayouts = loadPreludeRecordLayouts();
+  } catch (const std::exception &e) {
+    std::cerr << "error: invalid prebuilt standard library: " << e.what()
+              << "\n";
+    return unit.abandon();
+  }
+  try {
     auto preludeVariantTags = loadPreludeVariantTags();
     auto irModules = kex::ir::lowerModules(
-        program, stem,
-        withCheckerAnswers({.sourcePath = filepath,
+        unit.program, unit.stem,
+        withCheckerAnswers({.sourcePath = unit.filepath,
                             .externals = &preludeExternalModules(),
                             .externalRecords = &preludeRecordLayouts,
                             .externalVariants = &preludeVariantTags},
-                           compileAnalysis.get()));
-    moduleResults = kex::ir::emitModules(irModules);
-    result = moduleResults.front();
-    } catch (const kex::ir::LowerError &e) {
-      std::cerr << "error: " << e.what() << "\n";
-      return abandon();
-    }
+                           unit.compileAnalysis.get()));
+    unit.moduleResults = kex::ir::emitModules(irModules);
+  } catch (const kex::ir::LowerError &e) {
+    std::cerr << "error: " << e.what() << "\n";
+    return unit.abandon();
   }
+  return kContinue;
+}
 
-  timings.mark("lower + emit core");
-
-  for (const auto &emitted : moduleResults) {
-    std::string path = outputDir + "/" + emitted.moduleName + ".core";
+auto passWriteCore(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
+  for (const auto &emitted : unit.moduleResults) {
+    std::string path = unit.options.outputDir + "/" + emitted.moduleName + ".core";
     std::ofstream outFile(path);
     if (!outFile) {
       std::cerr << "error: cannot write " << path << "\n";
       return 1;
     }
     outFile << emitted.source;
-    corePaths.push_back(std::move(path));
+    unit.corePaths.push_back(std::move(path));
   }
-  if (mode == Mode::EmitCore) {
-    for (const auto &path : corePaths) std::cerr << "wrote " << path << "\n";
+  if (unit.mode() == Mode::EmitCore) {
+    for (const auto &path : unit.corePaths)
+      std::cerr << "wrote " << path << "\n";
     return 0;
   }
+  return kContinue;
+}
 
-  timings.mark("write core files");
+auto passErlc(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
+  // The runtime and prelude beams were copied before the run-cache lookup.
+  if (!compileCoreModules(unit.moduleResults, unit.corePaths,
+                          unit.options.outputDir, !unit.tempDir.empty()))
+    return unit.abandon();
+  return kContinue;
+}
 
-  // --compile: also invoke erlc to produce a .beam file. (The runtime
-  // and prelude beams every run needs regardless of a cache hit or miss
-  // were already copied/checked above, before this branch split.)
-  if (!compileCoreModules(moduleResults, corePaths, outputDir,
-                          !tempDir.empty())) {
-    return abandon();
-  }
+auto passStoreCaches(CompileUnit &unit) -> PassOutcome {
+  if (!unit.rebuilding()) return kContinue;
+  // What the next matching invocation reuses (kexhq/kex#323).
+  if (unit.runCacheKeyValue)
+    storeRunCache(*unit.runCacheKeyValue, unit.options.outputDir,
+                  unit.moduleResults);
+  if (unit.manifestKey && !kex::compiled::reachedOutside())
+    storeRunManifest(*unit.manifestKey, unit.options.outputDir,
+                     unit.moduleResults,
+                     runManifestFiles(unit.filepath, unit.beamSpecBaseFile,
+                                      unit.beamDeps));
+  return kContinue;
+}
 
-  timings.mark("module cache + erlc");
+auto passAttachInterfaces(CompileUnit &unit) -> PassOutcome {
+  if (!unit.compileRun() && !unit.corePaths.empty())
+    attachInterfaces(unit.program, unit.moduleResults, unit.options.outputDir,
+                     unit.stem, unit.options.skipCheck,
+                     unit.compileAnalysis.get());
+  return kContinue;
+}
 
-  // A fresh, successful, compileRun result is exactly what the NEXT
-  // matching invocation should be able to reuse (kexhq/kex#323).
-  if (runCacheKeyValue)
-    storeRunCache(*runCacheKeyValue, outputDir, moduleResults);
-  // Kept by entry as well, with every file it was built from, unless a
-  // compile-time evaluation reached outside the program.
-  if (manifestKey && !kex::compiled::reachedOutside())
-    storeRunManifest(*manifestKey, outputDir, moduleResults,
-                     runManifestFiles(filepath, beamSpecBaseFile, beamDeps));
-
-  } // haveCachedResult
-
-  if (!compileRun && !corePaths.empty())
-    attachInterfaces(program, moduleResults, outputDir, stem, skipCheck,
-                     compileAnalysis.get());
-  timings.mark("attach KexI");
-
-  // The emitted file is named after the module inside it. Kex used to
-  // rename `kex_<stem>.beam` to `<stem>.kx.beam` as a friendlier name,
-  // but BEAM's code server finds a module by FILENAME: a directory of
-  // `.kx.beam` files could not be put on a code path, so anything
-  // booting a built program straight from the emulator (`erl -pa ebin`,
-  // a package launcher) needed a renamed copy alongside it.
-  std::string kxBeam = outputDir + "/" + result.moduleName + ".beam";
-  if (tempDir.empty() && buildProgress.enabled)
+auto passFinish(CompileUnit &unit) -> PassOutcome {
+  // The emitted file is named after the module inside it, so a directory of
+  // them can go straight on a BEAM code path (`erl -pa ebin`).
+  const std::string kxBeam =
+      unit.options.outputDir + "/" + unit.moduleResults.front().moduleName +
+      ".beam";
+  if (unit.tempDir.empty() && buildProgress.enabled)
     buildProgress.finished(shownPath(kxBeam));
-  else if (tempDir.empty() && !quietBuild)
+  else if (unit.tempDir.empty() && !quietBuild)
     std::cerr << "  done  " << kxBeam << "\n";
-  if (compileRun)
-    buildProgress.step("Running", kex::color::cyan, shownPath(filepath));
+  if (!unit.compileRun()) return 0;
+  buildProgress.step("Running", kex::color::cyan, shownPath(unit.filepath));
+  return runBuiltProgram(unit.options, unit.filepath, unit.moduleResults,
+                         unit.tempDir, unit.scriptArgs);
+}
 
-  if (compileRun)
-    return runBuiltProgram(options, filepath, moduleResults, tempDir,
-                           scriptArgs);
-  return 0;
+// The passes of a `kex -c` / `--emit-core` build, in order.
+auto compilePipeline() -> const kex::driver::Pipeline<CompileUnit> & {
+  static const auto pipeline = [] {
+    kex::driver::Pipeline<CompileUnit> passes("compile (kex -c, --emit-core)");
+    passes
+        .add("prelude-interfaces", "load the stdlib's compiled interfaces",
+             passPreludeInterfaces)
+        .add("run-manifest", "-c --run: is a recorded build still current?",
+             passRunManifest)
+        .add("pre-check", "check the entry with its project modules",
+             passPreCheck)
+        .add("output-dir", "choose the output (a temp dir for a run)",
+             passOutputDirectory)
+        .add("spec-base", "merge a spec's base file", passSpecBase)
+        .add("dependencies", "merge every module the program reaches",
+             passDependencies)
+        .add("runtime-beams", "copy the prebuilt runtime", passRuntimeBeams)
+        .add("run-cache", "reuse an earlier identical build", passRunCache)
+        .add("expand", "expand `compiled` blocks of merged modules",
+             passExpand)
+        .add("check", "type-check; record the answers lowering reads",
+             passCheck)
+        .add("lower", "lower to IR, run the IR passes, emit Core Erlang",
+             passLower)
+        .add("write-core", "write .core files (--emit-core stops here)",
+             passWriteCore)
+        .add("erlc", "compile Core Erlang to .beam", passErlc)
+        .add("store-caches", "record this build for the next one",
+             passStoreCaches)
+        .add("attach-kexi", "attach each module's KexI interface",
+             passAttachInterfaces)
+        .add("finish", "report, and run it for -c --run", passFinish);
+    return passes;
+  }();
+  return pipeline;
+}
+
+auto compileToBeam(Options &options, const std::string &filepath,
+                   kex::ast::Program &program,
+                   const std::vector<std::string> &scriptArgs,
+                   const std::string &entryRawSourceForCache,
+                   const std::string &buildFlags,
+                   const ExpandProgram &expandParsedProgram) -> int {
+  CompileUnit unit{options, filepath, program, scriptArgs,
+                   entryRawSourceForCache, buildFlags, expandParsedProgram};
+  return compilePipeline().run(unit);
 }
 
 // `kex -C`: checks the entry file the way the run and compile paths see it —
@@ -6933,6 +6909,14 @@ auto runOnWalker(const Options &options, const std::string &filepath,
 int main(int argc, char *argv[]) {
   auto options = parseCommandLine(argc, argv);
   if (options.exitNow) return *options.exitNow;
+  if (options.printPasses) {
+    compilePipeline().print(std::cout);
+    std::cout << "IR passes (every emitted module):\n";
+    const auto irPasses = kex::ir::standardPasses();
+    for (const auto &pass : irPasses.passes())
+      std::cout << "  " << pass.name << "\n";
+    return 0;
+  }
   auto &mode = options.mode;
   auto &skipCheck = options.skipCheck;
   auto &completePrefix = options.completePrefix;

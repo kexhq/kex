@@ -2,6 +2,7 @@
 
 #include "../ast/ast.hxx"
 #include "decided_call.hxx"
+#include "intrinsics.hxx"
 #include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "traits.hxx"
@@ -352,6 +353,15 @@ private:
     auto namespaceCallProblem(const std::string& written, const std::string& resolved,
                               const std::string& method) -> std::optional<std::string>;
     auto typeNameReference(const ast::Expr& expr) -> TypePtr;
+    // Compile-time intrinsic handlers (intrinsics.hxx; typechecker_intrinsics.cxx).
+    friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
+        -> const CompileTimeIntrinsic*;
+    auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call)
+        -> TypePtr;
+    auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call)
+        -> TypePtr;
+    auto foldTypeOf(const ast::MethodCall& call,
+                    const std::vector<TypePtr>& argTypes) -> void;
     // Backing store for the pointer namedFunctionSignature returns when the
     // match came from imported interfaces.
     std::vector<Signature> m_importedSignatureCache;

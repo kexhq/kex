@@ -631,6 +631,45 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     binds,
                     localCallExpr(n.method, std::move(args)));
             }
+            // Only for an implementation whose parameters are plain names: a
+            // clause that matches on an argument (`to(String)`, a type
+            // selector) is reached through the dispatcher, which normalises
+            // that argument and falls back to the prelude conversion — called
+            // directly it met values it has no clause for (function_clause).
+            //
+            // A make method of this unit whose owner the checker decided:
+            // call that owner's own implementation (`count/List`). The
+            // shared dispatcher answers to the bare NAME, and lowerModules
+            // files a name with whichever module declares it — `count` with
+            // `module Mock` — so `parts.count` in the stdlib went to
+            // Kex.Mock's gated dispatcher. The decided owner is addressed
+            // directly, and the call skips the run-time dispatch too.
+            if (resolved->second.backendModule.empty() &&
+                resolved->second.passesReceiver &&
+                resolved->second.traitDictionaries.empty() &&
+                resolved->second.backendArity ==
+                    static_cast<int>(args.size()))
+                // Built-in structural owners only (List, Map, the primitives):
+                // their prelude implementation is the whole method. A record
+                // type's dispatcher also forwards to `make` extensions from
+                // units compiled apart (Units extends Measure), and a trait's
+                // default answers only when the concrete type has none —
+                // both decided at run time, so both keep the dispatcher.
+                if (const auto owner = receiverOwner(n);
+                    !owner.empty() && ownsMethod(owner, n.method) &&
+                    (owner == "List" || owner == "Map" ||
+                     primGuardBifs().count(owner)) &&
+                    takesPlainParameters(n.method, owner))
+                    if (auto implementation = collidingImplementationName(
+                            n.method, owner, args.size())) {
+                        if (threadsCapabilities() && resolved->second.isFoul)
+                            args.push_back(currentContext());
+                        auto call = std::make_unique<Expr>();
+                        call->node = Call{"", *implementation,
+                                          static_cast<int>(args.size()),
+                                          std::move(args), false};
+                        return wrapLets(binds, std::move(call));
+                    }
             // Everything appended from here on is a trait dictionary,
             // not a source argument — the two branches of a capability
             // dispatch need them separated (see the terminal call below).

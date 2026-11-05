@@ -100,7 +100,7 @@ auto collectFree(ExprPtr& e, std::set<std::string> bound,
 // Lifted-loop parameters are ordered by it rather than by the SSA name, so an
 // edit elsewhere in the function that renumbers fresh names does not reorder
 // the loop's parameters between two versions of the module.
-auto sourceName(const std::string& ssa) -> std::string {
+auto ssaSourceName(const std::string& ssa) -> std::string {
     std::string s = ssa;
     if (s.rfind("_ir_", 0) == 0) s = s.substr(4);
     while (!s.empty() && std::isdigit(static_cast<unsigned char>(s.back())))
@@ -144,7 +144,7 @@ struct UpgradePass {
             std::vector<std::string> captured(freeSet.begin(), freeSet.end());
             std::stable_sort(captured.begin(), captured.end(),
                              [](const std::string& a, const std::string& b) {
-                                 return sourceName(a) < sourceName(b);
+                                 return ssaSourceName(a) < ssaSourceName(b);
                              });
 
             // Named after the function it came from and its position there, so

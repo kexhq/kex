@@ -221,10 +221,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // the union name. Its overloaded operator is known from
                 // the static receiver type, so call that implementation
                 // directly instead of treating the value as a Bool.
-                if (expressionTypes && externalModules && n.left) {
-                    if (auto found = expressionTypes->find(n.left.get());
-                        found != expressionTypes->end() && found->second) {
-                        auto type = semantic::typeToString(found->second);
+                if (externalModules && n.left) {
+                    if (auto type = operatorOwner(n); !type.empty()) {
                         type.resize(std::min(type.size(), type.find('<')));
                         const auto bare = [](const std::string& name) {
                             return name.substr(name.rfind('.') + 1);
@@ -315,11 +313,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // the runtime guard below tests a record tag that an erased
             // `Tuplex` pair never carries, so `x + y` fell through to
             // the prelude's `+` and died with `function_clause`.
-            if (!sym.empty() && expressionTypes && n.left) {
-                std::string type;
-                if (auto found = expressionTypes->find(n.left.get());
-                    found != expressionTypes->end() && found->second)
-                    type = semantic::typeToString(found->second);
+            if (!sym.empty() && n.left) {
+                const std::string type = operatorOwner(n);
                 const auto bare = type.substr(type.rfind('.') + 1);
                 if (!type.empty() &&
                     (distinctTypes.count(type) || distinctTypes.count(bare)))
@@ -530,11 +525,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                             name.resize(std::min(name.size(), name.find('<')));
                             return name.substr(name.rfind('.') + 1);
                         };
-                        std::string left;
-                        if (expressionTypes && n.left)
-                            if (auto type = expressionTypes->find(n.left.get());
-                                type != expressionTypes->end() && type->second)
-                                left = bare(semantic::typeToString(type->second));
+                        const std::string left = bare(operatorOwner(n));
                         const ExternalModules::ReceiverFunction* chosen = nullptr;
                         for (const auto& candidate : it->second) {
                             if (candidate.beamArity != 2) continue;
@@ -1563,8 +1554,8 @@ auto Lowering::makeMethodFor(const ast::MethodCall& n, std::string owner,
         ? nullptr : makeMethodFor(n, "", false);
 }
 
-// `value.field` where the checker typed `value` as a record declaring that
-// field: read the slot. The name is not looked up at all, so a function
+// `value.field` the checker decided is a read of a record's field
+// (`decidedFieldReads`): read the slot. The name is not looked up at all, so a function
 // or another type's make function that shares it cannot take the call
 // — `incoming.target` beside a `target(incoming)` function ran the
 // function (kexhq/kex#448, kexhq/kex#476). Returns nullptr for anything
@@ -1576,22 +1567,12 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     if (resolvedCalls && resolvedCalls->count(&n)) return nullptr;
     if (std::holds_alternative<ast::UpperIdentifier>(n.receiver->kind))
         return nullptr;
-    // The record read: as the checker decided it, which holds even where
-    // the receiver's recorded type is a variable solved later; otherwise
-    // from that recorded type.
-    std::string recordName;
-    if (const auto decided = decidedFieldReads.find(&n);
-        decided != decidedFieldReads.end()) {
-        recordName = decided->second;
-    } else {
-        if (!expressionTypes) return nullptr;
-        auto typed = expressionTypes->find(n.receiver.get());
-        if (typed == expressionTypes->end() || !typed->second) return nullptr;
-        const auto* named =
-            std::get_if<semantic::NamedType>(&typed->second->kind);
-        if (!named) return nullptr;
-        recordName = named->name;
-    }
+    // The record read, as the checker decided it. Lowering used to work it
+    // out again from the receiver's recorded type; every read that found
+    // came from a field read the checker had already decided.
+    const auto decided = decidedFieldReads.find(&n);
+    if (decided == decidedFieldReads.end()) return nullptr;
+    const auto& recordName = decided->second;
     // A bare name the prelude also declares says too little: a local
     // `ParseError` and the prelude's are both `ParseError` to the checker,
     // and they keep their field at different positions. The accessor
@@ -1752,12 +1733,24 @@ auto Lowering::receiverIsForeignTo(const ast::MethodCall& n) const -> bool {
 
 // The receiver type the checker settled on for this call, "" when it did
 // not: the resolved target's own first, then the receiver's static type.
+// The name a `make` block's owner is filed under (`makeTargetNames`), for a
+// receiver type as the checker prints it: `[String]` is List's, `{K: V}`
+// Map's, `Box<Integer>` Box's. The checker's printed type used to be compared
+// to owner names as is, so `[String]` matched no owner and a resolved
+// `parts.count` fell back to the bare dispatcher name.
+auto Lowering::ownerNameOf(const std::string& printed) -> std::string {
+    if (printed.empty()) return printed;
+    if (printed.front() == '[') return "List";
+    if (printed.front() == '{') return "Map";
+    return printed.substr(0, printed.find('<'));
+}
+
 auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
     if (resolvedCalls)
         if (auto resolved = resolvedCalls->find(&n);
             resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty())
-            return resolved->second.localDispatchTypes.front();
+            return ownerNameOf(resolved->second.localDispatchTypes.front());
     if (expressionTypes && n.receiver)
         if (auto found = expressionTypes->find(n.receiver.get());
             found != expressionTypes->end() && found->second)
@@ -1791,6 +1784,15 @@ auto Lowering::placeMethodArguments(const ast::MethodCall& n, const MakeMethod& 
                          ? n.method : method.modulePath + "." + n.method,
                      slots, binds, &clause);
     return slots;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::operatorOwner(const ast::BinaryOp& n) const -> std::string {
+    const auto decided = decidedOperators.find(&n);
+    return decided == decidedOperators.end() ? std::string{} : decided->second;
 }
 
 } // namespace kex::ir

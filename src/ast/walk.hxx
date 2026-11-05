@@ -1,4 +1,7 @@
 #pragma once
+#include <cctype>
+#include <optional>
+#include <string>
 
 // Structural traversal of the expression tree: the one place that knows which
 // fields of which Expr kinds hold sub-expressions. A pass spells out only the
@@ -232,6 +235,29 @@ auto forEachBodyExpr(const Program& program, Visit&& visit) -> void {
             main && *main)
             for (const auto& expr : (*main)->body)
                 if (expr) visit(*expr);
+}
+
+} // namespace kex::ast
+
+namespace kex::ast {
+
+// The module path a receiver chain spells out — `App.Helper` for the
+// receiver of `App.Helper.hint(...)` — or nullopt when it is not one: every
+// segment a capitalized, argument-less name. A lowercase segment is a call:
+// taken for a module, `App.Helper.hint.upcase` (and `"${App.Helper.hint}"`,
+// which desugars the same way) recorded `App.Helper.hint` as the module to
+// load, and `App.Helper` itself was never found.
+inline auto writtenModulePath(const Expr& receiver) -> std::optional<std::string> {
+    if (const auto* root = std::get_if<UpperIdentifier>(&receiver.kind))
+        return root->name;
+    const auto* segment = std::get_if<MethodCall>(&receiver.kind);
+    if (!segment || !segment->receiver || !segment->args.empty() ||
+        !segment->namedArgs.empty() || segment->block || segment->method.empty() ||
+        !std::isupper(static_cast<unsigned char>(segment->method.front())))
+        return std::nullopt;
+    auto parent = writtenModulePath(*segment->receiver);
+    return parent ? std::optional<std::string>{*parent + "." + segment->method}
+                  : std::nullopt;
 }
 
 } // namespace kex::ast

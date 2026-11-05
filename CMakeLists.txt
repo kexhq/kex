@@ -157,6 +157,8 @@ add_library(kex_lib
     src/ir/lowering_pattern.cxx
     src/ir/lowering_record.cxx
     src/ir/emit_core.cxx
+    src/ir/pass_manager.cxx
+    src/ir/verify.cxx
     src/ir/upgrade.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
@@ -170,6 +172,7 @@ add_library(kex_lib
     src/semantic/typechecker.cxx
     src/semantic/typechecker_unify.cxx
     src/semantic/typechecker_expr.cxx
+    src/semantic/typechecker_intrinsics.cxx
     src/semantic/db.cxx
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
