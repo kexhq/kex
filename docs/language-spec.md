@@ -1968,6 +1968,17 @@ homogeneous — `[1, 2.0]` is still a type error.
 | `Float.parsePrefix(s)` | `(Float, String)?` | |
 | `Number.parse(s)` | `Result<Number, ParseError>` | Integer or Float |
 
+Parsing is dot-only by default; the same functions take an explicit
+`culture:` for localized text. `Culture` is opt-in — start with
+`using Culture` and resolve a preset with `Culture.of`:
+`Float.parse("1,44", culture: Culture.of("hu-HU").or(Culture.DEFAULT))`
+answers `Ok(1.44)`, while `Float.parse("1,44")` is an `Error`. Printing
+mirrors it: `(1500.5).to(String, culture: Culture.of("hu-HU").or(Culture.DEFAULT))`
+groups with a non-breaking space, and a `Number.format` pattern combines
+with a culture in `to(String, format, culture:)`. `Culture.of` resolves any
+of the 249 preset ISO tags; `Culture.DEFAULT` is the dot-only technical
+culture and `Culture.local` queries the system locale.
+
 ### 23.7 Math
 
 Constants: `Math.PI`, `Math.E`.

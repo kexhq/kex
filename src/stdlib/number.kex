@@ -291,6 +291,7 @@ module Integer do
   # The string must be entirely consumed: leading or trailing characters make
   # it an +Error+, with a +ParseError+ describing where parsing stopped. Use
   # +parsePrefix+ when a trailing remainder is expected.
+  # For localized text, pass +culture:+ explicitly.
   #
   # @param s [String] the text to parse
   # @return [Result<Integer, ParseError>] the integer, or a described failure
@@ -309,7 +310,29 @@ module Integer do
   #     Error(e) => IO.printError("bad port: ${e.message}")
   #   end
   parse : String -> Result<Integer, ParseError>
-  let parse(s) = Kex.Intrinsic.Integer.parse(s)
+  let parse(s: String) -> Result<Integer, ParseError> = Kex.Intrinsic.Integer.parse(s)
+
+  # Parses the whole string as an integer in +culture+.
+  #
+  # Group separators must match the culture and land on group boundaries; a
+  # decimal separator never parses as an integer. Anything else fails at its
+  # exact position with +value: None+.
+  #
+  # @param s [String] the text to parse
+  # @param culture [Culture] the culture to parse with
+  # @return [Result<Integer, ParseError>] the integer, or a described failure
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Integer.parse("1 500", culture: hu)              # => Ok(1500)
+  #   Integer.parse("1,500", culture: hu)              # => Error(ParseError { ... })
+  parse : String -> Culture -> Result<Integer, ParseError>
+  let parse(s, culture: Culture) do
+    match Culture.validateInteger(s, culture) do
+      Ok(normalized) => Kex.Intrinsic.Integer.parse(normalized)
+      Error(e) => Error(e)
+    end
+  end
 
   # Parses the whole string as an integer written in base +radix+, 2 through
   # 36. Digits above 9 are accepted in either case.
@@ -352,6 +375,37 @@ module Integer do
   #   end
   parsePrefix : String -> (Integer, String)?
   let parsePrefix(s) = Kex.Intrinsic.Integer.parsePrefix(s)
+
+  # Parses the longest integer prefix in +culture+ and returns it together
+  # with whatever text was left over. Answers +None+ when the string does
+  # not begin with a number at all.
+  #
+  # @param s [String] the text to parse from
+  # @param culture [Culture] the culture to parse with
+  # @return [(Integer, String)?] the value and the unconsumed remainder
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Integer.parsePrefix("12abc", culture: hu)              # => Just((12, "abc"))
+  #   Integer.parsePrefix("abc", culture: hu)                # => None
+  parsePrefix : String -> Culture -> (Integer, String)?
+  let parsePrefix(s, culture: Culture) do
+    var best: (Integer, String)? = None
+    var length = 1
+    while length <= s.count do
+      match Culture.validateInteger(s.take(length), culture) do
+        Ok(normalized) => do
+          match Integer.parse(normalized) do
+            Ok(v) => best = Just((v, s.drop(length)))
+            Error(_) => None
+          end
+        end
+        Error(_) => None
+      end
+      length = length + 1
+    end
+    best
+  end
 end
 
 # Reading floating-point numbers out of text.
@@ -360,6 +414,7 @@ module Float do
   #
   # The string must be entirely consumed; anything left over makes it an
   # +Error+ carrying a +ParseError+.
+  # For localized text, pass +culture:+ explicitly.
   #
   # @param s [String] the text to parse
   # @return [Result<Float, ParseError>] the float, or a described failure
@@ -373,6 +428,29 @@ module Float do
   #   rows.map { |r| Float.parse(r).or(0.0) }.sum / rows.count.to(Float).or(1.0)
   parse : String -> Result<Float, ParseError>
   let parse(s) = Kex.Intrinsic.Float.parse(s)
+
+  # Parses the whole string as a float in +culture+.
+  #
+  # The decimal separator and grouping follow the culture; the grammar is
+  # otherwise strict — an optional sign, grouped integer digits, an optional
+  # decimal separator with required fraction digits, and an optional
+  # exponent. Anything else fails at its exact position with +value: None+.
+  #
+  # @param s [String] the text to parse
+  # @param culture [Culture] the culture to parse with
+  # @return [Result<Float, ParseError>] the float, or a described failure
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Float.parse("1,44", culture: hu)              # => Ok(1.44)
+  #   Float.parse("1,44")                            # => Error(ParseError { ... })
+  parse : String -> Culture -> Result<Float, ParseError>
+  let parse(s, culture: Culture) do
+    match Culture.validateFloat(s, culture) do
+      Ok(normalized) => Kex.Intrinsic.Float.parse(normalized)
+      Error(e) => Error(e)
+    end
+  end
 
   # Parses a float from the front of the string and returns it together with
   # the unconsumed remainder. Answers +None+ when the string does not begin
@@ -389,6 +467,37 @@ module Float do
   #   Float.parsePrefix("12.5kg")   # => Just((12.5, "kg"))
   parsePrefix : String -> (Float, String)?
   let parsePrefix(s) = Kex.Intrinsic.Float.parsePrefix(s)
+
+  # Parses the longest float prefix in +culture+ and returns it together with
+  # the unconsumed remainder. Answers +None+ when the string does not begin
+  # with a number at all.
+  #
+  # @param s [String] the text to parse from
+  # @param culture [Culture] the culture to parse with
+  # @return [(Float, String)?] the value and the remainder
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Float.parsePrefix("1,5x", culture: hu)              # => Just((1.5, "x"))
+  #   Float.parsePrefix("x", culture: hu)                 # => None
+  parsePrefix : String -> Culture -> (Float, String)?
+  let parsePrefix(s, culture: Culture) do
+    var best: (Float, String)? = None
+    var length = 1
+    while length <= s.count do
+      match Culture.validateFloat(s.take(length), culture) do
+        Ok(normalized) => do
+          match Float.parse(normalized) do
+            Ok(v) => best = Just((v, s.drop(length)))
+            Error(_) => None
+          end
+        end
+        Error(_) => None
+      end
+      length = length + 1
+    end
+    best
+  end
 
   # The largest finite +Float+.
   #
@@ -544,6 +653,7 @@ module Number do
   #
   # Use it when the input's shape is not known ahead of time: a config value,
   # a CSV column that may hold either.
+  # For localized text, pass +culture:+ explicitly.
   #
   # @param s [String] the text to parse
   # @return [Result<Number, ParseError>] the number, or a described failure
@@ -554,6 +664,36 @@ module Number do
   #   Number.parse("x")      # => Error(ParseError { ... })
   parse : String -> Result<Number, ParseError>
   let parse(s) = Kex.Intrinsic.Number.parse(s)
+
+  # Parses the whole string as an +Integer+ or a +Float+ in +culture+,
+  # whichever the text describes.
+  #
+  # @param s [String] the text to parse
+  # @param culture [Culture] the culture to parse with
+  # @return [Result<Number, ParseError>] the number, or a described failure
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Number.parse("1 500,5", culture: hu)              # => Ok(1500.5)
+  #   Number.parse("1 500", culture: hu)                # => Ok(1500)
+  parse : String -> Culture -> Result<Number, ParseError>
+  let parse(s, culture: Culture) do
+    match Integer.parse(s, culture: culture) do
+      Ok(n) => return Ok(n)
+      Error(_) => None
+    end
+    match Float.parse(s, culture: culture) do
+      Ok(f) => return Ok(f)
+      Error(_) => None
+    end
+    Error(ParseError {
+      input: s,
+      position: 0,
+      value: None,
+      message: "invalid number for culture",
+      rest: s
+    })
+  end
 
   # Builds a +NumberFormat+ from a digit pattern, for +to(String, format)+.
   #
@@ -734,6 +874,41 @@ make Number do
   #   255.to(String, radix: 16)   # => Just("ff")
   let to(String, radix: Integer) -> String? = Kex.Intrinsic.Fun.convertTo(this, String, radix)
 
+  # Renders the number with a culture's separators: the decimal separator is
+  # substituted and digit groups are inserted per the culture's group sizes.
+  # An exponent, if the rendering has one, passes through unchanged. Answers
+  # +None+ for an invalid culture (see +Culture.valid?+).
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to render with
+  # @return [String?] the text, or +None+ for an invalid culture
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   (1500.5).to(String, culture: hu)              # => Just("1\u{A0}500,5")
+  #   42.to(String, culture: hu)                    # => Just("42")
+  let to(String, culture: Culture) -> String? = Culture.renderNumber(this.showValue, culture)
+
+  # Renders the number with a digit pattern and a culture's separators. The
+  # pattern controls precision exactly as +to(String, format)+; the culture
+  # only swaps the symbols. Answers +None+ for an invalid pattern or an
+  # invalid culture.
+  #
+  # @param String [Type] the target type
+  # @param format [NumberFormat] the pattern
+  # @param culture [Culture] the culture to render with
+  # @return [String?] the text, or +None+
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   (1234.5).to(String, Number.format`#.00`, culture: hu)              # => Just("1\u{A0}234,50")
+  let to(String, format: NumberFormat, culture: Culture) -> String? do
+    match this.to(String, format) do
+      Just(text) => Culture.renderNumber(text, culture)
+      None => None
+    end
+  end
+
   private do
     # +text+ with leading zeros up to +width+ characters.
     let leadingZeros(text: String, width: Integer) -> String do
@@ -747,5 +922,8 @@ make Number do
       return trailingZeros(text.take(text.count - 1), width) if text.count > width && text.endsWith?("0")
       return text
     end
+
+    # (Culture rendering lives in +Culture.renderNumber+; these helpers
+    # moved there with it.)
   end
 end

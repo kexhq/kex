@@ -377,6 +377,47 @@ let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 #   "ff".to(Integer, radix: 10)    # => None
 let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 
+# Renders a number as +String+ in an explicit culture: the decimal separator
+# is substituted and digit groups are inserted per the culture's group sizes.
+# Answers +None+ for an invalid culture (see +Culture.valid?+). Values
+# without digits render through +Showable+ unchanged.
+#
+# Needs +using Culture+ at the call site: only callers naming a culture
+# reach this clause.
+#
+# @param t [Type] the target type (+String+ renders; anything else renders
+#   through +Showable+ unchanged)
+# @param culture [Culture] the culture to render with
+# @return [String?] the text, or +None+ for an invalid culture
+#
+# @example
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   (1500.5).to(String, culture: hu)              # => Just("1\u{A0}500,5")
+let to(value, t, culture: Culture) = Culture.renderNumber(value.showValue, culture)
+
+# Renders a number with a digit pattern and a culture's separators. The
+# pattern controls precision exactly as +to(String, format)+; the culture
+# only swaps the symbols. Answers +None+ for an invalid pattern or an
+# invalid culture.
+#
+# Needs +using Culture+ at the call site, like the clause above.
+#
+# @param t [Type] the target type (+String+ renders; anything else renders
+#   through +Showable+ unchanged)
+# @param format [NumberFormat] the pattern
+# @param culture [Culture] the culture to render with
+# @return [String?] the text, or +None+ for an invalid culture
+#
+# @example
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   (1234.5).to(String, Number.format`#.00`, culture: hu)              # => Just("1\u{A0}234,50")
+let to(value, t, format: NumberFormat, culture: Culture) do
+  match value.to(String, format) do
+    Just(text) => Culture.renderNumber(text, culture)
+    None => None
+  end
+end
+
 make Either<L, R>, implement: Eitherable do
   # Case analysis: applies +onLeft+ to a +Left+ and +onRight+ to a +Right+.
   #

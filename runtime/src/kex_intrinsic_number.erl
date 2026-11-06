@@ -167,6 +167,43 @@ toInteger(N)  -> erlang:trunc(N).
 parse_error(S, Position, Value, Message, Rest) ->
     {'ParseError', S, Position, Value, Message, Rest}.
 
+%% string:to_float/1 accepts "," as well as "." for the decimal point, but
+%% Kex floats are written with "." only (`1,44` is not a float literal) and
+%% the walker's std::stod stops at the comma. A match that consumed a comma
+%% is discarded as if to_float had failed, so both backends agree and
+%% "1,234" never silently means 1.234. Rest is always a suffix of S (the
+%% ".0" rewrite only inserts before the exponent), so the consumed prefix is
+%% what remains after removing it.
+consumed_comma(S, Rest) when is_binary(S), is_binary(Rest) ->
+    Used = byte_size(S) - byte_size(Rest),
+    Used >= 0 andalso
+        binary:match(binary:part(S, 0, Used), <<",">>) =/= nomatch;
+consumed_comma(S, Rest) when is_list(S), is_list(Rest) ->
+    Used = length(S) - length(Rest),
+    Used >= 0 andalso lists:member($,, lists:sublist(S, Used)).
+
+%% string:to_float/1 with Kex's decimal point: "." only. N is the
+%% (possibly exponent-normalized) text handed to to_float; S is the
+%% original, against which the consumed prefix is measured.
+strict_to_float(N, S) when is_binary(N), is_binary(S) ->
+    case string:to_float(N) of
+        {Flt, Rest} when is_float(Flt) ->
+            case consumed_comma(S, Rest) of
+                true -> error;
+                false -> {ok, Flt, Rest}
+            end;
+        _ -> error
+    end;
+strict_to_float(N, S) when is_list(N), is_list(S) ->
+    case string:to_float(N) of
+        {Flt, Rest} when is_float(Flt) ->
+            case consumed_comma(S, Rest) of
+                true -> error;
+                false -> {ok, Flt, Rest}
+            end;
+        _ -> error
+    end.
+
 %% string:to_float/1 requires a fraction part, so it rejects "1e10" — text the
 %% Kex lexer accepts as a float literal, and which the walker's std::stod
 %% parses fine. Splice in the ".0" so both backends accept exactly the float
@@ -206,9 +243,9 @@ has_digit(L) -> lists:any(fun(C) -> C >= $0 andalso C =< $9 end, L).
 %% Ok(Flt). Partial (trailing) returns Error(ParseError{value, rest, ...}).
 %% A bare integer like "5" is accepted (to_integer fallback).
 float_parse(S) when is_binary(S) ->
-    case string:to_float(exp_normalized(S)) of
-        {Flt, <<>>} -> {'Ok', Flt};
-        {Flt, Rest} when is_float(Flt) ->
+    case strict_to_float(exp_normalized(S), S) of
+        {ok, Flt, <<>>} -> {'Ok', Flt};
+        {ok, Flt, Rest} ->
             {'Error', parse_error(S, byte_size(S) - byte_size(Rest), Flt,
                                   <<"trailing characters after float">>, Rest)};
         _ ->
@@ -221,9 +258,9 @@ float_parse(S) when is_binary(S) ->
             end
     end;
 float_parse(S) ->
-    case string:to_float(exp_normalized(S)) of
-        {Flt, ""} -> {'Ok', Flt};
-        {Flt, Rest} when is_float(Flt) ->
+    case strict_to_float(exp_normalized(S), S) of
+        {ok, Flt, ""} -> {'Ok', Flt};
+        {ok, Flt, Rest} ->
             {'Error', parse_error(unicode:characters_to_binary(S),
                                   length(S) - length(Rest), Flt,
                                   <<"trailing characters after float">>,
@@ -245,8 +282,8 @@ float_parse(S) ->
 %% Float.parsePrefix(s) -> Just({Float, Rest}) | none. Parses a leading float
 %% (or bare integer promoted to float), returning a proper Optional tuple.
 float_parse_prefix(S) when is_binary(S) ->
-    case string:to_float(exp_normalized(S)) of
-        {Flt, Rest} when is_float(Flt) -> {'Just', {Flt, Rest}};
+    case strict_to_float(exp_normalized(S), S) of
+        {ok, Flt, Rest} -> {'Just', {Flt, Rest}};
         _ ->
             case string:to_integer(S) of
                 {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
@@ -254,8 +291,8 @@ float_parse_prefix(S) when is_binary(S) ->
             end
     end;
 float_parse_prefix(S) ->
-    case string:to_float(S) of
-        {Flt, Rest} when is_float(Flt) -> {'Just', {Flt, Rest}};
+    case strict_to_float(S, S) of
+        {ok, Flt, Rest} -> {'Just', {Flt, Rest}};
         _ ->
             case string:to_integer(S) of
                 {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
@@ -304,8 +341,8 @@ to_integer(_) -> 'None'.
 to_float(X) when is_float(X) -> {'Just', X};
 to_float(X) when is_integer(X) -> {'Just', float(X)};
 to_float(X) when is_binary(X) ->
-    case string:to_float(X) of
-        {Flt, <<>>} -> {'Just', Flt};
+    case strict_to_float(X, X) of
+        {ok, Flt, <<>>} -> {'Just', Flt};
         _ ->
             case string:to_integer(X) of
                 {Int, <<>>} -> {'Just', float(Int)};
@@ -313,8 +350,8 @@ to_float(X) when is_binary(X) ->
             end
     end;
 to_float(X) when is_list(X) ->
-    case string:to_float(X) of
-        {Flt, ""} -> {'Just', Flt};
+    case strict_to_float(X, X) of
+        {ok, Flt, ""} -> {'Just', Flt};
         _ ->
             case string:to_integer(X) of
                 {Int, ""} -> {'Just', float(Int)};

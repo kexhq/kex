@@ -1,0 +1,407 @@
+# kex: no-check
+using Culture
+
+let hu = Culture.of("HU").or(Culture.DEFAULT)
+let huHu = Culture.of("HU_HU").or(Culture.DEFAULT)
+let en = Culture.of("EN").or(Culture.DEFAULT)
+let enUs = Culture.of("EN_US").or(Culture.DEFAULT)
+let de = Culture.of("DE").or(Culture.DEFAULT)
+let deDe = Culture.of("DE_DE").or(Culture.DEFAULT)
+
+describe("Culture.of") do
+  it("answers presets for ISO tags") do
+    assert(Culture.of("HU_HU").or(Culture.DEFAULT).name == "HU_HU")
+    assert(Culture.of("EN_US").or(Culture.DEFAULT).name == "EN_US")
+    assert(Culture.of("DE_DE").or(Culture.DEFAULT).name == "DE_DE")
+  end
+
+  it("normalizes case and dashes before lookup") do
+    assert(Culture.of("hu-HU").or(Culture.DEFAULT) == huHu)
+    assert(Culture.of("hu_hu").or(Culture.DEFAULT) == huHu)
+    assert(Culture.of("en-us").or(Culture.DEFAULT) == enUs)
+  end
+
+  it("answers None for unknown tags") do
+    assert(Culture.of("XX_YY") == None)
+    assert(Culture.of("") == None)
+  end
+end
+
+describe("Culture constants") do
+  it("DEFAULT is dot decimals with no grouping") do
+    assert(Culture.DEFAULT.numbers.decimalSeparator == '.')
+    assert(Culture.DEFAULT.numbers.groups == None)
+  end
+
+  it("HU_HU is comma decimals with space grouping") do
+    assert(huHu.numbers.decimalSeparator == ',')
+    match huHu.numbers.groups do
+      Just((separator, sizes)) => do
+        assert(sizes == [3])
+        assert(separator.codepoint == 160)
+      end
+      None => assert(false, "expected grouping")
+    end
+  end
+
+  it("EN_US is dot decimals with comma grouping") do
+    assert(enUs.numbers.decimalSeparator == '.')
+    match enUs.numbers.groups do
+      Just((separator, sizes)) => do
+        assert(separator == ',')
+        assert(sizes == [3])
+      end
+      None => assert(false, "expected grouping")
+    end
+  end
+
+  it("short aliases share the full tags' settings") do
+    assert(hu.numbers == huHu.numbers)
+    assert(en.numbers == enUs.numbers)
+    assert(de.numbers == deDe.numbers)
+  end
+end
+
+describe("Culture.valid?") do
+  it("accepts the presets") do
+    assert(Culture.valid?(Culture.DEFAULT))
+    assert(Culture.valid?(huHu))
+    assert(Culture.valid?(enUs))
+  end
+
+  it("accepts an assembled custom culture") do
+    let custom = Culture {
+      numbers: NumberSettings { decimalSeparator: '.', groups: Just((',', [3])) }
+    }
+    assert(Culture.valid?(custom))
+  end
+
+  it("rejects a group separator equal to the decimal separator") do
+    let bad = Culture {
+      numbers: NumberSettings { decimalSeparator: ',', groups: Just((',', [3])) }
+    }
+    assert(!Culture.valid?(bad))
+  end
+
+  it("rejects empty or non-positive group sizes") do
+    let empty = Culture {
+      numbers: NumberSettings { decimalSeparator: '.', groups: Just((',', [])) }
+    }
+    assert(!Culture.valid?(empty))
+    let zero = Culture {
+      numbers: NumberSettings { decimalSeparator: '.', groups: Just((',', [3, 0])) }
+    }
+    assert(!Culture.valid?(zero))
+  end
+end
+
+describe("Float.parse with culture") do
+  it("parses comma decimals in HU_HU") do
+    match Float.parse("1,44", culture: huHu) do
+      Ok(v) => assert(v == 1.44)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("parses grouped decimals in EN_US") do
+    match Float.parse("1,234.56", culture: enUs) do
+      Ok(v) => assert(v == 1234.56)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("rejects dot decimals in HU_HU") do
+    match Float.parse("1.44", culture: huHu) do
+      Error(e) => assert(e.message == "invalid float for culture")
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("rejects comma decimals without a culture") do
+    match Float.parse("1,44") do
+      Error(_) => assert(true)
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("parses signs and exponents in culture") do
+    match Float.parse("+1,5", culture: huHu) do
+      Ok(v) => assert(v == 1.5)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+    match Float.parse("1,5e3", culture: huHu) do
+      Ok(v) => assert(v == 1500.0)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("fails loudly for an invalid culture") do
+    let bad = Culture {
+      numbers: NumberSettings { decimalSeparator: ',', groups: Just((',', [3])) }
+    }
+    match Float.parse("1,44", culture: bad) do
+      Error(e) => assert(e.message == "invalid culture")
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("DEFAULT agrees with no-culture parsing") do
+    match Float.parse("1.44", culture: Culture.DEFAULT) do
+      Ok(v) => assert(v == 1.44)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+    match Float.parse("1,44", culture: Culture.DEFAULT) do
+      Error(_) => assert(true)
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+end
+
+describe("Integer.parse with culture") do
+  it("parses space groups in HU_HU") do
+    match Integer.parse("1 500", culture: huHu) do
+      Ok(v) => assert(v == 1500)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("rejects comma groups in HU_HU") do
+    match Integer.parse("1,500", culture: huHu) do
+      Error(e) => do
+        assert(e.message == "invalid integer for culture")
+        assert(e.position == 1)
+        assert(e.value == None)
+      end
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("rejects misplaced groups in HU_HU") do
+    match Integer.parse("15 00", culture: huHu) do
+      Error(_) => assert(true)
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("parses a user-assembled culture") do
+    let continental = Culture {
+      numbers: NumberSettings { decimalSeparator: ',', groups: Just(('.', [3])) }
+    }
+    match Integer.parse("1.500", culture: continental) do
+      Ok(v) => assert(v == 1500)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("keeps radix parsing working") do
+    match Integer.parse("ff", radix: 16) do
+      Ok(v) => assert(v == 255)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+end
+
+describe("Number.parse with culture") do
+  it("parses integers and floats in HU_HU") do
+    match Number.parse("1 500,5", culture: huHu) do
+      Ok(v) => assert(v == 1500.5)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+    match Number.parse("42", culture: huHu) do
+      Ok(v) => assert(v == 42)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("falls back from integer to float in culture") do
+    match Number.parse("1,500", culture: huHu) do
+      Ok(v) => assert(v == 1.5)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("fails on non-numeric input in culture") do
+    match Number.parse("xx", culture: huHu) do
+      Error(e) => assert(e.message == "invalid number for culture")
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+end
+
+describe("parsePrefix with culture") do
+  it("parses the longest float prefix in HU_HU") do
+    match Float.parsePrefix("12,34,56", culture: huHu) do
+      Just((f, rest)) => do
+        assert(f == 12.34)
+        assert(rest == ",56")
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+
+  it("parses the longest integer prefix in HU_HU") do
+    match Integer.parsePrefix("12abc", culture: huHu) do
+      Just((n, rest)) => do
+        assert(n == 12)
+        assert(rest == "abc")
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+
+  it("answers None when no prefix parses") do
+    assert(Integer.parsePrefix("abc", culture: huHu) == None)
+    assert(Float.parsePrefix("x", culture: huHu) == None)
+  end
+end
+
+describe("print with culture") do
+  it("renders with the culture's separators") do
+    assert((1500.5).to(String, culture: huHu) == Just("1\u{A0}500,5"))
+    assert(42.to(String, culture: huHu) == Just("42"))
+    assert((1500.5).to(String, culture: enUs) == Just("1,500.5"))
+  end
+
+  it("renders patterned with the culture's separators") do
+    assert((1234.5).to(String, Number.format`#.00`, culture: huHu) == Just("1\u{A0}234,50"))
+  end
+
+  it("passes exponents through") do
+    assert((1.5e21).to(String, culture: huHu) == Just("1,5e21"))
+  end
+
+  it("renders signs") do
+    assert((-2500.25).to(String, culture: huHu) == Just("-2\u{A0}500,25"))
+  end
+
+  it("answers None for an invalid culture") do
+    let bad = Culture {
+      numbers: NumberSettings { decimalSeparator: ',', groups: Just((',', [3])) }
+    }
+    assert((1500.5).to(String, culture: bad) == None)
+  end
+end
+
+describe("Culture.renderNumber") do
+  it("renders dot-form text directly") do
+    assert(Culture.renderNumber("1500.5", huHu) == Just("1\u{A0}500,5"))
+  end
+
+  it("answers None for an invalid culture") do
+    let bad = Culture {
+      numbers: NumberSettings { decimalSeparator: ',', groups: Just((',', [3])) }
+    }
+    assert(Culture.renderNumber("1500.5", bad) == None)
+  end
+end
+
+describe("Culture.local") do
+  it("is a usable culture") do
+    assert(Culture.valid?(Culture.local))
+  end
+
+  it("carries a name") do
+    assert(Culture.local.name.count > 0)
+  end
+end
+
+describe("Culture.of registry") do
+  it("resolves multi-part tags with normalization") do
+    assert(Culture.of("en-IN").or(Culture.DEFAULT).name == "EN_IN")
+    assert(Culture.of("pt-BR").or(Culture.DEFAULT).name == "PT_BR")
+    assert(Culture.of("sr-Latn-RS").or(Culture.DEFAULT).name == "SR_LATN_RS")
+  end
+
+  it("answers None for unknown tags") do
+    assert(Culture.of("XX_YY") == None)
+    assert(Culture.of("") == None)
+  end
+
+  it("every sampled preset validates") do
+    [
+      "EN_US", "EN_IN", "AR_SA", "FR_FR", "HU_HU", "DE_DE", "PT_BR", "ZH_CN",
+      "HI_IN", "SR_LATN_RS"
+    ].each do |tag|
+      assert(Culture.valid?(Culture.of(tag).or(Culture.DEFAULT)))
+    end
+  end
+end
+
+describe("secondary grouping (en-IN [3, 2])") do
+  it("exposes primary+secondary sizes") do
+    let c = Culture.of("EN_IN").or(Culture.DEFAULT)
+    match c.numbers.groups do
+      Just((separator, sizes)) => do
+        assert(separator == ',')
+        assert(sizes == [3, 2])
+      end
+      None => assert(false, "expected grouping")
+    end
+  end
+
+  it("parses 3-then-2-forever groups") do
+    let c = Culture.of("EN_IN").or(Culture.DEFAULT)
+    match Integer.parse("12,34,56,789", culture: c) do
+      Ok(n) => assert(n == 123456789)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("repeats the last size instead of cycling") do
+    # Sizes from the right are 3,2,2,2 — never 3 again.
+    let c = Culture.of("EN_IN").or(Culture.DEFAULT)
+    match Integer.parse("123,45,678", culture: c) do
+      Ok(_) => assert(false, "expected rejection")
+      Error(_) => assert(true)
+    end
+    assert(1234567890.to(String, culture: c) == Just("1,23,45,67,890"))
+  end
+end
+
+describe("arabic-indic separators (ar-SA)") do
+  it("parses arabic decimal and group marks") do
+    let c = Culture.of("AR_SA").or(Culture.DEFAULT)
+    assert(c.numbers.decimalSeparator.codepoint == 1643)
+    match Float.parse("1\u{66C}234\u{66B}56", culture: c) do
+      Ok(v) => assert(v == 1234.56)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("rejects ascii separators under ar-SA") do
+    let c = Culture.of("AR_SA").or(Culture.DEFAULT)
+    match Float.parse("1,234.56", culture: c) do
+      Ok(_) => assert(false, "expected rejection")
+      Error(_) => assert(true)
+    end
+  end
+end
+
+describe("narrow-NBSP groups (fr-FR)") do
+  it("accepts plain spaces for narrow-NBSP groups") do
+    let c = Culture.of("FR_FR").or(Culture.DEFAULT)
+    match c.numbers.groups do
+      Just((separator, sizes)) => do
+        assert(separator.codepoint == 8239)
+        assert(sizes == [3])
+      end
+      None => assert(false, "expected grouping")
+    end
+    match Integer.parse("1 234", culture: c) do
+      Ok(n) => assert(n == 1234)
+      Error(e) => assert(false, "expected Ok: ${e.message}")
+    end
+  end
+
+  it("prints narrow-NBSP groups") do
+    let c = Culture.of("FR_FR").or(Culture.DEFAULT)
+    assert((1500.5).to(String, culture: c) == Just("1\u{202F}500,5"))
+  end
+end
+
+describe("Culture.DEFAULT equivalence") do
+  it("agrees with no-culture parsing") do
+    assert(Float.parse("1.44") == Float.parse("1.44", culture: Culture.DEFAULT))
+    assert(Integer.parse("144") == Integer.parse("144", culture: Culture.DEFAULT))
+  end
+end
