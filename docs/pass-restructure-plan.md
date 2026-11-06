@@ -4,7 +4,7 @@ The plan for the `refactor/kex-bloat` branch: a smaller, DRY compiler with one
 semantic analysis whose decisions every backend follows, built as real passes.
 This file is the plan of record and its status; update it as stages land.
 
-Last updated: 2026-11-05.
+Last updated: 2026-11-06.
 
 ## Why
 
@@ -32,11 +32,11 @@ re-derives them, and the three disagree.
 - **Delivery: in place, gated.** The plan first said a strangler behind
   `KEX_PIPELINE=hir`; no such flag was ever built. Each decision moves into
   sema and its re-derivation is deleted in the same change, with every gate
-  green. The two build paths (merged and separate) are the one place where an
-  old path still stands beside the new one.
+  green. The merged build path, the one place an old path stood beside the new
+  one, is deleted (step 2).
 - **Separate compilation is the default build** (2026-11-05, by the user). Each
   unit is checked and lowered against the interfaces of the units below it;
-  unchanged units come from the unit cache. The merged build retires. The
+  unchanged units come from the unit cache. The merged build is deleted. The
   point is incremental builds; the measure is slick's incremental scenario.
 - **Receiver devirtualization** follows what the emitter records: each
   receiver method's per-type implementation and the dispatcher routes
@@ -46,10 +46,22 @@ re-derives them, and the three disagree.
   its module declares is recorded in its interface (`KexiMethod::
   foreignTarget`); consumers read it, never re-derive it from names.
 - **`src/` ends below `main`'s 89,708 lines** (2026-11-05, by the user): a hard
-  goal, not only a reported delta.
+  goal, not only a reported delta. Not met yet, and the gap is growing: on
+  2026-11-06 the `.cxx`/`.hxx` files under `src/` held 94,309 lines against
+  `main`'s 89,766, counted the same way on both (about +4,500; +3,458 on
+  2026-11-05 by the earlier count). Each step-3/4 item adds checker code;
+  the deletions that close the gap are scheduled for Stages 3–5.
 - **Pseudo-functions** (2026-11-04): one intrinsic registry plus `Type<T>`
   signatures instead of `name == "..."` branches per subsystem (Stage 2b).
-  **Deferred** until the HIR work is done (order step 9).
+  The `Type<T>` foundation and `to` signature move into step 3 because the
+  `using` gate cannot be a checker decision while `to` bypasses ordinary
+  argument matching. The rest of Stage 2b stays deferred to step 9.
+- **`Type<T>` is the reflection record** (2026-11-06, by the user). The
+  stdlib's `record Type` (`name`, `args`, `pure`) becomes generic, and a
+  type-name value (`String` written as an expression) IS that record on both
+  backends: `String.name == "String"`. Today it is a module value on the
+  walker and the atom `:String` on BEAM, and the checker types the
+  expression `String` as `String` itself (`let t = String; t.size` checks).
 - **Breaking changes are fine** pre-stability (e.g. `--no-check` still runs
   resolution).
 
@@ -82,33 +94,45 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 0 | Benchmark on slick | Done |
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
 | 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; no HIR node types yet |
-| 2b | Intrinsic registry + `Type<T>` signatures | Started, then **deferred** |
+| 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
 | 3 | Lowering only translates; IR passes | **In progress**: lowering re-derives no call (metric 0); still walks the AST |
 | 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; still evaluates the AST |
-| 5 | LSP / SemanticDB on the same sema | **In progress**: the checked run has no SemanticDB; the LSP still reads it |
+| 5 | LSP / SemanticDB on the same sema | **In progress**: runs and builds have no SemanticDB; `kex -C` and the LSP still use it |
 | 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below |
-| — | Separate compilation as the default | **In progress**: spec-beam 586/586 under it; not yet the default |
+| — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 
 ## Order of work (decided 2026-11-05)
 
 All of these are part of the refactor; none is optional. In order:
 
-1. **Separate compilation is the default build.** Today a separate build also
-   runs the merged analysis (`passCheck` analyses the whole merged program
-   after `checkUnitsSeparately`), so it does more work, not less. The separate
-   check must decide the build alone. Then: slick builds and `tey test`
-   passes under it, and the incremental scenario is measured against `main`.
-   The unit cache already skips check and lowering for a unit whose sources
-   and imported interfaces are unchanged.
-2. **Delete the merged build path**, with the lowerer's same-unit scoping
-   rules (`moduleScopedMethods`, `gatedOut`, `gatedModuleTaking`). One build
-   path is left for the HIR to serve. Step 3's error spec
+1. **Separate compilation is the default build — done.** The separate check
+   decides the build alone; slick builds and `tey test` passes under it, and
+   the incremental scenario was measured against `main`. The unit cache skips
+   check and lowering for a cacheable unit whose sources and imported
+   interfaces are unchanged.
+2. **Delete the merged build path — done.** One build path is left for the HIR to
+   serve. The lowerer's same-unit scoping rules are not merged-only: one unit
+   can hold several modules. They go in steps 3 and 4. Step 3's error spec
    (`error_measure_to_without_unit_module`) must keep passing through it.
 3. **The `using` gate is a checker decision.** A call that only a hidden
    `make` of an out-of-scope module takes gets a target saying so; lowering
-   emits it and the walker raises it. No backend guesses the module from type
-   names. Visibility already comes from the declaration
+   emits it and the walker raises it. The backends' own gates are deleted
+   (below: `moduleScopedMethods`, `gatedOut`, both `gatedModuleTaking`s).
+   No backend guesses the module from type names. Visibility already comes from the declaration
    (`KexiMethod::foreignTarget`).
+   Found 2026-11-06: the checker does not check `to`'s arguments at all
+   (`90.minute.to(String, in: 5)` passes it and fails in lowering), because
+   `to` is still a special case. Ordinary functions move first. Then add
+   `Type<T>` and the ordinary `to : A -> Type<T> -> T?` signature here, so
+   the same argument matching and visibility rule handles `Units.SI`'s
+   `to(String, in: SIPrefix)`. Remove the old `to` branches from the checker
+   and backends with that change.
+   Two things the migration must carry: the walker and BEAM conversion paths
+   still consume the checker's `Conversion` target for bare `to(T)`, so
+   deleting that branch alone turns conversions into `None`; and a global
+   `Type<T>` type for bare type-name values breaks existing generic APIs and
+   the `Void` value. Migrate those signatures and both backends together
+   before removing the branch.
 4. **Stage 2 proper.** `--verify-hir` clean on `spec/`, `examples/`, the
    stdlib and slick; HIR node types (every call its target, arguments placed,
    defaults filled; every expression its type); one resolver (`ResolvePass`
@@ -126,8 +150,214 @@ All of these are part of the refactor; none is optional. In order:
    the visibility rules go.
 7. **Stage 5: the LSP reads the checker's symbols; SemanticDB is deleted.**
 8. **Stage 1 leftovers:** one `TypeExpr` printer (three exist).
-9. **Stage 2b:** the intrinsic registry and `Type<T>` signatures.
+9. **Stage 2b:** finish the intrinsic registry and migrate the remaining
+   pseudo-functions onto the `Type<T>` foundation from step 3.
+   **Deferred with it (2026-11-06, by the user): Duration is a time Measure.**
+   `1.second` gives a `Measure` and `1.seconds` a `Duration` today, the type
+   picked by a spelling. Decided: one value, a `Measure` refined to dimension
+   `:time`, so unit maths and the typed Time/Date/DateTime APIs both apply.
+   It needs a dimensioned (refined) type in the checker.
+   **Singular unit names only** (2026-11-06, by the user): `10.watt`, `1.watt`,
+   `1.meter`, `10.second`. The plural time spellings go with this item:
+   `nanoseconds` … `weeks` (on Integer and Float, and `Duration`'s
+   `seconds(count)` …) and `months`/`years` for a `Period`. Today they are the
+   only way to build a `Duration`, so they go once `10.second` is that value.
+   **A measure is its quantity** (2026-11-06, by the user): `1.minute ==
+   60.second`, `1.hour == 3600.second`, `1.kilometer == 1000.meter`, and so on.
+   Today `==` on `Measure` is structural (the unit too), so all of these are
+   `false` on both backends, and `<` is not defined for `Measure`. Equality and
+   ordering compare the canonical value within one dimension; different
+   dimensions are never equal, and ordering them is an error.
 10. **Stage 6: measure** against the Stage 0 baseline; `src/` below `main`.
+
+### Step 3 progress (2026-11-06)
+
+- **The checker decides a hidden call.** A call every method of whose name
+  is a `make` for a type declared outside its module, in a module no `using`
+  brings in, gets target `Hidden` (owner: that module); lowering emits the
+  undefined method from it instead of re-deriving the gate by name.
+- **Hidden imported receiver overloads with named arguments are decided.**
+  When the labelled arguments fit only an out-of-scope receiver method, the
+  checker records `Hidden` with that method's module. The walker and lowerer
+  raise from this target. `power.to(String, in: Units.SI.Kilo(...))` is now
+  `hidden -> Units.SI` in `--dump-hir`, while the prelude's
+  `90.minute.to(String, in: Hour)` stays imported. The source-derived
+  interface now carries `foreignTarget` for a `make` of another module's type;
+  previously that declaration fact was lost in this interface path. The
+  completed slice passed `make test-all` (673 walker specs, 586 BEAM matches),
+  400+4 fuzz cases, devirt correspondence and dup-audit.
+- **Found on the way:** the checker's `makeModuleVisible` read only the
+  declaration's own `using`s, not the lexical `using M do ... end` frames,
+  so `"lexical".shout` inside `using Patcher do` was left undecided (both
+  backends got it right by their own rules).
+- **The backends' gates are deleted** (later 2026-11-06). Traced over
+  `spec/`, `examples/`, the walker and BEAM suites and every ctest: the
+  lowerer's `gatedOut` and its `staticTypeOf`-based `gatedModule`, and the
+  walker's `gatedModuleTaking`, never fired. The checker's `Hidden` target
+  answers first wherever there is a HIR. The one exception was the
+  prelude build, whose entry module lowered with NO HIR:
+  `lowerProgramTiered` copied six fields of its `LowerContext` and dropped
+  `hir`. It now passes the whole context, and the rest of what `gatedOut`
+  saw there were field reads (`constructor.name`) that the local
+  dispatcher answers the same way. Deleted: `moduleScopedMethods`,
+  `noteModuleScopedMake`, the lowerer's `makeMethodInScope`, `gatedOut`,
+  `gatedModule`, the walker's `gatedModuleTaking`.
+- **A receiver call's labels filter its candidates.** The per-candidate
+  label test ran only for calls without a receiver, so
+  `90.minute.to(String, in: 5)` picked `to(value, t, radix: Integer)` by
+  position. It now runs for receiver calls too (names with or without the
+  receiver). The call still checks clean, because every `to` candidate
+  types its target parameter `Unknown` and the checker reports nothing
+  from "unreliable" candidates: that is the `Type<T>` item.
+- **Left:** `Type<T>` and the ordinary `to` signature (above). The walker
+  keeps `makeMethodInScope` until it evaluates the HIR (step 6, Stage 4);
+  without a HIR (`compiled do`) it is the run-time scope rule.
+
+### Step 4 progress (2026-11-06)
+
+Toward `--verify-hir` clean, done alongside step 3: each call below was left
+undecided or typed Unknown.
+
+- **`private do` bodies are checked.** They were
+  skipped because make methods registered as they were checked; every make
+  method is registered before any body now, so the skip had no cause left.
+  No check result changes on `spec/` or `examples/`, slick included, and
+  the undecided call sites in `spec/` fall from 517 to 401
+  (`examples/json_parser.kex`: 110 to 1).
+- **A module's signatures name its own types qualified, everywhere.**
+  `s.matches(r)` (with `using Regex`) returned a bare `Match?` while
+  `Regex.matches(s, r)` returned `Regex.Match?`. The source-read opt-in
+  stdlib qualified only a signature's first parameter, and the prelude's
+  flattened entry chunk qualified nothing. One qualifier
+  (`moduleTypeQualifier` in `collect_metadata.cxx`) now serves units
+  compiled apart, the prelude's companions and its flattened entry, and the
+  source reader qualifies the whole signature. `Just(m) => m.get(0, "")`
+  is decided, and `let m: Match = ...` checks. A nested module's types read
+  by their full path (`Control.Retry.Retry.Schedule`), as their values
+  already did.
+- **More calls decided.** A call through a binding of not yet
+  known type (`let applyTo(f, x) = f(x)`) is a `ValueCall`; `BEAM.m.f(..)`
+  is `Foreign` (owner: its path) and `Kex.Intrinsic.*` a `Builtin`, their
+  segments `ModuleReference`s; a type's `make` method called through the
+  type's name (`Parser.parse(text)`) is checked as the method call both
+  backends run, with the type as receiver. It was typed Unknown, so
+  `let a: String = Parser.parse("x")` checked clean.
+- **Intrinsics and constants.** A call the intrinsic table folds
+  (`Type.of`, `Type.returnedBy`) is decided `Intrinsic` at the table's one
+  dispatch point. A module constant named bare (`LIMIT.abs`, `"${LIMIT}"`)
+  was taken as a namespace and typed Unknown, so
+  `let twice() -> String = LIMIT.abs` checked clean; `constantType` looks
+  it up through the enclosing modules, and a constant receiver is a value.
+  A nullary constructor receiver (`Monday.name`, `"${Low}"`) is a value
+  the same way (`nullaryConstructorType`, the one lookup the name's typing
+  uses too).
+- **A bare call only `make` methods answer is a method call**,
+  as lowering already ran it: inside a make block, one argument short of
+  the block's own method, `this` is the receiver (`decorate(@name)`);
+  otherwise the first argument is (`shout(tag)`). It was typed Unknown.
+- **A bare imported constructor** (`ReadFailed(path)` under `using FS`) is
+  checked as its qualified spelling is and decided `Constructor`; it was
+  typed Unknown (`let e: Integer = ReadFailed("x")` checked clean).
+- **One declaration, one signature.** A make method is registered ahead of
+  the bodies and again when its body is checked; the duplicate test used
+  `typesEqual`, which never equates two Unknowns, so a parameter declared
+  `Any` registered it twice, and a named-argument call (`t.string(:b,
+  nullable: true)`) then saw two candidates and typed Unknown. One
+  `sameParameters` (traits.hxx) replaces the seven hand-written copies of
+  that test.
+- **An overload set's bodies are typed by their annotations.**
+  `speak : Cat -> String` / `let speak(c)` beside
+  `speak : Dog -> String` / `let speak(d)` folds into ONE `FunctionDef`
+  with a clause per overload, and several same-arity contracts make
+  `checkFunctionDef` treat the whole set as one permissive body, so `c` is
+  untyped inside it (`let n: Integer = c` checks clean). Pairing each
+  definition with the annotation above it was tried and reverted: the
+  definitions are one node, so the pairing gave every clause the first
+  contract and `Digest.sha256(binary)` lost its `Binary` overload (slick).
+  Fixed per clause instead: when a folded definition has one clause per
+  same-arity contract, clause i is checked against contract i (source
+  order); several contracts over one clause (`FS.File.open` by mode) stay
+  one permissive body. Publication is unchanged: the annotations remain the
+  call-site signatures.
+- **List tails and structural fields.** The tail of `[x | rest]` was never
+  inferred: `[1 | "no"]` and `["a" | [2]]` checked clean, and `@row` in a
+  tail was undecided; it is checked as a list of the same elements. A field
+  of a structural record (`r: { name: String } & R`) answers `r.name`
+  before another type's same-named method (`structuralField`, one helper
+  for both places that ask), decided `FieldRead`.
+- **Calls through a structural alias** (`List.first(xs)` with
+  `type List<X> = [X]`) are `xs.first`, as both backends run them: the
+  checker looked up `List::first`, found nothing and left them Unknown. The
+  resolved target passes no receiver, since the value is the first argument.
+- **A zero-argument binding called with arguments** (`let hello = do |n|
+  ... end`, then `hello(a)` or `Greet.hello(a)`) calls the value it holds:
+  decided `ValueCall` and typed by the closure's result; it was Unknown.
+- **Module paths through re-exports and enclosing modules.** A re-export
+  (`export Numbers` in `Toolkit`) is followed when a call's path is
+  resolved: `Toolkit.Numbers.double(21)` calls `Numbers.double`. A bare
+  nested module named from its parent (`Router.status` inside `module Http`)
+  is `Http.Router` whenever the name reaches no module with the member;
+  `resolveModulePath`'s two scope walks are one.
+- **A numeric function's result is its argument's type** (also wrong on
+  `main`): `let sub(p, q) = p * q` returned a bare `N`, so
+  `let d: Float = sub(12.5, 4.0)` was rejected. The operators bind both
+  operands and the result to one `N: Number` placeholder, which
+  `generalizeSignature` now turns into a generic when it relates several
+  positions, and a call's `applyGenerics` substitutes bound generics as it
+  did plain ones. `spec/inference_numeric_operators` pinned `N` for
+  `fact(5)` awaiting exactly this; it is `Integer` now.
+- **Stdlib declaration fixed: `re`.** Documented as `regex`'s alias, it had
+  no annotations, so its overloaded body inferred Unknown and every
+  ``re`...` `` literal (and each call taking one, `text.replace(re`..`,
+  "#")`) was unchecked; it now carries `regex`'s two contracts.
+- **A method matching its receiver by pattern is pre-registered.** `let
+  factor(@Px) = 1.0` in `make CssUnit` was registered only when its block
+  was checked, after every top-level function, so `unit.factor` there typed
+  Unknown. The pre-pass now takes an explicit receiver (`@...`) as the first
+  parameter, and the body types that pattern as the make target, as it did
+  a destructured record receiver.
+- **Top-level values are declarations in the check order.** Functions were
+  checked first and top-level statements after, so a function reading a
+  top-level value (`let frame = Template.html(...)`, `let greeting = ...`)
+  saw nothing typed: `let show() -> Integer = greeting` checked clean, and
+  every template call through such a binding was undecided. A synthetic
+  main holding one `let` is now a node of the dependency order (after what
+  its expression uses, before what reads or calls it), in source order.
+- **A function named, not called** (`Type.of(Date.parse)`,
+  `Type.returnedBy(Time.midnight)`) is decided `FunctionReference` (owner:
+  its qualified name) where the intrinsic resolves the name.
+- **Inherited trait defaults are the type's own.** A default has
+  no signature, so `bot.shout` (a default `Bot` inherits, overridden only by
+  `Player`) and `Geo.Square{..}.describe` were left undecided. Both the
+  no-signature path and the overload path's existing `traitProvides` now ask
+  `ownTypeAnswers` and decide `OwnMethod`.
+- **Inline generic results share their parameter variables.** A clause
+  such as `let wrap(value: A) -> A?` now publishes one `A`; previously its
+  result annotation was resolved with a separate generic map and accepted
+  `wrap("text")` as `Integer?`. Qualified function and type queries also
+  share the AST's module-path reader instead of recursing through their own
+  copies. The interpreter/BEAM specs, semantic tests, fuzz, devirt and
+  duplication gates passed with this change.
+- **Measured** after "A function named, not called", before the two items
+  after it: undecided call sites in the `spec/` and `examples/` programs
+  that check clean, 391 when this work started and 14 then. (The 517 → 401
+  above counts every `spec/` program, clean or not.) Every change up to the
+  measurement kept test-all, fuzz, devirt, dup-audit and slick green.
+  Re-measure before quoting a current figure.
+
+### Step 2 done (2026-11-06)
+
+The merged build is deleted: `KEX_SEPARATE` and the check-only comparison
+mode, the merged pre-check (`preCheckWithDependencies`), the merged analysis
+and lowering in `passCheck`/`passLower`, `attachInterfaces`' collect path, and
+the run-cache key's mode. A non-gating build (`--no-check`, `--emit-core`)
+lowers every unit whatever the check found (it was the fallback's last user),
+and a unit that does not lower fails the build. Found on the way: a qualified
+record pattern of a unit compiled apart (`Kex.AST.ParseError { message }`)
+resolved to the prelude's `ParseError` by suffix. `kex -C`/`--check`
+(`checkEntry`) still indexes the merged program with SemanticDB until Stage
+5; the run and build paths (`runSemanticCheck`) do not. Gates green; `src/`
+93,842 lines.
 
 ### Step 1 progress (2026-11-05)
 
@@ -157,11 +387,20 @@ All of these are part of the refactor; none is optional. In order:
   separate), edit 11.28 / 10.15 / 8.70 s, `tey test` 114.8 / 113.0 / 100.7 s.
   Devirtualization fires less (1,315 firings against 3,682: calls into
   units compiled apart dispatch), and the spec run is still 12% faster.
-- **Left for step 1:** units whose sources read outside
+- **Tried and reverted (2026-11-06): keying a unit by what its expansion
+  read.** A `DependencyRecorder` around each dependency's expansion, plus a
+  per-expansion "reached outside" count, can replace the textual
+  `compiled do`/`Kex.embed`/`Template` test. But the recorded reads are not
+  stable between builds: the compile-time sandbox loads a module once per
+  process and the read is noted against whichever expansion loaded it first,
+  and a round served from the round cache notes its stored list instead.
+  Slick's hits fell from 131 to 119. A sound key needs either reads noted at
+  each use in the sandbox, or a lossless digest of the expanded program.
+- **Left after step 1:** units whose sources read outside
   files (`compiled do`, embeds, `Template`) are never cached, because the key
   does not cover those reads. Recording the reads in the key is the next
-  speed-up. `separate_check_cli_test` and `run_cache_cli_test` pin today's
-  opt-in flags and change with the flip.
+  speed-up. `separate_check_cli_test` and `run_cache_cli_test` cover the
+  default build and its cache behavior.
 
 ## Stage 0: benchmark on slick — done
 
@@ -195,7 +434,8 @@ Done:
   `sourceModulesNamedBy`.
 - **`main.cxx`**: `main()` 3,821 → 349 lines. Commands are functions
   (`compileToBeam`, `runOnWalker`, `checkEntry`, `compileCoreModules`,
-  `runBuiltProgram`, `preCheckWithDependencies`, `copyRuntimeBeams`); both REPLs
+  `runBuiltProgram`, `preCheckWithDependencies` (deleted in step 2),
+  `copyRuntimeBeams`); both REPLs
   are classes (`BeamReplSession`, `WalkerReplSession`). No function in
   `main.cxx` exceeds 400 lines.
 - **`LowerContext`**: one struct of named fields replaces 11 positional
@@ -229,24 +469,18 @@ Done (staged):
   `FieldRead`, `ModuleReference`, `TypeReference`, `TraitMethod`, `ValueCall`,
   `Dispatch` (receiver type unknown: the value decides), `Conversion`,
   `Builtin`.
-- Lowering reads `FieldRead` decisions (`LowerContext::decidedCalls`,
-  `staticFieldRead`).
+- Lowering reads `FieldRead` decisions (`staticFieldRead`; first through
+  `LowerContext::decidedCalls`, now through the HIR's targets, below).
 - Bug fix: a `make`-block method beside a same-named prelude method no longer
   commits to the import for an untyped receiver (false type error; BEAM called
   the wrong function). Spec: `spec/make_method_beside_prelude_import_beam.kex`.
 - Two candidates for different concrete receiver types with an untyped
   receiver now record `Dispatch` instead of picking the first.
 
-Coverage (call sites with no decision):
-
-| Corpus | Start | Now |
-|---|---|---|
-| `spec/` | 4,200 (12%) | 572 (1.5%) |
-| `examples/` | 1,333 | 296 |
-
-What remains undecided: calls into modules not in scope (`found.get` on a Regex
-match), receivers typed by patterns, error-test specs (correctly undecided),
-and a long tail.
+Coverage (call sites with no decision), at the start of this stage and
+before the owner decisions: `spec/` 4,200 (12%) → 572 (1.5%), `examples/`
+1,333 → 296, every program counted. The later figure is in "Step 4 progress"
+(391 → 14, programs that check clean only); the two do not compare.
 
 **The HIR object (2026-11-05):** `src/hir/hir.{hxx,cxx}` — `hir::Program`, built
 once from the parsed program and its analysis, gives every call one `Target`
@@ -262,8 +496,13 @@ LSP reading it.
 What is next for Stage 2 is order step 4: `--verify-hir` clean on the corpus,
 the HIR node types, and one resolver (`ResolvePass`, the checker's
 `resolveModulePath`/`resolveRecordName`/`resolveTypeExpr`, and the lowerer's
-`canonicalRecordName`/`registerModuleAliases`/`using` chain). The coverage
-figures above predate the owner decisions; re-measure before relying on them.
+`canonicalRecordName`/`registerModuleAliases`/`using` chain).
+
+**Written module paths (2026-11-06).** `Type.returnedBy`, function references,
+and the walker now use `ast::writtenModulePath`, the rule already used by the
+checker's module calls. Three local recursive path parsers are gone. This is
+a small part of the one-resolver work; name and scope resolution still have
+separate walks.
 
 **Node identities and a persisted HIR (2026-11-05, later).**
 - **Its own answers.** `hir::Program` reads `Answers` (types, `Type.of`
@@ -304,9 +543,9 @@ forgotten somewhere — `Type.of` alone had four handlers.
   (types the call itself; may return null to fall through) + optional `fold`
   (records the answer both backends emit). One dispatch point in the checker.
   Migrated: `Type.of` (both of its former branches), `Type.returnedBy`.
-- **`Type<T>` arguments** (decided, not started): a type-name expression has
-  type `Type<X>`; a `Type<T>` parameter binds `T`. Then
-  `to : A -> Type<T> -> T?`, `as : A -> Type<T> -> T`,
+- **`Type<T>` arguments** (foundation moved to step 3): a type-name expression
+  has type `Type<X>`; a `Type<T>` parameter binds `T`. Step 3 migrates
+  `to : A -> Type<T> -> T?`. Then `as : A -> Type<T> -> T`,
   `send : Process<M> -> M -> M`, `fromBytes : [Byte] -> Type<T> -> T?` are
   ordinary stdlib signatures and the checker special cases go away.
 - Then backends read folded answers instead of recognising names; the
@@ -537,9 +776,10 @@ does not count.
 `--no-check` is one rule on both backends now: the walker run analyzes silently
 as the BEAM build already did, so the evaluator always reads the decisions. A
 type error only stops a checked run. The 27 `no-check` programs behave
-identically. What still builds an evaluator without a HIR: the walker REPL,
-the wasm REPL and compile-time evaluation (`compiled do`). Until they have
-one, the walker keeps its run-time lookup as their fallback.
+identically. What still builds an evaluator without a HIR: compile-time
+evaluation (`compiled do`); the walker REPL and the wasm REPL got one later
+the same day (below). Until it has one, the walker keeps its run-time lookup
+as its fallback.
 
 The checker side needed one fix found by the separate-build test. A distinct
 type is registered under both its spellings, so `ThingId` and
@@ -661,6 +901,8 @@ What is left of Stage 5:
 - **The walker's run-time copies of the visibility rules** (`evaluator.cxx`,
   for the REPL and unchecked runs).
 - **The LSP** still reads SemanticDB's symbols, not the checker's.
+- **`kex -C`** (`checkEntry`) still indexes the program with SemanticDB
+  rather than going through `runSemanticCheck`'s one sema.
 
 ## Stage 6: delete and measure
 
@@ -715,11 +957,18 @@ module-locator fix (Stage 5) resolves it.
 - `make test-all` (not bare `ctest` — it misses the spec suite),
   `make spec-beam`, `make fuzz` (400 + targeted), `make test-devirt`,
   `make dup-audit` (no metric may rise).
-- `make bench-slick` for performance claims; slick must build and its
-  `tey test` pass.
 - `make test-wasm` in CI for changes to the driver or the stdlib loader.
 - New specs at the top of `spec/` need a `.expected` golden file
   (`make spec-orphans`); `describe`/`it` suites go under `spec/stdlib/`.
+
+## Milestone gates (between milestones, not every change)
+
+Slick is too slow to verify every change with (2026-11-06, by the user). It
+runs when a milestone (an order step or stage) completes, and for
+performance claims:
+
+- slick builds and its `tey test` passes;
+- `make bench-slick` against the previous milestone and `main`.
 
 ## Ground rules
 

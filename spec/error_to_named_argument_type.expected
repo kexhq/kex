@@ -1,0 +1,23 @@
+spec/error_to_named_argument_type.kex:6:28: error: `to` expects argument 3 to be TimeUnit, but got Integer
+
+to : Atom -> Type<String> -> String?
+
+to : Binary -> Type<String> -> Any
+
+to : Measure -> Type<String> -> String?
+
+to : Showable -> Type<String> -> String?
+
+to : Type -> Type<String> -> String?
+
+to : Measure -> Type<String> -> NumberFormat -> String?
+
+to : Measure -> Type<String> -> TimeUnit -> String?
+
+to : Number -> Type<String> -> Integer -> String?
+
+to : Number -> Type<String> -> NumberFormat -> String?
+
+to : Any -> Any -> Integer -> Any
+
+to : Measure -> Type<String> -> TimeUnit -> NumberFormat -> String?

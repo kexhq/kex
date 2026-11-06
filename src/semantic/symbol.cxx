@@ -2,8 +2,7 @@
 
 namespace kex::semantic {
 
-Scope::Scope(Scope* parent, bool isFoul)
-    : m_parent(parent), m_isFoul(isFoul) {}
+Scope::Scope(Scope* parent) : m_parent(parent) {}
 
 auto Scope::define(Symbol symbol) -> bool {
     auto [_, inserted] = m_symbols.emplace(symbol.name, std::move(symbol));
@@ -39,8 +38,8 @@ SymbolTable::SymbolTable() : m_current(nullptr) {
     pushScope();
 }
 
-auto SymbolTable::pushScope(bool isFoul) -> Scope& {
-    auto scope = std::make_unique<Scope>(m_current, isFoul);
+auto SymbolTable::pushScope() -> Scope& {
+    auto scope = std::make_unique<Scope>(m_current);
     m_current = scope.get();
     m_scopes.push_back(std::move(scope));
     return *m_current;

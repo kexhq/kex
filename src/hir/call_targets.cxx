@@ -18,6 +18,10 @@ auto targetKindName(TargetKind kind) -> std::string_view {
     case TargetKind::Operator: return "operator";
     case TargetKind::OwnMethod: return "own";
     case TargetKind::ModuleFunction: return "module-function";
+    case TargetKind::Hidden: return "hidden";
+    case TargetKind::Foreign: return "foreign";
+    case TargetKind::Intrinsic: return "intrinsic";
+    case TargetKind::FunctionReference: return "function";
     case TargetKind::Undecided: return "undecided";
     }
     return "undecided";

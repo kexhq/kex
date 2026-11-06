@@ -170,9 +170,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 // pre-pass (records, types, method owners); items are logically partitioned
 // into tiers by tierBounds. Currently produces one merged module; future
 // versions will produce separate modules per tier.
-// The prelude's tiers: lowered as one module, with only `externals`,
-// `externalRecords`, `resolvedCalls`, `preferExternalReceivers` and
-// `resolvedTraits` taken from `context`.
+// The prelude's tiers: lowered as one module, with all of `context`,
+// the checked program (`hir`) included.
 auto lowerProgramTiered(const ast::Program& prog,
                         const std::array<size_t, 5>& tierBounds,
                         const std::string& fileStem,

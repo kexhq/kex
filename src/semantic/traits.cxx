@@ -4,6 +4,19 @@
 
 namespace kex::semantic {
 
+auto sameParameters(const Signature& left, const Signature& right) -> bool {
+    if (left.params.size() != right.params.size()) return false;
+    for (std::size_t i = 0; i < left.params.size(); ++i) {
+        const auto& a = left.params[i];
+        const auto& b = right.params[i];
+        if (a && b && std::holds_alternative<UnknownType>(a->kind) &&
+            std::holds_alternative<UnknownType>(b->kind))
+            continue;
+        if (!typesEqual(a, b)) return false;
+    }
+    return true;
+}
+
 auto TraitRegistry::define(TraitDef def) -> void {
     m_traits[def.name] = std::move(def);
 }

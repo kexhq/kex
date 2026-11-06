@@ -6,6 +6,7 @@
 #include "../ast/ast.hxx"
 #include "../semantic/analyzer.hxx"
 #include <functional>
+#include <set>
 #include <string>
 
 namespace kex::beam {
@@ -64,5 +65,12 @@ auto coreExports(const std::string& coreSource)
 auto qualifyTypeNames(KexiChunk& chunk,
                       const std::function<std::string(const std::string&)>& qualify)
     -> void;
+// Qualifies the bare type names in `chunk`'s signatures as module `modulePath`
+// of `program` reads them: its own types, then those of the modules it uses
+// (`Match` in `Regex` is `Regex.Match`). `knownTypes` are the qualified types
+// declared outside `program`; its own modules' types are added.
+auto qualifyModuleTypeNames(KexiChunk& chunk, const ast::Program& program,
+                            const std::string& modulePath,
+                            std::set<std::string> knownTypes) -> void;
 
 } // namespace kex::beam
