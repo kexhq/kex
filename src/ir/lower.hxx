@@ -50,7 +50,7 @@ struct ExternalModules {
         // (kexhq/kex#181).
         bool isFoul = false;
         // Provided by one of this build's own units, lowered apart from the
-        // unit calling it (KEX_SEPARATE): for its own types it comes before
+        // unit calling it: for its own types it comes before
         // the prelude's generic function and its structural `==`.
         bool compiledApart = false;
         // As KexiMethod::foreignTarget: reached only where its module is
@@ -79,7 +79,7 @@ struct ExternalModules {
     // (KexiStructuralMetadata::capabilityMembers); otherwise its foul exports
     // stand for them.
     std::unordered_map<std::string, std::unordered_set<std::string>> capabilityMembers;
-    // The source modules of this build's own units lowered apart (KEX_SEPARATE):
+    // The source modules of this build's own units lowered apart:
     // `using` one makes its functions callable by UFCS and as tags, as a
     // module merged into the program is.
     std::unordered_set<std::string> compiledApartModules;
