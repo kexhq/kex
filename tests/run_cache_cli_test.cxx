@@ -25,14 +25,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// Separate compilation is the default build; KEX_SEPARATE=0 is the merged one.
-enum class Build { Separate, Merged };
-
 auto runKex(const std::string& cacheDir, const std::string& sourcePath,
-            Build build = Build::Separate,
             const std::string& binary = KEX_BINARY_PATH) -> std::string {
-    std::string cmd = (build == Build::Merged ? "KEX_SEPARATE=0 " : "") +
-                       std::string("KEX_CACHE=") + cacheDir + " " + binary +
+    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " " + binary +
                        " --run --no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -112,24 +107,6 @@ auto copyBinaryForBackdate() -> std::string {
 } // namespace
 
 int main() {
-    describe("Run cache — merged and separate builds", []() {
-        it("keeps their artifacts under different keys", []() {
-            char cacheTmp[] = "/tmp/kex_run_cache_modes_XXXXXX";
-            std::string cacheDir = mkdtemp(cacheTmp);
-            auto path = writeTempSource("main do\n  IO.printLine(\"modes\")\nend\n");
-
-            assertEqual(runKex(cacheDir, path, Build::Merged), std::string("modes\n"));
-            const auto mergedEntries = runCacheEntryCount(cacheDir);
-            assertEqual(runKex(cacheDir, path, Build::Separate), std::string("modes\n"));
-            assertTrue(runCacheEntryCount(cacheDir) > mergedEntries,
-                       "a separate build reused the merged build's run-cache entry");
-            assertEqual(runKex(cacheDir, path, Build::Separate), std::string("modes\n"));
-
-            std::remove(path.c_str());
-            fs::remove_all(cacheDir);
-        });
-    });
-
     describe("Run cache — fingerprint reacts to the compiler binary itself", []() {
         it("misses the cache when the kex binary's mtime changes under an unchanged git HEAD", []() {
             char cacheTmp[] = "/tmp/kex_run_cache_test_XXXXXX";
@@ -140,14 +117,14 @@ int main() {
                 "end\n");
             const auto binary = copyBinaryForBackdate();
 
-            auto first = runKex(cacheDir, path, Build::Separate, binary);
+            auto first = runKex(cacheDir, path, binary);
             assertEqual(first, std::string("cached\n"));
             auto afterFirst = runCacheEntryCount(cacheDir);
             assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
 
             backdateFile(binary);
 
-            auto second = runKex(cacheDir, path, Build::Separate, binary);
+            auto second = runKex(cacheDir, path, binary);
             assertEqual(second, std::string("cached\n"));
             auto afterSecond = runCacheEntryCount(cacheDir);
             assertTrue(afterSecond > afterFirst,

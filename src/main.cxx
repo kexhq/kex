@@ -1193,32 +1193,13 @@ auto unitsOf(const std::map<std::string, std::set<std::string>> &uses)
   return units;
 }
 
-// KEX_SEPARATE=1, phase 2 of docs/plan_separate_compilation.md: every unit
-// checked on its own, in build order, against the interfaces of the units
-// below it — the KexI its modules would carry once compiled, read back the
-// way a compiled unit's are. The merged check still decides the build; this
-// one prints what it found, `separate:` before each line, so the two can be
-// compared until they agree.
-// Separate compilation is the default build: every build and run (the compile
-// pipeline, which sets g_building) checks and lowers each unit apart, unless
-// KEX_SEPARATE=0 asks for the merged build. `--check` runs the separate check
-// only when KEX_SEPARATE=1 asks for it, beside the merged one, to compare.
+// Every build and run (the compile pipeline, which sets g_building) checks and
+// lowers each unit on its own, in build order, against the interfaces of the
+// units below it, as a compiled unit's are read back.
 bool g_building = false;
-
-auto separateCompilationOff() -> bool {
-  const char *value = std::getenv("KEX_SEPARATE");
-  return value && std::string(value) == "0";
-}
-
-auto separateBuildRequested() -> bool {
-  return g_building && !separateCompilationOff();
-}
-
-auto separateCheckRequested() -> bool {
-  if (separateBuildRequested()) return true;
-  const char *value = std::getenv("KEX_SEPARATE");
-  return value && *value && std::string(value) != "0";
-}
+// Whether this build's check stops it on a type error: not under `--no-check`
+// or `--emit-core`, which lower every unit whatever the check found.
+bool g_checkGates = true;
 
 // An emitted module's routed implementations, as recordImplementations asks.
 auto routedIn(const std::set<std::pair<std::string, int>> &routed)
@@ -1581,7 +1562,6 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
   g_separateChunks.clear();
   std::map<std::string, LoadedDep *> byPath;
   for (auto &dep : deps) byPath[*dep.path] = &dep;
-  std::size_t errors = 0;
   // Every unit's modules, for a separate build; it stands only if each unit
   // checked and lowered.
   std::vector<kex::ir::EmitResult> separateModules;
@@ -1597,7 +1577,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
   };
   std::vector<Described> describedUnits;
   std::optional<kex::cache::SeparateUnitCache> unitCache;
-  if (auto root = kex::cache::base(); root && separateBuildRequested())
+  if (auto root = kex::cache::base())
     unitCache.emplace(*root);
   // KEX_TIMINGS: where a separate build's time goes, summed over its units.
   std::map<std::string, double> unitPhaseMs;
@@ -1792,19 +1772,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     if (clean)
       for (auto &diagnostic : taggedLiteralDiagnostics(program, analyzer, g_separateEntryPath))
         unitDiagnostics.push_back(std::move(diagnostic));
-    for (const auto &diagnostic : unitDiagnostics) {
-      if (separateBuildRequested()) {
-        g_separateDiagnostics.push_back(diagnostic);
-        if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) errors++;
-        continue;
-      }
-      if (diagnostic.level != kex::semantic::Diagnostic::Level::Error) continue;
-      errors++;
-      std::fprintf(stderr, "separate: %s:%d:%d: error: %s\n",
-                   std::string(diagnostic.location.file).c_str(),
-                   diagnostic.location.line, diagnostic.location.column,
-                   diagnostic.message.c_str());
-    }
+    for (const auto &diagnostic : unitDiagnostics) g_separateDiagnostics.push_back(diagnostic);
     // Phase 3: the unit lowered on its own, against the prelude and the KexI
     // of the units below it, as the REPL lowers code against a loaded unit.
     const bool unitChecked =
@@ -1814,12 +1782,14 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
                      });
     chargeTo("check");
     const char *coreDir = std::getenv("KEX_SEPARATE_CORE");
-    const bool lowerApart = (coreDir && *coreDir) || separateBuildRequested();
     bool unitLowered = false;
     std::map<std::string, std::string> unitCoreExports;
     std::map<std::string, std::set<std::pair<std::string, int>>> unitRoutes;
-    if (lowerApart && !unitChecked) allLowered = false;
-    if (lowerApart && unitChecked) {
+    // A unit with errors is lowered all the same when the check does not
+    // gate this build; it is never cached.
+    const bool unitLowerable = unitChecked || !g_checkGates;
+    if (!unitLowerable) allLowered = false;
+    if (unitLowerable) {
       auto lowered = lowerUnitSeparately(program, isEntry ? g_separateEntryPath : unit.front(),
                                          analyzer, registry, coreDir ? coreDir : "");
       if (!lowered) allLowered = false;
@@ -1974,9 +1944,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
   if (kex::timings::enabled())
     for (const auto &[phase, ms] : unitPhaseMs)
       std::fprintf(stderr, "    separate %-20s %9.1f ms\n", phase.c_str(), ms);
-  if (!separateBuildRequested())
-    std::fprintf(stderr, "separate: %zu units checked, %zu errors\n", units.size(), errors);
-  if (separateBuildRequested() && allLowered) g_separateModules = std::move(separateModules);
+  if (allLowered) g_separateModules = std::move(separateModules);
 }
 
 // Every dependency file this build has parsed and expanded, by path. The
@@ -2236,7 +2204,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
   }
   const auto units = unitsOf(uses);
   // Before the dependencies are merged in, while each is still its own.
-  if (graph && separateCheckRequested())
+  if (graph && g_building)
     checkUnitsSeparately(program, deps, units, uses, interfaces);
 
   if (!deps.empty()) {
@@ -3266,7 +3234,7 @@ auto runCacheKeyFor(const std::string &filepath, bool skipCheck,
     return *a->path < *b->path;
   });
   std::string material = "kex-run-cache-v2\n" + kex::cache::toolchainFingerprint() +
-                        "\n" + (separateBuildRequested() ? "separate\n" : "merged\n") +
+                        "\n" +
                         filepath + "\n" +
                         (skipCheck ? "nocheck\n" : "check\n");
   material += "entry:" + kex::sha256Hex(entryRawSource) + "\n";
@@ -3390,9 +3358,7 @@ auto runManifestKey(const std::string &flags, const std::string &filepath)
   // The compiler that made the kept modules too: the .beam cache below keys
   // on it, but a run started from this entry never reaches that cache.
   return kex::sha256Hex("kex-run-by-entry-v2\n" + kex::cache::toolchainFingerprint() + "\n" +
-                   erlcIdentity() + "\n" +
-                   (separateBuildRequested() ? "separate\n" : "merged\n") +
-                   entry.string() + "\n" + flags);
+                   erlcIdentity() + "\n" + entry.string() + "\n" + flags);
 }
 
 auto runManifestDir(const std::string &key) -> std::filesystem::path {
@@ -5881,47 +5847,27 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
 // Companions go first, so the entry's chunk is written once, already naming
 // every companion's interface hash — the entry used to be written, then read
 // back with every companion and written again to fill those hashes in.
-// A module with a chunk in `prepared` (a separate build's, described by its own
-// unit) uses it, stamped with this layout; the rest are collected from
-// `program` with `analysis`.
-auto attachInterfaces(const kex::ast::Program &program,
-                      const std::vector<kex::ir::EmitResult> &modules,
-                      const std::string &outputDir, const std::string &stem,
-                      bool noCheck, const kex::semantic::Analyzer *analysis,
-                      const std::map<std::string, kex::beam::KexiChunk> *prepared = nullptr)
-    -> void {
+// Each module's chunk is the one its own unit described (`chunks`), stamped
+// here with the build's layout: the first module the entry, the rest its
+// companions.
+auto attachInterfaces(const std::vector<kex::ir::EmitResult> &modules,
+                      const std::string &outputDir,
+                      const std::map<std::string, kex::beam::KexiChunk> &chunks) -> void {
   std::map<std::string, kex::beam::Hash128> companionHashes;
   auto attach = [&](size_t index) {
     const auto &module = modules[index];
     const std::string beamPath = outputDir + "/" + module.moduleName + ".beam";
     try {
-      kex::beam::CollectOptions options;
-      options.unitId = modules[0].moduleName;
-      options.moduleAtom = module.moduleName;
-      options.fileStem = stem;
-      options.noCheck = noCheck;
-      options.analysis = analysis;
-      options.role = index == 0 ? kex::beam::KexiModuleRole::Entry
-                                : kex::beam::KexiModuleRole::Companion;
-      if (index != 0) {
-        options.entryBackPointer = modules[0].moduleName;
-        if (module.moduleName.rfind("Kex.", 0) == 0)
-          options.moduleName = module.moduleName.substr(4);
-      }
-      const kex::beam::KexiChunk *ready = nullptr;
-      if (prepared)
-        if (const auto found = prepared->find(module.moduleName); found != prepared->end())
-          ready = &found->second;
-      auto chunk = ready ? *ready : kex::beam::collectMetadata(program, options);
-      if (ready) {
-        chunk.metadata.unitId = options.unitId;
-        chunk.metadata.moduleAtom = options.moduleAtom;
-        chunk.metadata.role = options.role;
-        chunk.metadata.entryBackPointer = options.entryBackPointer;
-        chunk.metadata.companions.clear();
-      } else {
-        kex::beam::recordImplementations(chunk, routedIn(module.routedImplementations));
-      }
+      const auto described = chunks.find(module.moduleName);
+      if (described == chunks.end())
+        throw std::runtime_error("no unit described " + module.moduleName);
+      auto chunk = described->second;
+      chunk.metadata.unitId = modules[0].moduleName;
+      chunk.metadata.moduleAtom = module.moduleName;
+      chunk.metadata.role = index == 0 ? kex::beam::KexiModuleRole::Entry
+                                       : kex::beam::KexiModuleRole::Companion;
+      chunk.metadata.entryBackPointer = index == 0 ? "" : modules[0].moduleName;
+      chunk.metadata.companions.clear();
       chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
       chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
       if (index == 0)
@@ -6275,66 +6221,6 @@ auto runBuiltProgram(const Options &options, const std::string &filepath,
   return exitStatusOf(ret);
 }
 
-// What the gating pre-check found: whether the entry, checked together with
-// the project modules it uses, failed, and the Analyzer's diagnostics.
-struct PreCheck {
-  bool failed = false;
-  std::vector<kex::semantic::Diagnostic> diagnostics;
-  int typeErrors = 0;
-};
-
-// Checks `program` the way the project's other modules will see it: with its
-// spec base and every PROJECT module it names merged in. `program` gets its
-// own items back afterwards, unchanged; only the verdict is kept.
-auto preCheckWithDependencies(kex::ast::Program &program,
-                              const std::string &filepath) -> PreCheck {
-  PreCheck result;
-  kex::ast::Program checkProgram;
-  checkProgram.items = std::move(program.items);
-  const size_t originalCount = checkProgram.items.size();
-
-  mergeSpecBase(checkProgram, filepath);
-
-  resolveBeamDeps(checkProgram,
-                  kex::withoutStandardLibraryRoots(moduleRootsFor(filepath)),
-                  &preludeSemanticInterfaces(),
-                  sourceModulesNamedBy(checkProgram));
-
-  // Every item merged in above was PREPENDED (resolveBeamDeps's own
-  // convention), so the entry's own (already-expanded) items are
-  // still exactly the last `originalCount` of them — restorable by
-  // index regardless of how many dependency files contributed.
-  const size_t prependedCount = checkProgram.items.size() - originalCount;
-
-  // `Analyzer::analyze` directly, not `runSemanticCheck`: that helper
-  // also drives a `SemanticDB` pass for undefined-identifier
-  // diagnostics, which re-reads AND RE-PROCESSES `filepath` from disk
-  // (`SemanticDB::updateFile`) — including, for a file whose entry
-  // calls `Kex.embed`/`Template.text`, running the same expensive
-  // sandboxed scan a THIRD time (once in the shared expansion pass
-  // above, once in the real pipeline's own gating check below, and
-  // this would be a third — kexhq/kex#379 measured that scan at
-  // multiple seconds for an ordinary template). This pre-check's own
-  // job is the #378 overload-resolution class of error, which is the
-  // Analyzer's, not SemanticDB's; undefined identifiers are still
-  // caught by the real, unchanged gating check further down.
-  kex::semantic::Analyzer preCheckAnalyzer(&preludeSemanticInterfaces());
-  result.failed = !preCheckAnalyzer.analyze(checkProgram);
-  result.diagnostics = preCheckAnalyzer.diagnostics();
-  for (const auto &diag : result.diagnostics)
-    if (diag.level == kex::semantic::Diagnostic::Level::Error)
-      result.typeErrors++;
-
-  // Hand the entry's own items back to `program` either way: this
-  // pre-check's own verdict is consulted, deferred, further down —
-  // the real pipeline continues exactly as if it had never run.
-  program.items.clear();
-  program.items.reserve(originalCount);
-  for (size_t i = prependedCount; i < prependedCount + originalCount; i++)
-    program.items.push_back(std::move(checkProgram.items[i]));
-  return result;
-}
-
 // Copies the toolchain's prebuilt runtime `.beam` files into `outputDir`,
 // where every compiled program loads them from. False, having said why, when
 // they are missing — or the prelude is, and `needsPrelude`.
@@ -6385,7 +6271,6 @@ struct CompileUnit {
   // from `expand` to `store-caches` is skipped and its output reused.
   std::optional<std::string> manifestKey;
   bool manifestHit = false;
-  PreCheck preCheck;
   // The temporary output directory of a run without `-o`, removed after.
   std::string tempDir;
   std::string stem;
@@ -6395,7 +6280,6 @@ struct CompileUnit {
   std::vector<LoadedDep> beamDeps;
   std::optional<std::string> runCacheKeyValue;
   bool haveCachedResult = false;
-  std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
   std::vector<kex::ir::EmitResult> moduleResults;
   std::vector<std::string> corePaths;
 
@@ -6414,9 +6298,9 @@ using kex::driver::kContinue;
 using kex::driver::PassOutcome;
 
 auto passPreludeInterfaces(CompileUnit &unit) -> PassOutcome {
-  // This process builds: its units are checked and lowered apart
-  // (separateBuildRequested).
+  // This process builds: its units are checked and lowered apart.
   g_building = true;
+  g_checkGates = unit.mode() == Mode::Compile && !unit.options.skipCheck;
   // Loaded once per process and used by every pass below; timed on its own
   // so it does not hide inside whichever pass touches it first.
   buildProgress.step("Resolving", kex::color::cyan, shownPath(unit.filepath));
@@ -6432,13 +6316,6 @@ auto passRunManifest(CompileUnit &unit) -> PassOutcome {
     buildProgress.step("Cached", kex::color::gray,
                        "build of " + shownPath(unit.filepath));
   }
-  return kContinue;
-}
-
-auto passPreCheck(CompileUnit &unit) -> PassOutcome {
-  if (unit.mode() == Mode::Compile && !unit.options.skipCheck &&
-      !unit.manifestHit && !separateBuildRequested())
-    unit.preCheck = preCheckWithDependencies(unit.program, unit.filepath);
   return kContinue;
 }
 
@@ -6483,7 +6360,7 @@ auto passDependencies(CompileUnit &unit) -> PassOutcome {
   if (!unit.beamSpecBaseFile.empty()) g_separateNameCheckFiles.push_back(unit.beamSpecBaseFile);
   unit.beamDeps = resolveBeamDeps(
       unit.program, moduleRootsFor(unit.filepath), &preludeSemanticInterfaces(),
-      qualifiedModules, separateCheckRequested() ? &separateUnits : nullptr);
+      qualifiedModules, &separateUnits);
   return kContinue;
 }
 
@@ -6549,46 +6426,17 @@ auto passCheck(CompileUnit &unit) -> PassOutcome {
   if (!unit.rebuilding()) return kContinue;
   buildProgress.step("Checking", kex::color::blue,
                      moduleCount(unit.beamDeps.size() + 1));
-  if (unit.mode() != Mode::Compile && unit.mode() != Mode::EmitCore)
-    return kContinue;
-  unit.compileAnalysis =
-      std::make_unique<kex::semantic::Analyzer>(&preludeSemanticInterfaces());
-  // Gating: a type error stops the build. Otherwise (`--no-check`,
-  // `--emit-core`) the analysis still runs for the answers lowering reads.
-  const bool gating = unit.mode() == Mode::Compile && !unit.options.skipCheck;
-  // A separate build that checked every unit decides the build itself: its
-  // errors stop it, and when every unit lowered no merged analysis runs at
-  // all; `kex -c` attaches the interfaces the units described.
-  if (gating && separateBuildRequested()) {
-    const auto errors = std::count_if(
-        g_separateDiagnostics.begin(), g_separateDiagnostics.end(), [](const auto &diagnostic) {
-          return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
-        });
-    if (errors > 0 || g_separateModules) {
-      for (const auto &diagnostic : g_separateDiagnostics) printSemanticDiagnostic(diagnostic);
-      if (errors > 0) {
-        reportAborted(unit, static_cast<int>(errors));
-        return 1;
-      }
-      unit.compileAnalysis.reset();
-      return kContinue;
-    }
-  }
-  int typeErrors = 0;
-  const bool ok = gating
-      ? runSemanticCheck(unit.program, unit.filepath, unit.compileAnalysis.get(),
-                         unit.beamSpecBaseFile, &typeErrors)
-      : unit.compileAnalysis->analyze(unit.program);
-  if (!gating) return kContinue;
-  if (!ok) {
-    reportAborted(unit, typeErrors);
-    return 1;
-  }
-  // The pre-check's verdict, deferred to here (see preCheckWithDependencies).
-  if (unit.preCheck.failed) {
-    for (const auto &diag : unit.preCheck.diagnostics)
-      printSemanticDiagnostic(diag);
-    reportAborted(unit, unit.preCheck.typeErrors);
+  // Each unit was checked on its own (checkUnitsSeparately). In a gating
+  // build its diagnostics are reported and an error stops it; `--no-check`
+  // and `--emit-core` lower whatever the check found.
+  if (unit.mode() != Mode::Compile || unit.options.skipCheck) return kContinue;
+  const auto errors = std::count_if(
+      g_separateDiagnostics.begin(), g_separateDiagnostics.end(), [](const auto &diagnostic) {
+        return diagnostic.level == kex::semantic::Diagnostic::Level::Error;
+      });
+  for (const auto &diagnostic : g_separateDiagnostics) printSemanticDiagnostic(diagnostic);
+  if (errors > 0) {
+    reportAborted(unit, static_cast<int>(errors));
     return 1;
   }
   return kContinue;
@@ -6598,42 +6446,19 @@ auto passLower(CompileUnit &unit) -> PassOutcome {
   if (!unit.rebuilding()) return kContinue;
   buildProgress.step("Lowering", kex::color::yellow,
                      moduleCount(unit.beamDeps.size() + 1));
-  // Modules a separate build already lowered, the entry's own first.
-  if (g_separateModules) {
-    unit.moduleResults = std::move(*g_separateModules);
-    g_separateModules.reset();
-    std::stable_partition(unit.moduleResults.begin(), unit.moduleResults.end(),
-                          [&](const auto &module) {
-                            return module.moduleName == "kex_" + unit.stem;
-                          });
-    return kContinue;
-  }
-  // Prelude record layouts come from the embedded compiled interface, not
-  // from reparsing stdlib source. `emitModules` runs the IR passes.
-  std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
-  try {
-    preludeRecordLayouts = loadPreludeRecordLayouts();
-  } catch (const std::exception &e) {
-    std::cerr << "error: invalid prebuilt standard library: " << e.what()
-              << "\n";
+  // Every unit was lowered on its own (checkUnitsSeparately), unless one
+  // failed to, which it reported.
+  if (!g_separateModules) {
+    std::cerr << "error: a unit of " << shownPath(unit.filepath) << " did not lower\n";
     return unit.abandon();
   }
-  try {
-    auto preludeVariantTags = loadPreludeVariantTags();
-    std::optional<kex::hir::Program> hir;
-    if (unit.compileAnalysis) hir.emplace(unit.program, *unit.compileAnalysis);
-    auto irModules = kex::ir::lowerModules(
-        unit.program, unit.stem,
-        withCheckerAnswers({.sourcePath = unit.filepath,
-                            .externals = &preludeExternalModules(),
-                            .externalRecords = &preludeRecordLayouts,
-                            .externalVariants = &preludeVariantTags},
-                           hir ? &*hir : nullptr));
-    unit.moduleResults = kex::ir::emitModules(irModules);
-  } catch (const kex::ir::LowerError &e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return unit.abandon();
-  }
+  // The entry's own modules first.
+  unit.moduleResults = std::move(*g_separateModules);
+  g_separateModules.reset();
+  std::stable_partition(unit.moduleResults.begin(), unit.moduleResults.end(),
+                        [&](const auto &module) {
+                          return module.moduleName == "kex_" + unit.stem;
+                        });
   return kContinue;
 }
 
@@ -6682,10 +6507,7 @@ auto passStoreCaches(CompileUnit &unit) -> PassOutcome {
 
 auto passAttachInterfaces(CompileUnit &unit) -> PassOutcome {
   if (!unit.compileRun() && !unit.corePaths.empty())
-    attachInterfaces(unit.program, unit.moduleResults, unit.options.outputDir,
-                     unit.stem, unit.options.skipCheck,
-                     unit.compileAnalysis.get(),
-                     g_separateChunks.empty() ? nullptr : &g_separateChunks);
+    attachInterfaces(unit.moduleResults, unit.options.outputDir, g_separateChunks);
   return kContinue;
 }
 
@@ -6714,8 +6536,6 @@ auto compilePipeline() -> const kex::driver::Pipeline<CompileUnit> & {
              passPreludeInterfaces)
         .add("run-manifest", "-c --run: is a recorded build still current?",
              passRunManifest)
-        .add("pre-check", "check the entry with its project modules",
-             passPreCheck)
         .add("output-dir", "choose the output (a temp dir for a run)",
              passOutputDirectory)
         .add("spec-base", "merge a spec's base file", passSpecBase)

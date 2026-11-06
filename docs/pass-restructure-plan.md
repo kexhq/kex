@@ -151,7 +151,13 @@ All of these are part of the refactor; none is optional. In order:
   | touch | 11.99 | 10.43 | 8.72 |
   | edit | 12.00 | 10.35 | 8.99 |
 
-- **Left for step 1:** flip the default; units whose sources read outside
+- **The default flipped (2026-11-06).** Builds and runs are separate unless
+  `KEX_SEPARATE=0`; `KEX_SEPARATE_BUILD` is gone. Measured on the default
+  build (median of 3): no-op 10.74 / 9.70 / 8.01 s (main / merged /
+  separate), edit 11.28 / 10.15 / 8.70 s, `tey test` 114.8 / 113.0 / 100.7 s.
+  Devirtualization fires less (1,315 firings against 3,682: calls into
+  units compiled apart dispatch), and the spec run is still 12% faster.
+- **Left for step 1:** units whose sources read outside
   files (`compiled do`, embeds, `Template`) are never cached, because the key
   does not cover those reads. Recording the reads in the key is the next
   speed-up. `separate_check_cli_test` and `run_cache_cli_test` pin today's
@@ -709,8 +715,6 @@ module-locator fix (Stage 5) resolves it.
 - `make test-all` (not bare `ctest` — it misses the spec suite),
   `make spec-beam`, `make fuzz` (400 + targeted), `make test-devirt`,
   `make dup-audit` (no metric may rise).
-- Until the merged build is deleted (order step 2), `make spec-beam` again
-  under `KEX_SEPARATE=0`, with no divergence from the default (separate) run.
 - `make bench-slick` for performance claims; slick must build and its
   `tey test` pass.
 - `make test-wasm` in CI for changes to the driver or the stdlib loader.
