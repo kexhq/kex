@@ -1713,40 +1713,29 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         localMethodArities.empty() ||
         localMethodArities.count(m + "/" + std::to_string(ufcsArity)) > 0;
 
-    // Defined here only by a `make` inside a module this call cannot see.
-    // When the prelude answers the name too, the call goes there: Units.SI
-    // extending `make Measure` with `to(String, in: SIPrefix)` must not
-    // take the prelude's `90.minute.to(String, in: Hour)` away from a
-    // program that merely names `Units.SI.watt`. A call whose arguments
-    // only that module takes is a missing `using`, and otherwise it is
-    // the same "Undefined method" the walker raises.
-    const bool gatedOut = localMethods.count(n.method) && localArityExists &&
-        !makeMethodInScope(n.method);
-    if (gatedOut)
-        if (auto module = gatedModuleTaking(n); !module.empty())
-            return ret(undefinedMethod(
-                n.method, rv(),
-                " — `" + module + "` defines a matching `" + n.method +
-                    "`; add `using " + module + "`"));
-    if (gatedOut && !(externalModules &&
-                      externalModules->receiverFunctions.count(n.method)))
-        return ret(undefinedMethod(n.method, rv()));
+    // The checker decided a call only a `make` of a module not in scope
+    // here answers (`Hidden`): the same "Undefined method" the walker
+    // raises, naming the missing `using` when labelled arguments chose it.
+    if (hir && hir->targetOf(n).kind == hir::TargetKind::Hidden) {
+        const auto& hidden = hir->targetOf(n);
+        const auto hint = hidden.owner.empty() || n.namedArgs.empty() ? std::string{}
+            : " — `" + hidden.owner + "` defines a matching `" + n.method +
+                  "`; add `using " + hidden.owner + "`";
+        return ret(undefinedMethod(n.method, rv(), hint));
+    }
 
     // External receiver functions take priority over prelude for UFCS.
     // The registry includes only package-declared provider modules here;
     // ordinary module exports never become receiver functions implicitly.
     if (externalModules
-        && (!localMethods.count(m) || !localArityExists || gatedOut
+        && (!localMethods.count(m) || !localArityExists
             || preferExternalReceivers)) {
         auto found = externalModules->receiverFunctions.find(m);
         if (found != externalModules->receiverFunctions.end()) {
             // A unit's `make` for a type declared outside its module is in
-            // scope only through `using` that module, as one of this unit's
-            // own is (`gatedOut` above). A named argument of a type that
-            // module declares means its method was wanted: `power.to(String,
-            // in: Units.SI.Kilo(Units.SI.Watt))` without `using Units.SI`.
+            // scope only through `using` that module. A call only such a
+            // `make` takes was decided `Hidden` by the checker (above).
             std::vector<ExternalModules::ReceiverFunction> providers;
-            std::string gatedModule;
             for (const auto& candidate : found->second) {
                 std::string module;
                 for (const auto& [name, atom] : externalModules->nameToAtom)
@@ -1754,20 +1743,9 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 // The prelude's own modules are imported automatically; only a unit of
                 // this build is held behind its `using`, as the checker holds it.
                 if (!candidate.compiledApart || !candidate.foreignTarget || module.empty() ||
-                    moduleInScope(module)) {
+                    moduleInScope(module))
                     providers.push_back(candidate);
-                    continue;
-                }
-                for (const auto& [_, value] : n.namedArgs)
-                    if (const auto type = staticTypeOf(value.get());
-                        type && semantic::typeToString(type).starts_with(module + "."))
-                        gatedModule = module;
             }
-            if (!gatedModule.empty())
-                return ret(undefinedMethod(
-                    n.method, rv(),
-                    " — `" + gatedModule + "` defines a matching `" + n.method +
-                        "`; add `using " + gatedModule + "`"));
             int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                               (n.block ? 1 : 0);
             const ExternalModules::ReceiverFunction* match = nullptr;
@@ -2086,7 +2064,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // because the name alone matched. Falling through lets the prelude's
     // receiver function (Map.get here) handle it, which is what the
     // interpreter already does.
-    if (localMethods.count(n.method) && localArityExists && !gatedOut) {
+    if (localMethods.count(n.method) && localArityExists) {
         std::vector<Binding> binds;
         std::vector<ExprPtr> args;
         args.push_back(rv());

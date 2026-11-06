@@ -22,6 +22,10 @@ auto kindOf(semantic::CallKind kind) -> TargetKind {
     case Kind::Operator: return TargetKind::Operator;
     case Kind::OwnMethod: return TargetKind::OwnMethod;
     case Kind::ModuleFunction: return TargetKind::ModuleFunction;
+    case Kind::Hidden: return TargetKind::Hidden;
+    case Kind::Foreign: return TargetKind::Foreign;
+    case Kind::Intrinsic: return TargetKind::Intrinsic;
+    case Kind::FunctionReference: return TargetKind::FunctionReference;
     }
     return TargetKind::Undecided;
 }

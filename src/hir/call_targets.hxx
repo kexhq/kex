@@ -46,6 +46,15 @@ enum class TargetKind {
     // A function of the receiver type's home module, by UFCS (owner: its
     // qualified name).
     ModuleFunction,
+    // Answered only by a `make` of a module not in scope here (owner: that
+    // module): an undefined method on every backend.
+    Hidden,
+    // A backend function called through `BEAM.` (owner: its path).
+    Foreign,
+    // A compile-time intrinsic folded to its answer (owner: its name).
+    Intrinsic,
+    // A function named, not called (owner: its qualified name).
+    FunctionReference,
     // Nothing recorded: lowering and the walker resolve it themselves.
     Undecided,
 };
@@ -68,7 +77,7 @@ inline constexpr TargetKind kTargetKinds[] = {
     TargetKind::ValueCall, TargetKind::Dispatch,
     TargetKind::Conversion, TargetKind::TypeReference,
     TargetKind::Builtin, TargetKind::Operator, TargetKind::OwnMethod,
-    TargetKind::ModuleFunction, TargetKind::Undecided,
+    TargetKind::ModuleFunction, TargetKind::Hidden, TargetKind::Foreign, TargetKind::Intrinsic, TargetKind::FunctionReference, TargetKind::Undecided,
 };
 
 } // namespace kex::hir

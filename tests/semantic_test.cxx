@@ -8,6 +8,7 @@
 #include "../src/semantic/traits.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -1115,6 +1116,127 @@ int main() {
             }
             assertTrue(!hasErrorWithInterfaces(
                 "using Units.Left\nmain do 1.format end\n", interfaces, ""));
+        });
+
+        it("decides a hidden receiver overload from its labelled argument types", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction visible;
+            visible.sourceName = "format";
+            visible.sourceModule = "Prelude";
+            visible.backendModule = "kex_prelude";
+            visible.paramNames = {"", "in"};
+            visible.signature = {"format",
+                {semantic::Type::named("Measure"), semantic::Type::unknown(),
+                 semantic::Type::named("TimeUnit")},
+                semantic::Type::string()};
+            interfaces.modules["Prelude"].automaticImport = true;
+            interfaces.receiverFunctions["format"].push_back(visible);
+            auto hidden = visible;
+            hidden.sourceModule = "Units.SI";
+            hidden.backendModule = "Kex.Units.SI";
+            hidden.foreignTarget = true;
+            hidden.signature.params.back() = semantic::Type::named("SIPrefix");
+            interfaces.receiverFunctions["format"].push_back(hidden);
+
+            Lexer lexer(
+                "record Measure do n: Integer end\n"
+                "record TimeUnit do n: Integer end\n"
+                "record SIPrefix do n: Integer end\n"
+                "main do\n"
+                "  let m = Measure { n: 1 }\n"
+                "  m.format(String, in: SIPrefix { n: 2 })\n"
+                "  m.format(String, in: TimeUnit { n: 3 })\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+            assertTrue(analyzer.analyze(program));
+            const hir::Program checked(program, analyzer);
+            std::vector<hir::CallSite> formatCalls;
+            for (const auto& site : checked.callSites())
+                if (site.callee == "format") formatCalls.push_back(site);
+            assertEqual(formatCalls.size(), std::size_t{2});
+            assertTrue(formatCalls[0].kind == hir::TargetKind::Hidden);
+            assertEqual(formatCalls[0].target, std::string("Units.SI"));
+            assertTrue(formatCalls[1].kind == hir::TargetKind::Imported);
+
+            Lexer genericLexer(
+                "let maybe(measure, unit) = measure.format(String, in: unit)\n");
+            Parser genericParser(genericLexer.tokenizeAll());
+            auto genericProgram = genericParser.parseProgram();
+            semantic::Analyzer genericAnalyzer(&interfaces);
+            assertTrue(genericAnalyzer.analyze(genericProgram));
+            const hir::Program genericChecked(genericProgram, genericAnalyzer);
+            for (const auto& site : genericChecked.callSites())
+                if (site.callee == "format")
+                    assertTrue(site.kind != hir::TargetKind::Hidden);
+        });
+
+        it("decides a hidden local make overload beside a visible import", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction visible;
+            visible.sourceName = "format";
+            visible.sourceModule = "Prelude";
+            visible.backendModule = "kex_prelude";
+            visible.paramNames = {"", "in"};
+            visible.signature = {"format",
+                {semantic::Type::named("Measure"), semantic::Type::unknown(),
+                 semantic::Type::named("TimeUnit")},
+                semantic::Type::string()};
+            interfaces.modules["Prelude"].automaticImport = true;
+            interfaces.receiverFunctions["format"].push_back(visible);
+
+            Lexer lexer(
+                "record Measure do n: Integer end\n"
+                "record TimeUnit do n: Integer end\n"
+                "record SIPrefix do n: Integer end\n"
+                "module Patcher do\n"
+                "  make Measure do\n"
+                "    let format(t, in: SIPrefix) -> String = \"patched\"\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let m = Measure { n: 1 }\n"
+                "  m.format(String, in: SIPrefix { n: 2 })\n"
+                "  m.format(String, in: TimeUnit { n: 3 })\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+            assertTrue(analyzer.analyze(program));
+            const hir::Program checked(program, analyzer);
+            std::vector<hir::CallSite> calls;
+            for (const auto& site : checked.callSites())
+                if (site.callee == "format") calls.push_back(site);
+            assertEqual(calls.size(), std::size_t{2});
+            assertTrue(calls[0].kind == hir::TargetKind::Hidden);
+            assertEqual(calls[0].target, std::string("Patcher"));
+            assertTrue(calls[1].kind == hir::TargetKind::Imported);
+        });
+
+        it("records foreign make targets from source regardless of declaration order", []() {
+            namespace fs = std::filesystem;
+            const auto file = fs::temp_directory_path() /
+                ("kex-semantic-foreign-target-" + std::to_string(
+                    std::chrono::steady_clock::now().time_since_epoch().count()) +
+                 ".kex");
+            {
+                std::ofstream output(file);
+                output <<
+                    "module Demo.Cards do\n"
+                    "  make Card do let decorate -> String = \"card\" end\n"
+                    "  make Integer do let decorate -> String = \"number\" end\n"
+                    "  type Card = One | Two\n"
+                    "end\n";
+            }
+            const auto interfaces = sourceSemanticInterfaces(
+                {file.string()}, false, true);
+            fs::remove(file);
+            const auto found = interfaces.receiverFunctions.find("decorate");
+            assertTrue(found != interfaces.receiverFunctions.end());
+            assertEqual(found->second.size(), std::size_t{2});
+            assertTrue(!found->second[0].foreignTarget);
+            assertTrue(found->second[1].foreignTarget);
         });
 
         it("keeps prelude receiver methods available after opt-in interface merges", []() {
@@ -3542,6 +3664,14 @@ int main() {
             assertTrue(noErrors(
                 "let double -> Integer = 2 * 2\n"
                 "main do IO.printLine(double.to(String).or(\"\")) end\n"
+            ));
+        });
+
+        it("relates an inline generic result to its parameter", []() {
+            assertTrue(hasError(
+                "let wrap(value: A) -> A? = None\n"
+                "main do let bad: Integer? = wrap(\"text\") end\n",
+                "expected Integer?, got String?"
             ));
         });
 

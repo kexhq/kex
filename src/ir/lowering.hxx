@@ -300,12 +300,6 @@ struct Lowering {
     // names are not globally unique, so `this.field` must select the layout
     // owned by this type rather than the first same-named field in the file.
     std::string currentMakeType;
-    // Method name → the modules whose `make` blocks for a foreign type are its
-    // only definitions. Such a method is import-gated like every other module
-    // member, so a call may only reach it under a matching `using` of one of
-    // them (see makeMethodInScope). A name any top-level `make` also defines
-    // is marked with an empty entry and stays global.
-    std::unordered_map<std::string, std::set<std::string>> moduleScopedMethods;
     // Modules a `using` has brought into scope at this point. The block form
     // saves and restores it around its body, exactly as it does moduleImports.
     std::set<std::string> usingModules;
@@ -806,14 +800,8 @@ struct Lowering {
     auto externalPrefixCall(const std::string& name, int arity) const
         -> std::string;
 
-    void noteModuleScopedMake(const ast::MakeDef& make, const std::string& module,
-                              const std::set<std::string>& declaredTypes = {});
-
-    auto makeMethodInScope(const std::string& method) const -> bool;
-
     auto moduleInScope(const std::string& module) const -> bool;
 
-    auto gatedModuleTaking(const ast::MethodCall& n) const -> std::string;
 
     auto importSourceModule(const std::string& emittedSymbol) const
         -> std::string;

@@ -12,10 +12,10 @@
 # Nothing in the program mentions time.
 
 # The golden records what inference CURRENTLY concludes, which is not the same
-# as what it ideally would: a call to a recursive numeric function comes back
-# as the constrained variable `N` rather than `Integer`. That is a weaker
-# answer, not a wrong one, and pinning it means the day it improves shows up
-# as a reviewable diff.
+# as what it ideally would: inside a recursive numeric function the recursive
+# call is still the constrained variable `N`. A call from outside is not: the
+# one `N` the operators share is the signature's generic, so `fact(5)` is an
+# `Integer` (it was `N` until generalizing took bound placeholders in).
 
 # Recursive, so the second clause is checked while the function's own result
 # type is still being inferred — the case that went wrong.

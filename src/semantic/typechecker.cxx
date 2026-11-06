@@ -357,6 +357,21 @@ auto TypeChecker::check(const ast::Program& program,
             }, item);
         }
 
+        // A top-level value binding (`let frame = Template.html(...)`, a
+        // synthetic main holding just that `let`) is a declaration too: a
+        // function reading it needs its type, so it takes part in this order
+        // under a key no function name can have.
+        const auto valueKey = [](const std::string& name) { return "=" + name; };
+        std::unordered_map<std::string, size_t> topLevelValues;
+        for (size_t i = 0; i < program.items.size(); i++)
+            if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&program.items[i]);
+                main && *main && (*main)->synthetic && (*main)->body.size() == 1 &&
+                (*main)->body.front())
+                if (const auto* let = std::get_if<ast::LetExpr>(&(*main)->body.front()->kind);
+                    let && let->pattern)
+                    if (const auto* var = std::get_if<ast::VarPattern>(&let->pattern->kind))
+                        topLevelValues.try_emplace(var->name, i);
+
         // Collect direct call-dependencies for each FunctionDef.
         // Only user-defined function names are tracked; imported package
         // functions are outside this compilation unit and need no ordering.
@@ -364,10 +379,13 @@ auto TypeChecker::check(const ast::Program& program,
             [&](const ast::Expr& e, std::set<std::string>& out) {
             if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
                 if (userFns.count(call->name)) out.insert(call->name);
+                if (topLevelValues.count(call->name)) out.insert(valueKey(call->name));
             } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&e.kind)) {
                 if (userFns.count(tagged->tag)) out.insert(tagged->tag);
             } else if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
                 if (userFns.count(method->method)) out.insert(method->method);
+            } else if (const auto* id = std::get_if<ast::Identifier>(&e.kind)) {
+                if (topLevelValues.count(id->name)) out.insert(valueKey(id->name));
             }
             ast::forEachChild(e, [&](const ast::ExprPtr& child) {
                 collectCalls(*child, out);
@@ -391,6 +409,17 @@ auto TypeChecker::check(const ast::Program& program,
                 }
             }, program.items[i]);
         }
+        for (const auto& [name, index] : topLevelValues) {
+            const auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[index]);
+            std::set<std::string> d;
+            collectCalls(*main->body.front(), d);
+            d.erase(valueKey(name));
+            deps[valueKey(name)] = std::move(d);
+            fnOrder.emplace_back(valueKey(name), index);
+        }
+        // Source order among the nodes, so diagnostics come in the order written.
+        std::stable_sort(fnOrder.begin(), fnOrder.end(),
+                         [](const auto& left, const auto& right) { return left.second < right.second; });
 
         // DFS post-order toposort (handles cycles via visited/onStack sets;
         // back-edge functions are left in original order — pre-registration
@@ -414,7 +443,14 @@ auto TypeChecker::check(const ast::Program& program,
         // We do two passes: first check all FunctionDefs in sorted order,
         // then check everything else (types, records, make blocks, main).
         std::unordered_set<std::string> fnChecked;
+        std::unordered_set<size_t> valuesChecked;
         for (const auto& name : sorted) {
+            if (const auto value = topLevelValues.find(name.substr(1));
+                name.starts_with('=') && value != topLevelValues.end()) {
+                checkTopLevel(program.items[value->second]);
+                valuesChecked.insert(value->second);
+                continue;
+            }
             // Check ALL FunctionDefs with this name (handles overloaded functions
             // sharing a name — both overloads must be checked and appended to the
             // same overload set). Mark the name done only after the full sweep.
@@ -429,7 +465,9 @@ auto TypeChecker::check(const ast::Program& program,
             fnChecked.insert(name);
         }
         // Non-function items and any unchecked functions (e.g. inside modules).
-        for (const auto& item : program.items) {
+        for (size_t index = 0; index < program.items.size(); index++) {
+            if (valuesChecked.count(index)) continue;
+            const auto& item = program.items[index];
             std::visit([&](const auto& n) {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
@@ -913,10 +951,9 @@ auto TypeChecker::resolveModulePath(const std::string& name,
     // name would otherwise reach: `Clock.now()` inside `module Clocks`,
     // beside its own `capability Clock`, called the prelude's `Time.Clock`
     // and failed on BEAM with `undef`, while the walker (which looks in the
-    // module first) was right. Only a name that does reach another module is
-    // settled here; a nested name that resolves to nothing is left as it is,
-    // for the lookups after this one.
-    if (!exportsMember(resolved)) return resolved;
+    // module first) was right. The same holds where the name reaches no
+    // module with the member at all: `Router.status` inside `module Http` is
+    // `Http.Router.status`.
     if (auto nested = resolve_core::resolveInScopes(
             m_currentModulePath, name, [&](const std::string& candidate) {
                 return candidate != resolved &&
@@ -1186,13 +1223,15 @@ auto TypeChecker::constructorOwner(const NamedType& named) const
 }
 
 auto TypeChecker::constructorResultType(
-    const std::string& name, const std::vector<TypePtr>& argTypes)
-    -> TypePtr {
-    auto found = m_constructorResult.end();
+    const std::string& name, const std::vector<TypePtr>& argTypes,
+    const std::string& scope) -> TypePtr {
+    auto found = scope.empty() ? m_constructorResult.end()
+                               : m_constructorResult.find(kex::mangle::qualify(scope, name));
+    if (!scope.empty() && found == m_constructorResult.end()) return nullptr;
     // A constructor declared in this lexical module shadows an imported
     // constructor with the same spelling (for example a local Done versus
     // Control.Retry's Done). Do not let stdlib interfaces choose its ADT.
-    for (auto module = m_currentModulePath; !module.empty();) {
+    for (auto module = scope.empty() ? m_currentModulePath : std::string{}; !module.empty();) {
         found = m_constructorResult.find(kex::mangle::qualify(module, name));
         if (found != m_constructorResult.end()) break;
         const auto dot = module.rfind('.');
@@ -1798,8 +1837,12 @@ auto TypeChecker::annotationToSignature(
 
 auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> void {
     auto add = [&](const ast::TypeAnnotation& ann, const std::string& modulePath) {
+        // A contract's type variables are its own generics: `ident : T -> T`
+        // binds T per call, as an inline `let ident(x: T) -> T` does.
+        const int varMark = m_nextTypeVar;
         auto sig = annotationToSignature(ann);
         if (!sig) return;
+        generalizeSignature(*sig, varMark);
         sig->declaringModule = modulePath;
         // Declared annotation wins — stored first so checkFunctionDef
         // can find it and verify the body against the declared type.
@@ -1856,9 +1899,11 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
         const auto previousImports = m_declarationImports;
         if (const auto* imports = importsFor(ann.name))
             m_declarationImports = *imports;
+        const int varMark = m_nextTypeVar;
         auto sig = annotationToSignature(ann);
         m_declarationImports = previousImports;
         if (!sig) return;
+        generalizeSignature(*sig, varMark);
         sig->declaringModule = modulePath;
         m_annotationDeclared.insert(ann.name);
         const auto key = modulePath + "\n" + ann.name;
@@ -2063,26 +2108,13 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             auto& existing = m_methodSignatures[ann->name];
             const bool duplicate =
                 std::any_of(existing.begin(), existing.end(),
-                            [&](const Signature& other) {
-                                if (other.params.size() != sig->params.size())
-                                    return false;
-                                for (size_t i = 0; i < other.params.size(); i++)
-                                    if (!typesEqual(other.params[i], sig->params[i]))
-                                        return false;
-                                return true;
-                            });
+                        [&](const Signature& other) { return sameParameters(other, *sig); });
             sig->makeModule = modulePath;
             if (!duplicate) existing.push_back(*sig);
             if (def.isServing && slotNames.count(ann->name)) {
                 auto remote = remoteSlotSignature(*sig, replyResult);
-                const bool remoteDuplicate = std::any_of(
-                    existing.begin(), existing.end(), [&](const Signature& other) {
-                        if (other.params.size() != remote.params.size()) return false;
-                        for (size_t i = 0; i < other.params.size(); ++i)
-                            if (!typesEqual(other.params[i], remote.params[i]))
-                                return false;
-                        return true;
-                    });
+                const bool remoteDuplicate = std::any_of(existing.begin(), existing.end(),
+                        [&](const Signature& other) { return sameParameters(other, remote); });
                 if (!remoteDuplicate) existing.push_back(std::move(remote));
             }
         };
@@ -2111,12 +2143,16 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // `string :> String` vs. Input's own plain `let string(...)`) must
         // not block this type's method from registering at all (#251).
         if (hasAnnotatedSignatureForReceiver(method.name, receiver)) return;
-        // Only plain named parameters. A pattern in first position is the
-        // receiver-matching form (`let head(@[x | _])`) whose arity must not
-        // gain an implicit receiver, and a type-selector argument
-        // (`let to(String)`) is not a parameter type at all.
-        for (const auto& param : clause.params)
-            if (param.pattern || !param.name) return;
+        // Only plain named parameters, after an explicit receiver if the
+        // method matches one (`let factor(@Px)` in `make CssUnit`): that
+        // first parameter IS the receiver, so the arity gains none. Any other
+        // pattern, and a type-selector argument (`let to(String)`), is not a
+        // parameter type at all.
+        const bool explicitReceiver = !clause.params.empty() &&
+            clause.params.front().pattern &&
+            std::holds_alternative<ast::ThisPattern>((*clause.params.front().pattern)->kind);
+        for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
+            if (clause.params[i].pattern || !clause.params[i].name) return;
         Signature signature;
         signature.name = method.name;
         signature.isFoul = method.isFoul;
@@ -2143,10 +2179,10 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         const auto previousMakeType = m_currentMakeType;
         m_inMakeBlock = true;
         m_currentMakeType = receiver;
-        for (const auto& param : clause.params)
+        for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
             signature.params.push_back(
-                param.type ? resolveTypeExpr(**param.type, targetVars)
-                           : freshTypeVar());
+                clause.params[i].type ? resolveTypeExpr(**clause.params[i].type, targetVars)
+                                      : freshTypeVar());
         if (clause.returnAnnotation) {
             signature.result = resolveTypeExpr(**clause.returnAnnotation, targetVars);
         } else {
@@ -2161,27 +2197,20 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // Without the names a call site cannot place named arguments, and
         // lowering refused `router.launchOn(port: 4000)` for a method this
         // pass — not checkFunctionDef — registered.
-        for (const auto& param : clause.params)
-            signature.paramNames.push_back(*param.name);
+        for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
+            signature.paramNames.push_back(*clause.params[i].name);
         // Trailing defaults are optional from the start, not only once the
         // body has been checked: a top-level function calling
         // `t.string(:name, nullable: true)` is checked before the make block.
         std::size_t required = clause.params.size();
         while (required > 0 && clause.params[required - 1].defaultValue)
             required--;
-        signature.requiredParams = required + 1;
+        signature.requiredParams = required + (explicitReceiver ? 0 : 1);
         signature.makeModule = modulePath;
         auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
             std::any_of(existing.begin(), existing.end(),
-                        [&](const Signature& other) {
-                            if (other.params.size() != signature.params.size())
-                                return false;
-                            for (size_t i = 0; i < other.params.size(); i++)
-                                if (!typesEqual(other.params[i], signature.params[i]))
-                                    return false;
-                            return true;
-                        });
+                        [&](const Signature& other) { return sameParameters(other, signature); });
         if (!duplicate) existing.push_back(signature);
         if (def.isServing && method.isSlot) {
             bool hasFrom = false;
@@ -2189,14 +2218,8 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                 hasFrom = named->name == "Reply" &&
                           named->typeArgs.size() == 1;
             auto remote = remoteSlotSignature(signature, hasFrom);
-            const bool remoteDuplicate = std::any_of(
-                existing.begin(), existing.end(), [&](const Signature& other) {
-                    if (other.params.size() != remote.params.size()) return false;
-                    for (size_t i = 0; i < other.params.size(); ++i)
-                        if (!typesEqual(other.params[i], remote.params[i]))
-                            return false;
-                    return true;
-                });
+            const bool remoteDuplicate = std::any_of(existing.begin(), existing.end(),
+                        [&](const Signature& other) { return sameParameters(other, remote); });
             if (!remoteDuplicate) existing.push_back(std::move(remote));
         }
     };
@@ -2232,6 +2255,13 @@ auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,
                 if (node) registerMakeSignature(*node, path);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) registerMakeSignaturesInModule(*node, path);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                // A `make` inside `private do ... end` is the module's too.
+                if (node)
+                    for (const auto& visible : node->items)
+                        if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&visible);
+                            make && *make)
+                            registerMakeSignature(**make, path);
             }
         }, item);
     }
@@ -3511,9 +3541,28 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     siblingParamContracts[pi] = signature.params[pi];
         }
 
+    // An overload set folded into one definition, a contract written above
+    // each clause (`speak : Cat -> String` over `let speak(c)`, then
+    // `speak : Dog -> String` over `let speak(d)`): clause i implements the
+    // i-th, both in source order. Several contracts over ONE clause are one
+    // permissive body's (`FS.File.open` by mode), so the counts must agree.
+    std::vector<const Signature*> clauseContracts;
+    if (!declared && !m_inMakeBlock && def.clauses.size() > 1 &&
+        scopedDeclared != m_scopedDeclaredSignatures.end()) {
+        const auto arity = def.clauses.front().params.size();
+        for (const auto& signature : scopedDeclared->second)
+            if (signature.params.size() == arity) clauseContracts.push_back(&signature);
+        const bool oneArity = std::all_of(
+            def.clauses.begin(), def.clauses.end(),
+            [&](const auto& clause) { return clause.params.size() == arity; });
+        if (!oneArity || clauseContracts.size() != def.clauses.size()) clauseContracts.clear();
+    }
+
     std::vector<Signature> signatures;
     for (size_t ci = 0; ci < def.clauses.size(); ci++) {
         const auto& clause = def.clauses[ci];
+        const Signature* contract = declared ? declared
+            : ci < clauseContracts.size() ? clauseContracts[ci] : nullptr;
         // Every inference variable from here on belongs to THIS clause, and
         // is the clause's to quantify over once its body is checked. Anything
         // older is an enclosing inference's — see generalizeSignature.
@@ -3551,8 +3600,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             // Use declared param type if available and the annotation covers
             // this position; fall back to inline annotation or fresh TypeVar.
             TypePtr paramType;
-            if (declared && pi < declared->params.size() && !param.type) {
-                paramType = declared->params[pi];
+            if (contract && pi < contract->params.size() && !param.type) {
+                paramType = contract->params[pi];
             } else if (!param.type && !param.signatureType &&
                        !namesItsOwnType(param) &&
                        pi < siblingParamContracts.size() &&
@@ -3565,16 +3614,20 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = siblingParamContracts[pi];
             } else if (!param.type && pi == 0 && receiverIsFirstParam &&
                        m_currentMakeType && param.pattern &&
-                       std::holds_alternative<ast::RecordPattern>(
-                           (*param.pattern)->kind)) {
+                       (std::holds_alternative<ast::RecordPattern>((*param.pattern)->kind) ||
+                        std::holds_alternative<ast::ThisPattern>((*param.pattern)->kind))) {
                 // A receiver destructured in place (`let distance({ x: x1,
-                // y: y1 }, other)`) IS the make target, so its fields bind
+                // y: y1 }, other)`), or matched as the explicit receiver
+                // (`let factor(@Px)` in `make CssUnit`), IS the make target,
+                // so its fields bind
                 // with their declared types. A fresh variable left them to
                 // arithmetic, which generalized `x1 * x1` to a bare `N` that
                 // `Float.sqrt` then rejected.
                 paramType = m_currentMakeType;
             } else if (param.type) {
                 paramType = resolveTypeExpr(**param.type, genericVars);
+            } else if (auto selector = typeSelectorParameter(param)) {
+                paramType = std::move(selector);
             } else {
                 paramType = freshTypeVar();
                 if (auto* var = std::get_if<TypeVar>(&paramType->kind))
@@ -3617,7 +3670,15 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // relaxations that call-site checking uses — e.g. Int and Integer are
         // compatible, so `add : Int -> Int -> Int` with a body returning
         // Integer (inferred from literal arithmetic) isn't a mismatch.
-        auto effectiveReturnType = declared ? declared->result : inlineReturnType;
+        // An inline result annotation shares the clause's type parameters:
+        // `let wrap(value: A) -> A? = None` relates its result to `value`.
+        // The early resolution above uses a separate map for declaration
+        // validation; publishing it would turn the result's A into another
+        // generic and accept `let n: Integer? = wrap("text")`.
+        auto effectiveReturnType = contract ? contract->result
+            : clause.returnAnnotation
+                ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
+                : inlineReturnType;
         const auto servingTransitionMatches = [&]() {
             if (!def.isSlot || !effectiveReturnType || clause.body.empty())
                 return false;
@@ -3846,15 +3907,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                         signature.params.size()) + 1;
             const bool duplicate =
                 std::any_of(existing.begin(), existing.end(),
-                            [&](const Signature& other) {
-                                if (other.params.size() != withReceiver.params.size())
-                                    return false;
-                                for (size_t i = 0; i < other.params.size(); i++)
-                                    if (!typesEqual(other.params[i],
-                                                    withReceiver.params[i]))
-                                        return false;
-                                return true;
-                            });
+                        [&](const Signature& other) { return sameParameters(other, withReceiver); });
             if (!duplicate) existing.push_back(std::move(withReceiver));
         }
     }
@@ -4005,14 +4058,17 @@ auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
     if (m_currentModulePath == module ||
         m_currentModulePath.rfind(module + ".", 0) == 0)
         return true;
-    for (const auto& import : m_declarationImports) {
-        if (import.module == module) return true;
-        // `using A` also brings `A.B`'s members into scope, matching how a
-        // qualified member of a nested module resolves.
-        if (import.module.rfind(module + ".", 0) == 0) return true;
-        if (module.rfind(import.module + ".", 0) == 0) return true;
-    }
-    return false;
+    // `using A` also brings `A.B`'s members into scope, matching how a
+    // qualified member of a nested module resolves. The lexical
+    // `using M do ... end` form counts as the declaration's own does.
+    const auto names = [&](const ImportSelection& import) {
+        return import.module == module ||
+               import.module.rfind(module + ".", 0) == 0 ||
+               module.rfind(import.module + ".", 0) == 0;
+    };
+    for (const auto& frame : m_importScopeStack)
+        if (std::any_of(frame.begin(), frame.end(), names)) return true;
+    return std::any_of(m_declarationImports.begin(), m_declarationImports.end(), names);
 }
 
 auto TypeChecker::freeFunctionVisible(const std::string& module,
@@ -4059,25 +4115,16 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 checkFunctionDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                // A `private do ... end` block is checked as the rest are:
+                // visibility is not a type-system concept, and every make
+                // method is registered before any body is checked.
+                if (node)
+                    for (const auto& inner : node->items)
+                        if (const auto* fn =
+                                std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                            if (*fn) checkFunctionDef(**fn);
             }
-            // NOTE: `private do … end` methods are deliberately NOT checked
-            // here. They should be — visibility is not a type-system concept —
-            // but registering them exposes an ordering bug: a make block's
-            // methods are registered as they are CHECKED, so a call above a
-            // private definition (`this.timeMeasure(…)` in units.kex's
-            // `make Float`) resolves against the OTHER type's copy and reports
-            // a bogus mismatch. Fixing that needs make-block signatures
-            // pre-registered before any body is checked. Their names are
-            // collected below regardless, so the unknown-method report does not
-            // flag calls to them.
-            //
-            // Checking the block's own private methods FIRST does fix
-            // units.kex, but is not enough on its own: the signature a private
-            // method registers has the receiver prepended, so `si.kex`'s
-            // `productKind` then reads as arity 2 against 3-argument calls,
-            // and json_parser.spec fails on BEAM at RUNTIME with "Undefined
-            // method: advance for Parser" — registration changes dispatch, not
-            // just what tooling can see. Pre-registration is the real fix.
         }, item);
     }
     m_inMakeBlock = wasInMakeBlock;
@@ -4489,6 +4536,115 @@ auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected,
         never && !never->reason.empty())
         message += " (" + never->reason + ")";
     error(loc, std::move(message));
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::constantType(const std::string& name) const -> TypePtr {
+    for (auto scope = m_currentModulePath;;) {
+        if (const auto found = m_userSignatures.find(kex::mangle::qualify(scope, name));
+            found != m_userSignatures.end())
+            for (const auto& signature : found->second)
+                if (signature.params.empty()) return signature.result;
+        if (scope.empty()) return nullptr;
+        const auto dot = scope.rfind('.');
+        scope.resize(dot == std::string::npos ? 0 : dot);
+    }
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::nullaryConstructorType(const std::string& name) -> TypePtr {
+    if (auto constructed = constructorResultType(name, {});
+        constructed && m_nullaryConstructors.contains(name))
+        return constructed;
+    if (m_nullaryConstructors.contains(name))
+        return Type::named(name);
+    for (const auto& [module, constructors] : m_moduleConstructors) {
+        auto constructor = constructors.find(name);
+        if (constructor != constructors.end() &&
+            constructor->second.arity == 0 &&
+            moduleMemberImported(module, name))
+            return Type::named(name);
+    }
+    if (m_importedInterfaces)
+        for (const auto& [_, module] :
+             m_importedInterfaces->modules)
+            if (auto exports = module.exports.find(name);
+                exports != module.exports.end())
+                for (const auto& function : exports->second)
+                    if (function.isConstructor &&
+                        function.signature.params.empty() &&
+                        importedFunctionVisible(function))
+                        return function.signature.result;
+    // A spelling two ADTs share: typed as whichever one is in scope,
+    // not left unknown. `x : Integer = Timeout` checked clean.
+    if (const auto* owner = scopedConstructorOwner(name);
+        owner && owner->arity == 0 && !owner->generic)
+        return Type::named(owner->adt);
+    return nullptr;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A bare call that only `make` methods answer is a method call, as both
+// backends run it (lowering's FunctionCall cascade): inside a make block,
+// written one argument short of the block's own method, `this` is the
+// receiver (`decorate(@name)`, kexhq/kex#281); otherwise the first argument
+// is (`shout(tag)`, UFCS). A binding of the name, or a function at the
+// written arity, still answers it instead. Null when neither applies.
+auto TypeChecker::bareMethodCall(const ast::Expr& expr, const ast::FunctionCall& call,
+                                 const std::vector<TypePtr>& argTypes) -> TypePtr {
+    const auto& name = call.name;
+    if (kex::mangle::hasScope(name) || lookupVar(name)) return nullptr;
+    const auto methods = m_methodSignatures.find(name);
+    if (methods == m_methodSignatures.end()) return nullptr;
+    const auto suffix = std::string(kex::mangle::kSeparator) + name;
+    for (const auto& [key, signatures] : m_userSignatures)
+        if (key == name || key.ends_with(suffix))
+            for (const auto& signature : signatures)
+                if (signature.params.size() == argTypes.size()) return nullptr;
+    // A method of `arity` parameters, receiver included; of `receiver`'s
+    // type when one is given.
+    const auto methodAt = [&](std::size_t arity, const TypePtr& receiver) {
+        const auto* wanted =
+            receiver ? std::get_if<NamedType>(&resolve(receiver)->kind) : nullptr;
+        return std::any_of(
+            methods->second.begin(), methods->second.end(), [&](const Signature& method) {
+                if (method.params.size() != arity) return false;
+                if (!receiver) return true;
+                const auto* own = std::get_if<NamedType>(&resolve(method.params.front())->kind);
+                if (wanted && own)
+                    return ownTypeIdentity(own->name) == ownTypeIdentity(wanted->name);
+                return typesEqual(resolve(method.params.front()), resolve(receiver));
+            });
+    };
+    if (m_inMakeBlock && m_currentMakeType &&
+        methodAt(argTypes.size() + 1, m_currentMakeType)) {
+        std::vector<TypePtr> withThis{m_currentMakeType};
+        withThis.insert(withThis.end(), argTypes.begin(), argTypes.end());
+        auto result = checkCall(name, withThis, expr.location, true, nullptr, &expr);
+        m_decidedCalls.try_emplace(
+            &expr, DecidedCall{CallKind::OwnMethod, typeToString(m_currentMakeType)});
+        return result;
+    }
+    if (argTypes.empty() || !methodAt(argTypes.size(), nullptr)) return nullptr;
+    auto result = checkCall(name, argTypes, expr.location, true, nullptr, &expr);
+    if (!m_decidedCalls.contains(&expr)) {
+        const auto receiver = resolve(argTypes.front());
+        if (const auto own = ownTypeAnswers(argTypes, name))
+            m_decidedCalls[&expr] = own->decision();
+        else if (std::holds_alternative<UnknownType>(receiver->kind) ||
+                 std::holds_alternative<TypeVar>(receiver->kind))
+            m_decidedCalls[&expr] = {CallKind::Dispatch, name};
+    }
+    return result;
 }
 
 } // namespace kex::semantic
