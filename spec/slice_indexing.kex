@@ -1,0 +1,12 @@
+# Range indexing on strings and lists: methods, brackets, and overload
+# narrowing (integer get still answers Char?/X? beside the range form).
+main do
+  IO.printLine("hello".slice(1, 3))
+  IO.printLine("hello".slice(1..3))
+  IO.printLine("hello"[1..3])
+  IO.printLine("hello".substring(1..3))
+  IO.printLine("hello".get(1).or('?'))
+  IO.printLine([1, 2, 3, 4].slice(1, 2))
+  IO.printLine([1, 2, 3, 4][0..1])
+  IO.printLine([1, 2, 3, 4].get(2).or(0))
+end

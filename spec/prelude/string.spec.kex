@@ -252,3 +252,49 @@ describe("String — identifier case conversion") do
     assert("".camelCase == "")
   end
 end
+
+describe("String — slice") do
+  it("slice(start, length) extracts a substring") do
+    assert("hello".slice(1, 3) == "ell")
+    assert("hello".slice(0, 5) == "hello")
+    assert("hello".slice(0, 0) == "")
+    assert("hello".slice(4, 1) == "o")
+  end
+
+  it("slice(start, length) clamps out-of-range arguments") do
+    assert("hello".slice(1, 99) == "ello")
+    assert("hello".slice(9, 3) == "")
+    assert("hello".slice(-3, 2) == "he")
+    assert("hello".slice(1, -1) == "")
+    assert("".slice(0, 5) == "")
+  end
+
+  it("slice counts characters, not bytes") do
+    assert("héllo".slice(1, 2) == "él")
+  end
+
+  it("slice(range) extracts an inclusive range") do
+    assert("hello".slice(1..3) == "ell")
+    assert("hello".slice(0..4) == "hello")
+    assert("hello".slice(2..2) == "l")
+  end
+
+  it("slice(range) clamps rather than failing") do
+    assert("hello".slice(3..99) == "lo")
+    assert("hello".slice(9..20) == "")
+    assert("hello".slice(3..1) == "")
+    assert("hello".slice(-3..1) == "he")
+  end
+
+  it("substring is an alias for slice") do
+    assert("hello".substring(1, 3) == "ell")
+    assert("hello".substring(1..3) == "ell")
+  end
+
+  it("get accepts a range, so brackets index a substring") do
+    assert("hello".get(1..3) == "ell")
+    assert("hello"[1..3] == "ell")
+    assert("hello"[0..4] == "hello")
+    assert("hello"[2..2] == "l")
+  end
+end
