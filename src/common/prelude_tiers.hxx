@@ -21,8 +21,8 @@ inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
     "taggedvalidation.kex",
 };
 inline constexpr std::array<std::string_view, 7> kPreludeTier1 = {
-    "atom.kex", "binary.kex", "blankable.kex", "env.kex", "number.kex",
-    "string.kex", "truthyable.kex",
+    "atom.kex", "binary.kex", "blankable.kex", "env.kex",
+    "number.kex", "string.kex", "truthyable.kex",
 };
 inline constexpr std::array<std::string_view, 2> kPreludeTier2 = {
     "enumerable.kex", "filehandle.kex",

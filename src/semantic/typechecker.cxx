@@ -4356,6 +4356,35 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     *placeholder = checkedInterface;
                 else
                     sigs.push_back(std::move(checkedInterface));
+            } else if (!signatures.empty()) {
+                // Several same-arity contracts leave `declared` null by
+                // multiplicity (Integer.parse radix:/culture:): the body
+                // still checked fine, so append its signature for call
+                // sites — but only where a sibling already published.
+                // Never assign here: that would wipe the pre-pass
+                // contracts a single-body overload set like FS.File.open
+                // resolves against. An arity no contract declares keeps
+                // its silent treatment (the annotation/body warning above
+                // already spoke).
+                const auto arity = def.clauses.empty()
+                    ? size_t(0) : def.clauses.front().params.size();
+                size_t matching = 0;
+                if (scopedDeclared != m_scopedDeclaredSignatures.end())
+                    for (const auto& contract : scopedDeclared->second)
+                        if (contract.params.size() == arity &&
+                            ++matching > 1)
+                            break;
+                if (matching > 1) {
+                    for (auto& sig : signatures)
+                        m_userSignatures[def.name].push_back(sig);
+                    if (!m_currentModulePath.empty()) {
+                        const auto key =
+                            m_currentModulePath + "::" + def.name;
+                        if (m_qualifiedPublished.contains(key))
+                            for (const auto& sig : signatures)
+                                m_userSignatures[key].push_back(sig);
+                    }
+                }
             }
         } else {
             publishable = signatures;

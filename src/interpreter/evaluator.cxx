@@ -4509,6 +4509,13 @@ auto Evaluator::receiverArgumentOffset(const std::string& functionName,
     auto scope = functionName.substr(0, separator);
     auto receiverType = dispatchTypeName(args[0]);
     if (scope == receiverType) return 1;
+    // `Number` is the `Integer | Float` union rather than an ADT, so the
+    // variant table below never maps it — yet its methods take a union
+    // receiver, and arity matching must count that implicit argument too
+    // (the same union `runtimeTypeMatches` already knows).
+    if (scope == "Number" &&
+        (receiverType == "Integer" || receiverType == "Float"))
+        return 1;
     // Module-owned records retain their qualified runtime identity
     // (`CollisionWeb.Server`), while a make block written as `make Server`
     // registers `Server::method`. Method resolution applies this same

@@ -1,0 +1,778 @@
+# Explicit cultures for parsing and printing numbers: decimal separators,
+# digit grouping and group sizes, plus date/time layout data.
+#
+# A culture is always passed explicitly — parsing and printing never consult
+# the ambient locale, so the same call answers the same everywhere. Defaults
+# stay dot-only; reach for a culture exactly when the text follows human
+# conventions instead of literal syntax:
+#
+#   using Culture
+#   Float.parse("1,44", culture: Culture.HU_HU)   # => Ok(1.44)
+#   Float.parse("1,44")                            # => Error(...)
+module Culture
+
+# Number settings: which character marks the decimal point and how digit
+# groups are separated and sized.
+record NumberSettings do
+  # The decimal separator: +.+ in technical text, +,+ across much of Europe.
+  decimalSeparator : Char = '.'
+
+  # Digit grouping as +(separator, sizes)+, or +None+ for no grouping. Sizes
+  # run outward from the decimal point and the last repeats, so +[3]+ groups
+  # by thousands.
+  groups : (Char, [Integer])? = None
+end
+
+# Date and time layout data. Carried by every preset; no behavior reads it
+# yet — culture-aware time parsing and printing is a later slice.
+record TimeSettings do
+  # Field order as written: +:year+, +:month+ and +:day+ in written order.
+  dateOrder : [Atom]
+
+  # Separates date fields: +.+ in +2026. 11. 05.+, +/+ in +11/05/2026+.
+  dateSeparator : Char
+
+  # Separates time fields, almost always +:+.
+  timeSeparator : Char
+end
+
+# A culture: named settings for parsing and printing.
+#
+# The value carries its own settings — +parse+ and +to+ read them from the
+# culture they are handed, never from globals or by-name lookup. Assemble
+# one from a preset, from +of+, from +local+, or literally; fields you omit
+# take neutral defaults, so a numbers-only custom culture never mentions
+# time.
+record Culture do
+  # Display name: the ISO tag for presets, anything for a custom culture.
+  name : String = "custom"
+
+  # Number settings; the only part parsing and printing read today.
+  numbers : NumberSettings
+
+  # Time layout data, or +None+ when the culture defines none.
+  time : TimeSettings? = None
+end
+
+# The technical default: dot decimals, no grouping, no time section. This is
+# what no-culture parsing accepts, so +parse(s)+ and
+# +parse(s, culture: Culture.DEFAULT)+ always agree. Reach for it when the
+# text is machine-written: protocols, data files, logs.
+DEFAULT : Culture
+let DEFAULT = Culture {
+  name: "default",
+  numbers: NumberSettings { decimalSeparator: '.', groups: None }
+}
+
+# English (neutral): dot decimals, comma groups, month-first dates.
+EN : Culture
+let EN = of("EN").or(DEFAULT)
+
+# English (United States): dot decimals, comma groups, month-first dates.
+EN_US : Culture
+let EN_US = of("EN_US").or(DEFAULT)
+
+# Hungarian (neutral): comma decimals, space groups, year-first dates.
+HU : Culture
+let HU = of("HU").or(DEFAULT)
+
+# Hungarian (Hungary): comma decimals, space groups, year-first dates.
+HU_HU : Culture
+let HU_HU = of("HU_HU").or(DEFAULT)
+
+# German (neutral): comma decimals, dot groups, day-first dates.
+DE : Culture
+let DE = of("DE").or(DEFAULT)
+
+# German (Germany): comma decimals, dot groups, day-first dates.
+DE_DE : Culture
+let DE_DE = of("DE_DE").or(DEFAULT)
+
+# Answers the culture registered under +code+, or +None+ for an unknown tag.
+#
+# The code is normalized before lookup — upper-cased with +-+ read as +_+ —
+# so +"hu-HU"+ and +"HU_HU"+ find the same culture. This is how every ISO
+# tag resolves; the screaming constants above are just the ergonomic core
+# derived from the same table.
+#
+# @param code [String] the ISO tag, such as +"HU_HU"+
+# @return [Culture?] the culture, or +None+
+#
+# @example
+#   Culture.of("HU_HU").or(Culture.DEFAULT) == Culture.HU_HU   # => true
+#   Culture.of("hu-HU").or(Culture.DEFAULT) == Culture.HU_HU   # => true
+#   Culture.of("XX_YY")                                        # => None
+of : String -> Culture?
+let of(code) do
+  let want = normalizeTag(code)
+  let rows = [
+    ("AF", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("AF_ZA", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("AM", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("AM_ET", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("AR", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_AE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_BH", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_DZ", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_EG", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_JO", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_KW", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_LB", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_LY", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_MA", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_OM", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_QA", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_SA", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_SD", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_TN", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("AR_YE", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("AZ", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("AZ_AZ", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("BE", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("BE_BY", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("BG", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("BG_BG", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("BN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("BN_BD", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("BN_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("BS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("BS_BA", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("CA", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("CA_ES", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("CS", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("CS_CZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("CY", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("CY_GB", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("DA", ',', Just(('.', [3])), [:day, :month, :year], '.', '.'),
+    ("DA_DK", ',', Just(('.', [3])), [:day, :month, :year], '.', '.'),
+    ("DE", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_AT", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_BE", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_CH", '.', Just(('\u{2019}', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_DE", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_LI", '.', Just(('\u{2019}', [3])), [:day, :month, :year], '.', ':'),
+    ("DE_LU", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("EL", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("EL_CY", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("EL_GR", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("EN", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("EN_AE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_AU", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_CA", '.', Just((',', [3])), [:year, :month, :day], '-', ':'),
+    ("EN_GB", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_GH", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_HK", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_IE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_IL", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("EN_KE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_MY", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_NG", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_NZ", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_PH", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("EN_SG", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("EN_US", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("EN_ZA", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ES", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_AR", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_BO", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_CL", ',', Just(('.', [3])), [:day, :month, :year], '-', ':'),
+    ("ES_CO", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_CR", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_CU", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_DO", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_EC", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_ES", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_GT", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_HN", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_MX", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_NI", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_PA", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("ES_PE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_PR", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("ES_PY", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_SV", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_US", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_UY", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ES_VE", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("ET", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("ET_EE", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("EU", ',', Just(('.', [3])), [:year, :month, :day], '/', ':'),
+    ("EU_ES", ',', Just(('.', [3])), [:year, :month, :day], '/', ':'),
+    ("FA", '\u{66B}', Just(('\u{66C}', [3])), [:year, :month, :day], '/', ':'),
+    ("FA_AF", '\u{66B}', Just(('\u{66C}', [3])), [:year, :month, :day], '/', ':'),
+    ("FA_IR", '\u{66B}', Just(('\u{66C}', [3])), [:year, :month, :day], '/', ':'),
+    ("FI", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', '.'),
+    ("FI_FI", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', '.'),
+    ("FO", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("FO_FO", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("FR", ',', Just(('\u{202F}', [3])), [:day, :month, :year], '/', ':'),
+    ("FR_BE", ',', Just(('\u{202F}', [3])), [:day, :month, :year], '/', ':'),
+    ("FR_CA", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', 'h'),
+    ("FR_CH", ',', Just(('\u{202F}', [3])), [:day, :month, :year], '.', ':'),
+    ("FR_FR", ',', Just(('\u{202F}', [3])), [:day, :month, :year], '/', ':'),
+    ("FR_LU", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("FR_MC", ',', Just(('\u{202F}', [3])), [:day, :month, :year], '/', ':'),
+    ("GA", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("GA_IE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("GL", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("GL_ES", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("GU", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("GU_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("HE", '.', Just((',', [3])), [:day, :month, :year], '.', ':'),
+    ("HE_IL", '.', Just((',', [3])), [:day, :month, :year], '.', ':'),
+    ("HI", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("HI_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("HR", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("HR_BA", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("HR_HR", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("HU", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '.', ':'),
+    ("HU_HU", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '.', ':'),
+    ("HY", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("HY_AM", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("ID", ',', Just(('.', [3])), [:day, :month, :year], '/', '.'),
+    ("ID_ID", ',', Just(('.', [3])), [:day, :month, :year], '/', '.'),
+    ("IS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("IS_IS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("IT", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("IT_CH", '.', Just(('\u{2019}', [3])), [:day, :month, :year], '/', ':'),
+    ("IT_IT", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("JA", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("JA_JP", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("KA", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("KA_GE", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("KK", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("KK_KZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("KM", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("KM_KH", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("KN", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("KN_IN", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("KO", '.', Just((',', [3])), [:year, :month, :day], '.', ':'),
+    ("KO_KP", '.', Just((',', [3])), [:year, :month, :day], '.', ':'),
+    ("KO_KR", '.', Just((',', [3])), [:year, :month, :day], '.', ':'),
+    ("KY", ',', Just(('\u{A0}', [3])), [:year, :day, :month], '-', ':'),
+    ("KY_KG", ',', Just(('\u{A0}', [3])), [:year, :day, :month], '-', ':'),
+    ("LO", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("LO_LA", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("LT", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("LT_LT", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("LV", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("LV_LV", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("MK", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("MK_MK", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("ML", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("ML_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("MN", '.', Just((',', [3])), [:year, :month, :day], '.', ':'),
+    ("MN_MN", '.', Just((',', [3])), [:year, :month, :day], '.', ':'),
+    ("MR", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("MR_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("MS", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("MS_BN", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("MS_MY", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("MS_SG", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("MT", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("MT_MT", '.', Just((',', [3])), [:month, :day, :year], '/', ':'),
+    ("MY", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("MY_MM", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("NB", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("NB_NO", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("NE", '.', Just((',', [3, 2])), [:year, :month, :day], '-', ':'),
+    ("NE_IN", '.', Just((',', [3, 2])), [:year, :month, :day], '-', ':'),
+    ("NE_NP", '.', Just((',', [3, 2])), [:year, :month, :day], '-', ':'),
+    ("NL", ',', Just(('.', [3])), [:day, :month, :year], '-', ':'),
+    ("NL_BE", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("NL_NL", ',', Just(('.', [3])), [:day, :month, :year], '-', ':'),
+    ("NN", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("NN_NO", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("NO", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("NO_NO", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("PL", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("PL_PL", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("PT", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("PT_AO", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("PT_BR", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("PT_MZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("PT_PT", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("RO", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("RO_MD", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("RO_RO", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("RU", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("RU_BY", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("RU_KZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("RU_RU", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("RU_UA", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SK", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SK_SK", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SL", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SL_SI", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SQ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SQ_AL", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SQ_MK", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("SR", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SR_BA", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SR_CYRL_RS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SR_LATN_RS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SR_ME", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SR_RS", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("SV", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("SV_FI", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', '.'),
+    ("SV_SE", ',', Just(('\u{A0}', [3])), [:year, :month, :day], '-', ':'),
+    ("SW", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("SW_KE", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("SW_TZ", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("TA", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("TA_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("TA_LK", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("TA_SG", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("TE", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("TE_IN", '.', Just((',', [3, 2])), [:day, :month, :year], '/', ':'),
+    ("TH", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("TH_TH", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("TR", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("TR_CY", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("TR_TR", ',', Just(('.', [3])), [:day, :month, :year], '.', ':'),
+    ("UK", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("UK_UA", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '.', ':'),
+    ("UR", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("UR_IN", '\u{66B}', Just(('\u{66C}', [3])), [:day, :month, :year], '/', ':'),
+    ("UR_PK", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("UZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("UZ_CYRL_UZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("UZ_LATN_UZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("UZ_UZ", ',', Just(('\u{A0}', [3])), [:day, :month, :year], '/', ':'),
+    ("VI", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("VI_VN", ',', Just(('.', [3])), [:day, :month, :year], '/', ':'),
+    ("XH", '.', Just(('\u{A0}', [3])), [:month, :day, :year], '/', ':'),
+    ("XH_ZA", '.', Just(('\u{A0}', [3])), [:month, :day, :year], '/', ':'),
+    ("ZH", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ZH_CN", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ZH_HANS_CN", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ZH_HANT_HK", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ZH_HANT_TW", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ZH_HK", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ZH_MO", '.', Just((',', [3])), [:day, :month, :year], '/', ':'),
+    ("ZH_SG", '.', Just((',', [3])), [:year, :month, :day], '\u{5E74}', ':'),
+    ("ZH_TW", '.', Just((',', [3])), [:year, :month, :day], '/', ':'),
+    ("ZU", '.', Just((',', [3])), [:year, :month, :day], '-', ':'),
+    ("ZU_ZA", '.', Just((',', [3])), [:year, :month, :day], '-', ':')
+  ]
+  var found : Culture? = None
+  rows.each do |row|
+    let (tag, decimal, groups, order, dateSeparator, timeSeparator) = row
+    if tag == want
+      let numbers = NumberSettings { decimalSeparator: decimal, groups: groups }
+      let time = TimeSettings { dateOrder: order, dateSeparator: dateSeparator, timeSeparator: timeSeparator }
+      found = Just(Culture { name: tag, numbers: numbers, time: Just(time) })
+    end
+  end
+  found
+end
+
+# Answers +true+ when the culture's number settings are usable: grouped
+# cultures need a group separator that differs from the decimal separator
+# and a non-empty list of positive group sizes.
+#
+# Parsing and printing check this for you — an invalid culture fails loudly
+# at use — so call +valid?+ only to fail earlier with your own message.
+#
+# @param culture [Culture] the culture to check
+# @return [Bool] +true+ when the number settings are usable
+#
+# @example
+#   Culture.valid?(Culture.HU_HU)   # => true
+valid? : Culture -> Bool
+let valid?(culture) do
+  let decimal = culture.numbers.decimalSeparator
+  match culture.numbers.groups do
+    None => true
+    Just((separator, sizes)) => separator != decimal && validSizes?(sizes)
+  end
+end
+
+# Validates +text+ as an integer in +culture+, answering the normalized
+# dot-form text a strict parse delegates to.
+#
+# The grammar is strict: an optional sign, digits with validated grouping,
+# nothing else. Group separators must match the culture and land on group
+# boundaries; anything else fails at its exact position with +value: None+.
+#
+# This is plumbing shared by the typed parses — most callers want
+# +Integer.parse(s, culture:)+ instead.
+#
+# @param text [String] the text to validate
+# @param culture [Culture] the culture to validate against
+# @return [Result<String, ParseError>] the normalized text, or the failure
+#
+# @example
+#   Culture.validateInteger("1 500", Culture.HU_HU)   # => Ok("1500")
+validateInteger : String -> Culture -> Result<String, ParseError>
+let validateInteger(text, culture: Culture) do
+  if !valid?(culture)
+    return Error(parseErrorAt(text, 0, "invalid culture"))
+  end
+  if text.empty?
+    return Error(parseErrorAt(text, 0, "invalid integer for culture"))
+  end
+  let (sign, body) = splitSign(text)
+  if body.empty?
+    return Error(parseErrorAt(text, 1, "invalid integer for culture"))
+  end
+  let base = text.count - body.count
+  let decimal = culture.numbers.decimalSeparator
+  let badDecimal = firstFailure(body) { |c| c != decimal }
+  match badDecimal do
+    Just(i) => return Error(parseErrorAt(text, base + i, "invalid integer for culture"))
+    None => None
+  end
+  match validateIntPart(text, base, body, culture, "invalid integer for culture") do
+    Ok(digits) => Ok(sign + digits)
+    Error(e) => Error(e)
+  end
+end
+
+# Validates +text+ as a float in +culture+, answering the normalized
+# dot-form text a strict parse delegates to.
+#
+# The grammar is strict: an optional sign, grouped integer digits, an
+# optional decimal separator with required fraction digits, and an optional
+# exponent. The decimal separator and exponent marker follow the culture
+# only in shape — the normalized text always uses +.+ and +e+.
+#
+# This is plumbing shared by the typed parses — most callers want
+# +Float.parse(s, culture:)+ instead.
+#
+# @param text [String] the text to validate
+# @param culture [Culture] the culture to validate against
+# @return [Result<String, ParseError>] the normalized text, or the failure
+#
+# @example
+#   Culture.validateFloat("1,44", Culture.HU_HU)   # => Ok("1.44")
+validateFloat : String -> Culture -> Result<String, ParseError>
+let validateFloat(text, culture: Culture) do
+  if !valid?(culture)
+    return Error(parseErrorAt(text, 0, "invalid culture"))
+  end
+  if text.empty?
+    return Error(parseErrorAt(text, 0, "invalid float for culture"))
+  end
+  let (sign, body) = splitSign(text)
+  if body.empty?
+    return Error(parseErrorAt(text, 1, "invalid float for culture"))
+  end
+  let base = text.count - body.count
+  let decimal = culture.numbers.decimalSeparator
+  var mantissa = body
+  var exponent = ""
+  let eFound = firstFailure(body) { |c| c != 'e' && c != 'E' }
+  match eFound do
+    Just(ei) => do
+      mantissa = body.take(ei)
+      exponent = body.drop(ei + 1)
+    end
+    None => None
+  end
+  if exponent.empty? == false
+    let signed = exponent.startsWith?("-") || exponent.startsWith?("+")
+    let tail = signed then exponent.drop(1) else exponent
+    if tail.empty?
+      return Error(parseErrorAt(text, base + body.count, "invalid float for culture"))
+    end
+    let badTail = firstFailure(tail) { |c| c.digit? }
+    match badTail do
+      Just(j) => return Error(parseErrorAt(text, base + (body.count - tail.count) + j, "invalid float for culture"))
+      None => None
+    end
+  end
+  let (intPart, fracPart, hasDecimal, di) = splitDecimal(mantissa, decimal)
+  if intPart.empty?
+    return Error(parseErrorAt(text, base, "invalid float for culture"))
+  end
+  if hasDecimal
+    if fracPart.empty?
+      return Error(parseErrorAt(text, base + di + 1, "invalid float for culture"))
+    end
+    let badFrac = firstFailure(fracPart) { |c| c.digit? }
+    match badFrac do
+      Just(j) => return Error(parseErrorAt(text, base + di + 1 + j, "invalid float for culture"))
+      None => None
+    end
+  end
+  match validateIntPart(text, base, intPart, culture, "invalid float for culture") do
+    Ok(intDigits) => Ok(sign + intDigits + fracText(fracPart, hasDecimal) + expText(exponent))
+    Error(e) => Error(e)
+  end
+end
+
+# Renders plain dot-form +text+ with the culture's separators: the decimal
+# separator is substituted and digit groups are inserted per the culture's
+# group sizes. An exponent, if any, passes through unchanged. Answers
+# +None+ for an invalid culture (see +valid?+).
+#
+# This is plumbing shared by the typed prints — most callers want
+# +(1500.5).to(String, culture: culture)+ instead.
+#
+# @param text [String] the dot-form text to render
+# @param culture [Culture] the culture to render with
+# @return [String?] the rendered text, or +None+ for an invalid culture
+#
+# @example
+#   Culture.renderNumber("1500.5", Culture.HU_HU)   # => Just("1 500,5")
+renderNumber : String -> Culture -> String?
+let renderNumber(text, culture: Culture) do
+  if !valid?(culture)
+    return None
+  end
+  let negative = text.startsWith?("-")
+  let digits = negative then text.drop(1) else text
+  let eParts = digits.split("e")
+  let bigParts = digits.split("E")
+  var mantissa = digits
+  var exponent = ""
+  if eParts.count > 1
+    mantissa = eParts.at(0).or("")
+    exponent = "e" + eParts.at(1).or("")
+  end
+  if bigParts.count > 1
+    mantissa = bigParts.at(0).or("")
+    exponent = "E" + bigParts.at(1).or("")
+  end
+  let dotParts = mantissa.split(".")
+  let grouped = insertGroups(dotParts.at(0).or(""), culture)
+  let head = negative then "-" + grouped else grouped
+  let decimal = "${culture.numbers.decimalSeparator}"
+  match dotParts.at(1) do
+    Just(frac) => Just(head + decimal + frac + exponent)
+    None => Just(head + exponent)
+  end
+end
+
+# Answers the machine's culture as an ordinary value: numbers follow the
+# +LC_ALL+, +LC_NUMERIC+ or +LANG+ environment variable, falling back to
+# +DEFAULT+ when none names a known culture.
+#
+# The query is explicit and +foul+ — ambient locale never leaks into parsing
+# or printing on its own. Bind the answer once and pass it like any other
+# culture:
+#
+#   let culture = Culture.local
+#   Float.parse(input, culture: culture)
+#
+# @return [Culture] the machine's culture, or +DEFAULT+
+local : Culture
+foul local do
+  if let Just(tag) = envNonEmpty("LC_ALL")
+    return cultureFromTag(tag)
+  end
+  if let Just(tag) = envNonEmpty("LC_NUMERIC")
+    return cultureFromTag(tag)
+  end
+  if let Just(tag) = envNonEmpty("LANG")
+    return cultureFromTag(tag)
+  end
+  DEFAULT
+end
+
+private do
+  # Upper-cases a lookup tag and reads +-+ as +_+, so +"hu-HU"+ finds +HU_HU+.
+  let normalizeTag(code : String) -> String = code.upperCase.split("-").join("_")
+
+  # Answers the index of the first character failing +pred+, or +None+ when
+  # every character passes.
+  let firstFailure(text : String, pred : Char -> Bool) -> Integer? do
+    var found : Integer? = None
+    var index = 0
+    text.chars.each do |c|
+      if found.none? && pred(c) == false
+        found = Just(index)
+      end
+      index = index + 1
+    end
+    found
+  end
+
+  # Splits leading sign from body, dropping a leading +++. Answers
+  # +(sign, body)+ where sign is +"-"+ or +""+.
+  let splitSign(text : String) -> (String, String) do
+    if text.startsWith?("-")
+      return ("-", text.drop(1))
+    end
+    if text.startsWith?("+")
+      return ("", text.drop(1))
+    end
+    ("", text)
+  end
+
+  # Splits a mantissa on the decimal separator: +(before, after, present,
+  # index)+. Only the first separator splits; a second one is the caller's
+  # error to report.
+  let splitDecimal(text : String, decimal : Char) -> (String, String, Bool, Integer) do
+    match firstFailure(text) { |c| c != decimal } do
+      Just(i) => (text.take(i), text.drop(i + 1), true, i)
+      None => (text, "", false, -1)
+    end
+  end
+
+  # Builds the +ParseError+ for +index+, counting in characters and reporting
+  # byte offsets as +ParseError.position+ requires.
+  let parseErrorAt(text : String, index : Integer, message : String) -> ParseError do
+    ParseError {
+      input: text,
+      position: text.take(index).byteSize,
+      value: None,
+      message: message,
+      rest: text.drop(index)
+    }
+  end
+
+  # Maps no-break spaces onto plain spaces when the group separator is a
+  # space (codepoint 160 is no-break space), so both spellings group. Any
+  # other separator passes the text through untouched.
+  # Accepts every space lookalike (plain, NBSP, narrow NBSP) when the group
+  # separator is any of them: keyboards and copy-paste rarely produce NBSP.
+  let unifySpaces(text : String, separator : Char) -> String do
+    let gap = separator.codepoint == 32 || separator.codepoint == 160 || separator.codepoint == 8239
+    if gap
+      return text.mapChars { |c| c.codepoint == 32 || c.codepoint == 160 || c.codepoint == 8239 then separator else c }
+    end
+    text
+  end
+
+  # Removes every group separator from already-validated text.
+  let stripSeparator(text : String, separator : Char) -> String = text.split("${separator}").join("")
+
+  # Checks grouping structure: every group non-empty with valid sizes, the
+  # leftmost holding one up to a full group. Answers +None+ when fine, else
+  # the failing group's first character index relative to +part+.
+  let checkGroups(part : String, separator : Char, sizes : [Integer]) -> Integer? do
+    if sizes.count == 0
+      return Just(0)
+    end
+    let parts = part.split("${separator}")
+    var bad : Integer? = None
+    var offset = 0
+    var i = 0
+    parts.each do |piece|
+      if bad.none?
+        if piece.empty?
+          bad = Just(offset)
+        else
+          match firstFailure(piece) { |c| c.digit? } do
+            Just(j) => do
+              bad = Just(offset + j)
+            end
+            None => do
+              let fromRight = parts.count - 1 - i
+              let capped = fromRight < sizes.count then fromRight else sizes.count - 1
+              let want = sizes.at(capped).or(0)
+              if parts.count == 1 || i == 0
+                if piece.count > want
+                  bad = Just(offset)
+                end
+              else
+                if piece.count != want
+                  bad = Just(offset)
+                end
+              end
+            end
+          end
+        end
+      end
+      offset = offset + piece.count + 1
+      i = i + 1
+    end
+    bad
+  end
+
+  # Answers +true+ for a non-empty list of positive group sizes.
+  let validSizes?(sizes : [Integer]) -> Bool = sizes.count > 0 && sizes.filter { |n| n >= 1 }.count == sizes.count
+
+  # Validates an integer digit string with the culture's grouping, answering
+  # the bare digits. Positions count from +base+ inside +text+.
+  let validateIntPart(text : String, base : Integer, part : String, culture : Culture, message : String) -> String or! ParseError do
+    match culture.numbers.groups do
+      Just(groups) => do
+        let (separator, sizes) = groups
+        let unified = unifySpaces(part, separator)
+        match checkGroups(unified, separator, sizes) do
+          Just(j) => return Error(parseErrorAt(text, base + j, message))
+          None => None
+        end
+        return Ok(stripSeparator(unified, separator))
+      end
+      None => None
+    end
+    let badDigit = firstFailure(part) { |c| c.digit? }
+    match badDigit do
+      Just(j) => return Error(parseErrorAt(text, base + j, message))
+      None => None
+    end
+    Ok(part)
+  end
+
+  # Inserts the culture's group separators into integer +digits+.
+  let insertGroups(digits : String, culture : Culture) -> String do
+    match culture.numbers.groups do
+      None => digits
+      Just((separator, sizes)) => groupDigits(digits, separator, sizes)
+    end
+  end
+
+  # Groups +digits+ from the right; the last size repeats forever
+  # (CLDR primary/secondary, e.g. en-IN [3, 2]); the leftmost group
+  # takes whatever remains. Callers check +valid?+ first.
+  let groupDigits(digits : String, separator : Char, sizes : [Integer]) -> String do
+    var parts : [String] = []
+    var pos = digits.count
+    var k = 0
+    while pos > 0 do
+      let capped = k < sizes.count then k else sizes.count - 1
+      let size = sizes.at(capped).or(3)
+      if pos <= size
+        parts = [digits.take(pos)] + parts
+        pos = 0
+      else
+        parts = [digits.drop(pos - size).take(size)] + parts
+        pos = pos - size
+      end
+      k = k + 1
+    end
+    parts.join("${separator}")
+  end
+
+  # Renders the fraction tail of normalized text: dot plus digits, or nothing
+  # without a decimal separator.
+  let fracText(frac : String, present : Bool) -> String do
+    if present
+      return "." + frac
+    end
+    ""
+  end
+
+  # Renders the exponent tail of normalized text, dropping a leading +++.
+  let expText(exponent : String) -> String do
+    if exponent.empty?
+      return ""
+    end
+    if exponent.startsWith?("+")
+      return "e" + exponent.drop(1)
+    end
+    "e" + exponent
+  end
+
+  # Reads one variable, treating missing and empty alike as +None+.
+  foul envNonEmpty(name : String) -> String? do
+    let value = ENV.get(name, "")
+    if value.empty?
+      return None
+    end
+    Just(value)
+  end
+
+  # Resolves an environment locale tag to a culture, defaulting to +DEFAULT+.
+  # Strips any codeset suffix first, so +"hu_HU.UTF-8"+ finds +HU_HU+.
+  foul cultureFromTag(tag : String) -> Culture do
+    let bare = tag.split(".").first.or("")
+    let clean = bare.split("@").first.or("")
+    of(clean).or(DEFAULT)
+  end
+end

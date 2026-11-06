@@ -217,6 +217,43 @@ describe("Integer.parse and Float.parse") do
   end
 end
 
+describe("Float.parse — decimal separator") do
+  it("Float.parse stops at a comma, like the dot-only float syntax") do
+    # `1,44` is not a Kex float literal, so it does not parse as one: the
+    # comma ends the number exactly where the dot-only parser stops.
+    match Float.parse("1,44") do
+      Error(e) => do
+        assert(e.message == "trailing characters after float")
+        assert(e.position == 1)
+        assert(e.value == 1.0)
+        assert(e.rest == ",44")
+      end
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("Number.parse rejects a comma decimal separator") do
+    match Number.parse("1,44") do
+      Error(e) => assert(e.message == "invalid number")
+      Ok(v) => assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("to(Float) answers None for a comma decimal separator") do
+    assert("1,44".to(Float) == None)
+  end
+
+  it("Float.parsePrefix stops at a comma") do
+    match Float.parsePrefix("1,44") do
+      Just((f, rest)) => do
+        assert(f == 1.0)
+        assert(rest == ",44")
+      end
+      None => assert(false, "expected Just")
+    end
+  end
+end
+
 describe("Number.parse") do
   it("keeps integer input as an Integer") do
     assert(Number.parse("42").or(0) == 42)
