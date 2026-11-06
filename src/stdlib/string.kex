@@ -127,7 +127,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".get(1)    # => Just('i')
   #   "hi".get(9)    # => None
   get :> Integer -> Char?
-  let get(i) = Kex.Intrinsic.List.get(this, i)
+  let get(i: Integer) = Kex.Intrinsic.List.get(this, i)
 
   # Returns the character at index +i+, or +default+ when the index is out of
   # range. The total form of +get+, for when a missing character has an
@@ -142,6 +142,22 @@ make String, implement: Enumerable, Foldable do
   #   "hi".get(9, '?')   # => '?'
   get :> Integer -> Char -> Char
   let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
+
+  # Returns the substring addressed by +range+, both ends included. The same
+  # as +slice+ over a range, and what the +s[1..2]+ bracket spelling calls.
+  #
+  # @param range [Range<Integer>] the inclusive 0-based index range
+  # @return [String] the characters in that range
+  #
+  # @example
+  #   "hello".get(1..3)   # => "ell"
+  #   "hello"[1..3]       # => "ell"
+  #
+  # @example Taking a date apart
+  #   let day = "2026-07-04"
+  #   (day[0..3], day[5..6], day[8..9])   # => ("2026", "07", "04")
+  get :> Range<Integer> -> String
+  let get(range: Range<Integer>) = this.slice(range)
 
   # Returns the first +n+ characters. A short string is returned whole, so
   # +take+ never fails on an +n+ that is too large.
@@ -174,6 +190,78 @@ make String, implement: Enumerable, Foldable do
   #   flag.startsWith?("--") then flag.drop(2) else flag   # => "verbose"
   drop :> Integer -> String
   let drop(n) = Kex.Intrinsic.List.drop(this, n)
+
+  # Returns the substring of +length+ characters starting at index +start+,
+  # counting from 0.
+  #
+  # Characters, not bytes: the indices count what +count+ counts. The window
+  # is clamped rather than refused, the way +take+ and +drop+ already behave:
+  # a start past the end answers +""+, a length running past the end stops at
+  # the end, a negative start counts as 0, and a negative length answers +""+.
+  #
+  # @param start [Integer] the 0-based index of the first character
+  # @param length [Integer] how many characters to keep
+  # @return [String] the characters in that window
+  #
+  # @example
+  #   "hello".slice(1, 3)    # => "ell"
+  #   "hello".slice(1, 99)   # => "ello"
+  #   "hello".slice(9, 3)    # => ""
+  #
+  # @example Reading a fixed-width field
+  #   line.slice(0, 10).trim   # the date column of a log line
+  slice :> Integer -> Integer -> String
+  let slice(start, length) do
+    let from = start < 0 then 0 else start
+    let len = length < 0 then 0 else length
+    this.drop(from).take(len)
+  end
+
+  # Returns the substring addressed by +range+, both ends included.
+  #
+  # The bounds are clamped like the start/length form above: a range running
+  # past either end is trimmed to the string, and a range whose start lies
+  # past its end answers +""+.
+  #
+  # @param range [Range<Integer>] the inclusive 0-based index range
+  # @return [String] the characters in that range
+  #
+  # @example
+  #   "hello".slice(1..3)   # => "ell"
+  #   "hello".slice(0..4)   # => "hello"
+  #   "hello".slice(3..1)   # => ""
+  #
+  # @example Taking the year off a date
+  #   "2026-07-04".slice(0..3)   # => "2026"
+  slice :> Range<Integer> -> String
+  let slice(range) do
+    let (lo, hi) = Kex.Intrinsic.Range.bounds(range)
+    let from = lo < 0 then 0 else lo
+    this.slice(from, hi - from + 1)
+  end
+
+  # Returns the substring of +length+ characters starting at index +start+.
+  # The same as +slice+, under the name familiar from other languages.
+  #
+  # @param start [Integer] the 0-based index of the first character
+  # @param length [Integer] how many characters to keep
+  # @return [String] the characters in that window
+  #
+  # @example
+  #   "hello".substring(1, 3)   # => "ell"
+  substring :> Integer -> Integer -> String
+  let substring(start, length) = this.slice(start, length)
+
+  # Returns the substring addressed by +range+, both ends included. The same
+  # as +slice+, under the name familiar from other languages.
+  #
+  # @param range [Range<Integer>] the inclusive 0-based index range
+  # @return [String] the characters in that range
+  #
+  # @example
+  #   "hello".substring(1..3)   # => "ell"
+  substring :> Range<Integer> -> String
+  let substring(range) = this.slice(range)
 
   # Returns the characters that do NOT satisfy +pred+: the complement of
   # +filter+.
@@ -357,7 +445,8 @@ make String, implement: Enumerable, Foldable do
   let enclose(left, right) = "${left}${this}${right}"
 
   # Returns the character at index +i+, counting from 0, or +None+ when the
-  # index is out of range. The same as the one-argument +get+.
+  # index is out of range. The same as the integer one-argument +get+ (+get+
+  # also accepts a +Range+, which answers a substring instead).
   #
   # @param i [Integer] the 0-based index
   # @return [Char?] the character, or +None+

@@ -293,7 +293,8 @@ make [X], implement: Enumerable, Foldable do
   let at(i) = Kex.Intrinsic.List.at(this, i)
 
   # Returns the element at position +i+ (0-based), or +None+ when the index is
-  # out of range. The same as +at+.
+  # out of range. The same as +at+ (+get+ also accepts a +Range+, which
+  # answers a sublist instead).
   #
   # @param i [Integer] the 0-based index
   # @return [X?] the element, or +None+
@@ -302,7 +303,7 @@ make [X], implement: Enumerable, Foldable do
   #   [10, 20, 30].get(1)   # => Just(20)
   #   [10, 20, 30].get(9)   # => None
   get :> Integer -> X?
-  let get(i) = Kex.Intrinsic.List.get(this, i)
+  let get(i: Integer) = Kex.Intrinsic.List.get(this, i)
 
   # Returns the element at position +i+ (0-based), or +default+ when the index
   # is out of range. The total form of +get+: the value comes back unwrapped.
@@ -320,6 +321,21 @@ make [X], implement: Enumerable, Foldable do
   #   let port = args.get(1, "8080")
   get :> Integer -> X -> X
   let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
+
+  # Returns the sublist addressed by +range+, both ends included. The same
+  # as +slice+ over a range, and what the +xs[1..2]+ bracket spelling calls.
+  #
+  # @param range [Range<Integer>] the inclusive 0-based index range
+  # @return [[X]] the elements in that range
+  #
+  # @example
+  #   [1, 2, 3, 4].get(1..2)   # => [2, 3]
+  #   [1, 2, 3, 4][1..2]       # => [2, 3]
+  #
+  # @example Paging through results
+  #   page.items[(page.n - 1) * 10..page.n * 10 - 1]
+  get :> Range<Integer> -> [X]
+  let get(range: Range<Integer>) = this.slice(range)
 
   # Returns +true+ if +elem+ is present in the list.
   #
@@ -450,6 +466,55 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3, 4, 5].drop(2)   # => [3, 4, 5]
   drop :> Integer -> [X]
   let drop(n) = Kex.Intrinsic.List.drop(this, n)
+
+  # Returns the sublist of +length+ elements starting at index +start+,
+  # counting from 0.
+  #
+  # The window is clamped rather than refused, the way +take+ and +drop+
+  # already behave: a start past the end answers +[]+, a length running past
+  # the end stops at the end, a negative start counts as 0, and a negative
+  # length answers +[]+.
+  #
+  # @param start [Integer] the 0-based index of the first element
+  # @param length [Integer] how many elements to keep
+  # @return [[X]] the elements in that window
+  #
+  # @example
+  #   [1, 2, 3, 4].slice(1, 2)    # => [2, 3]
+  #   [1, 2, 3].slice(1, 99)      # => [2, 3]
+  #   [1, 2, 3].slice(9, 2)       # => []
+  #
+  # @example Taking a page of rows
+  #   rows.slice(page * 10, 10)
+  slice :> Integer -> Integer -> [X]
+  let slice(start, length) do
+    let from = start < 0 then 0 else start
+    let len = length < 0 then 0 else length
+    this.drop(from).take(len)
+  end
+
+  # Returns the sublist addressed by +range+, both ends included.
+  #
+  # The bounds are clamped like the start/length form above: a range running
+  # past either end is trimmed to the list, and a range whose start lies past
+  # its end answers +[]+.
+  #
+  # @param range [Range<Integer>] the inclusive 0-based index range
+  # @return [[X]] the elements in that range
+  #
+  # @example
+  #   [1, 2, 3, 4].slice(1..2)   # => [2, 3]
+  #   [1, 2, 3].slice(0..2)      # => [1, 2, 3]
+  #   [1, 2, 3].slice(2..0)      # => []
+  #
+  # @example Splitting a header off its body
+  #   let body = lines.slice(1..lines.count - 1)
+  slice :> Range<Integer> -> [X]
+  let slice(range) do
+    let (lo, hi) = Kex.Intrinsic.Range.bounds(range)
+    let from = lo < 0 then 0 else lo
+    this.slice(from, hi - from + 1)
+  end
 
   # Returns a new list with +x+ appended at the end.
   #
