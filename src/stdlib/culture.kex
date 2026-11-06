@@ -7,8 +7,9 @@
 # conventions instead of literal syntax:
 #
 #   using Culture
-#   Float.parse("1,44", culture: Culture.HU_HU)   # => Ok(1.44)
-#   Float.parse("1,44")                            # => Error(...)
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   Float.parse("1,44", culture: hu)   # => Ok(1.44)
+#   Float.parse("1,44")                 # => Error(...)
 module Culture
 
 # Number settings: which character marks the decimal point and how digit
@@ -64,44 +65,19 @@ let DEFAULT = Culture {
   numbers: NumberSettings { decimalSeparator: '.', groups: None }
 }
 
-# English (neutral): dot decimals, comma groups, month-first dates.
-EN : Culture
-let EN = of("EN").or(DEFAULT)
-
-# English (United States): dot decimals, comma groups, month-first dates.
-EN_US : Culture
-let EN_US = of("EN_US").or(DEFAULT)
-
-# Hungarian (neutral): comma decimals, space groups, year-first dates.
-HU : Culture
-let HU = of("HU").or(DEFAULT)
-
-# Hungarian (Hungary): comma decimals, space groups, year-first dates.
-HU_HU : Culture
-let HU_HU = of("HU_HU").or(DEFAULT)
-
-# German (neutral): comma decimals, dot groups, day-first dates.
-DE : Culture
-let DE = of("DE").or(DEFAULT)
-
-# German (Germany): comma decimals, dot groups, day-first dates.
-DE_DE : Culture
-let DE_DE = of("DE_DE").or(DEFAULT)
-
 # Answers the culture registered under +code+, or +None+ for an unknown tag.
+# This is the only way to reach a preset: there are no per-culture constants.
 #
 # The code is normalized before lookup — upper-cased with +-+ read as +_+ —
-# so +"hu-HU"+ and +"HU_HU"+ find the same culture. This is how every ISO
-# tag resolves; the screaming constants above are just the ergonomic core
-# derived from the same table.
+# so +"hu-HU"+ and +"HU_HU"+ find the same culture.
 #
 # @param code [String] the ISO tag, such as +"HU_HU"+
 # @return [Culture?] the culture, or +None+
 #
 # @example
-#   Culture.of("HU_HU").or(Culture.DEFAULT) == Culture.HU_HU   # => true
-#   Culture.of("hu-HU").or(Culture.DEFAULT) == Culture.HU_HU   # => true
-#   Culture.of("XX_YY")                                        # => None
+#   Culture.of("HU_HU").or(Culture.DEFAULT).name   # => "HU_HU"
+#   Culture.of("hu-HU").or(Culture.DEFAULT).name   # => "HU_HU"
+#   Culture.of("XX_YY")                            # => None
 of : String -> Culture?
 let of(code) do
   let want = normalizeTag(code)
@@ -356,12 +332,16 @@ let of(code) do
     ("ZU", '.', Just((',', [3])), [:year, :month, :day], '-', ':'),
     ("ZU_ZA", '.', Just((',', [3])), [:year, :month, :day], '-', ':')
   ]
-  var found : Culture? = None
+  var found: Culture? = None
   rows.each do |row|
     let (tag, decimal, groups, order, dateSeparator, timeSeparator) = row
     if tag == want
       let numbers = NumberSettings { decimalSeparator: decimal, groups: groups }
-      let time = TimeSettings { dateOrder: order, dateSeparator: dateSeparator, timeSeparator: timeSeparator }
+      let time = TimeSettings {
+        dateOrder: order,
+        dateSeparator: dateSeparator,
+        timeSeparator: timeSeparator
+      }
       found = Just(Culture { name: tag, numbers: numbers, time: Just(time) })
     end
   end
@@ -379,7 +359,8 @@ end
 # @return [Bool] +true+ when the number settings are usable
 #
 # @example
-#   Culture.valid?(Culture.HU_HU)   # => true
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   Culture.valid?(hu)              # => true
 valid? : Culture -> Bool
 let valid?(culture) do
   let decimal = culture.numbers.decimalSeparator
@@ -404,7 +385,8 @@ end
 # @return [Result<String, ParseError>] the normalized text, or the failure
 #
 # @example
-#   Culture.validateInteger("1 500", Culture.HU_HU)   # => Ok("1500")
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   Culture.validateInteger("1 500", hu)              # => Ok("1500")
 validateInteger : String -> Culture -> Result<String, ParseError>
 let validateInteger(text, culture: Culture) do
   if !valid?(culture)
@@ -446,7 +428,8 @@ end
 # @return [Result<String, ParseError>] the normalized text, or the failure
 #
 # @example
-#   Culture.validateFloat("1,44", Culture.HU_HU)   # => Ok("1.44")
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   Culture.validateFloat("1,44", hu)              # => Ok("1.44")
 validateFloat : String -> Culture -> Result<String, ParseError>
 let validateFloat(text, culture: Culture) do
   if !valid?(culture)
@@ -479,7 +462,10 @@ let validateFloat(text, culture: Culture) do
     end
     let badTail = firstFailure(tail) { |c| c.digit? }
     match badTail do
-      Just(j) => return Error(parseErrorAt(text, base + (body.count - tail.count) + j, "invalid float for culture"))
+      Just(j) => do
+        let at = base + (body.count - tail.count) + j
+        return Error(parseErrorAt(text, at, "invalid float for culture"))
+      end
       None => None
     end
   end
@@ -516,7 +502,8 @@ end
 # @return [String?] the rendered text, or +None+ for an invalid culture
 #
 # @example
-#   Culture.renderNumber("1500.5", Culture.HU_HU)   # => Just("1 500,5")
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   Culture.renderNumber("1500.5", hu)              # => Just("1\u{A0}500,5")
 renderNumber : String -> Culture -> String?
 let renderNumber(text, culture: Culture) do
   if !valid?(culture)
@@ -574,12 +561,12 @@ end
 
 private do
   # Upper-cases a lookup tag and reads +-+ as +_+, so +"hu-HU"+ finds +HU_HU+.
-  let normalizeTag(code : String) -> String = code.upperCase.split("-").join("_")
+  let normalizeTag(code: String) -> String = code.upperCase.split("-").join("_")
 
   # Answers the index of the first character failing +pred+, or +None+ when
   # every character passes.
-  let firstFailure(text : String, pred : Char -> Bool) -> Integer? do
-    var found : Integer? = None
+  let firstFailure(text: String, pred: Char -> Bool) -> Integer? do
+    var found: Integer? = None
     var index = 0
     text.chars.each do |c|
       if found.none? && pred(c) == false
@@ -592,7 +579,7 @@ private do
 
   # Splits leading sign from body, dropping a leading +++. Answers
   # +(sign, body)+ where sign is +"-"+ or +""+.
-  let splitSign(text : String) -> (String, String) do
+  let splitSign(text: String) -> (String, String) do
     if text.startsWith?("-")
       return ("-", text.drop(1))
     end
@@ -605,7 +592,7 @@ private do
   # Splits a mantissa on the decimal separator: +(before, after, present,
   # index)+. Only the first separator splits; a second one is the caller's
   # error to report.
-  let splitDecimal(text : String, decimal : Char) -> (String, String, Bool, Integer) do
+  let splitDecimal(text: String, decimal: Char) -> (String, String, Bool, Integer) do
     match firstFailure(text) { |c| c != decimal } do
       Just(i) => (text.take(i), text.drop(i + 1), true, i)
       None => (text, "", false, -1)
@@ -614,7 +601,7 @@ private do
 
   # Builds the +ParseError+ for +index+, counting in characters and reporting
   # byte offsets as +ParseError.position+ requires.
-  let parseErrorAt(text : String, index : Integer, message : String) -> ParseError do
+  let parseErrorAt(text: String, index: Integer, message: String) -> ParseError do
     ParseError {
       input: text,
       position: text.take(index).byteSize,
@@ -624,31 +611,31 @@ private do
     }
   end
 
-  # Maps no-break spaces onto plain spaces when the group separator is a
-  # space (codepoint 160 is no-break space), so both spellings group. Any
-  # other separator passes the text through untouched.
+  # Answers +true+ for the space lookalikes: plain space, NBSP (160) and
+  # narrow NBSP (8239).
+  let spaceLike?(c: Char) -> Bool = c.codepoint == 32 || c.codepoint == 160 || c.codepoint == 8239
+
   # Accepts every space lookalike (plain, NBSP, narrow NBSP) when the group
   # separator is any of them: keyboards and copy-paste rarely produce NBSP.
-  let unifySpaces(text : String, separator : Char) -> String do
-    let gap = separator.codepoint == 32 || separator.codepoint == 160 || separator.codepoint == 8239
-    if gap
-      return text.mapChars { |c| c.codepoint == 32 || c.codepoint == 160 || c.codepoint == 8239 then separator else c }
+  let unifySpaces(text: String, separator: Char) -> String do
+    if spaceLike?(separator)
+      return text.mapChars { |c| spaceLike?(c) then separator else c }
     end
     text
   end
 
   # Removes every group separator from already-validated text.
-  let stripSeparator(text : String, separator : Char) -> String = text.split("${separator}").join("")
+  let stripSeparator(text: String, separator: Char) -> String = text.split("${separator}").join("")
 
   # Checks grouping structure: every group non-empty with valid sizes, the
   # leftmost holding one up to a full group. Answers +None+ when fine, else
   # the failing group's first character index relative to +part+.
-  let checkGroups(part : String, separator : Char, sizes : [Integer]) -> Integer? do
+  let checkGroups(part: String, separator: Char, sizes: [Integer]) -> Integer? do
     if sizes.count == 0
       return Just(0)
     end
     let parts = part.split("${separator}")
-    var bad : Integer? = None
+    var bad: Integer? = None
     var offset = 0
     var i = 0
     parts.each do |piece|
@@ -684,11 +671,19 @@ private do
   end
 
   # Answers +true+ for a non-empty list of positive group sizes.
-  let validSizes?(sizes : [Integer]) -> Bool = sizes.count > 0 && sizes.filter { |n| n >= 1 }.count == sizes.count
+  let validSizes?(sizes: [Integer]) -> Bool do
+    return sizes.count > 0 && sizes.filter { |n| n >= 1 }.count == sizes.count
+  end
 
   # Validates an integer digit string with the culture's grouping, answering
   # the bare digits. Positions count from +base+ inside +text+.
-  let validateIntPart(text : String, base : Integer, part : String, culture : Culture, message : String) -> String or! ParseError do
+  let validateIntPart(
+    text: String,
+    base: Integer,
+    part: String,
+    culture: Culture,
+    message: String
+  ) -> Result<String, ParseError> do
     match culture.numbers.groups do
       Just(groups) => do
         let (separator, sizes) = groups
@@ -710,7 +705,7 @@ private do
   end
 
   # Inserts the culture's group separators into integer +digits+.
-  let insertGroups(digits : String, culture : Culture) -> String do
+  let insertGroups(digits: String, culture: Culture) -> String do
     match culture.numbers.groups do
       None => digits
       Just((separator, sizes)) => groupDigits(digits, separator, sizes)
@@ -720,8 +715,8 @@ private do
   # Groups +digits+ from the right; the last size repeats forever
   # (CLDR primary/secondary, e.g. en-IN [3, 2]); the leftmost group
   # takes whatever remains. Callers check +valid?+ first.
-  let groupDigits(digits : String, separator : Char, sizes : [Integer]) -> String do
-    var parts : [String] = []
+  let groupDigits(digits: String, separator: Char, sizes: [Integer]) -> String do
+    var parts: [String] = []
     var pos = digits.count
     var k = 0
     while pos > 0 do
@@ -741,7 +736,7 @@ private do
 
   # Renders the fraction tail of normalized text: dot plus digits, or nothing
   # without a decimal separator.
-  let fracText(frac : String, present : Bool) -> String do
+  let fracText(frac: String, present: Bool) -> String do
     if present
       return "." + frac
     end
@@ -749,7 +744,7 @@ private do
   end
 
   # Renders the exponent tail of normalized text, dropping a leading +++.
-  let expText(exponent : String) -> String do
+  let expText(exponent: String) -> String do
     if exponent.empty?
       return ""
     end
@@ -760,7 +755,7 @@ private do
   end
 
   # Reads one variable, treating missing and empty alike as +None+.
-  foul envNonEmpty(name : String) -> String? do
+  foul envNonEmpty(name: String) -> String? do
     let value = ENV.get(name, "")
     if value.empty?
       return None
@@ -770,7 +765,7 @@ private do
 
   # Resolves an environment locale tag to a culture, defaulting to +DEFAULT+.
   # Strips any codeset suffix first, so +"hu_HU.UTF-8"+ finds +HU_HU+.
-  foul cultureFromTag(tag : String) -> Culture do
+  foul cultureFromTag(tag: String) -> Culture do
     let bare = tag.split(".").first.or("")
     let clean = bare.split("@").first.or("")
     of(clean).or(DEFAULT)

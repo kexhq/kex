@@ -323,8 +323,9 @@ module Integer do
   # @return [Result<Integer, ParseError>] the integer, or a described failure
   #
   # @example
-  #   Integer.parse("1 500", culture: Culture.HU_HU)   # => Ok(1500)
-  #   Integer.parse("1,500", culture: Culture.HU_HU)   # => Error(ParseError { ... })
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Integer.parse("1 500", culture: hu)              # => Ok(1500)
+  #   Integer.parse("1,500", culture: hu)              # => Error(ParseError { ... })
   parse : String -> Culture -> Result<Integer, ParseError>
   let parse(s, culture: Culture) do
     match Culture.validateInteger(s, culture) do
@@ -384,11 +385,12 @@ module Integer do
   # @return [(Integer, String)?] the value and the unconsumed remainder
   #
   # @example
-  #   Integer.parsePrefix("12abc", culture: Culture.HU_HU)   # => Just((12, "abc"))
-  #   Integer.parsePrefix("abc", culture: Culture.HU_HU)     # => None
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Integer.parsePrefix("12abc", culture: hu)              # => Just((12, "abc"))
+  #   Integer.parsePrefix("abc", culture: hu)                # => None
   parsePrefix : String -> Culture -> (Integer, String)?
   let parsePrefix(s, culture: Culture) do
-    var best : (Integer, String)? = None
+    var best: (Integer, String)? = None
     var length = 1
     while length <= s.count do
       match Culture.validateInteger(s.take(length), culture) do
@@ -439,7 +441,8 @@ module Float do
   # @return [Result<Float, ParseError>] the float, or a described failure
   #
   # @example
-  #   Float.parse("1,44", culture: Culture.HU_HU)   # => Ok(1.44)
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Float.parse("1,44", culture: hu)              # => Ok(1.44)
   #   Float.parse("1,44")                            # => Error(ParseError { ... })
   parse : String -> Culture -> Result<Float, ParseError>
   let parse(s, culture: Culture) do
@@ -474,11 +477,12 @@ module Float do
   # @return [(Float, String)?] the value and the remainder
   #
   # @example
-  #   Float.parsePrefix("1,5x", culture: Culture.HU_HU)   # => Just((1.5, "x"))
-  #   Float.parsePrefix("x", culture: Culture.HU_HU)      # => None
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Float.parsePrefix("1,5x", culture: hu)              # => Just((1.5, "x"))
+  #   Float.parsePrefix("x", culture: hu)                 # => None
   parsePrefix : String -> Culture -> (Float, String)?
   let parsePrefix(s, culture: Culture) do
-    var best : (Float, String)? = None
+    var best: (Float, String)? = None
     var length = 1
     while length <= s.count do
       match Culture.validateFloat(s.take(length), culture) do
@@ -669,8 +673,9 @@ module Number do
   # @return [Result<Number, ParseError>] the number, or a described failure
   #
   # @example
-  #   Number.parse("1 500,5", culture: Culture.HU_HU)   # => Ok(1500.5)
-  #   Number.parse("1 500", culture: Culture.HU_HU)     # => Ok(1500)
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Number.parse("1 500,5", culture: hu)              # => Ok(1500.5)
+  #   Number.parse("1 500", culture: hu)                # => Ok(1500)
   parse : String -> Culture -> Result<Number, ParseError>
   let parse(s, culture: Culture) do
     match Integer.parse(s, culture: culture) do
@@ -879,8 +884,9 @@ make Number do
   # @return [String?] the text, or +None+ for an invalid culture
   #
   # @example
-  #   (1500.5).to(String, culture: Culture.HU_HU)   # => Just("1 500,5")
-  #   42.to(String, culture: Culture.HU_HU)         # => Just("42")
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   (1500.5).to(String, culture: hu)              # => Just("1\u{A0}500,5")
+  #   42.to(String, culture: hu)                    # => Just("42")
   let to(String, culture: Culture) -> String? = Culture.renderNumber(this.showValue, culture)
 
   # Renders the number with a digit pattern and a culture's separators. The
@@ -894,7 +900,8 @@ make Number do
   # @return [String?] the text, or +None+
   #
   # @example
-  #   (1234.5).to(String, Number.format`#.00`, culture: Culture.HU_HU)   # => Just("1 234,50")
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   (1234.5).to(String, Number.format`#.00`, culture: hu)              # => Just("1\u{A0}234,50")
   let to(String, format: NumberFormat, culture: Culture) -> String? do
     match this.to(String, format) do
       Just(text) => Culture.renderNumber(text, culture)

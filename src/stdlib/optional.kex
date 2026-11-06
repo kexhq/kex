@@ -391,7 +391,8 @@ let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 # @return [String?] the text, or +None+ for an invalid culture
 #
 # @example
-#   (1500.5).to(String, culture: Culture.HU_HU)   # => Just("1 500,5")
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   (1500.5).to(String, culture: hu)              # => Just("1\u{A0}500,5")
 let to(value, t, culture: Culture) = Culture.renderNumber(value.showValue, culture)
 
 # Renders a number with a digit pattern and a culture's separators. The
@@ -408,7 +409,8 @@ let to(value, t, culture: Culture) = Culture.renderNumber(value.showValue, cultu
 # @return [String?] the text, or +None+ for an invalid culture
 #
 # @example
-#   (1234.5).to(String, Number.format`#.00`, culture: Culture.HU_HU)   # => Just("1 234,50")
+#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+#   (1234.5).to(String, Number.format`#.00`, culture: hu)              # => Just("1\u{A0}234,50")
 let to(value, t, format: NumberFormat, culture: Culture) do
   match value.to(String, format) do
     Just(text) => Culture.renderNumber(text, culture)
