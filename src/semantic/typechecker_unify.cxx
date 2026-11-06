@@ -89,7 +89,29 @@ auto TypeChecker::generalizeSignature(Signature& signature, int varMark)
     for (const auto& param : signature.params) lowestGeneric(param);
     lowestGeneric(signature.result);
 
+    // One bound placeholder shared by several positions relates them: `p * q`
+    // makes both operands and the result one `N: Number`, so the signature
+    // is `(N, N) -> N` for a single N, and `sub(12.5, 4.0)` is a Float, not a
+    // bare `N`. Such a placeholder becomes a generic, as a free variable does.
+    // A trait type written in two places (`x: Showable` and `-> Showable`) is
+    // two separate types, related by nothing, and stays as written.
+    std::unordered_map<const Type*, int> occurrences;
+    std::function<void(const TypePtr&)> countPlaceholders = [&](const TypePtr& type) {
+        if (!type) return;
+        const auto resolved = resolve(type);
+        if (auto* constrained = std::get_if<ConstrainedType>(&resolved->kind);
+            constrained && constrained->genericId == 0)
+            ++occurrences[resolved.get()];
+        forEachTypeChild(resolved, countPlaceholders);
+    };
+    for (const auto& param : signature.params) countPlaceholders(param);
+    countPlaceholders(signature.result);
+    std::unordered_set<const Type*> placeholders;
+    for (const auto& [type, count] : occurrences)
+        if (count > 1) placeholders.insert(type);
+
     std::unordered_map<int, TypePtr> quantified;
+    std::unordered_map<const Type*, TypePtr> quantifiedPlaceholders;
     std::function<TypePtr(const TypePtr&)> quantify =
         [&](const TypePtr& type) -> TypePtr {
             if (!type) return type;
@@ -98,6 +120,15 @@ auto TypeChecker::generalizeSignature(Signature& signature, int varMark)
                 if (var->id < varMark) return resolved;
                 auto [entry, inserted] = quantified.emplace(var->id, nullptr);
                 if (inserted) entry->second = Type::typeVar(--nextGeneric);
+                return entry->second;
+            }
+            if (placeholders.contains(resolved.get())) {
+                const auto& constrained = std::get<ConstrainedType>(resolved->kind);
+                auto [entry, inserted] =
+                    quantifiedPlaceholders.emplace(resolved.get(), nullptr);
+                if (inserted)
+                    entry->second = Type::constrained(constrained.varName,
+                                                      constrained.traitName, --nextGeneric);
                 return entry->second;
             }
             return mapTypeChildren(resolved, quantify);

@@ -2,6 +2,7 @@
 // handler for each entry.
 #include "typechecker.hxx"
 #include "typechecker_internal.hxx"
+#include "../common/well_known.hxx"
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
 #include "../common/source_name.hxx"
@@ -61,6 +62,8 @@ auto TypeChecker::checkTypeReturnedBy(const ast::Expr& expr,
         error(expr.location, message);
     } else if (auto structured =
                    structuredTypeOf(candidates.front().result)) {
+        if (std::holds_alternative<ast::MethodCall>(node.args[0]->kind))
+            m_decidedCalls[node.args[0].get()] = {CallKind::FunctionReference, functionName};
         m_staticTypeOfCalls[&node] =
             {std::move(*structured), /*evaluateArgument=*/false};
     } else {
@@ -68,7 +71,7 @@ auto TypeChecker::checkTypeReturnedBy(const ast::Expr& expr,
               "`Type.returnedBy` cannot answer for `" + sourceName(functionName) +
               "`: its return type is not concrete");
     }
-    return Type::named("Type");
+    return Type::named(kex::names::kTypeRecord);
 }
 
 // `Type.of(Hello)` where `Hello` NAMES a type answers with that type, and
@@ -84,7 +87,7 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
         if (auto structured = structuredTypeOf(referenced)) {
             m_staticTypeOfCalls[&node] =
                 {std::move(*structured), /*evaluateArgument=*/false};
-            return Type::named("Type");
+            return Type::named(kex::names::kTypeRecord);
         }
     }
     // An imported nullary constructor is also represented by a
@@ -111,7 +114,7 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
                 function.args.push_back(std::move(*result));
                 m_staticTypeOfCalls[&node] =
                     {std::move(function), /*evaluateArgument=*/false};
-                return Type::named("Type");
+                return Type::named(kex::names::kTypeRecord);
             }
     }
     return nullptr;

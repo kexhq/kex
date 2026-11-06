@@ -14,7 +14,7 @@ using beam::TermPtr;
 
 constexpr int kMagic = 0x4b584852;  // "KXHR"
 // Bump with any change to the shape below.
-constexpr int kVersion = 1;
+constexpr int kVersion = 5;
 
 auto none() -> TermPtr { return Term::atom("none"); }
 

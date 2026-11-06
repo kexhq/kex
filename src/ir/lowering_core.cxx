@@ -80,6 +80,10 @@ auto Lowering::canonicalRecordName(const std::string& name) const -> std::string
                 return records.count(candidate) > 0;
             }))
         return *scoped;
+    // A qualified name written as a known record's identity is that record,
+    // imported or not: `Kex.AST.ParseError { message }` from a unit compiled
+    // apart matched the prelude's `ParseError` by suffix.
+    if (name.find('.') != std::string::npos && records.count(name)) return name;
     // A non-record type the module being lowered declares itself — an
     // opaque `type Connection` — is that type. Carrying on would hand the
     // name to whichever other module declares a RECORD called

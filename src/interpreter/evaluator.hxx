@@ -381,11 +381,6 @@ private:
     auto makeMethodInScope(const std::string& qualified) const -> bool;
     auto moduleInScope(const std::string& module) const -> bool;
     auto makeDefInScope(const ast::FunctionDef* def) const -> bool;
-    // The out-of-scope module whose gated definition of `functionName` takes
-    // these named arguments, for the "add `using`" hint.
-    auto gatedModuleTaking(const std::string& functionName,
-                           const NamedArgs& namedArgs) const
-        -> std::optional<std::string>;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;

@@ -18,6 +18,7 @@
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
+#include "../ast/walk.hxx"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -2647,28 +2648,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // This must run before eval(*node.receiver) to avoid the throw.
             std::string namespaceName;
             bool isNamespaceCall = false;
-            std::function<std::optional<std::string>(const ast::Expr&)>
-                qualifiedPath;
-            qualifiedPath = [&](const ast::Expr& receiver)
-                -> std::optional<std::string> {
-                if (auto* root =
-                        std::get_if<ast::UpperIdentifier>(
-                            &receiver.kind))
-                    return root->name;
-                auto* segment =
-                    std::get_if<ast::MethodCall>(&receiver.kind);
-                if (!segment || !segment->receiver ||
-                    !segment->args.empty() ||
-                    !segment->namedArgs.empty() || segment->block)
-                    return std::nullopt;
-                auto parent = qualifiedPath(*segment->receiver);
-                return parent
-                    ? std::optional<std::string>{
-                          *parent + "." + segment->method}
-                    : std::nullopt;
-            };
             if (node.receiver) {
-                if (auto path = qualifiedPath(*node.receiver);
+                if (auto path = ast::writtenModulePath(*node.receiver);
                     path && path->find('.') != std::string::npos) {
                     if (m_moduleRegistry.contains(*path)) {
                         namespaceName = *path;
@@ -2753,7 +2734,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // on that record would take (kexhq/kex#143).
             ValuePtr capabilityOverride;
             if (node.receiver)
-                if (auto path = qualifiedPath(*node.receiver)) {
+                if (auto path = ast::writtenModulePath(*node.receiver)) {
                     const auto capability = canonicalCapability(*path);
                     if (auto bound = lookupCapability(capability);
                         bound && capabilityMember(capability, node.method)) {
@@ -2970,6 +2951,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             NamedArgs namedArgs;
             for (const auto& [name, val] : node.namedArgs) {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
+            }
+
+            if (const auto& target = m_programs.targetOf(node);
+                target.kind == hir::TargetKind::Hidden) {
+                auto message = "Undefined method: " + node.method + " for " +
+                    dispatchTypeName(receiver);
+                if (!target.owner.empty() && !node.namedArgs.empty())
+                    message += " — `" + target.owner + "` defines a matching `" +
+                        node.method + "`; add `using " + target.owner + "`";
+                throw RuntimeError(message, expr.location);
             }
 
             if (const auto* identifier =
@@ -4382,21 +4373,6 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     const auto offset = receiverArgumentOffset(defLookupKey, args);
                     const auto* selected = findNamedClause(
                         defLookupKey, namedArgs, args.size() - offset);
-                    // Only the labels fit what is in scope, and a module this
-                    // call cannot see takes the values: that is a missing
-                    // `using`, not a call to run with the wrong clause.
-                    // BEAM raises the same from lowering.
-                    if (!selected || !namedArgsTypeFit(*selected, namedArgs, true))
-                        if (auto module = gatedModuleTaking(defLookupKey, namedArgs)) {
-                            const auto method = kex::mangle::memberOf(defLookupKey);
-                            throw RuntimeError(
-                                "Undefined method: " + method + " for " +
-                                (offset && !args.empty() ? dispatchTypeName(args[0])
-                                                         : sourceName(defLookupKey)) +
-                                " — `" + *module + "` defines a matching `" + method +
-                                "`; add `using " + *module + "`",
-                                loc);
-                        }
                     // No clause declares one of these labels. Falling back to
                     // clause 0 would drop it, turning `m.to(String, in: kWh)`
                     // into a plain `to(String)` whose answer looks fine and
@@ -4839,20 +4815,6 @@ auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
 auto Evaluator::makeDefInScope(const ast::FunctionDef* def) const -> bool {
     auto owner = m_gatedMakeDefs.find(def);
     return owner == m_gatedMakeDefs.end() || moduleInScope(owner->second);
-}
-
-auto Evaluator::gatedModuleTaking(const std::string& functionName,
-                                  const NamedArgs& namedArgs) const
-    -> std::optional<std::string> {
-    auto definitions = m_functionDefs.find(functionName);
-    if (definitions == m_functionDefs.end()) return std::nullopt;
-    for (const auto* definition : definitions->second) {
-        if (makeDefInScope(definition)) continue;
-        for (const auto& clause : definition->clauses)
-            if (namedArgsTypeFit(clause, namedArgs, true))
-                return m_gatedMakeDefs.at(definition);
-    }
-    return std::nullopt;
 }
 
 auto Evaluator::moduleInScope(const std::string& module) const -> bool {

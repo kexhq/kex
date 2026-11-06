@@ -1,0 +1,7 @@
+# kex: check-only
+# A conversion's named argument is checked against the overload its labels
+# select: `in:` takes a TimeUnit, and `radix:`'s `to` is no candidate for it.
+main do
+  IO.printLine(90.minute.to(String, in: Hour).or(""))
+  IO.printLine(90.minute.to(String, in: 5).or(""))
+end

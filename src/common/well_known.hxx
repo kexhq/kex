@@ -12,4 +12,8 @@ namespace kex::names {
 // receiver method a program does not define itself.
 inline const std::string kPreludeModule = "kex_prelude";
 
+// The reflection record a type is as a value (`String.name`), and the static
+// type of a type named where a value goes: `Type<String>`.
+inline const std::string kTypeRecord = "Type";
+
 } // namespace kex::names

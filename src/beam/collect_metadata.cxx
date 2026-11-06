@@ -2,6 +2,7 @@
 #include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../semantic/resolve_core.hxx"
 #include <fstream>
 #include <functional>
 #include <unordered_set>
@@ -9,6 +10,90 @@
 namespace kex::beam {
 
 namespace {
+
+// A bare type name in a module's signatures, by its qualified identity.
+auto qualifyType(const KexiTypePtr& type,
+                 const std::function<std::string(const std::string&)>& qualify) -> void {
+    if (!type) return;
+    if (type->kind == KexiType::Named && type->name.find('.') == std::string::npos)
+        type->name = qualify(type->name);
+    for (const auto& arg : type->typeArgs) qualifyType(arg, qualify);
+    qualifyType(type->result, qualify);
+}
+
+// How far an interface was filled, so what one module added can be told
+// from the rest of a flattened one.
+struct InterfaceMarks {
+    std::size_t exports = 0, constants = 0, types = 0, methods = 0, records = 0;
+};
+
+auto marksOf(const KexiTypeInterface& iface, const KexiStructuralMetadata& meta)
+    -> InterfaceMarks {
+    return {iface.exports.size(), iface.constants.size(), iface.types.size(),
+            iface.methods.size(), meta.records.size()};
+}
+
+// Qualifies every signature added since `from`.
+auto qualifyFrom(KexiTypeInterface& iface, KexiStructuralMetadata& meta,
+                 const InterfaceMarks& from,
+                 const std::function<std::string(const std::string&)>& qualify) -> void {
+    for (auto i = from.exports; i < iface.exports.size(); ++i) {
+        for (auto& param : iface.exports[i].paramTypes) qualifyType(param, qualify);
+        qualifyType(iface.exports[i].returnType, qualify);
+    }
+    for (auto i = from.constants; i < iface.constants.size(); ++i)
+        qualifyType(iface.constants[i].type, qualify);
+    for (auto i = from.types; i < iface.types.size(); ++i)
+        qualifyType(iface.types[i].backingType, qualify);
+    for (auto i = from.methods; i < iface.methods.size(); ++i) {
+        auto& method = iface.methods[i];
+        qualifyType(method.receiverType, qualify);
+        for (auto& param : method.paramTypes) qualifyType(param, qualify);
+        qualifyType(method.returnType, qualify);
+    }
+    for (auto i = from.records; i < meta.records.size(); ++i)
+        for (auto& field : meta.records[i].fields) qualifyType(field.type, qualify);
+}
+
+// What a bare type name in module `modulePath`'s signatures means: its own
+// type, then one of a module it uses (`Match` in `Regex` is `Regex.Match`).
+// `knownTypes` are the qualified types declared outside `program`; the
+// types of `program`'s own modules, nested ones by their full path, join
+// them. Every part of the module counts: one can come in several.
+auto moduleTypeQualifier(const kex::ast::Program& program, const std::string& modulePath,
+                         std::set<std::string> knownTypes)
+    -> std::function<std::string(const std::string&)> {
+    std::vector<const kex::ast::UsingBlock*> usings;
+    const auto visit = [&](const auto& self, const kex::ast::ModuleDef& module,
+                           const std::string& parent) -> void {
+        const auto path = kex::ast::nestedModulePath(parent, module.name);
+        for (const auto& item : module.body) {
+            if (const auto* record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item))
+                if (*record) knownTypes.insert(path + "." + (*record)->name);
+            if (const auto* type = std::get_if<std::unique_ptr<kex::ast::TypeDef>>(&item))
+                if (*type) knownTypes.insert(path + "." + (*type)->name);
+            if (const auto* use = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
+                if (*use && !(*use)->alias && path == modulePath) usings.push_back(use->get());
+            if (const auto* nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+                if (*nested) self(self, **nested, path);
+        }
+    };
+    for (const auto& item : program.items)
+        if (const auto* module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+            if (*module) visit(visit, **module, "");
+    return [modulePath, usings = std::move(usings), knownTypes = std::move(knownTypes)](
+               const std::string& name) -> std::string {
+        if (knownTypes.contains(modulePath + "." + name)) return modulePath + "." + name;
+        for (const auto* use : usings) {
+            if (!kex::semantic::resolve_core::usingSelectsName(name, use->onlyNames,
+                                                               use->exceptNames))
+                continue;
+            if (auto used = use->module.dotted() + "." + name; knownTypes.contains(used))
+                return used;
+        }
+        return name;
+    };
+}
 
 // The traits the unit being collected declares, and the `using`s of each of
 // its scopes — what a make block's `implement: Shape` needs to be exported
@@ -189,6 +274,12 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
             return kexiNever();
         } else if constexpr (std::is_same_v<T, kex::semantic::ConstrainedType>) {
             return kexiConstrained(node.varName, node.traitName);
+        } else if constexpr (std::is_same_v<T, kex::semantic::TypeVar>) {
+            // A generalized generic (`A` is -1, `B` -2, ...) is the
+            // signature's own, numbered per signature: written as its letter,
+            // which the reader turns back into a generic (kexi_registry).
+            if (node.id < 0 && node.id >= -26)
+                return kexiNamed(std::string(1, static_cast<char>('A' - node.id - 1)));
         }
         // Unresolved inference variables and Dynamic/Unknown remain unknown
         // at the package boundary; compiler-local IDs must not enter hashes.
@@ -1171,11 +1262,16 @@ void collectFlattenedProgram(const kex::ast::Program& program,
                              KexiStructuralMetadata& meta,
                              const kex::semantic::Analyzer* analysis) {
     collectFromTopLevel(program, iface, meta, analysis);
+    // Each module's signatures name its types as it reads them, flattened
+    // or not: `Regex.matches` returns `Regex.Match?`, never a bare `Match?`.
     for (const auto& item : program.items)
         if (auto* module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
-            module && *module)
+            module && *module) {
+            const auto marks = marksOf(iface, meta);
             collectFlattenedModuleBody((*module)->body, (*module)->name,
                                        iface, meta, analysis);
+            qualifyFrom(iface, meta, marks, moduleTypeQualifier(program, (*module)->name, {}));
+        }
 }
 
 auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
@@ -1379,34 +1475,16 @@ auto collectMetadata(const kex::ast::Program& program,
     return chunk;
 }
 
-namespace {
-auto qualifyType(const KexiTypePtr& type,
-                 const std::function<std::string(const std::string&)>& qualify) -> void {
-    if (!type) return;
-    if (type->kind == KexiType::Named && type->name.find('.') == std::string::npos)
-        type->name = qualify(type->name);
-    for (const auto& arg : type->typeArgs) qualifyType(arg, qualify);
-    qualifyType(type->result, qualify);
-}
-} // namespace
-
 auto qualifyTypeNames(KexiChunk& chunk,
                       const std::function<std::string(const std::string&)>& qualify)
     -> void {
-    auto& iface = chunk.typeInterface;
-    for (auto& exported : iface.exports) {
-        for (auto& param : exported.paramTypes) qualifyType(param, qualify);
-        qualifyType(exported.returnType, qualify);
-    }
-    for (auto& constant : iface.constants) qualifyType(constant.type, qualify);
-    for (auto& type : iface.types) qualifyType(type.backingType, qualify);
-    for (auto& method : iface.methods) {
-        qualifyType(method.receiverType, qualify);
-        for (auto& param : method.paramTypes) qualifyType(param, qualify);
-        qualifyType(method.returnType, qualify);
-    }
-    for (auto& record : chunk.metadata.records)
-        for (auto& field : record.fields) qualifyType(field.type, qualify);
+    qualifyFrom(chunk.typeInterface, chunk.metadata, {}, qualify);
+}
+
+auto qualifyModuleTypeNames(KexiChunk& chunk, const ast::Program& program,
+                            const std::string& modulePath,
+                            std::set<std::string> knownTypes) -> void {
+    qualifyTypeNames(chunk, moduleTypeQualifier(program, modulePath, std::move(knownTypes)));
 }
 
 } // namespace kex::beam

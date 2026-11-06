@@ -89,55 +89,6 @@ auto Lowering::externalPrefixCall(const std::string& name, int arity) const
     return single;
 }
 
-// Remember (or clear) the import gate for a make block's method names.
-// A top-level block passes "" and un-gates every name it defines, so a
-// module block cannot restrict a method the file also defines globally.
-void Lowering::noteModuleScopedMake(const ast::MakeDef& make, const std::string& module,
-                          const std::set<std::string>& declaredTypes ) {
-    // Only a make for a FOREIGN type is gated. One for a type the module
-    // declares is that type's own interface and travels with its values —
-    // `SQL.select(:all).from(:users)` must keep working without a `using`.
-    const auto targets = makeTargetNameList(make.target);
-    const bool ownType = std::any_of(
-        targets.begin(), targets.end(),
-        [&](const std::string& target) {
-            return declaredTypes.count(target) > 0 ||
-                (target.starts_with(module + ".") &&
-                 declaredTypes.count(target.substr(module.size() + 1)) > 0);
-        });
-    auto note = [&](const ast::FunctionDef& def) {
-        auto& modules = moduleScopedMethods[def.name];
-        if (module.empty() || ownType) modules = {""};
-        else if (!modules.count(""))
-            modules.insert(module);
-    };
-    for (const auto& item : make.body) {
-        if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fn) note(**fn);
-        } else if (auto* visibility =
-                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-            if (!*visibility) continue;
-            for (const auto& inner : (*visibility)->items)
-                if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
-                    if (*fn) note(**fn);
-        }
-    }
-}
-
-// Is a module-scoped `make` method reachable from here? Inside its own
-// module, or under a `using` that names it — the same rule the walker's
-// makeMethodInScope applies.
-auto Lowering::makeMethodInScope(const std::string& method) const -> bool {
-    auto owners = moduleScopedMethods.find(method);
-    if (owners == moduleScopedMethods.end() || owners->second.empty() ||
-        owners->second.count(""))
-        return true;
-    return std::any_of(owners->second.begin(), owners->second.end(),
-                       [&](const std::string& module) {
-                           return moduleInScope(module);
-                       });
-}
-
 auto Lowering::moduleInScope(const std::string& module) const -> bool {
     if (module.empty() || currentModulePath == module ||
         currentModulePath.rfind(module + ".", 0) == 0)
@@ -148,67 +99,6 @@ auto Lowering::moduleInScope(const std::string& module) const -> bool {
             module.rfind(imported + ".", 0) == 0)
             return true;
     return false;
-}
-
-// The out-of-scope module whose `make` function takes this call's named
-// arguments, judged by their static types: `power.to(String, in:
-// Units.SI.Kilo(Units.SI.Watt))` without `using Units.SI`. The walker
-// raises the same hint from the values.
-auto Lowering::gatedModuleTaking(const ast::MethodCall& n) const -> std::string {
-    if (n.namedArgs.empty()) return {};
-    auto found = makeMethods.find(n.method);
-    if (found == makeMethods.end()) return {};
-    auto baseName = [](std::string written) {
-        if (auto angle = written.find('<'); angle != std::string::npos)
-            written.resize(angle);
-        if (auto dot = written.rfind('.'); dot != std::string::npos)
-            written = written.substr(dot + 1);
-        return written;
-    };
-    std::vector<std::string> labels;
-    for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
-    for (const auto& method : found->second) {
-        if (method.modulePath.empty() || moduleInScope(method.modulePath))
-            continue;
-        const auto& clause = method.def->clauses[0];
-        if (!namedArgumentsFit(clause, labels,
-                               n.args.size() + (n.block ? 1 : 0)))
-            continue;
-        const bool typesFit = std::all_of(
-            n.namedArgs.begin(), n.namedArgs.end(), [&](const auto& named) {
-                for (const auto& param : clause.params) {
-                    if (!param.name || *param.name != named.first) continue;
-                    if (!param.type || !*param.type) return true;
-                    const auto wanted = baseName(renderDispatchType(**param.type));
-                    if (const auto typed = staticTypeOf(named.second.get())) {
-                        const auto written = semantic::typeToString(typed);
-                        if (written != "Unknown")
-                            return baseName(written) == wanted;
-                    }
-                    // The checker leaves the arguments of a call it could
-                    // not resolve untyped, which is exactly this call. A
-                    // constructor of the parameter's type says it anyway:
-                    // `in: Units.SI.Kilo(Units.SI.Watt)`.
-                    std::string constructor;
-                    if (const auto* call =
-                            std::get_if<ast::MethodCall>(&named.second->kind))
-                        constructor = call->method;
-                    else if (const auto* call =
-                                 std::get_if<ast::FunctionCall>(&named.second->kind))
-                        constructor = call->name;
-                    else if (const auto* name =
-                                 std::get_if<ast::UpperIdentifier>(&named.second->kind))
-                        constructor = name->name;
-                    auto tags = typeVariantTags.find(wanted);
-                    return !constructor.empty() && tags != typeVariantTags.end() &&
-                        std::find(tags->second.begin(), tags->second.end(),
-                                  baseName(constructor)) != tags->second.end();
-                }
-                return false;
-            });
-        if (typesFit) return method.modulePath;
-    }
-    return {};
 }
 
 // The single receiver type a method of a module compiled in THIS unit

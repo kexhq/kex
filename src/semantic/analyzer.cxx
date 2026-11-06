@@ -216,7 +216,7 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
 
     // A module never carries an effect of its own: entering one leaves the
     // surrounding purity exactly as it was, and each member declares its own.
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     // Its own `using`s apply inside it, and only there.
     const auto outerUsings = m_usings.size();
     for (const auto& item : mod.body)
@@ -324,7 +324,7 @@ auto Analyzer::analyzeRecordDef(const ast::RecordDef& def) -> void {
 }
 
 auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     const bool previousMake = m_inMakeBlock;
     m_inMakeBlock = true;
 
@@ -380,7 +380,7 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
     if (def.isFoul) m_inFoulContext = true;
 
     for (const auto& clause : def.clauses) {
-        m_symbols.pushScope(m_inFoulContext);
+        m_symbols.pushScope();
         if (m_inMakeBlock) {
             Symbol implicitNew{"new", SymbolKind::Variable, false, true,
                                true, def.location};
@@ -415,7 +415,7 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
 auto Analyzer::analyzeMainBlock(const ast::MainBlock& block) -> void {
     // Synthetic top-level binding wrappers run in the global scope so that
     // `let x = expr` at top level remains visible to subsequent items.
-    if (!block.synthetic) m_symbols.pushScope(true); // main is implicitly foul
+    if (!block.synthetic) m_symbols.pushScope();
     bool prevFoul = m_inFoulContext;
     m_inFoulContext = true;
 
@@ -444,14 +444,14 @@ auto Analyzer::analyzeRescue(const ast::RescueBlock& rescue,
     // introduce locals its guard and body can see, and `rescue |e|` binds the
     // caught error. Each clause gets its own scope.
     for (const auto& clause : rescue.clauses) {
-        m_symbols.pushScope(m_inFoulContext);
+        m_symbols.pushScope();
         for (const auto& pat : clause.patterns)
             if (pat) bindPatternVars(*pat, loc);
         if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
         if (clause.body) analyzeExpr(*clause.body);
         m_symbols.popScope();
     }
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     if (!rescue.catchAllParam.empty())
         m_symbols.define(Symbol{rescue.catchAllParam, SymbolKind::Variable,
                                 false, false, true, loc});
@@ -587,7 +587,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.letPattern) {
                 // `if let Pattern = expr` — the pattern's bindings are in
                 // scope only for the then-body, mirroring resolve_pass.cxx.
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 bindPatternVars(*node.letPattern, expr.location);
                 analyzeBody(node.thenBody);
                 m_symbols.popScope();
@@ -603,7 +603,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
             if (node.subject) analyzeExpr(*node.subject);
             for (const auto& clause : node.clauses) {
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 if (node.subjectBinding) {
                     m_symbols.define(Symbol{
                         *node.subjectBinding, SymbolKind::Variable, false, false, true, expr.location});
@@ -619,7 +619,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            m_symbols.pushScope(m_inFoulContext);
+            m_symbols.pushScope();
             if (node.counter && *node.counter != "_") {
                 m_symbols.define(Symbol{
                     *node.counter, SymbolKind::Variable, false, false, true, expr.location});
@@ -648,7 +648,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (!m_inFoulContext) {
                 error(expr.location, "Cannot use 'spawn' in pure context");
             }
-            m_symbols.pushScope(true);
+            m_symbols.pushScope();
             analyzeBody(node.body);
             m_symbols.popScope();
         }
@@ -657,7 +657,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 error(expr.location, "Cannot use 'receive' in pure context");
             }
             for (const auto& clause : node.clauses) {
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 // When a sender binding is present, every message is a
                 // {Payload, Sender} tuple; the sender name is in scope for
                 // every clause (alongside the pattern vars).
@@ -673,7 +673,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::Lambda>) {
-            m_symbols.pushScope(m_inFoulContext);
+            m_symbols.pushScope();
             for (const auto& param : node.params) {
                 if (param.name != "_") {
                     m_symbols.define(Symbol{

@@ -1551,7 +1551,7 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
         std::ofstream(dir + "/" + module.moduleName + ".core") << module.source;
     return emitted;
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "separate: %s: lowering failed: %s\n", path.c_str(), error.what());
+    std::fprintf(stderr, "error: %s: %s\n", shownPath(path).c_str(), error.what());
   }
   return std::nullopt;
 }
@@ -1813,15 +1813,12 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       // What the unit's modules would say of themselves once compiled.
       kex::beam::LoadedUnit described;
       std::vector<std::string> names;
-      std::vector<const kex::ast::ModuleDef *> modules;
       // Nested ones too (`capability Ticker` inside `module Tickers` is
       // `Tickers.Ticker`), once each: a module can come in more than one part.
       std::function<void(const kex::ast::ModuleDef &)> describe =
           [&](const kex::ast::ModuleDef &module) {
-            if (std::find(names.begin(), names.end(), module.name) == names.end()) {
+            if (std::find(names.begin(), names.end(), module.name) == names.end())
               names.push_back(module.name);
-              modules.push_back(&module);
-            }
             for (const auto &item : module.body)
               if (const auto *nested = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
                 if (*nested) describe(**nested);
@@ -1829,38 +1826,13 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       for (const auto &item : program.items)
         if (const auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
           if (*module) describe(**module);
-      // The types a bare name in a module's signatures can mean: its own,
-      // then those of the modules it uses, as the checker resolves them.
+      // The qualified types of the units below, which a bare name in a
+      // module's signatures can mean through its `using`s.
       std::set<std::string> qualifiedTypes(available.typeNames.begin(),
                                            available.typeNames.end());
       for (const auto &[name, _] : available.recordArities) qualifiedTypes.insert(name);
       for (const auto &[name, _] : available.typeAliases) qualifiedTypes.insert(name);
       for (const auto &[name, _] : available.distinctTypes) qualifiedTypes.insert(name);
-      for (const auto *module : modules)
-        for (const auto &item : module->body) {
-          if (const auto *record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item))
-            if (*record) qualifiedTypes.insert(module->name + "." + (*record)->name);
-          if (const auto *type = std::get_if<std::unique_ptr<kex::ast::TypeDef>>(&item))
-            if (*type) qualifiedTypes.insert(module->name + "." + (*type)->name);
-        }
-      auto qualifierFor = [&](const kex::ast::ModuleDef &module) {
-        return [&](const std::string &name) -> std::string {
-          if (qualifiedTypes.contains(module.name + "." + name))
-            return module.name + "." + name;
-          for (const auto &item : module.body) {
-            const auto *use = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item);
-            if (!use || !*use || (*use)->alias) continue;
-            const auto &only = (*use)->onlyNames;
-            const auto &except = (*use)->exceptNames;
-            if (!only.empty() && std::find(only.begin(), only.end(), name) == only.end())
-              continue;
-            if (std::find(except.begin(), except.end(), name) != except.end()) continue;
-            std::string used = (*use)->module.dotted();
-            if (qualifiedTypes.contains(used + "." + name)) return used + "." + name;
-          }
-          return name;
-        };
-      };
       for (std::size_t i = 0; i < names.size(); i++) {
         kex::beam::CollectOptions options;
         options.moduleAtom = "Kex." + names[i];
@@ -1872,7 +1844,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
         options.analysis = &analyzer;
         options.unitCompiledApart = true;
         auto chunk = kex::beam::collectMetadata(program, options);
-        kex::beam::qualifyTypeNames(chunk, qualifierFor(*modules[i]));
+        kex::beam::qualifyModuleTypeNames(chunk, program, names[i], qualifiedTypes);
         // A plain receiver dispatcher may only accept tagged records. A
         // distinct value is erased to its backing value, so another unit
         // must call the receiver-specific implementation when one was
@@ -2582,6 +2554,7 @@ auto compilePreludeCore(const std::string &dir,
         options.moduleName = built.emitted.moduleName.rfind("Kex.", 0) == 0
             ? built.emitted.moduleName.substr(4) : built.emitted.moduleName;
         built.interface = kex::beam::collectMetadata(merged, options);
+        kex::beam::qualifyModuleTypeNames(built.interface, merged, options.moduleName, {});
       }
       kex::beam::recordImplementations(
           built.interface, routedIn(built.emitted.routedImplementations));
@@ -6469,11 +6442,8 @@ auto passLower(CompileUnit &unit) -> PassOutcome {
   buildProgress.step("Lowering", kex::color::yellow,
                      moduleCount(unit.beamDeps.size() + 1));
   // Every unit was lowered on its own (checkUnitsSeparately), unless one
-  // failed to, which it reported.
-  if (!g_separateModules) {
-    std::cerr << "error: a unit of " << shownPath(unit.filepath) << " did not lower\n";
-    return unit.abandon();
-  }
+  // failed to, which reported its error.
+  if (!g_separateModules) return unit.abandon();
   // The entry's own modules first.
   unit.moduleResults = std::move(*g_separateModules);
   g_separateModules.reset();

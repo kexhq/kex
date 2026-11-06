@@ -41,7 +41,7 @@ struct Symbol {
 
 class Scope {
 public:
-    explicit Scope(Scope* parent = nullptr, bool isFoul = false);
+    explicit Scope(Scope* parent = nullptr);
 
     auto define(Symbol symbol) -> bool;
     // Overwrites any same-scope entry: an explicit binding replacing the
@@ -54,14 +54,13 @@ public:
 private:
     std::unordered_map<std::string, Symbol> m_symbols;
     Scope* m_parent;
-    bool m_isFoul;
 };
 
 class SymbolTable {
 public:
     SymbolTable();
 
-    auto pushScope(bool isFoul = false) -> Scope&;
+    auto pushScope() -> Scope&;
     auto popScope() -> void;
     auto currentScope() -> Scope&;
     auto define(Symbol symbol) -> bool;

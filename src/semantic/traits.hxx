@@ -43,6 +43,12 @@ struct Signature {
     std::string declaringModule;
 };
 
+// Do two signatures take the same parameters? One declaration registered
+// twice must read as one: a parameter declared `Any` is Unknown, which
+// `typesEqual` never equates, so it counts as equal to another Unknown here.
+auto sameParameters(const Signature& left, const Signature& right) -> bool;
+
+
 struct TraitDef {
     std::string name;                        // "Number", "Comparable", user-defined names too
     std::vector<Signature> requiredMethods;  // e.g. Comparable requires `compare : This -> Comparison`

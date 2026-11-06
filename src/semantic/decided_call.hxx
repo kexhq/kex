@@ -34,6 +34,19 @@ enum class CallKind {
     // A function of the receiver type's home module, called by UFCS
     // (`conn.close` is `TCP.close(conn)`): owner is its qualified name.
     ModuleFunction,
+    // Answered only by a `make` for a type declared elsewhere, in a module
+    // not in scope here (no `using` names it): owner is that module. The
+    // call is an undefined method wherever it runs.
+    Hidden,
+    // A function of the backend, called through `BEAM.` (`BEAM.lists.reverse`):
+    // owner is its path.
+    Foreign,
+    // A compile-time intrinsic folded to its answer (`Type.of(x)`): owner is
+    // its name, as the checker spells it (`Type::of`).
+    Intrinsic,
+    // A function NAMED, not called (`Type.of(Date.parse)`): owner is its
+    // qualified name.
+    FunctionReference,
 };
 
 struct DecidedCall {

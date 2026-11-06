@@ -543,7 +543,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     preMake(**md);
                     makeModulePath.clear();
                     makeRecordNames.clear();
-                    L.noteModuleScopedMake(**md, path, declaredTypes);
                     for (const auto& typeName :
                          Lowering::makeTargetNameList((*md)->target, path, declaredRecords))
                         if (!typeName.empty())
@@ -592,7 +591,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         preMake(**vmd);
                         makeModulePath.clear();
                         makeRecordNames.clear();
-                        L.noteModuleScopedMake(**vmd, path, declaredTypes);
                         for (const auto& typeName :
                              Lowering::makeTargetNameList((*vmd)->target, path, declaredRecords))
                             if (!typeName.empty())
@@ -695,7 +693,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (*md) {
                 preMake(**md);
-                L.noteModuleScopedMake(**md, "");  // top level: never gated
             }
         } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
             if (*module) preModule(**module);
@@ -1780,14 +1777,7 @@ auto lowerProgramTiered(const ast::Program& prog,
             throw LowerError("IR lower: non-monotonic prelude tier bounds");
     if (tierBounds[4] != prog.items.size())
         throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
-    LowerContext tiered;
-    tiered.sourcePath = context.sourcePath;
-    tiered.externals = context.externals;
-    tiered.externalRecords = context.externalRecords;
-    tiered.resolvedCalls = context.resolvedCalls;
-    tiered.preferExternalReceivers = context.preferExternalReceivers;
-    tiered.resolvedTraits = context.resolvedTraits;
-    return lowerProgram(prog, fileStem, tiered);
+    return lowerProgram(prog, fileStem, context);
 }
 
 namespace {
