@@ -1946,7 +1946,7 @@ int main() {
             // at/get are the partial forms: `Char?`, like Map.get. `or` is
             // what unwraps one here.
             auto result = run("main do\n  \"hello\".at(1).or('?')\nend\n");
-            assertEqual(std::get<CharValue>(result->data).value, 'e');
+            assertEqual(std::get<CharValue>(result->data).value, U'e');
         });
 
         it("returns None out of range", []() {

@@ -1,7 +1,10 @@
 #include "tag_validator.hxx"
 
+#include "../common/mangle.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../lexer/lexer.hxx"
+#include "../ast/walk.hxx"
+#include "../module/discovery.hxx"
 #include "../module/resolver.hxx"
 #include "../common/raw_string_margin.hxx"
 #include "../parser/parser.hxx"
@@ -43,7 +46,7 @@ using Functions =
 
 auto qualified(const std::string& scope, const std::string& name)
     -> std::string {
-    return scope.empty() ? name : scope + "::" + name;
+    return kex::mangle::qualify(scope, name);
 }
 
 auto companionName(const std::string& tag) -> std::string {
@@ -59,95 +62,16 @@ auto walkExpr(
     const ast::Expr& expression,
     const std::string& scope,
     std::vector<TagUse>& uses) -> void {
-    std::visit([&](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        auto walk = [&](const ast::ExprPtr& value) {
-            if (value) walkExpr(*value, scope, uses);
-        };
-        if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-            uses.push_back(TagUse{&expression, &node, scope});
-            for (const auto& value : node.values) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-            for (const auto& value : node.values) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            for (const auto& value : node.args) walk(value);
-            for (const auto& [_, value] : node.namedArgs) walk(value);
-            if (node.block) walk(*node.block);
-        } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            if (node.tagged && node.receiver)
-                if (auto path = modulePath(*node.receiver))
-                    uses.push_back(TagUse{&expression, node.tagged.get(), scope, *path});
-            walk(node.receiver);
-            for (const auto& value : node.args) walk(value);
-            for (const auto& [_, value] : node.namedArgs) walk(value);
-            if (node.block) walk(*node.block);
-        } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-            walk(node.left);
-            walk(node.right);
-        } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-            walk(node.operand);
-        } else if constexpr (std::is_same_v<T, ast::LetExpr> ||
-                             std::is_same_v<T, ast::VarExpr> ||
-                             std::is_same_v<T, ast::AssignExpr>) {
-            walk(node.value);
-        } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-            walk(node.value);
-        } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
-            walk(node.inner);
-        } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-            walk(node.expr);
-            walk(node.condition);
-        } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-            walk(node.condition);
-            walk(node.thenExpr);
-            walk(node.elseExpr);
-        } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-            walk(node.condition);
-            for (const auto& value : node.thenBody) walk(value);
-            for (const auto& [condition, body] : node.elifs) {
-                walk(condition);
-                for (const auto& value : body) walk(value);
-            }
-            if (node.elseBody)
-                for (const auto& value : *node.elseBody) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-            walk(node.subject);
-            for (const auto& clause : node.clauses) {
-                if (clause.guard) walk(*clause.guard);
-                walk(clause.body);
-            }
-        } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-            for (const auto& clause : node.clauses) {
-                if (clause.guard) walk(*clause.guard);
-                walk(clause.body);
-            }
-            if (node.timeout) walk(*node.timeout);
-            if (node.afterBody) walk(*node.afterBody);
-        } else if constexpr (std::is_same_v<T, ast::Lambda> ||
-                             std::is_same_v<T, ast::BlockExpr> ||
-                             std::is_same_v<T, ast::LoopExpr> ||
-                             std::is_same_v<T, ast::SpawnExpr>) {
-            for (const auto& value : node.body) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-            walk(node.condition);
-            for (const auto& value : node.body) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::ListExpr> ||
-                             std::is_same_v<T, ast::TupleExpr>) {
-            for (const auto& value : node.elements) walk(value);
-        } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-            for (const auto& entry : node.entries) {
-                walk(entry.key);
-                walk(entry.value);
-            }
-        } else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
-            walk(node.start);
-            walk(node.end);
-        } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& field : node.fields) walk(field.value);
-        } else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
-            for (const auto& value : node.body) walk(value);
-        }
-    }, expression.kind);
+    if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expression.kind)) {
+        uses.push_back(TagUse{&expression, tagged, scope});
+    } else if (const auto* call = std::get_if<ast::MethodCall>(&expression.kind);
+               call && call->tagged && call->receiver) {
+        if (auto path = modulePath(*call->receiver))
+            uses.push_back(TagUse{&expression, call->tagged.get(), scope, *path});
+    }
+    ast::forEachChild(expression, [&](const ast::ExprPtr& child) {
+        walkExpr(*child, scope, uses);
+    });
 }
 
 auto collectFunction(
@@ -240,37 +164,6 @@ struct ImportedModule {
     }
 };
 
-// Collects the module names a program imports with `using`, ignoring foreign
-// namespaces (BEAM.), which have no Kex source to parse.
-auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
-    std::vector<std::string> names;
-    auto add = [&](const ast::TypeName& typeName) {
-        std::string name;
-        for (size_t i = 0; i < typeName.parts.size(); i++) {
-            if (i) name += ".";
-            name += typeName.parts[i];
-        }
-        if (!module::Resolver::isForeignNamespace(name))
-            names.push_back(std::move(name));
-    };
-    auto scanBody = [&](auto& self, const std::vector<ast::ModuleItem>& body)
-        -> void {
-        for (const auto& item : body) {
-            if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
-                if (*block) add((*block)->module);
-            if (auto* def = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*def) self(self, (*def)->body);
-        }
-    };
-    for (const auto& item : program.items) {
-        if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
-            if (*block) add((*block)->module);
-        if (auto* def = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-            if (*def) scanBody(scanBody, (*def)->body);
-    }
-    return names;
-}
-
 auto loadUsingModules(
     const ast::Program& program,
     const std::vector<std::string>& roots,
@@ -279,7 +172,7 @@ auto loadUsingModules(
     module::Resolver resolver(roots);
     // A qualified tag names its module itself, with or without a `using`
     // (`Number` is reached through the prelude).
-    auto names = usingModuleNames(program);
+    auto names = module::collectUsingModules(program);
     for (const auto& use : uses)
         if (!use.qualifier.empty() &&
             std::find(names.begin(), names.end(), use.qualifier) == names.end())
@@ -518,8 +411,11 @@ auto appendIssues(
         std::optional<int64_t> endOffset;
         bool wholeLiteral = issue->args[0]->isNone();
         if (!issue->args[0]->isNone()) {
+            // The span is a `ByteSpan?`: `Just(At(offset))`.
             auto* span = std::get_if<interpreter::VariantValue>(
                 &issue->args[0]->data);
+            if (span && span->tag == "Just" && span->args.size() == 1 && span->args[0])
+                span = std::get_if<interpreter::VariantValue>(&span->args[0]->data);
             if (span && span->tag == "At" && span->args.size() == 1) {
                 offset = integerValue(span->args[0]);
                 if (!offset) {
@@ -682,8 +578,7 @@ auto validateTaggedLiterals(
             const Functions* fromModule = nullptr;
             for (const auto& module : importedModules()) {
                 for (const auto& [key, definitions] : module.functions) {
-                    const auto bare = key.substr(key.rfind("::") == std::string::npos
-                                                     ? 0 : key.rfind("::") + 2);
+                    const auto bare = kex::mangle::memberOf(key);
                     if (bare != use.literal->tag) continue;
                     const auto prefix =
                         key.size() > bare.size() ? key.substr(0, key.size() - bare.size())

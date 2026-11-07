@@ -15,6 +15,8 @@ namespace kex::cache {
 struct CachedSeparateUnit {
     beam::LoadedUnit interface;
     std::vector<ir::EmitResult> modules;
+    // Each module's KexI, as `kex -c` attaches it (parallel to `modules`).
+    std::vector<beam::KexiChunk> attachChunks;
 };
 
 class SeparateUnitCache {
@@ -26,10 +28,15 @@ public:
 
     explicit SeparateUnitCache(std::filesystem::path root);
 
+    // One digest of everything `unit` says of itself, computed once per unit
+    // and fed to the keys of the units above it.
+    static auto interfaceDigest(const beam::LoadedUnit& unit) -> std::string;
+    // A unit's key: its sources and the interface digests of the units it
+    // is checked against.
     static auto keyFor(const std::string& toolchain,
                        const std::string& runtimeStamp,
                        std::vector<Source> sources,
-                       const std::vector<const beam::LoadedUnit*>& dependencies)
+                       const std::vector<std::string>& dependencyDigests)
         -> std::string;
     auto load(const std::string& key) const -> std::optional<CachedSeparateUnit>;
     auto store(const std::string& key, const CachedSeparateUnit& unit) const -> void;

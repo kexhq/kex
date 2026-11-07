@@ -20,6 +20,9 @@ inline constexpr std::string_view kFileLevelPreludeModule = "Prelude";
 struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
+    // A receiver method's per-type implementation as its module emitted it
+    // (KexiMethod::implementation), or "".
+    std::string implementation;
     std::string backendModule;
     int backendArity = 0;
     // Source parameter names excluding the receiver for receiver functions.
@@ -44,6 +47,9 @@ struct ImportedFunction {
     // build, as it is in a program checked whole. The standard library's
     // stay behind their `using` (docs/plan_separate_compilation.md).
     bool visibleByReceiver = false;
+    // As KexiMethod::foreignTarget: a `make` for a type its module does not
+    // declare, so never visible by its receiver alone.
+    bool foreignTarget = false;
     // ADT constructors are represented as ordinary module exports so
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.
@@ -64,8 +70,8 @@ struct ImportedModuleInterface {
     // module boundary a stdlib capability is invisible to every consumer
     // (kexhq/kex#143).
     bool isCapability = false;
-    // One of this build's own modules, checked apart from its importers
-    // (KEX_SEPARATE): `using` it brings its functions in as a merged module
+    // One of this build's own modules, checked apart from its importers:
+    // `using` it brings its functions in as a merged module
     // of the program would, bare and by UFCS. The prelude's are reached
     // through its receiver functions instead.
     bool compiledApart = false;
@@ -101,6 +107,11 @@ struct ResolvedCallTarget {
     // entry names the zero-based source argument whose concrete value chooses
     // the implementation and the trait contract the dictionary represents.
     std::vector<std::pair<std::size_t, std::string>> traitDictionaries;
+    // Proven `name/Head` spelling for an imported make-block method
+    // (`resolve_core::importDispatchSpelling`), empty to keep the
+    // dispatcher. Lowering applies it unless the receiver takes a
+    // trait dictionary (clause (10)).
+    std::string importDispatchSpelling;
 };
 
 struct ImportedTraitConformance {
@@ -215,44 +226,22 @@ inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
         }
         return "";
     };
-    // Types are shared between signatures, so every rewrite is of a copy.
-    std::function<void(TypePtr&, const std::string&)> qualify =
-        [&](TypePtr& type, const std::string& scope) {
-            if (!type) return;
-            auto copy = std::make_shared<Type>(*type);
-            bool changed = false;
-            std::visit([&](auto& kind) {
-                using K = std::decay_t<decltype(kind)>;
-                auto visit = [&](TypePtr& inner) {
-                    const auto before = inner;
-                    qualify(inner, scope);
-                    changed = changed || inner != before;
-                };
-                if constexpr (std::is_same_v<K, NamedType>) {
-                    if (kind.name.find('.') == std::string::npos)
-                        if (auto owned = adtIn(scope, kind.name); !owned.empty()) {
-                            kind.name = owned;
-                            changed = true;
-                        }
-                    for (auto& arg : kind.typeArgs) visit(arg);
-                } else if constexpr (std::is_same_v<K, ListType>) {
-                    visit(kind.element);
-                } else if constexpr (std::is_same_v<K, OptionalType>) {
-                    visit(kind.inner);
-                } else if constexpr (std::is_same_v<K, MapType>) {
-                    visit(kind.key);
-                    visit(kind.value);
-                } else if constexpr (std::is_same_v<K, TupleType>) {
-                    for (auto& element : kind.elements) visit(element);
-                } else if constexpr (std::is_same_v<K, FuncType>) {
-                    for (auto& param : kind.params) visit(param);
-                    visit(kind.result);
-                } else if constexpr (std::is_same_v<K, UnionType>) {
-                    for (auto& member : kind.members) visit(member);
-                }
-            }, copy->kind);
-            if (changed) type = copy;
+    // Rebuilt, never edited in place: types are shared between signatures.
+    std::function<TypePtr(const TypePtr&, const std::string&)> qualified =
+        [&](const TypePtr& type, const std::string& scope) -> TypePtr {
+            if (!type) return type;
+            auto rebuilt = mapTypeChildren(type, [&](const TypePtr& child) {
+                return qualified(child, scope);
+            });
+            if (const auto* named = std::get_if<NamedType>(&rebuilt->kind);
+                named && named->name.find('.') == std::string::npos)
+                if (auto owned = adtIn(scope, named->name); !owned.empty())
+                    return Type::named(owned, named->typeArgs);
+            return rebuilt;
         };
+    auto qualify = [&](TypePtr& type, const std::string& scope) {
+        type = qualified(type, scope);
+    };
     auto qualifySignature = [&](ImportedFunction& function) {
         if (function.sourceModule.empty()) return;
         for (auto& param : function.signature.params)

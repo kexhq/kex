@@ -1,33 +1,15 @@
 #include "separate_unit.hxx"
+#include "cache.hxx"
 #include "../beam/kexi.hxx"
+#include "../common/digest.hxx"
+#include "../common/file_io.hxx"
 #include <algorithm>
-#include <atomic>
 #include <fstream>
-#include <iterator>
 #include <limits>
-#include <random>
 
 namespace kex::cache {
 
 namespace {
-
-auto stagingSuffix() -> std::string {
-    static const auto process = [] {
-        std::random_device device;
-        return (static_cast<unsigned long long>(device()) << 32) ^ device();
-    }();
-    static std::atomic<unsigned long long> counter{0};
-    return ".tmp." + std::to_string(process) + "." +
-           std::to_string(counter.fetch_add(1));
-}
-
-auto readFile(const std::filesystem::path& path) -> std::optional<std::string> {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) return std::nullopt;
-    std::string bytes((std::istreambuf_iterator<char>(input)), {});
-    if (!input.eof() && input.fail()) return std::nullopt;
-    return bytes;
-}
 
 auto writeFile(const std::filesystem::path& path, const std::string& bytes)
     -> bool {
@@ -55,34 +37,30 @@ auto SeparateUnitCache::pathFor(const std::string& key) const
 }
 
 auto SeparateUnitCache::digest(const std::string& bytes) -> std::string {
-    static constexpr char digits[] = "0123456789abcdef";
-    const auto hash = beam::computeSha256(
-        std::vector<uint8_t>(bytes.begin(), bytes.end()));
-    std::string result;
-    result.reserve(hash.size() * 2);
-    for (const auto byte : hash) {
-        result += digits[byte >> 4];
-        result += digits[byte & 15];
+    return sha256Hex(bytes);
+}
+
+auto SeparateUnitCache::interfaceDigest(const beam::LoadedUnit& unit) -> std::string {
+    std::string material;
+    for (const auto& module : unit.modules) {
+        const auto bytes = beam::serializeKexi(module.chunk);
+        material += module.beamAtom + ":" +
+                    digest(std::string(bytes.begin(), bytes.end())) + "\n";
     }
-    return result;
+    return digest(material);
 }
 
 auto SeparateUnitCache::keyFor(
     const std::string& toolchain, const std::string& runtimeStamp,
     std::vector<Source> sources,
-    const std::vector<const beam::LoadedUnit*>& dependencies) -> std::string {
+    const std::vector<std::string>& dependencyDigests) -> std::string {
     std::sort(sources.begin(), sources.end(), [](const auto& a, const auto& b) {
         return a.path < b.path;
     });
-    std::string material = "kex-unit-v1\n" + toolchain + "\n" + runtimeStamp + "\n";
+    std::string material = "kex-unit-v2\n" + toolchain + "\n" + runtimeStamp + "\n";
     for (const auto& source : sources)
         material += source.path + ":" + digest(std::string(source.text)) + "\n";
-    for (const auto* unit : dependencies)
-        for (const auto& module : unit->modules) {
-            const auto bytes = beam::serializeKexi(module.chunk);
-            material += module.beamAtom + ":" +
-                        digest(std::string(bytes.begin(), bytes.end())) + "\n";
-        }
+    for (const auto& dependency : dependencyDigests) material += dependency + "\n";
     return digest(material);
 }
 
@@ -91,7 +69,7 @@ auto SeparateUnitCache::load(const std::string& key) const
     const auto dir = pathFor(key);
     std::ifstream manifest(dir / "manifest.txt");
     std::string version;
-    if (!std::getline(manifest, version) || version != "kex-unit-v1")
+    if (!std::getline(manifest, version) || version != "kex-unit-v2")
         return std::nullopt;
 
     CachedSeparateUnit cached;
@@ -103,7 +81,7 @@ auto SeparateUnitCache::load(const std::string& key) const
         std::string atom, expected;
         if (!std::getline(manifest, atom) || !std::getline(manifest, expected))
             return std::nullopt;
-        const auto bytes = readFile(dir / (std::to_string(i) + ".kexi"));
+        const auto bytes = readFileText(dir / (std::to_string(i) + ".kexi"));
         if (!bytes || digest(*bytes) != expected) return std::nullopt;
         try {
             cached.interface.modules.push_back({atom, "", beam::deserializeKexi(
@@ -124,8 +102,18 @@ auto SeparateUnitCache::load(const std::string& key) const
             return std::nullopt;
         manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         if (!std::getline(manifest, expected)) return std::nullopt;
-        auto source = readFile(dir / (std::to_string(i) + ".core"));
+        auto source = readFileText(dir / (std::to_string(i) + ".core"));
         if (!source || digest(*source) != expected) return std::nullopt;
+        std::string attachExpected;
+        if (!std::getline(manifest, attachExpected)) return std::nullopt;
+        const auto attach = readFileText(dir / (std::to_string(i) + ".attach.kexi"));
+        if (!attach || digest(*attach) != attachExpected) return std::nullopt;
+        try {
+            cached.attachChunks.push_back(beam::deserializeKexi(
+                std::vector<uint8_t>(attach->begin(), attach->end())));
+        } catch (...) {
+            return std::nullopt;
+        }
         cached.modules.push_back({std::move(*source), std::move(name), arity});
     }
     return cached;
@@ -142,7 +130,7 @@ auto SeparateUnitCache::store(const std::string& key,
     fs::create_directories(temporary, error);
     if (error) return;
 
-    std::string manifest = "kex-unit-v1\n" + unit.interface.entryBeamAtom + "\n" +
+    std::string manifest = "kex-unit-v2\n" + unit.interface.entryBeamAtom + "\n" +
                            std::to_string(unit.interface.modules.size()) + "\n";
     for (std::size_t i = 0; i < unit.interface.modules.size(); ++i) {
         const auto& module = unit.interface.modules[i];
@@ -161,9 +149,19 @@ auto SeparateUnitCache::store(const std::string& key,
             fs::remove_all(temporary, error);
             return;
         }
+        if (i >= unit.attachChunks.size()) {
+            fs::remove_all(temporary, error);
+            return;
+        }
+        const auto attachData = beam::serializeKexi(unit.attachChunks[i]);
+        const std::string attach(attachData.begin(), attachData.end());
+        if (!writeFile(temporary / (std::to_string(i) + ".attach.kexi"), attach)) {
+            fs::remove_all(temporary, error);
+            return;
+        }
         manifest += module.moduleName + "\n" +
                     std::to_string(module.mainArity) + "\n" +
-                    digest(module.source) + "\n";
+                    digest(module.source) + "\n" + digest(attach) + "\n";
     }
     if (!writeFile(temporary / "manifest.txt", manifest)) {
         fs::remove_all(temporary, error);

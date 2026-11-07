@@ -10,7 +10,9 @@
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
 #include "semantic/completion_at.hxx"
+#include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
+#include "hir/repl_input.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
 #include "lexer/lexer.hxx"
@@ -158,49 +160,47 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
 
     std::string source(sourceIn ? sourceIn : "");
 
-    if (kex::isReplExit(source)) {
+    using Command = kex::ReplCommandKind;
+    const auto command = kex::parseReplCommand(source);
+    if (command.kind == Command::Exit) {
         session->lastResult = "";
         return;
     }
-    if (!source.empty() && source[0] == '/') {
-        if (source == "/help" || source == "/h") {
-            std::ostringstream os;
-            kex::printReplHelp(os);
-            session->lastResult = os.str();
-            return;
-        }
-        if (source == "/clear") {
-            // xterm.js renders the same ANSI clear sequence as a real terminal.
-            session->lastResult = kex::replClearScreenSequence();
-            return;
-        }
-        if (source == "/reset") {
-            // Evaluator owns a Scheduler that keeps a reference back to its
-            // Evaluator. Move-assignment from a temporary would leave that
-            // reference pointing at the destroyed temporary, so rebuild the
-            // evaluator in place instead.
-            session->evaluator.~Evaluator();
-            new (&session->evaluator) kex::interpreter::Evaluator();
-            session->evaluator.setReplMode(true);
-            session->evaluator.setMocksAllowed(true);
-            session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
-            session->replAccumSource.clear();
-            session->replBindings.clear();
-            g_programs.clear();
-            session->lastResult = "  (bindings cleared)\n";
-            return;
-        }
-        if (source.substr(0, 5) == "/set " || source == "/set" ||
-            source.substr(0, 7) == "/unset " || source == "/with" ||
-            source.substr(0, 6) == "/with " ||
-            source.substr(0, 9) == "/without ") {
-            session->lastResult = "  not yet implemented in the web REPL\n";
-            return;
-        }
-        if (source.substr(0, 6) == "/load " || source == "/reload") {
-            session->lastResult = "  not available in the web REPL (no filesystem)\n";
-            return;
-        }
+    if (command.kind == Command::Help) {
+        std::ostringstream os;
+        kex::printReplHelp(os);
+        session->lastResult = os.str();
+        return;
+    }
+    if (command.kind == Command::Clear) {
+        // xterm.js renders the same ANSI clear sequence as a real terminal.
+        session->lastResult = kex::replClearScreenSequence();
+        return;
+    }
+    if (command.kind == Command::Reset) {
+        // Evaluator owns a Scheduler that keeps a reference back to its
+        // Evaluator. Move-assignment from a temporary would leave that
+        // reference pointing at the destroyed temporary, so rebuild the
+        // evaluator in place instead.
+        session->evaluator.~Evaluator();
+        new (&session->evaluator) kex::interpreter::Evaluator();
+        session->evaluator.setReplMode(true);
+        session->evaluator.setMocksAllowed(true);
+        session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
+        session->replAccumSource.clear();
+        session->replBindings.clear();
+        g_programs.clear();
+        session->lastResult = "  (bindings cleared)\n";
+        return;
+    }
+    if (command.kind == Command::Set || command.kind == Command::Unset ||
+        command.kind == Command::With || command.kind == Command::Without) {
+        session->lastResult = "  not yet implemented in the web REPL\n";
+        return;
+    }
+    if (command.kind == Command::Load || command.kind == Command::Reload) {
+        session->lastResult = "  not available in the web REPL (no filesystem)\n";
+        return;
     }
 
     bool isDef = looksLikeTopLevelDef(source);
@@ -213,6 +213,30 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         Parser parser(std::move(tokens));
         g_programs.push_back(std::make_unique<ast::Program>(parser.parseProgram()));
         ast::Program* program = g_programs.back().get();
+
+        // An expression is checked as the statements that run, against the
+        // session's definitions and bindings (hir::checkReplInput), and runs
+        // on the checker's decisions as main.cxx's REPL does. This REPL has
+        // never refused an input the checker rejects, so one that fails the
+        // check still runs, on the values alone.
+        std::optional<hir::CheckedInput> checked;
+        if (!isDef) try {
+            Lexer sessionLexer(session->replAccumSource + "main do\n" +
+                                   session->replBindings + "end\n",
+                               "<repl>");
+            Parser sessionParser(sessionLexer.tokenizeAll(), "<repl>");
+            checked = hir::checkReplInput(
+                std::make_unique<ast::Program>(sessionParser.parseProgram()),
+                *program, {}, nullptr, &preludeSemanticInterfaces(""));
+        } catch (...) {
+            checked.reset();  // a session history that does not re-parse
+        }
+        session->evaluator.setProgram(
+            checked && checked->program ? checked->program.get() : nullptr);
+        struct Unset {
+            interpreter::Evaluator& evaluator;
+            ~Unset() { evaluator.setProgram(nullptr); }
+        } unset{session->evaluator};
 
         size_t outputBefore = session->evaluator.output().size();
         auto value = session->evaluator.execute(*program);
@@ -300,16 +324,11 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
     std::string text(textIn ? textIn : "");
     const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
                                     line.size());
-    const auto prefix =
-        session->replAccumSource + "main do\n" + session->replBindings;
-    const auto program = prefix + line + semantic::completionClosers(line) +
-                         "\nend\n";
-    auto completion = semantic::completeAt(
-        session->replDb, session->analysisDb, "<repl-completion>", program,
-        prefix.size() + std::min(wordStart + text.size(), line.size()),
+    auto completion = semantic::completeReplInput(
+        session->replDb, session->analysisDb, session->replAccumSource,
+        session->replBindings, line, line, wordStart + text.size(), false,
         nullptr);
-    const auto replaceFrom =
-        std::max(completion.replaceFrom - prefix.size(), wordStart);
+    const auto replaceFrom = std::max(completion.replaceFrom, wordStart);
     const auto lead = line.substr(wordStart, replaceFrom - wordStart);
 
     std::string joined;

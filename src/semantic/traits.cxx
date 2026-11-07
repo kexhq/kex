@@ -4,6 +4,19 @@
 
 namespace kex::semantic {
 
+auto sameParameters(const Signature& left, const Signature& right) -> bool {
+    if (left.params.size() != right.params.size()) return false;
+    for (std::size_t i = 0; i < left.params.size(); ++i) {
+        const auto& a = left.params[i];
+        const auto& b = right.params[i];
+        if (a && b && std::holds_alternative<UnknownType>(a->kind) &&
+            std::holds_alternative<UnknownType>(b->kind))
+            continue;
+        if (!typesEqual(a, b)) return false;
+    }
+    return true;
+}
+
 auto TraitRegistry::define(TraitDef def) -> void {
     m_traits[def.name] = std::move(def);
 }
@@ -145,6 +158,21 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     return false;
 }
 
+auto TraitRegistry::implementsInHome(const std::string& type,
+                                     const std::string& method) const -> bool {
+    auto implemented = m_implementations.find(type);
+    if (implemented == m_implementations.end()) return false;
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return true;
+        for (const auto& body : trait->second.defaultBodies)
+            if (body == method) return true;
+    }
+    return false;
+}
+
 auto TraitRegistry::declaresMethod(const std::string& type,
                                    const std::string& method) const -> bool {
     auto implemented = m_implementations.find(type);
@@ -158,6 +186,19 @@ auto TraitRegistry::declaresMethod(const std::string& type,
             if (defaulted == method) return true;
     }
     return false;
+}
+
+auto TraitRegistry::requiredMethod(const TypePtr& type, const std::string& method) const
+    -> std::pair<const TraitDef*, const Signature*> {
+    auto implemented = m_implementations.find(implementorKey(type));
+    if (implemented == m_implementations.end()) return {nullptr, nullptr};
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return {&trait->second, &required};
+    }
+    return {nullptr, nullptr};
 }
 
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {

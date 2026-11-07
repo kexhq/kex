@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include "../common/string_utils.hxx"
 #include <cctype>
 #include <memory>
 #include <optional>
@@ -22,6 +23,9 @@ using TypeExprPtr = std::unique_ptr<TypeExpr>;
 
 struct TypeName {
     std::vector<std::string> parts; // e.g. ["Html", "Element"]
+
+    // The name as written: `Html.Element`.
+    auto dotted() const -> std::string { return kex::join(parts, "."); }
 };
 
 struct GenericType {
@@ -798,6 +802,15 @@ struct ModuleDef {
     // requirement tracking consult this flag (kexhq/kex#143).
     bool isCapability = false;
 };
+
+// The qualified path of a module written as `name` inside `parent` ("" at the
+// top): `module Inner` in `Outer` is `Outer.Inner`, and a name already
+// written under its parent (`module Outer.Inner`) stays as written.
+inline auto nestedModulePath(const std::string& parent, const std::string& name)
+    -> std::string {
+    return parent.empty() || name.starts_with(parent + ".") ? name
+                                                            : parent + "." + name;
+}
 
 using TopLevelItem = std::variant<
     std::unique_ptr<ModuleDef>,

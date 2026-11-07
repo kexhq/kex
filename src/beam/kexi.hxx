@@ -115,6 +115,15 @@ struct KexiMethod {
     bool moduleFunction = false;
     // As KexiExport::defaultSources, the receiver left out.
     std::vector<std::string> defaultSources;
+    // The per-type implementation the emitter wrote for this receiver
+    // (`showValue/Box` at `beamArity`), when it wrote one: read from the
+    // emitted module (recordImplementations), never re-derived. "" when the
+    // method is reached only through its dispatcher.
+    std::string implementation;
+    // Declared by a `make` for a type its module does not declare (`Units.SI`'s
+    // `to` on `Measure`): reached only where that module is `using`-imported.
+    // A `make` for one of the module's own types travels with its values.
+    bool foreignTarget = false;
 };
 
 struct KexiTypeInterface {
@@ -190,6 +199,10 @@ struct KexiTraitRequiredMethod {
 struct KexiTraitDef {
     std::string name;
     std::vector<KexiTraitRequiredMethod> requiredMethods;
+    // The methods the trait's body defines: spliced into every implementor,
+    // so an implementor's own module emits them. A function over the trait
+    // declared elsewhere (`inspected(value: Inspectable)`) is not one.
+    std::vector<std::string> defaultBodies;
 };
 
 struct KexiStructuralMetadata {
@@ -249,7 +262,6 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk;
 
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128;
 auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128;
-auto computeSha256(const std::vector<uint8_t>& bytes) -> std::array<uint8_t, 32>;
 
 struct BeamFile;
 auto computeArtifactHash(const BeamFile& beam) -> Hash128;

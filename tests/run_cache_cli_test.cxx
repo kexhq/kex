@@ -26,9 +26,8 @@ namespace fs = std::filesystem;
 namespace {
 
 auto runKex(const std::string& cacheDir, const std::string& sourcePath,
-            bool separate = false) -> std::string {
-    std::string cmd = (separate ? "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 " : "") +
-                       std::string("KEX_CACHE=") + cacheDir + " " + std::string(KEX_BINARY_PATH) +
+            const std::string& binary = KEX_BINARY_PATH) -> std::string {
+    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " " + binary +
                        " --run --no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -90,27 +89,24 @@ auto backdateFile(const std::string& path) -> void {
     utime(path.c_str(), &times);
 }
 
+// A private copy of the real binary to backdate. Mutating KEX_BINARY_PATH
+// itself would invalidate every mtime-keyed cache entry of every test
+// running in parallel (ctest -j), flaking cache-reuse assertions elsewhere.
+// The copy sits alongside the original: stdlib/runtime discovery is
+// executable-relative, so only a sibling directory resolves the same way.
+auto copyBinaryForBackdate() -> std::string {
+    const auto dest = fs::path(KEX_BINARY_PATH).parent_path() /
+                      ("kex-backdate-probe-" + std::to_string(getpid()));
+    std::error_code ec;
+    fs::copy_file(KEX_BINARY_PATH, dest,
+                  fs::copy_options::overwrite_existing, ec);
+    chmod(dest.c_str(), 0755);
+    return dest.string();
+}
+
 } // namespace
 
 int main() {
-    describe("Run cache — merged and separate builds", []() {
-        it("keeps their artifacts under different keys", []() {
-            char cacheTmp[] = "/tmp/kex_run_cache_modes_XXXXXX";
-            std::string cacheDir = mkdtemp(cacheTmp);
-            auto path = writeTempSource("main do\n  IO.printLine(\"modes\")\nend\n");
-
-            assertEqual(runKex(cacheDir, path), std::string("modes\n"));
-            const auto mergedEntries = runCacheEntryCount(cacheDir);
-            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
-            assertTrue(runCacheEntryCount(cacheDir) > mergedEntries,
-                       "a separate build reused the merged build's run-cache entry");
-            assertEqual(runKex(cacheDir, path, true), std::string("modes\n"));
-
-            std::remove(path.c_str());
-            fs::remove_all(cacheDir);
-        });
-    });
-
     describe("Run cache — fingerprint reacts to the compiler binary itself", []() {
         it("misses the cache when the kex binary's mtime changes under an unchanged git HEAD", []() {
             char cacheTmp[] = "/tmp/kex_run_cache_test_XXXXXX";
@@ -119,15 +115,16 @@ int main() {
                 "main do\n"
                 "  IO.printLine(\"cached\")\n"
                 "end\n");
+            const auto binary = copyBinaryForBackdate();
 
-            auto first = runKex(cacheDir, path);
+            auto first = runKex(cacheDir, path, binary);
             assertEqual(first, std::string("cached\n"));
             auto afterFirst = runCacheEntryCount(cacheDir);
             assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
 
-            backdateFile(KEX_BINARY_PATH);
+            backdateFile(binary);
 
-            auto second = runKex(cacheDir, path);
+            auto second = runKex(cacheDir, path, binary);
             assertEqual(second, std::string("cached\n"));
             auto afterSecond = runCacheEntryCount(cacheDir);
             assertTrue(afterSecond > afterFirst,
@@ -136,6 +133,7 @@ int main() {
                        std::to_string(afterFirst) + " -> " + std::to_string(afterSecond));
 
             std::remove(path.c_str());
+            std::remove(binary.c_str());
             fs::remove_all(cacheDir);
         });
     });

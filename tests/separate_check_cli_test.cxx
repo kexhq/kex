@@ -1,18 +1,19 @@
-// The separate check (KEX_SEPARATE=1) checks each unit of a program against
-// the interfaces of the units below it, and must agree with the check of the
-// whole program. Each module here is shaped like one whose interface once
+// The build checks and lowers each unit of a program against the interfaces
+// of the units below it, and must find what the program's code says and run
+// what it means. Each module here is shaped like one whose interface once
 // left something out: constructors called through their module, defaulted
 // parameters, named block arguments, structural type aliases, `serving`
-// slots and `within:` on them, a module in two parts, a capability nested in a module, a constant,
-// a nested module compiled on its own, and a module function another
-// module's `make` function shares a name with, or one that takes no
-// receiver its signature line does not name.
+// slots and `within:` on them, a module in two parts, a capability nested in
+// a module, a constant, a nested module compiled on its own, and a module
+// function another module's `make` function shares a name with, or one that
+// takes no receiver its signature line does not name.
 //
-// With KEX_SEPARATE_CORE each unit that checked cleanly is also lowered on
-// its own; compiled and run, it must print what the merged build prints.
+// Built, compiled and run, the program must print what each unit's code
+// means, and the Core kept with KEX_SEPARATE_CORE must run the same.
 // For that the program also has a capability beside a module of its name,
 // whose default and replacement and helper each run, a slot called with
 // `within:` on another unit's server, a `make` block outside its module,
+// a trait default a type of another unit inherits,
 // a function of another unit called by UFCS, an operator one unit
 // overloads for two of its types, called on each from another unit, and a
 // method only one type of another unit owns, called on it from this one.
@@ -219,6 +220,19 @@ make Crate, implement: Showable do
   let showValue -> String = "crate of ${@count}"
 end
 )KEX");
+        write("lib/bags.kex", R"KEX(module Bags
+
+record Bag do
+  items : [Integer]
+end
+
+make Bag, implement: Foldable do
+  let reduce(acc: A, f: A -> Integer -> A) -> A = @items.reduce(acc, f)
+end
+
+bag : [Integer] -> Bag
+let bag(items) = Bag { items: items }
+)KEX");
         write("lib/fields.kex", R"KEX(module Fields
 
 record IntField do
@@ -303,30 +317,26 @@ end
         file << contents;
     }
 
-    // `kex --check` of app/main.kex with the separate check beside the
-    // merged one; its output, both checks' diagnostics.
+    // app/main.kex built (`kex -c`, unit by unit): its output, the check's
+    // diagnostics.
     auto check() -> std::string {
         const auto output = root / "output";
-        const auto command = "KEX_SEPARATE=1 KEX_CACHE=" + (root / "cache").string() +
-            " " + std::string(KEX_BINARY_PATH) + " --no-colors --check --source-root " +
+        std::filesystem::create_directories(root / "checked");
+        const auto command = "KEX_CACHE=" + (root / "cache").string() +
+            " " + std::string(KEX_BINARY_PATH) + " --no-colors -c -o " +
+            (root / "checked").string() + " --source-root " +
             (root / "app").string() + " --source-root " + (root / "lib").string() + " " +
             (root / "app" / "main.kex").string() + " > " + output.string() + " 2>&1";
         (void)std::system(command.c_str());
         return read(output);
     }
 
-    // The program built as one and as units lowered apart, each compiled and
-    // run: what each printed, merged first.
-    auto run() -> std::tuple<std::string, std::string, std::string> {
+    // The program built unit by unit, its Core also kept with
+    // KEX_SEPARATE_CORE, each compiled and run: what the build ran, then what
+    // the kept Core runs.
+    auto run() -> std::pair<std::string, std::string> {
         const auto roots = " --source-root " + (root / "app").string() +
             " --source-root " + (root / "lib").string() + " ";
-        const auto build = "KEX_SEPARATE=1 KEX_SEPARATE_CORE=" + (root / "separate").string() +
-            " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
-            " --no-colors -E -o " + (root / "merged").string() + roots +
-            (root / "app" / "main.kex").string() + " > " + (root / "build.out").string() +
-            " 2>&1";
-        std::filesystem::create_directories(root / "merged");
-        (void)std::system(build.c_str());
         const auto runAs = [&](const std::string& kind) {
             const auto cores = root / kind;
             const auto beams = root / (kind + "-beam");
@@ -343,19 +353,17 @@ end
             (void)std::system(command.c_str());
             return read(output);
         };
-        auto merged = runAs("merged");
-        // What went wrong is in the build's own output when it emitted nothing.
-        if (merged.find("open error") != std::string::npos)
-            merged += read(root / "build.out");
-        auto separate = runAs("separate");
         std::filesystem::create_directories(root / "actual");
-        const auto actualBuild = "KEX_SEPARATE=1 KEX_SEPARATE_BUILD=1 KEX_CACHE=" +
-            (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
+        std::filesystem::create_directories(root / "separate");
+        const auto actualBuild = "KEX_SEPARATE_CORE=" + (root / "separate").string() +
+            " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
             " --no-colors -E -o " + (root / "actual").string() + roots +
             (root / "app" / "main.kex").string() + " > " +
             (root / "actual-build.out").string() + " 2>&1";
         (void)std::system(actualBuild.c_str());
+        auto separate = runAs("separate");
         auto actual = runAs("actual");
+        // What went wrong is in the build's own output when it emitted nothing.
         if (actual.find("open error") != std::string::npos)
             actual += read(root / "actual-build.out");
         (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
@@ -378,7 +386,7 @@ let join(first, second) = "${first}:${second}"
                    "the changed unit's body was not rebuilt: " + changedBuild);
         assertTrue(runAs("actual").find("\nx:y\n") != std::string::npos,
                    "a cached dependent called the old implementation: " + changedBuild);
-        return {std::move(merged), std::move(separate), std::move(actual)};
+        return {std::move(actual), std::move(separate)};
     }
 
     static auto read(const std::filesystem::path& path) -> std::string {
@@ -407,6 +415,7 @@ using Notes
 using Marks
 using Boxes, only: [Box]
 using Crates, only: [Crate]
+using Bags
 using Ids, only: [UserId]
 using Fields, only: [IntField, TextField]
 using Tokens, only: [Token]
@@ -468,6 +477,7 @@ main do
   IO.printLine(presented(Box { label: "b" }))
   IO.printLine(Box.named("named").label)
   IO.printLine(presented(Crate { count: 3 }))
+  IO.printLine("bag ${Bags.bag([1, 2, 3]).any? { |x| x > 2 }}")
   IO.printLine(presented(7))
   IO.printLine(owner("u1"))
   IO.printLine(IntField { label: "n" } == 1)
@@ -485,31 +495,21 @@ main do
 end
 )KEX";
 
-// Whether a line of `text` reports `message`, from the separate check (its
-// lines start "separate: ") or from the merged one.
-auto reports(const std::string& text, const std::string& message, bool separate) -> bool {
-    std::istringstream lines(text);
-    for (std::string line; std::getline(lines, line);)
-        if (line.find(message) != std::string::npos &&
-            line.starts_with("separate: ") == separate)
-            return true;
-    return false;
-}
 
 } // namespace
 
 int main() {
     describe("the separate check", []() {
-        it("agrees with the merged check where it finds nothing", []() {
+        it("finds nothing in a program without errors", []() {
             Package package;
             package.write("app/main.kex", program);
             const auto text = package.check();
-            assertTrue(text.find("units checked, 0 errors") != std::string::npos,
-                       "the separate check found errors: " + text);
+            assertTrue(text.find("Aborted") == std::string::npos,
+                       "the build was aborted: " + text);
             assertTrue(text.find(": error: ") == std::string::npos,
                        "a check reported an error: " + text);
         });
-        it("finds what the merged check finds", []() {
+        it("finds each error a unit has", []() {
             Package package;
             package.write("app/main.kex", std::string(program) + R"KEX(
 let wrong() -> String = Shapes.Dot
@@ -522,29 +522,28 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
             for (const std::string expected : {"`wrong` declared to return String but body returns Dot",
                                                "`text` expects argument 5 to be String, but got Integer",
                                                "`within:` is not valid on an asynchronous cast slot"}) {
-                assertTrue(reports(text, expected, false),
-                           "the merged check missed \"" + expected + "\": " + text);
-                assertTrue(reports(text, expected, true),
-                           "the separate check missed \"" + expected + "\": " + text);
+                assertTrue(text.find(expected) != std::string::npos,
+                           "the check missed \"" + expected + "\": " + text);
             }
         });
     });
     describe("lowering unit by unit", []() {
-        it("runs as the merged build runs", []() {
+        it("runs each unit's behaviour", []() {
             Package package;
             package.write("app/main.kex", program);
-            const auto [merged, separate, actual] = package.run();
-            assertTrue(merged.find("error") == std::string::npos && !merged.empty(),
-                       "the merged build did not run: " + merged);
-            assertEqual(separate, merged);
-            assertEqual(actual, merged);
-            assertTrue(merged.find("\n?\n?\n") != std::string::npos,
-                       "list.join called a path join: " + merged);
-            assertTrue(merged.find("\npage x\ntrue\n") != std::string::npos,
-                       "cross-unit callable or distinct method did not run: " + merged);
-            assertTrue(merged.find("Any([One(1), One(2)])") != std::string::npos &&
-                       merged.find("All([One(1), One(2)])") != std::string::npos,
-                       "external union boolean operators did not run: " + merged);
+            const auto [ran, separate] = package.run();
+            assertTrue(ran.find("error") == std::string::npos && !ran.empty(),
+                       "the build did not run: " + ran);
+            assertEqual(separate, ran);
+            assertTrue(ran.find("\nbag true\n") != std::string::npos,
+                       "a trait default another unit's type inherits did not run: " + ran);
+            assertTrue(ran.find("\n?\n?\n") != std::string::npos,
+                       "list.join called a path join: " + ran);
+            assertTrue(ran.find("\npage x\ntrue\n") != std::string::npos,
+                       "cross-unit callable or distinct method did not run: " + ran);
+            assertTrue(ran.find("Any([One(1), One(2)])") != std::string::npos &&
+                       ran.find("All([One(1), One(2)])") != std::string::npos,
+                       "external union boolean operators did not run: " + ran);
         });
     });
     return runAll();

@@ -354,6 +354,7 @@ end
 #
 # @example Closing the conversion immediately
 #   let port = env.get("PORT").flatMap { |s| s.to(Integer) }.or(8080)
+to : A -> Type<T> -> T?
 let to(value, String) = Just(value.showValue)
 let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 
@@ -375,6 +376,7 @@ let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 #   "ff".to(Integer, radix: 16)    # => Just(255)
 #   "FF".to(Integer, radix: 16)    # => Just(255)
 #   "ff".to(Integer, radix: 10)    # => None
+to : A -> Type<T> -> Integer -> T?
 let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 
 # Renders a number as +String+ in an explicit culture: the decimal separator

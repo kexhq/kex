@@ -59,11 +59,6 @@ auto Environment::returnFrame() const -> std::shared_ptr<bool> {
     return nullptr;
 }
 
-auto Environment::importAll(const Environment& other) -> void {
-    for (const auto& [name, b] : other.m_bindings)
-        m_bindings[name] = b;
-}
-
 auto Environment::names() const -> std::vector<std::string> {
     std::vector<std::string> out;
     out.reserve(m_bindings.size());

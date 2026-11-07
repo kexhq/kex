@@ -163,8 +163,9 @@ auto Parser::rejectReservedBindingName() -> void {
       name == TokenType::Spawn || name == TokenType::After ||
       name == TokenType::Next)
     return;
-  const auto after = m_pos + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
-                                                 : TokenType::Eof;
+  const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size()
+                         ? m_tokens[m_pos + 2].type
+                         : TokenType::Eof;
   if (after != TokenType::Equals && after != TokenType::LParen)
     return;
   advance(); // let
@@ -397,11 +398,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
     expect(TokenType::Module, "Expected 'module'");
   }
   auto moduleName = parseTypeName();
-  for (size_t i = 0; i < moduleName.parts.size(); ++i) {
-    if (i)
-      mod->name += ".";
-    mod->name += moduleName.parts[i];
-  }
+  mod->name += moduleName.dotted();
   if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
     mod->name = parentModule + "." + mod->name;
   // A file-level `module Name` without `do` is desugared into the same
@@ -4577,25 +4574,6 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 
   expect(TokenType::End, "Expected 'end' to close visibility block");
   return complete(std::move(block));
-}
-
-auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    try {
-      body.push_back(parseSpreadableExpr());
-    } catch (const ParseError &e) {
-      // Insert an ErrorNode so the AST body stays complete, then sync
-      // to the next statement boundary before continuing.
-      auto errExpr = std::make_unique<ast::Expr>();
-      errExpr->location = e.location;
-      errExpr->kind = ast::ErrorNode{e.message};
-      body.push_back(std::move(errExpr));
-      syncToStatement();
-    }
-    skipNewlines();
-  }
-  return body;
 }
 
 // Looks ahead (without consuming) for a `do` token on the current logical

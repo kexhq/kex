@@ -1,0 +1,21 @@
+# kex: run-beam
+# A distinct type's own method, called where the type is imported by name:
+# the receiver is typed `ThingId` there and the method's receiver
+# `ThingIds.ThingId`, two spellings of one type. The checker decides the
+# call is the type's own (OwnMethod); the erased String value never could,
+# and `String.empty?` answered instead.
+
+module ThingIds do
+  distinct type ThingId = String
+
+  make ThingId do
+    let empty? -> Bool = true
+  end
+end
+
+using ThingIds, only: [ThingId]
+
+main do
+  IO.printLine("x".as(ThingId).empty?)
+  IO.printLine("".empty?)
+end

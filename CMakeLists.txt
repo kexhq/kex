@@ -143,9 +143,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 endif()
 
 add_library(kex_lib
+    src/hir/call_targets.cxx
+    src/hir/hir.cxx
+    src/hir/repl_input.cxx
+    src/hir/persist.cxx
     src/ir/lower.cxx
+    src/ir/lowering_body.cxx
+    src/ir/lowering_calls.cxx
+    src/ir/lowering_control.cxx
+    src/ir/lowering_core.cxx
+    src/ir/lowering_expr.cxx
+    src/ir/lowering_function.cxx
+    src/ir/lowering_helpers.cxx
+    src/ir/lowering_make.cxx
+    src/ir/lowering_method_call.cxx
+    src/ir/lowering_pattern.cxx
+    src/ir/lowering_record.cxx
     src/ir/emit_core.cxx
-    src/ir/upgrade.cxx
+    src/ir/pass_manager.cxx
+    src/ir/passes/guards.cxx
+    src/ir/passes/verify.cxx
+    src/ir/passes/upgrade.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
@@ -156,15 +174,22 @@ add_library(kex_lib
     src/semantic/types.cxx
     src/semantic/traits.cxx
     src/semantic/typechecker.cxx
+    src/semantic/typechecker_unify.cxx
+    src/semantic/typechecker_expr.cxx
+    src/semantic/typechecker_intrinsics.cxx
     src/semantic/db.cxx
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/semantic/module_rules.cxx
+    src/semantic/resolve_core.cxx
     src/ast/clone.cxx
     src/ast/function_groups.cxx
+    src/ast/type_text.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
     src/module/resolver.cxx
+    src/module/discovery.cxx
     src/module/package_metadata.cxx
     src/validation/tag_validator.cxx
     src/interpreter/value.cxx
@@ -200,9 +225,14 @@ add_library(kex_lib
     src/beam/beam_file.cxx
     src/beam/etf.cxx
     src/beam/kexi.cxx
+    src/beam/interface_cache.cxx
     src/beam/collect_metadata.cxx
     src/beam/kexi_registry.cxx
+    src/cache/cache.cxx
     src/cache/separate_unit.cxx
+    src/common/digest.cxx
+    src/common/process.cxx
+    src/common/diagnostics.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -620,6 +650,36 @@ target_link_libraries(beam_test PRIVATE kex_lib)
 target_include_directories(beam_test PRIVATE tests)
 add_test(NAME beam_test COMMAND beam_test)
 
+add_executable(mangle_test tests/mangle_test.cxx)
+target_link_libraries(mangle_test PRIVATE kex_lib)
+target_include_directories(mangle_test PRIVATE tests)
+add_test(NAME mangle_test COMMAND mangle_test)
+
+add_executable(resolve_core_test tests/resolve_core_test.cxx)
+target_link_libraries(resolve_core_test PRIVATE kex_lib)
+target_include_directories(resolve_core_test PRIVATE tests)
+add_test(NAME resolve_core_test COMMAND resolve_core_test)
+
+add_executable(named_arguments_test tests/named_arguments_test.cxx)
+target_link_libraries(named_arguments_test PRIVATE kex_lib)
+target_include_directories(named_arguments_test PRIVATE tests)
+add_test(NAME named_arguments_test COMMAND named_arguments_test)
+
+add_executable(string_utils_test tests/string_utils_test.cxx)
+target_link_libraries(string_utils_test PRIVATE kex_lib)
+target_include_directories(string_utils_test PRIVATE tests)
+add_test(NAME string_utils_test COMMAND string_utils_test)
+
+add_executable(diagnostics_test tests/diagnostics_test.cxx)
+target_link_libraries(diagnostics_test PRIVATE kex_lib)
+target_include_directories(diagnostics_test PRIVATE tests)
+add_test(NAME diagnostics_test COMMAND diagnostics_test)
+
+add_executable(interface_cache_test tests/interface_cache_test.cxx)
+target_link_libraries(interface_cache_test PRIVATE kex_lib)
+target_include_directories(interface_cache_test PRIVATE tests)
+add_test(NAME interface_cache_test COMMAND interface_cache_test)
+
 add_executable(codegen_test tests/codegen_test.cxx)
 target_link_libraries(codegen_test PRIVATE kex_lib)
 target_include_directories(codegen_test PRIVATE tests)
@@ -844,6 +904,16 @@ target_compile_definitions(run_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_
 add_dependencies(run_cache_cli_test kex)
 add_test(NAME run_cache_cli_test COMMAND run_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+# Risk #2: the prelude interface cache keyed on stdlib sources + version
+# only, so a same-version compiler rebuild served the previous build's
+# interfaces. Same shape as run_cache_cli_test above.
+add_executable(interface_cache_cli_test tests/interface_cache_cli_test.cxx)
+target_link_libraries(interface_cache_cli_test PRIVATE kex_lib)
+target_include_directories(interface_cache_cli_test PRIVATE tests)
+target_compile_definitions(interface_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(interface_cache_cli_test kex)
+add_test(NAME interface_cache_cli_test COMMAND interface_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # Regression test for kexhq/kex#377: a `serving` block in a sibling module
 # (not the entrypoint) failed its first slot call once `Net.HTTP` was
 # anywhere in the build. Two compilation units and real BEAM execution, so
@@ -857,7 +927,7 @@ add_dependencies(serving_imported_module_beam_test kex)
 add_test(NAME serving_imported_module_beam_test COMMAND serving_imported_module_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Hot code reload: three compiled versions of one module loaded in turn into
-# a live VM (src/ir/upgrade.cxx, kex_intrinsic_process's serving upgrade).
+# a live VM (src/ir/passes/upgrade.cxx, kex_intrinsic_process's serving upgrade).
 add_executable(hot_reload_beam_test tests/hot_reload_beam_test.cxx)
 target_link_libraries(hot_reload_beam_test PRIVATE kex_lib)
 target_include_directories(hot_reload_beam_test PRIVATE tests)
@@ -873,3 +943,25 @@ target_include_directories(cluster_beam_test PRIVATE tests)
 target_compile_definitions(cluster_beam_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(cluster_beam_test kex)
 add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Warnings for every target this file builds — the compiler, its library, the
+# wasm REPL and every test — so an unused variable or a pessimizing move shows
+# up in the build that introduced it. Applied per target, not through
+# add_compile_options, so vendored code (third_party/lsp-framework, added with
+# add_subdirectory) keeps its own flags. -Wmissing-field-initializers stays off:
+# aggregates here are initialized partially on purpose (`{kind, name}`, the
+# rest defaulted). KEX_WERROR turns every warning into an error.
+option(KEX_WERROR "Treat compiler warnings as errors" OFF)
+if(NOT MSVC)
+    set(KEX_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers)
+    if(KEX_WERROR)
+        list(APPEND KEX_WARNING_FLAGS -Werror)
+    endif()
+    get_property(kex_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target IN LISTS kex_targets)
+        get_target_property(kind ${target} TYPE)
+        if(kind MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|OBJECT_LIBRARY)$")
+            target_compile_options(${target} PRIVATE ${KEX_WARNING_FLAGS})
+        endif()
+    endforeach()
+endif()

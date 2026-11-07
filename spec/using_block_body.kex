@@ -1,0 +1,27 @@
+# `using M do ... end` at top level and in module bodies runs its body
+# with the imports scoped to it. Bodies run first, in file order —
+# elaboration-time code, before any main-phase steps — on both
+# backends. BEAM used to drop these bodies while the walker ran them.
+module M do
+  let answer() = 42
+end
+
+module N do
+  using M do
+    IO.printLine("module using body")
+    IO.printLine(answer())
+  end
+end
+
+IO.printLine("bare before")
+
+using M do
+  IO.printLine("top using body")
+  IO.printLine(answer())
+end
+
+main do
+  IO.printLine("main")
+end
+
+IO.printLine("bare after")

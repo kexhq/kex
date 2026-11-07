@@ -3,6 +3,7 @@
 #include "../ast/ast.hxx"
 #include "symbol.hxx"
 #include "typechecker.hxx"
+#include <functional>
 #include <optional>
 #include <map>
 #include <set>
@@ -33,11 +34,28 @@ public:
     explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
         : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
 
+    // The files whose names the analysis checks (undefined names, labels:
+    // resolveProgramNames), its first phase. A build sets its entry file (and
+    // a spec's base); without any, names are not checked.
+    auto setNameCheckFiles(std::vector<std::string> files) -> void {
+        m_nameCheckFiles = std::move(files);
+    }
+    // Where the build finds a module outside the program and its interfaces
+    // (its source roots), for the rule that an exported module must exist.
+    auto setModuleLocator(
+        std::function<bool(const std::string& module, const std::string& current)> locate)
+        -> void {
+        m_moduleLocator = std::move(locate);
+    }
+    // The backend modules this build links, which lowering finds providers
+    // in: a call one of them alone answers is resolved to its dispatcher.
+    // Unset (the REPL, the prelude build), no such call is resolved.
+    auto setLinkedModules(std::set<std::string> modules) -> void {
+        m_checker.linkModules(std::move(modules));
+    }
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 
-    // Query the inferred type of an expression node after analyze() has run.
-    auto typeOf(const ast::Expr* expr) const -> TypePtr;
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
@@ -87,9 +105,18 @@ public:
     }
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto resolvedTraits() const
+        -> const std::unordered_map<const ast::MakeDef*,
+                                    std::vector<std::string>>& {
+        return m_checker.resolvedTraits();
+    }
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
+    }
+    auto decidedCalls() const -> const std::unordered_map<
+        const ast::Expr*, TypeChecker::DecidedCall>& {
+        return m_checker.decidedCalls();
     }
     auto patternBindings() const
         -> const std::vector<TypeChecker::PatternBinding>& {
@@ -173,12 +200,13 @@ private:
 
     // Helpers
     auto error(SourceLocation loc, const std::string& msg) -> void;
-    auto warning(SourceLocation loc, const std::string& msg) -> void;
 
     SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
+    std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
+    std::vector<std::string> m_nameCheckFiles;
     bool m_inFoulContext = false;
     bool m_inMakeBlock = false;
 

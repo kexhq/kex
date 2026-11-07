@@ -1,0 +1,11 @@
+# `only:` and `except:` are mutually exclusive on one `using`.
+module Vault do
+  let open() = "open"
+  let shut() = "shut"
+end
+
+using Vault, only: [open], except: [shut]
+
+main do
+  IO.printLine(open())
+end

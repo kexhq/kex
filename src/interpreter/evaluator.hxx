@@ -5,6 +5,7 @@
 #include "scheduler.hxx"
 #include "value.hxx"
 #include "../semantic/traits.hxx"
+#include "../hir/hir.hxx"
 #include "../semantic/types.hxx"
 #include <chrono>
 #include <deque>
@@ -72,6 +73,26 @@ class EvaluationTimeout : public std::runtime_error {
 public:
     EvaluationTimeout()
         : std::runtime_error("compile-time evaluation timed out") {}
+};
+
+// Code run by `Evaluator.run` went past one of its EvaluatorOptions: a step
+// or depth limit, or a built-in its `allow` list leaves out. Not a
+// RuntimeError, so the evaluated code cannot `rescue` its way past a limit;
+// it ends the whole evaluation, which `Evaluator.run` reports as an Error.
+class SandboxViolation : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+// What `Evaluator.run` lets the code it evaluates do (EvaluatorOptions).
+struct SandboxLimits {
+    int64_t maxSteps = 1'000'000; // expressions evaluated, in total
+    int64_t maxDepth = 256;       // nested function calls
+    // Built-in categories that reach outside the program (FS, Net, IO,
+    // Process, ...) the code may call; pure ones are always available. `Net`
+    // also allows `NetHTTP`, `NetDNS` and the other `Net*`; case is ignored,
+    // so `ENV` names `Env`.
+    std::vector<std::string> allow;
 };
 
 class Evaluator {
@@ -152,6 +173,10 @@ public:
         return m_typeModules;
     }
 
+    // Puts this evaluator under `limits` from now on. Called once its prelude
+    // is loaded, so only the code it is then asked to run is limited.
+    auto setSandbox(SandboxLimits limits) -> void;
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
@@ -216,7 +241,6 @@ public:
     // run the user explicitly opted into with --allow-mocks. Defaults to
     // denied.
     auto setMocksAllowed(bool allowed) -> void;
-    auto mocksAllowed() const -> bool { return m_mocksAllowed; }
 
     // Every mock's state, captured so a test can be given it back at the end
     // of its `it` block. Mock state is global and lives until cleared, which
@@ -357,11 +381,6 @@ private:
     auto makeMethodInScope(const std::string& qualified) const -> bool;
     auto moduleInScope(const std::string& module) const -> bool;
     auto makeDefInScope(const ast::FunctionDef* def) const -> bool;
-    // The out-of-scope module whose gated definition of `functionName` takes
-    // these named arguments, for the "add `using`" hint.
-    auto gatedModuleTaking(const std::string& functionName,
-                           const NamedArgs& namedArgs) const
-        -> std::optional<std::string>;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
@@ -370,7 +389,6 @@ private:
                                   bool implicitReceiver) -> void;
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
-    auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
     auto resolveRecordTypeName(const std::string& name) const -> std::string;
 
     std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
@@ -454,34 +472,30 @@ public:
         m_testFilters = std::move(filters);
     }
 
-    // `Type.of(x)` sites the checker typed concretely (see
-    // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
-    // — the table is simply absent and every `Type.of` asks the value.
-    auto setStaticTypeOfCalls(
-        const std::unordered_map<const ast::MethodCall*,
-                                 semantic::StaticTypeAnswer>* calls) -> void {
-        m_staticTypeOfCalls = calls;
+    // The checked program (src/hir/) the evaluator runs: each expression's
+    // static type, the `Type.of` answers and the signature chosen for each
+    // call — the same object lowering reads, so the two backends share what
+    // semantic analysis decided. Without one every answer comes from the
+    // value. `setProgram` replaces the programs read; `addProgram` adds one,
+    // read first: a REPL session keeps every input's, since a later input
+    // calls an earlier one's definitions.
+    auto setProgram(const hir::Program* program) -> void {
+        m_programs.clear();
+        m_programs.push(program);
     }
-    auto setExpressionTypes(
-        const std::unordered_map<const ast::Expr*, semantic::TypePtr>* types)
-        -> void {
-        m_expressionTypes = types;
-    }
-    // The signature the checker chose for each call. Optional, like the
-    // tables above.
-    auto setCallSignatures(
-        const std::unordered_map<const ast::Expr*, semantic::Signature>* calls)
-        -> void {
-        m_callSignatures = calls;
-    }
+    auto addProgram(const hir::Program* program) -> void { m_programs.push(program); }
 
 private:
-    const std::unordered_map<const ast::MethodCall*,
-                             semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
-        m_expressionTypes = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::Signature>*
-        m_callSignatures = nullptr;
+    hir::ProgramSet m_programs;
+    // The checker's static type for `expr`, or null.
+    auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
+        return expr ? m_programs.typeOf(*expr) : nullptr;
+    }
+    // The function `type`'s own `method` is bound to, or "": the checker
+    // names a module's type qualified (`Accounts.AccountId`), a `make` block
+    // inside the module binds it as written there (`AccountId::successor`).
+    auto ownMethodName(const std::string& type, const std::string& method) const
+        -> std::string;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here
@@ -655,6 +669,12 @@ private:
     bool m_replMode = false;
     bool m_preludeLoaded = false;
     std::optional<std::chrono::steady_clock::time_point> m_deadline;
+    // `Evaluator.run`'s limits, with the steps taken and the calls currently
+    // open against them.
+    std::optional<SandboxLimits> m_sandbox;
+    int64_t m_sandboxSteps = 0;
+    int64_t m_sandboxDepth = 0;
+    auto sandboxAllows(const std::string& category) const -> bool;
     // Declarations recorded by `let %name(...)` during compile-time
     // evaluation; drained by src/compiled/expand.cxx.
     std::vector<GeneratedDeclaration> m_generatedDeclarations;

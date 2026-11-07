@@ -46,29 +46,15 @@ public:
 
     auto automaticImportModules() const -> std::vector<const LoadedModule*>;
 
-    auto findExport(const std::string& moduleAtom,
-                    const std::string& name) const -> const KexiExport*;
-
     auto findMethodsForReceiver(const std::string& methodName,
                                 const std::string& receiverTypeName) const
         -> std::vector<std::pair<std::string, const KexiMethod*>>;
-
-    auto findType(const std::string& typeName) const
-        -> std::pair<std::string, const KexiTypeExport*>;
-
-    auto findADT(const std::string& adtName) const
-        -> std::pair<std::string, const KexiADT*>;
-
-    auto findRecord(const std::string& recordName) const
-        -> std::pair<std::string, const KexiRecord*>;
 
     auto getUnit(const std::string& entryAtom) const -> const LoadedUnit*;
 
     void unloadUnit(const std::string& entryAtom);
 
     auto lastLoadedEntryAtom() const -> const std::string& { return m_lastLoaded; }
-
-    auto generateLoadErlang(const LoadedUnit& unit) const -> std::string;
 
     auto buildExternalModules() const -> kex::ir::ExternalModules;
 

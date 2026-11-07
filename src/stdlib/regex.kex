@@ -138,7 +138,10 @@ end
 # @example
 #   re`https?://\S+`   # tag form  -> Regex
 #   re("\\d+")         # call form -> Result<Regex, RegexError>
+re : String -> Result<Regex, RegexError>
 let re(source) = regex(source)
+
+re : [String] -> [Any] -> Regex
 let re(parts, values) = regex(parts, values)
 
 # Validates an `re` tagged literal at compile time, delegating to

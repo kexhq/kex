@@ -40,6 +40,9 @@ struct FileState {
     uint64_t version = 0;
     ast::Program ast;
     std::vector<Diagnostic> diagnostics;
+    // The parser's and compile-time expansion's, the part of `diagnostics`
+    // no sema produces: the language server adds the one sema's to them.
+    std::vector<Diagnostic> sourceDiagnostics;
     std::vector<SymbolInfo> symbols;
     // Names visible at expression boundaries, retained by ResolvePass for
     // position-aware editor completion after its transient scope stack is
@@ -85,15 +88,8 @@ public:
                         const std::string& name) -> SymbolInfo*;
     auto receiverSymbol(const std::string& receiver,
                         const std::string& name) const -> const SymbolInfo*;
-    auto isModuleLoading(const std::string& moduleName,
-                         const std::string& fromFile = "") const -> bool;
     auto shadowedModulePaths(const std::string& moduleName) const
         -> const std::vector<std::string>&;
-
-    // Returns true if `name` appears as a file-level symbol in any indexed
-    // file. This is an index query, not a name-resolution rule: top-level Kex
-    // definitions remain file-local.
-    auto isGloballyKnown(const std::string& name) const -> bool;
 
     // Finds the SymbolInfo for `name`, preferring symbols from `preferFile`.
     // Returns null if not found in any indexed file.
@@ -116,7 +112,6 @@ public:
 
     // Access to raw file state for passes
     auto fileState(const std::string& path) -> FileState*;
-    auto fileState(const std::string& path) const -> const FileState*;
 
 private:
     auto rebuildModuleExports(const std::string& path) -> void;

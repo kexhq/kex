@@ -1,0 +1,29 @@
+# kex: run-beam
+# Inside `make Cursor`, `c.advance` on an untyped `c` used to bind to the
+# prelude's `Parsing.Input.advance` — the only candidate left once the
+# block's own methods were held back for an untyped receiver. The checker
+# then rejected the program ("returns Parsing.Input"), and with --no-check
+# BEAM called the import on a Cursor and died where the walker ran the
+# Cursor's own `advance`. The value decides which method runs.
+
+record Cursor do
+  input : String
+  pos : Integer
+end
+
+make Cursor do
+  let advance({ input, pos }) -> Cursor do
+    Cursor { input: input, pos: pos + 1 }
+  end
+
+  let step(c) -> Cursor do
+    c.advance
+  end
+end
+
+main do
+  let start = Cursor { input: "ab", pos: 0 }
+  let moved = start.step(Cursor { input: "cd", pos: 5 })
+  IO.printLine(moved.input)
+  IO.printLine(moved.pos)
+end

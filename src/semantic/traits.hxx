@@ -43,6 +43,12 @@ struct Signature {
     std::string declaringModule;
 };
 
+// Do two signatures take the same parameters? One declaration registered
+// twice must read as one: a parameter declared `Any` is Unknown, which
+// `typesEqual` never equates, so it counts as equal to another Unknown here.
+auto sameParameters(const Signature& left, const Signature& right) -> bool;
+
+
 struct TraitDef {
     std::string name;                        // "Number", "Comparable", user-defined names too
     std::vector<Signature> requiredMethods;  // e.g. Comparable requires `compare : This -> Comparison`
@@ -51,6 +57,10 @@ struct TraitDef {
     // without this list `bot.shout` (an inherited default) is indistinguishable
     // from a call to a method that does not exist.
     std::vector<std::string> defaultMethods;
+    // The defaults the trait's BODY defines, a subset of `defaultMethods`:
+    // emitted with each implementor (KexiTraitDef::defaultBodies). The rest
+    // are functions over the trait, implemented once where they are declared.
+    std::vector<std::string> defaultBodies;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -91,8 +101,15 @@ public:
     // Does any trait `type` implements declare `method` — as a requirement or
     // as a default body? An inherited default has no per-type signature, so
     // this is the only way to know the call is legitimate.
+    // Whether `type`'s own module implements `method`: a method a trait it
+    // claims requires, or a default from that trait's body.
+    auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
     auto declaresMethod(const std::string& type, const std::string& method) const
         -> bool;
+    // The method a trait `type` claims requires under `method`'s name, and
+    // that trait; nulls when no claimed trait requires one.
+    auto requiredMethod(const TypePtr& type, const std::string& method) const
+        -> std::pair<const TraitDef*, const Signature*>;
 
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.

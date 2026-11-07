@@ -1,5 +1,9 @@
 #include "analyzer.hxx"
+#include "../ast/walk.hxx"
+#include "module_rules.hxx"
+#include "resolve_pass.hxx"
 #include "receiver_conflicts.hxx"
+#include "resolve_core.hxx"
 
 #include <algorithm>
 #include <cctype>
@@ -107,6 +111,12 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
 }
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
+    // Names first: an undefined name is reported as such, not as the type
+    // errors it causes.
+    if (!m_nameCheckFiles.empty())
+        for (auto& diagnostic :
+             resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces))
+            m_diagnostics.push_back(std::move(diagnostic));
     // Phase 0: two definitions of one method for one receiver type. Reported
     // before anything else so the message is not buried under the type errors
     // an ambiguous method tends to cause downstream.
@@ -115,6 +125,11 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Same-named opaque/variant types still use short dispatch identities.
     for (auto& conflict : findSameNamedTypeMethodCollisions(program))
         m_diagnostics.push_back(std::move(conflict));
+    // Which names one module may take from another (`using`, `export`).
+    for (auto& violation : findModuleRuleViolations(
+             program, m_importedInterfaces,
+             m_moduleLocator ? &m_moduleLocator : nullptr))
+        m_diagnostics.push_back(std::move(violation));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked
     // against a module declared anywhere in the unit, including below it.
@@ -146,10 +161,6 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
 
 auto Analyzer::diagnostics() const -> const std::vector<Diagnostic>& {
     return m_diagnostics;
-}
-
-auto Analyzer::typeOf(const ast::Expr* expr) const -> TypePtr {
-    return m_checker.typeOf(expr);
 }
 
 auto Analyzer::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
@@ -205,7 +216,7 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
 
     // A module never carries an effect of its own: entering one leaves the
     // surrounding purity exactly as it was, and each member declares its own.
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     // Its own `using`s apply inside it, and only there.
     const auto outerUsings = m_usings.size();
     for (const auto& item : mod.body)
@@ -313,7 +324,7 @@ auto Analyzer::analyzeRecordDef(const ast::RecordDef& def) -> void {
 }
 
 auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     const bool previousMake = m_inMakeBlock;
     m_inMakeBlock = true;
 
@@ -369,7 +380,7 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
     if (def.isFoul) m_inFoulContext = true;
 
     for (const auto& clause : def.clauses) {
-        m_symbols.pushScope(m_inFoulContext);
+        m_symbols.pushScope();
         if (m_inMakeBlock) {
             Symbol implicitNew{"new", SymbolKind::Variable, false, true,
                                true, def.location};
@@ -404,7 +415,7 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
 auto Analyzer::analyzeMainBlock(const ast::MainBlock& block) -> void {
     // Synthetic top-level binding wrappers run in the global scope so that
     // `let x = expr` at top level remains visible to subsequent items.
-    if (!block.synthetic) m_symbols.pushScope(true); // main is implicitly foul
+    if (!block.synthetic) m_symbols.pushScope();
     bool prevFoul = m_inFoulContext;
     m_inFoulContext = true;
 
@@ -433,14 +444,14 @@ auto Analyzer::analyzeRescue(const ast::RescueBlock& rescue,
     // introduce locals its guard and body can see, and `rescue |e|` binds the
     // caught error. Each clause gets its own scope.
     for (const auto& clause : rescue.clauses) {
-        m_symbols.pushScope(m_inFoulContext);
+        m_symbols.pushScope();
         for (const auto& pat : clause.patterns)
             if (pat) bindPatternVars(*pat, loc);
         if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
         if (clause.body) analyzeExpr(*clause.body);
         m_symbols.popScope();
     }
-    m_symbols.pushScope(m_inFoulContext);
+    m_symbols.pushScope();
     if (!rescue.catchAllParam.empty())
         m_symbols.define(Symbol{rescue.catchAllParam, SymbolKind::Variable,
                                 false, false, true, loc});
@@ -576,7 +587,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.letPattern) {
                 // `if let Pattern = expr` — the pattern's bindings are in
                 // scope only for the then-body, mirroring resolve_pass.cxx.
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 bindPatternVars(*node.letPattern, expr.location);
                 analyzeBody(node.thenBody);
                 m_symbols.popScope();
@@ -592,7 +603,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
             if (node.subject) analyzeExpr(*node.subject);
             for (const auto& clause : node.clauses) {
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 if (node.subjectBinding) {
                     m_symbols.define(Symbol{
                         *node.subjectBinding, SymbolKind::Variable, false, false, true, expr.location});
@@ -608,7 +619,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            m_symbols.pushScope(m_inFoulContext);
+            m_symbols.pushScope();
             if (node.counter && *node.counter != "_") {
                 m_symbols.define(Symbol{
                     *node.counter, SymbolKind::Variable, false, false, true, expr.location});
@@ -637,7 +648,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (!m_inFoulContext) {
                 error(expr.location, "Cannot use 'spawn' in pure context");
             }
-            m_symbols.pushScope(true);
+            m_symbols.pushScope();
             analyzeBody(node.body);
             m_symbols.popScope();
         }
@@ -646,7 +657,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 error(expr.location, "Cannot use 'receive' in pure context");
             }
             for (const auto& clause : node.clauses) {
-                m_symbols.pushScope(m_inFoulContext);
+                m_symbols.pushScope();
                 // When a sender binding is present, every message is a
                 // {Payload, Sender} tuple; the sender name is in scope for
                 // every clause (alongside the pattern vars).
@@ -662,7 +673,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::Lambda>) {
-            m_symbols.pushScope(m_inFoulContext);
+            m_symbols.pushScope();
             for (const auto& param : node.params) {
                 if (param.name != "_") {
                     m_symbols.define(Symbol{
@@ -782,16 +793,10 @@ auto Analyzer::moduleImportingName(const std::string& name) const -> std::string
         const auto& using_ = **it;
         // `using M as A` makes `A.name` available, not a bare `name`.
         if (using_.alias) continue;
-        if (!using_.onlyNames.empty() &&
-            std::find(using_.onlyNames.begin(), using_.onlyNames.end(), name) ==
-                using_.onlyNames.end())
+        if (!resolve_core::usingSelectsName(name, using_.onlyNames,
+                                            using_.exceptNames))
             continue;
-        if (std::find(using_.exceptNames.begin(), using_.exceptNames.end(), name) !=
-            using_.exceptNames.end())
-            continue;
-        std::string module;
-        for (const auto& part : using_.module.parts)
-            module += (module.empty() ? "" : ".") + part;
+        std::string module = using_.module.dotted();
         if (auto local = m_localModuleFunctions.find(module);
             local != m_localModuleFunctions.end() && local->second.count(name))
             return module;
@@ -827,9 +832,7 @@ auto Analyzer::isQualifiedCallFoul(const std::string& module,
     for (auto it = m_usings.rbegin(); it != m_usings.rend(); ++it) {
         const auto& using_ = **it;
         if (!using_.alias || *using_.alias != head) continue;
-        std::string target;
-        for (const auto& part : using_.module.parts)
-            target += (target.empty() ? "" : ".") + part;
+        std::string target = using_.module.dotted();
         if (dot != std::string::npos) target += module.substr(dot);
         return known(target);
     }
@@ -884,116 +887,34 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     // direct foul operations (spawn, receive, foul module method calls).
     std::function<void(const ast::Expr&, std::set<std::string>&, bool&)> walkExpr =
         [&](const ast::Expr& e, std::set<std::string>& calls, bool& hasFoulOp) {
-        std::visit([&](const auto& n) {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                if (allFns.count(n.name)) calls.insert(n.name);
-                auto* sym = m_symbols.lookup(n.name);
-                if (sym && sym->isFoul) hasFoulOp = true;
-                for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
-                for (const auto& [_, a] : n.namedArgs) if (a) walkExpr(*a, calls, hasFoulOp);
-                if (n.block) walkExpr(**n.block, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                for (const auto& value : n.values)
-                    if (value) walkExpr(*value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                if (allFns.count(n.tag)) calls.insert(n.tag);
-                auto* sym = m_symbols.lookup(n.tag);
-                if (sym && sym->isFoul) hasFoulOp = true;
-                for (const auto& value : n.values)
-                    if (value) walkExpr(*value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                if (allFns.count(n.method)) calls.insert(n.method);
-                if (n.receiver) {
-                    walkExpr(*n.receiver, calls, hasFoulOp);
-                    auto receiverName = receiverModuleName(*n.receiver);
-                    if (!receiverName.empty()
-                        && isQualifiedCallFoul(receiverName, n.method))
-                        hasFoulOp = true;
-                    // "" marks a requirement this function reaches itself,
-                    // as opposed to one inherited from a callee below.
-                    if (m_capabilityTarget && !receiverName.empty()
-                        && m_capabilityModules.count(receiverName))
-                        m_capabilityTarget->emplace(receiverName, "");
-                }
-                for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
-                for (const auto& [_, a] : n.namedArgs) if (a) walkExpr(*a, calls, hasFoulOp);
-                if (n.block) walkExpr(**n.block, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
+        if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
+            if (allFns.count(call->name)) calls.insert(call->name);
+            if (auto* sym = m_symbols.lookup(call->name); sym && sym->isFoul)
                 hasFoulOp = true;
-                for (const auto& ex : n.body) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+        } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&e.kind)) {
+            if (allFns.count(tagged->tag)) calls.insert(tagged->tag);
+            if (auto* sym = m_symbols.lookup(tagged->tag); sym && sym->isFoul)
                 hasFoulOp = true;
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) walkExpr(**cl.guard, calls, hasFoulOp);
-                    if (cl.body) walkExpr(*cl.body, calls, hasFoulOp);
-                }
-            } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                if (n.left) walkExpr(*n.left, calls, hasFoulOp);
-                if (n.right) walkExpr(*n.right, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-                if (n.operand) walkExpr(*n.operand, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                if (n.condition) walkExpr(*n.condition, calls, hasFoulOp);
-                for (const auto& ex : n.thenBody) if (ex) walkExpr(*ex, calls, hasFoulOp);
-                for (const auto& [c, b] : n.elifs) {
-                    if (c) walkExpr(*c, calls, hasFoulOp);
-                    for (const auto& ex : b) if (ex) walkExpr(*ex, calls, hasFoulOp);
-                }
-                if (n.elseBody)
-                    for (const auto& ex : *n.elseBody) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                if (n.subject) walkExpr(*n.subject, calls, hasFoulOp);
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) walkExpr(**cl.guard, calls, hasFoulOp);
-                    if (cl.body) walkExpr(*cl.body, calls, hasFoulOp);
-                }
-            } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                for (const auto& ex : n.body) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-                for (const auto& ex : n.body) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                if (n.value) walkExpr(*n.value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                if (n.value) walkExpr(*n.value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
-                if (n.value) walkExpr(*n.value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-                if (n.condition) walkExpr(*n.condition, calls, hasFoulOp);
-                if (n.thenExpr) walkExpr(*n.thenExpr, calls, hasFoulOp);
-                if (n.elseExpr) walkExpr(*n.elseExpr, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                if (n.expr) walkExpr(*n.expr, calls, hasFoulOp);
-                if (n.condition) walkExpr(*n.condition, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-                if (n.value) walkExpr(*n.value, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                for (const auto& ex : n.body) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                if (n.condition) walkExpr(*n.condition, calls, hasFoulOp);
-                for (const auto& ex : n.body) if (ex) walkExpr(*ex, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
-                for (const auto& el : n.elements) if (el) walkExpr(*el, calls, hasFoulOp);
-                if (n.rest) walkExpr(**n.rest, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-                for (const auto& en : n.entries) {
-                    if (en.key) walkExpr(*en.key, calls, hasFoulOp);
-                    if (en.value) walkExpr(*en.value, calls, hasFoulOp);
-                }
-            } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
-                for (const auto& el : n.elements) if (el) walkExpr(*el, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
-                if (n.inner) walkExpr(*n.inner, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-                for (const auto& group : n.argGroups)
-                    for (const auto& arg : group)
-                        if (arg && !std::holds_alternative<ast::CurryPlaceholder>(arg->kind))
-                            walkExpr(*arg, calls, hasFoulOp);
-            } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-                for (const auto& field : n.fields)
-                    if (field.value) walkExpr(*field.value, calls, hasFoulOp);
+        } else if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
+            if (allFns.count(method->method)) calls.insert(method->method);
+            if (method->receiver) {
+                auto receiverName = receiverModuleName(*method->receiver);
+                if (!receiverName.empty()
+                    && isQualifiedCallFoul(receiverName, method->method))
+                    hasFoulOp = true;
+                // "" marks a requirement this function reaches itself,
+                // as opposed to one inherited from a callee below.
+                if (m_capabilityTarget && !receiverName.empty()
+                    && m_capabilityModules.count(receiverName))
+                    m_capabilityTarget->emplace(receiverName, "");
             }
-        }, e.kind);
+        } else if (std::holds_alternative<ast::SpawnExpr>(e.kind) ||
+                   std::holds_alternative<ast::ReceiveExpr>(e.kind)) {
+            hasFoulOp = true;
+        }
+        ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+            walkExpr(*child, calls, hasFoulOp);
+        });
     };
 
     // Pass 1: collect all function names.
@@ -1171,124 +1092,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         }, e.kind);
     };
 
-    // Walk match and receive clauses to find guards.
-    std::function<void(const ast::Expr&)> findGuards = [&](const ast::Expr& e) {
-        std::visit([&](const auto& n) {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                if (n.subject) findGuards(*n.subject);
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) checkGuard(**cl.guard);
-                    if (cl.body) findGuards(*cl.body);
-                }
-            } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) checkGuard(**cl.guard);
-                    if (cl.body) findGuards(*cl.body);
-                }
-            } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                for (const auto& a : n.args) if (a) findGuards(*a);
-                for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
-                if (n.block) findGuards(**n.block);
-            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                for (const auto& value : n.values) if (value) findGuards(*value);
-            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                for (const auto& value : n.values) if (value) findGuards(*value);
-            } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                if (n.receiver) findGuards(*n.receiver);
-                for (const auto& a : n.args) if (a) findGuards(*a);
-                for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
-                if (n.block) findGuards(**n.block);
-            } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                if (n.left) findGuards(*n.left);
-                if (n.right) findGuards(*n.right);
-            } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-                if (n.operand) findGuards(*n.operand);
-            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                for (const auto& ex : n.thenBody) if (ex) findGuards(*ex);
-                for (const auto& [c, b] : n.elifs) {
-                    if (c) findGuards(*c);
-                    for (const auto& ex : b) if (ex) findGuards(*ex);
-                }
-                if (n.elseBody)
-                    for (const auto& ex : *n.elseBody) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                if (n.value) findGuards(*n.value);
-            } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                if (n.value) findGuards(*n.value);
-            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                if (n.thenExpr) findGuards(*n.thenExpr);
-                if (n.elseExpr) findGuards(*n.elseExpr);
-            } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                if (n.expr) findGuards(*n.expr);
-                if (n.condition) findGuards(*n.condition);
-            } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-                if (n.value) findGuards(*n.value);
-            }
-        }, e.kind);
-    };
-
-    // Walk all function bodies and main blocks.
-    for (const auto& item : program.items) {
-        std::visit([&](const auto& n) {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (n) {
-                    for (const auto& clause : n->clauses)
-                        for (const auto& ex : clause.body)
-                            if (ex) findGuards(*ex);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (n) {
-                    for (const auto& mi : n->body) {
-                        std::visit([&](const auto& mn) {
-                            using MT = std::decay_t<decltype(mn)>;
-                            if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                                if (mn) {
-                                    for (const auto& clause : mn->clauses)
-                                        for (const auto& ex : clause.body)
-                                            if (ex) findGuards(*ex);
-                                }
-                            }
-                        }, mi);
-                    }
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (n) {
-                    for (const auto& ex : n->body)
-                        if (ex) findGuards(*ex);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (n) {
-                    for (const auto& mi : n->body) {
-                        std::visit([&](const auto& mn) {
-                            using MT = std::decay_t<decltype(mn)>;
-                            if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                                if (mn) {
-                                    for (const auto& clause : mn->clauses)
-                                        for (const auto& ex : clause.body)
-                                            if (ex) findGuards(*ex);
-                                }
-                            }
-                        }, mi);
-                    }
-                }
-            }
-        }, item);
-    }
+    // Every guard in every body that runs.
+    ast::forEachBodyExpr(program, [&](const ast::Expr& body) {
+        ast::forEachGuard(body, checkGuard);
+    });
 }
 
 auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> void {
@@ -1308,114 +1115,60 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
     // Walk expression trees looking for MethodCall nodes with foul resolved targets.
     std::function<bool(const ast::Expr&)> hasFoulResolved =
         [&](const ast::Expr& e) -> bool {
-        return std::visit([&](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                auto it = resolved.find(&n);
-                if (it != resolved.end() && it->second.isFoul) {
-                    // `IO.inspect` is the documented purity-exempt hatch.
-                    // A call phase 1 already reported must not be reported
-                    // twice — that is exactly the qualified-and-known-foul
-                    // case, which `receiverModuleName` alone cannot identify
-                    // (it returns the name of any lowercase identifier, so a
-                    // plain value receiver `b` looks module-qualified).
-                    bool alreadyReported = n.receiver
-                        && isQualifiedCallFoul(receiverModuleName(*n.receiver),
-                                               n.method);
-                    if (!foulValueCall && !alreadyReported
-                        && n.method != "inspect") {
-                        foulValueCall = &e;
-                        foulValueMethod = n.method;
-                    }
-                    return true;
+        if (const auto* call = std::get_if<ast::MethodCall>(&e.kind)) {
+            const auto& n = *call;
+            auto it = resolved.find(&n);
+            if (it != resolved.end() && it->second.isFoul) {
+                // `IO.inspect` is the documented purity-exempt hatch.
+                // A call phase 1 already reported must not be reported
+                // twice — that is exactly the qualified-and-known-foul
+                // case, which `receiverModuleName` alone cannot identify
+                // (it returns the name of any lowercase identifier, so a
+                // plain value receiver `b` looks module-qualified).
+                bool alreadyReported = n.receiver
+                    && isQualifiedCallFoul(receiverModuleName(*n.receiver),
+                                           n.method);
+                if (!foulValueCall && !alreadyReported
+                    && n.method != "inspect") {
+                    foulValueCall = &e;
+                    foulValueMethod = n.method;
                 }
-                // A trait-typed receiver dispatches dynamically, so the call
-                // has no single resolved target and the branch above never
-                // fires. The trait declaration states the effect, so consult
-                // it directly (kexhq/kex#172).
-                if (n.receiver) {
-                    if (auto recvType = m_checker.typeOf(n.receiver.get())) {
-                        // A trait-typed parameter is a ConstrainedType (a type
-                        // variable bound to the trait), not a NamedType — but
-                        // a value annotated with the trait directly is named.
-                        std::string traitName;
-                        if (auto* con =
-                                std::get_if<ConstrainedType>(&recvType->kind))
-                            traitName = con->traitName;
-                        else if (auto* named =
-                                std::get_if<NamedType>(&recvType->kind))
-                            traitName = named->name;
-                        if (!traitName.empty()
-                            && m_checker.isTrait(traitName)
-                            && m_checker.traitMethodIsFoul(traitName,
-                                                           n.method)) {
-                            if (!foulValueCall && n.method != "inspect") {
-                                foulValueCall = &e;
-                                foulValueMethod = n.method;
-                            }
-                            return true;
-                        }
-                    }
-                }
-                if (n.receiver && hasFoulResolved(*n.receiver)) return true;
-                for (const auto& a : n.args) if (a && hasFoulResolved(*a)) return true;
-                for (const auto& [_, a] : n.namedArgs) if (a && hasFoulResolved(*a)) return true;
-                if (n.block && hasFoulResolved(**n.block)) return true;
-            } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                for (const auto& a : n.args) if (a && hasFoulResolved(*a)) return true;
-                for (const auto& [_, a] : n.namedArgs) if (a && hasFoulResolved(*a)) return true;
-                if (n.block && hasFoulResolved(**n.block)) return true;
-            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                for (const auto& value : n.values)
-                    if (value && hasFoulResolved(*value)) return true;
-            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                for (const auto& value : n.values)
-                    if (value && hasFoulResolved(*value)) return true;
-            } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                if (n.left && hasFoulResolved(*n.left)) return true;
-                if (n.right && hasFoulResolved(*n.right)) return true;
-            } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-                if (n.operand && hasFoulResolved(*n.operand)) return true;
-            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                if (n.condition && hasFoulResolved(*n.condition)) return true;
-                for (const auto& ex : n.thenBody) if (ex && hasFoulResolved(*ex)) return true;
-                for (const auto& [c, b] : n.elifs) {
-                    if (c && hasFoulResolved(*c)) return true;
-                    for (const auto& ex : b) if (ex && hasFoulResolved(*ex)) return true;
-                }
-                if (n.elseBody)
-                    for (const auto& ex : *n.elseBody) if (ex && hasFoulResolved(*ex)) return true;
-            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                if (n.subject && hasFoulResolved(*n.subject)) return true;
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard && hasFoulResolved(**cl.guard)) return true;
-                    if (cl.body && hasFoulResolved(*cl.body)) return true;
-                }
-            } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                for (const auto& ex : n.body) if (ex && hasFoulResolved(*ex)) return true;
-            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-                for (const auto& ex : n.body) if (ex && hasFoulResolved(*ex)) return true;
-            } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                if (n.value && hasFoulResolved(*n.value)) return true;
-            } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                if (n.value && hasFoulResolved(*n.value)) return true;
-            } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-                if (n.value && hasFoulResolved(*n.value)) return true;
-            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                for (const auto& ex : n.body) if (ex && hasFoulResolved(*ex)) return true;
-            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                if (n.condition && hasFoulResolved(*n.condition)) return true;
-                for (const auto& ex : n.body) if (ex && hasFoulResolved(*ex)) return true;
-            } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-                if (n.condition && hasFoulResolved(*n.condition)) return true;
-                if (n.thenExpr && hasFoulResolved(*n.thenExpr)) return true;
-                if (n.elseExpr && hasFoulResolved(*n.elseExpr)) return true;
-            } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                if (n.expr && hasFoulResolved(*n.expr)) return true;
-                if (n.condition && hasFoulResolved(*n.condition)) return true;
+                return true;
             }
-            return false;
-        }, e.kind);
+            // A trait-typed receiver dispatches dynamically, so the call
+            // has no single resolved target and the branch above never
+            // fires. The trait declaration states the effect, so consult
+            // it directly (kexhq/kex#172).
+            if (n.receiver) {
+                if (auto recvType = m_checker.typeOf(n.receiver.get())) {
+                    // A trait-typed parameter is a ConstrainedType (a type
+                    // variable bound to the trait), not a NamedType — but
+                    // a value annotated with the trait directly is named.
+                    std::string traitName;
+                    if (auto* con =
+                            std::get_if<ConstrainedType>(&recvType->kind))
+                        traitName = con->traitName;
+                    else if (auto* named =
+                            std::get_if<NamedType>(&recvType->kind))
+                        traitName = named->name;
+                    if (!traitName.empty()
+                        && m_checker.isTrait(traitName)
+                        && m_checker.traitMethodIsFoul(traitName,
+                                                       n.method)) {
+                        if (!foulValueCall && n.method != "inspect") {
+                            foulValueCall = &e;
+                            foulValueMethod = n.method;
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        bool found = false;
+        ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+            found = found || hasFoulResolved(*child);
+        });
+        return found;
     };
 
     // Check each function for newly discovered foul resolved calls.
@@ -1535,102 +1288,10 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
         }, e.kind);
     };
 
-    std::function<void(const ast::Expr&)> findGuards = [&](const ast::Expr& e) {
-        std::visit([&](const auto& n) {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                if (n.subject) findGuards(*n.subject);
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) checkGuard(**cl.guard);
-                    if (cl.body) findGuards(*cl.body);
-                }
-            } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-                for (const auto& cl : n.clauses) {
-                    if (cl.guard && *cl.guard) checkGuard(**cl.guard);
-                    if (cl.body) findGuards(*cl.body);
-                }
-            } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                for (const auto& a : n.args) if (a) findGuards(*a);
-                for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
-                if (n.block) findGuards(**n.block);
-            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                for (const auto& value : n.values) if (value) findGuards(*value);
-            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                for (const auto& value : n.values) if (value) findGuards(*value);
-            } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                if (n.receiver) findGuards(*n.receiver);
-                for (const auto& a : n.args) if (a) findGuards(*a);
-                for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
-                if (n.block) findGuards(**n.block);
-            } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                if (n.left) findGuards(*n.left);
-                if (n.right) findGuards(*n.right);
-            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                for (const auto& ex : n.thenBody) if (ex) findGuards(*ex);
-                for (const auto& [c, b] : n.elifs) {
-                    if (c) findGuards(*c);
-                    for (const auto& ex : b) if (ex) findGuards(*ex);
-                }
-                if (n.elseBody)
-                    for (const auto& ex : *n.elseBody) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                if (n.value) findGuards(*n.value);
-            } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                if (n.value) findGuards(*n.value);
-            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                for (const auto& ex : n.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-                if (n.value) findGuards(*n.value);
-            } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-                if (n.condition) findGuards(*n.condition);
-                if (n.thenExpr) findGuards(*n.thenExpr);
-                if (n.elseExpr) findGuards(*n.elseExpr);
-            } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                if (n.expr) findGuards(*n.expr);
-                if (n.condition) findGuards(*n.condition);
-            }
-        }, e.kind);
-    };
-
-    for (const auto& item : program.items) {
-        std::visit([&](const auto& n) {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (n) for (const auto& cl : n->clauses)
-                    for (const auto& ex : cl.body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (n) for (const auto& mi : n->body) {
-                    std::visit([&](const auto& mn) {
-                        using MT = std::decay_t<decltype(mn)>;
-                        if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                            if (mn) for (const auto& cl : mn->clauses)
-                                for (const auto& ex : cl.body) if (ex) findGuards(*ex);
-                        }
-                    }, mi);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (n) for (const auto& ex : n->body) if (ex) findGuards(*ex);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (n) for (const auto& mi : n->body) {
-                    std::visit([&](const auto& mn) {
-                        using MT = std::decay_t<decltype(mn)>;
-                        if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                            if (mn) for (const auto& cl : mn->clauses)
-                                for (const auto& ex : cl.body) if (ex) findGuards(*ex);
-                        }
-                    }, mi);
-                }
-            }
-        }, item);
-    }
+    // Every guard in every body that runs.
+    ast::forEachBodyExpr(program, [&](const ast::Expr& body) {
+        ast::forEachGuard(body, checkGuard);
+    });
 }
 
 auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) -> void {
@@ -1648,10 +1309,6 @@ auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) 
 
 auto Analyzer::error(SourceLocation loc, const std::string& msg) -> void {
     m_diagnostics.push_back({Diagnostic::Level::Error, loc, msg});
-}
-
-auto Analyzer::warning(SourceLocation loc, const std::string& msg) -> void {
-    m_diagnostics.push_back({Diagnostic::Level::Warning, loc, msg});
 }
 
 } // namespace kex::semantic

@@ -1,4 +1,6 @@
 #include "emit_core.hxx"
+#include "pass_manager.hxx"
+#include "walk.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
@@ -69,50 +71,17 @@ struct Emitter {
     // to know that one exists — see hasBlockReturn.
     static auto hasReturn(const ExprPtr& e, bool throughLambdas = false) -> bool {
         if (!e) return false;
-        const auto r = [throughLambdas](const ExprPtr& x) { return hasReturn(x, throughLambdas); };
-        return std::visit([&](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, Return>) return true;
-            else if constexpr (std::is_same_v<T, Let>) return r(n.value) || r(n.body);
-            else if constexpr (std::is_same_v<T, Seq>) {
-                for (auto& x : n.exprs) if (r(x)) return true; return false;
-            } else if constexpr (std::is_same_v<T, Match>) {
-                for (auto& s : n.subjects) if (r(s)) return true;
-                for (auto& c : n.clauses) {
-                    if (c.guard && r(*c.guard)) return true;
-                    if (r(c.body)) return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<T, Intrinsic>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, Call>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, CallIndirect>) {
-                if (r(n.callee)) return true;
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, MakeTuple>) {
-                for (auto& a : n.elements) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, MakeList>) {
-                for (auto& a : n.elements) if (r(a)) return true;
-                return n.rest && r(*n.rest);
-            } else if constexpr (std::is_same_v<T, Construct>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, TryCatch>) {
-                if (r(n.body)) return true;
-                for (auto& c : n.clauses) if (r(c.body)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, LetRec>) {
-                // Loops and guard continuations lower to a LetRec but stay in
-                // the SAME return scope: a `return` inside a loop escapes the
-                // enclosing function, so recurse into both bodies.
-                return r(n.funBody) || r(n.contBody);
-            } else if constexpr (std::is_same_v<T, Lambda>) {
-                // A named local function's returns are its own.
-                return throughLambdas && !n.ownReturnScope && r(n.body);
-            }
-            // Leaves have none.
-            return false;
-        }, e->node);
+        if (std::holds_alternative<Return>(e->node)) return true;
+        // A named local function's returns are its own.
+        if (const auto* lambda = std::get_if<Lambda>(&e->node))
+            return throughLambdas && !lambda->ownReturnScope &&
+                   hasReturn(lambda->body, throughLambdas);
+        // Everything else — loops and guard continuations included: they
+        // lower to a LetRec but stay in the SAME return scope, so a `return`
+        // inside a loop escapes the enclosing function.
+        return anyChild(*e, [&](const ExprPtr& child) {
+            return hasReturn(child, throughLambdas);
+        });
     }
 
     // Does a block (Lambda) somewhere under this body contain a `return`? Such
@@ -123,34 +92,7 @@ struct Emitter {
         if (const auto* lambda = std::get_if<Lambda>(&e->node))
             return !lambda->ownReturnScope &&
                    hasReturn(lambda->body, /*throughLambdas=*/true);
-        return std::visit([](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            const auto any = [](const auto& list) {
-                for (const auto& x : list) if (hasBlockReturn(x)) return true;
-                return false;
-            };
-            if constexpr (std::is_same_v<T, Return>) return hasBlockReturn(n.value);
-            else if constexpr (std::is_same_v<T, Let>) return hasBlockReturn(n.value) || hasBlockReturn(n.body);
-            else if constexpr (std::is_same_v<T, Seq>) return any(n.exprs);
-            else if constexpr (std::is_same_v<T, Match>) {
-                if (any(n.subjects)) return true;
-                for (const auto& c : n.clauses) {
-                    if (c.guard && hasBlockReturn(*c.guard)) return true;
-                    if (hasBlockReturn(c.body)) return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<T, Intrinsic> || std::is_same_v<T, Call> ||
-                                 std::is_same_v<T, Construct>) return any(n.args);
-            else if constexpr (std::is_same_v<T, CallIndirect>) return hasBlockReturn(n.callee) || any(n.args);
-            else if constexpr (std::is_same_v<T, MakeTuple>) return any(n.elements);
-            else if constexpr (std::is_same_v<T, MakeList>) return any(n.elements) || (n.rest && hasBlockReturn(*n.rest));
-            else if constexpr (std::is_same_v<T, TryCatch>) {
-                if (hasBlockReturn(n.body)) return true;
-                for (const auto& c : n.clauses) if (hasBlockReturn(c.body)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, LetRec>) return hasBlockReturn(n.funBody) || hasBlockReturn(n.contBody);
-            return false;
-        }, e->node);
+        return anyChild(*e, [](const ExprPtr& child) { return hasBlockReturn(child); });
     }
 
     // Wrap a body so a thrown {'kex_return', V} becomes the value; anything
@@ -281,8 +223,11 @@ struct Emitter {
     auto emitIntrinsic(const Intrinsic& in) -> std::string {
         auto a = [&](int i) { return emit(in.args[i]); };
         switch (in.op) {
-            // + is polymorphic (numeric add / string concat) at runtime.
-            case Op::Add:    return "call 'kex_intrinsic_number':'add'(" + a(0) + ", " + a(1) + ")";
+            // + is polymorphic (numeric add / string concat) at runtime; the
+            // lowerer routes everything except provably-integer addition
+            // through kex_intrinsic_number:add, so reaching here means both
+            // operands are integers and the raw BIF is exact.
+            case Op::Add:    return "call 'erlang':'+'(" + a(0) + ", " + a(1) + ")";
             case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
             case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
             case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
@@ -752,7 +697,29 @@ auto emitCore(const Module& mod) -> EmitResult {
     r.source = out.str();
     r.moduleName = mod.name;
     r.mainArity = mod.mainArity;
+    // A dispatcher's routes hold only as its function's first clause: one
+    // merged in ahead (a bare definition of the same name) answers first.
+    for (const auto& fn : mod.functions)
+        if (!fn.clauses.empty())
+            for (const auto& route : fn.clauses.front().routes)
+                r.routedImplementations.insert({route, fn.arity});
     return r;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult> {
+    auto passes = standardPasses();
+    std::vector<EmitResult> emitted;
+    emitted.reserve(modules.size());
+    for (auto& module : modules) {
+        passes.run(module);
+        emitted.push_back(emitCore(module));
+    }
+    passes.report();
+    return emitted;
 }
 
 } // namespace kex::ir

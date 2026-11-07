@@ -247,6 +247,10 @@ int main() {
                 if (store.find("stopping") != std::string::npos) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            // A client that failed never stopped the store, which would then
+            // hold the test open until ctest's timeout.
+            if (store.find("stopping") == std::string::npos)
+                std::system("pkill -f 'sname store --cookie kexexample' 2>/dev/null");
             std::error_code ec;
             fs::remove_all(root, ec);
             if (client.find("Start this node with a name") != std::string::npos ||

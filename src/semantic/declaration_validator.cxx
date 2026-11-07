@@ -216,11 +216,7 @@ private:
                bool allowThis) const -> bool {
         if (name.parts.empty()) return true;
         const auto& last = name.parts.back();
-        std::string qualified;
-        for (const auto& part : name.parts) {
-            if (!qualified.empty()) qualified += ".";
-            qualified += part;
-        }
+        std::string qualified = name.dotted();
         if ((allowThis && last == "This") || last == "Never" ||
             last == "Void" || last == "Any" || generics.count(last) ||
             (name.parts.size() == 1 && last.size() == 1) ||
@@ -245,11 +241,7 @@ private:
               bool allowThis = false) -> void {
         auto name = [&](const ast::TypeName& value) {
             if (known(value, generics, allowThis)) return;
-            std::string spelling;
-            for (const auto& part : value.parts) {
-                if (!spelling.empty()) spelling += ".";
-                spelling += part;
-            }
+            std::string spelling = value.dotted();
             diagnostics.push_back({Diagnostic::Level::Error, expr.location,
                                    "Unknown type `" + spelling + "`"});
         };

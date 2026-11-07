@@ -31,9 +31,14 @@ foul runCase(body: String, expected: String) -> RunnerResult do
   FS.File.write("${root}/sample.expected", "${expected}\n")
   FS.File.write(compiler, "#!/bin/bash\n${counting}\n${body}\n")
   FS.File.changePermission(compiler, [FS.Readable, FS.Writable, FS.Executable])
+  # 2s, not 0.2s: the trivial legs are a bash spawn plus file IO, which can
+  # exceed 200ms on a loaded machine (CI, parallel ctest) and spuriously retry
+  # (risk #7). The deliberate-timeout legs sleep 10, so they still time out
+  # deterministically. The TERM-ignoring case then takes ~14s (2 legs x (2s +
+  # 5s kill-after)), hence the 60s outer budget.
   let args = ["--no-print-directory", "-o", "build", "spec-beam", "KEX=${compiler}",
-    "BEAM_SPEC_FILES=${root}/sample.kex", "BEAM_SPEC_TIMEOUT=0.2"]
-  let ran = Process.run("make", args, 20000)
+    "BEAM_SPEC_FILES=${root}/sample.kex", "BEAM_SPEC_TIMEOUT=2"]
+  let ran = Process.run("make", args, 60000)
   let attempts = Integer.parse(FS.File.read(tally).or("").trim).or(0)
   FS.Directory.deleteAll(root)
   match ran do

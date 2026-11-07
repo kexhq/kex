@@ -1,4 +1,5 @@
 #include "completion_at.hxx"
+#include "../common/well_known.hxx"
 
 
 #include <algorithm>
@@ -19,8 +20,13 @@ auto completionQualifierForType(const TypePtr& type) -> std::string {
         else if constexpr (std::is_same_v<T, OptionalType>)
             return "Optional";
         else if constexpr (std::is_same_v<T, NamedType>)
-            return value.typeArgs.empty() ? value.name
-                                          : typeToString(type);
+        {
+            // A type named before a dot (`List.ma`) is a namespace there:
+            // complete what it holds, not its `Type` record's fields.
+            if (value.name == kex::names::kTypeRecord && value.typeArgs.size() == 1)
+                return completionQualifierForType(value.typeArgs.front());
+            return value.typeArgs.empty() ? value.name : typeToString(type);
+        }
         else if constexpr (std::is_same_v<T, PrimitiveType> ||
                            std::is_same_v<T, SizedIntType> ||
                            std::is_same_v<T, SizedFloatType>)
@@ -277,6 +283,24 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
         std::unique(result.matches.begin(), result.matches.end()),
         result.matches.end());
     return result;
+}
+
+auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
+                       const std::string& definitions,
+                       const std::string& bindings,
+                       const std::string& input, const std::string& line,
+                       size_t point, bool declaration,
+                       const ImportedInterfaces* interfaces) -> CompletionAt {
+    const auto prefix =
+        definitions + (declaration ? "" : "main do\n" + bindings);
+    const auto program = prefix + input + completionClosers(input) +
+                         (declaration ? "\n" : "\nend\n");
+    const size_t lineStart = prefix.size() + (input.size() - line.size());
+    auto completion = completeAt(db, analysisDb, "<repl-completion>", program,
+                                 lineStart + std::min(point, line.size()),
+                                 interfaces);
+    completion.replaceFrom -= lineStart;
+    return completion;
 }
 
 } // namespace kex::semantic
