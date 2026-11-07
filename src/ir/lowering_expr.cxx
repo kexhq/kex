@@ -791,8 +791,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
         } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
             return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
         } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-            // `&.method` / `&.method(args)` → fun(_sx) -> _sx.method(args).
-            return lowerNameAsUfcsFun(n.name, n.args);
+            return lower(n.lambda);
         } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
             if (n.entries.empty()) return callE("maps", "new", 0, {});
             std::vector<Binding> binds;

@@ -3504,44 +3504,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::record(typeName, std::move(fields));
         }
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-            if (node.kind == ast::ShorthandLambda::Kind::Method) {
-                // &.method — create a lambda that calls method on its arg
-                auto method = node.name;
-                auto lambda = std::make_shared<Value>();
-                lambda->data = FunctionValue{"&." + method,
-                    [this, method](std::vector<ValuePtr> args) -> ValuePtr {
-                        if (args.empty()) return Value::none();
-                        // Field access wins over UFCS dispatch, the same order
-                        // `receiver.field` uses — there is no callable
-                        // `field/1` for a plain record field to dispatch to.
-                        if (auto* rec = std::get_if<RecordValue>(&args[0]->data)) {
-                            auto field = rec->fields.find(method);
-                            if (field != rec->fields.end()) return field->second;
-                        }
-                        auto dispatchName = resolveMethodName(args[0], method);
-                        return callFunction(dispatchName, std::move(args), {}, {});
-                    }};
-                return lambda;
-            }
-            if (node.kind == ast::ShorthandLambda::Kind::MethodWithArgs) {
-                // &.method(args) — create a lambda that calls method with extra args
-                auto method = node.name;
-                std::vector<ValuePtr> extraArgs;
-                for (const auto& arg : node.args) {
-                    extraArgs.push_back(arg ? eval(*arg) : Value::none());
-                }
-                auto lambda = std::make_shared<Value>();
-                lambda->data = FunctionValue{"&." + method,
-                    [this, method, extraArgs](std::vector<ValuePtr> args) -> ValuePtr {
-                        if (args.empty()) return Value::none();
-                        auto dispatchName = resolveMethodName(args[0], method);
-                        auto allArgs = args;
-                        for (const auto& a : extraArgs) allArgs.push_back(a);
-                        return callFunction(dispatchName, std::move(allArgs), {}, {});
-                    }};
-                return lambda;
-            }
-            return Value::none();
+            return eval(*node.lambda);
         }
         else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
             return evalBody(node.body);

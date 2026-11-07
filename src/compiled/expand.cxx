@@ -526,7 +526,7 @@ struct Substituter {
                         if (node.rescue) each(*node.rescue);
                     });
                 } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-                    each(node.args);
+                    substitute(node.lambda);
                 } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
                     substitute(node.inner);
                 } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {

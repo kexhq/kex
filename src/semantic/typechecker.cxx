@@ -4740,6 +4740,8 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
         if (candidate.backendArity != arity) continue;
         // A module this build does not link provides nothing at run time.
         if (!m_linkedModules->contains(candidate.backendModule)) continue;
+        // Nor does one declared for an alias: no value has that type.
+        if (candidate.aliasReceiver) continue;
         if (candidate.foreignTarget && !makeModuleVisible(candidate.sourceModule)) continue;
         modules.insert(candidate.backendModule);
         if (candidate.backendFunction == name) dispatcher = &candidate;

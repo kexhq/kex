@@ -772,8 +772,11 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             resolveBody(node.body);
             resolveRescue(node.rescue);
         }
-        // Literals, ThisExpr, BreakExpr, NextExpr,
-        // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve
+        else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
+            if (node.lambda) resolveExpr(*node.lambda);
+        }
+        // Literals, ThisExpr, BreakExpr, NextExpr, CurryPlaceholder,
+        // ErrorNode: nothing to resolve
     }, expr.kind);
 }
 

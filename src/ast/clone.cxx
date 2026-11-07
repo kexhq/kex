@@ -343,8 +343,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.namedFunction = node.namedFunction;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
-                out->kind =
-                    ShorthandLambda{node.kind, node.name, cloneVec(node.args)};
+                out->kind = ShorthandLambda{node.kind, node.name, clone(node.lambda)};
             } else if constexpr (std::is_same_v<T, SpreadExpr>) {
                 out->kind = SpreadExpr{clone(node.inner)};
             } else if constexpr (std::is_same_v<T, TrailingIf>) {

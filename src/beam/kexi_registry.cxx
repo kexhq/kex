@@ -172,9 +172,32 @@ auto importedFunction(const KexiExport& exported,
     return result;
 }
 
+// Modules' type exports by source module.
+using ModuleTypes = std::map<std::string, const std::vector<KexiTypeExport>*>;
+
+// Whether `type`, written in `module`, names an alias there or in a module
+// enclosing it (`FilePath` in FS.Path is FS's): a type export with neither
+// constructors nor a distinct identity of its own (`type FilePath = String`);
+// an opaque type (`type Date`, backed by Unknown) is nominal.
+auto namesAlias(const KexiTypePtr& type, std::string module, const ModuleTypes& types) -> bool {
+    if (!type || type->kind != KexiType::Named) return false;
+    for (;;) {
+        if (const auto found = types.find(module); found != types.end())
+            for (const auto& exported : *found->second)
+                if (exported.name == type->name)
+                    return !exported.isDistinct && exported.constructors.empty() &&
+                           exported.backingType &&
+                           exported.backingType->kind != KexiType::Unknown;
+        const auto dot = module.rfind('.');
+        if (dot == std::string::npos) return false;
+        module.resize(dot);
+    }
+}
+
 auto importedReceiverFunction(const KexiMethod& receiver,
                               const std::string& backendModule,
-                              const std::string& sourceModule)
+                              const std::string& sourceModule,
+                              const ModuleTypes& types = {})
     -> kex::semantic::ImportedFunction {
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
@@ -189,6 +212,10 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.isReceiverMethod = !receiver.moduleFunction;
     TypeVarMap vars;
     auto receiverSemType = semanticType(receiver.receiverType, vars);
+    // A builtin structure (`List`, which the stdlib also declares as an
+    // alias) reads back as itself; only a bare alias name stays nominal.
+    result.aliasReceiver = std::holds_alternative<kex::semantic::NamedType>(receiverSemType->kind) &&
+                           namesAlias(receiver.receiverType, sourceModule, types);
     std::vector<kex::semantic::TypePtr> params = {
         std::move(receiverSemType),
     };
@@ -726,6 +753,12 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     importedTrait(trait, module.chunk.typeInterface));
         }
 
+    // Every module's types: a receiver's alias can be another module's
+    // (`FS.Path.join` over `FS`'s `FilePath`).
+    ModuleTypes allTypes;
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules)
+            allTypes.emplace(module.chunk.metadata.sourceModule, &module.chunk.typeInterface.types);
     for (const auto& [_, package] : m_packages) {
         std::unordered_set<std::string> units(package.unitIds.begin(),
                                               package.unitIds.end());
@@ -740,7 +773,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     if (receiver.typeOnly) continue;
                     auto function = importedReceiverFunction(
                         receiver, module.beamAtom,
-                        module.chunk.metadata.sourceModule);
+                        module.chunk.metadata.sourceModule, allTypes);
                     // A slot is called on the running server as well, as
                     // the checker's own `remoteSlotSignature` has it.
                     if (receiver.isSlot && !function.signature.params.empty()) {
