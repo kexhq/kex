@@ -4,7 +4,6 @@
 namespace kex::ir {
 
 auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
-    if (std::getenv("KEX_PROBE") && (n.name == "addIndex" || n.name == "createTable")) std::fprintf(stderr, "[probe] call %s ext=%d mod=%d subst=%d known=%d imports=%zu\n", n.name.c_str(), (int)externalImports.count(n.name), (int)moduleImports.count(n.name), (int)subst.count(n.name), (int)knownFns.count(n.name), externalImports.size()); /* TEMP PROBE */
     // A `using` import from a separately compiled module. A local binding
     // or an import from this unit still wins; anything else follows the
     // rule that a `using` import outranks a same-named function.

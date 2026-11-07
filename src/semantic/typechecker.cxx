@@ -4639,9 +4639,57 @@ auto TypeChecker::bareMethodCall(const ast::Expr& expr, const ast::FunctionCall&
             m_decidedCalls[&expr] = own->decision();
         else if (std::holds_alternative<UnknownType>(receiver->kind) ||
                  std::holds_alternative<TypeVar>(receiver->kind))
-            m_decidedCalls[&expr] = {CallKind::Dispatch, name};
+            decideDispatch(&expr, name);
     }
     return result;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& name) -> void {
+    m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+    // One imported module answering it, as this scope sees the providers:
+    // its dispatcher is the target, and lowering calls it rather than
+    // searching the providers itself.
+    const auto* call = std::get_if<ast::MethodCall>(&callExpr->kind);
+    if (!m_importedInterfaces || !m_linkedModules || !call || !call->receiver ||
+        m_resolvedCalls.contains(call))
+        return;
+    // A `make` method or function of this program by that name competes
+    // with the import at run time: that stays the value's to decide.
+    if (m_methodSignatures.contains(name) || m_userSignatures.contains(name)) return;
+    const auto providers = m_importedInterfaces->receiverFunctions.find(name);
+    if (providers == m_importedInterfaces->receiverFunctions.end()) return;
+    const int arity = static_cast<int>(call->args.size() + call->namedArgs.size()) + 1 +
+                      (call->block ? 1 : 0);
+    // Each module providing it at this arity that is in scope here: a
+    // `make` for a type its module does not declare is reached only through
+    // a `using` of that module, as lowering filters it.
+    std::set<std::string> modules;
+    const ImportedFunction* dispatcher = nullptr;
+    for (const auto& candidate : providers->second) {
+        if (candidate.backendArity != arity) continue;
+        // A module this build does not link provides nothing at run time.
+        if (!m_linkedModules->contains(candidate.backendModule)) continue;
+        if (candidate.foreignTarget && !makeModuleVisible(candidate.sourceModule)) continue;
+        // A foul provider takes the capability context, which the run-time
+        // search threads; such a call stays its to lower.
+        if (candidate.signature.isFoul) return;
+        modules.insert(candidate.backendModule);
+        if (candidate.backendFunction == name) dispatcher = &candidate;
+    }
+    if (modules.size() != 1 || !dispatcher) return;
+    ResolvedCallTarget target;
+    target.sourceModule = dispatcher->sourceModule;
+    target.backendModule = dispatcher->backendModule;
+    target.backendFunction = dispatcher->backendFunction;
+    target.backendArity = dispatcher->backendArity;
+    target.passesReceiver = true;
+    target.paramNames = dispatcher->paramNames;
+    target.defaultSources = dispatcher->defaultSources;
+    m_resolvedCalls[call] = std::move(target);
 }
 
 } // namespace kex::semantic

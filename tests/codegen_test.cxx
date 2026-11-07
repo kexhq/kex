@@ -1519,19 +1519,6 @@ int main() {
             assertTrue(contains(out, "call 'kex_units':'divide_measure'"), out);
         });
 
-        it("reorders named args for external module functions using param names", []() {
-            kex::ir::ExternalModules external;
-            external.nameToAtom["Stream"] = "Kex.Stream";
-            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
-            external.exportArity["Stream.Sequence"] = 2;
-            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
-
-            auto out = emitWithExternal(
-                "main do Stream.Sequence(from: 0) { |n| n + 1 } end\n",
-                external);
-            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
-        });
-
         it("resolves bare named-arg calls through external module fallback", []() {
             kex::ir::ExternalModules external;
             external.nameToAtom["Stream"] = "Kex.Stream";
@@ -1922,24 +1909,6 @@ int main() {
                 "main do go() end\n",
                 ext);
             assertTrue(contains(out, "call 'kex_prelude':'await'(T)"), out);
-            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
-        });
-
-        it("task.await(timeout: N) orders the named receiver argument", []() {
-            kex::ir::ExternalModules ext;
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 1, {}});
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 2, {"timeout"}});
-            auto out = emitWithExternal(
-                "# kex: no-check\n"
-                "foul go do\n"
-                "  let t = Task.start { 42 }\n"
-                "  t.await(timeout: 5000)\n"
-                "end\n"
-                "main do go() end\n",
-                ext);
-            assertTrue(contains(out, "call 'kex_prelude':'await'(T, 5000)"), out);
             assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 

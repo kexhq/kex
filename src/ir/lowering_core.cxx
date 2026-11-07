@@ -256,32 +256,6 @@ auto Lowering::runtimeError(const std::string& msg) -> ExprPtr {
         loc + "runtime error: " + msg)));
 }
 
-// The walker's failure for a `match` no clause covers: the same message,
-// with the subject rendered the same way (`inspect`). Built at runtime
-// because the value is only known then.
-//
-// Core Erlang needs this clause for a second reason: an inexhaustive
-// `case` is not merely a runtime risk there, it makes erlc's SSA pass
-// fail outright ("internal error in pass core_to_ssa"), so a program with
-// one unhandled variant did not compile at all where the walker ran it
-// and reported the unmatched value.
-auto Lowering::noClauseMatched(ExprPtr subject) -> ExprPtr {
-    std::string loc;
-    if (currentLoc) loc = std::string(currentLoc->file) + ":"
-        + std::to_string(currentLoc->line) + ":"
-        + std::to_string(currentLoc->column) + ": ";
-    std::vector<ExprPtr> parts;
-    parts.push_back(lit(LitKind::String,
-                        loc + "runtime error: no matching clause for "));
-    parts.push_back(callE("kex_io", "inspect_plain", 1,
-                          one(std::move(subject))));
-    auto list = std::make_unique<Expr>();
-    list->node = MakeList{std::move(parts), std::nullopt};
-    return callE("erlang", "error", 1,
-                 one(callE("erlang", "iolist_to_binary", 1,
-                           one(std::move(list)))));
-}
-
 // The same dispatch where the arguments are already lowered — the
 // qualified-call path builds its argument slots before it knows the
 // target is a capability.
