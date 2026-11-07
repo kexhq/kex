@@ -26,6 +26,9 @@ public:
         : m_importedInterfaces(importedInterfaces) {}
 
     auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics) -> void;
+    auto linkModules(std::set<std::string> modules) -> void {
+        m_linkedModules = std::move(modules);
+    }
 
     // Query the inferred type of any expression node after check() has run.
     // Returns nullptr for nodes not visited (e.g. unreachable code).
@@ -196,6 +199,10 @@ private:
     // "module\nname" for each free function declared in a `private do`.
     std::unordered_set<std::string> m_privateFreeFunctions;
     auto reportUnknownMethods() -> void;
+    // Decides `call` is dispatched on its value, and, when one imported module
+    // in scope answers it by name and arity, files its dispatcher as the
+    // resolved target.
+    auto decideDispatch(const ast::Expr* call, const std::string& name) -> void;
     auto publishQualifiedSignatures(const std::string& name,
                                     const std::vector<Signature>& signatures) -> void;
     std::unordered_set<std::string> m_qualifiedPublished;
@@ -490,6 +497,8 @@ private:
     // checked as before.
     TypePtr m_branchExpectation;
     TypeEnv m_globals;
+    // Analyzer::setLinkedModules.
+    std::optional<std::set<std::string>> m_linkedModules;
     // The program's top-level `let name = expr` values. Functions are checked
     // before the synthetic main blocks that bind these, so a call through one
     // (`layout(live)`) has no type for it yet — but it is still the program's

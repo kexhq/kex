@@ -1229,16 +1229,10 @@ std::vector<kex::semantic::Diagnostic> g_separateDiagnostics;
 // `kex -c` attaches as its KexI, so the merged program is never analysed.
 std::map<std::string, kex::beam::KexiChunk> g_separateChunks;
 
-// Phase 3: a checked unit lowered on its own, with its own analysis, against
-// the prelude and the KexI of the units below it (`registry`, which holds only
-// those yet). Its modules' Core Erlang, or nothing when lowering failed; with
-// KEX_SEPARATE_CORE=<dir> also written to `dir`, to be compared with the
-// merged build's.
-auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &path,
-                         const kex::semantic::Analyzer &analyzer,
-                         const kex::beam::KexiRegistry &registry,
-                         const std::string &dir)
-    -> std::optional<std::vector<kex::ir::EmitResult>> {
+// The providers a unit of this build lowers against: the prebuilt prelude's
+// and those of the units below it. The check counts a call's providers among
+// the same modules (Analyzer::setLinkedModules).
+auto unitExternalModules(const kex::beam::KexiRegistry &registry) -> kex::ir::ExternalModules {
   // A module this build compiles is described by its own interface. The
   // prebuilt runtime has its own copy of an opt-in standard library module,
   // laid out as the prelude build lays it out (`make Router` filed under
@@ -1281,6 +1275,20 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
           }))
         merged.push_back(provider);
   }
+  return externals;
+}
+
+// Phase 3: a checked unit lowered on its own, with its own analysis, against
+// the prelude and the KexI of the units below it (`registry`, which holds only
+// those yet). Its modules' Core Erlang, or nothing when lowering failed; with
+// KEX_SEPARATE_CORE=<dir> also written to `dir`, to be compared with the
+// merged build's.
+auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &path,
+                         const kex::semantic::Analyzer &analyzer,
+                         const kex::beam::KexiRegistry &registry,
+                         const std::string &dir)
+    -> std::optional<std::vector<kex::ir::EmitResult>> {
+  auto externals = unitExternalModules(registry);
   auto layouts = loadPreludeRecordLayouts();
   auto variants = loadPreludeVariantTags();
   // Where each type's `make` functions are, for the runtime's dispatch on a
@@ -1770,6 +1778,13 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     kex::semantic::Analyzer analyzer(&available);
     configureFullCheck(analyzer, isEntry ? g_separateNameCheckFiles : std::vector<std::string>{},
                        g_separateEntryPath);
+    // The providers lowering will see, so the check counts a call's the same.
+    {
+      std::set<std::string> linked;
+      for (const auto &[_, providers] : unitExternalModules(registry).receiverFunctions)
+        for (const auto &provider : providers) linked.insert(provider.moduleAtom);
+      analyzer.setLinkedModules(std::move(linked));
+    }
     const bool clean = analyzer.analyze(program);
     auto unitDiagnostics = analyzer.diagnostics();
     if (clean)

@@ -800,6 +800,77 @@ clusters (the specs pin each one):
   `dsl_qualified_calls`): the owner decides the target.
 - Other: `process_shared`, `closeable_traits_beam`, `writable_sockets_beam`.
 
+**Coverage-guided deletion (2026-11-07).** Production lowering always has a
+HIR: the separate build checks every unit before lowering it, `--no-check`
+and `--emit-core` included, and the REPL and the prelude build lower with
+their own check's answers. So a lowering path the BEAM corpus never takes is
+one the checker's decisions made dead. Measured with an instrumented build
+(`-fprofile-instr-generate`; prelude build, spec-beam, the prelude, stdlib
+and example BEAM suites, ctest without `codegen_test`, which lowers with no
+HIR): 1,099 of 11,574 lowering lines never ran, 553 of them in
+`lowering_method_call.cxx`. Deleted there so far (339 lines): named-argument
+placement for externals and providers (placed earlier, from the resolved
+target; a call that still reaches them is a `LowerError` now), a record
+built through a method name, module functions and exports through a type
+name, and the structural-alias provider loop. Two `codegen_test` cases
+pinned only those no-HIR paths and are gone. `noClauseMatched`, dead since
+the guards pass, is deleted too. A path a program outside the corpus can
+still reach is kept (a `let` destructuring a record, error paths).
+
+**What still reaches the cascade (measured 2026-11-07).** Of 50.5k method
+calls lowered over the corpus, the resolved-target block (`resolvedCalls`)
+takes 41k; 7.7k reach the cascade after it. By the checker's decision:
+Dispatch 974, FieldRead 570 (`pos`, `input`, `port`: a record whose layout
+lowering does not hold, read through its accessor), Imported 274 (`kind`,
+`second`: imported targets the resolved block did not take), Undecided 273
+(programs that do not check, lowered under `--emit-core`), OwnMethod 165,
+Selected 21, TraitMethod 9, Hidden 3, ModuleFunction 2. The structural
+switch is next: lower each of these kinds from its decision before the
+cascade (a FieldRead from the interface's layout, a Dispatch to its
+dispatcher), then measure the cascade dead again and delete it.
+First of these done: a FieldRead of an imported record is read from its
+interface's layout (`staticFieldRead`); only a bare name a local record
+also declares still goes through the accessor (`localRecordNames`).
+A Dispatch call only one imported module provides (at any arity: a unit
+compiled apart beside the prelude is routed by the value's owner) and no
+local method or function shares is resolved to that module's dispatcher
+by the checker (`resolveDispatchProviders`); 43 of 974 calls. The rest have
+several real providers (`showValue` 457: every unit with a Showable type).
+Choosing among them at run time is the semantics, so the next step is a
+checker target that names the providers to dispatch among, which lowering
+emits as written; then the search's per-owner, guarded and dual-provider
+branches can go.
+Measured after it: 615 of the Dispatch calls the search still lowers have
+ONE provider at their arity, the prelude, and the search only calls its
+dispatcher. The checker cannot take them yet: counted at the call's arity,
+`Kex.AST`'s `pattern.to(String)` went to the prelude, because the checker's
+interfaces did not hold `Kex.AST`'s `to` while lowering's did (an opt-in
+module read from source shows the checker its `make` methods only once a
+package approves them). Prerequisite: the checker sees every receiver
+function lowering sees; then the arity rule takes these 615 and the
+search's single-provider path can go.
+Narrowed later the same day: the decision moved to where the scope is live
+(`decideDispatch`, the one helper all eight Dispatch sites call; a `make`
+of a unit compiled apart counts as a provider only where its module is in
+scope, as lowering filters it). What still blocks the 615 (`showValue`
+441): the checker's interfaces hold EVERY opt-in stdlib module
+(`Kex.Data.Set`'s `showValue`, `Kex.Net.HTTP.Headers`'), linked or not,
+while lowering's hold only what this build links. The checker needs the
+build's linked-module set to count providers the way lowering does.
+Done: the separate build hands each unit's check the modules its lowering
+will find providers in (`unitExternalModules`, the one place both read;
+`Analyzer::setLinkedModules`), and `decideDispatch` counts only those. A
+call with a foul provider at its arity stays the search's (it threads the
+capability context). Dispatch calls the provider search lowers: 615 → 31
+(`count`, `each`, `get`: foul providers). What the search still lowers:
+those 31, 45 OwnMethod (`Kex.Net.Socket`), 5 Imported, 57 from programs
+that do not check. The cascade's traffic halved (7.7k → 4.3k calls), and
+coverage then showed the `externalImports` path (a `using`-imported
+function of a unit compiled apart), the imported clause's unplaced
+named-argument path and its two-provider dispatch dead; they are deleted,
+with `importOwnsLocalReceiver` and `importSourceModule`, which only they
+called (~130 lines).
+
 Originally planned:
 
 - New `src/ir/lower_hir*.cxx`: mechanical HIR→IR, a `switch` on the call

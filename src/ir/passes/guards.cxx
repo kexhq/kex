@@ -77,7 +77,8 @@ private:
         while (guarded < clauses.size() && !clauses[guarded].guard) ++guarded;
         if (guarded == clauses.size()) {
             // A single-subject match ends in the walker's failure: without
-            // it erlc cannot compile an inexhaustive `case`. The fallback's
+            // it erlc cannot compile an inexhaustive `case` (its SSA pass
+            // fails, "internal error in pass core_to_ssa"). The fallback's
             // own variable binds the unmatched value, so the subject is
             // neither evaluated again nor let-bound.
             if (subjects.size() == 1 && !anyMatchesAnything(clauses)) {

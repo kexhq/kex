@@ -1840,7 +1840,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const auto receiver = resolve(argTypes.front());
                 if (std::holds_alternative<UnknownType>(receiver->kind) ||
                     std::holds_alternative<TypeVar>(receiver->kind))
-                    m_decidedCalls[&expr] = {CallKind::Dispatch, node.method};
+                    decideDispatch(&expr, node.method);
             }
             return result;
         }
@@ -4492,7 +4492,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // false "returns Parsing.Input" error, and a BEAM call that died on the
     // Cursor the walker handled. The value decides when the call runs.
     if (hasLocalMethods && !useLocalMethods && !importedSigs.empty()) {
-        if (callExpr) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+        if (callExpr) decideDispatch(callExpr, name);
         return Type::unknown();
     }
     // Local methods come FIRST. When a user type defines a method the prelude
@@ -4694,7 +4694,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // Monoid's default on String): the value picks the body at run time.
         if (callExpr && isMethodCall && concreteReceiver &&
             m_traits.declaresMethod(m_traits.implementorKey(argTypes[0]), name)) {
-            m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+            decideDispatch(callExpr, name);
             return Type::unknown();
         }
         // Every method of this name is a `make` for a type declared outside
@@ -5022,7 +5022,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // A default the receiver's type inherits, with no home module to
             // answer for it (`(0..4).map`, Enumerable's on Range): the value
             // picks the body at run time.
-            if (callExpr && traitProvides) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+            if (callExpr && traitProvides) decideDispatch(callExpr, name);
             return Type::unknown();
         }
     }
@@ -5237,7 +5237,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // keep its intermediate result permissive until the surrounding
         // method chain or a call site supplies a concrete receiver.
         if (distinct.size() > 1 && !concreteArguments) {
-            if (callExpr) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+            if (callExpr) decideDispatch(callExpr, name);
             return Type::unknown();
         }
         if (best) {
@@ -5342,7 +5342,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         typeToString(headShapeOf(resolve(candidate->params[0]))));
             if (receiverHeads.size() > 1) {
                 if (callExpr)
-                    m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+                    decideDispatch(callExpr, name);
                 return Type::unknown();
             }
         }
@@ -5582,7 +5582,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     break;
                 case CallOwner::Value:
                     if (callExpr)
-                        m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+                        decideDispatch(callExpr, name);
                     break;
                 }
             } else if (winnerIsMakeMethod) {

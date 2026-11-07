@@ -1577,11 +1577,13 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     const auto& target = hir->targetOf(n);
     if (target.kind != hir::TargetKind::FieldRead) return nullptr;
     const auto& recordName = target.owner;
-    // A bare name the prelude also declares says too little: a local
-    // `ParseError` and the prelude's are both `ParseError` to the checker,
-    // and they keep their field at different positions. The accessor
-    // tells them apart by tuple size.
-    if (externalRecordNames.count(recordName)) return nullptr;
+    // A bare name both this unit and an imported one declare says too
+    // little: a local `ParseError` and the prelude's are both `ParseError`
+    // to the checker, and they keep their field at different positions. The
+    // accessor tells them apart by tuple size. An imported record no local
+    // one shadows is read from its interface's layout.
+    if (externalRecordNames.count(recordName) && localRecordNames.count(recordName))
+        return nullptr;
     auto record = records.find(recordName);
     if (record == records.end()) return nullptr;
     const auto& fields = record->second.fields;

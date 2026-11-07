@@ -47,6 +47,12 @@ public:
         -> void {
         m_moduleLocator = std::move(locate);
     }
+    // The backend modules this build links, which lowering finds providers
+    // in: a call one of them alone answers is resolved to its dispatcher.
+    // Unset (the REPL, the prelude build), no such call is resolved.
+    auto setLinkedModules(std::set<std::string> modules) -> void {
+        m_checker.linkModules(std::move(modules));
+    }
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 

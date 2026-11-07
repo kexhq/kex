@@ -73,6 +73,8 @@ struct Lowering {
     // Records that came in from a separately compiled module (the prelude's)
     // under their bare name, as opposed to ones this unit declares.
     std::unordered_set<std::string> externalRecordNames;
+    // Records this unit declares, by the name `records` keys them under.
+    std::unordered_set<std::string> localRecordNames;
     // A record or ADT of a unit compiled apart, by name: the module holding
     // its `make` functions (ExternalRecordLayout::methodOwner).
     std::unordered_map<std::string, std::string> externalMethodOwners;
@@ -357,8 +359,6 @@ struct Lowering {
     auto structuredTypeLiteral(const semantic::StructuredType& type) -> ExprPtr;
 
     auto runtimeError(const std::string& msg) -> ExprPtr;
-
-    auto noClauseMatched(ExprPtr subject) -> ExprPtr;
 
     auto capabilityDispatchLowered(
         const std::string& capability, const std::string& method,
@@ -803,13 +803,6 @@ struct Lowering {
 
     auto moduleInScope(const std::string& module) const -> bool;
 
-
-    auto importSourceModule(const std::string& emittedSymbol) const
-        -> std::string;
-
-    auto importOwnsLocalReceiver(const std::string& method,
-                                 const std::string& emittedSymbol) const
-        -> bool;
 
     auto methodReceiverOwner(const std::string& method) const -> std::string;
 
