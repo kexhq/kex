@@ -1,0 +1,24 @@
+# A module's own nullary constructor is in scope inside the module, ahead of
+# a record of the same name elsewhere: `Name` in `module People` is
+# `Detail.Name`, not `Directory.Name`. Typed as the record's type value, it
+# made `label(Name, text)` reject every `Name` (slick's `UserDetail.Name`
+# beside `Net.DNS.Name`).
+
+module Directory do
+  record Name do
+    value : String
+  end
+end
+
+module People do
+  type Detail = Name | Title
+
+  let DETAILS = [(Name, "Name"), (Title, "Title")]
+
+  let label(Name, text) = "${text}!"
+  let label(Title, text) = text
+end
+
+main do
+  IO.printLine(People.DETAILS.map { |detail, text| People.label(detail, text) }.join(", "))
+end

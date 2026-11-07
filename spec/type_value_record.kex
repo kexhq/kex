@@ -13,4 +13,8 @@ main do
   IO.printLine("${t}")
   IO.printLine(t.name)
   IO.printLine("${(-1).to(Byte).or(0)} ${200.to(Byte).or(0)}")
+  # `Type.of` of a type value is that type: the idiom `select(as: T)` with
+  # `Type.of(as)` keeps meaning what it did when a type name was a token.
+  IO.printLine(Type.of(t).name)
+  IO.printLine(Type.of(Integer).name)
 end

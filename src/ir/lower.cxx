@@ -47,7 +47,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     const auto* externals = context.externals;
     const auto* externalRecords = context.externalRecords;
     const auto* resolvedCalls = context.resolvedCalls;
-    const bool preferExternalReceivers = context.preferExternalReceivers;
+    const bool lowersPrelude = context.lowersPrelude;
     const auto* externalVariants = context.externalVariants;
     const auto* staticTypeOfCalls = context.staticTypeOfCalls;
     const auto* expressionTypes = context.expressionTypes;
@@ -58,7 +58,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.resolvedCalls = resolvedCalls;
     L.hir = context.hir;
     L.resolvedTraits = resolvedTraits;
-    L.preferExternalReceivers = preferExternalReceivers;
+    L.lowersPrelude = lowersPrelude;
     L.staticTypeOfCalls = staticTypeOfCalls;
     L.expressionTypes = expressionTypes;
     if (externals) L.traitMethods = externals->traitMethods;

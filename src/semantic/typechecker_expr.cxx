@@ -579,10 +579,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (type && !builtinName) return type;
             // A bare TYPE NAME used as a value (`x.to(Integer)`, `let t =
             // String`) is a `Type<X>`: what a `Type<T>` parameter takes.
-            if (isPrimitiveTypeName(node.name) ||
-                m_recordFields.count(resolveRecordName(node.name)) ||
-                m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
-            {
+            if (namesKnownType(node.name)) {
                 // A type named as a value is that type's `Type` record
                 // (`Type<String>`), except `Void`, which is the unit value.
                 if (node.name == kex::names::kVoidType) return Type::named(node.name);
@@ -1831,15 +1828,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (structuralAlias)
                 if (auto resolved = m_resolvedCalls.find(&node); resolved != m_resolvedCalls.end())
                     resolved->second.passesReceiver = false;
-            // Nothing chose a target and the receiver's type is not known:
-            // the method is looked up on the value when the call runs.
+            // Nothing chose a target and the receiver's type is not known
+            // (or is a trait's `This`, in its default bodies): the method is
+            // looked up on the value when the call runs.
             if (!isNamespaceCall && !argTypes.empty() &&
                 !m_decidedCalls.contains(&expr) &&
                 !m_selectedCallSignatures.contains(&expr) &&
                 !m_resolvedCalls.contains(&node)) {
                 const auto receiver = resolve(argTypes.front());
                 if (std::holds_alternative<UnknownType>(receiver->kind) ||
-                    std::holds_alternative<TypeVar>(receiver->kind))
+                    std::holds_alternative<TypeVar>(receiver->kind) ||
+                    isThisPlaceholder(receiver))
                     decideDispatch(&expr, node.method);
             }
             return result;
@@ -2230,7 +2229,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // only surfaced later — or not at all.
             std::string sourceName = node.typeName;
             TypePtr contextualRecordType;
-            if (sourceName == "This" || sourceName == "New") {
+            if (sourceName == names::kThisType || sourceName == "New") {
                 if (!m_inMakeBlock || !m_currentMakeType) {
                     error(expr.location, "`" + sourceName +
                                              "` construction requires a make block receiver");
@@ -2824,6 +2823,10 @@ auto TypeChecker::typeSelectorParameter(const ast::Param& param) -> TypePtr {
     if (param.type || !param.pattern || !*param.pattern) return nullptr;
     const auto* selector = std::get_if<ast::ConstructorPattern>(&(*param.pattern)->kind);
     if (!selector || !selector->args.empty()) return nullptr;
+    // A constructor is a value pattern, whatever imports it: `faults(Name, ...)`
+    // with `using App.Models.User, only: [Name]` matches `UserDetail.Name`.
+    if (!namesKnownType(selector->name) || nullaryConstructorType(selector->name))
+        return nullptr;
     auto named = typeNamed(selector->name, (*param.pattern)->location);
     if (!named || std::holds_alternative<UnknownType>(resolve(named)->kind))
         return nullptr;
@@ -2932,7 +2935,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
             return false;
         };
         const bool rootIsSomething =
-            root == "BEAM" || root == "Kex" || root == "This" ||
+            root == "BEAM" || root == "Kex" || root == names::kThisType ||
             isPrimitiveTypeName(root) ||
             m_recordFields.count(resolveRecordName(root)) ||
             m_adtVariants.count(root) || m_typeAliases.count(root) ||
@@ -3138,9 +3141,7 @@ auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& ann
     // placeholder — has no substitution mechanism yet and leaks out of trait
     // default methods as a literal type name, so it is treated the same way
     // (checkCall bails on it for the same reason).
-    const bool unsubstitutedThis =
-        std::holds_alternative<NamedType>(actual->kind) &&
-        std::get<NamedType>(actual->kind).name == "This";
+    const bool unsubstitutedThis = isThisPlaceholder(actual);
     if (deferIfPending(actual, declared, loc)) return declared;
     // `let x: Tuplex = (5, 11)`: a tuple written out under a distinct type's
     // annotation is that type, as `(5, 11).as(Tuplex)` would make it, when
@@ -3171,9 +3172,7 @@ auto TypeChecker::declaredConstantType(const std::string& name,
     const auto& signature = declared->second.front();
     if (!signature.params.empty() || !signature.result) return nullptr;
     auto actual = resolve(valueType);
-    const bool unsubstitutedThis =
-        std::holds_alternative<NamedType>(actual->kind) &&
-        std::get<NamedType>(actual->kind).name == "This";
+    const bool unsubstitutedThis = isThisPlaceholder(actual);
     if (deferIfPending(actual, signature.result, loc)) return signature.result;
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
@@ -4837,7 +4836,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // mismatch against the wrong (imported or unrelated) candidate would be
     // actively misleading, so bail out rather than guess.
     for (const auto& argType : argTypes) {
-        if (auto* named = std::get_if<NamedType>(&argType->kind); named && named->name == "This") {
+        if (isThisPlaceholder(argType)) {
             return Type::unknown();
         }
     }
@@ -5579,6 +5578,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 case CallOwner::ReceiverType:
                     // The receiver's own type answers; lowering reaches it.
                     if (callExpr) m_decidedCalls[callExpr] = owner.own.decision();
+                    // A type of a unit compiled apart: the dispatcher of the
+                    // one module declaring the method for it
+                    // (`connection.close`, Net.Socket's).
+                    if (!owner.own.home.empty() && owner.own.moduleFunction.empty()) {
+                        std::set<std::string> modules;
+                        const ImportedFunction* dispatcher = nullptr;
+                        for (const auto* candidate : importedFunctions) {
+                            if (candidate->backendArity != target.backendArity ||
+                                candidate->signature.params.empty())
+                                continue;
+                            const auto* receiver = std::get_if<NamedType>(
+                                &resolve(candidate->signature.params.front())->kind);
+                            if (!receiver || ownTypeIdentity(receiver->name) != owner.own.type)
+                                continue;
+                            modules.insert(candidate->backendModule);
+                            if (candidate->backendFunction == name) dispatcher = candidate;
+                        }
+                        if (modules.size() == 1 && dispatcher)
+                            m_resolvedCalls[methodCall] = dispatcherTarget(*dispatcher);
+                    }
                     break;
                 case CallOwner::Value:
                     if (callExpr)
@@ -5776,8 +5795,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
                 // A trait method's `This` is its receiver's type:
                 // `"x".repeat(3)` (Monoid's default) is a String.
-                if (auto* named = std::get_if<NamedType>(&type->kind);
-                    named && named->name == "This" && named->typeArgs.empty() &&
+                if (isThisPlaceholder(type) &&
                     isMethodCall && !kex::mangle::hasScope(name) && !argTypes.empty()) {
                     auto receiver = resolve(argTypes.front());
                     if (!std::holds_alternative<UnknownType>(receiver->kind) &&
@@ -6277,6 +6295,18 @@ auto TypeChecker::checkByteLiterals(const ast::Expr& value, const TypePtr& expec
     for (const auto& element : written->elements)
         if (element && !check(*element))
             error(element->location, "Byte literal must be in 0..255");
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// Whether `name` is a type this program knows by that name: a built-in, a
+// record, an ADT or an alias. What a type name in value position, or a
+// parameter written as one, has to be to stand for the type.
+auto TypeChecker::namesKnownType(const std::string& name) const -> bool {
+    return isPrimitiveTypeName(name) || m_recordFields.count(resolveRecordName(name)) ||
+           m_adtVariants.count(name) || m_typeAliases.count(name);
 }
 
 } // namespace kex::semantic

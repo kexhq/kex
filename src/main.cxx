@@ -1232,6 +1232,15 @@ std::map<std::string, kex::beam::KexiChunk> g_separateChunks;
 // The providers a unit of this build lowers against: the prebuilt prelude's
 // and those of the units below it. The check counts a call's providers among
 // the same modules (Analyzer::setLinkedModules).
+// The modules providing receiver functions in `externals`: what the check
+// counts a call's providers among (Analyzer::setLinkedModules).
+auto providerModules(const kex::ir::ExternalModules &externals) -> std::set<std::string> {
+  std::set<std::string> modules;
+  for (const auto &[_, providers] : externals.receiverFunctions)
+    for (const auto &provider : providers) modules.insert(provider.moduleAtom);
+  return modules;
+}
+
 auto unitExternalModules(const kex::beam::KexiRegistry &registry) -> kex::ir::ExternalModules {
   // A module this build compiles is described by its own interface. The
   // prebuilt runtime has its own copy of an opt-in standard library module,
@@ -1779,12 +1788,7 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
     configureFullCheck(analyzer, isEntry ? g_separateNameCheckFiles : std::vector<std::string>{},
                        g_separateEntryPath);
     // The providers lowering will see, so the check counts a call's the same.
-    {
-      std::set<std::string> linked;
-      for (const auto &[_, providers] : unitExternalModules(registry).receiverFunctions)
-        for (const auto &provider : providers) linked.insert(provider.moduleAtom);
-      analyzer.setLinkedModules(std::move(linked));
-    }
+    analyzer.setLinkedModules(providerModules(unitExternalModules(registry)));
     const bool clean = analyzer.analyze(program);
     auto unitDiagnostics = analyzer.diagnostics();
     if (clean)
@@ -2324,82 +2328,6 @@ auto expandReplProgram(kex::ast::Program &program) -> void {
 
 auto prebuiltRuntimeBeamDir() -> std::string;
 
-struct PreludeInterfaceNames {
-  std::unordered_set<std::string> receiverFunctions;
-};
-
-// Source discovery remains the interface boundary for builds that cannot use
-// BEAM artifacts (currently the browser/wasm build). Native builds use KexI.
-auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
-  PreludeInterfaceNames names;
-  for (const auto &filePath : kex::preludeSourceFiles()) {
-    kex::Lexer lexer(readFile(filePath), filePath);
-    kex::Parser parser(lexer.tokenizeAll(), filePath);
-    auto program = parser.parseProgram();
-    auto addReceiver = [&](const kex::ast::FunctionDef &fn) {
-      names.receiverFunctions.insert(fn.name);
-    };
-    auto collectMake = [&](const kex::ast::MakeDef &make) {
-      for (const auto &item : make.body) {
-        if (const auto *fn =
-                std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
-          if (*fn) addReceiver(**fn);
-        } else if (const auto *visibility =
-                       std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(
-                           &item)) {
-          if (!*visibility) continue;
-          for (const auto &visible : (*visibility)->items)
-            if (const auto *fn =
-                    std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
-                        &visible); fn && *fn)
-              addReceiver(**fn);
-        }
-      }
-    };
-    auto collectTrait = [&](const kex::ast::TraitDef &trait) {
-      for (const auto &item : trait.body)
-        if (const auto *fn =
-                std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
-            fn && *fn)
-          addReceiver(**fn);
-    };
-    std::function<void(const kex::ast::ModuleDef &)> collect;
-    collect = [&](const kex::ast::ModuleDef &module) {
-      for (const auto &item : module.body) {
-        if (const auto *make =
-                std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
-          if (*make) collectMake(**make);
-        } else if (const auto *trait =
-                       std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
-          if (*trait) collectTrait(**trait);
-        } else if (const auto *child =
-                       std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
-          collect(**child);
-        }
-      }
-    };
-    for (const auto &item : program.items) {
-      if (const auto *make =
-              std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
-        if (*make) collectMake(**make);
-      } else if (const auto *trait =
-                     std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
-        if (*trait) collectTrait(**trait);
-      } else if (const auto *module =
-                     std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
-        collect(**module);
-      } else if (const auto *fn =
-                     std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
-                         &item)) {
-        if (*fn && !(*fn)->clauses.empty() &&
-            (*fn)->clauses[0].params.size() >= 2)
-          names.receiverFunctions.insert((*fn)->name);
-      }
-    }
-  }
-  return names;
-}
-
 auto preludeExternalModules() -> const kex::ir::ExternalModules & {
   static const auto modules = [] {
     auto runtimeDir = prebuiltRuntimeBeamDir();
@@ -2514,15 +2442,8 @@ auto compilePreludeCore(const std::string &dir,
       return false;
     }
 
-    kex::ir::ExternalModules selfExt;
-    auto selfNames = sourcePreludeInterfaceNames();
-    for (const auto& name : selfNames.receiverFunctions)
-      for (int arity = 1; arity <= 4; arity++)
-        selfExt.receiverFunctions[name].push_back(
-            {kex::names::kPreludeModule, name, arity});
-
-    // The prelude lowers against its own names, receivers preferred, with
-    // what its own check decided — as every other program does.
+    // The prelude lowers from what its own check decided, as every other
+    // program does.
     const kex::hir::Program hir(merged, analyzer);
     // `--verify-hir --build-prelude`: the stdlib decides every call too.
     if (verifyHir) {
@@ -2532,7 +2453,7 @@ auto compilePreludeCore(const std::string &dir,
       if (!problems.empty()) return false;
     }
     const auto selfContext = withCheckerAnswers(
-        {.externals = &selfExt, .preferExternalReceivers = true}, &hir);
+        {.lowersPrelude = true}, &hir);
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgramTiered(merged, tierBounds,
                                                   "prelude", selfContext));
@@ -4488,6 +4409,7 @@ auto BeamReplSession::evaluate(
   auto extMods = mergeExternalModules(
       preludeExternalModules(), m_kexiRegistry.buildExternalModules());
   kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
+  replAnalyzer.setLinkedModules(providerModules(extMods));
   replAnalyzer.analyze(program);
   auto replRecordLayouts = loadPreludeRecordLayouts();
   auto replVariantTags = loadPreludeVariantTags();

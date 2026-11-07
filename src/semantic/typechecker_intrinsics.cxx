@@ -158,7 +158,13 @@ auto TypeChecker::foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
         }
         return resolved;
     };
-    if (auto structured = structuredTypeOf(widen(argTypes[0])))
+    // A type value describes itself: `Type.of(as)` for `as: Type<User>` is
+    // User's type, as it was when a type name was a bare token.
+    auto subject = resolve(argTypes[0]);
+    if (const auto* named = std::get_if<NamedType>(&subject->kind);
+        named && named->name == kex::names::kTypeRecord && named->typeArgs.size() == 1)
+        subject = named->typeArgs.front();
+    if (auto structured = structuredTypeOf(widen(subject)))
         m_staticTypeOfCalls[&node] = {std::move(*structured), true};
 }
 

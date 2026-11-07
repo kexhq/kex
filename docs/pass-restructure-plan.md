@@ -864,7 +864,30 @@ call with a foul provider at its arity stays the search's (it threads the
 capability context). Dispatch calls the provider search lowers: 615 → 31
 (`count`, `each`, `get`: foul providers). What the search still lowers:
 those 31, 45 OwnMethod (`Kex.Net.Socket`), 5 Imported, 57 from programs
-that do not check. The cascade's traffic halved (7.7k → 4.3k calls), and
+that do not check. The 31 were held back for nothing: their foul
+providers are `Mock.Env`'s `make` methods, in the prelude beside the pure
+ones, and the call ends in `callE`, which appends the capability context
+for a target registered foul at that arity, on the resolved path as on the
+search's. Foul providers count as ordinary ones now; Dispatch calls the
+search lowers: 31 → 0. Coverage after it: the imported clause chosen by
+labels (and by a shorter written arity), the search's label-picked
+same-module overload and its read of a resolved target (a resolved call
+never reaches the search) were dead; deleted (~110 lines).
+Where the search's remaining ~1,900 runs come from: about half (914) is the
+prelude build, which lowers against its own names with
+`preferExternalReceivers` (`compilePreludeCore`'s self-externals), so the
+search is its dispatch by design, and its check has no linked-module set.
+By decision: Dispatch 304, OwnMethod 202, Undecided 198 (split-module
+copies of nodes the HIR does not index), Imported 178.
+Done (2026-11-07): the prelude lowers from its check's decisions with no
+externals at all. Its receiver calls take the local make-method path, as a
+multi-module unit's do, and `lowerModules` files each with its module.
+The self-externals (`sourcePreludeInterfaceNames`, every prelude receiver
+name at arities 1–4 pointing at `kex_prelude`) and the search's
+`preferExternalReceivers` clause are deleted; the flag that remains,
+`lowersPrelude`, only keeps the prelude's own `to` forwarding. Search runs
+in the prelude build: 808 → 0; over all of `make test-all`: 351.
+The cascade's traffic halved (7.7k → 4.3k calls), and
 coverage then showed the `externalImports` path (a `using`-imported
 function of a unit compiled apart), the imported clause's unplaced
 named-argument path and its two-provider dispatch dead; they are deleted,
@@ -1153,6 +1176,27 @@ final measurement waits for the old paths to go.
 The user's decisions of 2026-11-05 (`src/` below `main`, separate compilation
 as the default) are under Decisions; node identities, which came next, are
 done (Stage 2).
+
+**Milestone gate (2026-11-07), against `main` (3846781).** Slick, median of
+3 interleaved runs (cold 2), the dev `tey` (`~/.local/bin/tey`: brew's
+0.2.0 cannot parse slick's `package.kex`):
+
+| scenario    | main   | branch | change |
+|-------------|--------|--------|--------|
+| cold        | 24.31  | 30.40  | +25%   |
+| no-op       | 9.85   | 7.39   | −25%   |
+| incremental | 10.44  | 7.94   | −24%   |
+
+The cold cost is the separate build's (step 1: every unit checked and
+lowered apart, 336 modules compiled against 188), not this milestone's:
+`91f1f4a`, where it became the default, builds slick cold in 31.9 s, the
+branch now in 31.6 s. The gate found two regressions, both fixed with specs:
+a module's own nullary constructor read as a same-named record elsewhere
+(slick's `UserDetail.Name` beside `Net.DNS.Name`;
+`spec/constructor_beside_same_named_record`, which also fixed BEAM lowering
+the same way, broken on `main` too), and `Type.of` of a type value (harmat's
+`first(as: T)` then `Type.of(as)`), which now answers the type the value is
+(`spec/type_value_record`). Slick's eight spec files pass on the branch.
 
 **Measured (2026-11-05), against `main` (66a5838, the Stage 0 baseline build).**
 Slick, median seconds of 3 interleaved runs, `tey` built from this tree

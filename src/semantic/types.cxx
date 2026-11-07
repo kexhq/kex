@@ -1,4 +1,5 @@
 #include "types.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
 #include <functional>
 #include <unordered_set>
@@ -752,6 +753,11 @@ auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool {
 } // namespace kex::semantic
 
 namespace kex::semantic {
+
+auto isThisPlaceholder(const TypePtr& type) -> bool {
+    const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
+    return named && named->name == names::kThisType && named->typeArgs.empty();
+}
 
 auto isNumericType(const TypePtr& type) -> bool {
     if (!type) return false;

@@ -100,7 +100,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // type; unmatched values must continue to the prelude conversion
     // instead of ending in the emitter's synthetic function_clause.
     if (first.name == "to" && def.name == "to" &&
-        !preferExternalReceivers) {
+        !lowersPrelude) {
         // The same goes for its typed parameters: Units.SI's
         // `make Measure do let to(String, in: SIPrefix)` is a 3-ary `to`
         // too, and without a guard on `in` it claimed the prelude's
@@ -155,7 +155,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // Only a plain definition: a trait default (`to/Showable`) carries a
     // hidden dictionary and already forwards through its own fallback.
     if (first.name == "to" && def.name != "to" &&
-        preferExternalReceivers && collidingMethods.count("to") &&
+        lowersPrelude && collidingMethods.count("to") &&
         static_cast<size_t>(def.arity) == sourceArity &&
         [&] {
             // A new conversion arity need not have a generic sibling:
@@ -207,8 +207,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
                                 return method.name == first.name;
                             });
                     });
-    if (first.name != "to" && def.name == first.name &&
-        !preferExternalReceivers && shadowsTraitDefault) {
+    if (first.name != "to" && def.name == first.name && shadowsTraitDefault) {
         const auto alreadyTotal =
             std::any_of(def.clauses.begin(), def.clauses.end(),
                         [](const FunClause& clause) {

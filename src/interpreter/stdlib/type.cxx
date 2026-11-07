@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/well_known.hxx"
 #include "../../semantic/declared_type.hxx"
 
 namespace kex::interpreter {
@@ -185,6 +186,11 @@ auto renderedType(const ValuePtr& type) -> std::string {
 // kex_intrinsic_type.erl mirrors it clause for clause so both backends agree.
 auto Evaluator::registerTypeBuiltins() -> void {
     defineIntrinsic("Type::ofValue", [](std::vector<ValuePtr> args) -> ValuePtr {
+        // A type value describes itself (`Type.of(as)` for `as: Type<User>`).
+        if (!args.empty() && args[0])
+            if (const auto* record = std::get_if<RecordValue>(&args[0]->data);
+                record && record->typeName == kex::names::kTypeRecord)
+                return args[0];
         return typeOfValue(args.empty() ? nullptr : args[0]);
     });
 
