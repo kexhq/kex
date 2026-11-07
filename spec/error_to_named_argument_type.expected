@@ -18,6 +18,6 @@ to : Number -> Type<String> -> Integer -> String?
 
 to : Number -> Type<String> -> NumberFormat -> String?
 
-to : Any -> Any -> Integer -> Any
+to : Any -> Type<A> -> Integer -> A?
 
 to : Measure -> Type<String> -> TimeUnit -> NumberFormat -> String?
