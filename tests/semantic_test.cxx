@@ -1429,7 +1429,7 @@ int main() {
         it("preserves a generic Result payload for overload selection", []() {
             Lexer lexer(
                 "using Regex\n"
-                "main do \"a-b\".replace(regex(\"-\").or(0), \"+\") end\n");
+                "main do \"a-b\".replace(regex(\"-\").or(re`x`), \"+\") end\n");
             Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             semantic::Analyzer analyzer(&preludeInterfaces());
@@ -3598,7 +3598,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  p.send(42)\n"
                 "end\n",
-                "does not match Process<String>"
+                "`send` expects argument 2 to be String"
             ));
         });
 
@@ -3642,7 +3642,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  send(p, 42)\n"
                 "end\n",
-                "does not match Process<String>"
+                "`send` expects argument 2 to be String"
             ));
         });
 

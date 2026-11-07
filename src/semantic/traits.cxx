@@ -188,6 +188,19 @@ auto TraitRegistry::declaresMethod(const std::string& type,
     return false;
 }
 
+auto TraitRegistry::requiredMethod(const TypePtr& type, const std::string& method) const
+    -> std::pair<const TraitDef*, const Signature*> {
+    auto implemented = m_implementations.find(implementorKey(type));
+    if (implemented == m_implementations.end()) return {nullptr, nullptr};
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return {&trait->second, &required};
+    }
+    return {nullptr, nullptr};
+}
+
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
     auto keyA = implementorKey(a);
     auto keyB = implementorKey(b);

@@ -59,7 +59,7 @@ let fatal(message) = Fatal(None, message)
 #     None                    => []
 #   end
 fatalAt : Integer -> String -> Issue
-let fatalAt(offset, message) = Fatal(At(offset), message)
+let fatalAt(offset, message) = Fatal(Just(At(offset)), message)
 
 # A fatal issue spanning a range of the literal.
 #
@@ -72,7 +72,7 @@ let fatalAt(offset, message) = Fatal(At(offset), message)
 #   TaggedValidation.fatalBetween(0, 4, "this group can never match")
 fatalBetween : Integer -> Integer -> String -> Issue
 let fatalBetween(start, finish, message) do
-  Fatal(Between(start, finish), message)
+  Fatal(Just(Between(start, finish)), message)
 end
 
 # A warning about the literal as a whole. Reported, but the build continues.
@@ -94,7 +94,7 @@ let warn(message) = Warn(None, message)
 # @example
 #   TaggedValidation.warnAt(7, "redundant escape")
 warnAt : Integer -> String -> Issue
-let warnAt(offset, message) = Warn(At(offset), message)
+let warnAt(offset, message) = Warn(Just(At(offset)), message)
 
 # A warning spanning a range of the literal.
 #
@@ -107,5 +107,5 @@ let warnAt(offset, message) = Warn(At(offset), message)
 #   TaggedValidation.warnBetween(2, 6, "this alternation is always taken")
 warnBetween : Integer -> Integer -> String -> Issue
 let warnBetween(start, finish, message) do
-  Warn(Between(start, finish), message)
+  Warn(Just(Between(start, finish)), message)
 end

@@ -389,7 +389,6 @@ private:
                                   bool implicitReceiver) -> void;
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
-    auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
     auto resolveRecordTypeName(const std::string& name) const -> std::string;
 
     std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;

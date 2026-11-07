@@ -88,7 +88,7 @@ using kex::diagnostics::extractHint;
 using kex::diagnostics::jsonEscape;
 using kex::diagnostics::printCollapseReport;
 using kex::diagnostics::printSemanticDiagnostic;
-using kex::diagnostics::typeExprToString;
+using kex::ast::typeText;
 using kex::module::collectUsingModules;
 using kex::module::declaredModuleNames;
 using kex::module::fileDeclaringModule;
@@ -2439,7 +2439,8 @@ struct PreludeBuildModule {
 // receiver compatibility code until typed receiver ownership is carried into
 // IR; public module calls already use companion interfaces.
 auto compilePreludeCore(const std::string &dir,
-                        std::vector<PreludeBuildModule> *builtModules) -> bool {
+                        std::vector<PreludeBuildModule> *builtModules,
+                        bool verifyHir) -> bool {
   kex::ast::Program merged;
   auto files = kex::preludeSourceFiles();
   if (files.empty()) {
@@ -2508,6 +2509,13 @@ auto compilePreludeCore(const std::string &dir,
     // The prelude lowers against its own names, receivers preferred, with
     // what its own check decided — as every other program does.
     const kex::hir::Program hir(merged, analyzer);
+    // `--verify-hir --build-prelude`: the stdlib decides every call too.
+    if (verifyHir) {
+      const auto problems = kex::hir::verify(hir);
+      for (const auto &problem : problems) std::cerr << problem << "\n";
+      std::cerr << "prelude: " << problems.size() << " undecided call sites\n";
+      if (!problems.empty()) return false;
+    }
     const auto selfContext = withCheckerAnswers(
         {.externals = &selfExt, .preferExternalReceivers = true}, &hir);
     std::vector<kex::ir::Module> modules;
@@ -5432,9 +5440,9 @@ auto WalkerReplSession::run() -> int {
 
 // `--build-prelude DIR`: compile the standard library into DIR, attach each
 // module's KexI interface, and drop artifacts of modules that no longer exist.
-auto buildPrelude(const std::string &dir) -> int {
+auto buildPrelude(const std::string &dir, bool verifyHir) -> int {
   std::vector<PreludeBuildModule> modules;
-  if (!compilePreludeCore(dir, &modules))
+  if (!compilePreludeCore(dir, &modules, verifyHir))
     return 1;
   try {
     // The prelude build directory is also the installed-runtime staging
@@ -5540,6 +5548,9 @@ struct Options {
   // checker decided about it / fail when any is undecided (src/hir/).
   bool dumpHir = false;
   bool verifyHir = false;
+  // `--build-prelude DIR`: run after every option is read, so `--verify-hir`
+  // applies to the prelude wherever it stands.
+  std::optional<std::string> buildPreludeDir;
   // `--print-passes`: list the compile pipeline and the IR passes, then exit.
   bool printPasses = false;
   std::string completePrefix;
@@ -5741,8 +5752,8 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       progressRequested = true;
       break;
     case Option::BuildPrelude:
-      options.exitNow = buildPrelude(optarg);
-      return options;
+      options.buildPreludeDir = optarg;
+      break;
     case 'r':
       options.mode = Mode::Compile;
       options.compileRun = true;
@@ -5821,6 +5832,11 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       printUsage(argv[0]);
       { options.exitNow = 1; return options; }
     }
+  }
+
+  if (options.buildPreludeDir) {
+    options.exitNow = buildPrelude(*options.buildPreludeDir, options.verifyHir);
+    return options;
   }
 
   // No mode flag: BEAM. A file runs on the BEAM, and no file opens the BEAM
@@ -6570,7 +6586,8 @@ auto compileToBeam(Options &options, const std::string &filepath,
 // the diagnostics (as JSON, a summary, or one per line), then the types with
 // `--dump-types`. Returns 0 when there were no errors.
 auto checkEntry(const Options &options, const std::string &filepath,
-                kex::ast::Program &program) -> int {
+                kex::ast::Program &program,
+                const std::vector<kex::ParseDiagnostic> &parseDiagnostics) -> int {
   const auto &dumpTypes = options.dumpTypes;
   const auto &jsonOutput = options.jsonOutput;
   const auto &summaryMode = options.summaryMode;
@@ -6605,41 +6622,32 @@ auto checkEntry(const Options &options, const std::string &filepath,
                     qualifiedModules, &units);
   }
 
-  // Pass 1+2: collect symbols and resolve names via SemanticDB
-  kex::semantic::SemanticDB db;
-  db.setImportedInterfaces(&preludeSemanticInterfaces());
-  db.setModuleRoots(moduleRootsFor(filepath));
-  loadPrelude(db);
-  std::vector<std::string> checkCompanions;
-  if (!checkCompanion.empty()) checkCompanions.push_back(checkCompanion);
-  db.updateFile(filepath, readFile(filepath), checkCompanions);
-
-  // Pass 3+: existing Analyzer (purity, type checking)
+  // One sema, as runSemanticCheck: names (for the entry file and a spec's
+  // base), module rules, purity and types.
+  std::vector<std::string> checkedFiles{filepath};
+  if (!checkCompanion.empty()) checkedFiles.push_back(checkCompanion);
   kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
-  bool ok = analyzer.analyze(program);
-
-  // Collect all diagnostics
+  configureFullCheck(analyzer, std::move(checkedFiles), filepath);
+  // The parser's errors first: a program that parsed with recovery is
+  // still checked, so one run reports both.
   std::vector<kex::semantic::Diagnostic> allDiags;
-  bool dbOk = true;
-  for (const auto &d : db.diagnosticsFor(filepath)) {
-    if (d.level == kex::semantic::Diagnostic::Level::Error)
-      dbOk = false;
-    allDiags.push_back(d);
-  }
-  for (const auto &d : analyzer.diagnostics())
-    allDiags.push_back(d);
+  for (const auto &parsed : parseDiagnostics)
+    allDiags.push_back({kex::semantic::Diagnostic::Level::Error, parsed.location,
+                        parsed.message});
+  bool ok = analyzer.analyze(program) && parseDiagnostics.empty();
+  allDiags.insert(allDiags.end(), analyzer.diagnostics().begin(),
+                  analyzer.diagnostics().end());
 
   bool validationOk = true;
-  if (ok && dbOk) {
-    for (const auto &d :
-         kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
+  if (ok) {
+    for (const auto &d : taggedLiteralDiagnostics(program, analyzer, filepath)) {
       if (d.level == kex::semantic::Diagnostic::Level::Error)
         validationOk = false;
       allDiags.push_back(d);
     }
   }
 
-  bool allOk = ok && dbOk && validationOk;
+  bool allOk = ok && validationOk;
 
   if (jsonOutput) {
     // Machine-readable JSON — one object per diagnostic
@@ -6698,7 +6706,7 @@ auto checkEntry(const Options &options, const std::string &filepath,
                     << (annotation.isFoul ? "foul " : "")
                     << annotation.name << " : ";
           if (annotation.type)
-            std::cout << typeExprToString(*annotation.type);
+            std::cout << typeText(*annotation.type);
           std::cout << "\n";
         };
     std::function<void(const kex::ast::ModuleDef &, size_t)> printModule;
@@ -7132,8 +7140,8 @@ int main(int argc, char *argv[]) {
     // and reports the exact same underlying parse error but mislabeled
     // as "fix type errors" — confusing for something that's actually a
     // syntax error (see spec/error_if_with_do.kex, a real regression
-    // case). In --check mode the SemanticDB re-parses and reports them
-    // itself; printing here would duplicate every message.
+    // case). In --check mode checkEntry reports them with the check's
+    // own diagnostics; printing here would duplicate every message.
     if (!parser.diagnostics().empty() &&
         (mode == Mode::Run || mode == Mode::Compile || mode == Mode::EmitAst ||
          mode == Mode::EmitSyntax ||
@@ -7283,7 +7291,7 @@ int main(int argc, char *argv[]) {
     if (mode == Mode::Run)
       return runOnWalker(options, filepath, program, scriptArgs,
                          expandParsedProgram);
-    return checkEntry(options, filepath, program);
+    return checkEntry(options, filepath, program, parser.diagnostics());
   } catch (const std::exception &e) {
     std::cerr << kex::color::apply(kex::color::bold)
               << kex::color::apply(kex::color::red)

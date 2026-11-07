@@ -146,7 +146,8 @@ All of these are part of the refactor; none is optional. In order:
    (`compiled do`) included; its own resolution and its run-time copies of
    the visibility rules go.
 7. **Stage 5: the LSP reads the checker's symbols; SemanticDB is deleted.**
-8. **Stage 1 leftovers:** one `TypeExpr` printer (three exist).
+8. **Stage 1 leftovers:** one `TypeExpr` printer — **done** (2026-11-07,
+   `ast::typeText`).
 9. **Stage 2b:** finish the intrinsic registry and migrate the remaining
    pseudo-functions onto the `Type<T>` foundation from step 3.
    **Deferred with it (2026-11-06, by the user): Duration is a time Measure.**
@@ -249,7 +250,30 @@ All of these are part of the refactor; none is optional. In order:
   stale): both call the prelude's `to`, whose `convertTo` takes today's
   run-time type value, so T2 is not a prerequisite. `Conversion` remains for
   `as` (Stage 2b).
-- **Left:** `Type<T>` stages T2-T3. The walker keeps `makeMethodInScope`
+- **T3, value-position type names** (2026-11-07): a type named as a value
+  (`let t = String`, `x.to(Integer)`) is a `Type<X>`; `Void` stays the unit
+  value. A built-in type's name no longer reads as the type itself through
+  the globals annotations resolve against. Through a type's name its own
+  `make` method takes the type as receiver (`Response.ok(body)`,
+  `throughTypeName`), and completion after `List.` completes the namespace.
+  `spec/lib/record_value`'s `first(as: Type<T>)` is the one generic API
+  in the corpus that took a type; no stdlib declaration did.
+- **T2, the run-time `Type` record** (2026-11-07): a type named as a value
+  (`String`, `App.Models.User`) is the `Type` record on both backends, built
+  from what the checker typed it (`hir::Program::typeValueOf`; a sized
+  integer keeps its written name, so `to(Byte)` still narrows). A
+  parameter written as a type name (`let to(value, String)`) matches the
+  record's name (`Lowering::typeNameParameter`, the walker's pattern
+  match). Showing a type value (`"${String}"`) works now; it failed on
+  both backends. `Kex.Intrinsic.Fun.convertTo/3` reads the record as `/2`
+  already did. APIs that took a type as `T` and called `Type.of` on it take
+  `Type<T>` and use it (`spec/type_token_select`, the name-collision test).
+  Without a checked program (`--no-check`, `compiled do`) a type name is
+  still the old run-time value (an atom on BEAM, a module value on the
+  walker). The walker's patterns match both; BEAM's type-name parameters
+  match only the record, so such a value reaches the generic clause
+  (`to(value, t)`), whose `convertTo` takes both.
+- **Left of `Type<T>`:** nothing in the plan's four stages. The walker keeps `makeMethodInScope`
   until it evaluates the HIR (step 6, Stage 4); without a HIR
   (`compiled do`) it is the run-time scope rule.
 
@@ -384,6 +408,62 @@ undecided or typed Unknown.
   above counts every `spec/` program, clean or not.) Every change up to the
   measurement kept test-all, fuzz, devirt, dup-audit and slick green.
   Re-measure before quoting a current figure.
+- **The corpus is decided: 16 → 0** (2026-11-07). Undecided call sites in
+  the `spec/` and `examples/` programs that check clean were 16 after the
+  `to` change, and are 0 now. Each fix:
+  - *A type that claims a trait answers the trait's required methods.*
+    `Kilo(Watt).factor` (Units.SI's unannotated `let factor(@Kilo(unit))`)
+    has no signature on record; the requirement (`requiredMethod` in
+    `traits.cxx`) types the call, decided `TraitMethod`. Not when the
+    type's own method rejects the receiver's refinement: writing through a
+    read-only `FileHandle` stays a mismatch, whatever `Writable` says.
+  - *A trait method's `This` is its receiver's type* (`"x".repeat(3)`,
+    Monoid's default, is a String).
+  - *`~banner` names the function*, even one of no parameters: a
+    `() -> String`, not its result.
+  - *A spread* (`[...xs, 99]`) is checked and stands for the list's elements.
+  - *Rescue clauses are checked everywhere one can appear*: on a function
+    clause, `main`, a block and a lambda, not only on `trying`
+    (`checkRescue`, one walk for all of them).
+  - *An overload the arguments cannot pick yet* (a closure body over
+    untyped parameters) is decided `Dispatch`: the value picks at run time.
+  - `examples/real_world.kex` called an `Http.Server.listen` that did not
+    exist; the example now defines it.
+- **The stdlib is decided: 18 → 0** (2026-11-07). `--verify-hir
+  --build-prelude DIR` verifies the prelude build's own HIR (each problem
+  names the receiver type the checker saw), and `make verify-hir-stdlib`, part
+  of `test-all`, keeps it at 0. Each fix:
+  - *A module function's qualified entry has its own arities.* `Time.now`
+    calling `DateTime.now` (defined later) found no `DateTime::now`: the bare
+    `now` that `Time.now` had registered first made the pre-pass skip
+    `DateTime.now`'s clause, qualified entry included. In user code it was a
+    false error (`` `Source` has no function `now` ``).
+  - *A receiver only an out-of-scope `make` takes is `Hidden`*, also when the
+    name exists on other types (`d.number` with `Cal`'s `make Day` and the
+    prelude's `Weekday.number`). It was undecided, and ran anyway. The
+    stdlib's own `make Date` called `make Weekday` (inside `module Time`)
+    that way; it now calls `Time.weekdayNumber`.
+  - *An interop path ends at a call.* `Kex.Intrinsic.Type.fieldLayoutsOf(n).map`
+    was decided as the path `Kex.Intrinsic.Type.fieldLayoutsOf.map`, and the
+    intrinsic's argument went unchecked.
+  - *Any binding called is a `ValueCall`* (`Just(rule) => rule()` with a
+    `Block<DateTime>` `rule`), not only function- or variable-typed ones.
+  - *An inherited default with no home module to answer for it is
+    `Dispatch`*: Monoid's `repeat` on a String, Enumerable's `map` on a Range.
+  - *Stdlib declarations fixed*: `Mock.FS` built `FS.FileError`s with bare
+    constructors no `using` reached (`ReadFailed` resolved to `ReadError`'s
+    nullary one); they are qualified now.
+- **A constructor's payload count is checked** (also missing on `main`):
+  `Broken(5)` for a nullary `Broken` and `Torn(1, 2)` for `Torn(Integer)`
+  checked clean, and the first died at run time. Payload TYPES are not
+  checked yet: tried, it rejected `Get(Process.self)` (a `Pid` for a
+  `Process<T>` payload, which an ordinary call rejects too) in three specs
+  and examples, so `Process.self`'s declared type is the fix to make first.
+  `taggedvalidation.kex` passed a bare `ByteSpan` for its `ByteSpan?`
+  payload; it passes `Just(At(offset))` now, and the tag validator reads
+  both. A payload is re-resolved in its declaring module by one helper
+  (`declaredPayload`).
+  Not yet measured: slick.
 
 ### Step 2 done (2026-11-06)
 
@@ -493,7 +573,11 @@ Not done here, and where it went:
   pipeline.hxx`, `ir::PassManager`). Commands stay functions in `main.cxx`.
 - `Session::analyze` replacing the ~16 one-line `Analyzer` constructions —
   skipped; the single sema of Stage 2 removes them instead.
-- One `TypeExpr` printer (three exist).
+- One `TypeExpr` printer — done 2026-11-07: `ast::typeText(type, spelling)`
+  (`src/ast/type_text.cxx`) replaces `diagnostics::typeExprToString`,
+  `ast::renderDispatchType` and the walker's `runtimeTypeKey`. Its
+  `TypeSpelling` is `Source` (diagnostics, the language server) or `Dispatch`
+  (the backends' type tests, the walker's overload key).
 
 ## Stage 2: one sema decides every call — in progress
 
@@ -590,6 +674,29 @@ forgotten somewhere — `Type.of` alone had four handlers.
   ordinary stdlib signatures and the checker special cases go away.
 - Then backends read folded answers instead of recognising names; the
   `name == "literal"` count is added to `dup-audit` and must fall.
+- **`send` is an ordinary signature** (2026-11-07): the checker's two
+  `send` special cases are deleted; `make Process<X>`'s `send :> X -> Void`
+  decides it. What it needed: **a generic several parameters share is one
+  type** at a call (`genericConflict` in the full-match test). That was
+  missing for every call, also on `main`: `same : A -> A -> Bool` took `1`
+  and `"s"`, `put : Box<A> -> A` a `Box<Integer>` and a String, and
+  `Process<A>.send` any message. `spec/regex_basics` passed `.or(0)` as a
+  `Regex` fallback 23 times; it passes a `Regex` now. A value of a generic
+  type written without its arguments (`Ask(Process)`) goes where the type
+  with arguments is expected, as an unparameterized parameter already took
+  any. **`fromBytes` is ordinary too**: its range check on literal bytes was
+  the checker's special case; a literal where a Byte goes is range-checked
+  wherever it is passed now (`checkByteLiterals`, also the `let` check's two
+  copies), so `g(256)` for `g(b: Byte)` is an error as `let b: Byte = 256`
+  was. **`as` is a registry entry** (`{"as", 1, checkAs}` in
+  `typechecker_intrinsics.cxx`), not a name test in the method-call path:
+  what it checks (a compatible representation, `.as(Atom)` only on a
+  literal) is no signature's to say. A deferred `reply` of the wrong type
+  is the shared-generic rule's too (`reply : From<A> -> A -> Void`); its
+  own check is deleted. Both backends lower and evaluate `.as` from the
+  checker's `Conversion` decision (its owner is the target), not by the
+  method's name; the walker reads the spelling only with no checked program
+  (`compiled do`).
 
 ## Stage 3: lowering from the HIR — in progress
 
@@ -616,7 +723,16 @@ Done:
   run-cache, expand, check, lower, write-core, erlc, store-caches,
   attach-kexi, finish — replacing the 397-line `compileToBeam`. `kex
   --print-passes` lists them; `KEX_TIMINGS` times each.
-- **IR verifier pass** (`src/ir/verify.{hxx,cxx}`, last in `standardPasses`):
+- **Guard expansion is an IR pass** (2026-11-07, `src/ir/passes/guards.cxx`,
+  first in `standardPasses`): lowering marks a match written in source
+  (`GuardExpansion::Source`, with the location its no-clause failure names)
+  or a rescue's arms (`Rescue`), and the pass turns `when` guards into
+  nested matches and adds the failure. `Lowering::expandGuards` is gone.
+  Loop lifting and the IR verifier moved there too (`passes/upgrade.cxx`,
+  `passes/verify.cxx`). Operator devirtualization stays in lowering, on
+  purpose: it reads the checker's `Operator` decision (`operatorOwner`), and
+  an IR pass would have to rediscover the receiver type that decision holds.
+- **IR verifier pass** (`src/ir/passes/verify.{hxx,cxx}`, last in `standardPasses`):
   every call's arity matches its arguments, every local call names a
   function of its module (or an enclosing `letrec`). Clean on every program
   that type-checks; it stops a broken `--no-check` build at the IR, naming
@@ -940,9 +1056,16 @@ What is left of Stage 5:
   scope tracking is what is left of "one resolver".
 - **The walker's run-time copies of the visibility rules** (`evaluator.cxx`,
   for the REPL and unchecked runs).
-- **The LSP** still reads SemanticDB's symbols, not the checker's.
-- **`kex -C`** (`checkEntry`) still indexes the program with SemanticDB
-  rather than going through `runSemanticCheck`'s one sema.
+- **The LSP's diagnostics are the one sema's** (done 2026-11-07): the parser's
+  and expansion's (`FileState::sourceDiagnostics`), then one Analyzer with the
+  name check for the document and the module locator, as `-C` runs. Its
+  SYMBOLS still come from SemanticDB (`findSymbol`, `receiverSymbol`,
+  `symbolInModule`, `symbolAt`, completion), not the checker's.
+- **`kex -C` is on the one sema** (done 2026-11-07): `checkEntry` configures
+  its Analyzer as `runSemanticCheck` does (`configureFullCheck`) and reports
+  the parser's diagnostics itself, which SemanticDB's re-parse used to.
+  One golden changed, to the run path's wording
+  (`error_using_alias_imports_nothing`: "... is not imported here").
 
 ## Stage 6: delete and measure
 

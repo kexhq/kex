@@ -750,3 +750,15 @@ auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool {
 }
 
 } // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto isNumericType(const TypePtr& type) -> bool {
+    if (!type) return false;
+    if (const auto* primitive = std::get_if<PrimitiveType>(&type->kind))
+        return primitive->kind == PrimitiveType::Integer;
+    return std::holds_alternative<SizedIntType>(type->kind) ||
+           std::holds_alternative<SizedFloatType>(type->kind);
+}
+
+} // namespace kex::semantic

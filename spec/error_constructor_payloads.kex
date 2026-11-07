@@ -1,0 +1,13 @@
+# kex: check-only
+# A constructor takes exactly as many payloads as its declaration names:
+# both of these checked clean, and `Broken(5)` then died at run time with
+# "'Broken' is not callable".
+
+type Problem = Broken | Torn(Integer)
+
+let nullary() -> Problem = Broken(5)
+let tooMany() -> Problem = Torn(1, 2)
+
+main do
+  IO.printLine("unreachable")
+end

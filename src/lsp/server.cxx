@@ -2430,12 +2430,19 @@ private:
 
     void publishDiagnostics(const ::lsp::DocumentUri& uri,
                             Document& document) {
-        std::vector<semantic::Diagnostic> diagnostics(
-            m_db.diagnosticsFor(document.path).begin(),
-            m_db.diagnosticsFor(document.path).end());
         auto* state = m_db.fileState(document.path);
+        // What the parser and expansion found, then the one sema the build
+        // runs: names (for this document), module rules, purity and types.
+        std::vector<semantic::Diagnostic> diagnostics =
+            state ? state->sourceDiagnostics : m_db.diagnosticsFor(document.path);
         if (state) {
             semantic::Analyzer analyzer(&m_interfaces);
+            analyzer.setNameCheckFiles({document.path});
+            analyzer.setModuleLocator(
+                [resolver = module::Resolver(documentModuleRoots(document.path))](
+                    const std::string& module, const std::string& current) {
+                    return resolver.resolve(module, current).has_value();
+                });
             const bool analyzed = analyzer.analyze(state->ast);
             enrichFunctionSymbols(*state, analyzer);
             document.hoverEntries.clear();

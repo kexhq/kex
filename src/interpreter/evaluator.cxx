@@ -18,6 +18,7 @@
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
+#include "../ast/type_text.hxx"
 #include "../ast/walk.hxx"
 #include "../common/well_known.hxx"
 #include <algorithm>
@@ -1564,7 +1565,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 for (const auto& param : candidateClause.params) {
                     signature += "|";
                     const auto* declared = dispatchParamType(param);
-                    signature += declared ? runtimeTypeKey(*declared) : "*";
+                    signature += declared ? ast::typeText(*declared, ast::TypeSpelling::Dispatch) : "*";
                 }
                 typedSignatures.insert(std::move(signature));
             }
@@ -2560,6 +2561,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 {}, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // A qualified type named as a value (`App.Models.User`) is its
+            // `Type` record, as a bare one is.
+            if (node.args.empty())
+                if (auto value = m_programs.typeValueOf(expr)) return structuredTypeValue(*value);
             // `Type.of(x)` where the checker typed the argument concretely:
             // build the answer from what it recorded. The value cannot know a
             // Result's unused half or an empty list's element type, so this
@@ -2580,31 +2585,34 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // already proved the retag is valid, so the runtime value is
             // unchanged. String is the one non-erased total conversion and
             // uses the same universal display representation as to(String).
-            if (node.method == "as" && node.args.size() == 1 &&
-                node.args[0] && node.receiver && node.namedArgs.empty() &&
-                !node.block) {
+            // The checker decided it (`Conversion`, owner the target); only a
+            // program evaluated before any check (`compiled do`) is read by
+            // its spelling.
+            const auto conversionTarget = [&]() -> std::string {
+                if (const auto& decided = m_programs.targetOf(node);
+                    decided.kind == hir::TargetKind::Conversion)
+                    return decided.owner;
+                if (!m_programs.empty() || node.method != "as" || node.args.size() != 1 ||
+                    !node.args[0] || !node.receiver || !node.namedArgs.empty() || node.block)
+                    return {};
+                const auto* written = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind);
+                return written ? written->name : std::string{};
+            }();
+            if (!conversionTarget.empty() && node.receiver) {
                 auto value = eval(*node.receiver);
                 // A value only the running program has stays unknown: the
                 // conversion goes back around it when the result is reified.
-                if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data))
-                    if (const auto* target =
-                            std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
-                        auto retagged = std::make_shared<Value>();
-                        auto copy = *placeholder;
-                        copy.retags.push_back(target->name);
-                        retagged->data = std::move(copy);
-                        return retagged;
-                    }
-                if (const auto* target =
-                        std::get_if<ast::UpperIdentifier>(
-                            &node.args[0]->kind);
-                    target && target->name == "String")
+                if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data)) {
+                    auto retagged = std::make_shared<Value>();
+                    auto copy = *placeholder;
+                    copy.retags.push_back(conversionTarget);
+                    retagged->data = std::move(copy);
+                    return retagged;
+                }
+                if (conversionTarget == "String")
                     return Value::string(value->toString());
                 // `"hello".as(Atom)` — the checker admits only a literal.
-                if (const auto* target =
-                        std::get_if<ast::UpperIdentifier>(
-                            &node.args[0]->kind);
-                    target && target->name == "Atom")
+                if (conversionTarget == "Atom")
                     if (const auto* text = std::get_if<StringValue>(&value->data))
                         return Value::atom(text->value);
                 return value;
@@ -3742,6 +3750,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             throw NextException{};
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            // A type named as a value is its `Type` record, as the checker typed
+            // it (`Type<String>`).
+            if (auto value = m_programs.typeValueOf(expr)) return structuredTypeValue(*value);
             // Look up in environment first (variants, modules, record namespaces,
             // ALL_CAPS constants like `let MAX_RETRIES = 3`).
             // All valid capitalized names (declared variants, stdlib modules,
@@ -4761,47 +4772,6 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
     }, type.kind);
 }
 
-auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
-    return std::visit([&](const auto& node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ast::TypeName>) {
-            return node.parts.empty() ? "*" : node.parts.back();
-        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
-            std::string out =
-                node.name.parts.empty() ? "*" : node.name.parts.back();
-            out += "<";
-            for (size_t i = 0; i < node.args.size(); i++) {
-                if (i) out += ",";
-                out += node.args[i] ? runtimeTypeKey(*node.args[i]) : "*";
-            }
-            return out + ">";
-        } else if constexpr (std::is_same_v<T, ast::ListType>) {
-            return "[" +
-                (node.element ? runtimeTypeKey(*node.element) : "*") + "]";
-        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return (node.inner ? runtimeTypeKey(*node.inner) : "*") + "?";
-        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
-            return (node.left ? runtimeTypeKey(*node.left) : "*") + "|" +
-                (node.right ? runtimeTypeKey(*node.right) : "*");
-        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
-            return (node.left ? runtimeTypeKey(*node.left) : "*") + "&" +
-                (node.right ? runtimeTypeKey(*node.right) : "*");
-        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
-            std::string out = "{";
-            for (std::size_t i = 0; i < node.fields.size(); i++) {
-                if (i) out += ",";
-                out += node.fields[i].first + ":";
-                out += node.fields[i].second
-                    ? runtimeTypeKey(*node.fields[i].second) : "*";
-            }
-            return out + "}";
-        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
-            return node.name;
-        } else {
-            return std::to_string(type.kind.index());
-        }
-    }, type.kind);
-}
 
 // Is the module owning `Type::method` in scope here? A method from a top-level
 // `make` (no owner) always is. Otherwise it takes a `using` — file-level or the
@@ -5251,6 +5221,13 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
                 if (auto* mod = std::get_if<ModuleValue>(&value->data)) {
                     if (mod->name == pat.name) return true;
                 }
+                // A type named as a value is its `Type` record: `String` matches
+                // the record whose name is "String".
+                if (auto* type = std::get_if<RecordValue>(&value->data);
+                    type && type->typeName == kex::names::kTypeRecord)
+                    if (auto name = type->fields.find("name"); name != type->fields.end())
+                        if (auto* text = std::get_if<StringValue>(&name->second->data))
+                            if (text->value == pat.name) return true;
                 // Match True/False as literal patterns
                 if (pat.name == "True") {
                     auto* b = std::get_if<BoolValue>(&value->data);

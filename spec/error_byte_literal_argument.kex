@@ -1,0 +1,13 @@
+# kex: check-only
+# A literal passed where a Byte goes is range-checked like one bound to a
+# Byte: an argument (`g(256)`), and the elements of a `[Byte]` argument. Only
+# `let` bindings and `fromBytes` were checked; these checked clean.
+
+let f(bytes: [Byte]) -> Integer = bytes.count
+let g(b: Byte) -> Integer = 1
+
+main do
+  IO.printLine("${f([1, 300])}")
+  IO.printLine("${f([1, -1])}")
+  IO.printLine("${g(256)}")
+end

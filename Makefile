@@ -140,7 +140,15 @@ web-demo: build-wasm
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
 test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-examples \
-          spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
+          spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json \
+          verify-hir-stdlib
+
+# The checker decides every call the standard library makes: none is left
+# for a backend to work out (`--verify-hir`, src/hir/).
+.PHONY: verify-hir-stdlib
+verify-hir-stdlib: build
+	@dir=$$(mktemp -d) && "$(KEX)" --verify-hir --build-prelude "$$dir"; \
+	status=$$?; rm -rf "$$dir"; exit $$status
 
 # Harness and generator regressions, including simulated crashes/timeouts.
 .PHONY: test-fuzz test-spec-beam-runner test-devirt
