@@ -1,8 +1,8 @@
 duplicate-helpers 24
-literal-compares 470
+literal-compares 469
 type-recursions 40
 expr-walkers 18
 long-functions 17
-big-files 10
+big-files 9
 lowering-rederives 0
 walker-rederives 1

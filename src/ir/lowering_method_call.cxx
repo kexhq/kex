@@ -955,33 +955,9 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         auto ait = externalModules->nameToAtom.find(candidate);
                         if (ait != externalModules->nameToAtom.end()) {
                             std::vector<Binding> binds;
-                            if (!n.namedArgs.empty()) {
-                                auto pit = externalModules->exportParamNames.find(qualKey);
-                                if (pit == externalModules->exportParamNames.end())
-                                    throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
-                                const auto& pnames = pit->second;
-                                std::vector<std::string> labels;
-                                for (const auto& [label, _] : n.namedArgs)
-                                    labels.push_back(label);
-                                const auto placed = placeArguments(
-                                    pnames, labels, n.args.size() + bool(n.block));
-                                std::vector<ExprPtr> slots(pnames.size());
-                                for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                                    if (placed.labelSlots[i] != PlacedArguments::npos)
-                                        slots[placed.labelSlots[i]] =
-                                            atomize(n.namedArgs[i].second, binds);
-                                std::vector<ExprPtr> positional;
-                                for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                                if (n.block) positional.push_back(atomize(*n.block, binds));
-                                for (size_t k = 0; k < positional.size(); ++k)
-                                    if (placed.positionalSlots[k] != PlacedArguments::npos)
-                                        slots[placed.positionalSlots[k]] =
-                                            std::move(positional[k]);
-                                for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
-                                int ar = static_cast<int>(slots.size());
-                                return wrapLets(binds,
-                                    externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
-                            }
+                            if (!n.namedArgs.empty())
+                                throw LowerError("IR lower: named arguments to `" + qualKey +
+                                                 "` reached lowering unplaced");
                             std::vector<ExprPtr> args;
                             for (const auto& a : n.args) args.push_back(atomize(a, binds));
                             if (n.block) args.push_back(atomize(*n.block, binds));
@@ -1006,86 +982,11 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     }
                 }
             }
-            if (auto rit = records.find(n.method); rit != records.end()) {
-                std::vector<Binding> binds;
-                const auto& info = rit->second;
-                std::unordered_map<std::string, const ast::ExprPtr*> provided;
-                for (const auto& [name, val] : n.namedArgs)
-                    provided[name] = &val;
-                if (n.block) {
-                    auto extractMap = [&](const ast::MapExpr* map) {
-                        for (const auto& entry : map->entries)
-                            if (auto* atom = std::get_if<ast::AtomLiteral>(&entry.key->kind))
-                                provided[atom->name] = &entry.value;
-                    };
-                    if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind)) {
-                        if (!lam->body.empty())
-                            if (auto* map = std::get_if<ast::MapExpr>(&lam->body.back()->kind))
-                                extractMap(map);
-                    } else if (auto* map = std::get_if<ast::MapExpr>(&(*n.block)->kind)) {
-                        extractMap(map);
-                    }
-                }
-                std::vector<ExprPtr> fieldArgs;
-                for (size_t i = 0; i < info.fields.size(); i++) {
-                    auto pit = provided.find(info.fields[i]);
-                    if (pit != provided.end() && *pit->second)
-                        fieldArgs.push_back(lower(*pit->second));
-                    else if (info.defaults[i])
-                        fieldArgs.push_back(lowerFieldDefault(info, *info.defaults[i]));
-                    else
-                        fieldArgs.push_back(lit(LitKind::None, "none"));
-                }
-                auto ex = std::make_unique<Expr>();
-                ex->node = Construct{n.method, std::move(fieldArgs)};
-                return wrapLets(binds, std::move(ex));
-            }
         }
     }
     // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
     if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
         std::vector<Binding> binds;
-        if (auto it = moduleFunctions.find(uid->name + "." + n.method);
-            it != moduleFunctions.end()) {
-            auto qualKey = uid->name + "." + n.method;
-            if (!n.namedArgs.empty()) {
-                auto pit = fnParamNames.find(qualKey);
-                if (pit == fnParamNames.end())
-                    throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
-                const auto* selected = namedClause(
-                    qualKey, n.namedArgs, n.args.size() + bool(n.block));
-                const auto pnames = clauseNames(selected, pit->second);
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                const auto placed = placeArguments(
-                    pnames, labels, n.args.size() + bool(n.block));
-                std::vector<ExprPtr> slots(pnames.size());
-                for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                    if (placed.labelSlots[i] != PlacedArguments::npos)
-                        slots[placed.labelSlots[i]] =
-                            atomize(n.namedArgs[i].second, binds);
-                std::vector<ExprPtr> positional;
-                for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                if (n.block) positional.push_back(atomize(*n.block, binds));
-                for (size_t k = 0; k < positional.size(); ++k)
-                    if (placed.positionalSlots[k] != PlacedArguments::npos)
-                        slots[placed.positionalSlots[k]] =
-                            std::move(positional[k]);
-                fillDefaultSlots(qualKey, slots, binds, selected);
-                return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
-            }
-            std::vector<ExprPtr> args;
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            if (n.block) args.push_back(atomize(*n.block, binds));
-            if (auto defaults = fnDefaults.find(qualKey);
-                defaults != fnDefaults.end() && args.size() < defaults->second.size() &&
-                !(n.block && blockFitsExactOverload(qualKey, args.size()))) {
-                args.resize(defaults->second.size());
-                fillDefaultSlots(qualKey, args, binds);
-            }
-            return wrapLets(binds, localCallExpr(it->second, std::move(args)));
-        }
         // A type imported from another unit can name one of its `make`
         // methods without an instance: `Organization.slugged(name)`.
         // Its companion expects the type atom as the receiver.
@@ -1101,120 +1002,14 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         continue;
                     std::vector<ExprPtr> args;
                     args.push_back(lit(LitKind::Atom, provider.receiverType));
-                    if (!n.namedArgs.empty()) {
-                        std::vector<std::string> labels;
-                        for (const auto& [label, _] : n.namedArgs)
-                            labels.push_back(label);
-                        const auto placed = placeArguments(
-                            provider.paramNames, labels,
-                            n.args.size() + bool(n.block));
-                        std::vector<ExprPtr> slots(provider.paramNames.size());
-                        for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                            if (placed.labelSlots[i] != PlacedArguments::npos)
-                                slots[placed.labelSlots[i]] =
-                                    atomize(n.namedArgs[i].second, binds);
-                        size_t positional = 0;
-                        for (const auto& value : n.args) {
-                            const auto slot = placed.positionalSlots[positional++];
-                            if (slot != PlacedArguments::npos)
-                                slots[slot] = atomize(value, binds);
-                        }
-                        if (n.block) {
-                            const auto slot = placed.positionalSlots[positional];
-                            if (slot != PlacedArguments::npos)
-                                slots[slot] = atomize(*n.block, binds);
-                        }
-                        if (std::any_of(slots.begin(), slots.end(),
-                                        [](const auto& value) { return !value; }))
-                            continue;
-                        for (auto& value : slots) args.push_back(std::move(value));
-                    } else {
-                        for (const auto& value : n.args) args.push_back(atomize(value, binds));
-                        if (n.block) args.push_back(atomize(*n.block, binds));
-                    }
+                    if (!n.namedArgs.empty()) continue;
+                    for (const auto& value : n.args) args.push_back(atomize(value, binds));
+                    if (n.block) args.push_back(atomize(*n.block, binds));
                     if (provider.isFoul) args.push_back(currentContext());
                     if (static_cast<int>(args.size()) != provider.beamArity) continue;
                     return wrapLets(binds, callE(provider.moduleAtom,
                                                  provider.beamFunction,
                                                  provider.beamArity, std::move(args)));
-                }
-            }
-        }
-        // External module dispatch — but skip when the receiver names a
-        // local type that owns this method (local types shadow prelude
-        // modules with the same name, e.g. a user `record Parser` shadows
-        // the prelude's `module Parser`).
-        if (externalModules
-            && !typeOwnsStaticFunction(uid->name, n.method)) {
-            auto qualKey = uid->name + "." + n.method;
-            auto eit = externalModules->exportToBeamFn.find(qualKey);
-            // An imported capability reaches a consumer only through
-            // the external tables, never through `moduleFunctions`.
-            if (eit != externalModules->exportToBeamFn.end() &&
-                threadsCapabilities() && isCapabilityModule(uid->name) &&
-                capabilityInterfaceHas(uid->name, n.method) &&
-                n.namedArgs.empty()) {
-                auto ait = externalModules->nameToAtom.find(uid->name);
-                if (ait != externalModules->nameToAtom.end()) {
-                    const auto atom = ait->second;
-                    const auto beamFn = eit->second;
-                    const auto key = qualKey;
-                    // A trailing block is a source argument like any
-                    // other; see the external-qualified route above.
-                    std::vector<Binding> blockBinds;
-                    std::vector<ExprPtr> loweredArgs;
-                    for (const auto& arg : n.args)
-                        loweredArgs.push_back(atomize(arg, blockBinds));
-                    if (n.block)
-                        loweredArgs.push_back(
-                            atomize(*n.block, blockBinds));
-                    return capabilityDispatchLowered(
-                        uid->name, n.method, std::move(loweredArgs),
-                        blockBinds,
-                        [&](std::vector<ExprPtr> callArgs) {
-                            const int ar =
-                                static_cast<int>(callArgs.size());
-                            return externalCallExpr(key, atom, beamFn, ar,
-                                                    std::move(callArgs));
-                        });
-                }
-            }
-            if (eit != externalModules->exportToBeamFn.end()) {
-                auto ait = externalModules->nameToAtom.find(uid->name);
-                if (ait != externalModules->nameToAtom.end()) {
-                    if (!n.namedArgs.empty()) {
-                        auto pit = externalModules->exportParamNames.find(qualKey);
-                        if (pit == externalModules->exportParamNames.end())
-                            throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
-                        const auto& pnames = pit->second;
-                        std::vector<std::string> labels;
-                        for (const auto& [label, _] : n.namedArgs)
-                            labels.push_back(label);
-                        const auto placed = placeArguments(
-                            pnames, labels, n.args.size() + bool(n.block));
-                        std::vector<ExprPtr> slots(pnames.size());
-                        for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                            if (placed.labelSlots[i] != PlacedArguments::npos)
-                                slots[placed.labelSlots[i]] =
-                                    atomize(n.namedArgs[i].second, binds);
-                        std::vector<ExprPtr> positional;
-                        for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                        if (n.block) positional.push_back(atomize(*n.block, binds));
-                        for (size_t k = 0; k < positional.size(); ++k)
-                            if (placed.positionalSlots[k] != PlacedArguments::npos)
-                                slots[placed.positionalSlots[k]] =
-                                    std::move(positional[k]);
-                        for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
-                        int ar = static_cast<int>(slots.size());
-                        return wrapLets(binds,
-                            externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
-                    }
-                    std::vector<ExprPtr> args;
-                    for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                    if (n.block) args.push_back(atomize(*n.block, binds));
-                    int ar = static_cast<int>(args.size());
-                    return wrapLets(binds,
-                        externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
                 }
             }
         }
@@ -1233,98 +1028,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             for (auto& a : args) callArgs.push_back(std::move(a));
             auto ex = std::make_unique<Expr>();
             ex->node = localCall(callName, std::move(callArgs));
-            return wrapLets(binds, std::move(ex));
-        }
-        // Static call on a prelude structural type: `List.first(x)`,
-        // `Map.get(m, k, d)`. The prelude's providers carry the bare type
-        // name (`typeNameStr` renders structural KexI receivers `List` /
-        // `Map` / ... that way); unlike a separately-compiled unit's, they
-        // need no `using` and no dotted qualifier, and the call passes no
-        // type atom — the first explicit argument IS the receiver, exactly
-        // as the value-receiver provider path invokes it. Without this the
-        // call fell through to "Undefined method" while the walker
-        // (namespace dispatch) and the checker (which resolves the alias
-        // now) accept it (risk #1). Local types win: the block above
-        // already claimed those. Providers of units compiled apart keep
-        // today's behavior (the dotted block above owns them).
-        if (externalModules && !typeOwnsStaticFunction(uid->name, n.method)) {
-            if (auto found = externalModules->receiverFunctions.find(n.method);
-                found != externalModules->receiverFunctions.end()) {
-                for (const auto& provider : found->second) {
-                    if (provider.compiledApart ||
-                        provider.receiverType != uid->name)
-                        continue;
-                    std::vector<ExprPtr> staticArgs;
-                    if (!n.namedArgs.empty()) {
-                        std::vector<std::string> labels;
-                        for (const auto& [label, _] : n.namedArgs)
-                            labels.push_back(label);
-                        const auto placed = placeArguments(
-                            provider.paramNames, labels,
-                            n.args.size() + bool(n.block));
-                        std::vector<ExprPtr> slots(provider.paramNames.size());
-                        for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                            if (placed.labelSlots[i] != PlacedArguments::npos)
-                                slots[placed.labelSlots[i]] =
-                                    atomize(n.namedArgs[i].second, binds);
-                        size_t positional = 0;
-                        for (const auto& value : n.args) {
-                            const auto slot = placed.positionalSlots[positional++];
-                            if (slot != PlacedArguments::npos)
-                                slots[slot] = atomize(value, binds);
-                        }
-                        if (n.block) {
-                            const auto slot = placed.positionalSlots[positional];
-                            if (slot != PlacedArguments::npos)
-                                slots[slot] = atomize(*n.block, binds);
-                        }
-                        if (std::any_of(slots.begin(), slots.end(),
-                                        [](const auto& value) { return !value; }))
-                            continue;
-                        for (auto& value : slots) staticArgs.push_back(std::move(value));
-                    } else {
-                        for (const auto& value : n.args) staticArgs.push_back(atomize(value, binds));
-                        if (n.block) staticArgs.push_back(atomize(*n.block, binds));
-                    }
-                    if (provider.isFoul) staticArgs.push_back(currentContext());
-                    if (static_cast<int>(staticArgs.size()) != provider.beamArity) continue;
-                    return wrapLets(binds, callE(provider.moduleAtom,
-                                                 provider.beamFunction,
-                                                 provider.beamArity, std::move(staticArgs)));
-                }
-            }
-        }
-        if (auto rit = records.find(n.method); rit != records.end()) {
-            const auto& info = rit->second;
-            std::unordered_map<std::string, const ast::ExprPtr*> provided;
-            for (const auto& [name, val] : n.namedArgs)
-                provided[name] = &val;
-            if (n.block) {
-                auto extractMap = [&](const ast::MapExpr* map) {
-                    for (const auto& entry : map->entries)
-                        if (auto* atom = std::get_if<ast::AtomLiteral>(&entry.key->kind))
-                            provided[atom->name] = &entry.value;
-                };
-                if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind)) {
-                    if (!lam->body.empty())
-                        if (auto* map = std::get_if<ast::MapExpr>(&lam->body.back()->kind))
-                            extractMap(map);
-                } else if (auto* map = std::get_if<ast::MapExpr>(&(*n.block)->kind)) {
-                    extractMap(map);
-                }
-            }
-            std::vector<ExprPtr> fieldArgs;
-            for (size_t i = 0; i < info.fields.size(); i++) {
-                auto pit = provided.find(info.fields[i]);
-                if (pit != provided.end() && *pit->second)
-                    fieldArgs.push_back(lower(*pit->second));
-                else if (info.defaults[i])
-                    fieldArgs.push_back(lowerFieldDefault(info, *info.defaults[i]));
-                else
-                    fieldArgs.push_back(lit(LitKind::None, "none"));
-            }
-            auto ex = std::make_unique<Expr>();
-            ex->node = Construct{n.method, std::move(fieldArgs)};
             return wrapLets(binds, std::move(ex));
         }
         // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
@@ -1481,15 +1184,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     }
     if (importedArityMatches) {
         auto imported = importedMethod;
-            const std::vector<std::string>* pnames = nullptr;
-            for (const auto& [qualified, emitted] : moduleFunctions) {
-                if (emitted != imported->second) continue;
-                if (auto names = fnParamNames.find(qualified);
-                    names != fnParamNames.end())
-                    pnames = &names->second;
-                break;
-            }
-
             std::vector<ExprPtr> args;
             if (importedClause) {
                 const auto pnames = clauseNames(importedClause, {});
@@ -1517,39 +1211,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 }
                 fillDefaultSlots(importedKey, slots, rb, importedClause);
                 args = std::move(slots);
-            } else if (!n.namedArgs.empty() && pnames) {
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                // Slot 0 holds the receiver (`rv()` below): labels land
-                // from 1 on, and anything else is unknown — including a
-                // label naming the receiver parameter itself.
-                const auto placed = placeArguments(
-                    *pnames, labels, n.args.size() + bool(n.block), 1);
-                std::vector<ExprPtr> slots(pnames->size());
-                if (!slots.empty()) slots[0] = rv();
-                for (size_t i = 0; i < n.namedArgs.size(); ++i) {
-                    if (placed.labelSlots[i] == PlacedArguments::npos)
-                        throw LowerError("IR lower: unknown named arg " +
-                                         n.namedArgs[i].first +
-                                         " for imported UFCS function " + m);
-                    slots[placed.labelSlots[i]] =
-                        atomize_ir(lower(n.namedArgs[i].second), rb);
-                }
-                size_t positional = 0;
-                for (const auto& value : n.args) {
-                    const auto slot = placed.positionalSlots[positional++];
-                    if (slot != PlacedArguments::npos)
-                        slots[slot] = atomize_ir(lower(value), rb);
-                }
-                if (n.block) {
-                    const auto slot = placed.positionalSlots[positional];
-                    if (slot != PlacedArguments::npos)
-                        slots[slot] = atomize_ir(lower(*n.block), rb);
-                }
-                for (auto& slot : slots)
-                    if (!slot) slot = lit(LitKind::None, "none");
-                args = std::move(slots);
             } else {
                 args.push_back(rv());
                 for (const auto& value : n.args)
@@ -1560,137 +1221,12 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     args.push_back(atomize_ir(lower(*n.block), rb));
             }
         const int arity = static_cast<int>(args.size());
-        // A `using`-ed module of this unit owns the name for ITS receiver
-        // type only (Regex's `get` is Match's). Claiming every call of
-        // that name sent a Map's `get` to Kex.Regex and crashed with
-        // function_clause where the walker dispatched on the value — see
-        // dualProviderDispatch.
-        //
-        // That reading only holds when the import IS the receiver method
-        // for the local owner — i.e. when it came from the very module
-        // that declares the owner's `make` block. Otherwise the import is
-        // an unrelated free function, and dualProviderDispatch's first
-        // arm would send the owner's own values straight to it: `using
-        // Dsl`'s `get(path, handler)` swallowed every `bag.get(name)`.
-        if (importOwnsLocalReceiver(m, imported->second))
-            if (auto dual = dualProviderDispatch(
-                    n, m, methodReceiverOwner(m), "", imported->second,
-                    arity, args))
-                return ret(std::move(dual));
-        // `dualProviderDispatch` only covers a name this unit imports as
-        // a RECEIVER METHOD. An imported FREE function competing with
-        // some other module's receiver method needs the same treatment
-        // from the other side.
+        // An imported FREE function competing with some other module's
+        // receiver method is decided between at run time.
         if (auto guarded = importedFreeFunctionDispatch(
                 n, m, imported->second, arity, args))
             return ret(std::move(guarded));
         return ret(localCallExpr(imported->second, std::move(args)));
-    }
-
-    // The same for a function `using` imported from a unit compiled
-    // apart (`text.scan(re)` under `using Regex`), where nothing of this
-    // unit or of a provider answers the call at its arity.
-    if (auto external = externalImports.find(m);
-        external != externalImports.end() && !moduleImports.count(m) &&
-        externalModules->compiledApartModules.contains(
-            external->second.substr(0, external->second.rfind('.')))) {
-        const auto& key = external->second;
-        const auto actual = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
-                            (n.block ? 1 : 0);
-        const auto names = externalModules->exportParamNames.find(key);
-        const auto arity = externalModules->exportArity.find(key);
-        // Shorter than the function only by parameters with defaults: a
-        // missing required one is no call to it, not a `none` argument.
-        const auto defaults = externalModules->exportDefaults.find(key);
-        const auto defaulted = [&](int from, int to) {
-            for (int i = from; i < to; i++)
-                if (defaults == externalModules->exportDefaults.end() ||
-                    static_cast<int>(defaults->second.size()) <= i ||
-                    defaults->second[static_cast<size_t>(i)].empty())
-                    return false;
-            return true;
-        };
-        // Where the arguments land: the receiver first, each label at its
-        // parameter, then positional ones and the block in the slots left.
-        const auto unfilledDefaulted = [&] {
-            const auto& params = names->second;
-            std::vector<bool> filled(params.size(), false);
-            filled[0] = true;
-            for (const auto& [label, _] : n.namedArgs) {
-                const auto at = std::find(params.begin() + 1, params.end(), label);
-                if (at == params.end()) return false;
-                filled[static_cast<size_t>(at - params.begin())] = true;
-            }
-            auto left = n.args.size() + (n.block ? 1 : 0);
-            for (size_t i = 1; i < filled.size() && left > 0; i++)
-                if (!filled[i]) { filled[i] = true; left--; }
-            for (size_t i = 0; i < filled.size(); i++)
-                if (!filled[i] && !defaulted(static_cast<int>(i), static_cast<int>(i) + 1))
-                    return false;
-            return left == 0;
-        };
-        const bool fits =
-            names != externalModules->exportParamNames.end()
-                ? actual <= static_cast<int>(names->second.size()) &&
-                      !names->second.empty() && unfilledDefaulted()
-                : arity != externalModules->exportArity.end() && arity->second == actual;
-        const auto providers = externalModules->receiverFunctions.find(m);
-        const bool answered =
-            localMethodArities.count(m + "/" + std::to_string(actual)) ||
-            (providers != externalModules->receiverFunctions.end() &&
-             std::any_of(providers->second.begin(), providers->second.end(),
-                         [&](const auto& provider) {
-                             return provider.beamArity == actual;
-                         }));
-        const auto owner = key.substr(0, key.rfind('.'));
-        // The checker's choice settles it when it chose this function
-        // over a provider's of the same arity (`"a-b".replace(re, "+")`
-        // is Regex's, not the prelude's String one).
-        const bool chosen = [&] {
-            if (!resolvedCalls) return false;
-            // The checker records no such choice for an erased receiver
-            // (`Any`): that call is a run-time dispatch.
-            const auto resolved = resolvedCalls->find(&n);
-            return resolved != resolvedCalls->end() &&
-                   resolved->second.backendModule ==
-                       externalModules->nameToAtom.at(owner);
-        }();
-        if (fits && (!answered || chosen) &&
-            (n.namedArgs.empty() || names != externalModules->exportParamNames.end())) {
-            std::vector<ExprPtr> args;
-            if (names != externalModules->exportParamNames.end()) {
-                const auto& params = names->second;
-                args.resize(params.size());
-                args[0] = rv();
-                for (const auto& [label, value] : n.namedArgs)
-                    for (size_t i = 1; i < params.size(); i++)
-                        if (params[i] == label) {
-                            args[i] = atomize_ir(lower(value), rb);
-                            break;
-                        }
-                size_t next = 1;
-                const auto place = [&](ExprPtr value) {
-                    while (next < args.size() && args[next]) next++;
-                    if (next < args.size()) args[next++] = std::move(value);
-                };
-                for (const auto& value : n.args) place(atomize_ir(lower(value), rb));
-                if (n.block) place(atomize_ir(lower(*n.block), rb));
-                if (auto defaults = externalModules->exportDefaults.find(key);
-                    defaults != externalModules->exportDefaults.end())
-                    fillImportedDefaults(owner, params, defaults->second, args, rb);
-                for (auto& slot : args)
-                    if (!slot) slot = lit(LitKind::None, "none");
-            } else {
-                args.push_back(rv());
-                for (const auto& value : n.args)
-                    args.push_back(atomize_ir(lower(value), rb));
-                if (n.block) args.push_back(atomize_ir(lower(*n.block), rb));
-            }
-            const auto count = static_cast<int>(args.size());
-            return ret(externalCallExpr(key, externalModules->nameToAtom.at(owner),
-                                        externalModules->exportToBeamFn.at(key), count,
-                                        std::move(args)));
-        }
     }
 
     // A local method only claims the call when it is defined at THIS
@@ -1912,52 +1448,10 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             if (match) {
                 std::vector<ExprPtr> pargs;
                 pargs.push_back(rv());
-                if (!n.namedArgs.empty()) {
-                    auto expected = static_cast<size_t>(actualArity - 1);
-                    // The walker names the target as the receiver TYPE
-                    // owns it (`Measure::to`). A generic trait fallback
-                    // carries no receiver type, so fall back to the
-                    // receiver's static type.
-                    std::string owner = match->receiverType;
-                    if (owner.empty())
-                        if (const auto type = staticTypeOf(n.receiver.get()))
-                            owner = semantic::typeToString(type);
-                    const auto qualified =
-                        kex::mangle::qualify(owner, m);
-                    // The selected clause does not declare the labels it
-                    // was given — the walker's "unknown named argument",
-                    // reported the same way here.
-                    if (match->paramNames.size() != expected) {
-                        const auto& [label, _] = n.namedArgs.front();
-                        return ret(unknownNamedArgument(qualified, label));
-                    }
-                    std::vector<std::string> labels;
-                    for (const auto& [label, _] : n.namedArgs)
-                        labels.push_back(label);
-                    const auto placed = placeArguments(
-                        match->paramNames, labels,
-                        n.args.size() + bool(n.block));
-                    std::vector<ExprPtr> slots(match->paramNames.size());
-                    for (size_t i = 0; i < n.namedArgs.size(); ++i) {
-                        if (placed.labelSlots[i] == PlacedArguments::npos)
-                            return ret(unknownNamedArgument(
-                                qualified, n.namedArgs[i].first));
-                        slots[placed.labelSlots[i]] =
-                            atomize_ir(lower(n.namedArgs[i].second), rb);
-                    }
-                    std::vector<ExprPtr> positional;
-                    for (const auto& a : n.args)
-                        positional.push_back(atomize_ir(lower(a), rb));
-                    if (n.block)
-                        positional.push_back(atomize_ir(lower(*n.block), rb));
-                    for (size_t k = 0; k < positional.size(); ++k)
-                        if (placed.positionalSlots[k] != PlacedArguments::npos)
-                            slots[placed.positionalSlots[k]] =
-                                std::move(positional[k]);
-                    for (auto& slot : slots)
-                        if (!slot) slot = lit(LitKind::None, "none");
-                    for (auto& slot : slots) pargs.push_back(std::move(slot));
-                } else {
+                if (!n.namedArgs.empty())
+                    throw LowerError("IR lower: named arguments to `" + m +
+                                     "` reached the provider search unplaced");
+                {
                     for (const auto& a : n.args)
                         pargs.push_back(atomize_ir(lower(a), rb));
                     if (n.block)

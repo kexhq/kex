@@ -50,6 +50,7 @@ void Lowering::collectRecord(const ast::RecordDef& rec,
                    const std::string& owner ) {
     const auto name = owner.empty() ? rec.name : owner + "." + rec.name;
     RecordInfo info;
+    localRecordNames.insert(name);
     info.owner = owner;
     for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
         info.fields.push_back(rec.fields[i].name);
@@ -103,35 +104,6 @@ auto Lowering::moduleInScope(const std::string& module) const -> bool {
 
 // The single receiver type a method of a module compiled in THIS unit
 // belongs to, or "" when the method has no such unambiguous owner.
-// The module a `using`-imported emitted symbol came from, or "" when this
-// unit cannot say.
-auto Lowering::importSourceModule(const std::string& emittedSymbol) const
-    -> std::string {
-    for (const auto& [qualified, emitted] : moduleFunctions) {
-        if (emitted != emittedSymbol) continue;
-        const auto dot = qualified.rfind('.');
-        return dot == std::string::npos ? std::string()
-                                        : qualified.substr(0, dot);
-    }
-    return {};
-}
-
-// Is the imported symbol the receiver method of the LOCAL type that owns
-// this name? True only when the import came from the module declaring
-// that type's `make` block — `using Regex` importing Match's `get`. An
-// unrelated free function of the same name is not that, however much the
-// spelling suggests it.
-auto Lowering::importOwnsLocalReceiver(const std::string& method,
-                             const std::string& emittedSymbol) const
-    -> bool {
-    const auto owner = methodReceiverOwner(method);
-    if (owner.empty()) return false;
-    auto declaring = localTypeModules.find(owner);
-    if (declaring == localTypeModules.end()) return false;
-    const auto source = importSourceModule(emittedSymbol);
-    return !source.empty() && source == declaring->second;
-}
-
 auto Lowering::methodReceiverOwner(const std::string& method) const -> std::string {
     auto owners = methodOwners.find(method);
     if (owners == methodOwners.end() || owners->second.size() != 1)
