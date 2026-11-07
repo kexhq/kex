@@ -84,6 +84,16 @@ struct ImportedModuleInterface {
 
 // Exact backend ownership selected by semantic analysis for an imported call.
 // The AST remains backend-neutral; lowering consumes this side table.
+// A provider a call may reach at run time instead of its target: a value of
+// `receiverType` goes to `backendModule:backendFunction`. With no type, the
+// provider is that module's own dispatcher, for a value whose registered
+// owner is the module.
+struct RuntimeAlternative {
+    std::string receiverType;
+    std::string backendModule;
+    std::string backendFunction;
+};
+
 struct ResolvedCallTarget {
     // Source owner selected by overload resolution (for example `Optional`
     // rather than an unrelated same-named `Bits` export). Tooling uses this
@@ -116,6 +126,10 @@ struct ResolvedCallTarget {
     // dispatcher. Lowering applies it unless the receiver takes a
     // trait dictionary (clause (10)).
     std::string importDispatchSpelling;
+    // Providers chosen by the value before this target, which takes every
+    // value none of them does: several modules answer the call, and only the
+    // receiver at run time says whose it is (`"${value}"` on a Showable).
+    std::vector<RuntimeAlternative> alternatives;
 };
 
 struct ImportedTraitConformance {

@@ -1,6 +1,7 @@
 #include "lower.hxx"
 #include "lower_internal.hxx"
 #include "lowering.hxx"
+#include "../semantic/analyzer.hxx"
 #include "../ast/function_groups.hxx"
 #include "../semantic/declared_type.hxx"
 #include "../common/utf8.hxx"
@@ -41,26 +42,59 @@ auto preludeAnswers(const Lowering& L, const std::string& module,
 
 } // namespace
 
+auto mergeExternalModules(const ExternalModules& base,
+                          const ExternalModules& overrides)
+    -> ExternalModules {
+    auto result = base;
+    for (const auto& [name, atom] : overrides.nameToAtom)
+        result.nameToAtom[name] = atom;
+    for (const auto& [name, function] : overrides.exportToBeamFn)
+        result.exportToBeamFn[name] = function;
+    for (const auto& [name, arity] : overrides.exportArity)
+        result.exportArity[name] = arity;
+    for (const auto& [name, names] : overrides.exportParamNames)
+        result.exportParamNames[name] = names;
+    for (const auto& [name, defaults] : overrides.exportDefaults)
+        result.exportDefaults[name] = defaults;
+    for (const auto& name : overrides.foulExports)
+        result.foulExports.insert(name);
+    for (const auto& name : overrides.capabilityModules)
+        result.capabilityModules.insert(name);
+    for (const auto& [name, members] : overrides.capabilityMembers)
+        result.capabilityMembers[name] = members;
+    for (const auto& [type, serving] : overrides.servingSlots)
+        result.servingSlots[type] = serving;
+    result.compiledApartModules.insert(overrides.compiledApartModules.begin(),
+                                                                          overrides.compiledApartModules.end());
+    for (const auto& [name, functions] : overrides.receiverFunctions)
+        result.receiverFunctions[name] = functions;
+    for (const auto& [name, methods] : overrides.traitMethods)
+        result.traitMethods[name] = methods;
+    return result;
+}
+
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const LowerContext& context) -> Module {
     const auto& sourcePath = context.sourcePath;
     const auto* externals = context.externals;
     const auto* externalRecords = context.externalRecords;
-    const auto* resolvedCalls = context.resolvedCalls;
     const bool lowersPrelude = context.lowersPrelude;
     const auto* externalVariants = context.externalVariants;
-    const auto* staticTypeOfCalls = context.staticTypeOfCalls;
-    const auto* expressionTypes = context.expressionTypes;
-    const auto* resolvedTraits = context.resolvedTraits;
+    // Lowering translates what the checker decided: there is nothing to
+    // lower without the checked program.
+    if (!context.hir) throw LowerError("IR lower: " + fileStem + " was not checked");
+    // The checker's answers, all read from the checked program.
+    const auto& analysis = context.hir->analysis();
+    const auto* staticTypeOfCalls = &analysis.staticTypeOfCalls();
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
-    L.resolvedCalls = resolvedCalls;
     L.hir = context.hir;
-    L.resolvedTraits = resolvedTraits;
+    L.resolvedCalls = &analysis.resolvedCalls();
+    L.resolvedTraits = &analysis.resolvedTraits();
+    L.expressionTypes = &analysis.typeMap();
     L.lowersPrelude = lowersPrelude;
     L.staticTypeOfCalls = staticTypeOfCalls;
-    L.expressionTypes = expressionTypes;
     if (externals) L.traitMethods = externals->traitMethods;
     if (externals)
         for (const auto& [name, candidates] : externals->receiverFunctions) {
@@ -121,33 +155,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         return s;
     };
-    // The `using`s of each scope, by module path ("" for the file). The
-    // pre-pass below collects a make block's inherited defaults before the
-    // main walk has recorded a single import, so `using Ui` then `implement:
-    // Shape` has to be resolved from these.
-    std::unordered_map<std::string, std::set<std::string>> scopeUsings;
-    kex::collectScopeUsings(prog.items, scopeUsings);
-    auto inheritedDefaults = [&](const ast::MakeDef& mk, const std::string& scope) {
+    auto inheritedDefaults = [&](const ast::MakeDef& mk) {
         std::vector<const ast::FunctionDef*> out;
         if (mk.implements.empty()) return out;
         auto own = ownMethodNames(mk);
         std::set<MethodKey> added;
-        // Semantic analysis already settled each `implement:` name with
-        // the checker's import order, aliases, and only/except rules;
-        // without analysis (`--no-check`), resolve from the pre-pass
-        // usings as before.
-        const std::vector<std::string>* identities = nullptr;
-        if (L.resolvedTraits)
-            if (auto resolved = L.resolvedTraits->find(&mk);
-                resolved != L.resolvedTraits->end())
-                identities = &resolved->second;
-        const auto visible = kex::usingsVisibleIn(scopeUsings, scope);
-        for (size_t i = 0; i < mk.implements.size(); ++i) {
-            const auto identity =
-                identities && i < identities->size()
-                    ? (*identities)[i]
-                    : L.traitIdentityOf(mk.implements[i], scope, true,
-                                        &visible);
+        // Each `implement:` name as the checker settled it, with its import
+        // order, aliases and only/except rules.
+        const auto resolved = L.resolvedTraits->find(&mk);
+        if (resolved == L.resolvedTraits->end()) return out;
+        for (const auto& identity : resolved->second) {
             auto it = traitDefs.find(identity);
             if (it == traitDefs.end()) continue;
             // Kex writes a multi-clause function as separate `let`
@@ -396,7 +413,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         collectMethod(vfd->get());
         }
         // Inherited trait defaults count as this type's methods too.
-        for (const auto* fd : inheritedDefaults(md, makeModulePath)) collectMethod(fd);
+        for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
         for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
             if (signatures.size() < 2) continue;
             if (!separableOverloadSignatures(signatures)) continue;
@@ -816,7 +833,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // TypeAnnotation items in a make block are erased.
                 }
                 // Splice in trait default methods this type doesn't override.
-                for (const auto* fd : inheritedDefaults(*node, "")) pushFn(fd);
+                for (const auto* fd : inheritedDefaults(*node)) pushFn(fd);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 if (!node) return;
@@ -932,7 +949,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                                         pushMethod(fd->get());
                         }
-                        for (const auto* fd : inheritedDefaults(*mk, L.currentModulePath)) pushMethod(fd);
+                        for (const auto* fd : inheritedDefaults(*mk)) pushMethod(fd);
                         }
                     };
                     std::function<void(const ast::ModuleDef&)> lowerModuleBody;

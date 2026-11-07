@@ -338,7 +338,8 @@ struct Lowering {
     // semantic analysis. Absent without analysis (`--no-check`), in which
     // case `inheritedDefaults` resolves from its pre-pass usings as before.
     const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
-        resolvedTraits = nullptr;    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
+        resolvedTraits = nullptr;
+    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
     const ExpressionTypes* expressionTypes = nullptr;
     // Lexical source binding -> trait -> hidden dictionary IR binding.
     std::unordered_map<std::string,
@@ -804,6 +805,10 @@ struct Lowering {
 
     auto methodReceiverOwner(const std::string& method) const -> std::string;
 
+    // A call the value decides among the providers the checker listed
+    // (ResolvedCallTarget::alternatives).
+    auto providerChoice(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
+        -> ExprPtr;
     auto dualProviderDispatch(const ast::MethodCall& n,
                               const std::string& method,
                               const std::string& receiverType,

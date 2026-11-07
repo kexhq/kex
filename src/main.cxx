@@ -883,22 +883,6 @@ auto specBaseCandidates(const std::string &filepath)
   return candidates;
 }
 
-// `context` with the checked program `hir` filled in — what each call is and
-// what type each expression has, everything lowering reads off a checked
-// program. Unchanged without one.
-auto withCheckerAnswers(kex::ir::LowerContext context,
-                        const kex::hir::Program *hir) -> kex::ir::LowerContext {
-  if (hir) {
-    const auto &analysis = hir->analysis();
-    context.hir = hir;
-    context.resolvedCalls = &analysis.resolvedCalls();
-    context.staticTypeOfCalls = &analysis.staticTypeOfCalls();
-    context.expressionTypes = &analysis.typeMap();
-    context.resolvedTraits = &analysis.resolvedTraits();
-  }
-  return context;
-}
-
 auto fileExists(const std::string &path) -> bool {
   std::ifstream probe(path);
   return probe.good();
@@ -960,9 +944,6 @@ auto mergeSpecBase(kex::ast::Program &program, const std::string &entry,
 // Defined with the prelude's other loaders below; lowering a unit on its own
 // (lowerUnitSeparately) needs them first.
 auto preludeExternalModules() -> const kex::ir::ExternalModules &;
-auto mergeExternalModules(const kex::ir::ExternalModules &base,
-                          const kex::ir::ExternalModules &overrides)
-    -> kex::ir::ExternalModules;
 auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout>;
 auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag>;
 auto prebuiltRuntimeBeamDir() -> std::string;
@@ -1268,7 +1249,7 @@ auto unitExternalModules(const kex::beam::KexiRegistry &registry) -> kex::ir::Ex
   for (auto &[_, functions] : unitExternals.receiverFunctions)
     for (auto &function : functions) function.compiledApart = true;
   for (const auto &[name, _] : unitExternals.nameToAtom) unitExternals.compiledApartModules.insert(name);
-  auto externals = mergeExternalModules(prelude, unitExternals);
+  auto externals = kex::ir::mergeExternalModules(prelude, unitExternals);
   // The merge lets a unit's providers of a name replace the prelude's, as a
   // module loaded into the REPL does; here both stand, or `handle.feed` lost
   // the prelude's foul FileHandle provider to FS.File's, and its context.
@@ -1378,11 +1359,11 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
     const kex::hir::Program hir(program, analyzer);
     auto modules = kex::ir::lowerModules(
         program, stem,
-        withCheckerAnswers({.sourcePath = path,
-                            .externals = &externals,
-                            .externalRecords = &layouts,
-                            .externalVariants = &variants},
-                           &hir));
+        {.sourcePath = path,
+         .externals = &externals,
+         .externalRecords = &layouts,
+         .externalVariants = &variants,
+         .hir = &hir});
     if (!dir.empty()) std::filesystem::create_directories(dir);
     // The unit's own module registers its records' layouts as it loads, but
     // only the entry's `main` used to run, and a call goes to a companion
@@ -2342,37 +2323,6 @@ auto preludeSemanticInterfaces()
   return kex::preludeSemanticInterfaces(prebuiltRuntimeBeamDir());
 }
 
-auto mergeExternalModules(const kex::ir::ExternalModules &base,
-                          const kex::ir::ExternalModules &overrides)
-    -> kex::ir::ExternalModules {
-  auto result = base;
-  for (const auto &[name, atom] : overrides.nameToAtom)
-    result.nameToAtom[name] = atom;
-  for (const auto &[name, function] : overrides.exportToBeamFn)
-    result.exportToBeamFn[name] = function;
-  for (const auto &[name, arity] : overrides.exportArity)
-    result.exportArity[name] = arity;
-  for (const auto &[name, names] : overrides.exportParamNames)
-    result.exportParamNames[name] = names;
-  for (const auto &[name, defaults] : overrides.exportDefaults)
-    result.exportDefaults[name] = defaults;
-  for (const auto &name : overrides.foulExports)
-    result.foulExports.insert(name);
-  for (const auto &name : overrides.capabilityModules)
-    result.capabilityModules.insert(name);
-  for (const auto &[name, members] : overrides.capabilityMembers)
-    result.capabilityMembers[name] = members;
-  for (const auto &[type, serving] : overrides.servingSlots)
-    result.servingSlots[type] = serving;
-  result.compiledApartModules.insert(overrides.compiledApartModules.begin(),
-                                     overrides.compiledApartModules.end());
-  for (const auto &[name, functions] : overrides.receiverFunctions)
-    result.receiverFunctions[name] = functions;
-  for (const auto &[name, methods] : overrides.traitMethods)
-    result.traitMethods[name] = methods;
-  return result;
-}
-
 struct PreludeBuildModule {
   kex::ir::EmitResult emitted;
   kex::beam::KexiChunk interface;
@@ -2452,8 +2402,7 @@ auto compilePreludeCore(const std::string &dir,
       std::cerr << "prelude: " << problems.size() << " undecided call sites\n";
       if (!problems.empty()) return false;
     }
-    const auto selfContext = withCheckerAnswers(
-        {.lowersPrelude = true}, &hir);
+    const kex::ir::LowerContext selfContext{.lowersPrelude = true, .hir = &hir};
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgramTiered(merged, tierBounds,
                                                   "prelude", selfContext));
@@ -4406,7 +4355,7 @@ auto BeamReplSession::evaluate(
   // qualified access such as `Units.SI.Meter`.
   resolveBeamDeps(program, m_replRoots, &preludeSemanticInterfaces(),
                   sourceModulesNamedBy(program));
-  auto extMods = mergeExternalModules(
+  auto extMods = kex::ir::mergeExternalModules(
       preludeExternalModules(), m_kexiRegistry.buildExternalModules());
   kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
   replAnalyzer.setLinkedModules(providerModules(extMods));
@@ -4420,11 +4369,10 @@ auto BeamReplSession::evaluate(
   const kex::hir::Program hir(program, replAnalyzer);
   auto irModules = kex::ir::lowerModules(
       program, "kex_repl_session_" + std::to_string(++m_sessionVersion),
-      withCheckerAnswers(
-          {.externals = extMods.nameToAtom.empty() ? nullptr : &extMods,
-           .externalRecords = &replRecordLayouts,
-           .externalVariants = &replVariantTags},
-          &hir));
+      {.externals = extMods.nameToAtom.empty() ? nullptr : &extMods,
+       .externalRecords = &replRecordLayouts,
+       .externalVariants = &replVariantTags,
+       .hir = &hir});
   auto results = kex::ir::emitModules(irModules);
   const auto& result = results.front();
 

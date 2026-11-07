@@ -4734,8 +4734,7 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
     // Each module providing it at this arity that is in scope here: a
     // `make` for a type its module does not declare is reached only through
     // a `using` of that module, as lowering filters it.
-    std::set<std::string> modules;
-    const ImportedFunction* dispatcher = nullptr;
+    std::map<std::string, std::vector<const ImportedFunction*>> byModule;
     for (const auto& candidate : providers->second) {
         if (candidate.backendArity != arity) continue;
         // A module this build does not link provides nothing at run time.
@@ -4743,11 +4742,58 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
         // Nor does one declared for an alias: no value has that type.
         if (candidate.aliasReceiver) continue;
         if (candidate.foreignTarget && !makeModuleVisible(candidate.sourceModule)) continue;
-        modules.insert(candidate.backendModule);
-        if (candidate.backendFunction == name) dispatcher = &candidate;
+        byModule[candidate.backendModule].push_back(&candidate);
     }
-    if (modules.size() != 1 || !dispatcher) return;
-    m_resolvedCalls[call] = dispatcherTarget(*dispatcher);
+    // A module's dispatcher: the provider under the call's own name.
+    const auto dispatcherOf = [&](const std::string& module) -> const ImportedFunction* {
+        const auto found = byModule.find(module);
+        if (found == byModule.end()) return nullptr;
+        for (const auto* candidate : found->second)
+            if (candidate->backendFunction == name) return candidate;
+        return nullptr;
+    };
+    if (byModule.size() == 1) {
+        if (const auto* dispatcher = dispatcherOf(byModule.begin()->first))
+            m_resolvedCalls[call] = dispatcherTarget(*dispatcher);
+        return;
+    }
+    // Several: the prelude's dispatcher for every value the others' providers
+    // do not take, each of those chosen by the value — by its type, where
+    // that is a record or a primitive a guard can test, or by its registered
+    // owner, where the module's provider is a dispatcher for any receiver.
+    const auto* prelude = dispatcherOf(names::kPreludeModule);
+    if (!prelude || !call->namedArgs.empty()) return;
+    std::vector<RuntimeAlternative> alternatives;
+    for (const auto& [module, candidates] : byModule) {
+        if (module == names::kPreludeModule) continue;
+        std::vector<RuntimeAlternative> typed;
+        bool generic = false;
+        for (const auto* candidate : candidates) {
+            const auto receiver = candidate->signature.params.empty()
+                ? Type::unknown() : resolve(candidate->signature.params.front());
+            if (std::holds_alternative<PrimitiveType>(receiver->kind) ||
+                (std::holds_alternative<NamedType>(receiver->kind) &&
+                 m_recordFields.contains(std::get<NamedType>(receiver->kind).name)))
+                typed.push_back({typeToString(receiver), module, candidate->backendFunction});
+            // A dispatcher for any receiver, or for several types at once
+            // (`make TypeRef | PatternRef`): the value's owner chooses it.
+            else if (std::holds_alternative<UnknownType>(receiver->kind) ||
+                     std::holds_alternative<TypeVar>(receiver->kind) ||
+                     std::holds_alternative<UnionType>(receiver->kind))
+                generic = true;
+            else
+                return;  // a receiver no guard can test
+        }
+        if (generic) {
+            if (!typed.empty() || !dispatcherOf(module)) return;
+            alternatives.push_back({{}, module, name});
+        } else {
+            alternatives.insert(alternatives.end(), typed.begin(), typed.end());
+        }
+    }
+    auto target = dispatcherTarget(*prelude);
+    target.alternatives = std::move(alternatives);
+    m_resolvedCalls[call] = std::move(target);
 }
 
 // A call of a module's receiver dispatcher, which picks the implementation

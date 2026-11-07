@@ -832,7 +832,7 @@ namespace kex::ir {
 // generation (which comparison, which dictionary). A DECISION about a call
 // (its target, its owner) comes from the decision tables instead.
 auto Lowering::staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
-    return hir && expr ? hir->typeOf(*expr) : nullptr;
+    return expr ? hir->typeOf(*expr) : nullptr;
 }
 
 } // namespace kex::ir

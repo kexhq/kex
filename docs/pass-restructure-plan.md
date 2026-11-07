@@ -908,10 +908,36 @@ Then (same day):
   lowering's own call node for it are gone. The walker now evaluates the
   arguments on each call, as BEAM did.
 
-Search runs over `make test-all`: 351 → 94. What is left: run-time choices
-among several providers (`showValue`, `any?`/`all?`, `to`: about 40), bare
-function values (`~digit?`: lowering still builds its own call node for
-them), and programs that are not checked (about 15).
+- Lowering requires the checked program (`LowerContext::hir`; it throws
+  without one) and reads every answer of the check from it: the four maps
+  `LowerContext` took beside it and `withCheckerAnswers` are gone, as is
+  `inheritedDefaults`' own resolution of `implement:` names from the
+  scopes' `using`s. The last unchecked lowering was `codegen_test`; its
+  fixtures are checked now and lowered against the prelude's externals
+  with their own laid over them (`ir::mergeExternalModules`, moved out of
+  `main.cxx`), as a build lowers.
+
+- A call several linked modules answer, its receiver known only at run
+  time, is the checker's too: the target is the prelude's dispatcher, and
+  `ResolvedCallTarget::alternatives` lists the others' providers, each for
+  a value of its receiver type (a record or a primitive, which a guard can
+  test) or, for a module's dispatcher over any receiver, for a value that
+  module owns. Lowering emits them as written (`providerChoice`). The
+  search's `runtimeProviders` branch, which made that choice, had no
+  caller left and is deleted (−40 lines). Devirtualizations unchanged
+  (1,248, 114 spellings). A provider declared for a union
+  (`make TypeRef | PatternRef`, `Kex.AST`'s `to`) is chosen by the value's
+  owner too.
+- A trait default a type of a unit compiled apart inherits (`set.any?`,
+  Foldable's) is the target of the type's home module, which forwards it
+  under the method's own name; the search guarded it beside the prelude's.
+
+Search runs over `make test-all`: 351 → 47, none of them unchecked. What
+is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided
+as the receiver's own method but guarded by the search's dual-provider
+path (12), and calls the checker leaves undecided (about 25: bare function
+values such as `~digit?`, for which lowering still builds its own call
+node, among them).
 The cascade's traffic halved (7.7k → 4.3k calls), and
 coverage then showed the `externalImports` path (a `using`-imported
 function of a unit compiled apart), the imported clause's unplaced

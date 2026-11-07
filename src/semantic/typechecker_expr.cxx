@@ -5571,8 +5571,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             modules.insert(candidate->backendModule);
                             if (candidate->backendFunction == name) dispatcher = candidate;
                         }
-                        if (modules.size() == 1 && dispatcher)
+                        if (modules.size() == 1 && dispatcher) {
                             m_resolvedCalls[methodCall] = dispatcherTarget(*dispatcher);
+                        } else if (modules.empty()) {
+                            // A trait default it inherits (`set.any?`, Foldable's):
+                            // its home module forwards that to where its unit
+                            // emitted it, under the method's own name.
+                            auto inherited = target;
+                            inherited.backendModule = owner.own.home;
+                            inherited.backendFunction = name;
+                            inherited.importDispatchSpelling.clear();
+                            inherited.localDispatchTypes.clear();
+                            m_resolvedCalls[methodCall] = std::move(inherited);
+                        }
                     }
                     break;
                 case CallOwner::Value:
