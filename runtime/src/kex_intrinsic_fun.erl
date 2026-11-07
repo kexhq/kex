@@ -70,6 +70,8 @@ convertTo(_, _) -> 'None'.
 %% Base-aware Integer <-> String, `.to(String, radix: 16)`. Only that pair is
 %% base dependent; anything else with a radix is a conversion that was not
 %% meant, so it fails rather than silently ignoring the base.
+convertTo(V, {'Type', Name, _Args, _Pure}, Radix) ->
+    convertTo(V, binary_to_atom(Name, utf8), Radix);
 convertTo(V, 'String', Radix)
   when is_integer(V), is_integer(Radix), Radix >= 2, Radix =< 36 ->
     %% integer_to_list/2 uppercases digits above 9; the walker's GMP get_str

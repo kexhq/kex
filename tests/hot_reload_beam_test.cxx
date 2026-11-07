@@ -7,7 +7,7 @@
 // v1, loads v2 and then v3 into the same VM, and checks that the process both
 // runs the new code and survives the purge of v1:
 //
-//  - a function that recurses from its receive arms (src/ir/upgrade.cxx
+//  - a function that recurses from its receive arms (src/ir/passes/upgrade.cxx
 //    makes those calls remote);
 //  - a `loop do receive ... end end` (lifted out of its function by the same
 //    pass, so it has a remote call to recurse through);

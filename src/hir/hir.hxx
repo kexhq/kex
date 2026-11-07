@@ -70,6 +70,9 @@ public:
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
     // The static type the checker gave `expr`, or null.
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
+    // A type named as a value (`String`, the checker's `Type<String>`) as the
+    // `Type` record both backends build for it, or nullopt.
+    auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     // The checker's compile-time answer to `Type.of(x)` at `call`, or null.
     auto typeOfAnswer(const ast::MethodCall& call) const
         -> const semantic::StaticTypeAnswer*;
@@ -111,6 +114,7 @@ public:
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
+    auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
     auto typeOfAnswer(const ast::MethodCall& call) const
         -> const semantic::StaticTypeAnswer*;

@@ -1,5 +1,5 @@
 #include "upgrade.hxx"
-#include "walk.hxx"
+#include "../walk.hxx"
 
 #include <algorithm>
 #include <functional>

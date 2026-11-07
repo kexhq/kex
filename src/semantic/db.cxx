@@ -76,7 +76,10 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         // is also empty — no point running passes.
         fatalParseError = noTokens && !parser.diagnostics().empty();
     }
-    if (fatalParseError) return;
+    if (fatalParseError) {
+        state.sourceDiagnostics = state.diagnostics;
+        return;
+    }
 
     // The DB re-reads and re-parses the file itself, so it would otherwise see
     // the program BEFORE compile-time expansion and report every generated
@@ -100,6 +103,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
             std::make_move_iterator(expansionDiagnostics.begin()),
             std::make_move_iterator(expansionDiagnostics.end()));
     }
+    state.sourceDiagnostics = state.diagnostics;
 
     // Companion declarations (see the header): parse each and prepend
     // everything except its main code, so the collect/resolve passes below

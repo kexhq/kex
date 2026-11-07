@@ -52,9 +52,8 @@ module Type do
   #   IO.printError("expected a list, got ${Type.of(value).to(String)}")
   #
   # @example Taking a type from the caller
-  #   let select(as: T) -> Result<[T], String> do
-  #     let model = Type.of(as)        # the caller's record type
-  #     ...                            # rows decoded with model.construct
+  #   let select(as: Type<T>) -> Result<[T], String> do
+  #     ...                            # rows decoded with as.construct
   #   end
   #   select(as: User)                 # => Result<[User], String>
   let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)

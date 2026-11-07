@@ -119,9 +119,22 @@ struct MatchClause {
     std::optional<ExprPtr> guard;
     ExprPtr body;
 };
+// What the `guards` pass (passes/guards.cxx) makes of a match's `when` guards.
+// BEAM guards cannot hold arbitrary calls, so a guard written in source
+// becomes ordinary code.
+enum class GuardExpansion {
+    Native,  // as lowered: lowering's own matches, `receive`
+    Source,  // a `match`: guards fail on anything but `true`; no clause
+             // matching is the walker's "no matching clause" error
+    Rescue,  // rescue arms: only a literal `false` skips one, and an error
+             // no arm takes is thrown again
+};
 struct Match {
     std::vector<ExprPtr> subjects; // usually 1; >1 for multi-value dispatch
     std::vector<MatchClause> clauses;
+    GuardExpansion guards = GuardExpansion::Native;
+    // Source: where the no-clause failure says it was (`file:line:col: `).
+    std::string unmatchedAt;
 };
 
 // ---- Data -----------------------------------------------------------------

@@ -174,6 +174,11 @@ private:
     auto registerMakeSignature(const ast::MakeDef& def,
                                const std::string& modulePath) -> void;
     auto makeModuleVisible(const std::string& module) const -> bool;
+    // The module of an out-of-scope `make` whose method `name` takes these
+    // arguments (receiver first), or empty: what a call no visible candidate
+    // fits is `Hidden` by.
+    auto hiddenMakeTaking(const std::string& name, const std::vector<TypePtr>& argTypes)
+        -> std::string;
     // The type of the constant `name` names here: a member without
     // parameters of an enclosing module, innermost first, or of the top
     // level (`let LIMIT = 100`). Null when it names none.
@@ -343,7 +348,6 @@ private:
     // Whether `send`/`sendFrom` on this receiver is process messaging. A
     // user type with its own `send` (a WebSocket `Connection`, say) goes
     // through ordinary overload resolution instead (kexhq/kex#398).
-    auto isProcessSendTarget(const TypePtr& receiver) -> bool;
     // Whether `name` has an EXPLICIT `:>` contract for a receiver matching
     // `receiverType` (see m_annotatedReceiverKeys). m_annotatedMethods only
     // tracks NAMES, so an unrelated type's `:>` contract (Char's
@@ -370,9 +374,19 @@ private:
     // `Type<X>` for a parameter that selects a type by name (`let to(String,
     // in: TimeUnit)`), or null for any other parameter.
     auto typeSelectorParameter(const ast::Param& param) -> TypePtr;
+    // The result of `name` on a receiver whose type claims a trait requiring
+    // it, recorded as dispatched through that trait; null when none does.
+    // A `rescue` block's arms, each in its own scope; `onArm` gets the type of
+    // every arm that does not leave the enclosing function.
+    auto checkRescue(const ast::RescueBlock& rescue,
+                     const std::function<void(const TypePtr&)>& onArm = {}) -> void;
+    auto claimedTraitAnswers(const std::vector<TypePtr>& argTypes,
+                             const std::string& name, const ast::Expr* callExpr)
+        -> TypePtr;
     // Compile-time intrinsic handlers (intrinsics.hxx; typechecker_intrinsics.cxx).
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
+    auto checkAs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call)
         -> TypePtr;
     auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call)
@@ -600,6 +614,9 @@ private:
         // in the declaring module, once every declaration is known.
         std::vector<const ast::TypeExpr*> payloadExprs;
         std::string modulePath;
+        // Declared in this program, so `payloadTypes` lists every payload. An
+        // imported constructor's entry carries only its slots.
+        bool declaredHere = false;
     };
     std::unordered_map<std::string, ConstructorResult> m_constructorResult;
     // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to
@@ -641,10 +658,29 @@ private:
         -> const ConstructorOwner*;
     // `scope`: a module the call names (`Model.RecordDecl(entry)`), looked in
     // first; otherwise the enclosing modules, innermost first.
+    // The constructor `name` resolves to there, by the same rules.
+    auto constructorInfo(const std::string& name, const std::string& scope = {}) const
+        -> const ConstructorResult*;
     auto constructorResultType(const std::string& name,
                                const std::vector<TypePtr>& argTypes,
                                const std::string& scope = {})
         -> TypePtr;
+    // Payload `i` of `info` as declared, resolved again in the declaring
+    // module now that its records and aliases are known: an ADT is
+    // registered before them.
+    auto declaredPayload(const ConstructorResult& info, std::size_t i) -> TypePtr;
+    // Errors when a constructor is applied to the wrong number of payloads
+    // (`Broken(5)` for a nullary `Broken`).
+    // The first argument of a call to `sig` that disagrees with what earlier
+    // arguments bound a shared generic to, and the type it had to be.
+    auto genericConflict(const Signature& sig, const std::vector<TypePtr>& argTypes,
+                         const std::function<TypePtr(std::size_t, const TypePtr&)>& selectedType)
+        -> std::optional<std::pair<std::size_t, TypePtr>>;
+    // Errors when an integer literal where a Byte goes is out of its range.
+    auto checkByteLiterals(const ast::Expr& value, const TypePtr& expected) -> void;
+    auto checkConstructorPayloads(const std::string& name,
+                                  const std::vector<TypePtr>& argTypes,
+                                  SourceLocation loc, const std::string& scope = {}) -> void;
     // Errors when a constructor pattern names an arm of a DIFFERENT ADT than
     // the value being matched — `if let Ok(x) = anOptional`.
     auto checkPatternConstructorOwner(const ast::Pattern& pattern,

@@ -17,6 +17,7 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
         {"Type::returnedBy", 1, &TypeChecker::checkTypeReturnedBy, nullptr},
         {"Type::of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
         {"Process::spawn", 1, nullptr, &TypeChecker::foldProcessSpawn},
+        {"as", 1, &TypeChecker::checkAs, nullptr},
     };
     for (const auto& intrinsic : intrinsics)
         if (intrinsic.name == name && intrinsic.arity == arity) return &intrinsic;
@@ -178,6 +179,68 @@ auto TypeChecker::foldProcessSpawn(const ast::Expr& expr,
         std::holds_alternative<TypeVar>(state->kind))
         return;
     m_decidedCalls[&expr] = {CallKind::Builtin, typeToString(state)};
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// `value.as(Target)` is a total, compile-time checked conversion.
+// Distinct types erase to their backing representation, so a
+// compatible retag changes only the static type. String is the
+// universal display target and is lowered to the existing total
+// display conversion by both backends.
+// A compile-time intrinsic (intrinsics.hxx): an ordinary signature could
+// type it, but not refuse an incompatible representation.
+auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) -> TypePtr {
+    if (!node.args[0] || !node.namedArgs.empty() || node.block) return nullptr;
+    std::unordered_map<std::string, TypePtr> targetGenerics;
+    auto target = node.targetType
+        ? resolveTypeExpr(*node.targetType, targetGenerics)
+        : typeNameReference(*node.args[0]);
+    if (!target) {
+        error(expr.location,
+              "`.as` needs a type name as its target");
+        return Type::unknown();
+    }
+    m_decidedCalls[&expr] = {CallKind::Conversion,
+                             typeToString(target)};
+    // `"hello".as(Atom)` is the atom `:hello`, made at compile time —
+    // so only from text the compiler can see. Atoms are never freed;
+    // run-time text goes through `Atom.from` (makes one) or
+    // `.to(Atom)` (finds an existing one), both explicit about it.
+    if (typeToString(target) == "Atom") {
+        const auto* literal = node.receiver
+            ? std::get_if<ast::StringLiteral>(&node.receiver->kind)
+            : nullptr;
+        if (!literal || !literal->values.empty())
+            error(expr.location,
+                  "`.as(Atom)` needs a string literal; for text known "
+                  "only at run time use `Atom.from(text)`, or "
+                  "`text.to(Atom)` to find an existing atom");
+        return target;
+    }
+    auto source = node.receiver ? inferExpr(*node.receiver)
+                                : Type::unknown();
+    const auto targetIsString = [](const TypePtr& type) {
+        const auto* primitive =
+            std::get_if<PrimitiveType>(&type->kind);
+        return primitive &&
+               primitive->kind == PrimitiveType::String;
+    };
+    if (!targetIsString(target) &&
+        !representationsCompatible(source, target)) {
+        error(expr.location,
+              "Cannot convert " + typeToString(source) + " to " +
+                  typeToString(target) + " with `.as`");
+    }
+    if (auto* sized = std::get_if<SizedIntType>(&target->kind);
+        sized && sized->bits == 8 && !sized->isSigned &&
+        !typesEqual(resolve(source), target)) {
+        error(expr.location,
+              "Unchecked narrowing to Byte is not allowed; use `.to(Byte)`");
+    }
+    return target;
 }
 
 } // namespace kex::semantic

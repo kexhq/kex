@@ -1,1 +1,3 @@
-spec/error_serving_deferred_reply_type.kex:9:16: error: Type mismatch: expected Integer, got String
+spec/error_serving_deferred_reply_type.kex:9:15: error: `reply` expects argument 2 to be Integer, but got String
+
+reply : From<A> -> A -> Void

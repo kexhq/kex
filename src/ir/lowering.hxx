@@ -4,6 +4,7 @@
 #include "lower_internal.hxx"
 #include "../hir/hir.hxx"
 #include "../ast/function_groups.hxx"
+#include "../ast/type_text.hxx"
 #include "../common/mangle.hxx"
 #include "../common/well_known.hxx"
 #include "../semantic/declared_type.hxx"
@@ -28,7 +29,8 @@ namespace kex::ir {
 using namespace kex::ir::detail;
 
 using ast::methodDispatchTypes;
-using ast::renderDispatchType;
+using ast::typeText;
+using ast::TypeSpelling;
 using ast::separableOverloadSignatures;
 
 struct Lowering {
@@ -650,11 +652,9 @@ struct Lowering {
     auto wildPat() -> PatternPtr;
 
     // ---- Guards -------------------------------------------------------------
-    static auto anyClauseIrrefutable(const std::vector<MatchClause>& clauses)
-        -> bool;
-
-    auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses,
-                      ExprPtr noMatch = nullptr, bool failOnFalseOnly = false) -> ExprPtr;
+    // A match written in source, for the `guards` pass to expand.
+    auto sourceMatch(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses)
+        -> ExprPtr;
 
     // Rescue arms with `when` guards or type tests cannot stay native:
     // the emitter drops TryCatch clause guards, so wrap the arms in one
@@ -780,6 +780,7 @@ struct Lowering {
 
     // ---- Function / program ----------------------------------------------
     auto lowerParam(const ast::Param& p) -> PatternPtr;
+    auto typeNameParameter(const ast::Pattern& p) -> PatternPtr;
 
     auto discriminatingType(const std::string& written) const -> bool;
 

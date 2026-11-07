@@ -422,6 +422,7 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         } else {
             bodyType = inferBody(lam->body);
         }
+        if (lam->rescue) checkRescue(*lam->rescue);
         m_blockDepth--;
         auto resultType = resolve(bodyType);
         if (lam->returnAnnotation) {
@@ -571,17 +572,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
             if (auto constructed = nullaryConstructorType(node.name)) return constructed;
             auto type = lookupVar(node.name);
-            if (type) return type;
-            // A bare TYPE NAME used as a value — `x.to(Integer)`, the argument
-            // of the conversion protocol. Typing it as the type it names is
-            // what makes the protocol dispatchable: left Unknown, every
-            // `to` overload matched every call, so `"42".to(Integer)` was typed
-            // by whichever came first (`make Showable do let to(String)`) and
-            // came out `String?` no matter the target.
+            // A built-in type's name reaches lookupVar through the globals that
+            // annotations resolve against: as a value it is still a type name.
+            const bool builtinName = type && type == m_globals.get(node.name) &&
+                                     builtinType(node.name) != nullptr;
+            if (type && !builtinName) return type;
+            // A bare TYPE NAME used as a value (`x.to(Integer)`, `let t =
+            // String`) is a `Type<X>`: what a `Type<T>` parameter takes.
             if (isPrimitiveTypeName(node.name) ||
                 m_recordFields.count(resolveRecordName(node.name)) ||
                 m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
-                return Type::named(node.name);
+            {
+                // A type named as a value is that type's `Type` record
+                // (`Type<String>`), except `Void`, which is the unit value.
+                if (node.name == kex::names::kVoidType) return Type::named(node.name);
+                const auto named = typeNamed(node.name, expr.location);
+                return Type::named(kex::names::kTypeRecord,
+                                   {named ? named : Type::named(node.name)});
+            }
             if (auto constant = constantType(node.name)) return constant;
             return Type::unknown();
         }
@@ -687,36 +695,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           " but rescue returns " + typeToString(candidate));
                 }
             };
-            // A rescue clause binds names exactly like a match clause: its
-            // patterns introduce locals its guard and body can see, and
-            // `rescue |e|` binds the caught error.
-            for (const auto& clause : node.rescue.clauses) {
-                pushScope();
-                for (const auto& pat : clause.patterns)
-                    if (pat) {
-                        checkPatternArity(*pat);
-                        bindPatternVars(*pat);
-                    }
-                if (clause.guard && *clause.guard) inferExpr(**clause.guard);
-                if (clause.body) {
-                    auto armType = inferExpr(*clause.body);
-                    if (!alwaysReturns(*clause.body)) merge(armType);
-                }
-                popScope();
-            }
-            if (!node.rescue.catchAllBody.empty()) {
-                pushScope();
-                if (!node.rescue.catchAllParam.empty())
-                    defineVar(node.rescue.catchAllParam, Type::unknown());
-                auto catchAllType = inferBody(node.rescue.catchAllBody);
-                if (!alwaysReturns(node.rescue.catchAllBody))
-                    merge(catchAllType);
-                popScope();
-            }
-            // `rescue return` exits the enclosing function, so its expression
-            // does not participate in the trying-expression result type.
-            if (node.rescue.inlineReturnExpr)
-                inferExpr(*node.rescue.inlineReturnExpr);
+            checkRescue(node.rescue, merge);
             return result;
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
@@ -753,40 +732,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // inferred type instead would defeat the reason for writing one.
             auto declared = declaredBindingType(node.type, valueType, expr.location,
                                                 node.value ? node.value.get() : nullptr);
-            if (declared && node.value) {
-                auto byteType = [](const TypePtr& type) {
-                    auto* sized = type ? std::get_if<SizedIntType>(&type->kind) : nullptr;
-                    return sized && sized->bits == 8 && !sized->isSigned;
-                };
-                auto invalidByteLiteral = [](const std::string& text) {
-                    if (text.empty() || text.front() == '-') return true;
-                    try {
-                        size_t parsed = 0;
-                        const auto value = std::stoull(text, &parsed, 0);
-                        return parsed != text.size() || value > 255;
-                    } catch (...) { return true; }
-                };
-                auto expected = resolve(declared);
-                if (byteType(expected)) {
-                    if (auto* literal = std::get_if<ast::IntLiteral>(&node.value->kind)) {
-                        if (invalidByteLiteral(literal->value))
-                            error(node.value->location, "Byte literal must be in 0..255");
-                    }
-                    if (auto* unary = std::get_if<ast::UnaryOp>(&node.value->kind);
-                        unary && unary->op == TokenType::Minus && unary->operand &&
-                        std::holds_alternative<ast::IntLiteral>(unary->operand->kind))
-                        error(node.value->location, "Byte literal must be in 0..255");
-                } else if (auto* listType = std::get_if<ListType>(&expected->kind);
-                           listType && byteType(listType->element)) {
-                    if (auto* list = std::get_if<ast::ListExpr>(&node.value->kind))
-                        for (const auto& element : list->elements)
-                            if (element)
-                                if (auto* literal = std::get_if<ast::IntLiteral>(&element->kind)) {
-                                    if (invalidByteLiteral(literal->value))
-                                        error(element->location, "Byte literal must be in 0..255");
-                                }
-                }
-            }
+            if (declared && node.value) checkByteLiterals(*node.value, declared);
             if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
                 // `x : Type.of(y)` on the line above `let x = 34`: a top-level
                 // binding is a synthetic-main LetExpr, not a 0-arg function, so
@@ -1215,33 +1161,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes.push_back(inferBlock(**node.block, hints));
                 passBlockByLabel(node, skippedTo);
             }
-            // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
-            if ((node.name == "send" || node.name == "sendFrom") &&
-                argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
-                m_decidedCalls[&expr] = {CallKind::Builtin, "Process.send"};
-                auto pidType = resolve(argTypes[0]);
-                auto msgType = resolve(argTypes[1]);
-                if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
-                    if (nt->name == "Process" && nt->typeArgs.size() == 1) {
-                        auto declared = resolve(nt->typeArgs[0]);
-                        // Process<Any> (unknown msg type) skips the check.
-                        if (!std::holds_alternative<UnknownType>(declared->kind)) {
-                            if (auto* tv = std::get_if<TypeVar>(&declared->kind)) {
-                                unifyVar(tv->id, msgType);
-                            } else if (!std::holds_alternative<UnknownType>(msgType->kind) &&
-                                       !std::holds_alternative<TypeVar>(msgType->kind) &&
-                                       !argMatchesParam(msgType, declared)) {
-                                error(expr.location,
-                                      "send: message type " + typeToString(msgType) +
-                                      " does not match Process<" + typeToString(declared) + ">");
-                            }
-                        }
-                    }
-                }
-                return msgType;
-            }
             if (auto constructed =
                     constructorResultType(node.name, argTypes)) {
+                checkConstructorPayloads(node.name, argTypes, expr.location);
                 const auto* adt =
                     std::get_if<NamedType>(&resolve(constructed)->kind);
                 m_decidedCalls[&expr] = {CallKind::Constructor,
@@ -1348,6 +1270,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::vector<const ast::Expr*> segments;
                 while (r) {
                     if (auto* mc = std::get_if<ast::MethodCall>(&r->kind)) {
+                        // A segment with arguments is a call, and the path ends
+                        // there: `.map` on `Kex.Intrinsic.Type.fieldLayoutsOf(n)`
+                        // is a call on its result, not a path member.
+                        if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block) break;
                         segments.push_back(r);
                         intrinsicSegment = intrinsicSegment || mc->method == "Intrinsic";
                         r = mc->receiver ? &*mc->receiver : nullptr;
@@ -1483,6 +1409,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     segment = call->receiver.get();
                 }
             }
+            // A qualified type named as a value (`App.Models.User`, the argument
+            // of `select(as: Type<T>)`) is a `Type<X>`, as a bare one is.
+            if (writtenPath && node.args.empty() && node.namedArgs.empty() && !node.block &&
+                !node.method.empty() &&
+                std::isupper(static_cast<unsigned char>(node.method.front())))
+                if (const auto full = *writtenPath + "." + node.method; namesType(full)) {
+                    m_decidedCalls[&expr] = {CallKind::TypeReference, full};
+                    return Type::named(kex::names::kTypeRecord,
+                                       {Type::named(resolveRecordName(full))});
+                }
             // Keep the syntactic qualified module path even when it is not in
             // the prebuilt interface registry. Source modules are discovered
             // from these references before their interfaces exist (for
@@ -1623,6 +1559,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // A type's `make` method called through the type's name
             // (`Parser.parse(text)`) takes the type as its receiver, as both
             // backends run it: an ordinary method call, not a namespace one.
+            bool throughTypeName = false;
             if (isNamespaceCall && !isImportedNamespace && !isLocalNamespace &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 const auto& written = std::get<ast::UpperIdentifier>(node.receiver->kind).name;
@@ -1643,7 +1580,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                         &resolve(method.params.front())->kind);
                                     return receiver && resolveRecordName(receiver->name) == canonical;
                                 }))
+                {
                     isNamespaceCall = false;
+                    throughTypeName = true;
+                }
             }
             bool structuralAlias = false;
             if (isImportedNamespace || isLocalNamespace) {
@@ -1659,61 +1599,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                      (m_importedInterfaces && m_importedInterfaces->typeAliases.count(written)));
                 callName = structuralAlias ? node.method
                                            : kex::mangle::qualify(written, node.method);
-            }
-            // `value.as(Target)` is a total, compile-time checked conversion.
-            // Distinct types erase to their backing representation, so a
-            // compatible retag changes only the static type. String is the
-            // universal display target and is lowered to the existing total
-            // display conversion by both backends.
-            if (node.method == "as" && node.args.size() == 1 && node.args[0] &&
-                node.namedArgs.empty() && !node.block) {
-                std::unordered_map<std::string, TypePtr> targetGenerics;
-                auto target = node.targetType
-                    ? resolveTypeExpr(*node.targetType, targetGenerics)
-                    : typeNameReference(*node.args[0]);
-                if (!target) {
-                    error(expr.location,
-                          "`.as` needs a type name as its target");
-                    return Type::unknown();
-                }
-                m_decidedCalls[&expr] = {CallKind::Conversion,
-                                         typeToString(target)};
-                // `"hello".as(Atom)` is the atom `:hello`, made at compile time —
-                // so only from text the compiler can see. Atoms are never freed;
-                // run-time text goes through `Atom.from` (makes one) or
-                // `.to(Atom)` (finds an existing one), both explicit about it.
-                if (typeToString(target) == "Atom") {
-                    const auto* literal = node.receiver
-                        ? std::get_if<ast::StringLiteral>(&node.receiver->kind)
-                        : nullptr;
-                    if (!literal || !literal->values.empty())
-                        error(expr.location,
-                              "`.as(Atom)` needs a string literal; for text known "
-                              "only at run time use `Atom.from(text)`, or "
-                              "`text.to(Atom)` to find an existing atom");
-                    return target;
-                }
-                auto source = node.receiver ? inferExpr(*node.receiver)
-                                            : Type::unknown();
-                const auto targetIsString = [](const TypePtr& type) {
-                    const auto* primitive =
-                        std::get_if<PrimitiveType>(&type->kind);
-                    return primitive &&
-                           primitive->kind == PrimitiveType::String;
-                };
-                if (!targetIsString(target) &&
-                    !representationsCompatible(source, target)) {
-                    error(expr.location,
-                          "Cannot convert " + typeToString(source) + " to " +
-                              typeToString(target) + " with `.as`");
-                }
-                if (auto* sized = std::get_if<SizedIntType>(&target->kind);
-                    sized && sized->bits == 8 && !sized->isSigned &&
-                    !typesEqual(resolve(source), target)) {
-                    error(expr.location,
-                          "Unchecked narrowing to Byte is not allowed; use `.to(Byte)`");
-                }
-                return target;
             }
             // A compile-time intrinsic (intrinsics.hxx): its entry types the
             // call when the arguments are no ordinary values, and folds it
@@ -1732,8 +1617,20 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
 
             std::vector<TypePtr> argTypes;
-            if (!isNamespaceCall)
-                argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
+            if (!isNamespaceCall) {
+                auto receiver = node.receiver ? inferExpr(*node.receiver) : Type::unknown();
+                // Through the type's name the receiver is the type, not its
+                // `Type` record: `Response.ok(body)` is a Response method.
+                if (const auto* named = std::get_if<NamedType>(&receiver->kind);
+                    throughTypeName && named && named->name == kex::names::kTypeRecord &&
+                    named->typeArgs.size() == 1)
+                {
+                    receiver = named->typeArgs.front();
+                    // ...and the backends evaluate it as the namespace it is.
+                    m_typeMap[node.receiver.get()] = receiver;
+                }
+                argTypes.push_back(std::move(receiver));
+            }
             // First pass: infer concrete args; defer lambdas with parameters
             // until the selected receiver signature can provide context.
             std::vector<std::pair<size_t, size_t>> contextualLambdas;
@@ -1761,19 +1658,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return named && named->name == "Server" &&
                        named->typeArgs.size() == 1;
             }();
-            if (!isNamespaceCall && node.method == "reply" &&
-                argTypes.size() >= 2) {
-                auto receiver = resolve(argTypes.front());
-                if (auto* named = std::get_if<NamedType>(&receiver->kind);
-                    named && named->name == "From" &&
-                    named->typeArgs.size() == 1) {
-                    auto actual = resolve(argTypes[1]);
-                    auto expected = resolve(named->typeArgs.front());
-                    if (!containsOpenType(actual) && !containsOpenType(expected) &&
-                        !argMatchesParam(actual, expected))
-                        typeMismatch(node.args.front()->location, expected, actual);
-                }
-            }
             for (const auto& [name, arg] : node.namedArgs) {
                 const auto* collecting =
                     arg ? std::get_if<ast::Lambda>(&arg->kind) : nullptr;
@@ -1821,51 +1705,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 foldedHere();
             }
 
-            // pid.send(msg) UFCS — check msg type against Process<Msg>.
-            // argTypes[0] = pid type, argTypes[1] = msg type.
-            if ((node.method == "send" || node.method == "sendFrom") &&
-                argTypes.size() == 2 && isProcessSendTarget(argTypes[0])) {
-                m_decidedCalls[&expr] = {CallKind::Builtin, "Process.send"};
-                auto pidType = resolve(argTypes[0]);
-                auto msgType = resolve(argTypes[1]);
-                if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
-                    if (nt->name == "Process" && nt->typeArgs.size() == 1) {
-                        auto declared = resolve(nt->typeArgs[0]);
-                        if (!std::holds_alternative<UnknownType>(declared->kind)) {
-                            if (auto* tv = std::get_if<TypeVar>(&declared->kind)) {
-                                unifyVar(tv->id, msgType);
-                            } else if (!std::holds_alternative<UnknownType>(msgType->kind) &&
-                                       !std::holds_alternative<TypeVar>(msgType->kind) &&
-                                       !argMatchesParam(msgType, declared)) {
-                                error(expr.location,
-                                      "send: message type " + typeToString(msgType) +
-                                      " does not match Process<" + typeToString(declared) + ">");
-                            }
-                        }
-                    }
-                }
-                return msgType;
-            }
-            if ((callName == "Binary::fromBytes" || callName == "String::fromBytes") &&
-                node.args.size() == 1 && node.args[0]) {
-                if (auto* list = std::get_if<ast::ListExpr>(&node.args[0]->kind))
-                    for (const auto& element : list->elements) if (element) {
-                        bool invalid = false;
-                        if (auto* literal = std::get_if<ast::IntLiteral>(&element->kind)) {
-                            try {
-                                size_t parsed = 0;
-                                const auto value = std::stoull(literal->value, &parsed, 0);
-                                invalid = parsed != literal->value.size() || value > 255;
-                            } catch (...) { invalid = true; }
-                        } else if (auto* unary = std::get_if<ast::UnaryOp>(&element->kind);
-                                   unary && unary->op == TokenType::Minus && unary->operand &&
-                                   std::holds_alternative<ast::IntLiteral>(unary->operand->kind)) {
-                            invalid = true;
-                        }
-                        if (invalid)
-                            error(element->location, "Byte literal must be in 0..255");
-                    }
-            }
             // `or` is what leaves the optional (or result) world, so its default
             // is the plain unwrapped value. `.or(None)` / `.or(Just(x))` passed
             // anyway — `None` is accepted wherever an optional could go — and
@@ -2004,6 +1843,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     m_decidedCalls[&expr] = {CallKind::Dispatch, node.method};
             }
             return result;
+        }
+        else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
+            // `[...xs.map(~double), 99]`: the spread value is checked like
+            // any other, and in a list it stands for its elements.
+            auto spread = node.inner ? resolve(inferExpr(*node.inner)) : Type::unknown();
+            if (const auto* list = std::get_if<ListType>(&spread->kind))
+                return list->element;
+            return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             if (node.anyElements) {
@@ -2302,6 +2149,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (node.params.empty()) {
                 m_blockDepth++;
                 auto bodyType = inferBody(node.body);
+                if (node.rescue) checkRescue(*node.rescue);
                 m_blockDepth--;
                 return Type::func({}, resolve(bodyType));
             }
@@ -2325,6 +2173,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             m_blockDepth++;
             auto bodyType = inferBody(node.body);
+            if (node.rescue) checkRescue(*node.rescue);
             m_blockDepth--;
             auto resultType = resolve(bodyType);
             if (node.returnAnnotation) {
@@ -2732,7 +2581,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             for (auto& param : remaining) param = resolve(param);
             resultType = resolve(resultType);
 
-            if (remaining.empty()) return resultType;
+            // `~banner` names the function, even one of no parameters: a
+            // `() -> String` to call later, not its result. Only arguments
+            // that fill every parameter (`~add(1, 2)`) make it a call.
+            if (remaining.empty() && !node.argGroups.empty()) return resultType;
             return Type::func(std::move(remaining), resultType);
         }
         else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
@@ -2767,12 +2619,7 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         auto* prim = std::get_if<PrimitiveType>(&t->kind);
         return prim && prim->kind == PrimitiveType::Char;
     };
-    auto isNumeric = [](const TypePtr& t) -> bool {
-        if (auto* prim = std::get_if<PrimitiveType>(&t->kind))
-            return prim->kind == PrimitiveType::Integer;
-        return std::holds_alternative<SizedIntType>(t->kind) ||
-               std::holds_alternative<SizedFloatType>(t->kind);
-    };
+    const auto isNumeric = isNumericType;
 
     // Resolve TypeVars through the substitution map — a prior operation in the
     // same body may have already constrained them (e.g. `n - 1` constrains n
@@ -3398,13 +3245,6 @@ auto TypeChecker::satisfiesTrait(const TypePtr& type,
     return false;
 }
 
-auto TypeChecker::isProcessSendTarget(const TypePtr& receiver) -> bool {
-    auto resolved = resolve(receiver);
-    if (auto* named = std::get_if<NamedType>(&resolved->kind))
-        return named->name == "Process" || named->name == "Pid";
-    return true;
-}
-
 auto TypeChecker::literalCoercesTo(const ast::Expr& value, const TypePtr& target) const
     -> bool {
     if (!target) return false;
@@ -3755,6 +3595,9 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         // form of the named type. For example, `make Range` methods apply to
         // inferred `Range<Integer>` and `Range<Char>` values.
         if (paramNamed->typeArgs.empty()) return true;
+        // The same for a value of the type written without its arguments
+        // (`Ask(Process)`): a `Process<A>` parameter takes it.
+        if (argNamed->typeArgs.empty()) return true;
         if (argNamed->typeArgs.size() != paramNamed->typeArgs.size()) return false;
         for (size_t i = 0; i < paramNamed->typeArgs.size(); i++) {
             if (!argMatchesParam(argNamed->typeArgs[i], paramNamed->typeArgs[i])) return false;
@@ -3995,16 +3838,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         auto local = lookupVar(name);
         auto resolvedLocal = local ? resolve(local) : nullptr;
         // A binding in scope shadows every function of its name, typed or
-        // not: `let applyTo(f, x) = f(x)` calls the value `f` holds.
-        if (resolvedLocal && callExpr &&
-            (std::holds_alternative<TypeVar>(resolvedLocal->kind) ||
-             std::holds_alternative<UnknownType>(resolvedLocal->kind)))
+        // not: `let applyTo(f, x) = f(x)` calls the value `f` holds, and
+        // `Just(rule) => rule()` the `Block<DateTime>` `rule` holds.
+        if (resolvedLocal && callExpr)
             m_decidedCalls[callExpr] = {CallKind::ValueCall, name};
         if (resolvedLocal)
             if (auto* function = std::get_if<FuncType>(&resolvedLocal->kind)) {
-                // A function value bound in scope, called.
-                if (callExpr)
-                    m_decidedCalls[callExpr] = {CallKind::ValueCall, name};
                 // A call through a local bound by a bare `~name` capture
                 // (`let f = ~greet`) carries only positional param TYPES in
                 // `function` — no names. `argTypes` here is positional args
@@ -4768,6 +4607,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             if (req.name == name) return req.result;
                 }
             }
+            if (auto answered = claimedTraitAnswers(argTypes, name, callExpr))
+                return answered;
             // If the field name is unambiguously defined on exactly one record
             // type, constrain a TypeVar receiver to that record type.
             if (std::holds_alternative<TypeVar>(receiver->kind)) {
@@ -4849,6 +4690,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
+        // A type with no home module to answer for it (`"-".repeat(3)`,
+        // Monoid's default on String): the value picks the body at run time.
+        if (callExpr && isMethodCall && concreteReceiver &&
+            m_traits.declaresMethod(m_traits.implementorKey(argTypes[0]), name)) {
+            m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
+            return Type::unknown();
+        }
         // Every method of this name is a `make` for a type declared outside
         // its module, in a module not in scope here: the call is undefined
         // wherever it runs, and says which `using` it lacks. A make for its
@@ -5141,12 +4989,25 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const bool provableMismatch =
             !m_inMakeBlock && isFullyConcrete(headShapeOf(argTypes[0])) &&
             !receiverIsField && !traitProvides && !anyUnknownParamCandidate;
+        // A receiver only an out-of-scope `make` takes (`d.number` on a `Day`
+        // whose `make` is `Cal`'s, without `using Cal`) has no visible method,
+        // whatever same-named methods other types have.
+        if (!anyFirstParamPlausible && callExpr)
+            if (auto hidden = hiddenMakeTaking(name, argTypes); !hidden.empty()) {
+                m_decidedCalls[callExpr] = {CallKind::Hidden, hidden};
+                return Type::unknown();
+            }
         // A default the type inherits answers the call: the type's own.
         if (!anyFirstParamPlausible && traitProvides && callExpr)
             if (const auto own = ownTypeAnswers(argTypes, name)) {
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
+        // Not when the type's own method rejects this refinement: writing
+        // through a read-only FileHandle is a mismatch, whatever Writable says.
+        if (!anyFirstParamPlausible && traitProvides && !hasReceiverRefinementConflict)
+            if (auto answered = claimedTraitAnswers(argTypes, name, callExpr))
+                return answered;
         // An unreliable candidate list blocks every route to a mismatch
         // report, the trait-bound one included: `"5".to(Integer)` finds only
         // `to : Measure -> ? -> ?` from units.kex when the interfaces come
@@ -5157,10 +5018,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         if (!anyFirstParamPlausible &&
             (anyUnknownParamCandidate ||
              (!anyConstrainedFirstParam && !hasReceiverRefinementConflict &&
-              !provableMismatch)))
+              !provableMismatch))) {
+            // A default the receiver's type inherits, with no home module to
+            // answer for it (`(0..4).map`, Enumerable's on Range): the value
+            // picks the body at run time.
+            if (callExpr && traitProvides) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
             return Type::unknown();
+        }
     }
 
+    const auto genericConflictOf = [&](const Signature& sig) {
+        return genericConflict(sig, argTypes, selectedType);
+    };
     std::vector<const Signature*> arityMatches;
     std::vector<const Signature*> fullMatches;
     for (const auto& sig : *sigs) {
@@ -5222,7 +5091,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 break;
             }
         }
-        if (allMatch) fullMatches.push_back(&sig);
+        if (allMatch && !genericConflictOf(sig)) fullMatches.push_back(&sig);
     }
 
     // A trait receiver is a fallback for concrete implementations of the
@@ -5367,8 +5236,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // would permanently specialize the closure to declaration order;
         // keep its intermediate result permissive until the surrounding
         // method chain or a call site supplies a concrete receiver.
-        if (distinct.size() > 1 && !concreteArguments)
+        if (distinct.size() > 1 && !concreteArguments) {
+            if (callExpr) m_decidedCalls[callExpr] = {CallKind::Dispatch, name};
             return Type::unknown();
+        }
         if (best) {
             // Rebuild fullMatches with best first so the code below uses it
             std::vector<const Signature*> reordered = {best};
@@ -5903,6 +5774,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     auto found = genericSubst.find(constrained->genericId);
                     return found == genericSubst.end() ? type : found->second;
                 }
+                // A trait method's `This` is its receiver's type:
+                // `"x".repeat(3)` (Monoid's default) is a String.
+                if (auto* named = std::get_if<NamedType>(&type->kind);
+                    named && named->name == "This" && named->typeArgs.empty() &&
+                    isMethodCall && !kex::mangle::hasScope(name) && !argTypes.empty()) {
+                    auto receiver = resolve(argTypes.front());
+                    if (!std::holds_alternative<UnknownType>(receiver->kind) &&
+                        !std::holds_alternative<TypeVar>(receiver->kind))
+                        return receiver;
+                }
                 // Every nested type, function types included: a function-typed
                 // parameter is where a BLOCK is passed, and skipping it left
                 // its variables the only ones standing — `nums.map { |x| x * 2 }`
@@ -5913,6 +5794,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             };
         auto selectedResult =
             normalizeIntersection(applyGenerics(matched.result));
+        for (std::size_t i = 0; i < argExprs.size() && i < matched.params.size(); ++i)
+            if (argExprs[i]) checkByteLiterals(*argExprs[i], applyGenerics(resolve(matched.params[i])));
         if (callExpr) {
             Signature selected = matched;
             selected.name = name;
@@ -6073,6 +5956,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             break;
         }
     }
+    if (detail == "different arguments")
+        if (const auto clash = genericConflictOf(first)) {
+            // An argument a dedicated check already rejected (`or` given a
+            // block, a deferred reply of the wrong type) is reported once.
+            if (m_diagnostics &&
+                std::any_of(m_diagnostics->begin(), m_diagnostics->end(),
+                            [&](const Diagnostic& d) {
+                                return d.level == Diagnostic::Level::Error &&
+                                       d.location.line == loc.line &&
+                                       d.location.file == loc.file;
+                            }))
+                return first.result;
+            detail = "argument " + std::to_string(clash->first + 1) + " to be " +
+                     typeToString(resolve(clash->second)) + ", but got " +
+                     typeToString(argTypes[clash->first]);
+        }
 
     std::string message = "`" + sourceName(name) + "` expects " + detail;
     // Vacuous candidates (params all TypeVar/Unknown/trait bounds — e.g. an
@@ -6229,6 +6128,155 @@ auto TypeChecker::typeHomeModule(const std::string& type) const
             home = &module;
     if (!home) return std::nullopt;
     return home->backendModule;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A type that claims a trait has what the trait requires, even where its own
+// methods are not on record (`Kilo(Watt).factor` on Units.SI's unannotated
+// `let factor(@Kilo(unit))`): the requirement types the call, and the value
+// decides the implementation at run time, as for a trait-typed receiver.
+auto TypeChecker::claimedTraitAnswers(const std::vector<TypePtr>& argTypes,
+                                      const std::string& name,
+                                      const ast::Expr* callExpr) -> TypePtr {
+    if (argTypes.empty()) return nullptr;
+    const auto [trait, required] = m_traits.requiredMethod(resolve(argTypes.front()), name);
+    if (!trait || argTypes.size() != required->params.size() + 1) return nullptr;
+    if (callExpr) m_decidedCalls[callExpr] = {CallKind::TraitMethod, trait->name};
+    return required->result;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A rescue clause binds names exactly like a match clause: its patterns
+// introduce locals its guard and body can see, and `rescue |e|` binds the
+// caught error. `rescue return` exits the enclosing function, so its
+// expression is no arm.
+auto TypeChecker::checkRescue(const ast::RescueBlock& rescue,
+                              const std::function<void(const TypePtr&)>& onArm) -> void {
+    for (const auto& clause : rescue.clauses) {
+        pushScope();
+        for (const auto& pat : clause.patterns)
+            if (pat) {
+                checkPatternArity(*pat);
+                bindPatternVars(*pat);
+            }
+        if (clause.guard && *clause.guard) inferExpr(**clause.guard);
+        if (clause.body) {
+            auto armType = inferExpr(*clause.body);
+            if (onArm && !alwaysReturns(*clause.body)) onArm(armType);
+        }
+        popScope();
+    }
+    if (!rescue.catchAllBody.empty()) {
+        pushScope();
+        if (!rescue.catchAllParam.empty())
+            defineVar(rescue.catchAllParam, Type::unknown());
+        auto catchAllType = inferBody(rescue.catchAllBody);
+        if (onArm && !alwaysReturns(rescue.catchAllBody)) onArm(catchAllType);
+        popScope();
+    }
+    if (rescue.inlineReturnExpr) inferExpr(*rescue.inlineReturnExpr);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A generic several parameters share is one type: `same : A -> A -> Bool`
+// does not take `1` and `"s"`, nor `Process<A>.send` a String for a
+// `Process<Msg>`. The arguments before bind it; the first one after that
+// fits neither way is the conflict, with the type it had to be. Two
+// numbers always agree (the numeric tower); an open type agrees.
+auto TypeChecker::genericConflict(
+    const Signature& sig, const std::vector<TypePtr>& argTypes,
+    const std::function<TypePtr(std::size_t, const TypePtr&)>& selectedType)
+    -> std::optional<std::pair<std::size_t, TypePtr>> {
+    std::unordered_map<int, TypePtr> bound;
+    std::function<TypePtr(const TypePtr&, const TypePtr&)> conflict =
+        [&](const TypePtr& pattern, const TypePtr& given) -> TypePtr {
+            if (!pattern || !given) return nullptr;
+            const auto actual = resolve(given);
+            if (containsOpenType(actual)) return nullptr;
+            int id = 0;
+            if (const auto* tv = std::get_if<TypeVar>(&pattern->kind)) id = tv->id;
+            if (const auto* c = std::get_if<ConstrainedType>(&pattern->kind)) id = c->genericId;
+            if (id < 0) {
+                const auto [it, fresh] = bound.try_emplace(id, actual);
+                if (fresh || argMatchesParam(actual, it->second) ||
+                    argMatchesParam(it->second, actual) ||
+                    (isNumericType(actual) && isNumericType(it->second)))
+                    return nullptr;
+                return it->second;
+            }
+            const auto both = [&](const TypePtr& p, const TypePtr& a) { return conflict(p, a); };
+            if (const auto* pn = std::get_if<NamedType>(&pattern->kind)) {
+                const auto* an = std::get_if<NamedType>(&actual->kind);
+                if (!an || pn->name != an->name || pn->typeArgs.size() != an->typeArgs.size())
+                    return nullptr;
+                for (std::size_t k = 0; k < pn->typeArgs.size(); ++k)
+                    if (both(pn->typeArgs[k], an->typeArgs[k])) return pattern;
+            } else if (const auto* pl = std::get_if<ListType>(&pattern->kind)) {
+                if (const auto* al = std::get_if<ListType>(&actual->kind);
+                    al && both(pl->element, al->element))
+                    return pattern;
+            } else if (const auto* po = std::get_if<OptionalType>(&pattern->kind)) {
+                if (const auto* ao = std::get_if<OptionalType>(&actual->kind);
+                    ao && both(po->inner, ao->inner))
+                    return pattern;
+            }
+            return nullptr;
+        };
+    for (std::size_t i = 0; i < argTypes.size() && i < sig.params.size(); ++i) {
+        const auto selected = selectedType(i, sig.params[i]);
+        if (auto expected = conflict(sig.params[i], selected ? selected : argTypes[i]))
+            return std::pair{i, expected};
+    }
+    return std::nullopt;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A literal where a Byte goes is checked against the range a Byte holds:
+// `let b: Byte = 300`, `Binary.fromBytes([1, 300])`, `g(-1)` for `g(b: Byte)`.
+// The literal's own type is Integer, which a Byte parameter takes.
+auto TypeChecker::checkByteLiterals(const ast::Expr& value, const TypePtr& expected) -> void {
+    const auto isByte = [](const TypePtr& type) {
+        const auto* sized = type ? std::get_if<SizedIntType>(&type->kind) : nullptr;
+        return sized && sized->bits == 8 && !sized->isSigned;
+    };
+    const auto check = [](const ast::Expr& literal) {
+        if (const auto* unary = std::get_if<ast::UnaryOp>(&literal.kind);
+            unary && unary->op == TokenType::Minus && unary->operand &&
+            std::holds_alternative<ast::IntLiteral>(unary->operand->kind))
+            return false;
+        const auto* integer = std::get_if<ast::IntLiteral>(&literal.kind);
+        if (!integer) return true;
+        try {
+            std::size_t parsed = 0;
+            const auto number = std::stoull(integer->value, &parsed, 0);
+            return parsed == integer->value.size() && number <= 255;
+        } catch (...) {
+            return false;
+        }
+    };
+    const auto target = resolve(expected);
+    if (isByte(target)) {
+        if (!check(value)) error(value.location, "Byte literal must be in 0..255");
+        return;
+    }
+    const auto* list = std::get_if<ListType>(&target->kind);
+    const auto* written = std::get_if<ast::ListExpr>(&value.kind);
+    if (!list || !written || !isByte(list->element)) return;
+    for (const auto& element : written->elements)
+        if (element && !check(*element))
+            error(element->location, "Byte literal must be in 0..255");
 }
 
 } // namespace kex::semantic

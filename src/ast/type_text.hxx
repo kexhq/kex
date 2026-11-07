@@ -1,15 +1,29 @@
 #pragma once
-
+// The one printer for a written type (`TypeExpr`).
 #include "ast.hxx"
+
 #include <string>
 #include <variant>
 
-// A type expression written back out as the Kex source that declares it. One
-// printer for every reader that shows a declared type to a person — the
-// collector's hover text, `--summary`, and the API help — so the three cannot
-// drift into spelling the same type three ways.
 namespace kex::ast {
 
+// How a written type is spelled.
+enum class TypeSpelling {
+    // As the source reads: dotted names, `Map<K, V>`, `:ok`, `?` where
+    // nothing is written. Diagnostics and the language server.
+    Source,
+    // As the backends' dispatch tests name it: a name's last segment,
+    // `{K: V}`, `Atom`, `[Char]` as `String`, `Any` where nothing is
+    // declared.
+    Dispatch,
+};
+
+auto typeText(const TypeExpr& type, TypeSpelling spelling = TypeSpelling::Source)
+    -> std::string;
+
+
+// Main's printer, kept beside typeText until its callers move over (the
+// rebase onto #653; see the end of the rebase).
 inline auto typeExprText(const TypeExpr& type) -> std::string;
 
 inline auto typeNameText(const TypeName& name) -> std::string {

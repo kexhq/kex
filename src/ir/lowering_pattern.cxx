@@ -7,141 +7,21 @@ auto Lowering::wildPat() -> PatternPtr {
     auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
 }
 
-// Expand user-written `when` guards into nested matches. Guards lower as
-// ordinary expressions (BEAM guards can't hold arbitrary calls, so the
-// predicate moves out of guard position entirely). A guarded clause
-// `P when G -> B` becomes `P -> case G of true -> B; _ -> Cont() end`
-// followed by a wildcard clause `_ -> Cont()`, where Cont is a LetRec-bound
-// 0-arity function holding the expansion of the remaining clauses — so
-// clause bodies are never duplicated. A non-`true` guard result fails the
-// clause, matching native guard semantics. `receive` guards are NOT
-// expanded here (they must stay native; see lowerReceive).
-// Does any clause match every value, making a trailing fallback dead code
-// (which erlc warns about)?
-auto Lowering::anyClauseIrrefutable(const std::vector<MatchClause>& clauses)
-    -> bool {
-    for (const auto& clause : clauses) {
-        if (clause.guard) continue;
-        bool irrefutable = true;
-        for (const auto& p : clause.patterns)
-            if (p->kind != PatKind::Var && p->kind != PatKind::Wild)
-                irrefutable = false;
-        if (irrefutable) return true;
-    }
-    return false;
-}
-
-auto Lowering::expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses,
-                            ExprPtr noMatch, bool failOnFalseOnly) -> ExprPtr {
-    size_t gi = 0;
-    while (gi < clauses.size() && !clauses[gi].guard) ++gi;
-    if (gi == clauses.size()) {
-        // Single-subject matches get the walker's "no matching clause"
-        // failure appended; without it erlc cannot even compile an
-        // inexhaustive `case` (see noClauseMatched). Rescue passes its own
-        // rethrow instead (see expandRescueGuards).
-        if (subjects.size() == 1 && !anyClauseIrrefutable(clauses)) {
-            // The clause's own variable pattern binds the unmatched value,
-            // so the subject expression is neither re-evaluated nor
-            // let-bound — `case {1, 2} of` stays exactly that.
-            MatchClause fallback;
-            auto bound = std::make_unique<Pattern>();
-            bound->kind = PatKind::Var;
-            bound->name = fresh("Nomatch");
-            const auto boundName = bound->name;
-            fallback.patterns.push_back(std::move(bound));
-            fallback.body = noMatch ? std::move(noMatch)
-                                    : noClauseMatched(var(boundName));
-            clauses.push_back(std::move(fallback));
-        }
-        auto e = std::make_unique<Expr>();
-        Match m; m.subjects = std::move(subjects); m.clauses = std::move(clauses);
-        e->node = std::move(m);
-        return e;
-    }
-    // Bind non-variable subjects so the continuation can re-match them.
-    std::vector<std::string> subjNames;
-    std::vector<std::pair<std::string, ExprPtr>> binds;
-    for (auto& s : subjects) {
-        if (auto* v = std::get_if<Var>(&s->node)) {
-            subjNames.push_back(v->name);
-        } else {
-            std::string sv = fresh("Gsubj");
-            binds.push_back({sv, std::move(s)});
-            subjNames.push_back(sv);
-        }
-    }
-    auto subjExprs = [&] {
-        std::vector<ExprPtr> v;
-        for (const auto& n : subjNames) v.push_back(var(n));
-        return v;
-    };
-    // Continuation: expand the remaining clauses, or reproduce the
-    // no-clause-matched failure when none remain.
-    std::vector<MatchClause> rest(
-        std::make_move_iterator(clauses.begin() + gi + 1),
-        std::make_move_iterator(clauses.end()));
-    ExprPtr contBody;
-    if (rest.empty()) {
-        contBody = noMatch ? std::move(noMatch)
-                           : noClauseMatched(var(subjNames[0]));
-    } else {
-        contBody = expandGuards(subjExprs(), std::move(rest),
-                                std::move(noMatch), failOnFalseOnly);
-    }
-    std::string contName = "__gcont" + std::to_string(counter++);
-    auto callCont = [&] {
-        auto c = std::make_unique<Expr>();
-        c->node = Call{"", contName, 0, {}, false};
-        return c;
-    };
-    Match m;
-    m.subjects = subjExprs();
-    for (size_t i = 0; i < gi; ++i) m.clauses.push_back(std::move(clauses[i]));
-    MatchClause g;
-    // An all-var/wildcard pattern already matches everything, so the
-    // trailing fallback below would be dead code (erlc warns about it);
-    // the guard's own `_ -> cont` arm covers the failure path.
-    bool irrefutable = true;
-    for (const auto& p : clauses[gi].patterns)
-        if (p->kind != PatKind::Var && p->kind != PatKind::Wild)
-            irrefutable = false;
-    g.patterns = std::move(clauses[gi].patterns);
-    // `true -> body; _ -> cont` — a non-boolean guard fails the clause.
-    // Rescue inverts it (`false -> cont; _ -> body`): the walker's rescue
-    // guards skip only on literal `false` (see expandRescueGuards).
-    Match gm;
-    gm.subjects.push_back(std::move(*clauses[gi].guard));
-    MatchClause gt;
-    auto tp = std::make_unique<Pattern>();
-    tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool;
-    tp->litBool = !failOnFalseOnly;
-    gt.patterns.push_back(std::move(tp));
-    gt.body = failOnFalseOnly ? callCont() : std::move(clauses[gi].body);
-    MatchClause gf;
-    gf.patterns.push_back(wildPat());
-    gf.body = failOnFalseOnly ? std::move(clauses[gi].body) : callCont();
-    gm.clauses.push_back(std::move(gt));
-    gm.clauses.push_back(std::move(gf));
-    auto ge = std::make_unique<Expr>();
-    ge->node = std::move(gm);
-    g.body = std::move(ge);
-    m.clauses.push_back(std::move(g));
-    if (!irrefutable) {
-        MatchClause fall;
-        for (size_t i = 0; i < m.subjects.size(); ++i) fall.patterns.push_back(wildPat());
-        fall.body = callCont();
-        m.clauses.push_back(std::move(fall));
-    }
-    auto caseE = std::make_unique<Expr>();
-    caseE->node = std::move(m);
-    LetRec lr; lr.name = contName; lr.params = {};
-    lr.funBody = std::move(contBody);
-    lr.contBody = std::move(caseE);
+// A match written in source: its `when` guards and its no-clause failure are
+// the `guards` pass's to expand (passes/guards.cxx), which also names where
+// the match was for that failure.
+auto Lowering::sourceMatch(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses)
+    -> ExprPtr {
+    Match match;
+    match.subjects = std::move(subjects);
+    match.clauses = std::move(clauses);
+    match.guards = GuardExpansion::Source;
+    if (currentLoc)
+        match.unmatchedAt = std::string(currentLoc->file) + ":" +
+                            std::to_string(currentLoc->line) + ":" +
+                            std::to_string(currentLoc->column) + ": ";
     auto e = std::make_unique<Expr>();
-    e->node = std::move(lr);
-    for (auto it = binds.rbegin(); it != binds.rend(); ++it)
-        e = makeLet(it->first, std::move(it->second), std::move(e));
+    e->node = std::move(match);
     return e;
 }
 
@@ -152,16 +32,16 @@ auto Lowering::expandRescueGuards(std::vector<MatchClause> clauses)
         if (c.guard) { anyGuard = true; break; }
     if (!anyGuard) return clauses;
     const auto errName = fresh("Rescued");
-    auto rethrow = std::make_unique<Expr>();
-    rethrow->node = TryThrow{var(errName)};
-    std::vector<ExprPtr> subjects;
-    subjects.push_back(var(errName));
+    Match arms;
+    arms.subjects.push_back(var(errName));
+    arms.clauses = std::move(clauses);
+    arms.guards = GuardExpansion::Rescue;
     MatchClause outer;
     auto bound = std::make_unique<Pattern>();
     bound->kind = PatKind::Var; bound->name = errName;
     outer.patterns.push_back(std::move(bound));
-    outer.body = expandGuards(std::move(subjects), std::move(clauses),
-                              std::move(rethrow), true);
+    outer.body = std::make_unique<Expr>();
+    outer.body->node = std::move(arms);
     std::vector<MatchClause> out;
     out.push_back(std::move(outer));
     return out;
@@ -461,7 +341,7 @@ auto Lowering::withTypeGuards(ExprPtr existing) -> std::optional<ExprPtr> {
     // BIFs (`typeGuard`'s one partial shape short-circuits internally), so
     // conjoining them is safe; only the guard needs the nested case.
     // Safe in every consumer: match paths move the guard out of native
-    // position via `expandGuards`, rescue drops it at emission, and
+    // position (the `guards` pass), rescue drops it at emission, and
     // receive rejects type patterns outright.
     Match m;
     m.subjects.push_back(std::move(tests));
@@ -499,7 +379,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
             out->kind = PatKind::Var; out->name = name;
             subst[name] = name;
             pendingTypeGuards.push_back(
-                typeGuard(pn.type ? renderDispatchType(*pn.type) : "Any",
+                typeGuard(pn.type ? typeText(*pn.type, TypeSpelling::Dispatch) : "Any",
                           var(name)));
         } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
             out->kind = PatKind::Lit;

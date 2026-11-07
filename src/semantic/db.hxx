@@ -40,6 +40,9 @@ struct FileState {
     uint64_t version = 0;
     ast::Program ast;
     std::vector<Diagnostic> diagnostics;
+    // The parser's and compile-time expansion's, the part of `diagnostics`
+    // no sema produces: the language server adds the one sema's to them.
+    std::vector<Diagnostic> sourceDiagnostics;
     std::vector<SymbolInfo> symbols;
     // Names visible at expression boundaries, retained by ResolvePass for
     // position-aware editor completion after its transient scope stack is

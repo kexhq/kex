@@ -116,7 +116,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
                     if (!params[j].type || !*params[j].type ||
                         j + 1 >= clause.params.size())
                         continue;
-                    const auto written = renderDispatchType(**params[j].type);
+                    const auto written = typeText(**params[j].type, TypeSpelling::Dispatch);
                     const auto& pattern = clause.params[j + 1];
                     if (!discriminatingType(written) || !pattern ||
                         pattern->kind != PatKind::Var)

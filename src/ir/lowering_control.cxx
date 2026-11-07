@@ -161,7 +161,7 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
             continue;
         }
         for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
-        // `when` guards lower as ordinary expressions; expandGuards moves
+        // `when` guards lower as ordinary expressions; the `guards` pass moves
         // the predicate out of BEAM guard position into a nested match.
         mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
         mc.body = lower(cl.body);
@@ -180,7 +180,7 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
         subst = snap;
         cls.push_back(std::move(mc));
     }
-    auto e = expandGuards(std::move(subjects), std::move(cls));
+    auto e = sourceMatch(std::move(subjects), std::move(cls));
     if (listSubjectValue)
         e = makeLet(listCoercedSubject, std::move(listSubjectValue),
                     std::move(e));
@@ -250,7 +250,7 @@ auto Lowering::lowerRangeMatch(const ast::MatchExpr& n) -> ExprPtr {
         subst = snap;
         cls.push_back(std::move(mc));
     }
-    auto e = expandGuards(std::move(subjects), std::move(cls));
+    auto e = sourceMatch(std::move(subjects), std::move(cls));
     return makeLet(sv, std::move(subjVal), std::move(e));
 }
 
@@ -512,7 +512,7 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             subst = snap;
             cls.push_back(std::move(mcx));
         }
-        return expandGuards(std::move(subjects), std::move(cls));
+        return sourceMatch(std::move(subjects), std::move(cls));
     }
     // A receive in a loop body — the imperative server shape
     // `loop do receive do :inc => n = n + 1 ... end end`. Like a match,

@@ -1,5 +1,5 @@
 #include "collect_pass.hxx"
-#include "../common/diagnostics.hxx"
+#include "../ast/type_text.hxx"
 #include "../common/type_def_utils.hxx"
 #include <variant>
 #include <cctype>
@@ -22,11 +22,11 @@ auto variantText(const ast::TypeExpr& variant) -> std::string {
         std::string result = generic->name.dotted() + "(";
         for (size_t i = 0; i < generic->args.size(); ++i) {
             if (i) result += ", ";
-            result += generic->args[i] ? diagnostics::typeExprToString(*generic->args[i]) : "?";
+            result += generic->args[i] ? ast::typeText(*generic->args[i]) : "?";
         }
         return result + ")";
     }
-    return diagnostics::typeExprToString(variant);
+    return ast::typeText(variant);
 }
 
 } // namespace
@@ -241,7 +241,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
             if (!variant) continue;
             info.detail += i == 0 ? "\n  " : "\n| ";
             info.detail += kex::isTransparentTypeAlias(def)
-                ? diagnostics::typeExprToString(*variant) : variantText(*variant);
+                ? ast::typeText(*variant) : variantText(*variant);
         }
     }
     m_symbols->push_back(std::move(info));
@@ -280,7 +280,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     ctor.type = Type::unknown();
                     ctor.detail = ctor.name + " : ";
                     for (const auto& arg : gt->args)
-                        ctor.detail += (arg ? diagnostics::typeExprToString(*arg) : "?") + " -> ";
+                        ctor.detail += (arg ? ast::typeText(*arg) : "?") + " -> ";
                     ctor.detail += def.name;
                     if (!def.typeParams.empty()) {
                         ctor.detail += "<";
@@ -316,7 +316,7 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
     info.detail += " do";
     for (const auto& field : def.fields)
         info.detail += "\n  " + field.name + " : " +
-                       (field.type ? diagnostics::typeExprToString(*field.type) : "?");
+                       (field.type ? ast::typeText(*field.type) : "?");
     info.detail += "\nend";
     m_symbols->push_back(std::move(info));
 

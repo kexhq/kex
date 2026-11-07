@@ -17,11 +17,6 @@
 // a function as one node instead of re-deriving the grouping on its own.
 namespace kex::ast {
 
-// How a parameter's declared type reads for dispatch: the last segment of a
-// type name, generics and containers spelled out, `Any` where nothing is
-// declared.
-auto renderDispatchType(const TypeExpr& type) -> std::string;
-
 // The dispatch types of a make-block method's clause: the receiver type,
 // then one per parameter.
 auto methodDispatchTypes(const FunctionClause& clause,

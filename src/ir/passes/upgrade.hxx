@@ -22,7 +22,7 @@
 //
 // Both are the ordinary Erlang idiom (`?MODULE:loop(State)`); functions that
 // never receive keep their fast local calls.
-#include "ir.hxx"
+#include "../ir.hxx"
 
 namespace kex::ir {
 

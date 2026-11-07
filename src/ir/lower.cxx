@@ -267,7 +267,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             (kex::isTransparentTypeAlias(td) ||
              Lowering::simpleTypeName((*td.variants)[0]).empty()))
             L.structuralTypeAliases[td.name] =
-                renderDispatchType(*(*td.variants)[0]);
+                typeText(*(*td.variants)[0], TypeSpelling::Dispatch);
         if (const auto* target = kex::aliasTarget(td))
             L.declaredAliases[td.name] = target;
         // A distinct type is erased to its backing type: it has no
@@ -454,7 +454,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                 const auto& receiver = fd->clauses[0].params.front();
                 if (receiver.type && *receiver.type) {
-                    auto written = renderDispatchType(**receiver.type);
+                    auto written = typeText(**receiver.type, TypeSpelling::Dispatch);
                     if (auto angle = written.find('<');
                         angle != std::string::npos && written.back() == '>')
                         written.resize(angle);
@@ -2033,7 +2033,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
             const auto& receiver = fn->clauses[0].params.front();
             if (!receiver.type || !*receiver.type) return;
-            auto written = renderDispatchType(**receiver.type);
+            auto written = typeText(**receiver.type, TypeSpelling::Dispatch);
             if (auto angle = written.find('<');
                 angle != std::string::npos && written.back() == '>')
                 written.resize(angle);

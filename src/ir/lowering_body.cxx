@@ -385,7 +385,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                         subst = snap;
                         cls.push_back(std::move(mc));
                     }
-                    caseE = expandGuards(std::move(subjects), std::move(cls));
+                    caseE = sourceMatch(std::move(subjects), std::move(cls));
                 }
                 // Rebind the mutated names to the yielded values.
                 if (mutVars.size() == 1) {

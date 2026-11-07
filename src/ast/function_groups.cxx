@@ -1,4 +1,5 @@
 #include "function_groups.hxx"
+#include "type_text.hxx"
 
 #include <set>
 #include <type_traits>
@@ -7,82 +8,13 @@
 
 namespace kex::ast {
 
-auto renderDispatchType(const TypeExpr& type) -> std::string {
-    return std::visit([](const auto& node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, TypeName>) {
-            return node.parts.empty() ? "Any" : node.parts.back();
-        } else if constexpr (std::is_same_v<T, GenericType>) {
-            std::string out =
-                node.name.parts.empty() ? "Any" : node.name.parts.back();
-            out += "<";
-            for (size_t i = 0; i < node.args.size(); i++) {
-                if (i) out += ", ";
-                out += node.args[i] ? renderDispatchType(*node.args[i]) : "Any";
-            }
-            return out + ">";
-        } else if constexpr (std::is_same_v<T, FunctionType>) {
-            return "(" +
-                (node.param ? renderDispatchType(*node.param) : "Any") +
-                ") -> " +
-                (node.result ? renderDispatchType(*node.result) : "Any");
-        } else if constexpr (std::is_same_v<T, TupleType>) {
-            std::string out = "(";
-            for (size_t i = 0; i < node.elements.size(); i++) {
-                if (i) out += ", ";
-                out += node.elements[i]
-                    ? renderDispatchType(*node.elements[i]) : "Any";
-            }
-            return out + ")";
-        } else if constexpr (std::is_same_v<T, ListType>) {
-            auto element =
-                node.element ? renderDispatchType(*node.element) : "Any";
-            return element == "Char" ? "String" : "[" + element + "]";
-        } else if constexpr (std::is_same_v<T, MapType>) {
-            return "{" +
-                (node.key ? renderDispatchType(*node.key) : "Any") + ": " +
-                (node.value ? renderDispatchType(*node.value) : "Any") + "}";
-        } else if constexpr (std::is_same_v<T, UnionType>) {
-            return (node.left ? renderDispatchType(*node.left) : "Any") +
-                " | " +
-                (node.right ? renderDispatchType(*node.right) : "Any");
-        } else if constexpr (std::is_same_v<T, IntersectionType>) {
-            return (node.left ? renderDispatchType(*node.left) : "Any") +
-                " & " +
-                (node.right ? renderDispatchType(*node.right) : "Any");
-        } else if constexpr (std::is_same_v<T, RecordType>) {
-            std::string out = "{";
-            for (size_t i = 0; i < node.fields.size(); i++) {
-                if (i) out += ", ";
-                out += node.fields[i].first + ": " +
-                    (node.fields[i].second
-                         ? renderDispatchType(*node.fields[i].second) : "Any");
-            }
-            return out + "}";
-        } else if constexpr (std::is_same_v<T, OptionalType>) {
-            return (node.inner ? renderDispatchType(*node.inner) : "Any") + "?";
-        } else if constexpr (std::is_same_v<T, BlockType>) {
-            std::string out = "Block<";
-            for (const auto& param : node.params)
-                out += (param ? renderDispatchType(*param) : "Any") + ", ";
-            return out +
-                (node.inner ? renderDispatchType(*node.inner) : "Any") + ">";
-        } else if constexpr (std::is_same_v<T, AtomType>) {
-            return "Atom";
-        } else if constexpr (std::is_same_v<T, GenericVar>) {
-            return node.name;
-        }
-        return "Any";
-    }, type.kind);
-}
-
 auto methodDispatchTypes(const FunctionClause& clause,
                          const std::string& receiverType)
     -> std::vector<std::string> {
     std::vector<std::string> types{receiverType};
     for (const auto& param : clause.params)
         types.push_back(param.type && *param.type
-            ? renderDispatchType(**param.type)
+            ? typeText(**param.type, TypeSpelling::Dispatch)
             : "Any");
     return types;
 }
@@ -161,16 +93,16 @@ auto signatureClauses(const FunctionDef& function)
         std::string key;
         for (const auto& param : clause.params) {
             if (param.type && *param.type)
-                key += renderDispatchType(**param.type);
+                key += typeText(**param.type, TypeSpelling::Dispatch);
             else if (param.signatureType)
-                key += renderDispatchType(*param.signatureType);
+                key += typeText(*param.signatureType, TypeSpelling::Dispatch);
             else
                 key += "_";
             key += ",";
         }
         key += "->";
         if (clause.returnAnnotation && *clause.returnAnnotation)
-            key += renderDispatchType(**clause.returnAnnotation);
+            key += typeText(**clause.returnAnnotation, TypeSpelling::Dispatch);
         if (seen.insert(std::move(key)).second) out.push_back(&clause);
     }
     return out;
