@@ -1715,39 +1715,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return target;
             }
-            // `x.to(T)` answers `T?`. The clauses implementing the protocol
-            // take their target as an ordinary VALUE parameter
-            // (`let to(value, String) = ...`), so every one of them has an
-            // `unknown` second parameter, overload resolution cannot tell them
-            // apart, and the first one wins: `"34".to(Integer)` and
-            // `(1..3).to(List)` both typed as `String?` while evaluating to an
-            // Integer and a list. The target NAMES a type, so read it.
-            //
-            // A String target is left alone: `String?` is already the right
-            // answer for it, and a receiver that declares its own total
-            // conversion (`Measure.to(String) -> String`) must keep it.
-            // Only the bare `to(T)` form. `to(T, radix: n)` carries named
-            // arguments, and answering here would skip the call resolution
-            // lowering needs to place them — it reported `radix:` as an
-            // unknown named argument on BEAM.
-            if (node.method == "to" && node.args.size() == 1 && node.args[0] &&
-                node.namedArgs.empty() && !node.block) {
-                const auto targetIsString = [](const TypePtr& t) {
-                    auto* prim = std::get_if<PrimitiveType>(&t->kind);
-                    return prim && prim->kind == PrimitiveType::String;
-                };
-                std::unordered_map<std::string, TypePtr> targetGenerics;
-                auto target = node.targetType
-                    ? resolveTypeExpr(*node.targetType, targetGenerics)
-                    : typeNameReference(*node.args[0]);
-                if (target && !targetIsString(target)) {
-                    for (const auto& argument : node.args) inferExpr(*argument);
-                    if (node.receiver) inferExpr(*node.receiver);
-                    m_decidedCalls[&expr] = {CallKind::Conversion,
-                                             typeToString(target)};
-                    return Type::optional(target);
-                }
-            }
             // A compile-time intrinsic (intrinsics.hxx): its entry types the
             // call when the arguments are no ordinary values, and folds it
             // once they are typed. The one place a callee name is consulted.
@@ -3921,7 +3888,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         if (!wanted || wanted->name != kex::names::kTypeRecord ||
             wanted->typeArgs.size() != 1 || i >= argExprs.size() || !argExprs[i])
             return nullptr;
-        auto named = typeNameReference(*argExprs[i]);
+        // A written type (`to([Integer])`, `to(List<Integer>)`) is the
+        // call's `targetType`; its argument names only the head.
+        TypePtr named;
+        if (methodCall && methodCall->targetType && !methodCall->args.empty() &&
+            argExprs[i] == methodCall->args.front().get()) {
+            std::unordered_map<std::string, TypePtr> generics;
+            named = resolveTypeExpr(*methodCall->targetType, generics);
+        } else {
+            named = typeNameReference(*argExprs[i]);
+        }
         return named ? Type::named(kex::names::kTypeRecord, {named}) : nullptr;
     };
     const auto fits = [&](std::size_t i, const TypePtr& param) {
