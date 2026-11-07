@@ -45,7 +45,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // `.as(T)`, as the checker decided it (`Conversion`, owner the target):
     // distinct/backing conversions erase to the receiver; `.as(String)` is the
     // universal total display path.
-    if (const auto* conversion = hir && n.receiver ? &hir->targetOf(n) : nullptr;
+    if (const auto* conversion = n.receiver ? &hir->targetOf(n) : nullptr;
         conversion && conversion->kind == hir::TargetKind::Conversion) {
         if (conversion->owner == "String")
             return callE("kex_intrinsic_kex", "show", 1,
@@ -188,7 +188,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             // no slots (rodolfo docs/kex-issues.md #2).
             std::string servingModule = outputModule;
             // The state's type, as the checker decided the call.
-            if (const auto* target = hir ? &hir->targetOf(n) : nullptr;
+            if (const auto* target = &hir->targetOf(n);
                 target && target->kind == hir::TargetKind::Builtin) {
                     auto stateType = target->owner;
                     if (auto angle = stateType.find('<');
@@ -354,6 +354,8 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         if (resolved != resolvedCalls->end() && !localTypeShadows &&
             !localFieldAccessor &&
             !modulePathOwnsCall) {
+            if (!resolved->second.alternatives.empty())
+                return providerChoice(n, resolved->second);
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             if (resolved->second.passesReceiver)
@@ -1179,7 +1181,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // The checker decided a call only a `make` of a module not in scope
     // here answers (`Hidden`): the same "Undefined method" the walker
     // raises, naming the missing `using` when labelled arguments chose it.
-    if (hir && hir->targetOf(n).kind == hir::TargetKind::Hidden) {
+    if (hir->targetOf(n).kind == hir::TargetKind::Hidden) {
         const auto& hidden = hir->targetOf(n);
         const auto hint = hidden.owner.empty() || n.namedArgs.empty() ? std::string{}
             : " — `" + hidden.owner + "` defines a matching `" + n.method +
@@ -1212,9 +1214,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                               (n.block ? 1 : 0);
             const ExternalModules::ReceiverFunction* match = nullptr;
             bool sameModuleOverloads = false;
-            // Units' providers decided between at run time, by their
-            // receiver types, before the match below (the prelude's).
-            std::vector<const ExternalModules::ReceiverFunction*> runtimeProviders;
             // Several units' generic dispatchers beside the prelude's, for a
             // receiver whose type is known only at run time: the value's
             // registered owner picks one, and the prelude's takes the rest, as
@@ -1281,28 +1280,11 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     // guard here. For an erased receiver, the prelude's
                     // dispatcher handles List.join/2 and Range.join/2.
                     providerModule = guardable ? other : names::kPreludeModule;
-                } else if (typedBesidePrelude && n.namedArgs.empty()) {
-                    // Several: one guard each, so only a type a guard can
-                    // test without matching every value (a known record,
-                    // a primitive) — and positional arguments, which mean
-                    // the same slots to every provider.
-                    std::vector<const ExternalModules::ReceiverFunction*> guarded;
-                    for (const auto& candidate : providers)
-                        if (candidate.beamArity == actualArity &&
-                            candidate.moduleAtom != names::kPreludeModule)
-                            guarded.push_back(&candidate);
-                    if (std::all_of(guarded.begin(), guarded.end(), [&](const auto* provider) {
-                            return records.count(canonicalRecordName(provider->receiverType)) ||
-                                   primGuardBifs().count(provider->receiverType);
-                        })) {
-                        providerModule = names::kPreludeModule;
-                        runtimeProviders = std::move(guarded);
-                    }
                 }
             }
             if (providerModule.empty() && n.namedArgs.empty()) {
                 // The prelude's typed entries are its one dispatcher's arms; the
-                // units' must be dispatchers too, or a guard decides (runtimeProviders).
+                // units' must be dispatchers too.
                 std::set<std::string> modules;
                 bool unitsGeneric = true, preludeGeneric = false;
                 for (const auto& candidate : providers) {
@@ -1372,28 +1354,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 // arity, keep BOTH: guard on the provider's receiver type
                 // and fall back to the prelude's dispatcher, which is the
                 // walker's runtime dispatch spelled in Core Erlang.
-                if (!runtimeProviders.empty()) {
-                    // The prelude's call for every value no unit's
-                    // provider takes, each of those for its own type.
-                    // The arguments are atoms, so each arm repeats them.
-                    auto dispatch = callE(match->moduleAtom, function, actualArity,
-                                          [&] {
-                                              std::vector<ExprPtr> copies;
-                                              for (const auto& arg : pargs)
-                                                  copies.push_back(clone(arg));
-                                              return copies;
-                                          }());
-                    for (const auto* provider : runtimeProviders) {
-                        std::vector<ExprPtr> copies;
-                        for (const auto& arg : pargs) copies.push_back(clone(arg));
-                        dispatch = matchBool(
-                            typeGuard(provider->receiverType, clone(pargs.front())),
-                            callE(provider->moduleAtom, provider->beamFunction,
-                                  actualArity, std::move(copies)),
-                            std::move(dispatch));
-                    }
-                    return ret(std::move(dispatch));
-                }
                 if (!ownerDispatchers.empty()) {
                     const auto callWith = [&](const std::string &module,
                                               const std::string &fn) {

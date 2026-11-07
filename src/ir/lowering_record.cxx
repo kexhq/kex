@@ -559,3 +559,58 @@ auto Lowering::capabilityModuleNamed(const std::vector<std::string>& path) const
 }
 
 } // namespace kex::ir
+
+namespace kex::ir {
+
+// Each typed provider for a value of its type, a module's own dispatcher for
+// a value that module owns, and the target for every other value: the
+// choice among several modules' providers the checker listed, made by the
+// value at run time.
+auto Lowering::providerChoice(const ast::MethodCall& n,
+                              const semantic::ResolvedCallTarget& target) -> ExprPtr {
+    std::vector<Binding> binds;
+    std::vector<ExprPtr> args;
+    args.push_back(atomize(n.receiver, binds));
+    for (const auto& arg : n.args) args.push_back(atomize(arg, binds));
+    if (n.block) args.push_back(atomize(*n.block, binds));
+    const int arity = static_cast<int>(args.size());
+    // The arguments are atoms, so each arm repeats them.
+    const auto copies = [&] {
+        std::vector<ExprPtr> copied;
+        for (const auto& arg : args) copied.push_back(clone(arg));
+        return copied;
+    };
+    auto chosen = callE(target.backendModule, target.backendFunction, arity, copies());
+    Match byOwner;
+    for (const auto& alternative : target.alternatives) {
+        if (!alternative.receiverType.empty()) continue;
+        MatchClause arm;
+        auto owner = std::make_unique<Pattern>();
+        owner->kind = PatKind::Lit;
+        owner->litKind = LitKind::Atom;
+        owner->litText = alternative.backendModule;
+        arm.patterns.push_back(std::move(owner));
+        arm.body = callE(alternative.backendModule, alternative.backendFunction, arity, copies());
+        byOwner.clauses.push_back(std::move(arm));
+    }
+    if (!byOwner.clauses.empty()) {
+        byOwner.subjects.push_back(callE("kex_io", "method_owner", 1, one(clone(args.front()))));
+        MatchClause rest;
+        auto wild = std::make_unique<Pattern>();
+        wild->kind = PatKind::Wild;
+        rest.patterns.push_back(std::move(wild));
+        rest.body = std::move(chosen);
+        byOwner.clauses.push_back(std::move(rest));
+        chosen = std::make_unique<Expr>();
+        chosen->node = std::move(byOwner);
+    }
+    for (const auto& alternative : target.alternatives)
+        if (!alternative.receiverType.empty())
+            chosen = matchBool(typeGuard(alternative.receiverType, clone(args.front())),
+                               callE(alternative.backendModule, alternative.backendFunction,
+                                     arity, copies()),
+                               std::move(chosen));
+    return wrapLets(binds, std::move(chosen));
+}
+
+} // namespace kex::ir

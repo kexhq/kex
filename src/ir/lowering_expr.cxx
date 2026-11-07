@@ -9,8 +9,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
         return var(found->second);
     // A type named as a value (`String`, `App.Models.User`) is its `Type`
     // record, as the checker typed it: what a type-name parameter matches.
-    if (hir)
-        if (auto value = hir->typeValueOf(*e)) return structuredTypeLiteral(*value);
+    if (auto value = hir->typeValueOf(*e)) return structuredTypeLiteral(*value);
     auto prevLoc = currentLoc;
     currentLoc = &e->location;
     auto r = std::visit([&](const auto& n) -> ExprPtr {
@@ -1569,13 +1568,12 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     if (!n.receiver || n.mutating || n.parenthesized ||
         !n.args.empty() || !n.namedArgs.empty() || n.block)
         return nullptr;
-    if (resolvedCalls && resolvedCalls->count(&n)) return nullptr;
+    if (resolvedCalls->count(&n)) return nullptr;
     if (std::holds_alternative<ast::UpperIdentifier>(n.receiver->kind))
         return nullptr;
     // The record read, as the checker decided it. Lowering used to work it
     // out again from the receiver's recorded type; every read that found
     // came from a field read the checker had already decided.
-    if (!hir) return nullptr;
     const auto& target = hir->targetOf(n);
     if (target.kind != hir::TargetKind::FieldRead) return nullptr;
     const auto& recordName = target.owner;
@@ -1719,11 +1717,9 @@ auto Lowering::ownerNameOf(const std::string& printed) -> std::string {
 }
 
 auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
-    if (resolvedCalls)
-        if (auto resolved = resolvedCalls->find(&n);
-            resolved != resolvedCalls->end() &&
-            !resolved->second.localDispatchTypes.empty())
-            return ownerNameOf(resolved->second.localDispatchTypes.front());
+    if (auto resolved = resolvedCalls->find(&n);
+        resolved != resolvedCalls->end() && !resolved->second.localDispatchTypes.empty())
+        return ownerNameOf(resolved->second.localDispatchTypes.front());
     // A call the checker left to this unit's own `make` blocks
     // (ownerOfCall's ReceiverType): the receiver's type is the owner.
     if (const auto type = staticTypeOf(n.receiver.get()))
@@ -1764,7 +1760,6 @@ auto Lowering::placeMethodArguments(const ast::MethodCall& n, const MakeMethod& 
 namespace kex::ir {
 
 auto Lowering::operatorOwner(const ast::BinaryOp& n) const -> std::string {
-    if (!hir) return {};
     const auto& target = hir->targetOf(n);
     return target.kind == hir::TargetKind::Operator ? target.owner : std::string{};
 }
@@ -1782,7 +1777,7 @@ namespace kex::ir {
 // to a Client's `close`). Lowering only names what the checker chose.
 auto Lowering::ownImplementationOf(const ast::MethodCall& n) const
     -> OwnImplementation {
-    if (!hir || !n.receiver || !n.namedArgs.empty() || n.block) return {};
+    if (!n.receiver || !n.namedArgs.empty() || n.block) return {};
     const auto& target = hir->targetOf(n);
     if (target.kind == hir::TargetKind::ModuleFunction) {
         const auto symbol = moduleFunctions.find(target.owner);

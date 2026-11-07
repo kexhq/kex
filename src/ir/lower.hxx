@@ -130,11 +130,6 @@ struct ExternalRecordLayout {
     std::string declaringModule;
 };
 
-using ResolvedCalls =
-    std::unordered_map<const ast::MethodCall*, semantic::ResolvedCallTarget>;
-using ResolvedTraits =
-    std::unordered_map<const ast::MakeDef*, std::vector<std::string>>;
-
 // Everything lowering is told besides the program itself. One struct, with
 // named fields, rather than a run of positional pointers: the entry points
 // used to take the same nine in two different orders.
@@ -147,16 +142,15 @@ struct LowerContext {
     const std::vector<ExternalVariantTag>* externalVariants = nullptr;
     // The prelude itself is being lowered (see Lowering::lowersPrelude).
     bool lowersPrelude = false;
-    // The type checker's answers, keyed by AST node (Analyzer accessors of
-    // the same names). Null when the program was not checked.
-    const ResolvedCalls* resolvedCalls = nullptr;
-    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
-    const ExpressionTypes* expressionTypes = nullptr;
-    const ResolvedTraits* resolvedTraits = nullptr;
     // The checked program: what each call is and what type each expression
-    // has (src/hir/). Lowering reads decisions from here.
+    // has (src/hir/), and every other answer of its check. Required.
     const hir::Program* hir = nullptr;
 };
+
+// `base` with every entry of `overrides` laid over it: the prelude's
+// externals beside those of the units a build links.
+auto mergeExternalModules(const ExternalModules& base, const ExternalModules& overrides)
+    -> ExternalModules;
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const LowerContext& context = {}) -> Module;
