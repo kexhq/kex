@@ -203,9 +203,13 @@ auto convertTypeExpr(const kex::ast::TypeExprPtr& te) -> KexiTypePtr {
     return convertTypeExprImpl(*te);
 }
 
-auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
+// `generics`: write a generalized generic as its letter. Only for a function
+// whose every position comes from the checker; a method mixes in its
+// receiver's own letters (`make [X]`), which these would not match.
+auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = false)
+    -> KexiTypePtr {
     if (!type) return kexiUnknown();
-    return std::visit([](const auto& node) -> KexiTypePtr {
+    return std::visit([generics](const auto& node) -> KexiTypePtr {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, kex::semantic::PrimitiveType>) {
             switch (node.kind) {
@@ -226,48 +230,48 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
         } else if constexpr (std::is_same_v<T, kex::semantic::NamedType>) {
             std::vector<KexiTypePtr> args;
             for (const auto& arg : node.typeArgs)
-                args.push_back(convertSemanticType(arg));
+                args.push_back(convertSemanticType(arg, generics));
             return kexiNamed(node.name, std::move(args));
         } else if constexpr (std::is_same_v<T, kex::semantic::FuncType>) {
             if (node.block) {
                 std::vector<KexiTypePtr> args;
                 for (const auto& param : node.params)
-                    args.push_back(convertSemanticType(param));
-                args.push_back(convertSemanticType(node.result));
+                    args.push_back(convertSemanticType(param, generics));
+                args.push_back(convertSemanticType(node.result, generics));
                 return kexiNamed("Block", std::move(args));
             }
             std::vector<KexiTypePtr> params;
             for (const auto& param : node.params)
-                params.push_back(convertSemanticType(param));
-            return kexiFunc(std::move(params), convertSemanticType(node.result));
+                params.push_back(convertSemanticType(param, generics));
+            return kexiFunc(std::move(params), convertSemanticType(node.result, generics));
         } else if constexpr (std::is_same_v<T, kex::semantic::TupleType>) {
             std::vector<KexiTypePtr> elements;
             for (const auto& element : node.elements)
-                elements.push_back(convertSemanticType(element));
+                elements.push_back(convertSemanticType(element, generics));
             return kexiTuple(std::move(elements));
         } else if constexpr (std::is_same_v<T, kex::semantic::ListType>) {
-            return kexiList(convertSemanticType(node.element));
+            return kexiList(convertSemanticType(node.element, generics));
         } else if constexpr (std::is_same_v<T, kex::semantic::MapType>) {
-            return kexiMap(convertSemanticType(node.key),
-                           convertSemanticType(node.value));
+            return kexiMap(convertSemanticType(node.key, generics),
+                           convertSemanticType(node.value, generics));
         } else if constexpr (std::is_same_v<T, kex::semantic::OptionalType>) {
-            return kexiOptional(convertSemanticType(node.inner));
+            return kexiOptional(convertSemanticType(node.inner, generics));
         } else if constexpr (std::is_same_v<T, kex::semantic::UnionType>) {
             std::vector<KexiTypePtr> members;
             for (const auto& member : node.members)
-                members.push_back(convertSemanticType(member));
+                members.push_back(convertSemanticType(member, generics));
             return kexiUnion(std::move(members));
         } else if constexpr (std::is_same_v<T, kex::semantic::IntersectionType>) {
             std::vector<KexiTypePtr> members;
             for (const auto& member : node.members)
-                members.push_back(convertSemanticType(member));
+                members.push_back(convertSemanticType(member, generics));
             return kexiIntersection(std::move(members));
         } else if constexpr (std::is_same_v<T, kex::semantic::RecordType>) {
             std::vector<std::string> names;
             std::vector<KexiTypePtr> types;
             for (const auto& [name, fieldType] : node.fields) {
                 names.push_back(name);
-                types.push_back(convertSemanticType(fieldType));
+                types.push_back(convertSemanticType(fieldType, generics));
             }
             return kexiRecord(std::move(names), std::move(types));
         } else if constexpr (std::is_same_v<T, kex::semantic::VoidType>) {
@@ -278,7 +282,7 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
             // A generalized generic (`A` is -1, `B` -2, ...) is the
             // signature's own, numbered per signature: written as its letter,
             // which the reader turns back into a generic (kexi_registry).
-            if (node.id < 0 && node.id >= -26)
+            if (generics && node.id < 0 && node.id >= -26)
                 return kexiNamed(std::string(1, static_cast<char>('A' - node.id - 1)));
         }
         // Unresolved inference variables and Dynamic/Unknown remain unknown
@@ -366,8 +370,8 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
             // the interface advertise an arity no emitted function has. The
             // annotated ones are counted in the loop below.
             for (const auto& param : signature.params)
-                exp.paramTypes.push_back(convertSemanticType(param));
-            exp.returnType = convertSemanticType(signature.result);
+                exp.paramTypes.push_back(convertSemanticType(param, true));
+            exp.returnType = convertSemanticType(signature.result, true);
             exp.isFoul = signature.isFoul || fd.isFoul;
         }
     }
@@ -562,6 +566,18 @@ auto mentionsUnknown(const KexiTypePtr& type) -> bool {
     return type->result ? mentionsUnknown(type->result) : false;
 }
 
+// Whether a type names a generic (`A`, `T`): a single capital letter, the
+// spelling the reader (kexi_registry) turns back into one.
+auto mentionsGeneric(const KexiTypePtr& type) -> bool {
+    if (!type) return false;
+    if (type->kind == KexiType::Named && type->typeArgs.empty() &&
+        type->name.size() == 1 && std::isupper(static_cast<unsigned char>(type->name[0])))
+        return true;
+    for (const auto& arg : type->typeArgs)
+        if (mentionsGeneric(arg)) return true;
+    return type->result ? mentionsGeneric(type->result) : false;
+}
+
 // Apply an implicit-this `:>` standalone type annotation to a method whose
 // syntactic/inferred params or return are still Unknown. `sigType` is the
 // raw converted KexiType from the annotation: a Func means a 1+ param
@@ -597,16 +613,27 @@ void patchExportWithSig(KexiExport& exp, const KexiTypePtr& sigType,
     if (!sigType) return;
     if (sigType->kind == KexiType::Func) {
         if (sigType->typeArgs.size() != exp.paramTypes.size()) return;
-        if (authoritative) {
+        if (authoritative ||
+            (mentionsGeneric(sigType) && !mentionsUnknown(sigType))) {
+            // A complete generic contract is the signature: its letters are
+            // its own, and filling only some positions would mix them with
+            // the checker's (`A -> Type<T> -> T?`). One without generics
+            // keeps the checker's resolved types (an alias like `Reader`
+            // would not resolve where the interface is read).
             exp.paramTypes = sigType->typeArgs;
             exp.returnType = sigType->result;
             return;
         }
-        if (mentionsUnknown(exp.returnType) && !mentionsUnknown(sigType->result))
+        // A position the checker left open (unknown, or a generic of its
+        // own) takes the contract's, when that one is concrete: `open`'s
+        // mode is `Read` in one contract and `Write` in the next.
+        const auto open = [](const KexiTypePtr& type) {
+            return mentionsUnknown(type) || mentionsGeneric(type);
+        };
+        if (open(exp.returnType) && !open(sigType->result))
             exp.returnType = sigType->result;
         for (size_t i = 0; i < exp.paramTypes.size(); i++)
-            if (mentionsUnknown(exp.paramTypes[i]) &&
-                !mentionsUnknown(sigType->typeArgs[i]))
+            if (open(exp.paramTypes[i]) && !open(sigType->typeArgs[i]))
                 exp.paramTypes[i] = sigType->typeArgs[i];
     } else {
         if (!exp.paramTypes.empty()) return;
@@ -650,6 +677,29 @@ void applyInlineTraitConstraints(KexiExport& exp,
         exp.paramTypes[i] =
             kexiConstrained(std::move(variable), trait->parts.front());
     }
+}
+
+// One export per standalone signature of the function's arity, each patched
+// with its signature (`to : A -> Type<T> -> T?` and the radix form beside
+// it). A signature of another arity belongs to a sibling clause: copying the
+// export for it left an unpatched duplicate that call sites could pick.
+void addPatchedExports(KexiTypeInterface& iface, const KexiExport& exported,
+                       const std::vector<KexiTypePtr>& signatures,
+                       const kex::ast::FunctionDef& fd,
+                       const kex::semantic::Analyzer* analysis, size_t clause) {
+    bool added = false;
+    for (const auto& sig : signatures) {
+        const bool sameArity = sig && (sig->kind == KexiType::Func
+            ? sig->typeArgs.size() == exported.paramTypes.size()
+            : exported.paramTypes.empty());
+        if (!sameArity) continue;
+        auto overload = exported;
+        patchExportWithSig(overload, sig, hasInlineTraitParam(fd, analysis, clause));
+        applyInlineTraitConstraints(overload, fd, analysis, clause);
+        iface.exports.push_back(std::move(overload));
+        added = true;
+    }
+    if (!added) iface.exports.push_back(exported);
 }
 
 // Build a standalone-method KexiMethod purely from a `:>` annotation, used
@@ -1022,13 +1072,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
         if (it != standaloneSigs.end()) {
             auto exported = std::move(iface.exports.back());
             iface.exports.pop_back();
-            for (const auto& sig : it->second) {
-                auto overload = exported;
-                patchExportWithSig(overload, sig,
-                                   hasInlineTraitParam(fd, analysis, clause));
-                applyInlineTraitConstraints(overload, fd, analysis, clause);
-                iface.exports.push_back(std::move(overload));
-            }
+            addPatchedExports(iface, exported, it->second, fd, analysis, clause);
         }
         // A nested companion module's typed operations participate in UFCS
         // when its parent is imported. Keep plain namespace modules
@@ -1129,13 +1173,7 @@ void collectFromTopLevel(const kex::ast::Program& program,
         if (it != standaloneSigs.end()) {
             auto exported = std::move(iface.exports.back());
             iface.exports.pop_back();
-            for (const auto& sig : it->second) {
-                auto overload = exported;
-                patchExportWithSig(overload, sig,
-                                   hasInlineTraitParam(fd, analysis, clause));
-                applyInlineTraitConstraints(overload, fd, analysis, clause);
-                iface.exports.push_back(std::move(overload));
-            }
+            addPatchedExports(iface, exported, it->second, fd, analysis, clause);
         }
         // A top-level prelude function is also reachable through UFCS, with its
         // first parameter as the receiver. One parameter is enough — that is
@@ -1158,6 +1196,21 @@ void collectFromTopLevel(const kex::ast::Program& program,
             }
             addReceiverFunction(fd, std::move(receiver), iface, meta,
                                 analysis, true, clause);
+            // Its UFCS form follows the same complete generic contract its
+            // export does (`1.to(Float, radix: 2)` is a `Float?`). The
+            // receiver stays as declared: a generic one made another unit's
+            // `to/2` ambiguous with it at run time (spec/stdlib/ast.spec).
+            auto& method = iface.methods.back();
+            if (it != standaloneSigs.end())
+                for (const auto& sig : it->second)
+                    if (sig && sig->kind == KexiType::Func &&
+                        sig->typeArgs.size() == method.paramTypes.size() + 1 &&
+                        mentionsGeneric(sig) && !mentionsUnknown(sig)) {
+                        method.paramTypes.assign(sig->typeArgs.begin() + 1,
+                                                 sig->typeArgs.end());
+                        method.returnType = sig->result;
+                        break;
+                    }
         }
     };
 

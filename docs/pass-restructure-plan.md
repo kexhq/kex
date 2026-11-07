@@ -127,12 +127,9 @@ All of these are part of the refactor; none is optional. In order:
    the same argument matching and visibility rule handles `Units.SI`'s
    `to(String, in: SIPrefix)`. Remove the old `to` branches from the checker
    and backends with that change.
-   Two things the migration must carry: the walker and BEAM conversion paths
-   still consume the checker's `Conversion` target for bare `to(T)`, so
-   deleting that branch alone turns conversions into `None`; and a global
-   `Type<T>` type for bare type-name values breaks existing generic APIs and
-   the `Void` value. Migrate those signatures and both backends together
-   before removing the branch.
+   A global `Type<T>` type for bare type-name values breaks existing generic
+   APIs and the `Void` value: migrate those signatures together (stage T3
+   below). The bare-`to` branch itself is gone (below).
 4. **Stage 2 proper.** `--verify-hir` clean on `spec/`, `examples/`, the
    stdlib and slick; HIR node types (every call its target, arguments placed,
    defaults filled; every expression its type); one resolver (`ResolvePass`
@@ -209,9 +206,52 @@ All of these are part of the refactor; none is optional. In order:
   receiver). The call still checks clean, because every `to` candidate
   types its target parameter `Unknown` and the checker reports nothing
   from "unreliable" candidates: that is the `Type<T>` item.
-- **Left:** `Type<T>` and the ordinary `to` signature (above). The walker
-  keeps `makeMethodInScope` until it evaluates the HIR (step 6, Stage 4);
-  without a HIR (`compiled do`) it is the run-time scope rule.
+- **`Type<T>`, stage T1 of four (checker only).** The `Type<T>` work is
+  staged: T1 the checker; T2 the run-time representation (a type named as a
+  value is the `Type` record on both backends, its patterns and the
+  intrinsics that read type names move with it); T3 every value-position
+  type name typed `Type<X>` (not `Void`, not a type used as a namespace,
+  `Parser.parse(..)`), and generic APIs taking a type (`select(as: T)`)
+  declared `Type<T>`; T4 the bare-`to(T)` special case and the `Conversion`
+  target deleted. T1 is done:
+  - A parameter written as a type name (`let to(String, in: TimeUnit)`) is
+    a `Type<String>` (`typeSelectorParameter`), and a type named as the
+    argument of a `Type<X>` parameter is that type as a value, for
+    matching and for binding generics (`selectedType` in `checkCall`).
+    `90.minute.to(String, in: 5)` is an error now
+    (`spec/error_to_named_argument_type`).
+  - The prelude declares `to : A -> Type<T> -> T?` and
+    `to : A -> Type<T> -> Integer -> T?`; `1.to(Float, radix: 2)` is a
+    `Float?` (was `Unknown?`), and `&.to(Float)` resolves through it: a
+    shorthand lambda now gives `checkCall` its argument expressions.
+  - **Found on the way: standalone generic contracts were never generic.**
+    `ident : T -> T` over `let ident(x) = x` left `T` one shared variable,
+    so `let n: Integer = ident("s")` checked clean (inline `let ident(x: T)
+    -> T` was right). Contracts are generalized when registered now.
+  - **And the KexI writer dropped every generic the checker inferred**
+    (`convertSemanticType` wrote type variables as `Unknown`). A top-level
+    function's checked signature now keeps them as letters; a method's
+    does not, since its receiver's own letters (`make [X]`) would not
+    match. A complete generic contract replaces the checker's signature
+    wholesale; otherwise a contract fills the positions the checker left
+    open (unknown or generic), so `FS.File.open`'s mode still selects
+    `Read`/`Write`. One export per same-arity contract
+    (`addPatchedExports`, which replaced two copies of that loop): a
+    contract of another arity used to leave an unpatched duplicate behind.
+  - Interim, until T2: the walker's dispatch accepts a type's module value
+    for a `Type` / `Type<T>` parameter (`runtimeTypeMatches`).
+- **`to` is an ordinary call (T4 for `to`, done before T2).** The
+  checker's bare-`to(T)` branch is deleted: `"42".to(Integer)` resolves to
+  the prelude's `to : A -> Type<T> -> T?` and is an `Integer?` by the
+  ordinary rules, and a written target (`to([Integer])`,
+  `to(List<Integer>)`) is the call's `targetType`, read the same way. No
+  backend read the `Conversion` target for `to` (the plan's note above was
+  stale): both call the prelude's `to`, whose `convertTo` takes today's
+  run-time type value, so T2 is not a prerequisite. `Conversion` remains for
+  `as` (Stage 2b).
+- **Left:** `Type<T>` stages T2-T3. The walker keeps `makeMethodInScope`
+  until it evaluates the HIR (step 6, Stage 4); without a HIR
+  (`compiled do`) it is the run-time scope rule.
 
 ### Step 4 progress (2026-11-06)
 

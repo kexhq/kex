@@ -19,6 +19,7 @@
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 #include "../ast/walk.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -4642,6 +4643,14 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
         return dot != std::string::npos &&
             actual.compare(dot + 1, std::string::npos, expected) == 0;
     };
+    // A type named as a value (`"42".to(Integer)`) is still the type's
+    // module value here, so a `Type` / `Type<T>` parameter takes one. It
+    // becomes a `Type` record with stage T2 of docs/pass-restructure-plan.md,
+    // and this goes.
+    auto namedTypeValue = [&](const std::string& expected) {
+        return expected == kex::names::kTypeRecord && value &&
+               std::holds_alternative<ModuleValue>(value->data);
+    };
     return std::visit([&](const auto& node) -> bool {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>) {
@@ -4653,6 +4662,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return true;
             auto actual = dispatchTypeName(value);
             if (matchesName(actual, expected)) return true;
+            if (namedTypeValue(expected)) return true;
             if (expected == "Number" &&
                 (actual == "Integer" || actual == "Float")) return true;
             if (auto parent = m_variantParent.find(actual);
@@ -4667,6 +4677,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
         } else if constexpr (std::is_same_v<T, ast::GenericType>) {
             if (node.name.parts.empty()) return true;
             const auto& expected = node.name.parts.back();
+            if (namedTypeValue(expected)) return true;
             auto actual = dispatchTypeName(value);
             if (expected == "Optional")
                 return actual == "None" || actual == "Just" ||
