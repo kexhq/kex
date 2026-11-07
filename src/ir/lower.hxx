@@ -145,7 +145,8 @@ struct LowerContext {
     const ExternalModules* externals = nullptr;
     const std::vector<ExternalRecordLayout>* externalRecords = nullptr;
     const std::vector<ExternalVariantTag>* externalVariants = nullptr;
-    bool preferExternalReceivers = false;
+    // The prelude itself is being lowered (see Lowering::lowersPrelude).
+    bool lowersPrelude = false;
     // The type checker's answers, keyed by AST node (Analyzer accessors of
     // the same names). Null when the program was not checked.
     const ResolvedCalls* resolvedCalls = nullptr;

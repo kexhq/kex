@@ -28,6 +28,8 @@ index_of(_Wanted, [], _Index) -> error;
 index_of(Wanted, [Wanted | _], Index) -> {ok, Index};
 index_of(Wanted, [_ | Rest], Index) -> index_of(Wanted, Rest, Index + 1).
 
+%% A type value describes itself (`Type.of(as)` for `as: Type<User>`).
+'ofValue'({'Type', _, _, _} = Type) -> Type;
 'ofValue'(X) -> type_of(X).
 
 %% `Type.values`: a record's field values in declaration order, which is its

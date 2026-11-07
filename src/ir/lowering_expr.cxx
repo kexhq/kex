@@ -198,8 +198,11 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // name at run time, which a same-named record elsewhere in
             // the program (Net.HTTP.WebSocket's) made ambiguous:
             // "Not a record type: Atom" (kexhq/kex#539).
+            // Never ahead of a constructor this unit declares: `Name` in
+            // `module People` is its `Detail.Name`, whatever record
+            // `Directory.Name` the bare spelling also resolves to.
             if (auto record = canonicalRecordName(n.name);
-                record != n.name && records.count(record)) {
+                record != n.name && records.count(record) && !variantTagSet.count(n.name)) {
                 ex->node = Construct{record, {}};
                 return ex;
             }

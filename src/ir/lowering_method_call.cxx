@@ -1122,96 +1122,26 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // imported functions also appear in localMethods at this point.
     auto importedMethod = moduleImports.find(m);
     bool importedArityMatches = importedMethod != moduleImports.end();
-    const ast::FunctionClause* importedClause = nullptr;
-    std::string importedKey;
     if (importedArityMatches) {
         const auto actual = n.args.size() + n.namedArgs.size() + 1 +
             (n.block ? 1 : 0);
         for (const auto& [qualified, emitted] : moduleFunctions) {
             if (emitted != importedMethod->second) continue;
+            // Labelled arguments are placed by the checker's resolved target.
             if (!n.namedArgs.empty()) {
                 importedArityMatches = false;
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                if (auto clauses = fnNamedClauses.find(qualified);
-                    clauses != fnNamedClauses.end())
-                    if (const auto* clause = selectClause(
-                            clauses->second, labels,
-                            n.args.size() + 1 + bool(n.block))) {
-                        importedClause = clause;
-                        importedKey = qualified;
-                        importedArityMatches = true;
-                    }
                 break;
             }
             if (auto names = fnParamNames.find(qualified);
                 names != fnParamNames.end())
                 importedArityMatches = names->second.size() == actual;
-            // Written shorter than the function it names: labels placed by
-            // name and defaulted parameters left out still fit a clause.
-            // Only when nothing answers at the arity as written — a local
-            // method or a provider's receiver function of that shape is
-            // the better reading (`ticket.to(String)` beside an imported
-            // `to(value, String, in: unit = ...)`).
-            const bool writtenArityAnswers =
-                localMethodArities.count(m + "/" + std::to_string(actual)) ||
-                (externalModules &&
-                 externalModules->receiverFunctions.count(m) &&
-                 std::any_of(
-                     externalModules->receiverFunctions.at(m).begin(),
-                     externalModules->receiverFunctions.at(m).end(),
-                     [&](const auto& candidate) {
-                         return candidate.beamArity ==
-                                static_cast<int>(actual);
-                     }));
-            if (auto clauses = fnNamedClauses.find(qualified);
-                !importedArityMatches && !writtenArityAnswers &&
-                clauses != fnNamedClauses.end()) {
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                if (const auto* clause =
-                        selectClause(clauses->second, labels,
-                                     n.args.size() + 1 + (n.block ? 1 : 0))) {
-                    importedClause = clause;
-                    importedKey = qualified;
-                    importedArityMatches = true;
-                }
-            }
             break;
         }
     }
     if (importedArityMatches) {
         auto imported = importedMethod;
             std::vector<ExprPtr> args;
-            if (importedClause) {
-                const auto pnames = clauseNames(importedClause, {});
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                const auto placed = placeArguments(
-                    pnames, labels, n.args.size() + bool(n.block), 1);
-                std::vector<ExprPtr> slots(importedClause->params.size());
-                slots[0] = rv();
-                for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                    if (placed.labelSlots[i] != PlacedArguments::npos)
-                        slots[placed.labelSlots[i]] =
-                            atomize_ir(lower(n.namedArgs[i].second), rb);
-                size_t positional = 0;
-                for (const auto& value : n.args) {
-                    const auto slot = placed.positionalSlots[positional++];
-                    if (slot != PlacedArguments::npos)
-                        slots[slot] = atomize_ir(lower(value), rb);
-                }
-                if (n.block) {
-                    const auto slot = placed.positionalSlots[positional];
-                    if (slot != PlacedArguments::npos)
-                        slots[slot] = atomize_ir(lower(*n.block), rb);
-                }
-                fillDefaultSlots(importedKey, slots, rb, importedClause);
-                args = std::move(slots);
-            } else {
+            {
                 args.push_back(rv());
                 for (const auto& value : n.args)
                     args.push_back(atomize_ir(lower(value), rb));
@@ -1261,8 +1191,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // The registry includes only package-declared provider modules here;
     // ordinary module exports never become receiver functions implicitly.
     if (externalModules
-        && (!localMethods.count(m) || !localArityExists
-            || preferExternalReceivers)) {
+        && (!localMethods.count(m) || !localArityExists)) {
         auto found = externalModules->receiverFunctions.find(m);
         if (found != externalModules->receiverFunctions.end()) {
             // A unit's `make` for a type declared outside its module is in
@@ -1301,19 +1230,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 for (const auto& candidate : providers)
                     if (candidate.beamArity == actualArity)
                         modules.insert(candidate.moduleAtom);
-                // A semantic winner for an `Any` receiver is not enough
-                // to bypass the prelude's runtime method dispatch. That
-                // made a list reached through a match arm call
-                // FS.Path.join/2 instead of List.join/2.
-                if (modules.size() > 1 && !modules.count(names::kPreludeModule) &&
-                    providerModule.empty() && resolvedCalls)
-                    if (auto resolved = resolvedCalls->find(&n);
-                        resolved != resolvedCalls->end() &&
-                        modules.count(resolved->second.backendModule) &&
-                        // The prelude's is its generic fallback, which a
-                        // provider for the receiver's own type comes before.
-                        resolved->second.backendModule != names::kPreludeModule)
-                        providerModule = resolved->second.backendModule;
                 // The receiver's static type picks the providers declared
                 // for it (`raw.close` on a TCPConnection, beside the
                 // prelude's FileHandle one), when they are one module's.
@@ -1422,29 +1338,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 }
                 match = &candidate;
             }
-            // Overloads of one module at one arity are one dispatching
-            // function there, so any of them may be called; the labels
-            // pick the one whose parameter names place them. The first
-            // was `to(String, decimals:)`, which has no `in:` for the
-            // prelude's `to(String, in: TimeUnit)`.
-            if (match && sameModuleOverloads && !n.namedArgs.empty())
-                for (const auto& candidate : providers) {
-                    if (candidate.beamArity != actualArity ||
-                        candidate.moduleAtom != match->moduleAtom)
-                        continue;
-                    const bool declaresAll = std::all_of(
-                        n.namedArgs.begin(), n.namedArgs.end(),
-                        [&](const auto& named) {
-                            return std::find(candidate.paramNames.begin(),
-                                             candidate.paramNames.end(),
-                                             named.first) !=
-                                candidate.paramNames.end();
-                        });
-                    if (declaresAll) {
-                        match = &candidate;
-                        break;
-                    }
-                }
             if (match) {
                 std::vector<ExprPtr> pargs;
                 pargs.push_back(rv());

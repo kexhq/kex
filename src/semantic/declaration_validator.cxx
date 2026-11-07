@@ -1,6 +1,7 @@
 #include "declaration_validator.hxx"
 
 #include "../common/type_def_utils.hxx"
+#include "../common/well_known.hxx"
 #include "analyzer.hxx"
 #include "imported_interfaces.hxx"
 #include "traits.hxx"
@@ -217,7 +218,7 @@ private:
         if (name.parts.empty()) return true;
         const auto& last = name.parts.back();
         std::string qualified = name.dotted();
-        if ((allowThis && last == "This") || last == "Never" ||
+        if ((allowThis && last == names::kThisType) || last == "Never" ||
             last == "Void" || last == "Any" || generics.count(last) ||
             (name.parts.size() == 1 && last.size() == 1) ||
             isPrimitiveTypeName(last) || namesTrait(qualified) ||

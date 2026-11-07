@@ -318,11 +318,9 @@ struct Lowering {
     std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
-    // When true, external receiver functions take priority over localMethods.
-    // Set during prelude self-compilation so internal receiver calls route
-    // through the module's own type-dispatching wrappers instead of the
-    // inline block/HOF lowerings.
-    bool preferExternalReceivers = false;
+    // Lowering the prelude itself: its `to` conversions are what other
+    // units' fall back to, so they forward among themselves instead.
+    bool lowersPrelude = false;
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;

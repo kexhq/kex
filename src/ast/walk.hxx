@@ -198,8 +198,8 @@ auto forEachGuard(const Expr& expr, OnGuard&& onGuard) -> void {
 }
 
 // Calls `visit(const FunctionDef&)` on every function `program` defines: at
-// top level, in modules at any depth, and in `make` and visibility blocks
-// inside either.
+// top level, in modules at any depth, in `make` and visibility blocks inside
+// either, and a trait's default methods.
 template <typename Visit>
 auto forEachFunction(const Program& program, Visit&& visit) -> void {
     auto items = [&](auto& self, const auto& list) -> void {
@@ -212,6 +212,12 @@ auto forEachFunction(const Program& program, Visit&& visit) -> void {
                     if (node) self(self, node->body);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
                     if (node) self(self, node->body);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>>) {
+                    if (node)
+                        for (const auto& member : node->body)
+                            if (const auto* fn = std::get_if<std::unique_ptr<FunctionDef>>(&member);
+                                fn && *fn)
+                                visit(**fn);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<VisibilityBlock>>) {
                     if (node) self(self, node->items);
                 }

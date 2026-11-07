@@ -19,6 +19,10 @@ inline const std::string kTypeRecord = "Type";
 // The unit type's name: named as a value it is the unit value, not a `Type`.
 inline const std::string kVoidType = "Void";
 
+// A trait's self type: in its signatures and default bodies, whatever type
+// claims the trait.
+inline const std::string kThisType = "This";
+
 // The two Bool values, spelled as constructors in a pattern.
 inline const std::string kTrue = "True";
 inline const std::string kFalse = "False";

@@ -203,6 +203,7 @@ private:
     // in scope answers it by name and arity, files its dispatcher as the
     // resolved target.
     auto decideDispatch(const ast::Expr* call, const std::string& name) -> void;
+    static auto dispatcherTarget(const ImportedFunction& dispatcher) -> ResolvedCallTarget;
     auto publishQualifiedSignatures(const std::string& name,
                                     const std::vector<Signature>& signatures) -> void;
     std::unordered_set<std::string> m_qualifiedPublished;
@@ -257,6 +258,7 @@ private:
     auto registerLocalConformances(const ast::Program& program) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
+    auto checkTraitDef(const ast::TraitDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;
     auto checkMainBlock(const ast::MainBlock& block) -> void;
 
@@ -380,6 +382,7 @@ private:
     auto typeNamed(const std::string& name, SourceLocation location) -> TypePtr;
     // `Type<X>` for a parameter that selects a type by name (`let to(String,
     // in: TimeUnit)`), or null for any other parameter.
+    auto namesKnownType(const std::string& name) const -> bool;
     auto typeSelectorParameter(const ast::Param& param) -> TypePtr;
     // The result of `name` on a receiver whose type claims a trait requiring
     // it, recorded as dispatched through that trait; null when none does.

@@ -7,6 +7,7 @@
 #include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
+#include "../common/well_known.hxx"
 #include "typechecker_internal.hxx"
 #include "resolve_core.hxx"
 #include <cctype>
@@ -2682,7 +2683,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             const std::string& last = node.parts.back();
             std::string qualified = node.dotted();
             // `This` inside a make block refers to the implementing type.
-            if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && m_currentMakeType)
+            if (last == names::kThisType && node.parts.size() == 1 && m_inMakeBlock && m_currentMakeType)
                 return m_currentMakeType;
             // `Never` — the bottom/uninhabited type for never-returning functions.
             // `Void` is an alias for the unit type `()` (Swift-style naming).
@@ -3281,6 +3282,8 @@ auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
             checkFunctionDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
             checkMakeDef(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+            if (node) checkTraitDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
             checkMainBlock(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
@@ -3305,6 +3308,8 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
                 checkFunctionDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 checkMakeDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                if (node) checkTraitDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 checkModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
@@ -4171,6 +4176,27 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     m_declarationImports = std::move(savedDeclarationImports);
 }
 
+// A trait's default bodies are checked as `make` methods: `this` is any value
+// claiming the trait, and their calls are decided as every other
+// body's are (lowering emits each default once per claiming type).
+auto TypeChecker::checkTraitDef(const ast::TraitDef& def) -> void {
+    pushScope();
+    const bool wasInMakeBlock = m_inMakeBlock;
+    auto prevMakeType = m_currentMakeType;
+    auto prevMakeModule = m_currentMakeModule;
+    m_inMakeBlock = true;
+    m_currentMakeModule = m_currentModulePath;
+    // `This`, as the trait's own signatures leave it.
+    m_currentMakeType = Type::named(names::kThisType);
+    for (const auto& item : def.body)
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fn && *fn)
+            checkFunctionDef(**fn);
+    m_inMakeBlock = wasInMakeBlock;
+    m_currentMakeType = std::move(prevMakeType);
+    m_currentMakeModule = std::move(prevMakeModule);
+    popScope();
+}
+
 auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
     if (def.implements.empty()) return;
 
@@ -4602,10 +4628,12 @@ auto TypeChecker::nullaryConstructorType(const std::string& name) -> TypePtr {
         return Type::named(name);
     for (const auto& [module, constructors] : m_moduleConstructors) {
         auto constructor = constructors.find(name);
-        if (constructor != constructors.end() &&
-            constructor->second.arity == 0 &&
-            moduleMemberImported(module, name))
-            return Type::named(name);
+        if (constructor == constructors.end() || constructor->second.arity != 0) continue;
+        // Inside its own module the constructor is in scope as written: `Name`
+        // in `module App.Models.User` is its `UserDetail.Name`, not a
+        // same-named record elsewhere (`Net.DNS.Name`).
+        if (withinModule(module)) return Type::named(constructor->second.typeName);
+        if (moduleMemberImported(module, name)) return Type::named(name);
     }
     if (m_importedInterfaces)
         for (const auto& [_, module] :
@@ -4713,22 +4741,25 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
         // A module this build does not link provides nothing at run time.
         if (!m_linkedModules->contains(candidate.backendModule)) continue;
         if (candidate.foreignTarget && !makeModuleVisible(candidate.sourceModule)) continue;
-        // A foul provider takes the capability context, which the run-time
-        // search threads; such a call stays its to lower.
-        if (candidate.signature.isFoul) return;
         modules.insert(candidate.backendModule);
         if (candidate.backendFunction == name) dispatcher = &candidate;
     }
     if (modules.size() != 1 || !dispatcher) return;
+    m_resolvedCalls[call] = dispatcherTarget(*dispatcher);
+}
+
+// A call of a module's receiver dispatcher, which picks the implementation
+// by the value.
+auto TypeChecker::dispatcherTarget(const ImportedFunction& dispatcher) -> ResolvedCallTarget {
     ResolvedCallTarget target;
-    target.sourceModule = dispatcher->sourceModule;
-    target.backendModule = dispatcher->backendModule;
-    target.backendFunction = dispatcher->backendFunction;
-    target.backendArity = dispatcher->backendArity;
+    target.sourceModule = dispatcher.sourceModule;
+    target.backendModule = dispatcher.backendModule;
+    target.backendFunction = dispatcher.backendFunction;
+    target.backendArity = dispatcher.backendArity;
     target.passesReceiver = true;
-    target.paramNames = dispatcher->paramNames;
-    target.defaultSources = dispatcher->defaultSources;
-    m_resolvedCalls[call] = std::move(target);
+    target.paramNames = dispatcher.paramNames;
+    target.defaultSources = dispatcher.defaultSources;
+    return target;
 }
 
 } // namespace kex::semantic
