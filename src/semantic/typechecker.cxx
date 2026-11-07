@@ -1135,6 +1135,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
             }
         }
         result.modulePath = modulePath;
+        result.declaredHere = true;
         const auto key = modulePath.empty() ? *name : kex::mangle::qualify(modulePath, *name);
         m_constructorResult[key] = std::move(result);
     }
@@ -1222,12 +1223,11 @@ auto TypeChecker::constructorOwner(const NamedType& named) const
     return &owner->second;
 }
 
-auto TypeChecker::constructorResultType(
-    const std::string& name, const std::vector<TypePtr>& argTypes,
-    const std::string& scope) -> TypePtr {
+auto TypeChecker::constructorInfo(const std::string& name, const std::string& scope) const
+    -> const ConstructorResult* {
     auto found = scope.empty() ? m_constructorResult.end()
                                : m_constructorResult.find(kex::mangle::qualify(scope, name));
-    if (!scope.empty() && found == m_constructorResult.end()) return nullptr;
+    if (!scope.empty()) return found == m_constructorResult.end() ? nullptr : &found->second;
     // A constructor declared in this lexical module shadows an imported
     // constructor with the same spelling (for example a local Done versus
     // Control.Retry's Done). Do not let stdlib interfaces choose its ADT.
@@ -1239,7 +1239,40 @@ auto TypeChecker::constructorResultType(
         module.resize(dot);
     }
     if (found == m_constructorResult.end()) found = m_constructorResult.find(name);
-    if (found == m_constructorResult.end()) {
+    return found == m_constructorResult.end() ? nullptr : &found->second;
+}
+
+auto TypeChecker::declaredPayload(const ConstructorResult& info, std::size_t i) -> TypePtr {
+    auto payload = i < info.payloadTypes.size() ? info.payloadTypes[i] : nullptr;
+    if (i >= info.payloadExprs.size() || !info.payloadExprs[i]) return payload;
+    const auto previousModule = m_currentModulePath;
+    m_currentModulePath = info.modulePath;
+    std::unordered_map<std::string, TypePtr> generics;
+    auto resolved = resolveTypeExpr(*info.payloadExprs[i], generics);
+    m_currentModulePath = previousModule;
+    if (resolved && !std::holds_alternative<UnknownType>(resolved->kind)) return resolved;
+    return payload;
+}
+
+auto TypeChecker::checkConstructorPayloads(const std::string& name,
+                                           const std::vector<TypePtr>& argTypes,
+                                           SourceLocation loc, const std::string& scope) -> void {
+    const auto* info = constructorInfo(name, scope);
+    if (!info || !info->declaredHere) return;
+    const auto arity = info->payloadTypes.size();
+    if (argTypes.size() != arity) {
+        error(loc, "`" + name + "` takes " + std::to_string(arity) +
+                       (arity == 1 ? " value" : " values") + ", but got " +
+                       std::to_string(argTypes.size()));
+    }
+}
+
+auto TypeChecker::constructorResultType(
+    const std::string& name, const std::vector<TypePtr>& argTypes,
+    const std::string& scope) -> TypePtr {
+    const auto* found = constructorInfo(name, scope);
+    if (!scope.empty() && !found) return nullptr;
+    if (!found) {
         // A payload constructor whose spelling two ADTs share (`Text(s)`):
         // its ADT is the one in scope.
         if (const auto* owner = scopedConstructorOwner(name);
@@ -1248,7 +1281,7 @@ auto TypeChecker::constructorResultType(
             return Type::named(owner->adt);
         return nullptr;
     }
-    const auto& info = found->second;
+    const auto& info = *found;
 
     std::vector<TypePtr> typeArgs;
     typeArgs.reserve(info.typeParamCount);
@@ -2423,14 +2456,16 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // Skipping the name outright would leave every arity but the first
     // invisible to calls checked before the definitions themselves are, so
     // only arities already present are skipped.
-    auto existing = m_userSignatures.find(def.name);
-    const bool alreadyRegistered = existing != m_userSignatures.end();
-    auto hasArity = [&](size_t arity) {
-        if (!alreadyRegistered) return false;
-        return std::any_of(existing->second.begin(), existing->second.end(),
+    const auto hasArity = [](const std::vector<Signature>* signatures, size_t arity) {
+        return signatures &&
+               std::any_of(signatures->begin(), signatures->end(),
                            [&](const Signature& signature) {
                                return signature.params.size() == arity;
                            });
+    };
+    const auto signaturesAt = [&](const std::string& key) -> std::vector<Signature>* {
+        auto found = m_userSignatures.find(key);
+        return found == m_userSignatures.end() ? nullptr : &found->second;
     };
 
     // The result a caller checked BEFORE this definition sees. A declared
@@ -2438,70 +2473,57 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // every such caller, so the first one to use the result decides its type
     // for the rest: `Shop.items.reduce("") do |text, item| ... end` above a
     // `foul items -> [Item]` bound it to a String and typed `item` as Char.
-    const auto provisionalResult =
-        [&](const ast::FunctionClause& clause,
-            std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr {
-            return clause.returnAnnotation
-                ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
-                : freshTypeVar();
-        };
-    std::vector<Signature> provisional;
-    for (const auto& clause : def.clauses) {
+    const auto provisionalOf = [&](const ast::FunctionClause& clause) {
         std::unordered_map<std::string, TypePtr> genericVars;
-        if (hasArity(clause.params.size())) {
-            // Retain an annotated sibling alongside an earlier untyped
-            // provisional clause. Do not mutate the earlier signature: these
-            // may be genuine same-arity overloads. Literal clauses consult
-            // this candidate narrowly while they are checked below.
+        std::vector<TypePtr> paramTypes;
+        for (const auto& param : clause.params)
+            paramTypes.push_back(
+                param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar());
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue) required--;
+        auto result = clause.returnAnnotation
+            ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
+            : freshTypeVar();
+        Signature signature{def.name, std::move(paramTypes), std::move(result), false, required};
+        signature.declaringModule = m_currentModulePath;
+        return signature;
+    };
+    // An arity already present is skipped: clauses of one definition share
+    // it, and separate definitions overload by arity (`let f(a)` and
+    // `let f(a, b)`). An annotated same-arity clause is kept beside an earlier
+    // untyped one without mutating it: they may be genuine overloads, which
+    // literal clauses consult narrowly while they are checked.
+    // One signature per clause, shared by the bare and qualified entries, so
+    // a caller of either binds the same provisional result.
+    std::vector<std::optional<Signature>> made(def.clauses.size());
+    const auto provisionalFor = [&](const std::vector<Signature>* existing) {
+        std::vector<Signature> provisional;
+        for (std::size_t i = 0; i < def.clauses.size(); i++) {
+            const auto& clause = def.clauses[i];
             const bool annotated = std::any_of(
                 clause.params.begin(), clause.params.end(),
                 [](const auto& param) { return bool(param.type); });
-            if (annotated) {
-                std::vector<TypePtr> paramTypes;
-                for (const auto& param : clause.params)
-                    paramTypes.push_back(param.type
-                        ? resolveTypeExpr(**param.type, genericVars)
-                        : freshTypeVar());
-                provisional.push_back(Signature{
-                    def.name, std::move(paramTypes),
-                    provisionalResult(clause, genericVars), false,
-                    clause.params.size()});
-            }
-            continue;
+            if (hasArity(existing, clause.params.size()) && !annotated) continue;
+            if (!made[i]) made[i] = provisionalOf(clause);
+            provisional.push_back(*made[i]);
         }
-        std::vector<TypePtr> paramTypes;
-        for (const auto& param : clause.params) {
-            paramTypes.push_back(
-                param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar());
-        }
-        std::size_t required = clause.params.size();
-        while (required > 0 && clause.params[required - 1].defaultValue) required--;
-        provisional.push_back(Signature{def.name, std::move(paramTypes),
-                                        provisionalResult(clause, genericVars),
-                                        false, required});
-    }
-    if (provisional.empty()) {
-        m_declarationImports = previousImports;
-        return;
-    }
-    for (auto& signature : provisional)
-        signature.declaringModule = m_currentModulePath;
+        return provisional;
+    };
     // A module function is reachable QUALIFIED before its definition is
     // checked. Without this, `Tey.Toolchain.sha256(path)` above the `sha256`
     // it names found no `Tey.Toolchain::sha256` yet, fell back to the bare
     // name, and resolved to `Digest.sha256` (#103). Not marked published, so
-    // the definition's own check replaces these provisional signatures.
+    // the definition's own check replaces these provisional signatures. Its
+    // arities are its own: `Source.now` is not skipped because `Clock.now`
+    // registered a bare `now` of the same arity first.
     if (!m_currentModulePath.empty()) {
         const auto qualified = kex::mangle::qualify(m_currentModulePath, def.name);
         if (!m_qualifiedPublished.contains(qualified))
-            for (const auto& signature : provisional)
-                m_userSignatures[qualified].push_back(signature);
+            for (auto& signature : provisionalFor(signaturesAt(qualified)))
+                m_userSignatures[qualified].push_back(std::move(signature));
     }
-    if (alreadyRegistered)
-        for (auto& signature : provisional)
-            existing->second.push_back(std::move(signature));
-    else
-        m_userSignatures[def.name] = std::move(provisional);
+    for (auto& signature : provisionalFor(signaturesAt(def.name)))
+        m_userSignatures[def.name].push_back(std::move(signature));
     m_declarationImports = previousImports;
 }
 
@@ -3119,20 +3141,9 @@ auto TypeChecker::bindPatternVars(
                     // so reading it bound every such pattern to whatever some
                     // unrelated use had unified it with: `let Just(i) = ...`
                     // came out `Char` in the merged prelude (kexhq/kex#249).
-                    payload = declaration->payloadTypes[i];
-                    if (!declaration->modulePath.empty() &&
-                        i < declaration->payloadExprs.size() &&
-                        declaration->payloadExprs[i]) {
-                        const auto previousModule = m_currentModulePath;
-                        m_currentModulePath = declaration->modulePath;
-                        std::unordered_map<std::string, TypePtr> generics;
-                        auto resolved =
-                            resolveTypeExpr(*declaration->payloadExprs[i], generics);
-                        m_currentModulePath = previousModule;
-                        if (resolved &&
-                            !std::holds_alternative<UnknownType>(resolved->kind))
-                            payload = std::move(resolved);
-                    }
+                    payload = declaration->modulePath.empty()
+                        ? declaration->payloadTypes[i]
+                        : declaredPayload(*declaration, i);
                 }
                 // The built-in carriers come from the prelude interface, not a
                 // local declaration, so they have no slot above. Left untyped,
@@ -3654,6 +3665,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
         }
         auto bodyType = inferBody(clause.body);
+        if (clause.rescue) checkRescue(*clause.rescue);
         m_inCastSlot = previousCastSlot;
         // Verify body matches declared return type (if declared and concrete).
         // Use argMatchesParam (not typesEqual) to apply the same trait-family
@@ -4032,6 +4044,29 @@ auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
     return std::any_of(m_declarationImports.begin(), m_declarationImports.end(), names);
 }
 
+auto TypeChecker::hiddenMakeTaking(const std::string& name,
+                                   const std::vector<TypePtr>& argTypes) -> std::string {
+    const auto methods = m_methodSignatures.find(name);
+    if (methods == m_methodSignatures.end() || argTypes.empty()) return {};
+    const auto receiver = resolve(argTypes.front());
+    std::string hidden;
+    for (const auto& method : methods->second) {
+        if (method.makeModule.empty() || makeModuleVisible(method.makeModule) ||
+            method.params.empty())
+            continue;
+        const auto required = method.requiredParams.value_or(method.params.size());
+        if (argTypes.size() < required || argTypes.size() > method.params.size()) continue;
+        // A make for its module's own type travels with that type's values.
+        const auto declared = resolve(method.params.front());
+        if (const auto* named = std::get_if<NamedType>(&declared->kind);
+            named && named->name.starts_with(method.makeModule + "."))
+            continue;
+        if (!argMatchesParam(receiver, declared)) continue;
+        if (hidden.empty() || method.makeModule < hidden) hidden = method.makeModule;
+    }
+    return hidden;
+}
+
 auto TypeChecker::freeFunctionVisible(const std::string& module,
                                       const std::string& name) const -> bool {
     if (withinModule(module)) return true;
@@ -4188,6 +4223,7 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
         }
     }
     inferBody(block.body);
+    if (block.rescue) checkRescue(*block.rescue);
     if (!block.synthetic) popScope();
     m_declarationImports = std::move(savedDeclarationImports);
 }

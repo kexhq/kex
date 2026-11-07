@@ -3,7 +3,8 @@
 #include "../src/compiled/reify.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include "../src/ir/emit_core.hxx"
-#include "../src/ir/upgrade.hxx"
+#include "../src/ir/passes/upgrade.hxx"
+#include "../src/ir/passes/guards.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
@@ -65,6 +66,13 @@ auto countOccurrences(const std::string& haystack, const std::string& needle)
     return count;
 }
 
+// A lowered module as the emitter receives it: `when` guards expanded (the
+// `guards` pass), without the hot-reload points most expectations leave out.
+auto emitted(kex::ir::Module module) -> kex::ir::EmitResult {
+    kex::ir::expandGuards(module);
+    return kex::ir::emitCore(module);
+}
+
 // Parse Kex source and emit Core Erlang text through the production IR path.
 auto emit(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
@@ -72,7 +80,7 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
+    return emitted(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
 // The production path with hot-reload upgrade points inserted, as main.cxx
@@ -85,6 +93,7 @@ auto emitUpgradable(const std::string& source, const std::string& stem = "test")
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
     auto module = kex::ir::lowerProgram(program, stem, {.externals = &ext});
+    kex::ir::expandGuards(module);
     kex::ir::insertUpgradePoints(module);
     return kex::ir::emitCore(module).source;
 }
@@ -96,7 +105,7 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
+    return emitted(kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternal(const std::string& source,
@@ -105,7 +114,7 @@ auto emitWithExternal(const std::string& source,
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(
+    return emitted(
         kex::ir::lowerProgram(program, stem, {.externals = &external})).source;
 }
 
@@ -118,7 +127,7 @@ auto emitWithResolvedCalls(
     auto program = parser.parseProgram();
     kex::semantic::Analyzer analyzer(&interfaces);
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
-    return kex::ir::emitCore(kex::ir::lowerProgram(
+    return emitted(kex::ir::lowerProgram(
         program, stem, {.resolvedCalls = &analyzer.resolvedCalls()})).source;
 }
 
@@ -137,7 +146,7 @@ auto emitProduction(const std::string& source,
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
     auto external =
         kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
-    return kex::ir::emitCore(kex::ir::lowerProgram(
+    return emitted(kex::ir::lowerProgram(
         program, stem,
         {.externals = &external,
          .resolvedCalls = &analyzer.resolvedCalls(),
@@ -157,7 +166,7 @@ auto emitWithPrelude(const std::string& source,
         for (int arity = 1; arity <= 4; arity++)
             ext.receiverFunctions[name].push_back(
                 {"kex_prelude", name, arity});
-    return kex::ir::emitCore(
+    return emitted(
         kex::ir::lowerProgram(program, stem, {.externals = &ext})).source;
 }
 
@@ -168,7 +177,7 @@ auto emitWithExternalRecords(
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(
+    return emitted(
         kex::ir::lowerProgram(program, stem, {.externalRecords = &records})).source;
 }
 
@@ -224,7 +233,7 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             auto ext = stdlibExternal();
-            return kex::ir::emitCore(
+            return emitted(
                        kex::ir::lowerProgram(program, "test", {.externals = &ext}))
                 .routedImplementations;
         };
@@ -544,7 +553,7 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "collapse", {.externals = &ext}))
                            .source;
 
@@ -601,7 +610,7 @@ int main() {
                         "both calls should be collapse candidates");
             assertEqual(collapsed, 1, "only the bound map should collapse");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "collapse", {.externals = &ext}))
                            .source;
             assertEqual(countOccurrences(out, "apply 'Rows.columns'"), 1,
@@ -648,7 +657,7 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "strings", {.externals = &ext}))
                            .source;
 
@@ -684,7 +693,7 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "concat", {.externals = &ext}))
                            .source;
 
@@ -749,7 +758,7 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "carried", {.externals = &ext}))
                            .source;
 
@@ -832,7 +841,7 @@ int main() {
                        "expansion should succeed");
             unsetenv("KEX_CODEGEN_BUILD_TAG");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
+            auto out = emitted(
                            kex::ir::lowerProgram(program, "envtag", {.externals = &ext}))
                            .source;
 
@@ -1174,7 +1183,7 @@ int main() {
             assertTrue(modules[1].functions[0].exported);
             assertEqual(modules[1].functions[1].name, std::string("hidden"));
             assertFalse(modules[1].functions[1].exported);
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto globalCore = emitted(std::move(modules[0])).source;
             assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
         });
 
@@ -1189,7 +1198,7 @@ int main() {
 
             auto modules = kex::ir::lowerModules(
                 program, "external_split", {.externals = &external});
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto globalCore = emitted(std::move(modules[0])).source;
 
             assertTrue(contains(
                 globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
@@ -1205,7 +1214,7 @@ int main() {
             auto program = parser.parseProgram();
             auto modules = kex::ir::lowerModules(program, "global_helper");
             assertEqual(modules.size(), size_t{2});
-            auto companionCore = kex::ir::emitCore(modules[1]).source;
+            auto companionCore = emitted(std::move(modules[1])).source;
             assertTrue(contains(
                 companionCore, "call 'kex_global_helper':'normalize'"),
                 companionCore);
@@ -1221,7 +1230,7 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             auto modules = kex::ir::lowerModules(program, "top_using");
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto globalCore = emitted(std::move(modules[0])).source;
             assertTrue(contains(globalCore, "call 'Kex.Utils':'double'"), globalCore);
         });
 

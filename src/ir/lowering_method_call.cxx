@@ -42,20 +42,17 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         ex->node = Call{mod, n.method, ar, std::move(args), false};
         return wrapLets(binds, std::move(ex));
     }
-    // `.as(T)` is checked statically. Distinct/backing conversions erase
-    // to the receiver; `.as(String)` is the universal total display path.
-    if (n.method == "as" && n.args.size() == 1 && n.args[0] &&
-        n.receiver && n.namedArgs.empty() && !n.block) {
-        if (const auto* target =
-                std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
-            target && target->name == "String")
+    // `.as(T)`, as the checker decided it (`Conversion`, owner the target):
+    // distinct/backing conversions erase to the receiver; `.as(String)` is the
+    // universal total display path.
+    if (const auto* conversion = hir && n.receiver ? &hir->targetOf(n) : nullptr;
+        conversion && conversion->kind == hir::TargetKind::Conversion) {
+        if (conversion->owner == "String")
             return callE("kex_intrinsic_kex", "show", 1,
                          one(lower(n.receiver)));
         // `"hello".as(Atom)`: the checker admits only a plain literal, so
         // the atom is a constant in the emitted code.
-        if (const auto* target =
-                std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
-            target && target->name == "Atom")
+        if (conversion->owner == "Atom")
             if (const auto* literal =
                     std::get_if<ast::StringLiteral>(&n.receiver->kind);
                 literal && literal->values.empty()) {

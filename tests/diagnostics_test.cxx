@@ -1,5 +1,6 @@
 #include "test.hxx"
 #include "../src/ast/ast.hxx"
+#include "../src/ast/type_text.hxx"
 #include "../src/common/diagnostics.hxx"
 #include "../src/common/color.hxx"
 
@@ -45,16 +46,16 @@ int main() {
         });
     });
 
-    describe("diagnostics::typeExprToString", []() {
+    describe("ast::typeText", []() {
         it("renders a plain name", []() {
             kex::ast::TypeExpr te;
             te.kind = kex::ast::TypeName{{"List"}};
-            assertEqual(typeExprToString(te), std::string("List"));
+            assertEqual(kex::ast::typeText(te), std::string("List"));
         });
         it("renders a qualified name", []() {
             kex::ast::TypeExpr te;
             te.kind = kex::ast::TypeName{{"Net", "HTTP"}};
-            assertEqual(typeExprToString(te), std::string("Net.HTTP"));
+            assertEqual(kex::ast::typeText(te), std::string("Net.HTTP"));
         });
     });
 

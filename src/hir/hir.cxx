@@ -2,6 +2,7 @@
 
 #include "../ast/walk.hxx"
 #include "../semantic/analyzer.hxx"
+#include "../common/well_known.hxx"
 
 namespace kex::hir {
 
@@ -203,6 +204,17 @@ auto ProgramSet::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {
         [](const semantic::TypePtr& t) { return t != nullptr; });
 }
 
+namespace {
+auto mayNameType(const ast::Expr& expr) -> bool;
+auto typeValueFrom(const ast::Expr& expr, const semantic::TypePtr& type)
+    -> std::optional<semantic::StructuredType>;
+}
+
+auto ProgramSet::typeValueOf(const ast::Expr& expr) const
+    -> std::optional<semantic::StructuredType> {
+    return mayNameType(expr) ? typeValueFrom(expr, typeOf(expr)) : std::nullopt;
+}
+
 auto ProgramSet::receiverTypeOf(const ast::Expr& call) const -> std::string {
     return newestAnswer<std::string>(
         m_programs, m_base, {}, [&](const Program& p) { return p.receiverTypeOf(call); },
@@ -229,14 +241,54 @@ auto Program::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {
     return found == m_types->end() ? nullptr : found->second;
 }
 
+namespace {
+
+// Could `expr` name a type: `String`, or a path without arguments
+// (`App.Models.User`)? Asked before the type map is.
+auto mayNameType(const ast::Expr& expr) -> bool {
+    const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
+    return std::holds_alternative<ast::UpperIdentifier>(expr.kind) ||
+           (call && call->args.empty() && call->namedArgs.empty() && !call->block);
+}
+
+// A type name the checker typed `Type<X>`, as the `Type` record of X.
+auto typeValueFrom(const ast::Expr& expr, const semantic::TypePtr& type)
+    -> std::optional<semantic::StructuredType> {
+    if (!type || !mayNameType(expr)) return std::nullopt;
+    const auto* named = std::get_if<semantic::NamedType>(&type->kind);
+    if (!named || named->name != kex::names::kTypeRecord || named->typeArgs.size() != 1)
+        return std::nullopt;
+    // The name written, which reflection on a VALUE cannot tell: a Byte is an
+    // Integer at run time, but `to(Byte)` names the narrower type.
+    const auto& written = named->typeArgs.front();
+    if (std::holds_alternative<semantic::SizedIntType>(written->kind) ||
+        std::holds_alternative<semantic::SizedFloatType>(written->kind))
+        return semantic::StructuredType{semantic::typeToString(written), {}};
+    return semantic::structuredTypeOf(written);
+}
+
+} // namespace
+
+auto Program::typeValueOf(const ast::Expr& expr) const
+    -> std::optional<semantic::StructuredType> {
+    return mayNameType(expr) ? typeValueFrom(expr, typeOf(expr)) : std::nullopt;
+}
+
 auto verify(const Program& program) -> std::vector<std::string> {
     std::vector<std::string> problems;
-    for (const auto& site : program.callSites())
-        if (site.kind == TargetKind::Undecided)
-            problems.push_back(std::string(site.expr->location.file) + ":" +
-                               std::to_string(site.expr->location.line) + ":" +
-                               std::to_string(site.expr->location.column) +
-                               ": no target for `" + site.callee + "`");
+    for (const auto& site : program.callSites()) {
+        if (site.kind != TargetKind::Undecided) continue;
+        auto problem = std::string(site.expr->location.file) + ":" +
+                       std::to_string(site.expr->location.line) + ":" +
+                       std::to_string(site.expr->location.column) +
+                       ": no target for `" + site.callee + "`";
+        // The receiver the checker saw is most of why a call went undecided.
+        if (const auto* method = std::get_if<ast::MethodCall>(&site.expr->kind);
+            method && method->receiver)
+            if (const auto type = program.typeOf(*method->receiver))
+                problem += " on " + semantic::typeToString(type);
+        problems.push_back(std::move(problem));
+    }
     return problems;
 }
 

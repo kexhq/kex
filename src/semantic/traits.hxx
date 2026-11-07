@@ -106,6 +106,10 @@ public:
     auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
     auto declaresMethod(const std::string& type, const std::string& method) const
         -> bool;
+    // The method a trait `type` claims requires under `method`'s name, and
+    // that trait; nulls when no claimed trait requires one.
+    auto requiredMethod(const TypePtr& type, const std::string& method) const
+        -> std::pair<const TraitDef*, const Signature*>;
 
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.

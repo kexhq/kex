@@ -1,6 +1,7 @@
 #include "pass_manager.hxx"
-#include "upgrade.hxx"
-#include "verify.hxx"
+#include "passes/upgrade.hxx"
+#include "passes/guards.hxx"
+#include "passes/verify.hxx"
 
 #include <stdexcept>
 
@@ -34,6 +35,9 @@ auto PassManager::report() const -> void {
 
 auto standardPasses() -> PassManager {
     PassManager passes;
+    // First: `when` guards out of BEAM guard position, before any pass reads
+    // the control flow they become.
+    passes.add("guards", expandGuards);
     // Loop lifting and the hot-code-upgrade points a reloaded module needs.
     passes.add("upgrade-points", insertUpgradePoints);
     // Last: what every pass left must still be a well-formed module. A

@@ -161,8 +161,9 @@ add_library(kex_lib
     src/ir/lowering_record.cxx
     src/ir/emit_core.cxx
     src/ir/pass_manager.cxx
-    src/ir/verify.cxx
-    src/ir/upgrade.cxx
+    src/ir/passes/guards.cxx
+    src/ir/passes/verify.cxx
+    src/ir/passes/upgrade.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
@@ -184,6 +185,7 @@ add_library(kex_lib
     src/semantic/resolve_core.cxx
     src/ast/clone.cxx
     src/ast/function_groups.cxx
+    src/ast/type_text.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
     src/module/resolver.cxx
@@ -925,7 +927,7 @@ add_dependencies(serving_imported_module_beam_test kex)
 add_test(NAME serving_imported_module_beam_test COMMAND serving_imported_module_beam_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Hot code reload: three compiled versions of one module loaded in turn into
-# a live VM (src/ir/upgrade.cxx, kex_intrinsic_process's serving upgrade).
+# a live VM (src/ir/passes/upgrade.cxx, kex_intrinsic_process's serving upgrade).
 add_executable(hot_reload_beam_test tests/hot_reload_beam_test.cxx)
 target_link_libraries(hot_reload_beam_test PRIVATE kex_lib)
 target_include_directories(hot_reload_beam_test PRIVATE tests)

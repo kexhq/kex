@@ -7,6 +7,10 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
     if (!e) return litBool(false);
     if (auto found = loweredReceivers.find(e.get()); found != loweredReceivers.end())
         return var(found->second);
+    // A type named as a value (`String`, `App.Models.User`) is its `Type`
+    // record, as the checker typed it: what a type-name parameter matches.
+    if (hir)
+        if (auto value = hir->typeValueOf(*e)) return structuredTypeLiteral(*value);
     auto prevLoc = currentLoc;
     currentLoc = &e->location;
     auto r = std::visit([&](const auto& n) -> ExprPtr {
@@ -437,7 +441,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                         if (!clause.params.empty())
                             if (const auto* declared =
                                     dispatchParamType(clause.params.back())) {
-                                const auto written = renderDispatchType(*declared);
+                                const auto written = typeText(*declared, TypeSpelling::Dispatch);
                                 if (discriminatingType(written))
                                     test = callE("erlang", "and", 2,
                                         two(std::move(test),

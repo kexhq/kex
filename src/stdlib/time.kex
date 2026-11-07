@@ -1698,7 +1698,7 @@ make Date, implement: Inspectable, Showable do
   #
   # @example
   #   Date.of(2026, 7, 30).try.startOfWeek.iso   # => "2026-07-27"
-  let startOfWeek -> Date = this.addDays(1 - this.weekday.number)
+  let startOfWeek -> Date = this.addDays(1 - Time.weekdayNumber(this.weekday))
 
   # The Sunday of this date's week.
   #
@@ -1706,7 +1706,7 @@ make Date, implement: Inspectable, Showable do
   #
   # @example
   #   Date.of(2026, 7, 30).try.endOfWeek.iso   # => "2026-08-02"
-  let endOfWeek -> Date = this.addDays(7 - this.weekday.number)
+  let endOfWeek -> Date = this.addDays(7 - Time.weekdayNumber(this.weekday))
 
   # Whole days from this date to +other+, negative when +other+ is earlier.
   #

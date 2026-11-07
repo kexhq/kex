@@ -1,5 +1,5 @@
 #include "verify.hxx"
-#include "walk.hxx"
+#include "../walk.hxx"
 
 #include <set>
 #include <utility>

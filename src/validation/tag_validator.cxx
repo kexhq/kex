@@ -411,8 +411,11 @@ auto appendIssues(
         std::optional<int64_t> endOffset;
         bool wholeLiteral = issue->args[0]->isNone();
         if (!issue->args[0]->isNone()) {
+            // The span is a `ByteSpan?`: `Just(At(offset))`.
             auto* span = std::get_if<interpreter::VariantValue>(
                 &issue->args[0]->data);
+            if (span && span->tag == "Just" && span->args.size() == 1 && span->args[0])
+                span = std::get_if<interpreter::VariantValue>(&span->args[0]->data);
             if (span && span->tag == "At" && span->args.size() == 1) {
                 offset = integerValue(span->args[0]);
                 if (!offset) {

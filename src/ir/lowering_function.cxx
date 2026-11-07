@@ -14,8 +14,36 @@ auto Lowering::lowerParam(const ast::Param& p) -> PatternPtr {
         subst[*p.name] = *p.name;
         return pat;
     }
+    if (p.pattern)
+        if (auto selector = typeNameParameter(**p.pattern)) return selector;
     if (p.pattern) return lowerPattern(*p.pattern);
     auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
+}
+
+// A parameter written as a type name (`let to(value, String)`) takes that
+// type as a value, which is its `Type` record `{'Type', Name, Args, Pure}`:
+// the pattern matches the record's name. The checker's rule
+// (typeSelectorParameter), over the types lowering knows.
+auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
+    const auto* written = std::get_if<ast::ConstructorPattern>(&p.kind);
+    if (!written || !written->args.empty() || written->name == kex::names::kTrue ||
+        written->name == kex::names::kFalse || variantTagSet.count(written->name) ||
+        variantOwner.count(written->name))
+        return nullptr;
+    const auto& name = written->name;
+    if (!semantic::isPrimitiveTypeName(name) && !records.count(canonicalRecordName(name)) &&
+        !typeVariantTags.count(name) && !structuralTypeAliases.count(name))
+        return nullptr;
+    auto record = std::make_unique<Pattern>();
+    record->kind = PatKind::Construct;
+    record->tag = kex::names::kTypeRecord;
+    auto text = std::make_unique<Pattern>();
+    text->kind = PatKind::Lit;
+    text->litKind = LitKind::String;
+    text->litText = name;
+    record->args.push_back(std::move(text));
+    for (int field = 0; field < 2; ++field) record->args.push_back(wildPat());
+    return record;
 }
 
 // Lower a group of same-name FunctionDefs (Kex writes multi-clause
@@ -159,7 +187,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                     // function_clause.
                     const auto* declared = dispatchParamType(p);
                     if (!p.name || !declared) return false;
-                    current.push_back(renderDispatchType(*declared));
+                    current.push_back(typeText(*declared, TypeSpelling::Dispatch));
                 }
                 if (signature.empty()) signature = current;
                 else if (signature != current) differs = true;
@@ -233,7 +261,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             auto savedParamTypes = declaredParamTypes;
             for (const auto& p : clause.params)
                 if (p.name && p.type && *p.type)
-                    declaredParamTypes[*p.name] = renderDispatchType(**p.type);
+                    declaredParamTypes[*p.name] = typeText(**p.type, TypeSpelling::Dispatch);
             for (const auto& p : clause.params) {
                 auto trait = traitNameOf(p);
                 if (trait.empty()) continue;
@@ -295,7 +323,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 for (const auto& p : clause.params) {
                     const auto* declared = dispatchParamType(p);
                     if (!p.name || !declared) continue;
-                    addGuardTest(renderDispatchType(*declared), var(*p.name));
+                    addGuardTest(typeText(*declared, TypeSpelling::Dispatch), var(*p.name));
                 }
                 // Named record-pattern params (`JSON { status, body }`)
                 // dispatch on their tag exactly like a plain `reply: JSON`

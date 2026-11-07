@@ -1,4 +1,5 @@
 #include "completion_at.hxx"
+#include "../common/well_known.hxx"
 
 
 #include <algorithm>
@@ -19,8 +20,13 @@ auto completionQualifierForType(const TypePtr& type) -> std::string {
         else if constexpr (std::is_same_v<T, OptionalType>)
             return "Optional";
         else if constexpr (std::is_same_v<T, NamedType>)
-            return value.typeArgs.empty() ? value.name
-                                          : typeToString(type);
+        {
+            // A type named before a dot (`List.ma`) is a namespace there:
+            // complete what it holds, not its `Type` record's fields.
+            if (value.name == kex::names::kTypeRecord && value.typeArgs.size() == 1)
+                return completionQualifierForType(value.typeArgs.front());
+            return value.typeArgs.empty() ? value.name : typeToString(type);
+        }
         else if constexpr (std::is_same_v<T, PrimitiveType> ||
                            std::is_same_v<T, SizedIntType> ||
                            std::is_same_v<T, SizedFloatType>)
