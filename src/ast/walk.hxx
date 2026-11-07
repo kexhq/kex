@@ -118,7 +118,7 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
                 all(node.body);
                 if (node.rescue) rescue(*node.rescue);
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
-                all(node.args);
+                one(node.lambda);
             } else if constexpr (std::is_same_v<T, SpreadExpr>) {
                 one(node.inner);
             } else if constexpr (std::is_same_v<T, TrailingIf>) {

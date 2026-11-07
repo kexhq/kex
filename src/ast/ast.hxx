@@ -442,12 +442,17 @@ struct Lambda {
 
 // `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
 // function or an operator is spelled with `~` (CurryExpr), never `&`.
+// `lambda` is what it means, `{ |__shorthand| __shorthand.method(args) }`,
+// which every pass but reflection reads; the call holds the arguments.
 struct ShorthandLambda {
     enum class Kind { Method, MethodWithArgs };
     Kind kind;
     std::string name;
-    std::vector<ExprPtr> args;
+    ExprPtr lambda;
 };
+
+// The call inside a shorthand's lambda: `__shorthand.method(args)`.
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall&;
 
 struct SpreadExpr {
     ExprPtr inner;
@@ -853,6 +858,10 @@ inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value)
         return false;
     const auto* lambda = std::get_if<Lambda>(&value->kind);
     return lambda && lambda->namedFunction && lambda->params.empty();
+}
+
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall& {
+    return std::get<MethodCall>(std::get<Lambda>(shorthand.lambda->kind).body.front()->kind);
 }
 
 } // namespace kex::ast

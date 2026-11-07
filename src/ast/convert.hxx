@@ -785,7 +785,7 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
                 return expressionVariant("ShorthandLambda", {
-                    m_builder.string(node.name), expressionList(node.args),
+                    m_builder.string(node.name), expressionList(shorthandCall(node).args),
                     m_builder.boolean(
                         node.kind == ShorthandLambda::Kind::MethodWithArgs),
                 });

@@ -461,23 +461,11 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                                     /*isMethodCall=*/false);
         return Type::func(std::move(paramTypes), resolve(resultType));
     }
+    // `&.method(args)`: the lambda it means.
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
-        TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
-        if (std::holds_alternative<TypeVar>(paramType->kind) ||
-            std::holds_alternative<UnknownType>(paramType->kind))
-            paramType = freshTypeVar();
-        // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
-        std::vector<TypePtr> callArgs = {paramType};
-        std::vector<const ast::Expr*> callExprs = {nullptr};
-        for (const auto& arg : sl->args) {
-            if (arg) {
-                callArgs.push_back(inferExpr(*arg));
-                callExprs.push_back(arg.get());
-            }
-        }
-        auto resultType = checkCall(sl->name, callArgs, blockExpr.location, true,
-                                    nullptr, nullptr, &callExprs);
-        return Type::func({paramType}, resolve(resultType));
+        auto type = inferBlock(*sl->lambda, hintParams);
+        m_typeMap[sl->lambda.get()] = type;
+        return type;
     }
     // BlockExpr (no param list) — infer body for side effects, stay permissive.
     inferExpr(blockExpr);
@@ -2436,19 +2424,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return resolve(thenType);
         }
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-            // &.method → (T) -> result; T unknown until used in context.
-            auto paramType = freshTypeVar();
-            std::vector<TypePtr> callArgs = {paramType};
-            std::vector<const ast::Expr*> callExprs = {nullptr};
-            for (const auto& arg : node.args) {
-                if (arg) {
-                    callArgs.push_back(inferExpr(*arg));
-                    callExprs.push_back(arg.get());
-                }
-            }
-            auto resultType = checkCall(node.name, callArgs, expr.location, false,
-                                        nullptr, nullptr, &callExprs);
-            return Type::func({paramType}, resolve(resultType));
+            return inferExpr(*node.lambda);
         }
         else if constexpr (std::is_same_v<T, ast::CurryPlaceholder>) {
             return Type::unknown();

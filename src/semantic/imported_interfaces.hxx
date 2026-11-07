@@ -50,6 +50,10 @@ struct ImportedFunction {
     // As KexiMethod::foreignTarget: a `make` for a type its module does not
     // declare, so never visible by its receiver alone.
     bool foreignTarget = false;
+    // A receiver method declared for a type alias (`FS.Path.join` over
+    // `FilePath`): no value has that type at run time, so only a static type
+    // reaches it, never the value's dispatch.
+    bool aliasReceiver = false;
     // ADT constructors are represented as ordinary module exports so
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.

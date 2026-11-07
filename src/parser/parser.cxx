@@ -3832,6 +3832,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     }
     std::vector<ast::ExprPtr> args;
 
+    auto kind = ast::ShorthandLambda::Kind::Method;
     if (match(TokenType::LParen)) {
       if (!check(TokenType::RParen)) {
         do {
@@ -3839,47 +3840,39 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         } while (match(TokenType::Comma));
       }
       expect(TokenType::RParen, "Expected ')'");
-      expr->kind = ast::ShorthandLambda{
-          ast::ShorthandLambda::Kind::MethodWithArgs, name, std::move(args)};
+      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
     } else if (isAtExprStart()) {
       // Operator with inline arg: &.+ 1 or &.+ "hello"
       args.push_back(parsePrimary());
-      expr->kind = ast::ShorthandLambda{
-          ast::ShorthandLambda::Kind::MethodWithArgs, name, std::move(args)};
-    } else {
-      expr->kind =
-          ast::ShorthandLambda{ast::ShorthandLambda::Kind::Method, name, {}};
+      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
     }
-    // A continuation belongs inside the shorthand lambda:
-    // `&.to(String).or("")` desugars to
+    // What it means: `{ |__shorthand| __shorthand.method(args) }`, and a
+    // continuation belongs inside it: `&.to(String).or("")` is
     // `{ |__shorthand| __shorthand.to(String).or("") }`.
-    if (check(TokenType::Dot)) {
-      constexpr const char *paramName = "__shorthand";
-      auto receiver = std::make_unique<ast::Expr>();
-      receiver->location = expr->location;
-      receiver->kind = ast::Identifier{paramName};
-
-      auto firstCall = std::make_unique<ast::Expr>();
-      firstCall->location = expr->location;
-      auto shorthand = std::get<ast::ShorthandLambda>(std::move(expr->kind));
-      ast::MethodCall call;
-      call.receiver = std::move(receiver);
-      call.method = std::move(shorthand.name);
-      call.args = std::move(shorthand.args);
-      firstCall->kind = std::move(call);
-
-      auto chained = parsePostfixTail(std::move(firstCall));
-      ast::LambdaParam param;
-      param.name = paramName;
-      std::vector<ast::LambdaParam> params;
-      params.push_back(std::move(param));
-      std::vector<ast::ExprPtr> body;
-      body.push_back(std::move(chained));
-      expr = std::make_unique<ast::Expr>();
-      expr->location = body.front()->location;
-      expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                               std::nullopt};
-    }
+    constexpr const char *paramName = "__shorthand";
+    auto receiver = std::make_unique<ast::Expr>();
+    receiver->location = expr->location;
+    receiver->kind = ast::Identifier{paramName};
+    auto firstCall = std::make_unique<ast::Expr>();
+    firstCall->location = expr->location;
+    ast::MethodCall call;
+    call.receiver = std::move(receiver);
+    call.method = name;
+    call.args = std::move(args);
+    firstCall->kind = std::move(call);
+    const bool chained = check(TokenType::Dot);
+    std::vector<ast::ExprPtr> body;
+    body.push_back(chained ? parsePostfixTail(std::move(firstCall)) : std::move(firstCall));
+    ast::LambdaParam param;
+    param.name = paramName;
+    std::vector<ast::LambdaParam> params;
+    params.push_back(std::move(param));
+    auto lambda = std::make_unique<ast::Expr>();
+    lambda->location = body.front()->location;
+    lambda->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
+    // A chain is no shorthand any more, only the lambda.
+    if (chained) return lambda;
+    expr->kind = ast::ShorthandLambda{kind, name, std::move(lambda)};
     return expr;
   }
 

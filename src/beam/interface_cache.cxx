@@ -45,7 +45,7 @@ constexpr size_t kIfaces = 14;
 constexpr size_t kModulePair = 2;
 constexpr size_t kModuleBody = 6;
 constexpr size_t kSignature = 9;
-constexpr size_t kFn = 16;
+constexpr size_t kFn = 17;
 constexpr size_t kTrait = 5;
 constexpr size_t kAdt = 8;
 constexpr size_t kDistinct = 3;
@@ -373,7 +373,8 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
                          Term::boolean(fn.remoteSlot),
                          Term::binary(fn.constructorOwner),
                          Term::binary(fn.implementation),
-                         Term::boolean(fn.foreignTarget)},
+                         Term::boolean(fn.foreignTarget),
+                         Term::boolean(fn.aliasReceiver)},
                         schema::kFn, "fn");
 }
 
@@ -405,6 +406,7 @@ auto functionFromSax(SaxReader& sax) -> kex::semantic::ImportedFunction {
     fn.constructorOwner = sax.readBinary();
     fn.implementation = sax.readBinary();
     fn.foreignTarget = sax.readBool();
+    fn.aliasReceiver = sax.readBool();
     return fn;
 }
 

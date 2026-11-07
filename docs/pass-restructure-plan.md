@@ -887,6 +887,31 @@ name at arities 1–4 pointing at `kex_prelude`) and the search's
 `preferExternalReceivers` clause are deleted; the flag that remains,
 `lowersPrelude`, only keeps the prelude's own `to` forwarding. Search runs
 in the prelude build: 808 → 0; over all of `make test-all`: 351.
+Then (same day):
+- The REPL's check has the linked set too (`providerModules`, shared with
+  the separate build).
+- A type of a unit compiled apart that answers a call itself is the target
+  of that module's dispatcher (`connection.close`).
+- Trait default bodies are checked, with `this` as `This`, and a call on it
+  is Dispatch. The prelude verifies with no undecided site, trait bodies
+  included (`forEachFunction` walks them).
+- A provider declared for a type alias (`FS.Path.join` over `FilePath`) is
+  reached only through a static type, never by the value (decided by the
+  user, keeping what lowering did): `ImportedFunction::aliasReceiver`, set
+  from the prelude's source and from KexI.
+
+- `&.method(args)` is `{ |__shorthand| __shorthand.method(args) }`, as its
+  chained form already was: the parser hangs that lambda on the
+  `ShorthandLambda` node, which only reflection (`Kex.AST`) still reads as
+  written. Every other pass reads the lambda, so the call in it is checked
+  and decided like any other; the walker's two shorthand evaluators and
+  lowering's own call node for it are gone. The walker now evaluates the
+  arguments on each call, as BEAM did.
+
+Search runs over `make test-all`: 351 → 94. What is left: run-time choices
+among several providers (`showValue`, `any?`/`all?`, `to`: about 40), bare
+function values (`~digit?`: lowering still builds its own call node for
+them), and programs that are not checked (about 15).
 The cascade's traffic halved (7.7k → 4.3k calls), and
 coverage then showed the `externalImports` path (a `using`-imported
 function of a unit compiled apart), the imported clause's unplaced

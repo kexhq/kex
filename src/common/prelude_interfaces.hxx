@@ -631,10 +631,20 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         return sig;
     };
 
+    // Whether a receiver parameter is written as one of the type aliases. An
+    // opaque type (`type Range`, recorded as an alias of Unknown) is nominal.
+    auto namesAlias = [&](const ast::TypeExpr* written) {
+        const auto* name = written ? std::get_if<ast::TypeName>(&written->kind) : nullptr;
+        if (!name || name->parts.empty()) return false;
+        const auto alias = typeAliases.find(name->parts.back());
+        return alias != typeAliases.end() && alias->second &&
+               !std::holds_alternative<kex::semantic::UnknownType>(alias->second->kind);
+    };
+
     auto addReceiverSig = [&](const std::string& mod,
                               const kex::semantic::Signature& sig,
                               std::vector<std::string> paramNames = {},
-                              bool foreignTarget = false) {
+                              bool foreignTarget = false, bool aliasReceiver = false) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
@@ -647,6 +657,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 (sig.isFoul ? 1 : 0);
         }
         ifn.isReceiverMethod = true;
+        ifn.aliasReceiver = aliasReceiver;
         ifn.foreignTarget = foreignTarget;
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
         ifaces.receiverFunctions[sig.name].push_back(ifn);
@@ -1035,7 +1046,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                         moduleName, *sig,
                                         std::vector<std::string>(
                                             paramNames.begin() + 1,
-                                            paramNames.end()));
+                                            paramNames.end()),
+                                        false,
+                                        clause->params.front().type &&
+                                            namesAlias(clause->params.front().type->get()));
                                 }
                             }
                     }
@@ -1067,8 +1081,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         // during UFCS selection.
                         qualifySignature(sig);
                         addModuleSig(moduleName, sig, sig.paramNames);
-                        if (directBackendOwnership && !sig.params.empty())
-                            addReceiverSig(moduleName, sig);
+                        if (directBackendOwnership && !sig.params.empty()) {
+                            const auto* function = (*ann)->type
+                                ? std::get_if<ast::FunctionType>(&(*ann)->type->kind) : nullptr;
+                            addReceiverSig(moduleName, sig, {}, false,
+                                           function && function->param &&
+                                               namesAlias(function->param.get()));
+                        }
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
                     if (*make) collectMakeAnnotations(**make, moduleName, &ownTypes);
