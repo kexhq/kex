@@ -30,4 +30,19 @@ inline const std::string kThisType = "This";
 inline const std::string kTrue = "True";
 inline const std::string kFalse = "False";
 
+// The name that binds nothing: a `_` parameter, pattern, or loop counter.
+inline const std::string kWildcard = "_";
+inline auto isWildcard(const std::string& name) -> bool { return name == kWildcard; }
+
+// The atom a caller passes for an argument it leaves out: the callee puts
+// its own default in its place on entry, checked and lowered in its own
+// scope. A unit compiled apart needs nothing of the default but this.
+inline const std::string kDefaultArgument = "$kex_default";
+
+// What every record-declaring module answers a field's declared default
+// with, as `__kex_record_default(Tag, Field)`, and its answer for a field
+// without one. The runtime's hot-reload migration calls it too.
+inline const std::string kRecordDefaultFunction = "__kex_record_default";
+inline const std::string kNoRecordDefault = "kex_no_default";
+
 } // namespace kex::names

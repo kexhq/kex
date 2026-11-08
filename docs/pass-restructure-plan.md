@@ -1033,7 +1033,46 @@ Then (same day):
   (`Signature::clause`), the HIR answers the selected signature by call
   node, and lowering places a labelled call's arguments into the clause the
   checker chose rather than choosing one by labels itself (`namedClause`
-  and `selectClause` are deleted).
+  and `selectClause` are deleted). `makeMethodFor` takes the method
+  whose clause the checker selected; only the extension entry (the first
+  module in path order) is still lowering's. `trailingMakeDefaults` and
+  `methodDefaults` are deleted: with the selected clause placing every
+  positional call that leaves defaults out, neither padded a call in
+  `make test-all`.
+  - Not yet: `ownedMakeFunction` (does the receiver's own make function
+    take the capability context). Over the spec suites the checker
+    selects no clause for 86 of the 143 calls it answers, 12 of them to a
+    `foul` function. Recording `ownTypeAnswers`' one declared signature
+    as the selection, and linking `:>`-annotated methods to their clause,
+    covered one more. The rest need checker work: inherited trait
+    defaults (`describe`, `passing?`), `this.helper(x)` with an untyped
+    argument left to Dispatch (`Mock.Files.cannedRead`, `contains?`),
+    Undecided private helpers (`Measure.productKind`), and stdlib types
+    checked from their interface, whose signatures carry no clause.
+  - A namespaced call into this unit's own module (`Util.double(21)`)
+    reaches the function the checker named (`checkedCallModule`: the
+    selected signature's scope, the owner of a Dispatch or value call,
+    the module of a constructor's type) instead of trying each module
+    path candidate. A re-export (`Toolkit.Numbers.double`) is the function
+    itself. The same answer (with an Imported target's selected signature)
+    serves calls into units compiled apart and the capability check, so
+    `modulePathCandidates` and `capabilityModuleNamed` are deleted: lowering
+    searches no module paths.
+  - Defaults across units (decided 2026-11-08, the user's choice; defaults
+    are pure): the callee fills its own. A caller compiled apart passes
+    the sentinel atom `'$kex_default'` (`names::kDefaultArgument`) for
+    each argument it leaves out, and the function rebinds each defaulted
+    parameter on entry, the default lowered in its own scope and already
+    checked; a type guard on such a parameter accepts the sentinel. A
+    record from another unit takes each field it leaves out from its
+    module's `__kex_record_default(Tag, Field)`, which every module that
+    declares a record with defaults now has (it was served records only).
+    Lowering parses nothing any more: `importedDefault`, its cache, and
+    `lowerFieldDefault`'s guess at short module names are deleted. The
+    interface keeps the default text only as "has a default".
+  - The HIR's node numbering (and every "body that runs" walk) now covers
+    parameter and record-field defaults (`forEachBodyExpr`, over the new
+    `forEachDeclared`), so a persisted HIR keeps their decisions.
 
 Search runs over `make test-all`: 351 → 47, none of them unchecked. What
 is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided

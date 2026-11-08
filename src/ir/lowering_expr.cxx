@@ -833,7 +833,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // them in one head (`{ |key, _, _| key }`) were a
                 // duplicate variable and erlc refused the module. Each
                 // one is a fresh name nothing reads.
-                if (p.name == "_") {
+                if (names::isWildcard(p.name)) {
                     lam.params.push_back(fresh("Ignored"));
                     continue;
                 }
@@ -1383,54 +1383,15 @@ auto Lowering::blockFitsExactOverload(const std::string& key, size_t count) cons
     return exact && misplaced;
 }
 
-// A callee compiled apart: no AST of its own to read a default from,
-// only the source text its interface keeps. Parsed once; null for a
-// parameter without one, or a default that no longer parses alone.
-auto Lowering::importedDefault(const std::string& source) -> const ast::ExprPtr* {
-    if (source.empty()) return nullptr;
-    auto [entry, added] = importedDefaults.try_emplace(source);
-    if (added) {
-        Lexer lexer(source, "<default>");
-        Parser parser(lexer.tokenizeAll(), "<default>");
-        auto expr = parser.parseExpr();
-        if (parser.diagnostics().empty()) entry->second = std::move(expr);
-    }
-    return entry->second ? &entry->second : nullptr;
-}
-
-// fillDefaultSlots for such a callee: `slots` are its parameters after
-// the receiver, a missing one filled with its default, read in the
-// callee's own module, where an earlier parameter is in scope by name.
-auto Lowering::fillImportedDefaults(const std::string& sourceModule,
-                          const std::vector<std::string>& paramNames,
-                          const std::vector<std::string>& defaultSources,
-                          std::vector<ExprPtr>& slots,
-                          std::vector<Binding>& binds) -> void {
-    const auto savedSubst = subst;
-    const auto savedModule = currentModulePath;
-    currentModulePath = sourceModule;
-    for (size_t i = 0; i < slots.size(); ++i) {
-        if (!slots[i]) {
-            const auto* fallback = i < defaultSources.size()
-                ? importedDefault(defaultSources[i]) : nullptr;
-            slots[i] = fallback ? atomize(*fallback, binds)
-                                : lit(LitKind::None, "none");
-        }
-        const auto bound = fresh("DefaultArg");
-        binds.push_back({bound, std::move(slots[i])});
-        slots[i] = var(bound);
-        if (i < paramNames.size() && !paramNames[i].empty())
-            subst[paramNames[i]] = bound;
-    }
-    subst = savedSubst;
-    currentModulePath = savedModule;
-}
-
-auto Lowering::fillImportedDefaults(const semantic::ResolvedCallTarget& target,
-                          std::vector<ExprPtr>& slots,
-                          std::vector<Binding>& binds) -> void {
-    fillImportedDefaults(target.sourceModule, target.paramNames,
-                         target.defaultSources, slots, binds);
+// A callee compiled apart fills its own defaults: each argument left out
+// for a parameter that has one is the sentinel (names::kDefaultArgument),
+// any other `none`.
+auto Lowering::fillOmittedArguments(const std::vector<std::string>& defaults,
+                                    std::vector<ExprPtr>& slots) -> void {
+    for (size_t i = 0; i < slots.size(); ++i)
+        if (!slots[i])
+            slots[i] = i < defaults.size() && !defaults[i].empty()
+                ? defaultArgument() : lit(LitKind::None, "none");
 }
 
 auto Lowering::fillDefaultSlots(const std::string& name,
@@ -1641,59 +1602,6 @@ auto Lowering::ownedMakeFunction(const ast::MethodCall& n, size_t explicitArgs) 
         if (!loose) loose = &method;
     }
     return loose;
-}
-
-// The defaults a positional receiver call leaves out, in order. They are
-// the ones of the function the RECEIVER's type declares: by name alone, a
-// `Builder.string(label, primaryKey = false, ...)` anywhere in the unit
-// padded every other type's `string` out to its arity (kexhq/kex#475).
-auto Lowering::trailingMakeDefaults(const ast::MethodCall& n) const
-    -> std::vector<const ast::ExprPtr*> {
-    std::vector<const ast::ExprPtr*> trailing;
-    auto owner = receiverOwner(n);
-    if (auto angle = owner.find('<'); angle != std::string::npos)
-        owner.resize(angle);
-    owner = canonicalRecordName(owner);
-    const std::vector<MakeMethod>* methods = nullptr;
-    if (auto found = makeMethods.find(n.method); found != makeMethods.end())
-        methods = &found->second;
-    const bool owned = methods && !owner.empty() &&
-        std::any_of(methods->begin(), methods->end(),
-                    [&](const MakeMethod& method) {
-                        return method.owner == owner;
-                    });
-    if (owned) {
-        // An overload the arguments already fill needs nothing padded,
-        // and one that leaves out a parameter with no default cannot be
-        // the call's: `this.all` beside `all(as: T, renamed = {})` was
-        // padded with `renamed` alone, to an `all/3` nobody declared
-        // (kexhq/kex#531).
-        for (const auto& method : *methods)
-            if (method.owner == owner &&
-                method.def->clauses[0].params.size() == n.args.size())
-                return trailing;
-        for (const auto& method : *methods) {
-            if (method.owner != owner) continue;
-            const auto& params = method.def->clauses[0].params;
-            if (params.size() <= n.args.size()) continue;
-            if (!std::all_of(params.begin() + static_cast<std::ptrdiff_t>(n.args.size()),
-                             params.end(),
-                             [](const ast::Param& param) {
-                                 return param.defaultValue.has_value();
-                             }))
-                continue;
-            for (size_t i = n.args.size(); i < params.size(); ++i)
-                trailing.push_back(&*params[i].defaultValue);
-            break;
-        }
-        return trailing;
-    }
-
-    if (auto found = methodDefaults.find(n.method);
-        found != methodDefaults.end())
-        for (size_t i = n.args.size(); i < found->second.size(); ++i)
-            if (found->second[i]) trailing.push_back(found->second[i]);
-    return trailing;
 }
 
 // The receiver type the checker settled on for this call, "" when it did

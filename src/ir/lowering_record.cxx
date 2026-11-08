@@ -211,45 +211,29 @@ auto Lowering::makeAccessors(const std::unordered_set<std::string>& definedFns,
 }
 
 
-auto Lowering::modulePathCandidates(const std::vector<std::string>& path) const
-    -> std::vector<std::string> {
-    std::string explicitPath;
-    for (std::size_t i = 0; i < path.size(); ++i) {
-        if (i) explicitPath += ".";
-        explicitPath += path[i];
+// The module whose function a namespaced call `Path.f(...)` reaches, as the
+// checker named it: the selected signature's scope, the scope of the name a
+// run-time dispatch or a value call is decided on, or the module of the
+// type a constructor builds. A re-export (`Toolkit.Numbers.double`) is the
+// function itself. "" when the checker named none.
+auto Lowering::checkedCallModule(const ast::MethodCall& n) const -> std::string {
+    const auto& target = hir->targetOf(n);
+    switch (target.kind) {
+    case hir::TargetKind::Selected:
+    case hir::TargetKind::Imported:
+        if (const auto* signature = hir->selectedSignatureOf(n))
+            return kex::mangle::scopeOf(signature->name);
+        return {};
+    case hir::TargetKind::Dispatch:
+    case hir::TargetKind::ValueCall:
+        return kex::mangle::scopeOf(target.owner);
+    case hir::TargetKind::Constructor: {
+        const auto dot = target.owner.rfind('.');
+        return dot == std::string::npos ? std::string{} : target.owner.substr(0, dot);
     }
-    // The literal path always wins over an alias expansion — see
-    // registerModuleAliases. `Data.Set.from(…)` must stay `Data.Set.from`,
-    // not become `Units.Data.Set.from`, in a file that also `using`s
-    // `Units.Data` (kexhq/kex#229, kexhq/kex#233).
-    std::vector<std::string> candidates{explicitPath};
-    if (path.empty()) return candidates;
-    if (auto alias = moduleAliases.find(path.front()); alias != moduleAliases.end()) {
-        auto aliased = alias->second;
-        for (std::size_t i = 1; i < path.size(); ++i) aliased += "." + path[i];
-        candidates.push_back(std::move(aliased));
+    default:
+        return {};
     }
-    if (!currentModulePath.empty() && path.size() == 1)
-        candidates.push_back(currentModulePath + "." + explicitPath);
-    // Every enclosing module, innermost first, and the modules a `using`
-    // opened: `Headers.empty` inside `Net.HTTP.HTTP` is
-    // `Net.HTTP.Headers.empty` (kexhq/kex#476).
-    for (auto scope = currentModulePath; !scope.empty();) {
-        const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
-        scope.resize(dot);
-        candidates.push_back(scope + "." + explicitPath);
-    }
-    for (const auto& imported : usingModules)
-        candidates.push_back(imported + "." + explicitPath);
-    return candidates;
-}
-
-auto Lowering::capabilityModuleNamed(const std::vector<std::string>& path) const
-    -> std::string {
-    for (const auto& candidate : modulePathCandidates(path))
-        if (isCapabilityModule(candidate)) return candidate;
-    return {};
 }
 
 } // namespace kex::ir
@@ -285,10 +269,7 @@ auto Lowering::providerChoice(const ast::MethodCall& n,
     for (const auto& alternative : target.alternatives) {
         if (!alternative.receiverType.empty()) continue;
         MatchClause arm;
-        auto owner = std::make_unique<Pattern>();
-        owner->kind = PatKind::Lit;
-        owner->litKind = LitKind::Atom;
-        owner->litText = alternative.backendModule;
+        auto owner = atomPattern(alternative.backendModule);
         arm.patterns.push_back(std::move(owner));
         arm.body = call(alternative.backendModule, alternative.backendFunction);
         byOwner.clauses.push_back(std::move(arm));

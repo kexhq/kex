@@ -283,10 +283,7 @@ auto Lowering::capabilityDispatchLowered(
     m.subjects.push_back(callE("maps", "get", 3, std::move(getArgs)));
 
     MatchClause missing;
-    auto undef = std::make_unique<Pattern>();
-    undef->kind = PatKind::Lit;
-    undef->litKind = LitKind::Atom;
-    undef->litText = "undefined";
+    auto undef = atomPattern("undefined");
     missing.patterns.push_back(std::move(undef));
     missing.body = directCall(varsOf());
     m.clauses.push_back(std::move(missing));
@@ -799,23 +796,6 @@ auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
     currentModulePath = info.owner;
     if (!info.imports.empty()) moduleImports = info.imports;
     if (!info.aliases.empty()) moduleAliases = info.aliases;
-    // KexI carries an external record's default source, but not the
-    // declaring file's `using` clauses. Resolve a short module name in
-    // that source when exactly one loaded module has it (`Headers.empty`
-    // in Metro.WebRequest's default is Net.HTTP.Headers.empty).
-    if (info.imports.empty() && info.aliases.empty() && externalModules) {
-        std::unordered_map<std::string, std::string> shortModules;
-        std::unordered_set<std::string> ambiguous;
-        for (const auto& [name, _] : externalModules->nameToAtom) {
-            const auto dot = name.rfind('.');
-            const auto shortName = name.substr(dot == std::string::npos ? 0 : dot + 1);
-            auto [it, added] = shortModules.try_emplace(shortName, name);
-            if (!added && it->second != name) ambiguous.insert(shortName);
-        }
-        for (const auto& [shortName, name] : shortModules)
-            if (!ambiguous.count(shortName))
-                moduleAliases.try_emplace(shortName, name);
-    }
     auto result = lower(e);
     currentModulePath = std::move(savedPath);
     moduleImports = std::move(savedImports);

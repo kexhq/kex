@@ -62,8 +62,8 @@ struct ExternalModules {
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
     std::unordered_map<std::string, std::vector<std::string>> exportParamNames;
-    // Imported exports' defaults as source text, for one compiled apart
-    // (KexiExport::defaultSources), by the same key.
+    // Imported exports' defaults as source text (KexiExport::defaultSources),
+    // by the same key: which parameters have one, for the sentinel.
     std::unordered_map<std::string, std::vector<std::string>> exportDefaults;
     // Imported exports that are `foul`. A foul function takes the capability
     // context, so a call into one has to append it — without this a consumer

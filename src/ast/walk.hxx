@@ -197,22 +197,23 @@ auto forEachGuard(const Expr& expr, OnGuard&& onGuard) -> void {
     forEachChild(expr, [&](const ExprPtr& child) { forEachGuard(*child, onGuard); });
 }
 
-// Calls `visit(const FunctionDef&)` on every function `program` defines: at
-// top level, in modules at any depth, in `make` and visibility blocks inside
-// either, and a trait's default methods.
-template <typename Visit>
-auto forEachFunction(const Program& program, Visit&& visit) -> void {
+// Calls `visit(const Node&)` on every `Node` (a FunctionDef or a RecordDef)
+// `program` declares: at top level, in modules at any depth, in `make` and
+// visibility blocks inside either, and a trait's default methods.
+template <typename Node, typename Visit>
+auto forEachDeclared(const Program& program, Visit&& visit) -> void {
     auto items = [&](auto& self, const auto& list) -> void {
         for (const auto& item : list)
             std::visit([&](const auto& node) {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<FunctionDef>>) {
+                if constexpr (std::is_same_v<T, std::unique_ptr<Node>>) {
                     if (node) visit(*node);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<ModuleDef>>) {
                     if (node) self(self, node->body);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
                     if (node) self(self, node->body);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>>) {
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>> &&
+                                     std::is_same_v<Node, FunctionDef>) {
                     if (node)
                         for (const auto& member : node->body)
                             if (const auto* fn = std::get_if<std::unique_ptr<FunctionDef>>(&member);
@@ -226,15 +227,28 @@ auto forEachFunction(const Program& program, Visit&& visit) -> void {
     items(items, program.items);
 }
 
-// Calls `visit(const Expr&)` on each top-level expression of every body that
-// runs: function clauses (wherever `forEachFunction` finds them) and main
-// blocks.
+// Every function `program` defines (forEachDeclared).
+template <typename Visit>
+auto forEachFunction(const Program& program, Visit&& visit) -> void {
+    forEachDeclared<FunctionDef>(program, std::forward<Visit>(visit));
+}
+
+// Calls `visit(const Expr&)` on each top-level expression of everything that
+// runs: function clauses (wherever `forEachFunction` finds them), their
+// parameters' defaults, record fields' defaults, and main blocks.
 template <typename Visit>
 auto forEachBodyExpr(const Program& program, Visit&& visit) -> void {
     forEachFunction(program, [&](const FunctionDef& function) {
-        for (const auto& clause : function.clauses)
+        for (const auto& clause : function.clauses) {
+            for (const auto& param : clause.params)
+                if (param.defaultValue && *param.defaultValue) visit(**param.defaultValue);
             for (const auto& expr : clause.body)
                 if (expr) visit(*expr);
+        }
+    });
+    forEachDeclared<RecordDef>(program, [&](const RecordDef& record) {
+        for (const auto& field : record.fields)
+            if (field.defaultValue && *field.defaultValue) visit(**field.defaultValue);
     });
     for (const auto& item : program.items)
         if (const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
