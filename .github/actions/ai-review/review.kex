@@ -486,7 +486,7 @@ let mergeByLocation(findings) do
           file: first.file,
           startLine: first.startLine,
           endLine: last > first.startLine then Just(last) else None,
-          severity: group.maxBy { |f| rank(f.severity) }.map(&.severity).or(first.severity),
+          severity: group.sort { |a, b| rank(a.severity) > rank(b.severity) }.first.map(&.severity).or(first.severity),
           comment: group.map(&.comment).join("\n\n---\n\n")
         }]
       end

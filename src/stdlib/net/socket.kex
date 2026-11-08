@@ -251,18 +251,6 @@ capability TCP do
     Kex.Intrinsic.NetTCP.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
     return ()
   end
-  # Reads the next chunk of bytes, up to 64 KiB: whatever the peer has sent.
-  #
-  # Answers +Ok(None)+ once the peer has closed, like +FileHandle.get+.
-  #
-  # @example Reading whatever arrived
-  #   let chunk = connection.get.try
-  foul get(connection: TCPConnection) -> Result<Binary?, NetError> do
-    match Kex.Intrinsic.NetTCP.receiveChunk(connection, 65536) do
-      Ok(bytes) => return Ok(Just(bytes))
-      Error(e) => return e.kind == Closed then Ok(None) else Error(e)
-    end
-  end
   # Reads the next line as text, without its newline.
   #
   # Answers +Ok(None)+ at end of input, like +FileHandle.readLine+. Lines are
@@ -709,18 +697,6 @@ capability Unix do
     Kex.Intrinsic.NetUnix.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
     return ()
   end
-  # Reads the next chunk of bytes, up to 64 KiB: whatever the peer has sent.
-  #
-  # Answers +Ok(None)+ once the peer has closed, like +FileHandle.get+.
-  #
-  # @example Reading whatever arrived
-  #   let chunk = connection.get.try
-  foul get(connection: UnixConnection) -> Result<Binary?, NetError> do
-    match Kex.Intrinsic.NetUnix.receiveChunk(connection, 65536) do
-      Ok(bytes) => return Ok(Just(bytes))
-      Error(e) => return e.kind == Closed then Ok(None) else Error(e)
-    end
-  end
   # Reads the next line as text, without its newline.
   #
   # Answers +Ok(None)+ at end of input, like +FileHandle.readLine+. Lines are
@@ -859,18 +835,6 @@ capability TLS do
     Kex.Intrinsic.NetTLS.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
     return ()
   end
-  # Reads the next chunk of bytes, up to 64 KiB: whatever the peer has sent.
-  #
-  # Answers +Ok(None)+ once the peer has closed, like +FileHandle.get+.
-  #
-  # @example Reading whatever arrived
-  #   let chunk = connection.get.try
-  foul get(connection: TLSConnection) -> Result<Binary?, NetError> do
-    match Kex.Intrinsic.NetTLS.receiveChunk(connection, 65536) do
-      Ok(bytes) => return Ok(Just(bytes))
-      Error(e) => return e.kind == Closed then Ok(None) else Error(e)
-    end
-  end
   # Receives one decrypted chunk no larger than +limit+.
   foul receiveChunk(connection: TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTLS.receiveChunk(connection, limit)
   # @return [Bool] whether the TLS connection owner has stopped
@@ -986,7 +950,6 @@ module Mock do
     foul writeLine(connection, content) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul print(connection, content) = ()
     foul printLine(connection, content) = ()
-    foul get(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul readLine(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul getLine(connection) = None
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TCP, "TCP has no connection")
@@ -1046,7 +1009,6 @@ module Mock do
     foul writeLine(connection, content) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul print(connection, content) = ()
     foul printLine(connection, content) = ()
-    foul get(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul readLine(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul getLine(connection) = None
     foul receiveChunk(connection, limit) = refusing(@failure, Net.Unix, "Unix has no connection")
@@ -1067,7 +1029,6 @@ module Mock do
     foul writeLine(connection, content) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul print(connection, content) = ()
     foul printLine(connection, content) = ()
-    foul get(connection) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul closed?(connection) = true
   end
