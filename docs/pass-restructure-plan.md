@@ -931,6 +931,34 @@ Then (same day):
 - A trait default a type of a unit compiled apart inherits (`set.any?`,
   Foldable's) is the target of the type's home module, which forwards it
   under the method's own name; the search guarded it beside the prelude's.
+- A constant a `using` imports from a unit compiled apart (`STATUSES`) is
+  a constant to the check (`constantType`), not a module: `STATUSES.map`
+  was checked as a call into a module of that name, decided nothing, and
+  left the call to the search. Search runs: 47 → 26.
+- A method call the check rejects, though its receiver is one the method
+  takes (a truthy block for `filter`), is lowered only where the check does
+  not gate the build (`--no-check`), and there the value decides: it is
+  Dispatch. A receiver no candidate takes (`"a b".whiteSpaces`) keeps the
+  search's failure, which names the call's location.
+- Lowering no longer sets aside the checker's target for a call on `this`
+  (a rule from kexhq/kex#143 that made every `this.x` the search's). A
+  call on a trait's `This` is the type claiming it, in the copy of the
+  default lowered for that type: Dispatch, never an import's target
+  (`Repeatable`'s `this.repeat` beside the prelude's Monoid `repeat`).
+- A sized number claims what its family's `make` claims (`make Float,
+  implement: Blankable` covers a Float64): `1.5.present?` found no
+  candidate, its implementor key being `Float64`. One `familyKey` serves
+  the list, map and optional families too.
+- A rejected call whose candidates are all records' methods, on a receiver
+  that is no such record (`"a b".whiteSpaces`), is `Hidden`: no value
+  reaches one, and both backends raise the undefined method where it is
+  written (the walker naming the receiver as BEAM does,
+  `Result<Date, ?>`, not its constructor).
+- **The provider search is gone** (204 lines → a 40-line fallback). A call
+  the checker left to the value with no target goes to the one module
+  answering it at that arity, else to the prelude's dispatcher; choosing
+  among several modules' providers is the checker's alone (its
+  alternatives). `lowering_method_call.cxx`: 1,558 → 1,396 lines.
 
 Search runs over `make test-all`: 351 → 47, none of them unchecked. What
 is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided

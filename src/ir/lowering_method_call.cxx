@@ -252,10 +252,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 knownTypes.count(uid->name) &&
                 typeOwnsStaticFunction(uid->name, n.method);
         }
-        if (auto* id = std::get_if<ast::Identifier>(&n.receiver->kind))
-            localTypeShadows = id->name == "this";
-        if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
-            localTypeShadows = true;
         auto resolved = resolvedCalls->find(&n);
         const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty() &&
@@ -1189,208 +1185,46 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         return ret(undefinedMethod(n.method, rv(), hint));
     }
 
-    // External receiver functions take priority over prelude for UFCS.
-    // The registry includes only package-declared provider modules here;
-    // ordinary module exports never become receiver functions implicitly.
-    if (externalModules
-        && (!localMethods.count(m) || !localArityExists)) {
-        auto found = externalModules->receiverFunctions.find(m);
-        if (found != externalModules->receiverFunctions.end()) {
-            // A unit's `make` for a type declared outside its module is in
-            // scope only through `using` that module. A call only such a
-            // `make` takes was decided `Hidden` by the checker (above).
-            std::vector<ExternalModules::ReceiverFunction> providers;
+    // A call the checker left to the value with no target of its own: the
+    // one module answering it at this arity, else the prelude's dispatcher,
+    // which looks the method up on the value as the walker does. Several
+    // modules' providers are the checker's choice (its alternatives), never
+    // made here.
+    if (externalModules && (!localMethods.count(m) || !localArityExists)) {
+        if (const auto found = externalModules->receiverFunctions.find(m);
+            found != externalModules->receiverFunctions.end()) {
+            const int arity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+                              (n.block ? 1 : 0);
+            std::map<std::string, std::vector<const ExternalModules::ReceiverFunction*>> byModule;
             for (const auto& candidate : found->second) {
+                if (candidate.beamArity != arity) continue;
                 std::string module;
                 for (const auto& [name, atom] : externalModules->nameToAtom)
                     if (atom == candidate.moduleAtom) module = name;
-                // The prelude's own modules are imported automatically; only a unit of
-                // this build is held behind its `using`, as the checker holds it.
-                if (!candidate.compiledApart || !candidate.foreignTarget || module.empty() ||
-                    moduleInScope(module))
-                    providers.push_back(candidate);
-            }
-            int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
-                              (n.block ? 1 : 0);
-            const ExternalModules::ReceiverFunction* match = nullptr;
-            bool sameModuleOverloads = false;
-            // Several units' generic dispatchers beside the prelude's, for a
-            // receiver whose type is known only at run time: the value's
-            // registered owner picks one, and the prelude's takes the rest, as
-            // a merged program's one dispatcher would.
-            std::vector<const ExternalModules::ReceiverFunction*> ownerDispatchers;
-            // Providers in more than one module: the one the checker
-            // chose, or else the one for the receiver's static type
-            // (`status.showValue` is Net.HTTP.Status's, not the
-            // prelude's), when that leaves a single module.
-            std::string providerModule;
-            {
-                std::set<std::string> modules;
-                for (const auto& candidate : providers)
-                    if (candidate.beamArity == actualArity)
-                        modules.insert(candidate.moduleAtom);
-                // The receiver's static type picks the providers declared
-                // for it (`raw.close` on a TCPConnection, beside the
-                // prelude's FileHandle one), when they are one module's.
-                if (modules.size() > 1 && providerModule.empty())
-                    if (const auto type = staticTypeOf(n.receiver.get())) {
-                        const auto written = semantic::typeToString(type);
-                        const auto last = [](const std::string& name) {
-                            const auto dot = name.rfind('.');
-                            return dot == std::string::npos ? name : name.substr(dot + 1);
-                        };
-                        std::set<std::string> owners;
-                        for (const auto& candidate : providers)
-                            if (candidate.beamArity == actualArity &&
-                                !candidate.receiverType.empty() &&
-                                last(candidate.receiverType) == last(written))
-                                owners.insert(candidate.moduleAtom);
-                        if (owners.size() == 1) providerModule = *owners.begin();
-                    }
-                // Still undecided between units' providers for their own
-                // types and the prelude's: each of them for a value of its
-                // type, the prelude's dispatcher for every other, decided
-                // at run time as the merged build's local dispatcher
-                // decides (`"${text}"` beside Net.HTTP's own `showValue`).
-                const bool typedBesidePrelude =
-                    modules.size() > 1 && providerModule.empty() &&
-                    modules.count(names::kPreludeModule) &&
-                    std::all_of(providers.begin(), providers.end(),
-                                [&](const auto& candidate) {
-                                    return candidate.beamArity != actualArity ||
-                                           candidate.moduleAtom == names::kPreludeModule ||
-                                           !candidate.receiverType.empty();
-                                });
-                if (typedBesidePrelude && modules.size() == 2) {
-                    // One unit: its provider is the call, whose labels
-                    // its own parameters place; dualProviderDispatch
-                    // below guards it and falls back to the prelude.
-                    const auto other = *std::find_if(
-                        modules.begin(), modules.end(),
-                        [](const std::string& module) { return module != names::kPreludeModule; });
-                    const bool guardable = std::all_of(
-                        providers.begin(), providers.end(),
-                        [&](const auto& candidate) {
-                            if (candidate.beamArity != actualArity ||
-                                candidate.moduleAtom != other) return true;
-                            return records.count(canonicalRecordName(candidate.receiverType)) ||
-                                   primGuardBifs().count(candidate.receiverType);
-                        });
-                    // A type alias such as FilePath has no safe runtime
-                    // guard here. For an erased receiver, the prelude's
-                    // dispatcher handles List.join/2 and Range.join/2.
-                    providerModule = guardable ? other : names::kPreludeModule;
-                }
-            }
-            if (providerModule.empty() && n.namedArgs.empty()) {
-                // The prelude's typed entries are its one dispatcher's arms; the
-                // units' must be dispatchers too.
-                std::set<std::string> modules;
-                bool unitsGeneric = true, preludeGeneric = false;
-                for (const auto& candidate : providers) {
-                    if (candidate.beamArity != actualArity) continue;
-                    modules.insert(candidate.moduleAtom);
-                    if (candidate.moduleAtom == names::kPreludeModule)
-                        preludeGeneric = preludeGeneric || candidate.receiverType.empty();
-                    else
-                        unitsGeneric = unitsGeneric && candidate.receiverType.empty();
-                }
-                if (unitsGeneric && preludeGeneric && modules.size() > 1) {
-                    providerModule = names::kPreludeModule;
-                    std::set<std::string> taken;
-                    for (const auto& candidate : providers)
-                        if (candidate.beamArity == actualArity &&
-                            candidate.moduleAtom != names::kPreludeModule &&
-                            taken.insert(candidate.moduleAtom).second)
-                            ownerDispatchers.push_back(&candidate);
-                }
-            }
-            for (const auto& candidate : providers) {
-                if (candidate.beamArity != actualArity) continue;
-                if (!providerModule.empty() && candidate.moduleAtom != providerModule)
+                // A unit's `make` for a type declared outside its module is
+                // in scope only through `using` that module.
+                if (candidate.compiledApart && candidate.foreignTarget && !module.empty() &&
+                    !moduleInScope(module))
                     continue;
-                if (match) {
-                    if (match->moduleAtom == candidate.moduleAtom) {
-                        sameModuleOverloads = true;
-                        continue;
-                    }
-                    return ret(runtimeError(
-                        "Ambiguous receiver function: " + m + "/" +
-                        std::to_string(actualArity)));
-                }
-                match = &candidate;
+                byModule[candidate.moduleAtom].push_back(&candidate);
             }
-            if (match) {
-                std::vector<ExprPtr> pargs;
-                pargs.push_back(rv());
+            const auto chosen = byModule.size() == 1 ? byModule.begin()
+                                                     : byModule.find(names::kPreludeModule);
+            if (chosen != byModule.end()) {
                 if (!n.namedArgs.empty())
                     throw LowerError("IR lower: named arguments to `" + m +
-                                     "` reached the provider search unplaced");
-                {
-                    for (const auto& a : n.args)
-                        pargs.push_back(atomize_ir(lower(a), rb));
-                    if (n.block)
-                        pargs.push_back(atomize_ir(lower(*n.block), rb));
-                }
-                if (std::getenv("KEX_DEBUG_TO2") && m == "to")
-                    std::fprintf(stderr,
-                                 "[ufcs] mod=%s fn=%s arity=%d same=%d\n",
-                                 match->moduleAtom.c_str(),
-                                 match->beamFunction.c_str(), actualArity,
-                                 static_cast<int>(sameModuleOverloads));
-                const auto function =
-                    sameModuleOverloads ? m : match->beamFunction;
-                // A package provider owns this name for ITS receiver type
-                // only. Binding every call to it is right when the
-                // receiver's static type says so — and wrong otherwise,
-                // which is common: a constructor-pattern binding
-                // (`Just(d) ->`) carries no type, so `d.get(:year, "?")`
-                // on a Map went to `Kex.Regex:get/3` (Match's accessor)
-                // and died with function_clause, where the walker
-                // dispatched on the value and read the map
-                // (examples/regexes.kex).
-                //
-                // When the prelude provides the same name at the same
-                // arity, keep BOTH: guard on the provider's receiver type
-                // and fall back to the prelude's dispatcher, which is the
-                // walker's runtime dispatch spelled in Core Erlang.
-                if (!ownerDispatchers.empty()) {
-                    const auto callWith = [&](const std::string &module,
-                                              const std::string &fn) {
-                        std::vector<ExprPtr> copies;
-                        for (const auto& arg : pargs) copies.push_back(clone(arg));
-                        return callE(module, fn, actualArity, std::move(copies));
-                    };
-                    Match byOwner;
-                    byOwner.subjects.push_back(
-                        callE("kex_io", "method_owner", 1, one(clone(pargs.front()))));
-                    for (const auto* provider : ownerDispatchers) {
-                        MatchClause arm;
-                        auto owner = std::make_unique<Pattern>();
-                        owner->kind = PatKind::Lit;
-                        owner->litKind = LitKind::Atom;
-                        owner->litText = provider->moduleAtom;
-                        arm.patterns.push_back(std::move(owner));
-                        arm.body = callWith(provider->moduleAtom, provider->beamFunction);
-                        byOwner.clauses.push_back(std::move(arm));
-                    }
-                    MatchClause rest;
-                    auto wild = std::make_unique<Pattern>();
-                    wild->kind = PatKind::Wild;
-                    rest.patterns.push_back(std::move(wild));
-                    rest.body = callWith(match->moduleAtom, function);
-                    byOwner.clauses.push_back(std::move(rest));
-                    auto chosen = std::make_unique<Expr>();
-                    chosen->node = std::move(byOwner);
-                    return ret(std::move(chosen));
-                }
-                if (auto dual = dualProviderDispatch(
-                        n, m, match->receiverType, match->moduleAtom,
-                        function, actualArity, pargs))
-                    return ret(std::move(dual));
-                return ret(callE(match->moduleAtom, function,
-                                 actualArity, std::move(pargs)));
+                                     "` reached lowering undecided");
+                std::vector<ExprPtr> args;
+                args.push_back(rv());
+                for (const auto& a : n.args) args.push_back(atomize_ir(lower(a), rb));
+                if (n.block) args.push_back(atomize_ir(lower(*n.block), rb));
+                const auto& providers = chosen->second;
+                const auto function = providers.size() == 1 ? providers.front()->beamFunction : m;
+                return ret(callE(chosen->first, function, arity, std::move(args)));
             }
+            if (!byModule.empty())
+                return ret(runtimeError("Ambiguous receiver function: " + m + "/" +
+                                        std::to_string(arity)));
         }
     }
     // Generic UFCS fallback: a field access or a make-block method are

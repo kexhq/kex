@@ -181,8 +181,7 @@ auto TypeChecker::foldProcessSpawn(const ast::Expr& expr,
     (void)call;
     if (argTypes.size() != 1) return;
     const auto state = resolve(argTypes.front());
-    if (std::holds_alternative<UnknownType>(state->kind) ||
-        std::holds_alternative<TypeVar>(state->kind))
+    if (isUndetermined(state))
         return;
     m_decidedCalls[&expr] = {CallKind::Builtin, typeToString(state)};
 }

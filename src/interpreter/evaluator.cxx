@@ -2965,7 +2965,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (const auto& target = m_programs.targetOf(node);
                 target.kind == hir::TargetKind::Hidden) {
                 auto message = "Undefined method: " + node.method + " for " +
-                    dispatchTypeName(receiver);
+                    receiver->typeName();
                 if (!target.owner.empty() && !node.namedArgs.empty())
                     message += " — `" + target.owner + "` defines a matching `" +
                         node.method + "`; add `using " + target.owner + "`";
