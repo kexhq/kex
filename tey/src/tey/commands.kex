@@ -262,7 +262,7 @@ foul uninstallProgram(name: String) -> Integer do
   receipt.targets.each do |target|
     let path = FS.Path.join(binDirectory, target)
     if FS.File.exists?(path) || FS.File.symlink?(path)
-      if Tey.Programs.teyBuilt?(path) && FS.File.delete(path)
+      if Tey.Programs.teyBuilt?(path) && FS.File.delete(path).ok?
         IO.printLine("${Console.GREEN}Removed${Console.RESET} ${target} ${Console.DIM}from ${binDirectory}${Console.RESET}")
       else
         IO.printError("${Console.YELLOW}warning:${Console.RESET} left ${path}: it is no longer the program Tey installed")
@@ -646,7 +646,7 @@ foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt,
   end
   let status = Tey.Commands.buildMember(member)
   return status if status != 0
-  return Tey.Commands.fail("could not create ${binDirectory}") if !FS.Directory.create(binDirectory)
+  return Tey.Commands.fail("could not create ${binDirectory}") if !FS.Directory.create(binDirectory).ok?
   var installed: [String] = []
   var failures = 0
   package.targets.each do |target|
@@ -656,8 +656,8 @@ foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt,
     # Copied beside the destination and renamed over it, so a program that is
     # running while it is reinstalled never reads a half-written file.
     let staging = FS.Path.join(binDirectory, ".${target.name}.new")
-    let copied = FS.File.copy(built, staging) && Tey.Commands.runStatus("chmod", ["+x", staging]) == 0
-    if copied && FS.File.rename(staging, destination)
+    let copied = FS.File.copy(built, staging).ok? && Tey.Commands.runStatus("chmod", ["+x", staging]) == 0
+    if copied && FS.File.rename(staging, destination).ok?
       installed.push!(target.name)
       IO.printLine("${Console.GREEN}Installed${Console.RESET} ${target.name} ${Console.DIM}to ${destination}${Console.RESET}")
     else
@@ -709,7 +709,7 @@ foul recordInstall(package: ManifestPackage, origin: Receipt, installed: [String
   let declared = package.targets.map { |target| target.name }
   let previousTargets = previous.map { |old| old.targets }.or([])
   previousTargets.filter { |name| !declared.contains?(name) }.each do |name|
-    if FS.File.delete(FS.Path.join(binDirectory, name))
+    if FS.File.delete(FS.Path.join(binDirectory, name)).ok?
       IO.printLine("${Console.YELLOW}Removed${Console.RESET} ${name} ${Console.DIM}(no longer a target of ${package.name})${Console.RESET}")
     end
     ()
@@ -1063,7 +1063,7 @@ foul buildMember(member: Member) -> Integer do
   # is both the BEAM convention and where a package's launcher expects its
   # code path to point.
   let output = FS.Path.join(packageRoot, Tey.Commands.outputDirectory)
-  if !FS.Directory.create(output)
+  if !FS.Directory.create(output).ok?
     return Tey.Commands.fail("could not create ${output}")
   end
   let status = Tey.Commands.report(
@@ -1177,7 +1177,7 @@ foul clean(all?: Bool) -> Integer do
     IO.printLine("Cache is at ${Tey.Cache.root}; pass --cache to remove it")
     return 0
   end
-  if FS.Directory.deleteAll(Tey.Cache.root)
+  if FS.Directory.deleteAll(Tey.Cache.root).ok?
     IO.printLine("${Console.GREEN}Removed${Console.RESET} ${Tey.Cache.root}")
     0
   else
@@ -1211,7 +1211,7 @@ foul new(directory: String, library: Bool) -> Integer do
   if FS.File.file?("${directory}/package.kex")
     return Tey.Commands.fail("'${directory}' already holds a package.kex")
   end
-  if !FS.Directory.create(directory)
+  if !FS.Directory.create(directory).ok?
     return Tey.Commands.fail("could not create project '${name}'")
   end
   IO.printLine(Tey.Commands.creating(name, library, directory))
@@ -1480,8 +1480,8 @@ private do
     let binding = bindings.first.try
     IO.print("Approve plugin `${binding.approvalKey}` with resources ${Tey.Commands.resourcesText(binding)}? [y/N] ")
     let answer = match IO.getLine do
-      Just(line) => line.trim.lowerCase
-      None => do
+      Ok(Just(line)) => line.trim.lowerCase
+      _ => do
         IO.printLine("")
         let wanted = bindings.map do |pending|
           "  ${pending.approvalKey}: ${Tey.Commands.resourcesText(pending)}"
@@ -1585,7 +1585,7 @@ private do
     var status = 0
     package.targets.each do |target|
       let staging = "${Tey.Commands.outputDirectory}/.${target.name}"
-      if !FS.Directory.create(staging)
+      if !FS.Directory.create(staging).ok?
         status = Tey.Commands.fail("could not create ${staging}")
       end
       let outcome = match Process.run(Tey.Toolchain.kex,
@@ -1617,7 +1617,7 @@ private do
     var status = 0
     package.targets.each do |target|
       let staging = "${outputDirectory}/.${target.name}"
-      if !FS.Directory.create(staging)
+      if !FS.Directory.create(staging).ok?
         status = Tey.Commands.fail("could not create ${staging}")
       end
       # `target.entrypoint` stays relative to `packageRoot`, which `runAt`
@@ -1776,7 +1776,7 @@ private do
       Tey.Commands.report("exist", directory, path)
       return true
     end
-    return false if !FS.Directory.create(path)
+    return false if !FS.Directory.create(path).ok?
     Tey.Commands.report("create", directory, path)
     true
   end

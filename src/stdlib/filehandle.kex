@@ -13,7 +13,7 @@ type ReadError = ReadFailed | InvalidUtf8(Integer)
 # trait when your function should work with either source.
 #
 #   foul firstLine(source: Readable) -> String do
-#     source.getLine.try.or("(empty)")
+#     source.getLine.or("(empty)")
 #   end
 #
 #   firstLine(IO.in)
@@ -32,12 +32,6 @@ trait Readable do
   # @return [Result<String?, ReadError>] the next character, +Ok(None)+ at end
   #   of input, or the failure
   get :> Result<String?, ReadError>
-
-  # Reads the next line, without its newline. The same as +getLine+.
-  #
-  # @return [Result<String?, ReadError>] the next line, +Ok(None)+ at end of
-  #   input, or the failure
-  readLine :> Result<String?, ReadError>
 
   # Reads everything remaining, as one +String+.
   #
@@ -60,11 +54,6 @@ trait Readable do
   #
   # @return [Bool] +true+ at end of input
   eof? :> Bool
-
-  # Returns +true+ when the source has reached its end. The same as +eof?+.
-  #
-  # @return [Bool] +true+ at end of input
-  atEnd? :> Bool
 end
 
 # +Writable+: a sink that accepts text.
@@ -94,21 +83,9 @@ trait Writable do
   # @return [Void]
   print :> Showable -> Void
 
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  #
-  # @param content [Showable] the value to write
-  # @return [Void]
-  writeLine :> Showable -> Void
-
-  # Writes +content+ with no trailing newline. The same as +print+.
-  #
-  # @param content [Showable] the value to write
-  # @return [Void]
-  write :> Showable -> Void
-
   # Writes +content+ as raw bytes, with no trailing newline.
   #
-  # The byte counterpart of +write+: the payload goes to the sink exactly as
+  # The byte counterpart of +print+: the payload goes to the sink exactly as
   # given. It never renders the value, so a +Binary+ reaches the sink as its
   # bytes rather than as the +#Binary<N bytes>+ that +Showable+ would print.
   #
@@ -140,7 +117,7 @@ end
 #
 # The two type parameters record what the handle is allowed to do: +R+ is
 # +CanRead+ or +CannotRead+, +W+ is +CanWrite+ or +CannotWrite+. +FS.File.open+
-# picks them from the mode you pass, so calling +write+ on a handle opened
+# picks them from the mode you pass, so calling +printLine+ on a handle opened
 # +Read+ is a compile error rather than a run-time failure.
 #
 #   using FS
@@ -170,19 +147,19 @@ make FileHandle<CanRead, W>, implement: Readable do
   # Reads the next line from the handle, without its newline.
   #
   # Answers +None+ at end of file, which is what makes it usable as a loop
-  # condition. The same operation as +readLine+, under the name +IO.getLine+
-  # uses.
+  # condition, and the name +IO.getLine+ uses.
   #
   # @return [Result<String?, ReadError>] the next line, or +None+ at end of file
   #
   # @example Walking a file line by line
   #   foul echo(handle: FileHandle<CanRead, W>) -> Void do
   #     match handle.getLine do
-  #       Just(line) => do
+  #       Ok(Just(line)) => do
   #         IO.printLine(line)
   #         echo(handle)
   #       end
-  #       None => ()
+  #       Ok(None) => ()
+  #       Error(e) => IO.printError("read failed: ${e}")
   #     end
   #   end
   getLine :> Result<String?, ReadError>
@@ -199,22 +176,9 @@ make FileHandle<CanRead, W>, implement: Readable do
   get :> Result<String?, ReadError>
   foul get = Kex.Intrinsic.FileHandle.get(this)
 
-  # Reads the next line from the handle, without its newline. The same as
-  # +getLine+, named for reading from a file rather than from a console.
-  #
-  # @return [Result<String?, ReadError>] the next line, or +None+ at end of file
-  #
-  # @example
-  #   let header = handle.readLine.or("")
-  #
-  # @example Reading the first three lines
-  #   let head = (1..3).items.map { |_| handle.readLine.or("") }
-  readLine :> Result<String?, ReadError>
-  foul readLine = Kex.Intrinsic.FileHandle.readLine(this)
-
   # Reads everything remaining in the file and returns it as one +String+.
   #
-  # Reads from the current position, so calling it after a +readLine+ gives
+  # Reads from the current position, so calling it after a +getLine+ gives
   # the rest of the file rather than the whole of it.
   #
   # @return [Result<String, ReadError>] the remaining contents
@@ -223,7 +187,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #   let body = handle.read.or("")
   #
   # @example Skipping a header line, then taking the rest
-  #   handle.readLine
+  #   handle.getLine
   #   let body = handle.read.or("")
   read :> Result<String, ReadError>
   foul read = Kex.Intrinsic.FileHandle.read(this)
@@ -249,23 +213,11 @@ make FileHandle<CanRead, W>, implement: Readable do
   eof? :> Bool
   foul eof? = Kex.Intrinsic.FileHandle.eof?(this)
 
-  # Returns +true+ when the handle has reached the end of the file. The same
-  # as +eof?+, spelled out.
-  #
-  # @return [Bool] +true+ at end of file
-  #
-  # @example
-  #   if !handle.atEnd?
-  #     IO.printLine(handle.readLine.or(""))
-  #   end
-  atEnd? :> Bool
-  foul atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
-
   # Returns the handle's remaining lines as a lazy +Feed+.
   #
   # Lines are read on demand off the handle's own position, so this is how to
   # look at the start of a very large file, or process one without holding it
-  # all in memory. The feed shares the handle's cursor: interleaving +readLine+
+  # all in memory. The feed shares the handle's cursor: interleaving +getLine+
   # with it advances one position through one open file.
   #
   # The feed ends at the last line, so taking more lines than the file has
@@ -275,14 +227,20 @@ make FileHandle<CanRead, W>, implement: Readable do
   # it of every +Readable+ would put a foul, one-shot operation on types that
   # have no such cursor to offer. It stays a FileHandle function.
   #
-  # @return [Feed<String>?] the lines as a feed, or +None+
+  # @return [Result<Feed<String>, ReadError>] the lines as a feed, or
+  #   +ReadFailed+ for a handle that cannot be read line by line
   #
   # @example The first ten lines of a large file
   #   handle.feed
   #     .map { |lines| lines.take(10) }
   #     .or([])
-  feed :> Feed<String>?
-  foul feed = Kex.Intrinsic.FileHandle.feed(this)
+  feed :> Result<Feed<String>, ReadError>
+  foul feed do
+    match Kex.Intrinsic.FileHandle.feed(this) do
+      Just(lines) => return Ok(lines)
+      None => return Error(ReadFailed)
+    end
+  end
 end
 
 make FileHandle<R, CanWrite>, implement: Writable do
@@ -318,33 +276,13 @@ make FileHandle<R, CanWrite>, implement: Writable do
   print :> Showable -> Void
   foul print(content) = Kex.Intrinsic.FileHandle.print(this, content.showValue)
 
-  # Writes +content+ followed by a newline. The same as +printLine+, named for
-  # writing to a file rather than to a console.
-  #
-  # @param content [Showable] the value to write
-  # @return [Void]
-  #
-  # @example
-  #   handle.writeLine("done")
-  writeLine :> Showable -> Void
-  foul writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content.showValue)
-
-  # Writes +content+ with no trailing newline. The same as +print+.
-  #
-  # @param content [Showable] the value to write
-  # @return [Void]
-  #
-  # @example Writing a whole document in one call
-  #   handle.write(rendered)
-  write :> Showable -> Void
-  foul write(content) = Kex.Intrinsic.FileHandle.write(this, content.showValue)
 end
 
 make FileHandle<R, W> do
   # Moves the handle's cursor to an absolute byte offset from the start of
   # the file. Read and write share one cursor, so this repositions both —
-  # a `readLine` right after `seek(0)` starts over from the top, and a
-  # `write` right after does too, overwriting from that point.
+  # a `getLine` right after `seek(0)` starts over from the top, and a
+  # `print` right after does too, overwriting from that point.
   #
   # @param offset [Integer] the byte offset to seek to, from the start of
   #   the file
@@ -352,7 +290,7 @@ make FileHandle<R, W> do
   #   failed
   #
   # @example Reading a length-prefixed record, then rewinding past it
-  #   let length = handle.readLine.or("0").to(Integer).or(0)
+  #   let length = handle.getLine.or("0").to(Integer).or(0)
   #   let record = handle.readBytes.try
   #   handle.seek(0)
   seek : Integer -> Result<Void, ReadError>

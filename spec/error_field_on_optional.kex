@@ -1,4 +1,4 @@
-# `.field` on an optional — `xs.max { |b| b.id }.id` — used to pass the
+# `.field` on an optional — `xs.maxBy { |b| b.id }.id` — used to pass the
 # checker and then break three different ways at run time: a crash on BEAM,
 # "Undefined method: id for Optional<M.Book>" in the interpreter, and (worst,
 # on 0.4.0-beta.2 BEAM) the whole record silently interpolated where the
@@ -14,5 +14,5 @@ end
 
 main do
   let books = [M.Book { id: 3 }, M.Book { id: 1 }]
-  IO.printLine("nonempty: ${books.max { |b| b.id }.id.or(0)}")
+  IO.printLine("nonempty: ${books.maxBy { |b| b.id }.id.or(0)}")
 end

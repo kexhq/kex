@@ -410,10 +410,10 @@ foul installSource(source: String, version: String) -> String or! String do
   let home = Tey.Toolchain.home
   let prefix = "${home}/toolchains/${version}"
   let build = "${Tey.Cache.root}/build/kex-${version}"
-  return Error("could not create Tey home") if !FS.Directory.create(home)
-  return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
-  return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
-  return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
+  return Error("could not create Tey home") if !FS.Directory.create(home).ok?
+  return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains").ok?
+  return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root).ok?
+  return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build").ok?
   # CMake installs into a staging prefix, and only a COMPLETE installation is
   # renamed to the real one. Installing straight into `prefix` would publish
   # the compiler binary before the runtime and stdlib beside it, and a build
@@ -451,7 +451,7 @@ end
 foul uninstall(version: String) -> String or! String do
   let prefix = "${Tey.Toolchain.home}/toolchains/${version}"
   return Error("Kex ${version} is not installed") if !FS.Directory.directory?(prefix)
-  return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix)
+  return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix).ok?
   # Its Tey goes too — unless it is the one running this, whose modules still
   # load from there. Nothing runs an orphan: `bin/tey` only picks it up while
   # its Kex is selected, and a reinstall reuses it.
@@ -512,7 +512,7 @@ foul download(url: String, path: String) -> Void or! String do
     FS.File.delete(partial)
     return Error("could not download ${url}")
   end
-  return FS.File.rename(partial, path) then Ok(()) else Error("could not move the download into ${path}")
+  return FS.File.rename(partial, path).ok? then Ok(()) else Error("could not move the download into ${path}")
 end
 
 # The published `.sha256` is `<hash>  <filename>`, the format both
@@ -569,11 +569,11 @@ foul publish(staging: String, prefix: String) -> String or! String do
   let previous = "${prefix}.previous"
   FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
   let replacing = FS.Directory.directory?(prefix)
-  if replacing && !FS.File.rename(prefix, previous)
+  if replacing && !FS.File.rename(prefix, previous).ok?
     FS.Directory.deleteAll(staging)
     return Error("could not move the installed toolchain at ${prefix} aside")
   end
-  if !FS.File.rename(staging, prefix)
+  if !FS.File.rename(staging, prefix).ok?
     FS.File.rename(previous, prefix) if replacing
     FS.Directory.deleteAll(staging)
     return Error("could not move the new toolchain into ${prefix}")
@@ -607,7 +607,7 @@ private do
     end
     let name = "kex-${version}-${target}"
     let downloads = "${Tey.Cache.root}/downloads"
-    return Error(Unavailable("could not create the download cache")) if !FS.Directory.create(downloads)
+    return Error(Unavailable("could not create the download cache")) if !FS.Directory.create(downloads).ok?
 
     let archive = "${downloads}/${name}.tar.gz"
     let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
@@ -625,14 +625,14 @@ private do
 
     let home = Tey.Toolchain.home
     let prefix = "${home}/toolchains/${version}"
-    return Error(Unavailable("could not create Tey home")) if !FS.Directory.create("${home}/toolchains")
+    return Error(Unavailable("could not create Tey home")) if !FS.Directory.create("${home}/toolchains").ok?
     # Unpacked beside its destination, not in the download cache: the tree is
     # renamed into place below, and a rename cannot cross filesystems. The
     # cache under ~/.cache and a Tey home on another one (a tmpfs /tmp, a
     # separate /home) failed with "could not move the unpacked toolchain".
     let unpacked = "${prefix}.unpacked"
     FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
-    return Error(Unavailable("could not create ${unpacked}")) if !FS.Directory.create(unpacked)
+    return Error(Unavailable("could not create ${unpacked}")) if !FS.Directory.create(unpacked).ok?
     let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
       Error(error) => return Error(Corrupt(error))
       Ok(value) => value
@@ -651,7 +651,7 @@ private do
     end
     let staging = "${prefix}.partial"
     FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
-    if !FS.File.rename(tree, staging)
+    if !FS.File.rename(tree, staging).ok?
       FS.Directory.deleteAll(unpacked)
       return Error(Unavailable("could not move the unpacked toolchain into place"))
     end
@@ -693,7 +693,7 @@ private do
     let prefix = "${home}/toolchains/${version}"
     return Ok(prefix) if Tey.Toolchain.installed?(version)
 
-    return Error("could not create Tey home") if !FS.Directory.create("${home}/toolchains")
+    return Error("could not create Tey home") if !FS.Directory.create("${home}/toolchains").ok?
     let staging = "${prefix}.partial"
     FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
     let copied = match Process.run("cp", ["-R", source, staging]) do
@@ -736,8 +736,8 @@ private do
   # the checkout. Tags are tried as written and with a leading `v`, since
   # both spellings are common.
   foul fetchRelease(version: String) -> String or! String do
-    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
-    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/src")
+    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root).ok?
+    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/src").ok?
     let checkout = "${Tey.Cache.root}/src/kex-${version}"
     return Ok(checkout) if FS.Directory.directory?(checkout)
     let staging = "${checkout}.partial"
@@ -750,7 +750,7 @@ private do
         return Error(error)
       end
       Ok(_) => do
-        return Ok(checkout) if FS.File.rename(staging, checkout)
+        return Ok(checkout) if FS.File.rename(staging, checkout).ok?
         FS.Directory.deleteAll(staging)
         return Error("could not move the Kex ${version} checkout into place")
       end
@@ -761,7 +761,7 @@ private do
   # first time. A symlink rather than a copy: `kex` finds its stdlib and
   # runtime relative to the REAL path, which the link preserves.
   foul link(version: String) -> Bool do
-    return false if !FS.Directory.create(Tey.Toolchain.binDirectory)
+    return false if !FS.Directory.create(Tey.Toolchain.binDirectory).ok?
     let target = Tey.Toolchain.binaryOf(version)
     return false if !FS.File.file?(target)
     match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do

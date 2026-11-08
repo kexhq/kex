@@ -168,8 +168,8 @@ module Tey.Docgen.Index do
   # Returns (the file, the modules it makes visible, its opening comment).
   foul preludeInfo(source: String) -> (String, [String], String) do
     match FS.File.readLines(FS.Path.join(source, "prelude.kex")) do
-      None => ("", [], "")
-      Just(lines) => do
+      Error(_) => ("", [], "")
+      Ok(lines) => do
         let names = lines.map { |line| usingName(line.trim) }.reject { |name| name.empty? }
         return ("prelude.kex", names, leadingComment(lines))
       end

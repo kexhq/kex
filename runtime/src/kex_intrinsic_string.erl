@@ -4,7 +4,7 @@
 %% representation); the typed string stdlib lives in the Kex prelude
 %% (src/stdlib/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
--export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
+-export([upperCase/1, lowerCase/1, trim/1, trimStart/1, trimEnd/1, find/2, split/1, split/2, replace/3, chars/1,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1,
           bytes/1, fromBytes/1, graphemeCount/1,
           byteSize/1, byteAt/2, bytePart/3]).
@@ -24,7 +24,26 @@ upperCase(S) -> string:uppercase(S).
 lowerCase({'Char', C}) -> {'Char', kex_unicode_case:simple_lower(C)};
 lowerCase(C) when is_integer(C) -> kex_unicode_case:simple_lower(C);
 lowerCase(S) -> string:lowercase(S).
-trim(S)      -> string:trim(S).
+%% trim/1, trimStart/1, trimEnd/1 — strip what `Char.space?` calls whitespace,
+%% so the trims and the predicate never disagree (string:trim's own set leaves
+%% NBSP behind).
+trim(S) -> trimEnd(trimStart(S)).
+trimStart(S) ->
+    Cps = unicode:characters_to_list(S),
+    unicode:characters_to_binary(lists:dropwhile(fun kex_unicode_category:is_space/1, Cps)).
+trimEnd(S) ->
+    Rev = lists:reverse(unicode:characters_to_list(S)),
+    Kept = lists:dropwhile(fun kex_unicode_category:is_space/1, Rev),
+    unicode:characters_to_binary(lists:reverse(Kept)).
+
+%% find/2 — the codepoint index of the first occurrence of Sub, as Just, or
+%% None. binary:match answers a BYTE offset, so count the codepoints before it.
+find(S, <<>>) when is_binary(S) -> {'Just', 0};
+find(S, Sub) ->
+    case binary:match(S, Sub) of
+        nomatch -> 'None';
+        {Pos, _} -> {'Just', erlang:length(unicode:characters_to_list(binary:part(S, 0, Pos)))}
+    end.
 
 %% chars/1 — the string's characters as a real [Char] (tagged tuples).
 chars(S) -> kex_intrinsic_list:as_list(S).

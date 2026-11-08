@@ -195,14 +195,14 @@ private do
   foul publishSnapshot(source: String,
                        files: [String]) -> (String, String) or! String do
     let snapshots = FS.Path.join(Tey.Cache.root, "snapshots")
-    return Error("could not create snapshot cache") if !FS.Directory.create(Tey.Cache.root)
-    return Error("could not create snapshot cache") if !FS.Directory.create(snapshots)
+    return Error("could not create snapshot cache") if !FS.Directory.create(Tey.Cache.root).ok?
+    return Error("could not create snapshot cache") if !FS.Directory.create(snapshots).ok?
     let nonce = Digest.sha256("${source}:${DateTime.epochNanos()}")
     let staging = FS.Path.join(snapshots, ".partial.${nonce}")
-    return Error("could not stage path dependency") if !FS.Directory.create(staging)
+    return Error("could not stage path dependency") if !FS.Directory.create(staging).ok?
     files.each do |relative|
       let target = FS.Path.join(staging, relative)
-      let directoryReady = FS.Directory.create(FS.Path.dirname(target))
+      let directoryReady = FS.Directory.create(FS.Path.dirname(target)).ok?
       let copied = match Process.run("cp", ["-a", "--", FS.Path.join(source, relative), target]) do
         Ok(result) => result.exitCode == 0
         Error(_) => false
@@ -235,7 +235,7 @@ private do
       end
       return Ok((sha, destination))
     end
-    return Ok((sha, destination)) if FS.File.rename(staging, destination)
+    return Ok((sha, destination)) if FS.File.rename(staging, destination).ok?
     # A concurrent resolver may have published the same content-addressed
     # snapshot first. Its directory is exactly our result; discard only our
     # unpublished sibling rather than moving it inside the winner.

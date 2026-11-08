@@ -20,9 +20,9 @@ main do
 
   # readLine's own cursor is the SAME one reset/seek move.
   handle.reset.try
-  let Ok(Just(line)) = handle.readLine
+  let Ok(Just(line)) = handle.getLine
   handle.seek(6).try
-  let Ok(Just(rest)) = handle.readLine
+  let Ok(Just(rest)) = handle.getLine
   IO.printLine(line)
   IO.printLine(rest)
 end

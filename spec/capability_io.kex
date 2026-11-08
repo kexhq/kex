@@ -9,7 +9,7 @@
 #
 # The rule: a capability's INTERFACE is its `foul` members. A pure member
 # performs no effect, so there is nothing to substitute. `Canned` below
-# implements the ten and not `inspect`, and that is a complete implementation.
+# implements the eight and not `inspect`, and that is a complete implementation.
 
 record Canned do
   stdin : String
@@ -23,10 +23,8 @@ make Canned, implement: IO do
   foul print = @stdin
   foul printError(msg) = @stdin
   foul printError = @stdin
-  foul warn(msg) = @stdin
-  foul warning(msg) = @stdin
-  foul getLine = Just(@stdin)
-  foul get = Just("c")
+  foul getLine = Ok(Just(@stdin))
+  foul get = Ok(Just("c"))
 end
 
 # Declares no dependency and threads nothing: written exactly as in production.
@@ -43,7 +41,7 @@ main do
     # capability at all.
     chatty()
     IO.printLine("also suppressed")
-    IO.warn("suppressed warning")
+    IO.printError("suppressed warning")
   end
 
   # Reading is replaced too, which is what makes stdin-driven code testable

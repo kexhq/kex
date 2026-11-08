@@ -1,6 +1,6 @@
 using FS
 
-foul readPackageJson(path: String) -> Result<Map<String, Any>, JSON.Error> do
+foul readPackageJson(path: String) -> Result<Map<String, Any>, JSON.JSONError> do
   let file = FS.File.open(path, FS.Read).try
   let content = file.read.or("")
 

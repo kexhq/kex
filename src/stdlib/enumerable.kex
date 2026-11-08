@@ -103,6 +103,27 @@ trait Foldable do
     acc || Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
+  # Returns +true+ when no item satisfies +pred+: the opposite of +any?+. An
+  # empty collection answers +true+.
+  #
+  # @param pred [T -> Bool] the test applied to each item
+  # @return [Bool] +true+ when nothing matches
+  #
+  # @example
+  #   [1, 2, 3].none? { |n| n > 9 }   # => true
+  #   [1, 2, 3].none? { |n| n > 2 }   # => false
+  let none?(pred) = !this.any?(pred)
+
+  # Returns +true+ when exactly one item satisfies +pred+.
+  #
+  # @param pred [T -> Bool] the test applied to each item
+  # @return [Bool] +true+ for exactly one match
+  #
+  # @example
+  #   [1, 2, 3].one? { |n| n > 2 }   # => true
+  #   [1, 2, 3].one? { |n| n > 1 }   # => false
+  let one?(pred) = this.count(pred) == 1
+
   # Returns the first item satisfying +pred+, or +None+ when nothing does.
   #
   # @param pred [T -> Bool] the test applied to each item

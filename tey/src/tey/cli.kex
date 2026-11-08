@@ -457,11 +457,8 @@ private do
 
   foul askLibrary -> Bool do
     IO.print("Create a ${Console.BOLD}library${Console.RESET}? [y/${Console.CYAN}N${Console.RESET}] ")
-    # `.or("")` rather than a match on the Optional: end-of-input and a bare
-    # Enter both mean "the default", so the two need no telling apart — which
-    # is just as well, because `IO.getLine` answers a line as an UNTAGGED
-    # string on both backends despite being declared `String?`, so `Just(x)`
-    # matches nothing anywhere (kexhq/kex#197).
+    # End of input, a read error and a bare Enter all mean "the default", so
+    # they need no telling apart.
     let choice = IO.getLine.or("").trim.lowerCase
     # The prompt carried no newline, so close its line before the scaffold
     # prints underneath.

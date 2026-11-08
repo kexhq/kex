@@ -85,11 +85,11 @@ using FS
 
 main do
   match FS.File.feed("app.log") do
-    Just(lines) => do
+    Ok(lines) => do
       let errors = lines.filter { |line| line.contains?("ERROR") }.take(10)
       errors.each { |line| IO.printLine(line) }
     end
-    None => IO.printError("Could not open app.log")
+    Error(_) => IO.printError("Could not open app.log")
   end
 end
 ```

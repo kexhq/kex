@@ -37,7 +37,7 @@ main do
 
   # `Showable`, not `String` — the handle accepts anything the IO family did.
   IO.out.printLine(42)
-  IO.out.writeLine([1, 2, 3])
+  IO.out.printLine([1, 2, 3])
   IO.out.print("no newline")
   IO.out.printLine("")
 

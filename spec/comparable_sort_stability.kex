@@ -30,8 +30,8 @@ main do
     Book { title: "B", year: 1850 },
   ]
   IO.printLine("${books.sort.map({ |b| b.title })}")
-  IO.printLine("${books.min({ |b| b.year }).map({ |b| b.title })}")
-  IO.printLine("${books.max({ |b| b.year }).map({ |b| b.title })}")
+  IO.printLine("${books.minBy({ |b| b.year }).map({ |b| b.title })}")
+  IO.printLine("${books.maxBy({ |b| b.year }).map({ |b| b.title })}")
 
   # Descending, because Shelf's own compare is written that way — proof the
   # order comes from the type and not from the tuple.

@@ -39,7 +39,7 @@ main do
   end
   let client = TCP.connectTo("127.0.0.1:${port}").try
   client.printLine("hello")
-  client.write(" sp")
+  client.print(" sp")
   client.printLine("aced ")
   client.writeBytes("raw\r\n".to(Binary).try)
   client.writeBytes(Binary.fromBytes([255, 10]))

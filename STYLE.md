@@ -829,11 +829,11 @@ pattern and discards the rest — the other arm being `_`, `None`, `false`, or a
 empty body — is an `if let` (`prefer-if-let`):
 
 ```kex
-if let Just(largest) = shapes.max { |s| s.area }    # yes
+if let Just(largest) = shapes.maxBy { |s| s.area }    # yes
   IO.printLine("largest area: ${largest.area}")
 end
 
-match shapes.max { |s| s.area } do                  # no — the second arm is filler
+match shapes.maxBy { |s| s.area } do                  # no — the second arm is filler
   Just(largest) => IO.printLine("largest area: ${largest.area}")
   _             => Void
 end

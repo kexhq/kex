@@ -28,7 +28,7 @@ module Shelf do
   end
 
   make [Book] do
-    let tally() = seed * this.count
+    let shelfTally() = seed * this.count
     let seed = 2
   end
 end
@@ -53,6 +53,6 @@ using Shelf, only: [Book]
 main do
   IO.printLine(Shelf.Book { title: "Dune" }.shown)
   let books = [Shelf.Book { title: "a" }, Shelf.Book { title: "b" }]
-  IO.printLine(books.tally())
+  IO.printLine(books.shelfTally())
   IO.printLine(Measure { kind: "unit" }.described)
 end

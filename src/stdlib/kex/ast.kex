@@ -749,7 +749,7 @@ module Kex.AST do
   #
   # @example Building a lint message from a parsed annotation
   #   let written = reference.to(String).or("unknown")
-  #   IO.warn("avoid the broad ${written} annotation")
+  #   IO.printError("avoid the broad ${written} annotation")
   make TypeRef | PatternRef do
     let to(String) -> String? = Just(Kex.AST.referenceText(this))
   end

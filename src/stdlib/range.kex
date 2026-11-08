@@ -52,20 +52,25 @@ make Range, implement: Enumerable, Foldable do
   #   (1..5).product   # => 120   (five factorial)
   let product = this.reduce(1) { |acc, n| acc * n }
 
-  # Returns +true+ when +value+ is one of the enumerated elements.
+  # Returns +true+ when +value+ lies between the endpoints, both included.
   #
-  # This function materializes the range and supports integer and character
-  # ranges only. For continuous bounds, compare the value with each endpoint:
-  # +value >= lower && value <= upper+.
+  # Only the endpoints are compared: nothing is enumerated, so this is cheap
+  # for a range of any size and works for a continuous +Float+ range too. A
+  # range whose lower endpoint exceeds its upper endpoint contains nothing.
   #
   # @param value [A] the value to test
   # @return [Bool] +true+ when the value is in range
   #
   # @example
-  #   (1..10).contains?(5)    # => true
-  #   (1..10).contains?(11)   # => false
+  #   (1..10).contains?(5)          # => true
+  #   (1..10).contains?(11)         # => false
+  #   (0.0..1.0).contains?(0.25)    # => true
+  #   ('a'..'f').contains?('c')     # => true
   contains? :> A -> Bool
-  let contains?(value) = this.items.contains?(value)
+  let contains?(value) do
+    let (lo, hi) = Kex.Intrinsic.Range.bounds(this)
+    value >= lo && value <= hi
+  end
 
   # Returns the range's elements as a list.
   #
@@ -82,18 +87,6 @@ make Range, implement: Enumerable, Foldable do
   #   (1..12).items.map { |m| (m, monthName(m)) }
   items :> [A]
   let items = Kex.Intrinsic.Range.items(this)
-
-  # Returns the range's elements as a list. The same as +items+, under the
-  # name that reads as a conversion — and unlike +to(List)+ it answers the
-  # list directly rather than wrapped in an +Optional+.
-  #
-  # @return [[A]] the elements, in ascending order
-  #
-  # @example
-  #   (1..3).list      # => [1, 2, 3]
-  #   ('a'..'c').list  # => ['a', 'b', 'c']
-  list :> [A]
-  let list = this.items
 
   # Returns the first element, or +None+ for an empty range.
   #

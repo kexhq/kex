@@ -4,7 +4,7 @@ main do
   IO.printLine("hello".slice(1, 3))
   IO.printLine("hello".slice(1..3))
   IO.printLine("hello"[1..3])
-  IO.printLine("hello".substring(1..3))
+  IO.printLine("hello".slice(1..3))
   IO.printLine("hello".get(1).or('?'))
   IO.printLine([1, 2, 3, 4].slice(1, 2))
   IO.printLine([1, 2, 3, 4][0..1])

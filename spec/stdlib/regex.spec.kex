@@ -1,0 +1,46 @@
+using Regex
+
+describe("Regex.replaceFirst") do
+  it("replaces only the first match") do
+    assert("a1b22c".replaceFirst(re`\d+`, "#") == "a#b22c")
+    assert("a1b22c".replace(re`\d+`, "#") == "a#b#c")
+    assert("abc".replaceFirst(re`\d`, "#") == "abc")
+  end
+
+  it("takes a function of the match, as replace does") do
+    assert("aaa".replaceFirst(re`a`) { |m| m.get(0, "").upperCase } == "Aaa")
+  end
+
+  it("handles an empty match at the start") do
+    assert("abc".replaceFirst(re``, "-") == "-abc")
+  end
+end
+
+describe("Regex as Showable") do
+  it("interpolates as its literal") do
+    assert("${re`\d+`}" == "re`\\d+`")
+  end
+end
+
+describe("Regex.withOptions") do
+  it("turns on the requested flags") do
+    assert(Regex.withOptions("hello", { ignoreCase: true }).map { |re| "HeLLo".matches?(re) } == Ok(true))
+    assert(Regex.withOptions("hello", { ignoreCase: false }).map { |re| "HeLLo".matches?(re) } == Ok(false))
+    assert(Regex.withOptions("^b", { multiline: true }).map { |re| "a\nb".matches?(re) } == Ok(true))
+    assert(Regex.withOptions("a.b", { dotAll: true }).map { |re| "a\nb".matches?(re) } == Ok(true))
+    assert(Regex.withOptions("a b # comment", { extended: true }).map { |re| "ab".matches?(re) } == Ok(true))
+  end
+
+  it("reports an unknown option and keeps error positions in the caller's pattern") do
+    assert(Regex.withOptions("x", { verbose: true }).error.map { |e| e.message } == Just("unknown regex option :verbose"))
+    assert(Regex.withOptions("ab(", { ignoreCase: true }).error.map { |e| e.position } == regex("ab(").error.map { |e| e.position })
+  end
+end
+
+describe("Match.offset") do
+  it("is where the match starts, in characters") do
+    assert("item 42".matches(re`\d+`).map { |m| m.offset } == Just(5))
+    assert("héllo wörld".matches(re`w\w+`).map { |m| m.offset } == Just(6))
+    assert("a1b22c".scan(re`\d+`).map { |m| m.offset } == [1, 3])
+  end
+end

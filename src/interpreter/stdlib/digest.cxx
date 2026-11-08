@@ -1,6 +1,7 @@
 #include "../../beam/kexi.hxx"
 #include "../evaluator.hxx"
 
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -36,10 +37,19 @@ auto Evaluator::registerDigestBuiltins() -> void {
         if (args.empty()) return Value::none();
         const auto* path = std::get_if<StringValue>(&args[0]->data);
         if (!path) return Value::none();
+        // A directory opens as an ifstream on Linux and only fails at the
+        // first read, which libstdc++ reports by throwing: refuse it up front,
+        // as BEAM's file:read_file does.
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path->value, ec)) return Value::none();
         std::ifstream input(path->value, std::ios::binary);
         if (!input) return Value::none();
-        std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
-        return Value::just(Value::string(sha256Hex(bytes)));
+        try {
+            std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
+            return Value::just(Value::string(sha256Hex(bytes)));
+        } catch (const std::exception&) {
+            return Value::none();
+        }
     });
 }
 

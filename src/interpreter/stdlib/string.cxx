@@ -402,15 +402,42 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::string(std::move(result));
     });
 
-    defineIntrinsic("String::trim", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // Whitespace is what `Char.space?` says it is, so the trims and the
+    // predicate never disagree (NBSP, U+2028, ... included).
+    auto trimmed = [](const std::vector<ValuePtr>& args, bool front, bool back) -> ValuePtr {
         if (args.empty()) return Value::string("");
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
-        auto s = str->value;
-        auto start = s.find_first_not_of(" \t\n\r");
-        auto end = s.find_last_not_of(" \t\n\r");
-        if (start == std::string::npos) return Value::string("");
-        return Value::string(s.substr(start, end - start + 1));
+        auto cps = utf8::decode(str->value);
+        auto space = [](char32_t cp) {
+            return utf8::categories::inRanges(utf8::categories::spaceRanges, cp);
+        };
+        auto first = front ? std::find_if_not(cps.begin(), cps.end(), space) : cps.begin();
+        auto last = back
+            ? std::find_if_not(cps.rbegin(), std::make_reverse_iterator(first), space).base()
+            : cps.end();
+        return Value::string(utf8::encodeAll({first, last}));
+    };
+    defineIntrinsic("String::trim", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+        return trimmed(args, true, true);
+    });
+    defineIntrinsic("String::trimStart", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+        return trimmed(args, true, false);
+    });
+    defineIntrinsic("String::trimEnd", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+        return trimmed(args, false, true);
+    });
+
+    // String.find(s, sub) -> Integer?  (codepoint index of the first match)
+    defineIntrinsic("String::find", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        auto* sub = std::get_if<StringValue>(&args[1]->data);
+        if (!str || !sub) return Value::none();
+        auto pos = str->value.find(sub->value);
+        if (pos == std::string::npos) return Value::none();
+        auto index = utf8::decode(std::string_view(str->value).substr(0, pos)).size();
+        return Value::just(Value::integer(static_cast<int64_t>(index)));
     });
 
     defineIntrinsic("String::upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {

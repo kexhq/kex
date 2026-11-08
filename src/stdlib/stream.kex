@@ -42,18 +42,6 @@ module Stream do
   #   # => [1.0, 0.5, 0.25, 0.125]
   let Sequence(from, step) = Kex.Intrinsic.Stream.generate(from, step)
 
-  # Builds an infinite stream from a seed and a step function. The same thing
-  # as +Sequence+: use whichever reads better where you are.
-  #
-  # @param seed [A] the first element
-  # @param step [A -> A] produces the next element from the current one
-  # @return [Stream<A>] the generated stream
-  #
-  # @example
-  #   let odds = Stream.Iterate(1) { |n| n + 2 }
-  #   odds.take(5)   # => [1, 3, 5, 7, 9]
-  let Iterate(seed, step) = Kex.Intrinsic.Stream.generate(seed, step)
-
   # The stream with no elements.
   #
   # @return [Stream<A>] the empty stream
@@ -82,7 +70,7 @@ make Stream<A> do
   #
   # @example Generating retry delays without building an unbounded list
   #   let delays = Stream.Sequence(from: 1.seconds) { |d| d * 2 }
-  #   delays.take(4)   # => [1 second, 2 seconds, 4 seconds, 8 seconds]
+  #   delays.take(4)   # => four Durations: 1, 2, 4 and 8 seconds
   take :> Integer -> [A]
   let take(n) = Kex.Intrinsic.Stream.take(this, n)
 

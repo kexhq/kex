@@ -351,7 +351,7 @@ module Mock do
     # Queues the lines +IO.getLine+ will return, in order.
     #
     # Takes a list, or up to four lines as separate arguments. Once they run
-    # out, +IO.getLine+ answers +None+: end of input, exactly as a closed
+    # out, +IO.getLine+ answers +Ok(None)+: end of input, exactly as a closed
     # stdin would.
     #
     # @param lines [[String]] the lines to serve, in order
@@ -395,13 +395,22 @@ module Mock do
       Just(content) => Ok(content.to(Binary).try)
       None => Error(ReadFailed(path))
     end
-    foul readLines(path) = this.cannedRead(path).map { |content| content.lines }
-    foul feed(path) = this.cannedRead(path).map { |content| Feed.Elements(content.lines) }
-    foul size(path) = this.cannedRead(path).map { |content| content.bytes.count }
+    foul readLines(path) = match this.cannedRead(path) do
+      Just(content) => Ok(content.lines)
+      None => Error(ReadFailed(path))
+    end
+    foul feed(path) = match this.cannedRead(path) do
+      Just(content) => Ok(Feed.Elements(content.lines))
+      None => Error(ReadFailed(path))
+    end
+    foul size(path) = match this.cannedRead(path) do
+      Just(content) => Ok(content.bytes.count)
+      None => Error(ReadFailed(path))
+    end
     foul exists?(path) = this.cannedRead(path) != None
     foul file?(path) = this.cannedRead(path) != None
     foul directory?(path) = false
-    foul absolute(path) = Just(path)
+    foul absolute(path) = Ok(path)
     foul canonical(path) = match this.cannedRead(path) do
       Just(_) => Ok(path)
       None => Error(ReadFailed(path))
@@ -418,12 +427,12 @@ module Mock do
     foul open(path, mode) = Error(OpenFailed(path))
     foul write(path, content) = Error(WriteFailed(path))
     foul writeBytes(path, content) = Error(WriteFailed(path))
-    foul append(path, content) = false
-    foul delete(path) = false
-    foul copy(src, dst) = false
-    foul rename(src, dst) = false
-    foul changePermission(path, permissions) = false
-    foul changeMode(path, mode) = false
+    foul append(path, content) = Error(WriteFailed(path))
+    foul delete(path) = Error(DeleteFailed(path))
+    foul copy(src, dst) = Error(CopyFailed(src, dst))
+    foul rename(src, dst) = Error(RenameFailed(src, dst))
+    foul changePermission(path, permissions) = Error(ModeFailed(path))
+    foul changeMode(path, mode) = Error(ModeFailed(path))
   end
 
   make Env, implement: ENV do

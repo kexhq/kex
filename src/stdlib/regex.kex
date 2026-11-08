@@ -39,6 +39,18 @@ record Regex do
   source : String
 end
 
+make Regex, implement: Showable do
+  # Renders the regex as the literal that builds it, so interpolating one
+  # shows its pattern rather than its record layout.
+  #
+  # @return [String] the pattern as a +re+ literal
+  #
+  # @example
+  #   "${re`\d+`}"   # => "re`\d+`"
+  showValue :> String
+  let showValue = "re`${@source}`"
+end
+
 # A pattern that failed to compile.
 #
 # Mirrors +ParseError+: the +position+ is a *character* offset into the
@@ -83,6 +95,47 @@ end
 #   end
 regex : String -> Result<Regex, RegexError>
 let regex(source) = Kex.Intrinsic.Regex.compile(source)
+
+# Compiles +source+ with matching options, as Ruby's +Regexp.new(source,
+# options)+ does: +ignoreCase+ (+/i+), +multiline+ (+^+ and +$+ at every line),
+# +dotAll+ (+.+ matches a newline too) and +extended+ (whitespace and +#+
+# comments in the pattern are ignored). An option set to +false+ is the same as
+# leaving it out; an unknown one is a +RegexError+ at position 0.
+#
+# The options become an inline +(?imsx)+ prefix, so the regex's +source+
+# carries them and prints them. Positions in a compile error still count from
+# the start of +source+.
+#
+# @param source [String] the pattern text
+# @param options [{Atom: Bool}] which options to turn on
+# @return [Result<Regex, RegexError>] the regex, or why it did not compile
+#
+# @example
+#   Regex.withOptions("hello", { ignoreCase: true }).map { |re| "HeLLo".matches?(re) }
+#   # => Ok(true)
+#   Regex.withOptions("x", { verbose: true })
+#   # => Error(RegexError { source: "x", position: 0, message: "unknown regex option :verbose" })
+withOptions : String -> {Atom: Bool} -> Result<Regex, RegexError>
+let withOptions(source: String, options: {Atom: Bool}) -> Result<Regex, RegexError> do
+  let letters = { ignoreCase: "i", multiline: "m", dotAll: "s", extended: "x" }
+  if let Just(unknown) = options.keys.find { |key| !letters.has?(key) }
+    return Error(RegexError { source: source, position: 0, message: "unknown regex option ${unknown}" })
+  end
+  let chosen = options.filter { |key, on| on }.keys.map { |key| letters.get(key, "") }.join
+  return regex(source) if chosen.empty?
+  let prefix = "(?${chosen})"
+  match regex(prefix + source) do
+    Ok(built) => return Ok(built)
+    Error(problem) => do
+      let position = problem.position - prefix.count
+      return Error(RegexError {
+        source: source,
+        position: position < 0 then 0 else position,
+        message: problem.message
+      })
+    end
+  end
+end
 
 # The tagged-literal form (`` regex`\d+` ``) which the parser lowers to the
 # two-argument tag ABI regex(parts, values).
@@ -185,6 +238,13 @@ let quote(s) = Kex.Intrinsic.Regex.quote(s)
 record Match do
   # The captured text, keyed by group number and by group name.
   captures : Map<Any, String>
+
+  # Where the whole match starts in the searched string, in characters from
+  # 0: Ruby's +begin(0)+. The match ends +get(0, "").count+ characters later.
+  #
+  # @example
+  #   "item 42".matches(re`\d+`).map { |m| m.offset }   # => Just(5)
+  offset : Integer
 end
 
 make Match do
@@ -309,6 +369,22 @@ let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 replace : String -> Regex -> (String | (Match -> String)) -> String
 let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement)
 
+# Replaces only the first match of +re+ in +s+: Ruby's +sub+, where +replace+
+# is its +gsub+. The replacement is a literal string or a function of the
+# +Match+, as for +replace+.
+#
+# @param s [String] the text to rewrite
+# @param re [Regex] the pattern to replace
+# @param replacement [String | (Match -> String)] the new text, or how to
+#   compute it
+# @return [String] the text with its first match replaced, or unchanged
+#
+# @example
+#   "a1b22c".replaceFirst(re`\d+`, "#")   # => "a#b22c"
+#   "abc".replaceFirst(re`\d`, "#")       # => "abc"
+replaceFirst : String -> Regex -> (String | (Match -> String)) -> String
+let replaceFirst(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement, 1)
+
 # Splits +s+ on +re+, capping the number of fields.
 #
 # A positive +limit+ caps the field count, leaving the remainder unsplit in
@@ -320,8 +396,8 @@ let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement
 # backends), and follows Ruby's semantics: trailing empty fields are dropped,
 # leading ones are kept, and capture groups are interleaved into the result.
 #
-# Use +Regex.splitWithLimit+ to control the number of fields.
-
+# Use +Regex.splitLimit+ to control the number of fields.
+#
 # @param s [String] the text to split
 # @param re [Regex] the separator pattern
 # @param limit [Integer] the field cap; negative keeps trailing empty fields

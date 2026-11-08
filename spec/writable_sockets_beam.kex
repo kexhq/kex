@@ -34,8 +34,8 @@ main do
   client.printLine("l2")
   client.print("p1")
   client.printLine("p2")
-  client.write("w1")
-  client.writeLine("w2")
+  client.print("w1")
+  client.printLine("w2")
   client.writeBytes("raw".to(Binary).try)
   client.close
   server.await
@@ -57,8 +57,8 @@ main do
   unixClient.printLine("l2")
   unixClient.print("p1")
   unixClient.printLine("p2")
-  unixClient.write("w1")
-  unixClient.writeLine("w2")
+  unixClient.print("w1")
+  unixClient.printLine("w2")
   unixClient.writeBytes("raw".to(Binary).try)
   unixClient.close
   unixServer.await

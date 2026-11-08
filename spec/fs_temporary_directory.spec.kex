@@ -10,6 +10,6 @@ describe("FS.Directory.temporary") do
     FS.File.delete(scratch)
     assert(FS.File.writeBytes(scratch, Binary.fromBytes([1, 2])).ok?, "writable")
     assert(FS.File.readBytes(scratch) == Ok(Binary.fromBytes([1, 2])), "readable")
-    assert(FS.File.delete(scratch), "deletable")
+    assert(FS.File.delete(scratch).ok?, "deletable")
   end
 end

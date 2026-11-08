@@ -1,15 +1,61 @@
 -module(kex_intrinsic_uri).
--export([parse/1, fromIRI/1, normalize/1, resolve/2, scheme/1, host/1, query/1,
+-export([parse/1, fromIRI/1, normalize/1, resolve/2, scheme/1, host/1, query/1, bracketed/1,
          queryParse/1, queryEncode/1, formFrom/1, formParse/1, formEncode/1,
          idnaHost/1, redacted/1]).
 
+%% The same checks, in the same order and with the same kinds and positions,
+%% as the walker's URI::parse (src/interpreter/stdlib/net.cxx): uri_string on
+%% its own accepts a space, an empty authority and any port number.
 parse(Text) when is_binary(Text) ->
-    case ascii(Text) andalso valid_percent(Text) of
-        false -> uri_error('InvalidSyntax', <<"invalid URI text">>);
-        true -> case safe_parse(Text) of
-            {ok, _} -> {'Ok', {'URI.URI', Text}};
-            error -> uri_error('InvalidSyntax', <<"malformed URI reference">>)
-        end
+    case check_text(Text) of
+        ok -> case well_formed(Text) of
+            true -> {'Ok', {'URI.URI', Text}};
+            false -> uri_error('InvalidSyntax', <<"malformed URI reference">>)
+        end;
+        Error -> Error
+    end.
+
+check_text(Text) ->
+    case ascii(Text) of
+        false -> uri_error('NonASCII', <<"URI contains non-ASCII text">>);
+        true -> check_bytes(Text, 0)
+    end.
+
+check_bytes(<<>>, _) -> ok;
+check_bytes(<<C, _/binary>>, I) when C < 16#20; C =:= 16#7f; C =:= $  ->
+    uri_error('InvalidSyntax', <<"invalid URI text">>, I);
+check_bytes(<<$%, A, B, Rest/binary>>, I) ->
+    case hex(A) andalso hex(B) of
+        true -> check_bytes(Rest, I + 3);
+        false -> uri_error('InvalidEscape', <<"invalid URI text">>, I)
+    end;
+check_bytes(<<$%, _/binary>>, I) -> uri_error('InvalidEscape', <<"invalid URI text">>, I);
+check_bytes(<<_, Rest/binary>>, I) -> check_bytes(Rest, I + 1).
+
+%% An authority, when there is one, names a host, and a port fits in 16 bits.
+well_formed(Text) ->
+    case safe_parse(Text) of
+        {ok, Map} ->
+            HostOk = case maps:find(host, Map) of
+                {ok, Host} -> Host =/= <<>>;
+                error -> binary:match(Text, <<"//">>) =:= nomatch orelse
+                         not authority_marker(Text)
+            end,
+            PortOk = case maps:find(port, Map) of
+                {ok, Port} when is_integer(Port) -> Port =< 65535;
+                {ok, _} -> false;
+                error -> true
+            end,
+            HostOk andalso PortOk;
+        error -> false
+    end.
+
+%% Whether "//" starts an authority (right after the scheme, or at the start
+%% of a relative reference), rather than appearing inside a path.
+authority_marker(Text) ->
+    case binary:match(Text, <<":">>) of
+        {Colon, 1} -> binary:part(Text, Colon + 1, min(2, byte_size(Text) - Colon - 1)) =:= <<"//">>;
+        nomatch -> binary:part(Text, 0, min(2, byte_size(Text))) =:= <<"//">>
     end.
 
 fromIRI(Text) when is_binary(Text) ->
@@ -33,14 +79,18 @@ resolve(Base, Reference) ->
 
 scheme(Value) ->
     case safe_parse(source(Value)) of
-        {ok, Map} -> option(maps:get(scheme, Map, undefined));
+        {ok, Map} -> case maps:get(scheme, Map, undefined) of
+            undefined -> 'None'; S -> {'Just', lower(S)}
+        end;
         error -> 'None'
     end.
 
 host(Value) ->
     case safe_parse(source(Value)) of
         {ok, Map} -> case maps:get(host, Map, undefined) of
-            undefined -> 'None'; H -> {'Just', {'URI.Host', H, lower(H)}}
+            undefined -> 'None';
+            <<>> -> 'None';
+            H0 -> H = bracketed(H0), {'Just', {'URI.Host', H, lower(H)}}
         end;
         error -> 'None'
     end.
@@ -60,7 +110,8 @@ formEncode({'URI.Form', Entries}) -> encode_pairs(Entries, true).
 formFrom(Entries) -> {'URI.Form', [{K, {'Just', V}} || {K, V} <- Entries]}.
 
 parse_pairs(Text, Form, Type) ->
-    try {'Ok', {Type, [parse_pair(P, Form) || P <- binary:split(Text, <<"&">>, [global])]}}
+    %% An empty piece (an empty query, or "&&") is no entry, as on the walker.
+    try {'Ok', {Type, [parse_pair(P, Form) || P <- binary:split(Text, <<"&">>, [global]), P =/= <<>>]}}
     catch _:_ -> uri_error('InvalidEscape', <<"invalid percent escape in query">>) end.
 
 parse_pair(Pair, Form) ->
@@ -104,15 +155,12 @@ redact_userinfo(UserInfo) ->
         [User, _] -> <<User/binary, ":***">>;
         [_] -> UserInfo
     end.
-option(undefined) -> 'None'; option(V) -> {'Just', V}.
 lower(B) -> string:lowercase(B).
 ascii(B) -> lists:all(fun(C) -> C < 128 end, binary:bin_to_list(B)).
-valid_percent(<<>>) -> true;
-valid_percent(<<$%, A, B, Rest/binary>>) -> hex(A) andalso hex(B) andalso valid_percent(Rest);
-valid_percent(<<$%, _/binary>>) -> false;
-valid_percent(<<_, Rest/binary>>) -> valid_percent(Rest).
 hex(C) -> (C >= $0 andalso C =< $9) orelse (C >= $a andalso C =< $f) orelse (C >= $A andalso C =< $F).
 uri_error(Kind, Message) -> {'Error', {'URI.URIError', Kind, Message, 'None'}}.
+uri_error(Kind, Message, Position) ->
+    {'Error', {'URI.URIError', Kind, Message, {'Just', Position}}}.
 
 iri_to_uri(Text) ->
     case binary:match(Text, <<"://">>) of
@@ -252,3 +300,11 @@ quote_non_ascii(Text) -> iolist_to_binary([quote_iri_byte(C) || <<C>> <= Text]).
 quote_iri_byte(C) when C < 16#20; C =:= 16#7f -> throw(invalid_character);
 quote_iri_byte(C) when C < 128 -> <<C>>;
 quote_iri_byte(C) -> io_lib:format("%~2.16.0B", [C]).
+
+%% uri_string drops the brackets of an IP literal; the host component keeps
+%% them (RFC 3986 3.2.2), as the walker reports it: `[::1]`, not `::1`.
+bracketed(Host) ->
+    case binary:match(Host, <<":">>) of
+        nomatch -> Host;
+        _ -> <<"[", Host/binary, "]">>
+    end.

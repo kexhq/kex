@@ -328,3 +328,46 @@ describe("Float.parsePrefix") do
     assert(Float.parsePrefix("abc") == None)
   end
 end
+
+describe("Integer arithmetic helpers") do
+  it("pow is exact") do
+    assert(2.pow(10) == 1024)
+    assert(2.pow(100) == 1267650600228229401496703205376)
+    assert((-3).pow(3) == -27)
+    assert(5.pow(0) == 1)
+    assert(2.pow(-1) == 0)
+  end
+
+  it("div floors and divmod pairs it with modulo") do
+    assert(7.div(2) == 3)
+    assert((-7).div(2) == -4)
+    assert(7.div(-2) == -4)
+    assert((-7).divmod(2) == (-4, 1))
+  end
+
+  it("gcd and lcm") do
+    assert(12.gcd(18) == 6)
+    assert((-4).gcd(6) == 2)
+    assert(0.gcd(0) == 0)
+    assert(4.lcm(6) == 12)
+    assert(0.lcm(5) == 0)
+  end
+
+  it("digits are least significant first") do
+    assert(1234.digits == [4, 3, 2, 1])
+    assert(0.digits == [0])
+    assert((-12).digits == [2, 1])
+  end
+
+  it("sign predicates") do
+    assert(0.zero? && !1.zero? && 0.0.zero?)
+    assert(3.positive? && !(-3).positive? && 2.5.positive?)
+    assert((-3).negative? && !0.negative? && (-0.5).negative?)
+  end
+
+  it("in? compares against the bounds without enumerating") do
+    assert(5.in?(1..1000000000000))
+    assert(0.75.in?(0.0..1.0))
+    assert(!1.5.in?(0.0..1.0))
+  end
+end

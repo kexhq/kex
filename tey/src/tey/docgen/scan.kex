@@ -16,13 +16,13 @@ module Tey.Docgen.Scan do
 
   foul filesWithSuffix(sourceDir: String, suffix: String) -> [String] do
     match FS.Directory.files(sourceDir) do
-      Just(names) => do
+      Ok(names) => do
         let matched = names.filter { |n| n.endsWith?(suffix) && !n.endsWith?(".spec.kex") }
         let sorted = matched.sort
         let nestedDirs = subdirectories(sourceDir)
         return sorted + nested(nestedDirs, sourceDir, suffix)
       end
-      None => []
+      Error(_) => []
     end
   end
 

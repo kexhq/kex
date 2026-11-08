@@ -133,3 +133,27 @@ describe("JSON.stringify") do
     assert(JSON.parse(JSON.stringify(value)) == Ok(value))
   end
 end
+
+record JsonPoint do
+  x : Integer
+  label : String
+end
+
+describe("JSON.stringify beyond maps and lists") do
+  it("writes records as objects in field order") do
+    assert(JSON.stringify(JsonPoint { x: 1, label: "p" }) == "{\"x\":1,\"label\":\"p\"}")
+    assert(JSON.stringify([JsonPoint { x: 2, label: "q" }]) == "[{\"x\":2,\"label\":\"q\"}]")
+  end
+
+  it("writes tuples as arrays and atoms, chars and bare constructors as strings") do
+    assert(JSON.stringify((1, "a")) == "[1,\"a\"]")
+    assert(JSON.stringify(:ok) == "\"ok\"")
+    assert(JSON.stringify('c') == "\"c\"")
+    assert(JSON.stringify(Monday) == "\"Monday\"")
+  end
+
+  it("writes a constructor with a payload as null") do
+    assert(JSON.stringify(Ok(1)) == "null")
+    assert(JSON.stringify(Just(4)) == "4")
+  end
+end

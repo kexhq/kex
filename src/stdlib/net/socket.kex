@@ -210,14 +210,6 @@ capability TCP do
   # @example Sending one newline-delimited request
   #   connection.sendAll("status\n".to(Binary).try).try
   foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
-  # Writes +content+ with no trailing newline.
-  #
-  # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
   # Writes +content+ followed by a newline.
   #
   # @example Answering a line-oriented client
@@ -234,14 +226,12 @@ capability TCP do
     connection.sendAll(content).try
     ()
   end
-  # Writes +content+ with no trailing newline. The same as +write+.
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
   foul print(connection: TCPConnection, content: Showable) -> Void do
     connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
     ()
   end
   # Reads the next line as text, without its newline.
@@ -632,14 +622,6 @@ capability Unix do
 
   # Sends every byte and returns the count.
   foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)
-  # Writes +content+ with no trailing newline.
-  #
-  # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
   # Writes +content+ followed by a newline.
   #
   # @example Answering a line-oriented peer
@@ -656,14 +638,12 @@ capability Unix do
     connection.sendAll(content).try
     ()
   end
-  # Writes +content+ with no trailing newline. The same as +write+.
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
   foul print(connection: UnixConnection, content: Showable) -> Void do
     connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
     ()
   end
   # Reads the next line as text, without its newline.
@@ -743,14 +723,6 @@ capability TLS do
 
   # Sends every plaintext byte through the TLS stream.
   foul sendAll(connection: TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTLS.sendAll(connection, data)
-  # Writes +content+ with no trailing newline.
-  #
-  # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
   # Writes +content+ followed by a newline.
   #
   # @example Answering a line-oriented peer
@@ -767,14 +739,12 @@ capability TLS do
     connection.sendAll(content).try
     ()
   end
-  # Writes +content+ with no trailing newline. The same as +write+.
+  # Writes +content+ with no trailing newline.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
   foul print(connection: TLSConnection, content: Showable) -> Void do
     connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
     ()
   end
   # Receives one decrypted chunk no larger than +limit+.
@@ -887,11 +857,9 @@ module Mock do
     foul accept(listener) = refusing(@failure, Net.TCP, "TCP refused to accept")
     foul accept(listener, timeout) = refusing(@failure, Net.TCP, "TCP refused to accept")
     foul sendAll(connection, data) = refusing(@failure, Net.TCP, "TCP has no connection")
-    foul write(connection, content) = ()
     foul printLine(connection, content) = ()
     foul writeBytes(connection, content) = ()
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
     foul getLine(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul receiveChunk(connection, limit, timeout) do
@@ -945,11 +913,9 @@ module Mock do
     foul bind(path, block) = refusing(@failure, Net.Unix, "Unix refused to listen")
     foul accept(listener) = refusing(@failure, Net.Unix, "Unix refused to accept")
     foul sendAll(connection, data) = refusing(@failure, Net.Unix, "Unix has no connection")
-    foul write(connection, content) = ()
     foul printLine(connection, content) = ()
     foul writeBytes(connection, content) = ()
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
     foul getLine(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul receiveChunk(connection, limit) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul receiveExactly(connection, count) = refusing(@failure, Net.Unix, "Unix has no connection")
@@ -964,11 +930,9 @@ module Mock do
   make TLS, implement: Net.Socket.TLS do
     foul connect(endpoint, config) = refusing(@failure, Net.TLS, "TLS refused to connect")
     foul sendAll(connection, data) = refusing(@failure, Net.TLS, "TLS has no connection")
-    foul write(connection, content) = ()
     foul printLine(connection, content) = ()
     foul writeBytes(connection, content) = ()
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul closed?(connection) = true
   end

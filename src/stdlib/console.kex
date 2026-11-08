@@ -106,7 +106,7 @@ module Console do
   # @return [String] the escape sequence, or +""+ when color is off
   #
   # @example
-  #   IO.warn(Console.colorize("deprecated option", Console.YELLOW))
+  #   IO.printError(Console.colorize("deprecated option", Console.YELLOW))
   let YELLOW = Kex.Intrinsic.Console.Yellow
 
   # Blue. Useful for informational labels and links.

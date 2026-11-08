@@ -84,34 +84,27 @@ describe("IO.printError (mocked)") do
     assert(Mock.IO.output() == "oops\n")
     Mock.IO.stop()
   end
-
-  it("IO.warn is an alias for printError") do
-    Mock.IO.start()
-    IO.warn("warning message")
-    assert(Mock.IO.output() == "warning message\n")
-    Mock.IO.stop()
-  end
 end
 
-# `String?`, so a staged line arrives as `Just("first")`. It used to arrive
-# unwrapped, which made `match ... Just(x)` match nothing anywhere
-# (kexhq/kex#197).
+# `IO.getLine` answers `Result<String?, ReadError>`, as every Readable does, so
+# a staged line arrives as `Ok(Just("first"))`. It once arrived unwrapped,
+# which made `match ... Just(x)` match nothing anywhere (kexhq/kex#197).
 describe("IO.getLine (mocked)") do
   it("returns staged input lines in order") do
     Mock.IO.start()
     Mock.IO.input("first", "second", "third")
-    assert(IO.getLine() == Just("first"))
-    assert(IO.getLine() == Just("second"))
-    assert(IO.getLine() == Just("third"))
+    assert(IO.getLine() == Ok(Just("first")))
+    assert(IO.getLine() == Ok(Just("second")))
+    assert(IO.getLine() == Ok(Just("third")))
     Mock.IO.stop()
   end
 
-  it("returns None when input is exhausted") do
+  it("returns Ok(None) when input is exhausted") do
     Mock.IO.start()
     Mock.IO.input("only")
     IO.getLine()
     let result = IO.getLine()
-    assert(result == None)
+    assert(result == Ok(None))
     Mock.IO.stop()
   end
 
@@ -119,16 +112,16 @@ describe("IO.getLine (mocked)") do
     Mock.IO.start()
     Mock.IO.input("a")
     Mock.IO.input("b")
-    assert(IO.getLine() == Just("a"))
-    assert(IO.getLine() == Just("b"))
+    assert(IO.getLine() == Ok(Just("a")))
+    assert(IO.getLine() == Ok(Just("b")))
     Mock.IO.stop()
   end
 
   it("accepts a list of input lines") do
     Mock.IO.start()
     Mock.IO.input(["left", "right"])
-    assert(IO.getLine() == Just("left"))
-    assert(IO.getLine() == Just("right"))
+    assert(IO.getLine() == Ok(Just("left")))
+    assert(IO.getLine() == Ok(Just("right")))
     Mock.IO.stop()
   end
 end
@@ -137,15 +130,15 @@ describe("IO.get (mocked)") do
   it("reads one character at a time from staged input") do
     Mock.IO.start()
     Mock.IO.input("hi")
-    assert(IO.get() == Just("h"))
-    assert(IO.get() == Just("i"))
+    assert(IO.get() == Ok(Just("h")))
+    assert(IO.get() == Ok(Just("i")))
     Mock.IO.stop()
   end
 
-  it("returns None when all input is consumed") do
+  it("returns Ok(None) when all input is consumed") do
     Mock.IO.start()
     let result = IO.get()
-    assert(result == None)
+    assert(result == Ok(None))
     Mock.IO.stop()
   end
 end
@@ -166,7 +159,7 @@ describe("IO — mixed read and write (mocked)") do
     Mock.IO.start()
     Mock.IO.input("Alice")
     IO.print("Name: ")
-    let name = IO.getLine()
+    let name = IO.getLine().or("")
     IO.printLine("Hello, ${name}!")
     assert(Mock.IO.output() == "Name: Hello, Alice!\n")
     Mock.IO.stop()
@@ -175,9 +168,8 @@ describe("IO — mixed read and write (mocked)") do
   it("simulates reading multiple inputs and computing") do
     Mock.IO.start()
     Mock.IO.input("3", "4")
-    # `getLine` answers `String?`, so the line comes out of the Optional before
-    # it is converted — `Just("3").to(Integer)` is a conversion of the option,
-    # not of the string inside it.
+    # `or` with a plain default takes the line out of the Result and the
+    # Optional both, before it is converted.
     let a = IO.getLine().or("").to(Integer).or(0)
     let b = IO.getLine().or("").to(Integer).or(0)
     IO.printLine(a + b)

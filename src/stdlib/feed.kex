@@ -23,7 +23,7 @@ type Feed<A>
 
 # Constructors for +Feed+.
 module Feed do
-  # A feed with nothing in it, already spent.
+  # A feed with nothing in it: its first read answers +None+.
   #
   # Mostly the +or+ half of a failed open: +FS.File.feed(path).or(Feed.empty)+
   # reads nothing rather than stopping the program.
@@ -71,7 +71,7 @@ make Feed<A> do
   #   feed.pull   # => Just(2)
   #   feed.pull   # => None
   pull :> A?
-  let pull = Kex.Intrinsic.Feed.pull(this)
+  foul pull = Kex.Intrinsic.Feed.pull(this)
 
   # Whether the source has run out.
   #
@@ -83,10 +83,12 @@ make Feed<A> do
   # @example Draining a feed a piece at a time
   #   let jobs = Feed.Elements(["resize", "index"])
   #   jobs.spent?   # => false
-  #   jobs.take(2)
+  #   jobs.take(2)  # => ["resize", "index"]
+  #   jobs.spent?   # => false: nothing has read past the end yet
+  #   jobs.pull     # => None
   #   jobs.spent?   # => true
   spent? :> Bool
-  let spent? = Kex.Intrinsic.Feed.spent?(this)
+  foul spent? = Kex.Intrinsic.Feed.spent?(this)
 
   # Returns the next +n+ elements as a list, consuming them.
   #

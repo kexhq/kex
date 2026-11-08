@@ -287,14 +287,17 @@ auto Evaluator::registerIOBuiltins() -> void {
         defineIntrinsic("System::die", std::move(fn));
     }
 
-    // IO.getLine() — reads one line from stdin (or mock input).
+    // The stdin read behind IO.getLine (through FileHandle.getLine on IO.in,
+    // which wraps it in a Result) — reads one line from stdin or mock input.
+    // An intrinsic only, not also a global: a global `IO::getLine` would
+    // shadow io.kex's own definition.
     //
-    // `String?`, as io.kex declares: `Just(line)` or `None` at EOF. The line
+    // `String?` here: `Just(line)` or `None` at EOF. The line
     // used to come back UNWRAPPED, so the type was really `String | None` and
     // `match ... Just(x)` matched nothing on either backend — only `.or(...)`
     // worked, because `Optional.or`'s catch-all returns whatever it is given
     // (kexhq/kex#197).
-    defineDual("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto line = m_mockIOInputLines.front();
@@ -325,7 +328,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.get() — reads a single character from stdin (or mock input).
     // `String?` on the same terms as `getLine` above (kexhq/kex#197).
-    defineDual("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto& front = m_mockIOInputLines.front();

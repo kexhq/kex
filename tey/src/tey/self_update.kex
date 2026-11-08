@@ -202,7 +202,7 @@ foul installPaired(kexVersion: String) -> String? or! String do
   let version = Tey.SelfUpdate.teyVersionAt(tag).try
   let unpacked = Tey.SelfUpdate.unpackRelease(tag, version).try
   let parent = "${Tey.Toolchain.home}/tey/${kexVersion}"
-  if !FS.Directory.create("${Tey.Toolchain.home}/tey") || !FS.Directory.create(parent)
+  if !FS.Directory.create("${Tey.Toolchain.home}/tey").ok? || !FS.Directory.create(parent).ok?
     FS.Directory.deleteAll(unpacked)
     return Error("could not create ${parent}")
   end
@@ -310,7 +310,7 @@ private do
       Ok(slug) => do
         let url = "https://raw.githubusercontent.com/${slug}/${tag}/tey/package.kex"
         let downloads = "${Tey.Cache.root}/downloads"
-        return Error("could not create the download cache") if !FS.Directory.create(downloads)
+        return Error("could not create the download cache") if !FS.Directory.create(downloads).ok?
         let local = "${downloads}/tey-manifest.kex"
         FS.File.delete(local)
         match Tey.Toolchain.download(url, local) do
@@ -399,8 +399,8 @@ private do
     FS.Directory.deleteAll(unpacked)
     # The launchers sit beside binaries Tey does not own, so only the two
     # files move — never their directory. A rename overwrites atomically.
-    return Error("could not write ${prefix}/bin/tey (check that its directory is writable)") if !FS.File.rename(stagedTey, "${prefix}/bin/tey")
-    return Error("could not write ${prefix}/bin/kex (check that its directory is writable)") if !FS.File.rename(stagedKex, "${prefix}/bin/kex")
+    return Error("could not write ${prefix}/bin/tey (check that its directory is writable)") if !FS.File.rename(stagedTey, "${prefix}/bin/tey").ok?
+    return Error("could not write ${prefix}/bin/kex (check that its directory is writable)") if !FS.File.rename(stagedKex, "${prefix}/bin/kex").ok?
     # Last word while the old runtime is still on disk — see above. Touching
     # `System` first loads `Kex.System` from that same old runtime: the process
     # ends in `System.exit`, and a module loads from disk on first use, which
@@ -418,7 +418,7 @@ private do
   # deletes it when done.
   foul unpackRelease(tag: String, version: String) -> String or! String do
     let downloads = "${Tey.Cache.root}/downloads"
-    return Error("could not create the download cache") if !FS.Directory.create(downloads)
+    return Error("could not create the download cache") if !FS.Directory.create(downloads).ok?
     let name = "tey-${version}"
     let archive = "${downloads}/${name}.tar.gz"
     let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
@@ -426,7 +426,7 @@ private do
     Tey.Toolchain.verifyArchive(archive, "${url}.sha256").try
     let unpacked = "${downloads}/${name}.unpacked"
     FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
-    return Error("could not create ${unpacked}") if !FS.Directory.create(unpacked)
+    return Error("could not create ${unpacked}") if !FS.Directory.create(unpacked).ok?
     let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
       Error(error) => return Error(error)
       Ok(value) => value

@@ -86,12 +86,17 @@ capability IO do
     return val
   end
 
-  # Reads one line from stdin, without the trailing newline.
+  # Reads one line from stdin, without its line ending.
   #
-  # Returns +None+ at end of input, which is what makes it usable as a loop
-  # condition: the +None+ is the end of the stream, not an error.
+  # The same read as +IO.in.getLine+, and the same shape as every other
+  # +Readable+: +Ok(None)+ at end of input, which is what makes it usable as a
+  # loop condition, and an +Error+ only when the input cannot be read as text.
   #
-  # @return [String?] the line, or +None+ at end of input
+  # @return [Result<String?, ReadError>] the line, +Ok(None)+ at end of input,
+  #   or why it could not be read
+  #
+  # +or+ with a plain default sees through both layers, so the simple case
+  # stays simple: the line, or the default at end of input or on a read error.
   #
   # @example Reading an answer with a default
   #   let answer = IO.getLine.or("")
@@ -99,28 +104,30 @@ capability IO do
   # @example Draining stdin line by line
   #   foul echoAll -> Void do
   #     match IO.getLine do
-  #       Just(line) => do
+  #       Ok(Just(line)) => do
   #         IO.printLine(line)
   #         echoAll
   #       end
-  #       None => ()
+  #       Ok(None) => ()
+  #       Error(e) => IO.printError("cannot read stdin: ${e}")
   #     end
   #   end
-  getLine : String?
-  foul getLine = Kex.Intrinsic.IO.getLine
+  getLine : Result<String?, ReadError>
+  foul getLine = Kex.Intrinsic.FileHandle.getLine(Kex.Intrinsic.IO.stdin)
 
-  # Reads a single character from stdin.
+  # Reads a single character from stdin, as +IO.in.get+ does.
   #
-  # Returns +None+ at end of input. Note that the result is a one-character
+  # +Ok(None)+ at end of input. Note that the character is a one-character
   # +String+, not a +Char+.
   #
-  # @return [String?] the character, or +None+ at end of input
+  # @return [Result<String?, ReadError>] the character, +Ok(None)+ at end of
+  #   input, or why it could not be read
   #
   # @example
   #   let key = IO.get.or("")
   #   IO.printLine("you pressed ${key}")
-  get : String?
-  foul get = Kex.Intrinsic.IO.get
+  get : Result<String?, ReadError>
+  foul get = Kex.Intrinsic.FileHandle.get(Kex.Intrinsic.IO.stdin)
 
   # Writes +msg+ to stderr followed by a newline.
   #
@@ -140,27 +147,6 @@ capability IO do
   printError : Showable -> Void
   foul printError(msg: Showable) = Kex.Intrinsic.IO.printError(msg.showValue)
   foul printError = Kex.Intrinsic.IO.printError("")
-
-  # Writes +msg+ to stderr. Identical to +printError+, named for the case
-  # where the message is a warning rather than a failure.
-  #
-  # @param msg [Showable] the warning to write
-  # @return [Void]
-  #
-  # @example
-  #   IO.warn("ignoring unknown key ${key}")
-  warn : Showable -> Void
-  foul warn(msg: Showable) = Kex.Intrinsic.IO.warn(msg.showValue)
-
-  # Writes +msg+ to stderr. The long spelling of +warn+.
-  #
-  # @param msg [Showable] the warning to write
-  # @return [Void]
-  #
-  # @example
-  #   IO.warning("this option is deprecated")
-  warning : Showable -> Void
-  foul warning(msg: Showable) = Kex.Intrinsic.IO.warning(msg.showValue)
 
   # The three standard streams, as ordinary handle VALUES.
   #
@@ -187,8 +173,8 @@ capability IO do
   out : FileHandle<CannotRead, CanWrite>
   let out = Kex.Intrinsic.IO.stdout
 
-  # Standard error, as a handle. The sink +IO.printError+ and +IO.warn+ write
-  # to, reachable as a value.
+  # Standard error, as a handle. The sink +IO.printError+ writes to, reachable
+  # as a value.
   #
   # @return [FileHandle<CannotRead, CanWrite>] standard error, as a +Writable+
   #

@@ -115,6 +115,14 @@ make Binary, implement: Showable, Inspectable do
   #   "héllo".to(Binary).try.length   # => 6
   let length -> Integer = Kex.Intrinsic.Binary.length(this)
 
+  # Number of bytes held. The same as +length+, as on +List+ and +String+.
+  #
+  # @return [Integer] the byte count
+  #
+  # @example
+  #   "héllo".to(Binary).try.count   # => 6
+  let count -> Integer = Kex.Intrinsic.Binary.length(this)
+
   # Whether it holds no bytes at all.
   #
   # @return [Bool] +true+ when the binary is empty
@@ -125,9 +133,10 @@ make Binary, implement: Showable, Inspectable do
 
   # The byte at +index+, counting from zero.
   #
-  # Answers +None+ for a negative or out-of-range index, so an index you did
-  # not check is something you handle rather than something that stops the
-  # program.
+  # A negative index counts back from the end, as on a +List+: +-1+ is the
+  # last byte. Answers +None+ for an index outside the binary, so an index you
+  # did not check is something you handle rather than something that stops
+  # the program.
   #
   # @param index [Integer] the position to read
   # @return [Byte?] the byte, or +None+ when the index is outside the binary
@@ -136,8 +145,11 @@ make Binary, implement: Showable, Inspectable do
   #   let data = Binary.fromBytes([104, 105])
   #   data.at(0)    # => Just(104)
   #   data.at(2)    # => None
-  #   data.at(-1)   # => None
-  let at(index: Integer) -> Byte? = Kex.Intrinsic.Binary.at(this, index)
+  #   data.at(-1)   # => Just(105)
+  #   data.at(-3)   # => None
+  let at(index: Integer) -> Byte? do
+    return Kex.Intrinsic.Binary.at(this, index < 0 then this.length + index else index)
+  end
 
   # The byte at +index+, counting from zero. The same as +at+, matching the
   # +get+ that +List+ and +String+ carry.

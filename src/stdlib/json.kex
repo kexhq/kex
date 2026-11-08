@@ -12,11 +12,11 @@
 #   end
 #
 # Parsed JSON arrives as ordinary Kex values: an object becomes a +Map+ with
-# atom keys, an array becomes a +List+, +null+ becomes +None+, and numbers
+# string keys, an array becomes a +List+, +null+ becomes +None+, and numbers
 # become +Integer+ or +Float+ as written. Going the other way, +stringify+
 # accepts those same values and always emits strict JSON.
 #
-#   JSON.parse("{\"a\": 1}")           # => Ok({ a: 1 })
+#   JSON.parse("{\"a\": 1}")           # => Ok({ "a": 1 })
 #   JSON.stringify({ name: "Ada" })    # => "{\"name\":\"Ada\"}"
 #
 # Comments are accepted only when requested. Stringification always emits
@@ -30,7 +30,7 @@ module JSON do
 #
 #   JSON.parse("[1, 2")    # => Error(UnexpectedEnd(5))
 #   JSON.parse("// c\n1")  # => Error(UnexpectedCharacter("/", 0))
-type Error
+type JSONError
   = UnexpectedCharacter(String, Integer)
   | UnexpectedEnd(Integer)
   | InvalidLiteral(String, Integer)
@@ -45,14 +45,14 @@ type Error
 #
 # The whole text must be one JSON value with nothing after it: trailing input
 # is +TrailingInput+, not a silently ignored tail. Objects come back as maps
-# with atom keys, arrays as lists, +null+ as +None+.
+# with string keys, arrays as lists, +null+ as +None+.
 #
 # @param text [String] the JSON document
-# @return [Result<Any, Error>] the parsed value, or why it failed
+# @return [Result<Any, JSONError>] the parsed value, or why it failed
 #
 # @example
 #   JSON.parse("{\"a\": 1, \"b\": [true, null, 2.5]}")
-#   # => Ok({ a: 1, b: [true, None, 2.5] })
+#   # => Ok({ "a": 1, "b": [true, None, 2.5] })
 #   JSON.parse("[1, 2")   # => Error(UnexpectedEnd(5))
 #
 # @example Reading a config file
@@ -60,8 +60,8 @@ type Error
 #     Ok(config) => IO.printLine(config)
 #     Error(e)   => IO.printError("config.json is not valid JSON: ${e}")
 #   end
-parse : String -> Result<Any, Error>
-let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
+parse : String -> Result<Any, JSONError>
+let parse(text: String) -> Result<Any, JSONError> = parseWithOptions(text, {})
 
 # Parses a JSON document with parsing options.
 #
@@ -72,7 +72,7 @@ let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
 #
 # @param text [String] the JSON document
 # @param options [{Atom: Bool}] parsing options, e.g. +{ allowComments: true }+
-# @return [Result<Any, Error>] the parsed value, or why it failed
+# @return [Result<Any, JSONError>] the parsed value, or why it failed
 #
 # @example Accepting comments
 #   JSON.parse("// a note\n1", options: { allowComments: true })   # => Ok(1)
@@ -80,8 +80,8 @@ let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
 #
 # @example Reading a JSONC config
 #   JSON.parse(text, options: { allowComments: true })
-parse : String -> {Atom: Bool} -> Result<Any, Error>
-let parse(text: String, options: {Atom: Bool}) -> Result<Any, Error> = parseWithOptions(text, options)
+parse : String -> {Atom: Bool} -> Result<Any, JSONError>
+let parse(text: String, options: {Atom: Bool}) -> Result<Any, JSONError> = parseWithOptions(text, options)
 
 private do
   # Camel-case atom literals are represented by map-field syntax today.
@@ -93,7 +93,7 @@ private do
     [key] => key
   end
 
-  let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Any, Error> do
+  let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Any, JSONError> do
     let optionError = validateOptions(options)
     if optionError != None
       let Just(error) = optionError
@@ -124,8 +124,12 @@ end
 # with those names as strings, so +{ name: "Ada" }+ becomes +{"name":"Ada"}+.
 # Object keys come out in canonical key order.
 #
-# Anything the encoder does not recognise renders as +null+ rather than
-# failing, so this never raises.
+# Records become objects of their fields, in declaration order; tuples become
+# arrays; atoms, characters and constructors without a payload (+Monday+)
+# become strings. A constructor that carries a payload, such as +Ok(1)+, has no
+# JSON shape of its own and renders as +null+ (+Just(x)+ is the exception: it
+# is +x+), as does anything else the encoder does not recognise, so this never
+# raises.
 #
 # @param value [Any] the value to render
 # @return [String] the JSON text
@@ -134,13 +138,13 @@ end
 #   JSON.stringify({ name: "Ada", n: 1, ok: true })
 #   # => '{"n":1,"name":"Ada","ok":true}'
 #   JSON.stringify([1, 2, 3])
-#   # => '[1,2,3]'
+#   # => "[1,2,3]"
 #
 # @example Writing a JSON file
 #   FS.File.write("out.json", JSON.stringify(report))
 #
 # @example A round trip
-#   JSON.parse(JSON.stringify({ a: 1 }))   # => Ok({ a: 1 })
+#   JSON.parse(JSON.stringify({ "a": 1 }))   # => Ok({ "a": 1 })
 stringify : Any -> String
 let stringify(value: Any) -> String do
   # The BEAM encoder follows `stringifyValue` rule for rule (kexhq/kex#333);
@@ -159,12 +163,29 @@ private do
     if let Just(inner) = value
       return stringifyValue(inner)
     end
+    # A record is an object of its fields, in declaration order.
+    if let Just(values) = Type.fieldValues(value)
+      let names = Type.of(value).fields.map { |field| field.name }
+      let fields = names.zip(values).map do |pair|
+        let (name, item) = pair
+        "${encodeString(name)}:${stringifyValue(item)}"
+      end
+      return "{${fields.join(",")}}"
+    end
     match Kex.Intrinsic.Kex.kind(value) do
       :none => return "null"
       :bool => return value then "true" else "false"
       :integer => return "${value}"
       :float => return "${value}"
       :string => return encodeString(value)
+      :char => return encodeString("${value}")
+      :atom => return encodeString(objectKey(value))
+      :tuple => do
+        # On BEAM a constructor with a payload is a tuple too.
+        return constructorName(value) if Type.of(value).name != "Tuple"
+        return "[${Kex.Intrinsic.Tuple.items(value).map(~stringifyValue).join(",")}]"
+      end
+      :variant => return constructorName(value)
       :list => return "[${value.map(~stringifyValue).join(",")}]"
       :map => do
         let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
@@ -177,6 +198,14 @@ private do
     end
   end
 
+  # A nullary constructor (+Monday+) is its name, as an atom is; one with a
+  # payload has no JSON shape of its own and stays +null+.
+  let constructorName(value: Any) -> String do
+    # Its structural spelling, not its +showValue+: +Ok(1)+ shows as +1+.
+    let text = Kex.Intrinsic.Kex.inspect(value, false)
+    return text.contains?("(") then "null" else encodeString(text)
+  end
+
   # A JSON object key is a string, but a Kex map literal is written with ATOM
   # keys (`{ n: 1 }`): the shape most values being stringified actually have.
   # Rendering one gives `:n`, so drop the leading colon; anything else goes
@@ -187,14 +216,14 @@ private do
     return text.startsWith?(":") then text.drop(1) else text
   end
 
-  let validateOptions(options: {Atom: Bool}) -> Error? do
+  let validateOptions(options: {Atom: Bool}) -> JSONError? do
     match Kex.Intrinsic.Map.keys(options).find { |key| key != allowCommentsKey() } do
       Just(key) => return Just(UnknownOption(key))
       None => return None
     end
   end
 
-  let skipIgnored(cursor: Input, allowComments: Bool) -> Result<Input, Error> do
+  let skipIgnored(cursor: Input, allowComments: Bool) -> Result<Input, JSONError> do
     var current = skipWhitespace(cursor)
     loop do
       return Ok(current) if !allowComments || current.peek != Just('/')
@@ -232,7 +261,7 @@ private do
     return current
   end
 
-  let parseValue(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
+  let parseValue(cursor: Input, allowComments: Bool) -> Result<(Any, Input), JSONError> do
     let current = skipIgnored(cursor, allowComments).try
     match current.peek do
       None => return Error(UnexpectedEnd(current.pos))
@@ -248,7 +277,7 @@ private do
     end
   end
 
-  let parseLiteral(cursor: Input, literal: String, value: Any) -> Result<(Any, Input), Error> do
+  let parseLiteral(cursor: Input, literal: String, value: Any) -> Result<(Any, Input), JSONError> do
     var current = cursor
     var index = 0
     while index < literal.count do
@@ -261,12 +290,12 @@ private do
     return Ok((value, current))
   end
 
-  let parseString(cursor: Input) -> Result<(Any, Input), Error> do
+  let parseString(cursor: Input) -> Result<(Any, Input), JSONError> do
     let (value, advanced) = parseStringText(cursor).try
     return Ok((value, advanced))
   end
 
-  let parseStringText(cursor: Input) -> Result<(String, Input), Error> do
+  let parseStringText(cursor: Input) -> Result<(String, Input), JSONError> do
     var current = cursor.advance
     var pieces: [String] = []
     loop do
@@ -287,7 +316,7 @@ private do
     end
   end
 
-  let parseEscape(cursor: Input) -> Result<(String, Input), Error> do
+  let parseEscape(cursor: Input) -> Result<(String, Input), JSONError> do
     let escaped = cursor.advance
     match escaped.peek do
       None => return Error(UnexpectedEnd(escaped.pos))
@@ -304,7 +333,7 @@ private do
     end
   end
 
-  let parseUnicodeEscape(cursor: Input, escapePosition: Integer) -> Result<(String, Input), Error> do
+  let parseUnicodeEscape(cursor: Input, escapePosition: Integer) -> Result<(String, Input), JSONError> do
     let (first, afterFirst) = parseHexQuad(cursor, escapePosition).try
     var codepoint = first
     var advanced = afterFirst
@@ -327,7 +356,7 @@ private do
     end
   end
 
-  let parseHexQuad(cursor: Input, escapePosition: Integer) -> Result<(Integer, Input), Error> do
+  let parseHexQuad(cursor: Input, escapePosition: Integer) -> Result<(Integer, Input), JSONError> do
     var current = cursor
     var value = 0
     var count = 0
@@ -354,7 +383,7 @@ private do
     return None
   end
 
-  let parseArray(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
+  let parseArray(cursor: Input, allowComments: Bool) -> Result<(Any, Input), JSONError> do
     var current = skipIgnored(cursor.advance, allowComments).try
     var values: [Any] = []
     return Ok((values, current.advance)) if current.peek == Just(']')
@@ -374,7 +403,7 @@ private do
     end
   end
 
-  let parseObject(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
+  let parseObject(cursor: Input, allowComments: Bool) -> Result<(Any, Input), JSONError> do
     var current = skipIgnored(cursor.advance, allowComments).try
     var values: {String: Any} = {}
     return Ok((values, current.advance)) if current.peek == Just('}')
@@ -399,7 +428,7 @@ private do
     end
   end
 
-  let parseNumber(cursor: Input) -> Result<(Any, Input), Error> do
+  let parseNumber(cursor: Input) -> Result<(Any, Input), JSONError> do
     let start = cursor.pos
     var current = cursor
     var chars: [Char] = []

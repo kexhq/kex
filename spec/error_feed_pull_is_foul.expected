@@ -1,0 +1,1 @@
+spec/error_feed_pull_is_foul.kex:4:57: error: Cannot call foul function 'pull' from pure context

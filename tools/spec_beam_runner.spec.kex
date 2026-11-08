@@ -21,8 +21,8 @@ end
 
 foul runCase(body: String, expected: String) -> RunnerResult do
   let root = match FS.Directory.createTemporary("kex-beam-runner") do
-    Just(path) => path
-    None => die("spec_beam_runner: cannot create a temporary directory")
+    Ok(path) => path
+    Error(_) => die("spec_beam_runner: cannot create a temporary directory")
   end
   let compiler = "${root}/compiler"
   let tally = "${root}/count"

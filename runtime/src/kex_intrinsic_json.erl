@@ -92,12 +92,16 @@ only_whitespace(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t; C =:= $\n; C =:= 
     only_whitespace(Rest);
 only_whitespace(_) -> false.
 
-%% encode(Value) -> Just(Text). Mirrors json.kex's `stringify` rule for rule:
-%% unknown kinds (chars, tuples, records) render as null, object keys come out
-%% in canonical (sorted) order, strings escape exactly the characters
-%% `encodeString` does and nothing else.
+%% encode(Value) -> Just(Text) | None. Mirrors json.kex's `stringify` rule for
+%% rule: object keys come out in canonical (sorted) order, strings escape
+%% exactly the characters `encodeString` does and nothing else. A value this
+%% fast path cannot name faithfully (a record, whose field names live in the
+%% type registry; a tuple; an atom; a char) answers None, and json.kex walks it
+%% with the Type API instead.
 encode(Value) ->
-    {'Just', iolist_to_binary(value(Value))}.
+    try {'Just', iolist_to_binary(value(Value))}
+    catch throw:unsupported -> 'None'
+    end.
 
 value('None') -> <<"null">>;
 %% An optional is JSON's nullable: `Just(x)` is `x`, as `None` is `null`.
@@ -111,7 +115,7 @@ value(V) when is_list(V) -> [$[, lists:join($,, [value(E) || E <- V]), $]];
 value(V) when is_map(V) ->
     Fields = [[string(key(K)), $:, value(Item)] || {K, Item} <- lists:sort(maps:to_list(V))],
     [${, lists:join($,, Fields), $}];
-value(_) -> <<"null">>.
+value(_) -> throw(unsupported).
 
 %% json.kex's objectKey: a String key as-is; anything else by its text, minus
 %% the leading colon an atom's text carries.

@@ -34,7 +34,7 @@ describe("binary I/O") do
     FS.File.delete(path)
     assert(FS.File.writeBytes(path, payload).ok?)
     assert(FS.File.readBytes(path) == Ok(payload))
-    assert(FS.File.delete(path))
+    assert(FS.File.delete(path).ok?)
   end
 
   it("reads one complete Unicode scalar and reports malformed UTF-8") do

@@ -205,16 +205,15 @@ describe("Time") do
     assert(Duration.utcOffset(-5, 30).wholeSeconds == -19800)
   end
 
-  it("answers `now` for every type") do
+  it("reads the same clock for dates, times and instants") do
     let moment = DateTime.now()
-    let date = Date.now()
+    let date = Date.today()
     let clock = Time.now()
     # All three read the same clock, so the date and time components of the
     # instant agree with the standalone readings (barring a midnight tick).
     assert(date.compareTo(moment.date) == Equal)
     assert(clock.hour == moment.time.hour)
-    assert(Date.today().compareTo(Date.now()) == Equal)
-    assert(Date.utcNow().compareTo(DateTime.utcNow().date) == Equal)
+    assert(Date.utcToday().compareTo(DateTime.utcNow().date) == Equal)
     assert(Time.utcNow().hour == DateTime.utcNow().time.hour)
   end
 
@@ -371,5 +370,125 @@ describe("Time") do
       assert(Date.utcToday().iso == "2500-01-01")
       assert(DateTime.epochNanos() == 16725225600000000000)
     end
+  end
+end
+
+describe("Time and DateTime arithmetic below a second") do
+  it("carries sub-second spans into the seconds") do
+    assert((Time.of(14, 3, 0).try + 500.milliseconds).iso == "14:03:00.500")
+    assert((Time.of(14, 3, 0, 900000000).try + 500.milliseconds).iso == "14:03:01.400")
+    assert((Time.of(0, 0, 0).try - 1.milliseconds).iso == "23:59:59.999")
+    assert((DateTime.parse("2026-07-30T00:00:00Z").try - 1.milliseconds).iso == "2026-07-29T23:59:59.999Z")
+    assert((DateTime.parse("1969-12-31T23:59:59.5Z").try + 750.milliseconds).iso == "1970-01-01T00:00:00.250Z")
+  end
+
+  it("truncates whole units without float drift") do
+    assert(7.nanoseconds.wholeNanoseconds == 7)
+    assert(1500.milliseconds.wholeSeconds == 1)
+    assert((-1500).milliseconds.wholeSeconds == -1)
+  end
+end
+
+describe("Strict ISO 8601 parsing") do
+  it("rejects malformed offsets") do
+    assert(Time.parseOffset("+-02:00").error?)
+    assert(Time.parseOffset("+02:-30").error?)
+    assert(Time.parseOffset("   ").error?)
+    assert(Time.parseOffset("+2:00").error?)
+    assert(Time.parseOffset("-05:30").map { |d| d.wholeSeconds } == Ok(-19800))
+  end
+
+  it("rejects malformed times and dates") do
+    assert(DateTime.parse("2026-07-30T14:03:00ZZ").error?)
+    assert(Time.parse("14:03:00.").error?)
+    assert(Time.parse("14:03:00.+5").error?)
+    assert(Time.parse("1:3").error?)
+    assert(Date.parse("+2024-02-09").error?)
+    assert(Date.parse("2024-2-9").error?)
+    assert(Date.parse(" 2024-02-09").error?)
+  end
+
+  it("still accepts the ISO forms") do
+    assert(Time.parse("14:03").map { |t| t.iso } == Ok("14:03:00"))
+    assert(Time.parse("14:03:00.5").map { |t| t.iso } == Ok("14:03:00.500"))
+    assert(Date.parse("12024-02-09").map { |d| d.iso } == Ok("12024-02-09"))
+  end
+end
+
+describe("Formatting dates and times by pattern") do
+  it("writes CLDR fields with English names by default") do
+    let d = Date.of(2026, 11, 7).try
+    assert(d.to(String, Date.format`yyyy-MM-dd`) == Just("2026-11-07"))
+    assert(d.to(String, Date.format`EEEE, d MMMM yyyy`) == Just("Saturday, 7 November 2026"))
+    assert(d.to(String, Date.format`EEE, d MMM yy`) == Just("Sat, 7 Nov 26"))
+    assert(d.to(String, Date.format`'week of' d MMM`) == Just("week of 7 Nov"))
+    assert(d.to(String, Date.format`d 'o''clock' ''`) == Just("7 o'clock '"))
+  end
+
+  it("answers None for a field the value does not have") do
+    assert(Date.of(2026, 11, 7).try.to(String, Date.format`HH:mm`) == None)
+    assert(Time.of(14, 3, 0).try.to(String, Date.format`yyyy`) == None)
+  end
+
+  it("writes times, fractions, day periods and offsets") do
+    let t = Time.of(14, 3, 7, 250000000).try
+    assert(t.to(String, Date.format`HH:mm:ss.SSS`) == Just("14:03:07.250"))
+    assert(t.to(String, Date.format`h:mm a`) == Just("2:03 PM"))
+    assert(Time.of(0, 5, 0).try.to(String, Date.format`hh:mm a`) == Just("12:05 AM"))
+    let m = DateTime.parse("2026-07-30T14:03:00+02:00").try
+    assert(m.to(String, Date.format`yyyy-MM-dd HH:mm XXX`) == Just("2026-07-30 14:03 +02:00"))
+    assert(m.to(String, Date.format`X XX XXX x`) == Just("+02 +0200 +02:00 +02"))
+    assert(m.utc.to(String, Date.format`XXX xxx`) == Just("Z +00:00"))
+  end
+
+  it("uses a culture's names and layouts") do
+    let d = Date.of(2026, 11, 7).try
+    let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+    let de = Culture.of("DE_DE").or(Culture.DEFAULT)
+    let us = Culture.of("EN_US").or(Culture.DEFAULT)
+    assert(d.to(String, Date.format`yyyy. MMMM d.`, culture: hu) == Just("2026. november 7."))
+    assert(d.to(String, Date.format`EEEE`, culture: de) == Just("Samstag"))
+    assert(d.to(String, culture: de) == Just("07.11.2026"))
+    assert(d.to(String, culture: us) == Just("11/07/2026"))
+    let t = Time.of(14, 3, 7).try
+    assert(t.to(String, culture: us) == Just("2:03:07 PM"))
+    assert(t.to(String, culture: de) == Just("14:03:07"))
+    assert(t.to(String, Date.format`h:mm a`, culture: hu) == Just("2:03 du."))
+  end
+
+  it("reports where a run-time pattern goes wrong") do
+    assert(DateFormat.parse("yyyy-MM-dd").ok?)
+    assert(DateFormat.parse("yyyy-QQ").error.map { |e| e.position } == Just(5))
+    assert(DateFormat.parse("'open").error?)
+    assert(DateFormat.parse("MMMMM").error?)
+  end
+end
+
+describe("TimeError as Showable") do
+  it("interpolates as its message") do
+    assert("${InvalidDate(2026, 13, 1)}" == "not a calendar date: 2026-13-1")
+    match Date.parse("nope") do
+      Error(e) => assert("${e}" == "cannot parse as a date/time: nope")
+      Ok(_) => assert(false)
+    end
+  end
+
+  it("Duration shows as ISO 8601") do
+    assert(90.minutes.iso == "PT1H30M")
+    assert(500.milliseconds.iso == "PT0.500S")
+    assert((-2).seconds.iso == "-PT2S")
+    assert(Duration.zero().iso == "PT0S")
+    assert("${90.seconds}" == "PT1M30S")
+  end
+end
+
+describe("Culture month and weekday names") do
+  it("covers Italian, Portuguese and Dutch, and falls back to English") do
+    let d = Date.of(2026, 3, 2).try
+    let format = Date.format`EEEE d MMMM yyyy (EEE, MMM)`
+    assert(d.to(String, format, culture: Culture.of("IT_IT").or(Culture.DEFAULT)) == Just("lunedì 2 marzo 2026 (lun, mar)"))
+    assert(d.to(String, format, culture: Culture.of("PT_BR").or(Culture.DEFAULT)) == Just("segunda-feira 2 março 2026 (seg., mar.)"))
+    assert(d.to(String, format, culture: Culture.of("NL_NL").or(Culture.DEFAULT)) == Just("maandag 2 maart 2026 (ma, mrt)"))
+    assert(d.to(String, format, culture: Culture.of("JA_JP").or(Culture.DEFAULT)) == Just("Monday 2 March 2026 (Mon, Mar)"))
   end
 end

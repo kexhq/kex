@@ -89,10 +89,12 @@ uniq_seen([H | T], Seen, Acc) ->
         false -> uniq_seen(T, Seen#{H => true}, [H | Acc])
     end.
 flatten(L) -> lists:flatten(as_list(L)).
+%% A negative count takes nothing and drops nothing, as the interpreter does.
+take(L, N) when N =< 0 -> repack(L, []);
 take(L, N) -> repack(L, lists:sublist(as_list(L), N)).
 drop(L, N) ->
     L2 = as_list(L),
-    repack(L, lists:nthtail(min(N, erlang:length(L2)), L2)).
+    repack(L, lists:nthtail(max(0, min(N, erlang:length(L2))), L2)).
 zip(L, R)  -> zip_short(as_list(L), as_list(R)).
 zip_short([], _) -> [];
 zip_short(_, []) -> [];

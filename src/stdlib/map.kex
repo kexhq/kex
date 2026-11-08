@@ -15,11 +15,16 @@
 #   config.get(:user).or("anonymous")   # => "anonymous"
 #   config.put(:port, 9090)             # => { :host: "localhost", :port: 9090 }
 #
-# A map is +Enumerable+ and +Foldable+, and the traversal blocks take the key
-# and value as two parameters:
+# A map is +Enumerable+ and +Foldable+, and every traversal block takes the
+# key and value as two parameters: +each+, +map+, +filter+, +reject+, +find+,
+# +any?+, +all?+, +none?+, +one?+, +count+, +collect+ and +flatMap+, with
+# +mapIndexed+ adding the index as a third. Only +reduce+, the primitive, hands
+# over the pair as one value.
 #
 #   config.each { |k, v| IO.printLine("${k} = ${v}") }
 #   config.filter { |k, v| k != :port }   # => { :host: "localhost" }
+#   config.collect { |k, v| k == :port then Just(v) else None }   # => [8080]
+#   config.mapIndexed { |k, v, i| "${i}. ${k}" }   # => ["0. host", "1. port"]
 
 # Declared for the same reason list.kex declares `type List<X> = [X]`: it
 # gives the name `Map` a source declaration, so it resolves as a type through
@@ -349,6 +354,37 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
   merge :> Map<K, V> -> Map<K, V>
   let merge(other) = Kex.Intrinsic.Map.merge(this, other)
 
+  # Replaces the value under +key+ with +f+ of it. A missing key is left
+  # missing: use the three-argument form to supply a starting value.
+  #
+  # @param key [K] the key to update
+  # @param f [V -> V] computes the new value from the old
+  # @return [Map<K, V>] the map with that one value replaced
+  #
+  # @example
+  #   { "a": 1 }.update("a") { |n| n + 1 }   # => { "a": 2 }
+  #   { "a": 1 }.update("b") { |n| n + 1 }   # => { "a": 1 }
+  update :> K -> (V -> V) -> Map<K, V>
+  let update(key, f) do
+    match this.get(key) do
+      Just(value) => this.put(key, f(value))
+      None => this
+    end
+  end
+
+  # Replaces the value under +key+ with +f+ of it, starting from +default+
+  # when the key is missing.
+  #
+  # @param key [K] the key to update
+  # @param default [V] the value +f+ starts from when +key+ is missing
+  # @param f [V -> V] computes the new value from the old
+  # @return [Map<K, V>] the map with that value set
+  #
+  # @example Counting words
+  #   words.reduce({}) { |acc, w| acc.update(w, 0) { |n| n + 1 } }
+  update :> K -> V -> (V -> V) -> Map<K, V>
+  let update(key, default, f) = this.put(key, f(this.get(key, default)))
+
   # Returns +true+ when at least one entry satisfies +pred+. Stops at the
   # first match.
   #
@@ -403,4 +439,23 @@ make Map<K,V>, implement: Blankable do
   #   { a: 1 }.blank?   # => false
   blank? :> Bool
   let blank? = this.entries.empty?
+end
+
+module Map do
+  # Builds a map from +(key, value)+ pairs. A key that appears more than once
+  # keeps its last value, as +put+ would. Ruby spells this +to_h+.
+  #
+  # @param entries [[(K, V)]] the pairs
+  # @return [Map<K, V>] the map
+  #
+  # @example
+  #   Map.from([("a", 1), ("b", 2)])   # => { "a": 1, "b": 2 }
+  #   Map.from(m.entries) == m         # => true
+  from : [(K, V)] -> Map<K, V>
+  let from(entries) do
+    entries.reduce({}) do |acc, entry|
+      let (key, value) = entry
+      acc.put(key, value)
+    end
+  end
 end

@@ -97,8 +97,10 @@ end
 #   m.iso        # => "2026-07-30T14:03:00+02:00"
 #   m.utc.iso    # => "2026-07-30T12:03:00Z"
 #
-# Two +DateTime+ values that name the same instant compare equal whatever
-# offsets they are written at: comparison goes through +epochSeconds+.
+# Two +DateTime+ values that name the same instant order +Equal+ under
+# +compareTo+ whatever offsets they are written at: ordering goes through
+# +epochSeconds+. +==+ is structural, so the same instant written at two
+# offsets is not +==+; compare +epochSeconds+ (or +utc+) for that.
 record DateTime do
   # The calendar date, as read at this offset.
   date : Date
@@ -212,11 +214,13 @@ module Time do
   let parse(text: String) -> Result<Time, TimeError> do
     let parts = text.split(":")
     return Error(InvalidFormat(text)) if parts.count < 2 || parts.count > 3
-    let hour = Time.digitsIn(parts.at(0).or(""), text).try
-    let minute = Time.digitsIn(parts.at(1).or(""), text).try
-    let secondParts = parts.at(2).or("0").split(".")
-    let second = Time.digitsIn(secondParts.at(0).or("0"), text).try
-    let nanosecond = Time.parseFraction(secondParts.at(1).or(""), text).try
+    let hour = Time.fixedDigitsIn(parts.at(0).or(""), 2, text).try
+    let minute = Time.fixedDigitsIn(parts.at(1).or(""), 2, text).try
+    let secondParts = parts.at(2).or("00").split(".")
+    return Error(InvalidFormat(text)) if secondParts.count > 2
+    let second = Time.fixedDigitsIn(secondParts.at(0).or(""), 2, text).try
+    let fraction = secondParts.at(1)
+    let nanosecond = fraction.set? then Time.parseFraction(fraction.or(""), text).try else 0
     return Time.of(hour, minute, second, nanosecond)
   end
 
@@ -257,15 +261,14 @@ module Time do
   #   Time.parseOffset("+02:00").map { |d| d.wholeSeconds }   # => Ok(7200)
   #   Time.parseOffset("Z").map { |d| d.wholeSeconds }        # => Ok(0)
   let parseOffset(text: String) -> Result<Duration, TimeError> do
-    return Ok(Duration.zero()) if text.blank? || text == "Z"
+    return Ok(Duration.zero()) if text.empty? || text == "Z"
+    # Exactly ±HH:MM: one sign, then the two fields. Not `text.rest`: on BEAM
+    # the result of `rest` is not a binary string.
     let sign = text.at(0).or('+')
     return Error(InvalidFormat(text)) if sign != '+' && sign != '-'
-    # Not `text.rest.split(...)`: on BEAM the result of `rest` is not a
-    # binary string, so `split` on it raises function_clause.
-    let parts = text.replace("+", "").replace("-", "").split(":")
-    return Error(InvalidFormat(text)) if parts.count != 2
-    let hours = Time.digitsIn(parts.at(0).or(""), text).try
-    let minutes = Time.digitsIn(parts.at(1).or(""), text).try
+    return Error(InvalidFormat(text)) if text.count != 6 || text.at(3) != Just(':')
+    let hours = Time.fixedDigitsIn(text.slice(1, 2), 2, text).try
+    let minutes = Time.fixedDigitsIn(text.slice(4, 2), 2, text).try
     return Error(InvalidFormat(text)) if hours > 23 || minutes > 59
     return Ok(Duration.utcOffset(0 - hours, 0 - minutes)) if sign == '-'
     return Ok(Duration.utcOffset(hours, minutes))
@@ -578,9 +581,13 @@ module Time do
     return quotient
   end
 
+  # A Duration holds Float seconds, so it is rounded to the nanosecond, the
+  # finest unit it names, before truncating: 7.nanoseconds is 7e-9 seconds,
+  # and dividing that by 1e-9 directly gives 6.999... and so 6.
   let truncatedBy(seconds: Float, unit: Float) -> Integer do
-    let scaled = seconds / unit
-    return scaled.toInteger
+    let nanos = (seconds * 1000000000.0).round
+    let unitNanos = (unit * 1000000000.0).round
+    return nanos / unitNanos
   end
 
   let pad2(value: Integer) -> String do
@@ -616,8 +623,16 @@ module Time do
     end
   end
 
+  # The same, for a field ISO 8601 writes at a fixed width: "14", never "2".
+  let fixedDigitsIn(fragment: String, width: Integer, whole: String) -> Result<Integer, TimeError> do
+    return Error(InvalidFormat(whole)) if fragment.count != width
+    return Time.digitsIn(fragment, whole)
+  end
+
+  # ASCII digits only: Integer.parse would also take a sign or surrounding
+  # space, and none of those belongs inside an ISO 8601 field.
   let digitsToInteger(text: String) -> Result<Integer, TimeError> do
-    return Error(InvalidFormat(text)) if text.blank?
+    return Error(InvalidFormat(text)) if text.empty? || text.chars.any? { |c| !c.in?('0'..'9') }
     match Integer.parse(text) do
       Ok(value) => return Ok(value)
       Error(_) => return Error(InvalidFormat(text))
@@ -625,9 +640,9 @@ module Time do
   end
 
   # ".5" is 500000000ns: the digits are padded out to nanosecond scale.
+  # The caller has seen the ".", so an empty fraction is malformed, not zero.
   let parseFraction(text: String, whole: String) -> Result<Integer, TimeError> do
-    return Ok(0) if text.blank?
-    return Error(InvalidFormat(whole)) if text.count > 9
+    return Error(InvalidFormat(whole)) if text.empty? || text.count > 9
     var digits = text
     while digits.count < 9 do
       digits = "${digits}0"
@@ -638,7 +653,9 @@ module Time do
   # Splits "14:03:00+02:00" into its time and offset halves. A missing offset
   # reads as UTC, matching what a zero offset formats back to.
   let splitOffset(text: String) -> [String] do
-    return [text.split("Z").at(0).or(""), "Z"] if text.endsWith?("Z")
+    # Only the final "Z" is the designator: "...00ZZ" leaves "...00Z" to fail
+    # as a time rather than quietly dropping the extra one.
+    return [text.take(text.count - 1), "Z"] if text.endsWith?("Z")
     let plus = text.split("+")
     return [plus.at(0).or(""), "+${plus.at(1).or("")}"] if plus.count == 2
     # The date half is already gone, so any "-" left here starts the offset.
@@ -651,6 +668,56 @@ end
 
 # Building calendar dates, and asking what today is.
 module Date do
+  # Builds a +DateFormat+ from a CLDR pattern, for +to(String, format)+ on a
+  # +Date+, a +Time+ or a +DateTime+.
+  #
+  # A pattern that does not fit makes +to(String, format)+ answer +None+;
+  # +DateFormat.parse+ says where it goes wrong, and +validateFormat+ is the
+  # companion check for the tagged literal. Letters are fields, repeated for width; quote literal letters, as in
+  # +'at'+, and write +''+ for a quote itself. Anything else is written as
+  # it stands.
+  #
+  # - +yyyy+ the year, +yy+ its last two digits
+  # - +M+ / +MM+ the month number, +MMM+ / +MMMM+ its short / full name
+  # - +d+ / +dd+ the day of the month
+  # - +EEE+ / +EEEE+ the short / full weekday name
+  # - +H+ / +HH+ the hour 0-23, +h+ / +hh+ the hour 1-12, +a+ AM or PM
+  # - +m+ / +mm+ minutes, +s+ / +ss+ seconds, +S+ up to +SSSSSSSSS+ the
+  #   fraction of a second
+  # - +XXX+ the offset as +-05:00+, or +Z+ for UTC; +xxx+ the same without +Z+
+  #   (+XX+ / +xx+ write +-0500+, and one letter writes +-05+)
+  #
+  # Names come from the culture passed to +to(String, format, culture:)+,
+  # English without one.
+  #
+  # @param parts [[String]] the literal pieces of the tagged literal
+  # @param values [[Any]] the interpolated values
+  # @return [DateFormat] the format
+  #
+  # @example
+  #   let d = Date.of(2026, 11, 7).try
+  #   d.to(String, Date.format`yyyy-MM-dd`)        # => Just("2026-11-07")
+  #   d.to(String, Date.format`EEE, d MMM yyyy`)   # => Just("Sat, 7 Nov 2026")
+  #   d.to(String, Date.format`d MMMM yyyy`, culture: Culture.of("HU_HU").or(Culture.DEFAULT))
+  #   # => Just("7 november 2026")
+  format : [String] -> [Any] -> DateFormat
+  let format(parts, values) do
+    let rest = values.zip(parts.rest).map { |value, part| "${value}${part}" }
+    return DateFormat { pattern: parts.first.or("") + rest.join("") }
+  end
+
+  # Checks a +Date.format+ pattern during compilation, pointing at the first
+  # character that does not fit.
+  #
+  # @param source [String] the pattern
+  # @return [[TaggedValidation.Issue]] the problem found, if any
+  let validateFormat(source: String) -> [TaggedValidation.Issue] do
+    match DateFormat.pieces(source) do
+      Ok(_) => return []
+      Error((index, message)) => return [TaggedValidation.fatalAt(source.take(index).byteSize, message)]
+    end
+  end
+
   # Builds a validated calendar date.
   #
   # The month and the day are both range-checked, and the day is checked
@@ -704,24 +771,14 @@ module Date do
     let parts = text.split("-")
     # A leading "-" would be a negative year, which this deliberately rejects.
     return Error(InvalidFormat(text)) if parts.count != 3
-    let year = Time.digitsIn(parts.at(0).or(""), text).try
-    let month = Time.digitsIn(parts.at(1).or(""), text).try
-    let day = Time.digitsIn(parts.at(2).or(""), text).try
+    # At least four year digits (a wider year renders as-is, so it parses
+    # back); exactly two for the month and the day.
+    let yearText = parts.at(0).or("")
+    return Error(InvalidFormat(text)) if yearText.count < 4
+    let year = Time.digitsIn(yearText, text).try
+    let month = Time.fixedDigitsIn(parts.at(1).or(""), 2, text).try
+    let day = Time.fixedDigitsIn(parts.at(2).or(""), 2, text).try
     return Date.of(year, month, day)
-  end
-
-  # Today's date, in this machine's zone.
-  #
-  # +Date.today()+ reads better in most code; +now+ exists so every type in
-  # this file answers the same question the same way.
-  #
-  # @return [Date] today's date
-  #
-  # @example
-  #   Date.now().iso   # => "2026-07-30"
-  foul now() -> Date do
-    let moment = DateTime.now()
-    return moment.date
   end
 
   # Today's date, in this machine's zone.
@@ -766,18 +823,6 @@ module Date do
   end
 
   # Today's date in UTC, whatever this machine's zone is.
-  #
-  # @return [Date] today's UTC date
-  #
-  # @example
-  #   Date.utcNow().iso   # => "2026-07-30"
-  foul utcNow() -> Date do
-    let moment = DateTime.utcNow()
-    return moment.date
-  end
-
-  # Today's date in UTC. The same as +Date.utcNow()+, under the name that
-  # reads better.
   #
   # @return [Date] today's UTC date
   #
@@ -1170,7 +1215,7 @@ make Duration do
   #
   # @example
   #   Duration.hours(2).wholeSeconds   # => 7200
-  let wholeSeconds -> Integer = this.seconds.toInteger
+  let wholeSeconds -> Integer = Time.truncatedBy(this.seconds, 1.0)
 
   # The whole minutes in the span, truncated toward zero.
   #
@@ -1873,16 +1918,20 @@ make Time, implement: Inspectable, Showable do
   # A Time has no date to carry into, so 23:00 + 2.hours is 01:00. Reach for
   # +DateTime+ when the day rolling over is something you need to see.
   #
-  # The nanosecond field rides along untouched: +wholeSeconds+ truncates the
-  # span, so a sub-second Duration shifts nothing.
+  # Sub-second spans count: the nanoseconds carry into the seconds.
   #
   # @param span [Duration] the elapsed span to add
   # @return [Time] the later time of day
   #
   # @example
-  #   (Time.of(14, 3, 0).try + 2.hours).iso    # => "16:03:00"
-  #   (Time.of(23, 0, 0).try + 2.hours).iso    # => "01:00:00"
-  let +(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + span.wholeSeconds, this.nanosecond)
+  #   (Time.of(14, 3, 0).try + 2.hours).iso            # => "16:03:00"
+  #   (Time.of(23, 0, 0).try + 2.hours).iso            # => "01:00:00"
+  #   (Time.of(14, 3, 0).try + 500.milliseconds).iso   # => "14:03:00.500"
+  let +(span: Duration) -> Time do
+    let nanos = this.nanosecond + span.wholeNanoseconds
+    let carry = Time.floorDiv(nanos, 1000000000)
+    return Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + carry, nanos - carry * 1000000000)
+  end
 
   # Moves the time of day back by a span, wrapping within the day.
   #
@@ -1891,7 +1940,7 @@ make Time, implement: Inspectable, Showable do
   #
   # @example
   #   (Time.midnight() - 1.seconds).iso   # => "23:59:59"
-  let -(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight - span.wholeSeconds, this.nanosecond)
+  let -(span: Duration) -> Time = this + span.negated
 
   # The time of day +count+ seconds later, wrapping within the day.
   #
@@ -2040,7 +2089,12 @@ make DateTime, implement: Inspectable, Showable do
   # @example
   #   (DateTime.parse("2026-07-30T14:03:00Z").try + 90.minutes).iso
   #   # => "2026-07-30T15:33:00Z"
-  let +(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
+  let +(span: Duration) -> DateTime do
+    let nanos = this.time.nanosecond + span.wholeNanoseconds
+    let carry = Time.floorDiv(nanos, 1000000000)
+    let moved = DateTime.fromEpochSeconds(this.epochSeconds + carry, this.offset)
+    return Time.withNanosecond(moved, nanos - carry * 1000000000)
+  end
 
   # Moves the instant back by a fixed span, keeping its offset.
   #
@@ -2049,7 +2103,7 @@ make DateTime, implement: Inspectable, Showable do
   #
   # @example
   #   (DateTime.utcNow() - 24.hours).iso   # yesterday, same wall clock
-  let -(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
+  let -(span: Duration) -> DateTime = this + span.negated
 
   # Advances the instant by a calendar span, moving the DATE and leaving the
   # wall clock where it is.
@@ -2191,4 +2245,423 @@ make DateTime, implement: Inspectable, Showable do
     return Equal
   end
 
+end
+
+# How +to(String, format)+ writes a date, a time of day or an instant: a
+# CLDR pattern such as +"yyyy-MM-dd HH:mm"+, described at +Date.format+.
+# Build one with the +Date.format+ tagged literal, or with +DateFormat.parse+,
+# which says where a pattern known only at run time goes wrong.
+record DateFormat do
+  # The CLDR pattern, such as +"yyyy-MM-dd"+.
+  pattern : String
+end
+
+module DateFormat do
+  # One piece of a pattern: a field letter written +width+ times, or text
+  # written as it stands.
+  type Piece = PatternField(Char, Integer) | PatternText(String)
+
+  # Checks a pattern known only at run time. +Date.format+ describes the
+  # patterns.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<DateFormat, ParseError>] the format, or where the
+  #   pattern goes wrong
+  #
+  # @example
+  #   DateFormat.parse("yyyy-MM-dd")   # => Ok(DateFormat { pattern: "yyyy-MM-dd" })
+  #   DateFormat.parse("yyyy-QQ")      # => Error(ParseError { position: 5, ... })
+  parse : String -> Result<DateFormat, ParseError>
+  let parse(pattern) do
+    match DateFormat.pieces(pattern) do
+      Ok(_) => return Ok(DateFormat { pattern: pattern })
+      Error((index, message)) => return Error(ParseError {
+        input: pattern,
+        position: pattern.take(index).byteSize,
+        value: None,
+        message: message,
+        rest: pattern.drop(index)
+      })
+    end
+  end
+
+  # Splits a pattern into its fields and its literal text. Otherwise the
+  # index of its first problem, and what that problem is.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<[Piece], (Integer, String)>] the pieces, or the problem
+  #
+  # @example
+  #   DateFormat.pieces("d MMM")   # => Ok([PatternField('d', 1), PatternText(" "), PatternField('M', 3)])
+  pieces : String -> Result<[Piece], (Integer, String)>
+  let pieces(pattern) = scanPattern(pattern.chars, 0, [])
+
+  # Writes +date+, +time+ and +offset+ (whichever the value has) by the
+  # pieces of a pattern, with +culture+'s names. +None+ when the pattern
+  # asks for a field the value does not have, such as an hour of a +Date+.
+  #
+  # The +to(String, format)+ functions on +Date+, +Time+ and +DateTime+ are
+  # the way to reach this.
+  #
+  # @param format [DateFormat] the pattern
+  # @param date [Date?] the calendar date, when the value has one
+  # @param time [Time?] the time of day, when the value has one
+  # @param offset [Duration?] the offset from UTC, when the value has one
+  # @param culture [Culture] where month, weekday and day-period names come from
+  # @return [String?] the text, or +None+
+  renderParts : DateFormat -> Date? -> Time? -> Duration? -> Culture -> String?
+  let renderParts(format, date, time, offset, culture) do
+    match DateFormat.pieces(format.pattern) do
+      Error(_) => return None
+      Ok(pieces) => do
+        let names = Culture.timeNames(culture)
+        let parts = pieces.map { |piece| renderPiece(piece, date, time, offset, names) }
+        return parts.all?(~set?) then Just(parts.map { |part| part.or("") }.join) else None
+      end
+    end
+  end
+
+  # The pattern a culture writes its dates in: year, month and day in its
+  # order, joined by its date separator. ISO order without a time section.
+  #
+  # @param culture [Culture] the culture
+  # @return [String] the pattern, such as +"dd.MM.yyyy"+
+  #
+  # @example
+  #   DateFormat.dateLayout(Culture.of("DE_DE").or(Culture.DEFAULT))   # => "dd.MM.yyyy"
+  dateLayout : Culture -> String
+  let dateLayout(culture) do
+    match culture.time do
+      None => return "yyyy-MM-dd"
+      Just(settings) => do
+        let fields = settings.dateOrder.map { |field| fieldPattern(field) }
+        return fields.join(quoted("${settings.dateSeparator}"))
+      end
+    end
+  end
+
+  # The pattern a culture writes a time of day in: hours, minutes and
+  # seconds joined by its time separator, on a 12-hour clock with a day
+  # period where the culture reads time that way.
+  #
+  # @param culture [Culture] the culture
+  # @return [String] the pattern, such as +"HH:mm:ss"+ or +"h:mm:ss a"+
+  #
+  # @example
+  #   DateFormat.timeLayout(Culture.of("EN_US").or(Culture.DEFAULT))   # => "h:mm:ss a"
+  timeLayout : Culture -> String
+  let timeLayout(culture) do
+    match culture.time do
+      None => return "HH:mm:ss"
+      Just(settings) => do
+        let separator = quoted("${settings.timeSeparator}")
+        return "h${separator}mm${separator}ss a" if settings.twelveHour?
+        return "HH${separator}mm${separator}ss"
+      end
+    end
+  end
+
+  private do
+    # A text piece safe to splice into a pattern: letters are quoted.
+    let quoted(text: String) -> String do
+      let special = text.chars.any? { |c| c.in?('a'..'z') || c.in?('A'..'Z') || c == '\'' }
+      return special then "'${text.replace("'", "''")}'" else text
+    end
+
+    let fieldPattern(field: Atom) -> String do
+      return "yyyy" if field == :year
+      return "MM" if field == :month
+      return "dd" if field == :day
+      return ""
+    end
+
+    # Letters are fields, a quote starts literal text, and anything else is
+    # written as it stands.
+    let scanPattern(chars: [Char], index: Integer, acc: [Piece]) -> Result<[Piece], (Integer, String)> do
+      match chars.first do
+        None => return Ok(acc.reverse)
+        Just(c) => do
+          return quotedText(chars.rest, index + 1, index, "", acc) if c == '\''
+          if c.in?('a'..'z') || c.in?('A'..'Z')
+            let width = chars.takeWhile { |x| x == c }.count
+            if let Just(problem) = fieldProblem(c, width)
+              return Error((index, problem))
+            end
+            return scanPattern(chars.drop(width), index + width, [PatternField(c, width) | acc])
+          end
+          return scanPattern(chars.rest, index + 1, [PatternText(c.string) | acc])
+        end
+      end
+    end
+
+    # Inside +'...'+: +''+ is one quote, and a lone +'+ closes the text. An
+    # empty +''+ outside any text is a quote of its own.
+    let quotedText(chars: [Char], index: Integer, start: Integer, text: String, acc: [Piece]) -> Result<[Piece], (Integer, String)> do
+      match chars.first do
+        None => return Error((start, "quoted text needs its closing `'`"))
+        Just(c) => do
+          if c == '\''
+            if chars.second == Just('\'')
+              return quotedText(chars.drop(2), index + 2, start, text + "'", acc)
+            end
+            let piece = text.empty? then "'" else text
+            return scanPattern(chars.rest, index + 1, [PatternText(piece) | acc])
+          end
+          return quotedText(chars.rest, index + 1, start, text + c.string, acc)
+        end
+      end
+    end
+
+    let fieldProblem(c: Char, width: Integer) -> String? do
+      match widestField(c) do
+        None => return Just("`${c}` is not a date or time field; quote literal text, as in `'at'`")
+        Just(most) => return width > most then Just("`${c}` takes at most ${most} letters") else None
+      end
+    end
+
+    let widestField(c: Char) -> Integer? do
+      return Just(9) if c == 'y' || c == 'S'
+      return Just(4) if c == 'M' || c == 'E'
+      return Just(3) if c == 'X' || c == 'x'
+      return Just(1) if c == 'a'
+      return Just(2) if "dHhms".chars.contains?(c)
+      return None
+    end
+
+    let renderPiece(piece: Piece, date: Date?, time: Time?, offset: Duration?, names: Culture.TimeNames) -> String? do
+      match piece do
+        PatternText(text) => return Just(text)
+        PatternField(c, width) => do
+          return date.map { |d| dateField(c, width, d, names) } if "yMdE".chars.contains?(c)
+          return time.map { |t| timeField(c, width, t, names) } if "HhmsSa".chars.contains?(c)
+          return offset.map { |o| offsetField(c, width, o) }
+        end
+      end
+    end
+
+    let digits(value: Integer, width: Integer) -> String = "${value}".padLeft(width, "0")
+
+    let dateField(c: Char, width: Integer, date: Date, names: Culture.TimeNames) -> String do
+      return (width == 2 then digits(date.year.modulo(100), 2) else digits(date.year, width)) if c == 'y'
+      return digits(date.day, width) if c == 'd'
+      if c == 'M'
+        return names.months.get(date.month - 1, "") if width == 4
+        return names.shortMonths.get(date.month - 1, "") if width == 3
+        return digits(date.month, width)
+      end
+      let weekday = date.weekday.number - 1
+      return width == 4 then names.weekdays.get(weekday, "") else names.shortWeekdays.get(weekday, "")
+    end
+
+    let timeField(c: Char, width: Integer, time: Time, names: Culture.TimeNames) -> String do
+      return digits(time.hour, width) if c == 'H'
+      return digits(time.minute, width) if c == 'm'
+      return digits(time.second, width) if c == 's'
+      return digits(time.nanosecond, 9).take(width) if c == 'S'
+      let (am, pm) = names.dayPeriods
+      return (time.hour < 12 then am else pm) if c == 'a'
+      let twelve = time.hour.modulo(12)
+      return digits(twelve == 0 then 12 else twelve, width)
+    end
+
+    # +X+ writes UTC as +Z+, +x+ as +00+; one letter is +HH+ (with +mm+ only
+    # when the minutes are not zero), two +HHmm+, three +HH:mm+.
+    let offsetField(c: Char, width: Integer, offset: Duration) -> String do
+      let total = offset.wholeSeconds
+      return "Z" if total == 0 && c == 'X'
+      let sign = total < 0 then "-" else "+"
+      let magnitude = total.abs
+      let hours = digits(magnitude / 3600, 2)
+      let minutes = digits(magnitude.modulo(3600) / 60, 2)
+      return "${sign}${hours}:${minutes}" if width == 3
+      return "${sign}${hours}${minutes}" if width == 2
+      return minutes == "00" then "${sign}${hours}" else "${sign}${hours}${minutes}"
+    end
+  end
+end
+
+make Date do
+  # Writes the date by a CLDR pattern, with English month and weekday names.
+  # Patterns are described at +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ when the pattern asks for a time
+  #   field, which a date does not have
+  #
+  # @example
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`yyyy-MM-dd`)   # => Just("2026-11-07")
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`EEEE, d MMMM yyyy`)
+  #   # => Just("Saturday, 7 November 2026")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, Just(this), None, None, Culture.DEFAULT)
+  end
+
+  # Writes the date by a CLDR pattern, with +culture+'s month and weekday
+  # names (English names for a culture that carries none).
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`yyyy. MMMM d.`, culture: hu)
+  #   # => Just("2026. november 7.")
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, Just(this), None, None, culture)
+  end
+
+  # Writes the date the way +culture+ writes dates: its field order and its
+  # separator, with two-digit months and days.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   Date.of(2026, 11, 7).try.to(String, culture: Culture.of("DE_DE").or(Culture.DEFAULT))
+  #   # => Just("07.11.2026")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat { pattern: DateFormat.dateLayout(culture) }
+    return DateFormat.renderParts(layout, Just(this), None, None, culture)
+  end
+end
+
+make Time do
+  # Writes the time of day by a CLDR pattern. Patterns are described at
+  # +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ when the pattern asks for a date
+  #   or an offset field, which a time of day does not have
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.to(String, Date.format`HH:mm`)     # => Just("14:03")
+  #   Time.of(14, 3, 0).try.to(String, Date.format`h:mm a`)    # => Just("2:03 PM")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, None, Just(this), None, Culture.DEFAULT)
+  end
+
+  # Writes the time of day by a CLDR pattern, with +culture+'s day-period
+  # names.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, None, Just(this), None, culture)
+  end
+
+  # Writes the time of day the way +culture+ does: its separator, on a
+  # 12-hour clock where the culture reads time that way.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.to(String, culture: Culture.of("EN_US").or(Culture.DEFAULT))
+  #   # => Just("2:03:00 PM")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat { pattern: DateFormat.timeLayout(culture) }
+    return DateFormat.renderParts(layout, None, Just(this), None, culture)
+  end
+end
+
+make DateTime do
+  # Writes the instant by a CLDR pattern, as read at its own offset.
+  # Patterns are described at +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ for a pattern that is not valid
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try.to(String, Date.format`yyyy-MM-dd HH:mm XXX`)
+  #   # => Just("2026-07-30 14:03 +02:00")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, Just(this.date), Just(this.time), Just(this.offset), Culture.DEFAULT)
+  end
+
+  # Writes the instant by a CLDR pattern, with +culture+'s names.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, Just(this.date), Just(this.time), Just(this.offset), culture)
+  end
+
+  # Writes the instant the way +culture+ writes a date and a time of day,
+  # separated by a space. The offset is not written.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00Z").try.to(String, culture: Culture.of("DE_DE").or(Culture.DEFAULT))
+  #   # => Just("30.07.2026 14:03:00")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat {
+      pattern: "${DateFormat.dateLayout(culture)} ${DateFormat.timeLayout(culture)}"
+    }
+    return DateFormat.renderParts(layout, Just(this.date), Just(this.time), Just(this.offset), culture)
+  end
+end
+
+make Duration, implement: Showable do
+  # The span in ISO 8601 form: hours, minutes and seconds, with the
+  # fraction of a second written as +iso+ on a +Time+ writes it. A zero span
+  # is +PT0S+, and a negative one carries a leading +-+.
+  #
+  # @return [String] the ISO 8601 duration
+  #
+  # @example
+  #   90.minutes.iso          # => "PT1H30M"
+  #   500.milliseconds.iso    # => "PT0.500S"
+  #   (-2).seconds.iso        # => "-PT2S"
+  #   Duration.zero().iso     # => "PT0S"
+  iso :> String
+  let iso do
+    let total = this.wholeNanoseconds
+    let sign = total < 0 then "-" else ""
+    let span = total.abs
+    let hours = span / 3600000000000
+    let minutes = span.modulo(3600000000000) / 60000000000
+    let nanos = span.modulo(60000000000)
+    let fraction = Time.formatFraction(nanos.modulo(1000000000))
+    let secondsPart = (nanos == 0) then "" else "${nanos / 1000000000}${fraction}S"
+    let hoursPart = hours == 0 then "" else "${hours}H"
+    let minutesPart = minutes == 0 then "" else "${minutes}M"
+    let body = "${hoursPart}${minutesPart}${secondsPart}"
+    return "${sign}PT${body.empty? then "0S" else body}"
+  end
+
+  # Shows the span as its ISO 8601 form, as +iso+ writes it, so
+  # interpolating a +Duration+ reads as a span rather than as its record.
+  #
+  # @return [String] the ISO 8601 duration
+  #
+  # @example
+  #   "${90.seconds}"   # => "PT1M30S"
+  showValue :> String
+  let showValue = this.iso
+end
+
+make TimeError, implement: Showable do
+  # Shows the failure as the sentence +Time.errorMessage+ writes, so
+  # +"${e}"+ explains itself rather than printing the constructor.
+  #
+  # @return [String] the message
+  #
+  # @example
+  #   "${InvalidDate(2026, 13, 1)}"   # => "not a calendar date: 2026-13-1"
+  showValue :> String
+  let showValue = Time.errorMessage(this)
 end

@@ -84,6 +84,20 @@ static auto writeFailed(const std::string& path) -> ValuePtr {
     return Value::error(Value::variant("WriteFailed", "FileError", {Value::string(path)}));
 }
 
+// A directory opens as an fstream on Linux and only fails at the first read,
+// so a read of one has to be refused up front, as BEAM's file module does.
+static auto isDirectoryPath(const std::string& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
+}
+
+// A line read off getline loses its "\n" but keeps the "\r" of a CRLF ending.
+// Every line reader drops it too, as String.lines and BEAM's file:read_line do.
+static auto chompCarriageReturn(std::string line) -> std::string {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    return line;
+}
+
 static auto optionalValueReadResult(const ValuePtr& value) -> ValuePtr {
     if (!value || value->isNone()) return Value::ok(Value::none());
     if (auto* variant = std::get_if<VariantValue>(&value->data);
@@ -163,6 +177,12 @@ auto Evaluator::registerFileBuiltins() -> void {
 
         std::shared_ptr<std::fstream> fs;
         if (!isMocked) {
+            if (isDirectoryPath(path)) {
+                auto fileError = std::make_shared<Value>();
+                fileError->data = VariantValue{
+                    "OpenFailed", "FileError", {Value::string(path)}, {}, {}};
+                return Value::error(fileError);
+            }
             fs = std::make_shared<std::fstream>(
                 path, *flags | std::ios::binary);
             if (!fs->is_open()) {
@@ -216,14 +236,14 @@ auto Evaluator::registerFileBuiltins() -> void {
                 pos = end + 1;
             }
             setMockCursor(h->path, pos);
-            return optionalTextReadResult(std::move(line));
+            return optionalTextReadResult(chompCarriageReturn(std::move(line)));
         }
 
         if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
         std::string line;
         if (!std::getline(*h->stream, line))
             return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
-        return optionalTextReadResult(std::move(line));
+        return optionalTextReadResult(chompCarriageReturn(std::move(line)));
     });
 
     // handle.get -> String? (single character)
@@ -426,8 +446,13 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::boolean(mockCursor(h->path) >= mockIt->second.size());
         }
 
-        if (!h->stream) return Value::boolean(true);
-        return Value::boolean(h->stream->eof());
+        if (!h->stream || !h->stream->is_open()) return Value::boolean(true);
+        // Peek rather than read eofbit: a whole-file `read` (through rdbuf)
+        // drains the stream without ever setting it, and BEAM answers true
+        // there. Clear afterwards so a later seek or write is unaffected.
+        const bool atEnd = h->stream->peek() == std::char_traits<char>::eof();
+        h->stream->clear();
+        return Value::boolean(atEnd);
     });
 
     // handle.close -> Void
@@ -513,7 +538,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::just(lazy::feedValue([stream]() -> ValuePtr {
             std::string line;
             if (!std::getline(*stream, line)) return nullptr;
-            return Value::string(line);
+            return Value::string(chompCarriageReturn(line));
         }));
     });
 
@@ -529,6 +554,8 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::ok(Value::string(std::move(content)));
         };
         if (auto mocked = mockFileContent(pathStr->value)) return finish(*mocked);
+        if (isDirectoryPath(pathStr->value))
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
         std::ostringstream buf;
@@ -543,6 +570,8 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!path) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         if (auto mocked = mockFileContent(name))
             return Value::ok(Value::binary({mocked->begin(), mocked->end()}));
+        if (isDirectoryPath(name))
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         std::ifstream file(name, std::ios::binary);
         if (!file) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(file), {});
@@ -724,10 +753,11 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::just(lazy::feedValue([text]() -> ValuePtr {
                 std::string line;
                 if (!std::getline(*text, line)) return nullptr;
-                return Value::string(line);
+                return Value::string(chompCarriageReturn(line));
             }));
         }
 
+        if (isDirectoryPath(pathStr->value)) return Value::none();
         auto file = std::make_shared<std::ifstream>(pathStr->value, std::ios::binary);
         if (!file->is_open()) return Value::none();
         return Value::just(lazy::feedValue([file]() -> ValuePtr {
@@ -736,7 +766,7 @@ auto Evaluator::registerFileBuiltins() -> void {
             // first null, so the handle closes with the last reference.
             std::string line;
             if (!std::getline(*file, line)) return nullptr;
-            return Value::string(line);
+            return Value::string(chompCarriageReturn(line));
         }));
     });
 
@@ -894,7 +924,11 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
             m_mockDirs.erase(pathStr->value);
             return Value::boolean(true);
         }
+        // A directory function never removes a file: std::filesystem::remove
+        // takes either, so check first (symlink_status: a link is not one).
         std::error_code ec;
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+            return Value::boolean(false);
         bool removed = std::filesystem::remove(pathStr->value, ec);
         return Value::boolean(removed && !ec);
     });
@@ -916,9 +950,12 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
             }
             return Value::boolean(true);
         }
+        // Only a directory tree: a file, a symlink or a missing path is false.
         std::error_code ec;
-        std::filesystem::remove_all(pathStr->value, ec);
-        return Value::boolean(!ec);
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+            return Value::boolean(false);
+        auto removed = std::filesystem::remove_all(pathStr->value, ec);
+        return Value::boolean(removed > 0 && !ec);
     });
 
     // Directory.list(path) -> [String]?  (entry names, not full paths)

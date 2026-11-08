@@ -2,8 +2,24 @@
 #include "../../common/utf8.hxx"
 #include "lazy.hxx"
 #include <algorithm>
+#include <functional>
+#include <memory>
 
 namespace kex::interpreter {
+
+namespace {
+
+// A take/drop count clamped to [0, size]: a negative count means none, and a
+// count too big for int64_t (a BigIntValue) means all of a positive one.
+auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
+    if (auto* n = std::get_if<IntValue>(&count->data))
+        return n->value <= 0 ? 0 : std::min(static_cast<size_t>(n->value), size);
+    if (auto* big = std::get_if<BigIntValue>(&count->data))
+        return sgn(big->value) <= 0 ? 0 : size;
+    return 0;
+}
+
+} // namespace
 
 auto Evaluator::registerListBuiltins() -> void {
     defineModule("List");
@@ -318,31 +334,27 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        auto n = std::get_if<IntValue>(&args[1]->data);
-        if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             const auto& cps = cachedCodepoints(*str);
-            auto cnt = std::min(static_cast<size_t>(n->value), cps.size());
+            auto cnt = clampedCount(args[1], cps.size());
             return Value::string(utf8::encodeAll({cps.begin(), cps.begin() + cnt}));
         }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
-        auto cnt = std::min(static_cast<size_t>(n->value), list->elements.size());
+        auto cnt = clampedCount(args[1], list->elements.size());
         return Value::list({list->elements.begin(), list->elements.begin() + cnt});
     });
 
     reg("drop", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        auto n = std::get_if<IntValue>(&args[1]->data);
-        if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             const auto& cps = cachedCodepoints(*str);
-            auto skip = std::min(static_cast<size_t>(n->value), cps.size());
+            auto skip = clampedCount(args[1], cps.size());
             return Value::string(utf8::encodeAll({cps.begin() + skip, cps.end()}));
         }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
-        auto skip = std::min(static_cast<size_t>(n->value), list->elements.size());
+        auto skip = clampedCount(args[1], list->elements.size());
         return Value::list({list->elements.begin() + skip, list->elements.end()});
     });
 
@@ -434,7 +446,33 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::boolean(true);
     });
 
-    auto compareVia = [this](const ValuePtr& a, const ValuePtr& b) -> std::string {
+    // Held by a shared_ptr rather than written as a plain lambda: tuples and
+    // lists compare element by element, so the comparison calls itself, and
+    // the builtins below keep it alive long after this function returns.
+    using Comparison = std::function<std::string(const ValuePtr&, const ValuePtr&)>;
+    auto self = std::make_shared<Comparison>();
+    auto compareVia = [self](const ValuePtr& a, const ValuePtr& b) { return (*self)(a, b); };
+    *self = [this, compareVia](const ValuePtr& a, const ValuePtr& b) -> std::string {
+        // Tuples and lists order lexicographically, a shorter prefix first:
+        // the term order BEAM sorts them by. Without this every pair compared
+        // Equal and `.sort` left the list alone.
+        auto lexicographic = [&compareVia](const std::vector<ValuePtr>& xs,
+                                           const std::vector<ValuePtr>& ys) -> std::string {
+            for (size_t i = 0; i < xs.size() && i < ys.size(); ++i) {
+                auto r = compareVia(xs[i], ys[i]);
+                if (r != "Equal") return r;
+            }
+            return xs.size() < ys.size() ? "Less" : (xs.size() > ys.size() ? "Greater" : "Equal");
+        };
+        if (auto* at = std::get_if<TupleValue>(&a->data))
+            if (auto* bt = std::get_if<TupleValue>(&b->data))
+                return lexicographic(at->elements, bt->elements);
+        if (auto* al = std::get_if<ListValue>(&a->data))
+            if (auto* bl = std::get_if<ListValue>(&b->data))
+                return lexicographic(al->elements, bl->elements);
+        if (auto* ab = std::get_if<BoolValue>(&a->data))
+            if (auto* bb = std::get_if<BoolValue>(&b->data))
+                return ab->value == bb->value ? "Equal" : (bb->value ? "Less" : "Greater");
         if (auto* ai = std::get_if<IntValue>(&a->data))
             if (auto* bi = std::get_if<IntValue>(&b->data))
                 return ai->value < bi->value ? "Less" : (ai->value > bi->value ? "Greater" : "Equal");

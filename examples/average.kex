@@ -13,7 +13,7 @@ foul numbersFrom(args: [String]) -> [Float] do
   # Check if all arguments were successfully converted to Float, warn the user if not
   if numbers.count != args.count
     let not_numbers = args.filter(&.to(Float).none?)
-    IO.warning("Warning: These arguments could not be converted to numbers and will be ignored: " + not_numbers.join(", "))
+    IO.printError("Warning: These arguments could not be converted to numbers and will be ignored: " + not_numbers.join(", "))
   end
 
   printUsageAndExitWith("Please provide at least one valid number as an argument.") if numbers.empty?
