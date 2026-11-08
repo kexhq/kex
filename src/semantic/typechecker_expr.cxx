@@ -3592,7 +3592,17 @@ auto TypeChecker::hasAnnotatedSignatureForReceiver(
     const std::string& name, const TypePtr& receiverType) const -> bool {
     auto it = m_annotatedReceiverKeys.find(name);
     if (it == m_annotatedReceiverKeys.end()) return false;
-    return it->second.count(typeToString(receiverType)) > 0;
+    return it->second.count(annotatedReceiverKey(receiverType)) > 0;
+}
+
+auto TypeChecker::annotatedReceiverKey(const TypePtr& receiverType) const -> std::string {
+    const auto receiver = resolve(receiverType);
+    const auto* named = std::get_if<NamedType>(&receiver->kind);
+    const bool generic = named && std::all_of(
+        named->typeArgs.begin(), named->typeArgs.end(), [&](const TypePtr& arg) {
+            return std::holds_alternative<TypeVar>(resolve(arg)->kind);
+        });
+    return typeToString(generic ? headShapeOf(receiver) : receiver);
 }
 
 auto TypeChecker::displaySignature(const std::string& name, const Signature& sig) const -> std::string {
@@ -4235,8 +4245,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // A module declared in the current compilation unit shadows a package
     // module with the same source identity. This matches runtime code-path
     // precedence and prevents imported ownership from hijacking local calls.
+    // A receiver method too, on a type one of those modules declares: a
+    // stdlib unit compiled with the prelude's interface saw its own
+    // `Mock.Files.cannedRead` twice, the source's and the interface's, and
+    // left `this.cannedRead(path)` to the value.
     if (!qualifiedModule.empty() && m_localModules.contains(qualifiedModule))
         importedFunctions.clear();
+    std::erase_if(importedFunctions, [&](const ImportedFunction* function) {
+        if (!function->isReceiverMethod || function->signature.params.empty())
+            return false;
+        const auto* receiver =
+            std::get_if<NamedType>(&function->signature.params.front()->kind);
+        return receiver &&
+               m_localModules.contains(kex::mangle::pathScopeOf(receiver->name));
+    });
     // A receiver method hidden behind `using` can be the only overload whose
     // labelled arguments and types fit. Decide that here, from local methods
     // and imported interfaces, so the backends do not infer ownership.

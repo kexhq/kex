@@ -385,6 +385,32 @@ undecided or typed Unknown.
   Unknown. The pre-pass now takes an explicit receiver (`@...`) as the first
   parameter, and the body types that pattern as the make target, as it did
   a destructured record receiver.
+- **A method matching values by literal, `_` or name is pre-registered.**
+  `let productKind(:mass, :acceleration) = :force` in `make Measure` was
+  registered only when its block was checked, so `this.productKind(...)` in
+  an earlier body stayed undecided (36 calls in `units/si.kex`). A literal,
+  wildcard or variable pattern takes any value, like an untyped name, and
+  the body types it; only constructor and structure patterns (`to(String)`)
+  wait for their block.
+- **One method, one signature.** Three registrations of the same method
+  looked like overloads, and `this.helper(untyped)` was left to the value
+  (`Dispatch`):
+  - the pre-pass placeholder (`Files -> A -> B`) beside the checked body
+    (`Files -> A -> String?`): the checked signature now replaces the
+    placeholder registered for its clause;
+  - a `:>` contract on a generic receiver (`contains? :> A -> Bool` in
+    `make Set<A>`) beside the body's own registration: contracts were keyed
+    by the printed receiver, whose variables each pass spells apart, so the
+    body never saw its contract. `annotatedReceiverKey` files `Set<A>` by
+    its head, and a concrete instantiation (`[Integer]`) whole;
+  - a stdlib unit's own methods arriving again through the prelude
+    interface (`Mock.Files.cannedRead`): a module the unit declares shadows
+    the interface's for receiver methods on its types, as it already did
+    for qualified calls (`mangle::pathScopeOf`).
+  Lowering's `ownedMakeFunction` then reads the owner from the checker's
+  `OwnMethod`/`TraitMethod` target instead of from the receiver's static
+  type; no `Dispatch` call reached it any more. An error's candidate list
+  shows the answered result (`+ : Vec -> Vec -> Vec`, was `-> A`).
 - **Top-level values are declarations in the check order.** Functions were
   checked first and top-level statements after, so a function reading a
   top-level value (`let frame = Template.html(...)`, `let greeting = ...`)
@@ -1070,6 +1096,26 @@ Then (same day):
     Lowering parses nothing any more: `importedDefault`, its cache, and
     `lowerFieldDefault`'s guess at short module names are deleted. The
     interface keeps the default text only as "has a default".
+  - A call the checker resolved is emitted as resolved even when some
+    record has a field of the same name (`localFieldAccessor` and
+    `resolvedApart` are deleted). Over the spec suites the override threw
+    the checker's target away 263 times, nearly all on receivers whose type
+    it knew (`2.seconds` on Integer, `measure.kind`); the erased receiver it
+    was written for (`opaque(bag).entries`) the checker already decides as
+    Dispatch. Devirtualized calls rose 1250 → 1315.
+    Likewise a type of this program with a static function of the same
+    name (`localTypeShadows`) and a dotted module path naming one of this
+    unit's functions (`modulePathOwnsCall`) no longer override a resolved
+    target: a call the checker resolved is emitted as resolved.
+  - A field read the checker decided reads its slot unless an interface
+    lays the same record name out differently (`conflictingRecordLayouts`;
+    the same layout seen twice is one record), with the checker's name
+    canonicalized (`Port` is `Net.Port`). Field reads reaching the
+    local-method cascade fell 128 → 5 (a conflicting `ParseError`,
+    structural records).
+  - The walker's last re-derivation (`showErasedArgument` reading an
+    argument's static type) is the checker's answer now
+    (`shownThroughDistinct`, persisted with the HIR): walker-rederives 0.
   - The HIR's node numbering (and every "body that runs" walk) now covers
     parameter and record-field defaults (`forEachBodyExpr`, over the new
     `forEachDeclared`), so a persisted HIR keeps their decisions.

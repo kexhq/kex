@@ -49,6 +49,13 @@ inline auto scopeOf(const std::string& name) -> std::string {
     return pos == std::string::npos ? std::string{} : name.substr(0, pos);
 }
 
+// A dotted source path's module, everything before its LAST `.`
+// (`Mock.Files` → `Mock`), or "" for a bare name.
+inline auto pathScopeOf(const std::string& path) -> std::string {
+    const auto pos = path.rfind('.');
+    return pos == std::string::npos ? std::string{} : path.substr(0, pos);
+}
+
 // Everything after the LAST separator, or `name` when there is none.
 inline auto memberOf(const std::string &name) -> std::string {
   const auto pos = name.rfind(kSeparator);

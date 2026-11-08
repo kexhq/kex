@@ -2132,7 +2132,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             // this makes the source agree.
             generalizeSignature(*sig, targetVarMark);
             m_annotatedMethods.insert(ann->name);
-            m_annotatedReceiverKeys[ann->name].insert(typeToString(receiver));
+            m_annotatedReceiverKeys[ann->name].insert(annotatedReceiverKey(receiver));
             // Skip a signature already registered with the same parameters —
             // the same guard checkFunctionDef applies. A prelude type whose
             // method is registered both from the imported interface and from
@@ -2178,16 +2178,25 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // `string :> String` vs. Input's own plain `let string(...)`) must
         // not block this type's method from registering at all (#251).
         if (hasAnnotatedSignatureForReceiver(method.name, receiver)) return;
-        // Only plain named parameters, after an explicit receiver if the
-        // method matches one (`let factor(@Px)` in `make CssUnit`): that
-        // first parameter IS the receiver, so the arity gains none. Any other
-        // pattern, and a type-selector argument (`let to(String)`), is not a
-        // parameter type at all.
+        // After an explicit receiver if the method matches one (`let
+        // factor(@Px)` in `make CssUnit`): that first parameter IS the receiver,
+        // so the arity gains none. A parameter matched by a literal, `_` or a
+        // name (`let productKind(:mass, :acceleration)`) takes any value, typed
+        // by the body like an untyped name; a constructor or structure pattern,
+        // or a type-selector argument (`let to(String)`), is not a parameter
+        // type at all, and the method registers when its body is checked.
         const bool explicitReceiver = !clause.params.empty() &&
             clause.params.front().pattern &&
             std::holds_alternative<ast::ThisPattern>((*clause.params.front().pattern)->kind);
+        const auto takesAnyValue = [](const ast::Param& param) {
+            if (!param.pattern) return param.name.has_value();
+            const auto& kind = (*param.pattern)->kind;
+            return std::holds_alternative<ast::LiteralPattern>(kind) ||
+                   std::holds_alternative<ast::WildcardPattern>(kind) ||
+                   std::holds_alternative<ast::VarPattern>(kind);
+        };
         for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
-            if (clause.params[i].pattern || !clause.params[i].name) return;
+            if (!takesAnyValue(clause.params[i])) return;
         Signature signature;
         signature.name = method.name;
         signature.isFoul = method.isFoul;
@@ -2233,7 +2242,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // lowering refused `router.launchOn(port: 4000)` for a method this
         // pass — not checkFunctionDef — registered.
         for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
-            signature.paramNames.push_back(*clause.params[i].name);
+            signature.paramNames.push_back(clause.params[i].name.value_or(""));
         signature.clause = &clause;
         // Trailing defaults are optional from the start, not only once the
         // body has been checked: a top-level function calling
@@ -3927,6 +3936,18 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 withReceiver.requiredParams =
                     withReceiver.requiredParams.value_or(
                         signature.params.size()) + 1;
+            // One clause, one signature: the checked body replaces what the
+            // pre-pass registered for it. Kept beside it, the placeholder
+            // (`Files -> A -> B`) and the checked `Files -> A -> String?`
+            // were two candidates, and `this.canned(path)` an overload left
+            // to the value.
+            const auto placeholder = std::find_if(
+                existing.begin(), existing.end(),
+                [&](const Signature& other) { return other.clause == signature.clause; });
+            if (signature.clause && placeholder != existing.end()) {
+                *placeholder = std::move(withReceiver);
+                continue;
+            }
             const bool duplicate =
                 std::any_of(existing.begin(), existing.end(),
                         [&](const Signature& other) { return sameParameters(other, withReceiver); });

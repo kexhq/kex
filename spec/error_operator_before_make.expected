@@ -27,5 +27,5 @@ spec/error_operator_before_make.kex:12:25: error: `+` expects argument 2 to be V
 
 + : Time -> Duration -> Time
 
-+ : Vec -> Vec -> A
++ : Vec -> Vec -> Vec
 spec/error_operator_before_make.kex:13:3: error: Type mismatch: expected String, got Vec

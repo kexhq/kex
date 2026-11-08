@@ -77,6 +77,9 @@ struct Lowering {
     std::unordered_set<std::string> externalRecordNames;
     // Records this unit declares, by the name `records` keys them under.
     std::unordered_set<std::string> localRecordNames;
+    // Names this unit declares a record under that an interface lays out
+    // differently (collectRecord).
+    std::unordered_set<std::string> conflictingRecordLayouts;
     // A record or ADT of a unit compiled apart, by name: the module holding
     // its `make` functions (ExternalRecordLayout::methodOwner).
     std::unordered_map<std::string, std::string> externalMethodOwners;
