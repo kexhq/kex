@@ -11,8 +11,6 @@
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
 #include "../lexer/token.hxx"
-#include "../lexer/lexer.hxx"
-#include "../parser/parser.hxx"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -212,13 +210,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     if (externalRecords)
         for (const auto& record : *externalRecords) {
             L.collectRecordLayout(record.name, record.fields);
-            // A unit compiled apart: its defaults come as source text.
+            // A unit compiled apart: its module answers the defaults.
             if (!record.fieldDefaults.empty()) {
                 auto& info = L.records[record.name];
-                for (size_t i = 0; i < record.fieldDefaults.size() &&
-                                   i < info.defaults.size(); ++i)
-                    info.defaults[i] = L.importedDefault(record.fieldDefaults[i]);
-                info.owner = record.declaringModule;
+                info.defaultsModule = record.moduleAtom;
+                for (const auto& source : record.fieldDefaults)
+                    info.defaultedApart.push_back(!source.empty());
             }
             L.externalRecordNames.insert(record.name);
             if (!record.methodOwner.empty())
@@ -398,9 +395,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     owners.push_back(typeName);
             }
             if (!fd->clauses.empty()) {
-                auto defaults = ast::parameterDefaults(*fd);
-                if (std::any_of(defaults.begin(), defaults.end(), [](auto* d) { return d != nullptr; }))
-                    L.methodDefaults[fd->name] = std::move(defaults);
                 L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
             }
         };
@@ -1634,51 +1628,47 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         mod.onLoad = "__kex_on_load";
     }
 
+    // `__kex_record_default(Tag, Field)`, in the module that declares the
+    // record: a field's declared default, or `kex_no_default`. A record built
+    // in a unit compiled apart takes each field it leaves out from here, the
+    // default checked and lowered in its own scope; a hot reload that adds a
+    // field to a server's state record fills it from here too
+    // (kex_intrinsic_process:migrate/2). A module-nested record's function
+    // is routed to its own module by lowerModules, via the `@path` suffix;
+    // the prelude is one module, whose function answers for all of them.
+    std::map<std::string, FunDef> defaultFunctions;
+    const auto defaultFunctionOf = [&](const std::string& module) -> FunDef& {
+        auto name = names::kRecordDefaultFunction;
+        if (!module.empty() && !lowersPrelude) name += "@" + module;
+        auto& fn = defaultFunctions[name];
+        fn.name = name;
+        fn.arity = 2;
+        return fn;
+    };
+    for (const auto& name : L.localRecordNames) {
+        const auto& info = L.records.at(name);
+        for (size_t i = 0; i < info.fields.size(); i++) {
+            if (i >= info.defaults.size() || !info.defaults[i] || !*info.defaults[i])
+                continue;
+            FunClause clause;
+            clause.params.push_back(atomPattern(name));
+            clause.params.push_back(atomPattern(info.fields[i]));
+            L.subst.clear();
+            clause.body = L.lowerFieldDefault(info, *info.defaults[i]);
+            defaultFunctionOf(info.owner).clauses.push_back(std::move(clause));
+        }
+    }
     // Publish each serving type's slots on the module that implements them —
     // the same module `Process.spawn` names (see the spawnServing lowering).
-    //
-    // Each such module also gets `__kex_record_default(Tag, Field)`, the
-    // declared default of a served record's field, or `kex_no_default`. A
-    // hot reload that adds a field to a server's state record fills it from
-    // here (kex_intrinsic_process:migrate/2). A module-nested type's function
-    // is routed to its own module by lowerModules, via the `@path` suffix.
-    std::map<std::string, FunDef> defaultFunctions;
     for (const auto& [typeName, slots] : L.servingSlotsByType) {
         std::string owner = mod.name;
-        std::string defaultFunction = "__kex_record_default";
+        std::string declaringModule;
         if (auto declaring = L.localTypeModules.find(typeName);
             declaring != L.localTypeModules.end()) {
-            owner = mangleModulePath(names::moduleAtom(declaring->second));
-            defaultFunction += "@" + declaring->second;
+            declaringModule = declaring->second;
+            owner = mangleModulePath(names::moduleAtom(declaringModule));
         }
-        auto record = L.records.find(typeName);
-        if (record == L.records.end())
-            for (auto it = L.records.begin(); it != L.records.end(); ++it)
-                if (it->first.size() > typeName.size() &&
-                    it->first.ends_with("." + typeName))
-                    record = it;
-        if (record != L.records.end()) {
-            auto& fn = defaultFunctions[defaultFunction];
-            fn.name = defaultFunction;
-            fn.arity = 2;
-            const auto& info = record->second;
-            for (size_t i = 0; i < info.fields.size(); i++) {
-                if (i >= info.defaults.size() || !info.defaults[i] ||
-                    !*info.defaults[i])
-                    continue;
-                FunClause clause;
-                for (const auto& atom : {record->first, info.fields[i]}) {
-                    auto pat = std::make_unique<Pattern>();
-                    pat->kind = PatKind::Lit;
-                    pat->litKind = LitKind::Atom;
-                    pat->litText = atom;
-                    clause.params.push_back(std::move(pat));
-                }
-                L.subst.clear();
-                clause.body = L.lowerFieldDefault(info, *info.defaults[i]);
-                fn.clauses.push_back(std::move(clause));
-            }
-        }
+        defaultFunctionOf(declaringModule);
         mod.servingSlots[owner][typeName] = slots;
         if (L.servingUpgradeTypes.count(typeName))
             mod.servingUpgrades[owner].insert(typeName);
@@ -1687,7 +1677,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         FunClause fallback;
         fallback.params.push_back(L.wildPat());
         fallback.params.push_back(L.wildPat());
-        fallback.body = lit(LitKind::Atom, "kex_no_default");
+        fallback.body = lit(LitKind::Atom, names::kNoRecordDefault);
         fn.clauses.push_back(std::move(fallback));
         mod.functions.push_back(std::move(fn));
     }
@@ -2132,10 +2122,10 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     // `__kex_record_default@Store` belongs in `Kex.Store`, as the plain
     // `__kex_record_default` (see lowerProgram).
     for (auto it = globalFunctions.begin(); it != globalFunctions.end();) {
-        const std::string prefix = "__kex_record_default@";
+        const auto prefix = names::kRecordDefaultFunction + "@";
         if (it->name.rfind(prefix, 0) == 0) {
             auto path = it->name.substr(prefix.size());
-            it->name = "__kex_record_default";
+            it->name = names::kRecordDefaultFunction;
             moduleBuckets[path].push_back(std::move(*it));
             it = globalFunctions.erase(it);
         } else {

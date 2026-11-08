@@ -76,9 +76,9 @@ struct KexiExport {
     // How many trailing parameters have a default, so a call may leave
     // them out. Absent in chunks written before it existed.
     int defaultedParams = 0;
-    // Each parameter's default as source text, "" for one with none: a
-    // unit compiled apart fills a call's missing arguments with these, as
-    // the merged build does from the callee's own AST.
+    // Each parameter's default as source text, "" for one with none. A
+    // caller compiled apart passes the sentinel for a missing argument that
+    // has one, and the callee fills it (names::kDefaultArgument).
     std::vector<std::string> defaultSources;
 };
 

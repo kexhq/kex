@@ -14,8 +14,6 @@
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
 #include "../lexer/token.hxx"
-#include "../lexer/lexer.hxx"
-#include "../parser/parser.hxx"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -68,6 +66,10 @@ struct Lowering {
         std::string owner;
         std::unordered_map<std::string, std::string> imports;
         std::unordered_map<std::string, std::string> aliases;
+        // A record of a unit compiled apart: the BEAM module whose
+        // `__kex_record_default` answers its defaults, and which fields have one.
+        std::string defaultsModule;
+        std::vector<bool> defaultedApart;
     };
     std::unordered_map<std::string, RecordInfo> records;
     // Records that came in from a separately compiled module (the prelude's)
@@ -135,8 +137,6 @@ struct Lowering {
     // accessor rather than a function someone wrote. Such a call never takes
     // a capability context, whatever else the name means at another arity.
     std::unordered_set<std::string> accessorFields;
-    // Make-method trailing defaults, indexed by explicit parameter position.
-    std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
     // Every make-block method by name, with the type its block targets and the
     // module that block is written in. A receiver call that labels arguments
     // or leaves defaulted ones out places them against the method it binds.
@@ -251,11 +251,8 @@ struct Lowering {
     // 1-param overload even when the 2-param one was recorded.
     std::unordered_map<std::string, std::set<std::string>> fnAllParamNames;
     // Top-level trailing defaults, used to expand omitted arguments at local
-    // call sites just as methodDefaults does for receiver calls.
+    // call sites.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> fnDefaults;
-    // Defaults of callees compiled apart, parsed from the source text their
-    // interface carries (ResolvedCallTarget::defaultSources), once each.
-    std::unordered_map<std::string, ast::ExprPtr> importedDefaults;
     std::unordered_map<std::string,
         std::vector<std::pair<std::size_t, std::string>>> fnTraitParams;
     // Names that are real functions in this module (top-level + make methods).
@@ -366,14 +363,7 @@ struct Lowering {
         -> ExprPtr;
 
     auto isCapabilityModule(const std::string& name) const -> bool;
-    // The modules a written path can name, the literal one first: then through
-    // a `using` alias, relative to the enclosing modules (innermost first), and
-    // under every `using`-opened module.
-    auto modulePathCandidates(const std::vector<std::string>& path) const
-        -> std::vector<std::string>;
-    // The capability module a written path names (`TCP` under `using
-    // Net.Socket` is `Net.Socket.TCP`), "" when it names none.
-    auto capabilityModuleNamed(const std::vector<std::string>& path) const -> std::string;
+    auto checkedCallModule(const ast::MethodCall& n) const -> std::string;
 
     auto capabilityInterfaceHas(const std::string& capability,
                                 const std::string& method) const -> bool;
@@ -494,16 +484,8 @@ struct Lowering {
     auto blockFitsExactOverload(const std::string& key, size_t count) const
         -> bool;
 
-    auto importedDefault(const std::string& source) -> const ast::ExprPtr*;
-
-    auto fillImportedDefaults(const std::string& sourceModule,
-                              const std::vector<std::string>& paramNames,
-                              const std::vector<std::string>& defaultSources,
-                              std::vector<ExprPtr>& slots,
-                              std::vector<Binding>& binds) -> void;
-    auto fillImportedDefaults(const semantic::ResolvedCallTarget& target,
-                              std::vector<ExprPtr>& slots,
-                              std::vector<Binding>& binds) -> void;
+    auto fillOmittedArguments(const std::vector<std::string>& defaults,
+                              std::vector<ExprPtr>& slots) -> void;
 
     auto fillDefaultSlots(const std::string& name,
                           std::vector<ExprPtr>& slots,
@@ -526,8 +508,6 @@ struct Lowering {
     auto ownedMakeFunction(const ast::MethodCall& n, size_t explicitArgs) const
         -> const MakeMethod*;
 
-    auto trailingMakeDefaults(const ast::MethodCall& n) const
-        -> std::vector<const ast::ExprPtr*>;
 
 
     auto receiverOwner(const ast::MethodCall& n) const -> std::string;

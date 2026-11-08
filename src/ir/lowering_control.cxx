@@ -691,7 +691,7 @@ auto Lowering::lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const as
     // starting at 0 and bumped by every tail call. It exists only for the
     // duration of the loop, so it is never rebound afterwards.
     std::string ctr;
-    if (counterVar && *counterVar && **counterVar != "_") {
+    if (counterVar && *counterVar && !names::isWildcard(**counterVar)) {
         ctr = **counterVar;
         mutVars.erase(std::remove(mutVars.begin(), mutVars.end(), ctr), mutVars.end());
         mutVars.push_back(ctr);
@@ -815,7 +815,7 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
         }
         if (auto defaults = externalModules->exportDefaults.find(qualKey);
             defaults != externalModules->exportDefaults.end())
-            fillImportedDefaults(owner, pnames, defaults->second, args, binds);
+            fillOmittedArguments(defaults->second, args);
         for (auto& a : args) if (!a) a = lit(LitKind::None, "none");
     } else {
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -828,7 +828,7 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
             names != externalModules->exportParamNames.end() &&
             args.size() < names->second.size()) {
             args.resize(names->second.size());
-            fillImportedDefaults(owner, names->second, defaults->second, args, binds);
+            fillOmittedArguments(defaults->second, args);
         }
     }
     const int ar = static_cast<int>(args.size());

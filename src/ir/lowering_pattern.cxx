@@ -175,10 +175,7 @@ auto Lowering::anonymousRecordTest(const std::string& subject,
         callE("erlang", "element", 2, two(litInt(1), var(subject))));
     for (const auto& tag : tags) {
         MatchClause hit;
-        auto pat = std::make_unique<Pattern>();
-        pat->kind = PatKind::Lit;
-        pat->litKind = LitKind::Atom;
-        pat->litText = tag;
+        auto pat = atomPattern(tag);
         hit.patterns.push_back(std::move(pat));
         hit.body = litBool(true);
         m.clauses.push_back(std::move(hit));
@@ -211,10 +208,7 @@ auto Lowering::anonymousFieldRead(const std::string& subject,
         auto at = std::find(fields.begin(), fields.end(), field);
         if (at == fields.end()) continue;
         MatchClause hit;
-        auto pat = std::make_unique<Pattern>();
-        pat->kind = PatKind::Lit;
-        pat->litKind = LitKind::Atom;
-        pat->litText = tag;
+        auto pat = atomPattern(tag);
         hit.patterns.push_back(std::move(pat));
         hit.body = callE(
             "erlang", "element", 2,
@@ -374,7 +368,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
             // `s : String =>` binds like a variable and tests like a
             // guard. The test is left in pendingTypeGuards for the clause
             // being built to pick up — a pattern alone cannot carry one.
-            const auto name = pn.name.empty() || pn.name == "_"
+            const auto name = pn.name.empty() || names::isWildcard(pn.name)
                 ? fresh("Typed") : pn.name;
             out->kind = PatKind::Var; out->name = name;
             subst[name] = name;

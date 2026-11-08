@@ -931,10 +931,7 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
                 MatchClause mc;
                 // Nullary variant (no payload) → bare atom on BEAM.
                 if (nullaryVariantTags.count(tag)) {
-                    auto pat = std::make_unique<Pattern>();
-                    pat->kind = PatKind::Lit;
-                    pat->litKind = LitKind::Atom;
-                    pat->litText = tag;
+                    auto pat = atomPattern(tag);
                     mc.patterns.push_back(std::move(pat));
                 } else {
                     // Payload variant: tuple pattern {Tag, _, ...}, one
@@ -943,10 +940,7 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
                     // through to the next owner's clause.
                     auto pat = std::make_unique<Pattern>();
                     pat->kind = PatKind::Tuple;
-                    auto tagPat = std::make_unique<Pattern>();
-                    tagPat->kind = PatKind::Lit;
-                    tagPat->litKind = LitKind::Atom;
-                    tagPat->litText = tag;
+                    auto tagPat = atomPattern(tag);
                     pat->args.push_back(std::move(tagPat));
                     const auto fields = variantArity.count(tag)
                         ? std::max(1, variantArity.at(tag)) : 1;
@@ -973,10 +967,7 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
             MatchClause mc;
             auto pat = std::make_unique<Pattern>();
             pat->kind = PatKind::Tuple;
-            auto tagPat = std::make_unique<Pattern>();
-            tagPat->kind = PatKind::Lit;
-            tagPat->litKind = LitKind::Atom;
-            tagPat->litText = "Char";
+            auto tagPat = atomPattern("Char");
             pat->args.push_back(std::move(tagPat));
             auto wild = std::make_unique<Pattern>();
             wild->kind = PatKind::Wild;

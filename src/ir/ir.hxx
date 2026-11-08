@@ -1,4 +1,5 @@
 #pragma once
+#include "../common/well_known.hxx"
 // Kex in-memory lowering IR.
 //
 // This is the "desugar target" from docs/ir-format.md: a small,
@@ -329,5 +330,15 @@ inline auto var(std::string name) -> ExprPtr {
     e->node = Var{std::move(name)};
     return e;
 }
+// A pattern matching one atom.
+inline auto atomPattern(std::string atom) -> PatternPtr {
+    auto p = std::make_unique<Pattern>();
+    p->kind = PatKind::Lit;
+    p->litKind = LitKind::Atom;
+    p->litText = std::move(atom);
+    return p;
+}
+// What a caller passes for an argument it leaves out (names::kDefaultArgument).
+inline auto defaultArgument() -> ExprPtr { return lit(LitKind::Atom, kex::names::kDefaultArgument); }
 
 } // namespace kex::ir

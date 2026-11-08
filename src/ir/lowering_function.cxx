@@ -8,7 +8,7 @@ auto Lowering::lowerParam(const ast::Param& p) -> PatternPtr {
     // A `_` parameter is a wildcard, like an unnamed one: as a variable,
     // two of them (`let seventh(_: Integer, _: Integer)`) were a
     // duplicate `_` in the clause head and erlc refused the module.
-    if (p.name && *p.name != "_") {
+    if (p.name && !names::isWildcard(*p.name)) {
         auto pat = std::make_unique<Pattern>();
         pat->kind = PatKind::Var; pat->name = *p.name;
         subst[*p.name] = *p.name;
@@ -323,6 +323,16 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 for (const auto& p : clause.params) {
                     const auto* declared = dispatchParamType(p);
                     if (!p.name || !declared) continue;
+                    // An argument left out arrives as the sentinel, whose
+                    // default is this clause's to give.
+                    if (p.defaultValue && discriminatingType(typeText(*declared, TypeSpelling::Dispatch))) {
+                        auto test = intrin(Op::Or, two(
+                            intrin(Op::Eq, two(var(*p.name), defaultArgument())),
+                            typeGuard(typeText(*declared, TypeSpelling::Dispatch), var(*p.name))));
+                        guard = guard ? intrin(Op::And, two(std::move(guard), std::move(test)))
+                                      : std::move(test);
+                        continue;
+                    }
                     addGuardTest(typeText(*declared, TypeSpelling::Dispatch), var(*p.name));
                 }
                 // Named record-pattern params (`JSON { status, body }`)
@@ -335,6 +345,29 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             }
             for (const auto& [nm, _] : prefix) subst[nm] = nm;
             if (fn->isSlot) subst["from"] = "from";
+            // Each argument the caller left out, from its default: in
+            // parameter order, so a default reads the parameters before it.
+            std::vector<std::pair<std::string, ExprPtr>> defaulted;
+            for (const auto& p : clause.params) {
+                if (!p.name || !p.defaultValue || names::isWildcard(*p.name)) continue;
+                Match chosen;
+                chosen.subjects.push_back(var(subst[*p.name]));
+                MatchClause omitted;
+                omitted.patterns.push_back(atomPattern(kex::names::kDefaultArgument));
+                omitted.body = lower(*p.defaultValue);
+                chosen.clauses.push_back(std::move(omitted));
+                MatchClause given;
+                auto any = std::make_unique<Pattern>();
+                any->kind = PatKind::Wild;
+                given.patterns.push_back(std::move(any));
+                given.body = var(subst[*p.name]);
+                chosen.clauses.push_back(std::move(given));
+                auto value = std::make_unique<Expr>();
+                value->node = std::move(chosen);
+                const auto bound = fresh(*p.name);
+                defaulted.emplace_back(bound, std::move(value));
+                subst[*p.name] = bound;
+            }
             ExprPtr body = lowerBody(clause.body);
             if (fn->isSlot)
                 body = makeLet(
@@ -348,6 +381,8 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 body = wrapRecordPattern(it->first, *it->second, std::move(body));
             if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
             else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
+            for (auto it = defaulted.rbegin(); it != defaulted.rend(); ++it)
+                body = makeLet(it->first, std::move(it->second), std::move(body));
             fc.body = std::move(body);
             currentContextVar = savedContextVar;
             declaredParamTypes = std::move(savedParamTypes);

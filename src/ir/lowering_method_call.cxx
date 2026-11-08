@@ -331,8 +331,9 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         if (n.receiver) {
             std::vector<std::string> segments;
             if (modulePath(*n.receiver, segments) && !segments.empty())
-                if (const auto named = capabilityModuleNamed(segments);
-                    !named.empty() && capabilityInterfaceHas(named, n.method)) capabilityTarget = named;
+                if (const auto named = checkedCallModule(n);
+                    isCapabilityModule(named) && capabilityInterfaceHas(named, n.method))
+                    capabilityTarget = named;
         }
         bool modulePathOwnsCall = false;
         if (n.receiver) {
@@ -402,9 +403,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         slots[placed.positionalSlots[k]] =
                             std::move(positional[k]);
                 if (!resolved->second.defaultSources.empty())
-                    fillImportedDefaults(resolved->second, slots, binds);
-                for (auto& slot : slots)
-                    if (!slot) slot = lit(LitKind::None, "none");
+                    fillOmittedArguments(resolved->second.defaultSources, slots);
                 for (auto& slot : slots) args.push_back(std::move(slot));
             } else if (const auto expected = resolved->second.paramNames.size();
                        !resolved->second.defaultSources.empty() &&
@@ -415,18 +414,12 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 size_t next = 0;
                 for (const auto& arg : n.args) slots[next++] = atomize(arg, binds);
                 if (n.block) slots[next++] = atomize(*n.block, binds);
-                fillImportedDefaults(resolved->second, slots, binds);
+                fillOmittedArguments(resolved->second.defaultSources, slots);
                 for (auto& slot : slots) args.push_back(std::move(slot));
             } else {
                 for (const auto& arg : n.args)
                     args.push_back(atomize(arg, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
-                // A local make method's defaults, for a local target only: an
-                // imported one fills its own (`uri.string` beside a local
-                // `string(prefix = ...)`, kexhq/kex#475).
-                else if (resolved->second.backendModule.empty())
-                    for (const auto* value : trailingMakeDefaults(n))
-                        args.push_back(atomize(*value, binds));
             }
             // A local make-method beats an imported TRAIT DEFAULT of the
             // same name. `make Comparison do let to(@Less, Integer)` never
@@ -730,16 +723,13 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             return wrapLets(binds, std::move(ex));
         }
     }
-    // User module function: `Util.double(21)` / `Util.Math.double(21)`.
-    // Resolve first against the explicit receiver path, then relative to
-    // the enclosing module path so nested modules can refer to siblings.
+    // User module function: `Util.double(21)` / `Util.Math.double(21)`, the
+    // one the checker named.
     {
         std::vector<std::string> path;
         if (!path.empty() || modulePath(*n.receiver, path)) {
-            const auto candidates = modulePathCandidates(path);
-            std::unordered_set<std::string> tried;
-            for (const auto& candidate : candidates) {
-                if (candidate.empty() || !tried.insert(candidate).second) continue;
+            for (const auto& candidate : {checkedCallModule(n)}) {
+                if (candidate.empty()) continue;
                 auto qualKey = candidate + "." + n.method;
                 auto it = moduleFunctions.find(qualKey);
                 // A call into a capability asks the context first and
@@ -786,10 +776,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     m.subjects.push_back(
                         callE("maps", "get", 3, std::move(getArgs)));
                     MatchClause missing;
-                    auto undef = std::make_unique<Pattern>();
-                    undef->kind = PatKind::Lit;
-                    undef->litKind = LitKind::Atom;
-                    undef->litText = "undefined";
+                    auto undef = atomPattern("undefined");
                     missing.patterns.push_back(std::move(undef));
                     auto direct = std::make_unique<Expr>();
                     direct->node = localCall(it->second, argsFrom(""));
@@ -906,7 +893,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             if (externalModules
                 && !(path.size() == 1
                      && typeOwnsStaticFunction(path[0], n.method))) {
-                for (const auto& candidate : candidates) {
+                for (const auto& candidate : {checkedCallModule(n)}) {
                     if (candidate.empty()) continue;
                     auto qualKey = candidate + "." + n.method;
                     auto eit = externalModules->exportToBeamFn.find(qualKey);
@@ -1243,12 +1230,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             // value)` form.
             for (const auto& [_, value] : n.namedArgs)
                 args.push_back(atomize(value, binds));
-            if (n.block) {
-                args.push_back(atomize(*n.block, binds));
-            } else {
-                for (const auto* value : trailingMakeDefaults(n))
-                    args.push_back(atomize(*value, binds));
-            }
+            if (n.block) args.push_back(atomize(*n.block, binds));
         }
         auto ex = std::make_unique<Expr>();
         // The receiver's own make function says whether it takes the capability
@@ -1328,6 +1310,13 @@ auto Lowering::lowerRecordConstruction(const ast::RecordConstruction& n) -> Expr
                     two(litInt(static_cast<int>(i) + 2), std::move(base)));
                 auto name = fresh("field");
                 binds.push_back({name, std::move(read)});
+                args.push_back(var(name));
+            } else if (i < info.defaultedApart.size() && info.defaultedApart[i]) {
+                auto name = fresh("field");
+                binds.push_back({name, callE(info.defaultsModule,
+                                             names::kRecordDefaultFunction, 2,
+                                             two(lit(LitKind::Atom, recordName),
+                                                 lit(LitKind::Atom, info.fields[i])))});
                 args.push_back(var(name));
             } else if (info.defaults[i]) {
                 auto lowered = lowerFieldDefault(info, *info.defaults[i]);

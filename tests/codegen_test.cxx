@@ -80,10 +80,12 @@ auto testInterfaces() -> const kex::semantic::ImportedInterfaces& {
 // reads the checker's decisions (a fixture the check rejects keeps what was
 // decided), against the prelude's externals with the fixture's own laid
 // over them. `lower` is lowerProgram or lowerModules.
+// `interfaces` is what the checker sees, the prelude's by default.
 template <typename Lower>
 auto lowerCheckedWith(const kex::ast::Program& program, const std::string& stem,
-                      kex::ir::LowerContext context, Lower lower) {
-    kex::semantic::Analyzer analyzer(&testInterfaces());
+                      kex::ir::LowerContext context, Lower lower,
+                      const kex::semantic::ImportedInterfaces* interfaces = nullptr) {
+    kex::semantic::Analyzer analyzer(interfaces ? interfaces : &testInterfaces());
     (void)analyzer.analyze(program);
     const kex::hir::Program hir(program, analyzer);
     context.hir = &hir;
@@ -102,8 +104,10 @@ auto lowerChecked(const kex::ast::Program& program, const std::string& stem,
 }
 
 auto lowerModulesChecked(const kex::ast::Program& program, const std::string& stem,
-                         kex::ir::LowerContext context = {}) -> std::vector<kex::ir::Module> {
-    return lowerCheckedWith(program, stem, context, &kex::ir::lowerModules);
+                         kex::ir::LowerContext context = {},
+                         const kex::semantic::ImportedInterfaces* interfaces = nullptr)
+    -> std::vector<kex::ir::Module> {
+    return lowerCheckedWith(program, stem, context, &kex::ir::lowerModules, interfaces);
 }
 
 // A lowered module as the emitter receives it: `when` guards expanded (the
@@ -1239,9 +1243,23 @@ int main() {
             external.nameToAtom["Web.Response"] = "Kex.Web.Response";
             external.exportToBeamFn["Web.Response.text"] = "text";
             external.exportArity["Web.Response.text"] = 1;
+            // What the checker reads of the same module, so it names the call.
+            auto interfaces = testInterfaces();
+            kex::semantic::ImportedModuleInterface response;
+            response.sourceModule = "Web.Response";
+            response.backendModule = "Kex.Web.Response";
+            kex::semantic::ImportedFunction text;
+            text.sourceName = "text";
+            text.backendModule = "Kex.Web.Response";
+            text.backendFunction = "text";
+            text.backendArity = 1;
+            text.signature = {"text", {kex::semantic::Type::string()},
+                              kex::semantic::Type::string()};
+            response.exports["text"].push_back(std::move(text));
+            interfaces.modules["Web.Response"] = std::move(response);
 
             auto modules = lowerModulesChecked(
-                program, "external_split", {.externals = &external});
+                program, "external_split", {.externals = &external}, &interfaces);
             auto globalCore = emitted(std::move(modules[0])).source;
 
             assertTrue(contains(
@@ -1528,19 +1546,6 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
-        });
-
-        it("routes a qualified module call through its compiled interface", []() {
-            kex::ir::ExternalModules external;
-            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
-            external.exportToBeamFn["Web.Response.text"] = "text";
-            external.exportArity["Web.Response.text"] = 1;
-
-            auto out = emitWithExternal(
-                "main do Web.Response.text(\"ok\") end\n", external);
-            assertTrue(contains(out, "call 'Kex.Web.Response':'text'"), out);
-            assertFalse(contains(out, "call 'kex_prelude':'Web__Response__text'"),
-                        out);
         });
 
         it("routes only declared external receiver functions", []() {
