@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/clone.hxx"
+#include "well_known.hxx"
 #include "../ast/function_groups.hxx"
 #include "file_io.hxx"
 #include "mangle.hxx"
@@ -541,7 +542,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
-        return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
+        return directBackendOwnership && !mod.empty() ? names::moduleAtom(mod) : "";
     };
 
     auto annotationToSignature = [&](const ast::TypeAnnotation& ann,

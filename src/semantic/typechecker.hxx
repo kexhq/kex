@@ -204,6 +204,8 @@ private:
     // resolved target.
     auto decideDispatch(const ast::Expr* call, const std::string& name) -> void;
     static auto dispatcherTarget(const ImportedFunction& dispatcher) -> ResolvedCallTarget;
+    auto importedFunctionChoice(const ast::MethodCall& call, const std::string& name)
+        -> std::optional<ResolvedCallTarget>;
     auto publishQualifiedSignatures(const std::string& name,
                                     const std::vector<Signature>& signatures) -> void;
     std::unordered_set<std::string> m_qualifiedPublished;

@@ -1365,7 +1365,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                        m_importedModulePaths.contains(path) ||
                        (m_importedInterfaces &&
                         (m_importedInterfaces->modules.contains(path) ||
-                         m_importedInterfaces->modules.contains("Kex." + path)));
+                         m_importedInterfaces->modules.contains(names::moduleAtom(path))));
             };
             // A record or sum type used as a namespace (`TCP.Endpoint.loopback`).
             const auto namesType = [&](const std::string& path) {
@@ -1426,7 +1426,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         // stored as Kex.Kex.Interface). Accept that identity at
                         // this boundary so an automatic prelude module is
                         // still recognized as already compiled.
-                        const auto backendPrefixed = "Kex." + candidate;
+                        const auto backendPrefixed = names::moduleAtom(candidate);
                         if (m_importedInterfaces->modules.count(backendPrefixed)) {
                             interfaceModule = backendPrefixed;
                             break;

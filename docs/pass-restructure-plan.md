@@ -45,12 +45,16 @@ re-derives them, and the three disagree.
 - **Visibility is decided at the declaration.** Whether a `make` targets a type
   its module declares is recorded in its interface (`KexiMethod::
   foreignTarget`); consumers read it, never re-derive it from names.
-- **`src/` ends below `main`'s 89,708 lines** (2026-11-05, by the user): a hard
-  goal, not only a reported delta. Not met yet, and the gap is growing: on
-  2026-11-06 the `.cxx`/`.hxx` files under `src/` held 94,309 lines against
-  `main`'s 89,766, counted the same way on both (about +4,500; +3,458 on
-  2026-11-05 by the earlier count). Each step-3/4 item adds checker code;
-  the deletions that close the gap are scheduled for Stages 3–5.
+- **The size of `src/` is measured, not a gate** (2026-11-08, by the user,
+  revising the decision of 2026-11-05 that `src/` must end below `main`'s
+  89,708 lines). Much of the branch's growth is infrastructure the plan
+  wants to keep: the HIR and its persistence, the interface cache that
+  separate compilation needs, the checker's decisions. What the plan does
+  require is that every old path is deleted once its replacement serves
+  the corpus, with no two implementations of one decision; the final
+  measurement reports the line count against `main` beside that. On
+  2026-11-08 the `.cxx`/`.hxx` files under `src/` held 93,709 lines against
+  `main`'s 89,766 (94,309 on 2026-11-06, before the provider search went).
 - **Pseudo-functions** (2026-11-04): one intrinsic registry plus `Type<T>`
   signatures instead of `name == "..."` branches per subsystem (Stage 2b).
   The `Type<T>` foundation and `to` signature move into step 3 because the
@@ -166,7 +170,8 @@ All of these are part of the refactor; none is optional. In order:
    `false` on both backends, and `<` is not defined for `Measure`. Equality and
    ordering compare the canonical value within one dimension; different
    dimensions are never equal, and ordering them is an error.
-10. **Stage 6: measure** against the Stage 0 baseline; `src/` below `main`.
+10. **Stage 6: measure** against the Stage 0 baseline, and report `src/`'s
+    size against `main` (no longer a gate: see Decisions).
 
 ### Step 3 progress (2026-11-06)
 
@@ -959,6 +964,27 @@ Then (same day):
   answering it at that arity, else to the prelude's dispatcher; choosing
   among several modules' providers is the checker's alone (its
   alternatives). `lowering_method_call.cxx`: 1,558 → 1,396 lines.
+- `dualProviderDispatch` is deleted (−171 lines with `methodReceiverOwner`):
+  its last caller, the local make-method path, guarded the unit's own type
+  ahead of the prelude, which the unit's own dispatcher already does;
+  `make test-all` passed with it switched off. Left of the old choices:
+  `importedFreeFunctionDispatch` (one spec), a run-time choice between an
+  imported free function and records' methods, for the checker's
+  alternatives next.
+- Coverage after it (`make test-all` on an instrumented build): the prelude's
+  split-`to` fallback clause, the argument dispatchers' single-module and
+  `Prelude`-export fallbacks, `externalPrefixCall`'s single-module loop and
+  `moduleInScope` (whose one caller's filter the checker's `Hidden` decides
+  first) never ran, nor did either branch for a `compiled do` block, which
+  is expanded before the check; deleted (−113 lines).
+- `importedFreeFunctionDispatch` is deleted: the checker decides that choice
+  (`importedFunctionChoice`). A free function a `using` brings in beside
+  records' own methods of the name, on a receiver of unknown type, is the
+  target, each record's method an alternative for a value of its type.
+  Alternatives and targets may name this unit's functions as lowering emits
+  them (`Dsl.get`, a record's bare dispatcher, no module), which lowering
+  calls locally, with a foul one's capability context. The 20 spellings of
+  a module's BEAM atom (`"Kex." + path`) are one `names::moduleAtom`.
 
 Search runs over `make test-all`: 351 → 47, none of them unchecked. What
 is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided
@@ -1252,8 +1278,9 @@ are now: the driver pipeline, one sema (names, then the Analyzer), the checked
 program, and both backends on it. It lists what is not on the HIR yet. The
 final measurement waits for the old paths to go.
 
-The user's decisions of 2026-11-05 (`src/` below `main`, separate compilation
-as the default) are under Decisions; node identities, which came next, are
+The user's decisions of 2026-11-05 (separate compilation as the default; the
+`src/`-below-`main` goal, revised on 2026-11-08 to a reported measurement)
+are under Decisions; node identities, which came next, are
 done (Stage 2).
 
 **Milestone gate (2026-11-07), against `main` (3846781).** Slick, median of

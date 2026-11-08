@@ -140,7 +140,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
             args.push_back(var("_toFallback" + std::to_string(i)));
         }
         const auto next = nextExtendingModule("to", typeName, def.arity);
-        fallback.body = callE(next.empty() ? names::kPreludeModule : "Kex." + next,
+        fallback.body = callE(next.empty() ? names::kPreludeModule : names::moduleAtom(next),
                               "to", def.arity, std::move(args));
         def.clauses.push_back(std::move(fallback));
         forwarded = true;

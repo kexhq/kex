@@ -1420,7 +1420,7 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
       const auto owner =
           kex::join(target->parts, ".", target->parts.size() - 1);
       const auto note = [&](const kex::ast::FunctionDef &function) {
-        outsideMakes["Kex." + owner].insert(function.name);
+        outsideMakes[kex::names::moduleAtom(owner)].insert(function.name);
       };
       for (const auto &member : (*make)->body)
         if (const auto *function = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&member);
@@ -1447,7 +1447,7 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
                                     function.arity);
         const auto dot = function.name.rfind('.');
         if (dot == std::string::npos || !function.name.ends_with("$free")) continue;
-        forwards.emplace_back("Kex." + function.name.substr(0, dot),
+        forwards.emplace_back(kex::names::moduleAtom(function.name.substr(0, dot)),
                               function.name.substr(dot + 1, function.name.size() - dot - 6),
                               function.name, function.arity);
       }
@@ -1487,7 +1487,7 @@ auto lowerUnitSeparately(const kex::ast::Program &program, const std::string &pa
     std::map<std::string, std::set<std::string>> ownTypes;
     std::function<void(const kex::ast::ModuleDef &)> noteTypes =
         [&](const kex::ast::ModuleDef &definition) {
-          auto &types = ownTypes["Kex." + definition.name];
+          auto &types = ownTypes[kex::names::moduleAtom(definition.name)];
           for (const auto &item : definition.body) {
             std::string name;
             if (const auto *record = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item);
@@ -1835,12 +1835,12 @@ auto checkUnitsSeparately(kex::ast::Program &entry, std::vector<LoadedDep> &deps
       for (const auto &[name, _] : available.distinctTypes) qualifiedTypes.insert(name);
       for (std::size_t i = 0; i < names.size(); i++) {
         kex::beam::CollectOptions options;
-        options.moduleAtom = "Kex." + names[i];
-        options.unitId = "Kex." + names.front();
+        options.moduleAtom = kex::names::moduleAtom(names[i]);
+        options.unitId = kex::names::moduleAtom(names.front());
         options.moduleName = names[i];
         options.role = i == 0 ? kex::beam::KexiModuleRole::Entry
                               : kex::beam::KexiModuleRole::Companion;
-        if (i > 0) options.entryBackPointer = "Kex." + names.front();
+        if (i > 0) options.entryBackPointer = kex::names::moduleAtom(names.front());
         options.analysis = &analyzer;
         options.unitCompiledApart = true;
         auto chunk = kex::beam::collectMetadata(program, options);
@@ -2199,7 +2199,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
     for (const auto &name : unresolved) {
       if (declared.contains(name)) continue;
       if (interfaces && (interfaces->modules.contains(name) ||
-                         interfaces->modules.contains("Kex." + name)))
+                         interfaces->modules.contains(kex::names::moduleAtom(name))))
         continue;
       const auto found = fileDeclaringModule(name, roots);
       if (!found) continue;

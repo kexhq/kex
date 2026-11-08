@@ -800,27 +800,12 @@ struct Lowering {
     auto externalPrefixCall(const std::string& name, int arity) const
         -> std::string;
 
-    auto moduleInScope(const std::string& module) const -> bool;
-
-
-    auto methodReceiverOwner(const std::string& method) const -> std::string;
 
     // A call the value decides among the providers the checker listed
     // (ResolvedCallTarget::alternatives).
     auto providerChoice(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
         -> ExprPtr;
-    auto dualProviderDispatch(const ast::MethodCall& n,
-                              const std::string& method,
-                              const std::string& receiverType,
-                              const std::string& moduleAtom,
-                              const std::string& function, int arity,
-                              std::vector<ExprPtr>& args) -> ExprPtr;
 
-    auto importedFreeFunctionDispatch(const ast::MethodCall& n,
-                                      const std::string& method,
-                                      const std::string& importedFunction,
-                                      int arity,
-                                      std::vector<ExprPtr>& args) -> ExprPtr;
 
     auto fieldAccessorDelegate(const std::string& field, bool& blocked) const
         -> const ExternalModules::ReceiverFunction*;
