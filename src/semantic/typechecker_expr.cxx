@@ -5801,6 +5801,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             for (auto& param : selected.params)
                 param = applyGenerics(resolve(param));
             selected.result = selectedResult;
+            // A distinct type's value runs as its backing value, so where a
+            // `Showable` parameter takes one, its own `showValue` shows it.
+            for (std::size_t i = 0; i < argTypes.size() && i < matched.params.size(); ++i) {
+                const auto param = resolve(matched.params[i]);
+                const auto* paramName = std::get_if<NamedType>(&param->kind);
+                const auto* paramBound = std::get_if<ConstrainedType>(&param->kind);
+                if (!(paramName && paramName->name == names::kShowableTrait) &&
+                    !(paramBound && paramBound->traitName == names::kShowableTrait))
+                    continue;
+                const auto given = resolve(argTypes[i]);
+                const auto* argument = std::get_if<NamedType>(&given->kind);
+                if (argument && distinctBacking(given) != given)
+                    m_shownThroughDistinct[callExpr].emplace_back(i, argument->name);
+            }
             m_selectedCallSignatures[callExpr] = std::move(selected);
             // A call no imported target took (none, or a `make` method of
             // this program): the receiver's own type may answer it

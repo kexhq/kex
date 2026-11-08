@@ -4091,19 +4091,11 @@ auto Evaluator::showErasedArgument(const ast::Expr& call, size_t index,
                                    const ast::Expr* argument, ValuePtr value)
     -> ValuePtr {
     if (!argument) return value;
-    const auto* signature = m_programs.selectedSignatureOf(call);
-    if (!signature || index >= signature->params.size()) return value;
-    const auto& param = signature->params[index];
-    const auto* paramName = std::get_if<semantic::NamedType>(&param->kind);
-    const auto* paramBound = std::get_if<semantic::ConstrainedType>(&param->kind);
-    if (!(paramName && paramName->name == "Showable") &&
-        !(paramBound && paramBound->traitName == "Showable"))
-        return value;
-    const auto argumentType = staticTypeOf(argument);
-    if (!argumentType) return value;
-    const auto* named = std::get_if<semantic::NamedType>(&argumentType->kind);
-    if (!named || !m_erasedReceiverTypes.contains(named->name)) return value;
-    const auto method = named->name + "::showValue";
+    // The checker's answer: a distinct type's value given for a `Showable`
+    // parameter, which only that type's own `showValue` shows right.
+    const auto* type = m_programs.shownThroughOf(call, index);
+    if (!type) return value;
+    const auto method = *type + "::showValue";
     if (!m_functionValues.count(method) && !m_env->get(method)) return value;
     return callFunction(method, {std::move(value)}, {}, argument->location);
 }

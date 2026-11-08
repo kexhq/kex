@@ -27,6 +27,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
+    m_shownThroughDistinct.clear();
     m_referencedModules.clear();
     m_localModules.clear();
     m_moduleConstructors.clear();

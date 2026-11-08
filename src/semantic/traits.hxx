@@ -3,6 +3,7 @@
 #include "types.hxx"
 
 namespace kex::ast {
+struct Expr;
 struct FunctionClause;
 }
 #include <optional>
@@ -45,10 +46,15 @@ struct Signature {
     // table holds every module's functions, so a plain call keeps only the
     // ones its module may see (kexhq/kex#496, #494).
     std::string declaringModule;
-    // The clause it was made from, for a signature of a FunctionDef: its
-    // parameters' defaults fill what a call leaves out (hir::Program::placementOf).
+    // The clause it was made from, for a signature of a FunctionDef: lowering
+    // places a call's arguments into it (hir::Program::selectedSignatureOf).
     const ast::FunctionClause* clause = nullptr;
 };
+
+// By call: each argument position given for a `Showable` parameter with a
+// value of a distinct type, and that type (TypeChecker::shownThroughDistinct).
+using ShownThrough =
+    std::unordered_map<const ast::Expr*, std::vector<std::pair<std::size_t, std::string>>>;
 
 // Do two signatures take the same parameters? One declaration registered
 // twice must read as one: a parameter declared `Any` is Unknown, which

@@ -44,6 +44,7 @@ struct Answers {
     std::unordered_map<const ast::Expr*, semantic::TypePtr> types;
     std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer> typeOfAnswers;
     std::unordered_map<const ast::Expr*, semantic::Signature> selected;
+    semantic::ShownThrough shownThroughDistinct;
 };
 
 class Program {
@@ -81,6 +82,12 @@ public:
     // The same, for the call node inside the expression (what lowering holds).
     auto selectedSignatureOf(const ast::FunctionCall& call) const -> const semantic::Signature*;
     auto selectedSignatureOf(const ast::MethodCall& call) const -> const semantic::Signature*;
+    // The distinct type whose `showValue` shows `call`'s argument at parameter
+    // `index` (TypeChecker::shownThroughDistinct), or null.
+    auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;
+    // Every such argument of `call`, or null.
+    auto shownThroughOf(const ast::Expr& call) const
+        -> const std::vector<std::pair<std::size_t, std::string>>*;
 
     // Every call site, in source order, with its target.
     auto callSites() const -> const std::vector<CallSite>& { return m_sites; }
@@ -94,6 +101,7 @@ private:
     const decltype(Answers::types)* m_types = nullptr;
     const decltype(Answers::typeOfAnswers)* m_typeOfAnswers = nullptr;
     const decltype(Answers::selected)* m_selected = nullptr;
+    const decltype(Answers::shownThroughDistinct)* m_shownThrough = nullptr;
     std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;
     // Keyed by the call node (the Expr, and the MethodCall / BinaryOp inside
@@ -124,6 +132,7 @@ public:
     auto typeOfAnswer(const ast::MethodCall& call) const
         -> const semantic::StaticTypeAnswer*;
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
+    auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;
 
 private:
     std::vector<const Program*> m_programs;
